@@ -91,6 +91,19 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   da árvore verificada. Teste do backend não pode deixar timer, thread que age, `sys.modules`,
   módulo recarregado ou tratador de sinal alterado para o arquivo seguinte: com a suíte repartida, quem paga é o vizinho. Evidência em
   [Verificação local em paralelo](#verificação-local-em-paralelo-09102026).
+- **Build Rust: testes de integração do `hangar-server` num executável só, e o CI publica com LTO
+  fat só na `main`.** Teste novo entra como módulo de `crates/hangar-server/tests/it/`; teste que
+  mexe em estado do processo inteiro (PATH, HOME, TZ, logger global, gancho de pânico) vai para um
+  `[[test]]` à parte no `Cargo.toml`. Quem reexecuta o próprio executável monta o nome com
+  `exact_name(module_path!(), …)` e confere `assert_ran_one`; filho de `fork` sem `exec` chama
+  `close_inherited_fds`; porta que deve recusar vem de `refused_address`; porta que deve ter fechado
+  passa por `assert_closed`; lease ou porta reaberta logo depois de solta, por `lease_when_free` ou
+  espera com prazo; executável de teste, por `write_executable`. A depuração reduzida vem do perfil
+  `dev` do `crates/Cargo.toml`, nunca de variável, e o `hangar-server` pede as mesmas features que o
+  resto do workspace: `-p` e `--workspace` têm de dar o mesmo hash. O binário publicado pela `main`
+  sai do perfil `dist` (`--profile dist`, em `target/dist/`); a branch, do `release`. O cache tem o
+  perfil na chave e só guarda dependências de terceiros (`scripts/podar-target --cache`). Evidência em
+  [Build Rust e CI menores](#build-rust-e-ci-menores-09102026).
 - **O bloco do MCP `hangar` no `config.toml` do Codex é reconhecido pela TABELA, não só pelos
   marcadores.** O app desktop reescreve o arquivo sem comentários; quem só procura `# >>> hangar`
   anexa de novo, e o TOML com chave duplicada derruba o ChatGPT e o Codex juntos.
@@ -614,7 +627,7 @@ os passos do que mudou, e árvore que já passou não roda nada.
   processo o ergue), e o padrão do Windows é 15,625 ms: teste de prazo que passa aqui pode falhar
   no runner; 4 núcleos dedicados contra 4 vCPU compartilhadas, Windows 11 26100
   contra Server 2022, e o cache frio de cada rodada do CI.
-- **O que só o CI faz**: build release com LTO fat (`zigbuild` com glibc 2.28 no Linux), macOS, a
+- **O que só o CI faz**: build release (LTO fat na `main`; `zigbuild` com glibc 2.28 no Linux), macOS, a
   publicação dos binários e do `dist-latest`, e o `passos` (o pre-commit faz o mesmo por commit).
 - **Cache do Rust no Actions: só a `main` grava, toda branch lê o dela.** Em 07/10 o repositório
   estava em 7,3 GB de 10 GB, com cópias de 2 a 3,6 GB gravadas por branches `fix/*`; a parte1
@@ -674,3 +687,100 @@ e mobile 139 s na mesma faixa; shell, statusline e pi 8 s. Caminho crítico ≈ 
   release, 1119 s no job). Os jobs que guardam `crates/target` compilam sem incremental e com
   depuração só de linhas, e as chaves ganharam `-v2-`: o `save` só grava quando a chave exata não
   existe, e sem chave nova o cache enxuto nunca seria gravado.
+
+## Build Rust e CI menores (09/10/2026)
+
+Issue #142. Um executável por arquivo de `crates/hangar-server/tests/` (94), cada um com o servidor
+inteiro; perfil `dev` com depuração completa para quem não passava a variável do CI; e o CI ligando
+LTO fat com uma unidade de código em todo push.
+
+Medido num Intel Core i7-13700K (16 núcleos, 24 threads), 32 GB de RAM, SSD NVMe PCIe 4.0 com
+btrfs, Linux 6.18, Rust 1.98.1 e `CARGO_BUILD_JOBS=12`: `cargo test --workspace --no-run` do zero
+em `crates/`, depois tocando `src/lib.rs` e um arquivo de teste e rodando
+`cargo test -p hangar-server --no-run`:
+
+| | Antes (perfil padrão) | Antes (`line-tables-only`) | Depois |
+|---|---|---|---|
+| Compilação do zero | 79 s | 58 s | 55 s |
+| `target` | 42,7 GB | 15,6 GB | 4,3 GB |
+| `debug/deps` | 35,9 GB | 11,9 GB | 2,0 GB |
+| Executáveis acima de 100 MB | 95 | 41 | 4 |
+| Tocar `src/lib.rs` | 68 s | 47 s | 7 s |
+| Tocar um arquivo de teste | 1 s | 0 s | 3 s |
+| `target` depois dos dois | 84 GB | 30 GB | 5,5 GB |
+
+Testes listados: 1651 no `hangar-server` e 1739 no workspace antes; depois da junção os mesmos (os
+testes novos das correções abaixo vieram depois da medição).
+
+- **Seis executáveis à parte.** `workspace_unavailable` esvazia o `PATH`; `runtime_diagnostics` e
+  `terminal_diagnostics` instalam o logger global e contam avisos exatos; `contract_local_policy`
+  troca `HOME`, `USERPROFILE` e `TZ`; `costs_hook` (os três de custos) instala o gancho de pânico do
+  servidor, que tirava a mensagem de falha de todo o `it` (duas falhas apareceram sem motivo antes
+  da separação).
+- **O limite do diário atravessava os arquivos.** `groups_routes` e `groups_legacy` esperavam o
+  mesmo `rust.groups_restore_failed` para `s0`; no mesmo processo o segundo nunca chegava
+  ("condição não chegou em 5 s"), porque o `warn_limit` é do processo. A chave do diário ganhou o
+  destino (o Python do servidor): em produção há um só, e cada servidor de teste tem o seu. Um
+  `DiagClient` próprio por limitador mudaria a produção, porque o cliente é criado em vários pontos.
+- **Três intermitentes que a junção expôs no Windows**, corrigidos na causa:
+  - `costs/origins` dava a pasta por igual quando a skill nova nascia no mesmo degrau do relógio do
+    sistema de arquivos (1 a 16 ms no Windows) da mudança anterior. Data com menos de 2 s da
+    varredura agora não vale como "não mudou".
+  - `accounts/locks` fazia cada tentativa no pool de bloqueio. A tentativa sobrevivia ao
+    cancelamento da espera e podia pegar a trava depois dele; agora roda na própria espera, já que
+    o `try_lock` não bloqueia.
+  - O `terminal_runtime` lia o arquivo de estado no meio da troca atômica do ator. No Windows 11, 286 de
+    392 mil leituras feitas durante as trocas deram acesso negado. O leitor Python de
+    `runtime_policy.py` (`session.patch_meta`) está exposto ao mesmo e ficou fora deste trabalho.
+- **Um processo só para todos os testes exige higiene de processo.** No Linux, em 12 rodadas do `it`
+  inteiro, três falharam por recursos de um teste que outro segurava:
+  - **Filho de `fork` sem `exec`** (a sonda de `ptrace` do `uploads_store` e o filho parado do
+    `accounts_catalog`) carregava cópias de todos os descritores do processo: o socket que outro teste
+    fechou continuava aceitando conexão. O filho agora fecha o que herdou (`close_inherited_fds`).
+  - **Porta "fechada" tirada de um listener solto** voltava a outro teste, que respondia no lugar. Agora
+    é a porta 1 (`refused_address`), que o kernel nunca sorteia; o auxiliar confere uma vez que ela
+    recusa e para com o motivo se algo escutar ali. Reservar com
+    `bind` sem `listen` não serve: no macOS a conexão fica pendurada em vez de recusar.
+  - **Executável gravado e rodado em seguida** podia dar "Text file busy" (ETXTBSY): um filho de outro
+    teste, nascido enquanto o arquivo estava aberto para escrita, herdava o descritor. Quem grava agora
+    é um `install` à parte (`write_executable` no `it`, `write_test_executable` nos testes de `src/`).
+  - **"A porta fechou" logo depois do `stop`** espera a recusa com prazo (`assert_closed`), pela mesma
+    janela entre o `fork` e o `exec`.
+  - **Lease e portas reabertos logo depois de soltos**: um filho de outro teste, entre o `fork` e o
+    `exec`, carrega por instantes a cópia do descritor (a trava do `flock` é da descrição aberta). O
+    teste espera até 2 s (`lease_when_free` e o reinício do `plugin_loopback`). A produção tem a
+    mesma janela, já que o servidor lança processos o tempo todo; trocar o `flock` pela trava do
+    `fcntl`, que não passa ao filho, muda o contrato com o `WriterLease` do Python.
+  - Os intermitentes de porta do `cano_v2` e do `plugin_loopback` e o do canal privado do `side`
+    vieram do #140, com o mesmo conteúdo.
+- **Dois que o pytest em 4 processos expôs no CI:** o `git commit` dispara `maintenance run --auto`
+  em segundo plano, e o `maintenance.lock` sumia no meio da cópia do repositório do teste (a suíte
+  desliga a manutenção automática); e o Codex deixava filhos em segundo plano (o clone dos plugins
+  curados) escrevendo na pasta temporária do escritor de `config.toml`, e salvar as opções falhava
+  ao apagá-la. No POSIX o Codex nasce num grupo de processos próprio (`_OwnGroup`), com o mesmo
+  contrato do Job do Windows: prazo de saída, grupo encerrado e fim confirmado. Conserto no Python
+  por decisão do dono: é defeito do que já existe, não recurso novo.
+- **Intermitentes antigos do macOS, já presentes na `main`:** o `state::live` exigia nenhuma
+  releitura logo depois de armar o observador, e o FSEvents entrega com atraso a criação das pastas
+  do próprio teste; agora o teste espera o observador assentar. O `cargo test` do Server roda com
+  `--no-fail-fast`: sem ele, o primeiro executável que falhava escondia os outros, e cada rodada do
+  macOS mostrava um intermitente diferente.
+- **Reexecução com nome curto passava sem testar nada.** No `it` o nome ganha o módulo; o filho com
+  `--exact <nome>` rodava 0 testes e saía 0. Prova: com `assert_ran_one` e o nome antigo, os cinco
+  falharam com `running 0 tests`.
+- **Features iguais entre `-p` e `--workspace`.** `alloc` no `serde`/`serde_json` (vindo do
+  `schemars` de teste do `hangar-codex`) e `signal` no `tokio` (do `hangar-cano`) faziam
+  `cargo test -p hangar-server` e `--workspace` compilarem o servidor duas vezes, com uma cópia de
+  cada. O `resolver.feature-unification` resolveria, mas no cargo 1.98 ainda pede `-Z`.
+- **O Native não era lento por cache despejado.** Na `main` (run 37998405378) o cache foi achado nos
+  três sistemas e o release levou 869 s (Linux), 1130 s (Windows) e 1392 s (macOS): o LTO fat com
+  uma unidade de código, mais o GPUI vendorizado recompilando a cada checkout, porque o cargo julga
+  crate de caminho pela data dos arquivos. Os 74 crates do job Linux do Server eram o
+  `cargo install cargo-zigbuild`, não o release.
+- **Com LTO as dependências saem em bitcode**, e o cache da `main` (`dist`) não serve ao `release`
+  da branch. Por isso a chave leva o perfil, e o job `cache-release` da `main` grava o cache do
+  `release` só quando as dependências mudam. O perfil nomeado no `Cargo.toml`, e não variável de
+  ambiente, deixa os dois perfis em pastas próprias e sem valor a espelhar entre os jobs.
+- **Cache do Actions em 10,98 GB** (limite 10 GB) antes: `server-v2` 2,5/2,2/1,6 GB, `native-*`
+  0,8–0,9 GB, `backend-rust` 0,6 GB e 0,8 GB de uma chave sem `v2` que nenhum workflow usava.
+

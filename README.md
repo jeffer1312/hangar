@@ -214,6 +214,9 @@ npm --prefix frontend run dev
 cd backend && uv run pytest
 npm run check                      # svelte-check + tsc for every TypeScript package
 scripts/verificar-local            # what CI would run for the current commit
+
+# Rust targets keep the previous copy of every test executable and incremental session
+scripts/podar-target crates/target desktop-native/target
 ```
 
 Contributor notes, architecture rules and the decisions behind them are in

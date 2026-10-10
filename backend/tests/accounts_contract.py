@@ -19,6 +19,31 @@ from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHand
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "accounts_contract"
+CRATES = Path(__file__).resolve().parents[2] / "crates"
+
+
+_integration_binary: Path | None = None
+
+
+def rust_integration_binary(build_log: Path | None = None) -> Path:
+    """Executável dos testes de integração do hangar-server (`tests/it/`); as sondas são módulos dele e
+    rodam por `--exact <módulo>::<teste>`. Uma vez por processo, compila se preciso e pergunta ao cargo qual
+    é o executável: o arquivo `it-*` mais novo podia ser de outra configuração ou de outra versão."""
+    global _integration_binary
+    if _integration_binary is None:
+        with (build_log or Path(os.devnull)).open("w", encoding="utf-8") as erros:
+            built = subprocess.run(["cargo", "test", "--locked", "-p", "hangar-server", "--test", "it", "--no-run",
+                                    "--message-format=json"], cwd=CRATES, stdout=subprocess.PIPE, stderr=erros,
+                                   text=True, encoding="utf-8", timeout=900)
+        assert built.returncode == 0, f"Falha ao compilar os testes do hangar-server; log: {build_log}"
+        artefatos = [json.loads(linha) for linha in built.stdout.splitlines() if linha.startswith("{")]
+        executaveis = [a["executable"] for a in artefatos if a.get("reason") == "compiler-artifact"
+                       and a.get("target", {}).get("name") == "it" and a.get("executable")]
+        assert executaveis, "o cargo não informou o executável dos testes `it`"
+        _integration_binary = Path(executaveis[-1])
+    return _integration_binary
+
+
 _BRIDGE_OPERATIONS = frozenset({"bridge.prepare", "bridge.claude_window", "bridge.other_quotas"})
 # Rotas da ponte secundária Pi/omp retirada: chamada a qualquer uma é escrita/leitura fora do Rust.
 _RETIRED_SECONDARY_ROUTES = frozenset({
@@ -184,27 +209,9 @@ class PythonReference(HttpTransport):
 
 class RustClaude(HttpTransport):
     """Transporte real Rust com CLI sintética em árvore descartável."""
-    _prepared_targets: set[Path] = set()
-
     def __init__(self, reference):
         self.reference = reference
-        target = Path(os.environ.get("CARGO_TARGET_DIR", Path(__file__).resolve().parents[2] / "crates/target")) / "debug/deps"
-        candidates = [p for p in target.glob("accounts_claude_login-*")
-                      if p.is_file() and p.suffix in {"", ".exe"}]
-        if target not in self._prepared_targets:
-            # O gate pode reutilizar um target cujo binário veio de outra fonte.
-            build_log = reference.root / "rust-build.log"
-            with build_log.open("w", encoding="utf-8") as output:
-                built = subprocess.run([
-                    "cargo", "test", "--locked", "-p", "hangar-server",
-                    "--test", "accounts_claude_login", "--no-run",
-                ], cwd=Path(__file__).resolve().parents[2] / "crates",
-                    stdout=output, stderr=subprocess.STDOUT, timeout=900)
-            assert built.returncode == 0, f"Falha ao compilar a sonda Rust; log: {build_log}"
-            self._prepared_targets.add(target)
-            candidates = [p for p in target.glob("accounts_claude_login-*")
-                          if p.is_file() and p.suffix in {"", ".exe"}]
-        binary = max(candidates, key=lambda p: p.stat().st_mtime)
+        binary = rust_integration_binary(build_log=reference.root / "rust-build.log")
         environment = isolated_environment(reference.root)
         fixture = reference.root / "claude-native"
         script = fixture / "node_modules/@anthropic-ai/claude-code/cli.js"
@@ -221,7 +228,7 @@ process.stdout.write(r);process.exit(r.includes('false')?1:0);"""
         environment["PATH"] = str(fixture) + os.pathsep + environment["PATH"]
         environment.update(ACCOUNT_HTTP_UPSTREAM=reference.base_url.removeprefix("http://"),
                            HANGAR_RUNTIME_INSTANCE="contract-instance")
-        self.process = subprocess.Popen([str(binary), "--exact", "http_probe_process", "--nocapture"],
+        self.process = subprocess.Popen([str(binary), "--exact", "accounts_claude_login::http_probe_process", "--nocapture"],
                                         cwd=reference.root, env=environment, stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, text=True, encoding="utf-8")
         ready = queue.Queue()
@@ -245,22 +252,9 @@ process.stdout.write(r);process.exit(r.includes('false')?1:0);"""
 
 class RustCodex(HttpTransport):
     """CLI JSON-RPC sintética; somente o transporte externo é controlado."""
-    _prepared_targets: set[Path] = set()
-
     def __init__(self, reference, *, missing_cli=False, device_url=None, extra_environment=None):
         self.reference = reference
-        target = Path(os.environ.get("CARGO_TARGET_DIR", Path(__file__).resolve().parents[2] / "crates/target")) / "debug/deps"
-        if target not in self._prepared_targets:
-            with (reference.root / "codex-build.log").open("w", encoding="utf-8") as output:
-                built = subprocess.run(["cargo", "test", "--locked", "-p", "hangar-server",
-                                        "--test", "accounts_codex_login", "--no-run"],
-                                       cwd=Path(__file__).resolve().parents[2] / "crates",
-                                       stdout=output, stderr=subprocess.STDOUT, timeout=900)
-            assert built.returncode == 0, "Falha ao compilar a sonda Codex; confira codex-build.log"
-            self._prepared_targets.add(target)
-        candidates = [p for p in target.glob("accounts_codex_login-*")
-                      if p.is_file() and p.suffix in {"", ".exe"}]
-        binary = max(candidates, key=lambda p: p.stat().st_mtime)
+        binary = rust_integration_binary(build_log=reference.root / "codex-build.log")
         self.fixture = reference.root / "codex-native"
         script = self.fixture / "node_modules/@openai/codex/bin/codex.js"
         script.parent.mkdir(parents=True, exist_ok=True)
@@ -318,7 +312,7 @@ else send({id:m.id,error:{code:-32601,message:'método inesperado'}});
         if device_url is not None:
             environment["ACCOUNT_DEVICE_UPSTREAM"] = device_url
         environment.update(extra_environment or {})
-        self.process = subprocess.Popen([str(binary), "--exact", "http_probe_process", "--nocapture"],
+        self.process = subprocess.Popen([str(binary), "--exact", "accounts_codex_login::http_probe_process", "--nocapture"],
                                         cwd=reference.root, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, text=True, encoding="utf-8")
         ready = queue.Queue()

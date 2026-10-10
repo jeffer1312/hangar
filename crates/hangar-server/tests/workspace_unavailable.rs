@@ -1,5 +1,7 @@
 //! Binário próprio: o teste esvazia o PATH do processo para o `git` não iniciar.
+#[path = "it/fake/mod.rs"]
 mod fake;
+#[path = "it/workspace_fixture/mod.rs"]
 mod workspace_fixture;
 use fake::{OWNER, client};
 use workspace_fixture::refusal;

@@ -105,11 +105,21 @@ fn identify(pid: u32, key: &str) -> Liveness {
 /// Pelo pid E pela identidade: número reaproveitado depois de reiniciar a máquina é `Foreign`.
 pub fn liveness(pid: u32, key: &str) -> Liveness { identify(pid, key) }
 
+static FOUND: OnceLock<PathBuf> = OnceLock::new();
+
+/// Fixa o binário do cano antes da primeira busca, sem variável de ambiente: os testes de integração
+/// rodam num processo só, e mudar o ambiente com outras threads lendo é indefinido em Unix. O mesmo
+/// caminho de novo é aceito; outro devolve o que já valia.
+#[doc(hidden)]
+pub fn use_cano_binary(path: PathBuf) -> Result<(), PathBuf> {
+    let current = FOUND.get_or_init(|| path.clone());
+    if *current == path { Ok(()) } else { Err(current.clone()) }
+}
+
 /// `CP_RUST_CANO_BIN`, senão a pasta do `hangar-server`, senão `~/.hangar/bin`; sondado uma vez
 /// por processo quando acha (sem argumentos o cano sai com 2); falha não fica guardada, a próxima chamada
 /// sonda de novo. Caminho errado na variável não vira outro binário.
 pub fn cano_binary() -> Result<PathBuf, ProcessError> {
-    static FOUND: OnceLock<PathBuf> = OnceLock::new();
     if let Some(path) = FOUND.get() { return Ok(path.clone()); }
     let found = {
         let name = if cfg!(windows) { "hangar-cano.exe" } else { "hangar-cano" };
@@ -244,9 +254,9 @@ pub async fn spawn(spec: &LaunchSpec) -> Result<Cano, ProcessError> {
     }
 }
 
-/// Mata o grupo do cano (cano + agente) só se o pid ainda for o cano da chave, e apaga
-/// `cano-<key16>*` da pasta da sessão (`sidecar_dir`, nunca a tirada do `escuta`) depois de
-/// confirmada a saída. Pid de outro programa: não mata.
+/// Mata o grupo do cano (cano + agente) só se o pid ainda for o cano da chave e, confirmada a saída,
+/// apaga os rastros dele na pasta da sessão (`sidecar_dir`): o socket desta vida e, se nenhuma outra
+/// vida da chave tem socket ali nem processo vivo, os demais `cano-<key16>*`. Pid de outro programa: não mata.
 pub async fn kill(cano: &Cano, key: &str, sidecar_dir: &Path) -> Result<(), ProcessError> {
     let (pid, key_owned) = (cano.pid, key.to_owned());
     let state = tokio::task::spawn_blocking(move || identify(pid, &key_owned)).await
@@ -263,7 +273,7 @@ pub async fn kill(cano: &Cano, key: &str, sidecar_dir: &Path) -> Result<(), Proc
             }
         }
     }
-    remove_traces(sidecar_dir, key);
+    remove_traces(sidecar_dir, key, &cano.escuta, cano.pid);
     Ok(())
 }
 
@@ -295,20 +305,46 @@ fn signal_group(pid: u32) -> Result<(), ProcessError> {
     if matches!(status.code(), Some(0 | 128)) { Ok(()) } else { Err(ProcessError::StillAlive) }
 }
 
-fn remove_traces(dir: &Path, key: &str) {
+fn remove_traces(dir: &Path, key: &str, escuta: &str, except: u32) {
     // Chave vazia ou curta casaria `cano-*` de outras sessões e levaria o socket delas.
     if key.len() < 16 { return; }
     let prefix = format!("cano-{}", key16(key));
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
+    let remove = |path: &Path| if let Err(e) = std::fs::remove_file(path) && e.kind() != std::io::ErrorKind::NotFound {
+        tracing::warn!(file = %path.display(), kind = ?e.kind(), "rastro do cano não removido");
+    };
+    // O socket desta vida, se é mesmo um rastro dela na pasta da sessão.
+    if let Some(own) = escuta.strip_prefix("unix:").map(Path::new)
+        && own.parent() == Some(dir) && own.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&prefix)) {
+        remove(own);
+    }
+    let entries: Vec<_> = match std::fs::read_dir(dir) {
+        Ok(entries) => entries.flatten().filter(|e| e.file_name().to_string_lossy().starts_with(&prefix)).collect(),
         Err(e) => { tracing::debug!(dir = %dir.display(), kind = ?e.kind(), "rastros do cano: pasta ilegível"); return; }
     };
-    for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().starts_with(&prefix)
-            && let Err(e) = std::fs::remove_file(entry.path()) && e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(file = %entry.path().display(), kind = ?e.kind(), "rastro do cano não removido");
-        }
-    }
+    // Outra vida da mesma chave (sufixo por subida) ainda tem socket, ou outro cano dela está vivo (a
+    // que escuta por TCP não deixa socket): o log e o resto são dela também.
+    let newer_socket = entries.iter().any(|e| { let name = e.file_name().to_string_lossy().into_owned();
+        name.starts_with(&format!("{prefix}-")) && name.ends_with(".sock") });
+    if newer_socket || other_cano_alive(key, except) { return; }
+    for entry in entries { remove(&entry.path()); }
+}
+
+/// Outro cano vivo desta chave além de `except`. Sem como listar os processos, responde que sim: na
+/// dúvida, os rastros ficam.
+#[cfg(target_os = "linux")]
+fn other_cano_alive(key: &str, except: u32) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else { return true };
+    entries.flatten().filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| *pid != except)
+        .any(|pid| probe(pid).is_some_and(|(argv, _)| is_cano_of(&argv, key)))
+}
+#[cfg(not(target_os = "linux"))]
+fn other_cano_alive(key: &str, except: u32) -> bool {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always));
+    system.processes().iter().any(|(pid, process)| pid.as_u32() != except
+        && is_cano_of(&process.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>(), key))
 }
 
 /// Canos deste dono cuja sessão já não existe; `SIGTERM` por pid, como o Python. Dono é

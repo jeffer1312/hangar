@@ -45,28 +45,29 @@ jobs:
             exe: ""
             target: x86_64-unknown-linux-gnu
             zigbuild: true
-            bindir: target/x86_64-unknown-linux-gnu/release
+            dir: target/x86_64-unknown-linux-gnu
             experimental: false
           # Como no native.yml: falha de Windows ou macOS não segura a release do Linux.
           - os: windows-latest
             platform: windows-x86_64
             exe: ".exe"
             target: ""
-            bindir: target/release
+            dir: target
             experimental: true
           - os: macos-latest
             platform: macos-aarch64
             exe: ""
             target: ""
-            bindir: target/release
+            dir: target
             experimental: true
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.experimental }}
-    # Target enxuto no cache: o incremental não serve entre runs e a depuração completa inchava o do
-    # Windows a ponto de o GitHub despejar o do Linux pelo limite do repositório.
+    # O incremental não serve entre runs; a depuração reduzida vem do perfil dev do crates/Cargo.toml.
+    # PERFIL: a main publica com o `dist` (LTO completo, uma unidade de código); a pré-release de branch, com o
+    # `release` comum, que lê o cache do job `cache-release`.
     env:
       CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      PERFIL: ${{ github.ref == 'refs/heads/main' && 'dist' || 'release' }}
     # Escreve porque cada sistema publica no fim do próprio build; sem o token do git no checkout, o cargo
     # test e os build scripts não alcançam essa escrita.
     permissions:
@@ -99,50 +100,56 @@ jobs:
         if: runner.os != 'Windows'
         run: tmux -V
       # O rustup do runner lê o crates/rust-toolchain.toml (1.98.1) no primeiro cargo.
-      # Só a main grava (o passo `cache/save` lá embaixo); as outras branches leem o dela. Cada branch
-      # gravando a própria cópia estourava o limite de cache do repositório e o GitHub despejava a da main.
+      # Só a main grava; as outras branches leem o dela. Cada branch gravando a própria cópia estourava o limite
+      # de cache do repositório e o GitHub despejava a da main. Dois caches: o dos testes (debug) e o do release,
+      # com o perfil na chave, porque com LTO as dependências saem em bitcode e não servem ao release sem LTO.
       - uses: actions/cache/restore@v4
-        id: cache-rust
+        id: cache-dev
         with:
-          path: |
+          path: &cache-dev |
             ~/.cargo/registry
             ~/.cargo/git
-            crates/target
-          key: server-v2-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
-          restore-keys: server-v2-${{ runner.os }}-
+            crates/target/debug
+          key: server-v3-${{ runner.os }}-dev-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: server-v3-${{ runner.os }}-dev-
+      - uses: actions/cache/restore@v4
+        id: cache-perfil
+        with:
+          path: &cache-perfil |
+            crates/target/${{ env.PERFIL }}
+            crates/target/x86_64-unknown-linux-gnu/${{ env.PERFIL }}
+          key: &chave-perfil server-v3-${{ runner.os }}-${{ env.PERFIL }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: &chave-perfil-parcial server-v3-${{ runner.os }}-${{ env.PERFIL }}-
       # Os testes do hangar-api leem as amostras de backend/tests/fixtures/, que vêm no mesmo checkout.
-      - run: cargo test --locked --workspace
+      # --no-fail-fast: sem ele o cargo para no primeiro executável que falha e esconde os outros.
+      - run: cargo test --locked --workspace --no-fail-fast
+      # A poda tira o que é do workspace (recompila a cada push) e fica só o que o cache poupa.
+      - if: &grava-dev github.ref == 'refs/heads/main' && steps.cache-dev.outputs.cache-hit != 'true'
+        run: ../scripts/podar-target --cache target
+      - uses: actions/cache/save@v4
+        if: *grava-dev
+        with:
+          path: *cache-dev
+          key: ${{ steps.cache-dev.outputs.cache-primary-key }}
       - if: matrix.target != ''
         run: rustup target add ${{ matrix.target }}
       # Zig baixado direto (sha256 do index.json do ziglang.org): o repositório só libera actions da GitHub,
       # de criador verificado e o setup-uv, e uma action fora da lista derruba o workflow antes de começar.
       - if: matrix.zigbuild
-        run: |
+        run: &zig |
           curl -fsSL -o /tmp/zig.tar.xz https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
           echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz" | sha256sum -c -
           tar -xJf /tmp/zig.tar.xz -C /tmp
           echo /tmp/zig-x86_64-linux-0.16.0 >> "$GITHUB_PATH"
-      - if: matrix.zigbuild
-        run: cargo install cargo-zigbuild --locked --version =0.23.4
-      # O sufixo .2.28 fixa a glibc mínima; o diretório de saída continua sem ele (target/<triplo>/release).
-      - run: cargo ${{ matrix.zigbuild && 'zigbuild' || 'build' }} --locked --release --workspace ${{ matrix.target && format('--target {0}{1}', matrix.target, matrix.zigbuild && '.2.28' || '') || '' }}
-        env:
-          CARGO_PROFILE_RELEASE_LTO: fat
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
-      - uses: actions/cache/save@v4
-        if: github.ref == 'refs/heads/main' && steps.cache-rust.outputs.cache-hit != 'true'
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            crates/target
-          key: ${{ steps.cache-rust.outputs.cache-primary-key }}
+          cargo install cargo-zigbuild --locked --version =0.23.4
+      # O sufixo .2.28 fixa a glibc mínima; o diretório de saída continua sem ele (target/<triplo>/<perfil>).
+      - run: &build-perfil cargo ${{ matrix.zigbuild && 'zigbuild' || 'build' }} --locked --profile "$PERFIL" --workspace ${{ matrix.target && format('--target {0}{1}', matrix.target, matrix.zigbuild && '.2.28' || '') || '' }}
       # Guarda: se o zigbuild deixar de fixar a glibc, o binário passa a exigir mais que o prometido.
       - name: glibc máxima exigida
         if: matrix.zigbuild
         run: |
           for bin in hangar-server hangar-cano; do
-            top=$(objdump -T "${{ matrix.bindir }}/$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+            top=$(objdump -T "${{ matrix.dir }}/${{ env.PERFIL }}/$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
             echo "$bin exige $top"
             test "$(printf '%s\n' "$top" GLIBC_2.28 | sort -V | tail -1)" = GLIBC_2.28
           done
@@ -161,15 +168,22 @@ jobs:
         working-directory: backend
         run: |
           # Sem o binário a suíte pula os casos Rust e sairia verde: aqui a falta é erro.
-          test -x "$GITHUB_WORKSPACE/crates/${{ matrix.bindir }}/hangar-cano"
-          CP_RUST_CANO_BIN=$GITHUB_WORKSPACE/crates/${{ matrix.bindir }}/hangar-cano uv run pytest tests/test_claude_headless_cano.py
+          test -x "$GITHUB_WORKSPACE/crates/${{ matrix.dir }}/${{ env.PERFIL }}/hangar-cano"
+          CP_RUST_CANO_BIN=$GITHUB_WORKSPACE/crates/${{ matrix.dir }}/${{ env.PERFIL }}/hangar-cano uv run pytest tests/test_claude_headless_cano.py
       - name: Empacotar
         run: |
           mkdir -p out
           for bin in hangar-server hangar-cano; do
-            cp "${{ matrix.bindir }}/$bin${{ matrix.exe }}" "out/$bin-${{ matrix.platform }}${{ matrix.exe }}"
+            cp "${{ matrix.dir }}/${{ env.PERFIL }}/$bin${{ matrix.exe }}" "out/$bin-${{ matrix.platform }}${{ matrix.exe }}"
           done
           ls -l out
+      - if: &grava-perfil github.ref == 'refs/heads/main' && steps.cache-perfil.outputs.cache-hit != 'true'
+        run: ../scripts/podar-target --cache target
+      - uses: actions/cache/save@v4
+        if: *grava-perfil
+        with:
+          path: *cache-perfil
+          key: ${{ steps.cache-perfil.outputs.cache-primary-key }}
       # Cada sistema publica assim que o PRÓPRIO build passa: o Linux não espera Windows e macOS. Build que falha não
       # publica nada, e a release segue com o binário e a entrada anteriores daquele sistema.
       - name: Publicar na release
@@ -279,6 +293,63 @@ jobs:
               sys.exit(f"{LATEST} não estabilizou")
           EOF
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+
+  # O cache de release que a pré-release de branch lê. Só a main grava, e só quando as dependências ou o
+  # toolchain mudam (a chave não existe ainda); nos outros pushes o job termina na consulta.
+  cache-release:
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            zigbuild: true
+          - os: windows-latest
+            target: ""
+          - os: macos-latest
+            target: ""
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    env:
+      CARGO_INCREMENTAL: "0"
+      PERFIL: release
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: crates
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        id: consulta
+        with:
+          path: *cache-perfil
+          key: *chave-perfil
+          lookup-only: true
+      # A base é o cache anterior do mesmo perfil: só o que mudou compila.
+      - if: &falta-perfil steps.consulta.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: *cache-perfil
+          key: *chave-perfil
+          restore-keys: *chave-perfil-parcial
+      - if: steps.consulta.outputs.cache-hit != 'true' && matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
+      - if: steps.consulta.outputs.cache-hit != 'true' && matrix.zigbuild
+        run: *zig
+      - if: *falta-perfil
+        run: *build-perfil
+      - if: *falta-perfil
+        run: ../scripts/podar-target --cache target
+      - if: *falta-perfil
+        uses: actions/cache/save@v4
+        with:
+          path: *cache-perfil
+          key: ${{ steps.consulta.outputs.cache-primary-key }}
 
   # Windows e macOS têm continue-on-error para a falha de build deles não segurar o Linux; publicação que falhou
   # depois de começar (binário novo com manifesto velho) não pode passar calada por isso.

@@ -1,11 +1,14 @@
 //! Descoberta das origens de skills com atualização assíncrona após a primeira consulta.
 
 use indexmap::IndexMap;
-use std::{fs, path::{Path, PathBuf}, sync::{Arc, Mutex, OnceLock}, time::{Instant, SystemTime}};
+use std::{fs, path::{Path, PathBuf}, sync::{Arc, Mutex, OnceLock}, time::{Duration, Instant, SystemTime}};
 
 const CHECK_NANOS: u64 = 30_000_000_000;
+/// Idade mínima da data de uma pasta para valer como "não mudou".
+const RACY: Duration = Duration::from_secs(2);
 type Clock = dyn Fn() -> u64 + Send + Sync;
-type Watch = Vec<(PathBuf, Option<SystemTime>)>;
+/// Data de cada pasta na última varredura; `None` = recente demais para valer, olhar de novo.
+type Watch = Vec<(PathBuf, Option<Option<SystemTime>>)>;
 
 fn roots(home: &Path, repo: &Path) -> ([PathBuf; 3], [PathBuf; 3]) {
     ([home.join(".claude/skills"), repo.join("skills"), home.join(".agents/skills")],
@@ -155,10 +158,15 @@ impl Origins {
 fn refresh(inner: &Inner, force: bool) {
     let checked_at = (inner.clock)();
     let watch = inner.state.lock().unwrap().watch.clone();
-    if !force && watch.iter().all(|(p, seen)| mtime(p) == *seen) { return; }
-    // Ler os mtimes antes permite perceber mudanças ocorridas durante a varredura.
+    if !force && watch.iter().all(|(p, seen)| *seen == Some(mtime(p))) { return; }
+    // Ler os mtimes antes permite perceber mudanças ocorridas durante a varredura. Data recente demais
+    // não prova nada: mudança no mesmo degrau do relógio do sistema de arquivos (até 16 ms no Windows, 2 s
+    // no FAT) deixa a mesma data, e a pasta é olhada de novo na verificação seguinte.
+    let started = SystemTime::now();
     let watch = watched_dirs(&inner.home, &inner.repo).into_iter().map(|p| {
-        let seen = mtime(&p); (p, seen)
+        let seen = mtime(&p);
+        let settled = seen.is_none_or(|t| started.duration_since(t).is_ok_and(|age| age >= RACY));
+        (p, settled.then_some(seen))
     }).collect();
     let found = scan(&inner.home, &inner.repo);
     let mut state = inner.state.lock().unwrap();

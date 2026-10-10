@@ -38,6 +38,7 @@ dev = [
     # precisam dele pra exercitar o caminho de Windows/macOS nesta maquina. Sem isso o codigo
     # que so roda fora do Linux nunca seria testado por ninguem que desenvolve no Linux.
     "psutil>=5.9.0",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.pytest.ini_options]

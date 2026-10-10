@@ -181,11 +181,10 @@ mod tests {
 
     #[cfg(unix)]
     fn script(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
+        
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("fake-tmux");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::write_test_executable(&path, format!("#!/bin/sh\n{body}\n"));
         (dir, path)
     }
 

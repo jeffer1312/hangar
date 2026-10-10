@@ -178,10 +178,29 @@ async fn local_process_is_reused_and_stopped_by_its_owner() {
     );
     assert_eq!(first.unwrap().text, "Transcrição local em português.");
     assert_eq!(second.unwrap().text, "Transcrição local em português.");
-    let starts = std::fs::read_to_string(std::path::Path::new(&provider.model_path).with_extension("starts")).unwrap();
-    assert_eq!(starts.lines().count(), 1);
+    // Um processo atendeu os dois pedidos. Partidas que morreram antes de escutar (porta tomada) não contam.
+    let listening = std::fs::read_to_string(std::path::Path::new(&provider.model_path).with_extension("listening")).unwrap();
+    assert_eq!(listening.lines().count(), 1);
     service.shutdown().await;
     assert!(!temp.path().join("transcription-local.json").exists());
+}
+
+/// A porta do Whisper é reservada e solta antes de ele subir: outro processo pode tomá-la nesse meio, e o
+/// Whisper sai antes de escutar. Uma partida que morre assim tenta de novo numa porta nova.
+#[tokio::test]
+async fn local_process_that_dies_on_start_is_retried_on_a_new_port() {
+    let (temp, provider) = installed_whisper().await;
+    std::fs::write(&provider.model_path, "exit-first").unwrap();
+    let service = TranscriptionService::default();
+    service.configure(ConfigSnapshot { providers: vec![provider.clone()],
+        state_path: temp.path().join("wait.json").to_string_lossy().into_owned(), ..Default::default() }).await;
+    let text = service.transcribe(Bytes::from_static(WAV), Some("fala.wav".into()), Profile::Dictation).await.unwrap().text;
+    assert_eq!(text, "Transcrição local em português.");
+    let starts = std::fs::read_to_string(std::path::Path::new(&provider.model_path).with_extension("starts")).unwrap();
+    assert_eq!(starts.lines().count(), 2, "uma partida que morreu e outra que subiu");
+    let listening = std::fs::read_to_string(std::path::Path::new(&provider.model_path).with_extension("listening")).unwrap();
+    assert_eq!(listening.lines().count(), 1);
+    service.shutdown().await;
 }
 
 #[tokio::test]

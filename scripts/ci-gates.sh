@@ -55,7 +55,7 @@ fi
 if (( roda_back )); then
     # O CI instala ripgrep de propósito: sem `rg`, a busca entre sessões volta zero e os testes falham só lá.
     command -v rg >/dev/null || { echo "ci-gates: ripgrep (rg) não está no PATH — o CI tem, e os testes de busca dependem dele" >&2; falhou=1; }
-    portao "backend: pytest" bash -c 'cd backend && uv run pytest -q'
+    portao "backend: pytest" bash -c 'cd backend && uv run pytest -q -n 4 --dist loadfile'
 else
     echo "backend: nada em backend/ mudou, pulando"
 fi

@@ -2,7 +2,7 @@
 //! caixa, abas e a ativa, a célula do `✕`, a faixa (inteira, encolhida ou recolhida), diálogo, pesquisa,
 //! foco e rascunho, no tmux (SGR relativo) e no psmux (SGR absoluto). Só no Rust, nos três sistemas; o
 //! `plugin_screen.py` de hoje fica para a reserva sem Rust. Conferida contra as capturas da medição em
-//! `tests/mods_screen.rs`.
+//! `tests/it/mods_screen.rs`.
 use std::ops::Range;
 use std::sync::LazyLock;
 

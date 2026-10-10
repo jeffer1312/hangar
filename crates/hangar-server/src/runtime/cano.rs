@@ -125,7 +125,9 @@ async fn open(binding: &CanoBinding) -> Result<BufReader<Socket>, RuntimeError> 
                 // só "recusada" e "socket ausente" contam como subindo; outro erro responde na hora.
                 Err(error) if matches!(error.kind(), std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound)
                     && Instant::now() < deadline => tokio::time::sleep(Duration::from_millis(50)).await,
-                Err(_) => return Err(RuntimeError::new("cano_connect", "não foi possível conectar ao cano")),
+                // O tipo do erro vai na mensagem: sem ele, uma falha rara não diz o que o sistema respondeu.
+                Err(error) => return Err(RuntimeError { code: "cano_connect".into(),
+                    message: format!("não foi possível conectar ao cano ({:?})", error.kind()) }),
             }
         };
         let mut reader = BufReader::new(socket);

@@ -249,3 +249,15 @@ mod tests {
         assert_eq!(read("hangar-server.log.4"), None);
     }
 }
+
+/// Grava um executável de teste sem abrir o arquivo para escrita neste processo: quem grava é um
+/// `install` à parte. Gravado aqui, um filho de outro teste nascido nesse instante herdaria o descritor
+/// de escrita, e rodar o arquivo daria "Text file busy" (ETXTBSY).
+#[cfg(all(test, unix))]
+pub(crate) fn write_test_executable(path: &std::path::Path, content: impl AsRef<[u8]>) {
+    let source = path.with_extension("conteudo");
+    std::fs::write(&source, content).unwrap();
+    let status = std::process::Command::new("install").arg("-m").arg("755").arg(&source).arg(path).status().unwrap();
+    assert!(status.success(), "install não gravou {}", path.display());
+    std::fs::remove_file(&source).unwrap();
+}

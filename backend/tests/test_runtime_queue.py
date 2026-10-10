@@ -621,7 +621,7 @@ def _parity_run(store):
 
 
 def test_compaction_matches_rust_fixture(tmp_path):
-    """O mesmo roteiro roda em crates/hangar-server/tests/runtime_queue.rs contra este arquivo."""
+    """O mesmo roteiro roda em crates/hangar-server/tests/it/runtime_queue.rs contra este arquivo."""
     store = open_store(tmp_path)
     results = _parity_run(store)
     expected = json.loads(FIXTURE.read_text(encoding="utf-8"))

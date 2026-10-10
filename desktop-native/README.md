@@ -10,7 +10,7 @@ cargo +1.98.1 run --manifest-path desktop-native/Cargo.toml --locked
 
 Execute o comando na raiz desta worktree. O seletor `+1.98.1` mantém a versão do Rust ao executar fora de `desktop-native/`; se ela ainda não estiver instalada, use `rustup toolchain install 1.98.1`. Para uma compilação otimizada, acrescente `--release` depois de `--locked`. A janela pede a URL HTTP(S) do backend existente e o token de acesso; o token fica apenas na memória do processo, sem ser salvo em disco. Para a interface em inglês, use `HANGAR_NATIVE_LANG=en` no ambiente do processo.
 
-Em desenvolvimento, preserve o `target-dir` configurado no `~/.cargo/config.toml` da máquina; não abra um cache vazio por sessão. No Linux, builds de desenvolvimento rodam com `nice -n 19 ionice -c3` antes do comando Cargo. O script `tools/build-otimizado.sh` usa um target separado porque muda o perfil de compilação.
+Em desenvolvimento, preserve o `target-dir` configurado no `~/.cargo/config.toml` da máquina; não abra um cache vazio por sessão. No Linux, builds de desenvolvimento rodam com `nice -n 19 ionice -c3` antes do comando Cargo. O script `tools/build-otimizado.sh` compila com o perfil `dist` (o da main publicada), que sai em `dist/` dentro do `target-dir` em uso (o que o `cargo metadata` informa), à parte do release comum.
 
 ### Assistente de instalação sem instalar
 
