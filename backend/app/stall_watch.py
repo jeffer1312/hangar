@@ -118,6 +118,17 @@ async def _default_list_fn():
     return await sse._list_registry.list_with_state(snap)
 
 
+def _send(fn, *args) -> None:
+    """Push é rede (webpush e a presença no Rust): no laço ele travava o backend e o SIGTERM. Thread
+    própria e daemon, fora do pool padrão que o resto disputa, para não segurar o desligamento."""
+    def work() -> None:
+        try:
+            fn(*args)
+        except Exception:
+            _log.warning("stall watch: push %s falhou", getattr(fn, "__name__", fn), exc_info=True)
+    threading.Thread(target=work, daemon=True).start()
+
+
 async def _tick(list_fn) -> None:
     """Uma varredura: notifica quem ENTROU em stalled/limited desde a ultima vez; libera (re-arma)
     quem saiu de cada um (concerns independentes -- uma sessao pode estar nos dois, so um, ou nenhum)."""
@@ -136,7 +147,7 @@ async def _tick(list_fn) -> None:
         if name in _notified_dead:
             continue
         if runtime_config.get("notify_dead"):
-            push.notify_dead(name)
+            _send(push.notify_dead, name)
         sid = _seen_live.get(name)
         if sid:
             from app import api  # import local: api importa stall_watch (evita ciclo)
@@ -148,7 +159,7 @@ async def _tick(list_fn) -> None:
 
     live = {i.name for i in infos if i.stalled}
     for name in live - _notified:
-        push.notify_stalled(name)
+        _send(push.notify_stalled, name)
     # _notified passa a ser EXATAMENTE `live`: quem segue travado nao re-notifica no proximo tick; quem
     # saiu (state mudou/last_activity avancou) sai do set e pode notificar de novo se travar outra vez.
     _notified.clear()
@@ -159,7 +170,7 @@ async def _tick(list_fn) -> None:
     limited_reset = {i.name: i.limit_reset for i in infos if i.limited}
     limited_now = set(limited_reset)
     for name in limited_now - _notified_limited:
-        push.notify_limited(name, limited_reset[name])
+        _send(push.notify_limited, name, limited_reset[name])
         _maybe_auto_resume(name, limited_reset[name])
     _notified_limited.clear()
     _notified_limited.update(limited_now)
