@@ -43,6 +43,7 @@ impl SelfApi {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CallError { pub certain: bool, pub text: String }
 
+/// `own_label`: id deste servidor, vazio quando não há.
 pub struct Machines { pub own: SelfApi, pub peers: Arc<PeerClient>, pub own_label: String }
 
 fn enc(name: &str) -> String { utf8_percent_encode(name, NON_ALPHANUMERIC).to_string() }
@@ -58,8 +59,13 @@ impl Machines {
             .map_err(|e| CallError { certain: !e.is_transport(), text: e.text(machine) })
     }
 
+    /// Nome falado da máquina.
     pub fn label(&self, machine: &str) -> String {
-        if machine == HERE { self.own_label.clone() } else { machine.to_owned() }
+        match machine {
+            HERE if self.own_label.is_empty() => "este servidor".to_owned(),
+            HERE => self.own_label.clone(),
+            _ => machine.to_owned(),
+        }
     }
 
     /// `(máquina, linha)` de todas as máquinas que responderam, e o rótulo das que não.
@@ -154,6 +160,8 @@ mod tests {
         assert_eq!(m.send(HERE, "hangar", "oi").await.unwrap(), Delivery { ok: true, delivered: true });
         assert_eq!(m.history(HERE, "hangar", 20).await.unwrap()[0].text.as_deref(), Some("feito"));
         assert_eq!(m.label(HERE), "casa");
+        let unnamed = Machines { own_label: String::new(), ..m };
+        assert_eq!(unnamed.label(HERE), "este servidor", "sem id, a fala ainda nomeia a máquina");
     }
 
     #[tokio::test]

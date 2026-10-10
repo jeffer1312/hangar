@@ -143,7 +143,8 @@ impl VoiceHub {
             organizer: chosen.organizer, tools: tools_for(&caps), handoff_same_thread: true, voice_dir: settings::voice_dir(&self.home) };
         let (events_tx, events) = async_channel::unbounded();
         let voice = Voice::start(options, spawn, events_tx);
-        let own_label = st.groups.as_ref().map(|g| g.server_id().to_owned()).filter(|id| !id.is_empty()).unwrap_or_else(|| "este servidor".to_owned());
+        // Sem id fica vazio: o aparelho mostra o nome que ele mesmo dá a este servidor.
+        let own_label = st.groups.as_ref().map(|g| g.server_id().to_owned()).unwrap_or_default();
         let machines = Arc::new(Machines { own, peers: st.peers.clone(), own_label });
         let link = DeviceLink::default();
         link.replace_owner(owner, caps, screen);
