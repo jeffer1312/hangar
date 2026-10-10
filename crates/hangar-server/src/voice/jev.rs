@@ -1,7 +1,7 @@
 //! A configuração única do Jev que o servidor grava: uma chave, um endereço e um modelo para navegador,
 //! orquestração, voz e Computer Use.
 use serde_json::{Value, json};
-use std::{path::Path, sync::Mutex, time::Duration};
+use std::{sync::Mutex, time::Duration};
 
 pub const TYPESAFE_URL: &str = "https://api.typesafe.ai/v1/systemone";
 pub const TYPESAFE_MODEL: &str = "jev-latest";
@@ -46,26 +46,6 @@ pub fn config_from(runtime: &Value, settings_env: &Value, env_key: Option<String
     let key = text(&runtime["jev_api_key"]).or(env_key).or_else(|| text(&settings_env["TYPESAFE_API_KEY"]))?;
     let (url, model) = destination(&key, text(&runtime["jev_endpoint"]).as_deref(), text(&runtime["jev_model"]).as_deref());
     Some(Config { key, url: url.unwrap_or_else(|| TYPESAFE_URL.to_owned()), model: model.unwrap_or_else(|| TYPESAFE_MODEL.to_owned()) })
-}
-
-/// Bloqueia (lê arquivos). Pasta de config do servidor desta máquina: a mesma regra do backend.
-pub fn load(home: &Path) -> Option<Config> {
-    // Ausente é normal; ilegível ou quebrado vai ao diário (só o nome e o tipo), senão a chave cai calada no ambiente.
-    let read = |path: &Path| {
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        match std::fs::read(path) {
-            Ok(bytes) => serde_json::from_slice::<Value>(&bytes).unwrap_or_else(|e| {
-                crate::voice::log(format!("jev {name} unreadable json kind={:?}", e.classify()));
-                Value::Null
-            }),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Null,
-            Err(e) => { crate::voice::log(format!("jev {name} unreadable kind={:?}", e.kind())); Value::Null }
-        }
-    };
-    let base = std::env::var_os("CLAUDE_CONFIG_DIR").map_or_else(|| home.join(".claude"), Into::into);
-    let runtime = read(&base.join("runtime-config.json"));
-    let settings = read(&home.join(".claude").join("settings.json"));
-    config_from(&runtime, &settings["env"], std::env::var("TYPESAFE_API_KEY").ok().filter(|v| !v.is_empty()))
 }
 
 /// Modelo que o endereço recusou ("does not exist") e o padrão que o substitui: `(endereço, recusado, padrão)`. Só vale

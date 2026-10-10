@@ -9,6 +9,8 @@ mod fake;
 #[cfg(unix)]
 mod list_support;
 mod mods_support;
+#[cfg(unix)]
+mod voice_support;
 mod workspace_fixture;
 
 /// O `hangar-cano` de `target/<perfil>/`, ao lado de `deps/` (o binário de outro crate não tem
@@ -193,5 +195,6 @@ mod terminal_routes;
 mod terminal_runtime;
 mod terminal_runtime_tmux;
 mod uploads_store;
+mod voice_settings;
 mod workspace_routes;
 mod worktree_routes;

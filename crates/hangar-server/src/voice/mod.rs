@@ -1,11 +1,14 @@
 //! Voz ao vivo: o organizador roda aqui; o aparelho dono da chamada só fala, ouve e atende a tela.
 pub mod computer;
+pub mod hub;
 pub mod jev;
 pub mod observe;
 pub mod organizer;
 pub mod plan;
+pub mod routes;
 pub mod rpc;
 pub mod rules;
+pub mod settings;
 pub mod usage;
 
 /// Diário da voz. Nunca recebe fala, transcrição, texto de pedido nem argumentos de ferramenta.

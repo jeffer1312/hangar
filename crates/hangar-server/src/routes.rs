@@ -72,6 +72,8 @@ pub struct AppState {
     pub groups: Option<Arc<crate::groups::service::GroupService>>,
     /// Outras máquinas do dono (`peers.json`), para o par 1:1 entre máquinas.
     pub peers: Arc<crate::groups::peers::PeerClient>,
+    /// Voz ao vivo; o teste troca por um hub com pastas temporárias.
+    pub voice: Arc<crate::voice::hub::VoiceHub>,
 }
 
 impl AppState {
@@ -126,7 +128,8 @@ impl AppState {
             mods,
             pages: Arc::new(crate::pages::store::Store::new(crate::pages::store::Store::default_root())),
             chromium: crate::pages::chrome::find,
-            write_gate_wait: std::time::Duration::from_secs(30) }
+            write_gate_wait: std::time::Duration::from_secs(30),
+            voice: Arc::new(crate::voice::hub::VoiceHub::new()) }
     }
 
     pub(crate) fn skill_origins(&self, repo: &std::path::Path) -> crate::costs::origins::Origins {
@@ -326,6 +329,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         // Mesmo caminho: o axum junta o POST à rota de cima (um repasse só, o dela).
         .route("/api/presence", axum::routing::post(crate::presence::route))
         .route("/api/presence/heartbeat", axum::routing::post(crate::presence::route).fallback(pass_any))
+        .route("/api/voice/settings", axum::routing::any(crate::voice::routes::settings_route))
         // Grupos (`/pair`, `/group-message`, `/pair/contract`, `/pair-remote`, `/unpair-remote`).
         .merge(crate::groups::routes::router())
         .fallback(pass_any)
