@@ -5,6 +5,7 @@ pub mod config;
 pub mod claude_customizations;
 pub mod claude_defaults;
 pub mod presence;
+pub mod watchdog;
 pub mod costs;
 pub mod costs_routes;
 pub mod costs_failure;
@@ -105,6 +106,8 @@ pub async fn serve_until_with_state(
         let quota_bridge=accounts::bridge::AccountsBridge::new(cfg.upstream,cfg.internal_secret.clone(),instance.clone())
             .map_err(std::io::Error::other)?;
         refresh_loop=Some(accounts::claude_refresh::start(state.accounts.clone(),quota_bridge,registry.clone()));
+        let _watchdog = std::env::home_dir().map(|home| AbortOnDrop(tokio::spawn(
+            watchdog::run(state.http.clone(), cfg.upstream, cfg.internal_secret.clone(), home))));
         println!("{}",runtime::gateway::startup_line(INTERNAL_PROTOCOL,&instance,port));
         let gateway = runtime::gateway::serve(private,registry.clone(),cfg.internal_secret.clone(),instance,INTERNAL_PROTOCOL);
         let result = tokio::select! {

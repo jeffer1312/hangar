@@ -452,6 +452,12 @@ async def state_service(name: str, request: Request) -> dict:
         return {"ok": False, "error_type": type(exc).__name__}
 
 
+@router.get("/ping")
+async def ping() -> dict:
+    """Responde no próprio laço: sem resposta, o laço do Python está parado (vigia do Rust)."""
+    return {"ok": True}
+
+
 @router.get("/migration/status")
 async def migration_status() -> dict:
     from app import migration_status
