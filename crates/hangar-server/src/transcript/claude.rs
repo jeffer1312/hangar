@@ -367,7 +367,7 @@ fn queue_operation(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatE
     let id = delivery
         .unwrap_or_else(|| format!("queued:{}:{h}", obj.get("timestamp").map_or_else(String::new, py::py_str)));
     if let Some(peer) = wrapped_peer_msg(q, resolve) {
-        return vec![text_event(ChatKind::UserMsg, id, peer)];
+        return vec![ChatEvent { ts: delivery_ts, ..text_event(ChatKind::UserMsg, id, peer) }];
     }
     if is_command_meta(q) {
         return Vec::new();
@@ -686,6 +686,17 @@ mod tests {
             .into_iter().map(|e| e.id).collect::<Vec<_>>();
         assert_eq!(ids(att), vec!["delivery:d-1".to_string()]);
         assert_eq!(ids(rem), vec!["delivery:d-1".to_string()]);
+    }
+
+    #[test]
+    fn headless_peer_delivery_keeps_the_remove_timestamp() {
+        let rem = json!({"type": "queue-operation", "operation": "remove", "deliveryId": "d-1",
+            "timestamp": "2026-10-09T23:06:10.249Z",
+            "content": "<cross-session-message from=\"uds:/x\" from-name=\"x\">\n[de: x] oi\n</cross-session-message>"});
+        let [ev] = <[ChatEvent; 1]>::try_from(LineParser::new(Provider::Claude).feed(rem.to_string().as_bytes(), 0))
+            .expect("um evento");
+        assert_eq!((ev.id.as_str(), ev.text.as_deref()), ("delivery:d-1", Some("[de: x] oi")));
+        assert!(ev.ts.is_some());
     }
 
     #[test]

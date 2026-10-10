@@ -520,6 +520,14 @@ def test_entrega_sem_terminal_anexo_e_remove_viram_uma_bolha():
     assert [e.id for e in att] == [e.id for e in rem] == ["delivery:d-1"]
 
 
+
+def test_recado_nativo_entregue_sem_terminal_leva_o_horario_do_remove():
+    bruto = ('<cross-session-message from="uds:/run/user/1000/cc-socks/4242.sock" from-name="x">\n'
+             '[de: x] oi\n</cross-session-message>')
+    [ev] = parse_line(json.dumps({"type": "queue-operation", "operation": "remove", "deliveryId": "d-1",
+                                  "timestamp": "2026-10-09T23:06:10.249Z", "content": bruto}))
+    assert ev.id == "delivery:d-1" and ev.text == "[de: x] oi" and ev.ts is not None
+
 def test_historico_leva_uma_bolha_por_entrega_sem_terminal(tmp_path, monkeypatch):
     from app import pqueue
     monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)

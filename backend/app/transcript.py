@@ -518,8 +518,9 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
             # este ramo ele passaria batido e viraria bolha com o paragrafo de instrucao a mostra.
             if (peer := _peer_msg_embrulhado(queued)) is not None:
                 digest = hashlib.md5(queued.encode("utf-8", "replace")).hexdigest()[:8]
-                return [ChatEvent(kind="user_msg", text=peer,
-                                  id=_delivery_id(obj.get("deliveryId")) or f"queued:{obj.get('timestamp', '')}:{digest}")]
+                entrega = _delivery_id(obj.get("deliveryId"))
+                return [ChatEvent(kind="user_msg", text=peer, ts=_ts(obj) if entrega else None,
+                                  id=entrega or f"queued:{obj.get('timestamp', '')}:{digest}")]
             if _is_command_meta(queued):
                 return []
             cleaned = _strip_meta_blocks(queued)
