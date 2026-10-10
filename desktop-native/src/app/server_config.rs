@@ -244,6 +244,8 @@ pub(in crate::app) struct ServerConfig {
     /// Espera de cota de cada serviço, relida ao abrir a Voz.
     provider_status: Remote<Vec<ProviderStatus>>,
     provider_tests: std::collections::HashMap<String, Remote<String>>,
+    /// Serviços da última confirmação do servidor. Sobrevive à limpeza de `fields` ao reler: é com ela que um teste é comparado.
+    confirmed_providers: Vec<Value>,
     /// Servidor e chave do rascunho: trocar qualquer um dos dois é outro dono, e o rascunho não passa para ele.
     owner: String,
     _subscriptions: Vec<Subscription>,
@@ -428,14 +430,15 @@ impl ServerConfig {
     /// Campos que o servidor confirmou. O resultado de um teste vale só para a configuração testada: some quando a
     /// leitura traz outra, ou quando um Salvar confirmou serviços (a máscara não distingue duas chaves).
     fn replace_fields(&mut self, fields: Map<String, Value>, providers_saved: bool) {
-        let before: Vec<(String, Option<Value>)> =
-            self.provider_tests.keys().map(|id| (id.clone(), self.provider_saved(id).cloned())).collect();
         self.fields = fields;
-        for (id, old) in before {
-            if providers_saved || self.provider_saved(&id) != old.as_ref() {
-                if let Some(test) = self.provider_tests.get_mut(&id) { test.reset(); }
-            }
+        let confirmed = std::mem::take(&mut self.confirmed_providers);
+        for (id, test) in &mut self.provider_tests {
+            let old = confirmed.iter().find(|p| provider_text(p, "id") == id);
+            let new = self.fields.get(PROVIDERS).and_then(|f| f.get("valor")).and_then(Value::as_array)
+                .and_then(|list| list.iter().find(|p| provider_text(p, "id") == id));
+            if providers_saved || old != new { test.reset(); }
         }
+        self.confirmed_providers = self.fields.get(PROVIDERS).and_then(|f| f.get("valor")).and_then(Value::as_array).cloned().unwrap_or_default();
     }
 
     /// Máscara da chave guardada de um serviço, como a última leitura trouxe.
@@ -1981,8 +1984,9 @@ mod tests {
         s.replace_fields(read("http://x"), false);
         let seq = s.provider_tests.entry("a".into()).or_default().start();
         s.provider_tests.get_mut("a").unwrap().finish(seq, Ok("ok".into()));
+        s.fields.clear(); // como `load_server_config` faz antes de reler
         s.replace_fields(read("http://x"), false);
-        assert!(s.provider_tests["a"].value.is_some(), "mesma configuração: o resultado fica");
+        assert!(s.provider_tests["a"].value.is_some(), "reler a mesma configuração: o resultado fica");
         s.replace_fields(read("http://y"), false);
         assert!(s.provider_tests["a"].value.is_none(), "outra configuração lida: o resultado some");
         let seq = s.provider_tests.get_mut("a").unwrap().start();
