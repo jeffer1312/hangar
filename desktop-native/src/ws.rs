@@ -31,15 +31,41 @@ impl fmt::Display for Error {
 }
 
 pub enum Event { Connected, Data(Vec<u8>), Closed }
+pub enum TextEvent { Connected, Text(String), Closed }
 pub(crate) struct Frame { pub opcode: u8, fin: bool, pub data: Vec<u8> }
 
+/// O que cada socket entrega: o terminal aceita texto e binário; o de texto recusa binário.
+pub(crate) trait Incoming: Send + 'static {
+    const CONNECTED: Self;
+    const CLOSED: Self;
+    fn message(opcode: u8, data: Vec<u8>) -> Result<Self, Error> where Self: Sized;
+}
+
+impl Incoming for Event {
+    const CONNECTED: Self = Self::Connected;
+    const CLOSED: Self = Self::Closed;
+    fn message(_: u8, data: Vec<u8>) -> Result<Self, Error> { Ok(Self::Data(data)) }
+}
+
+impl Incoming for TextEvent {
+    const CONNECTED: Self = Self::Connected;
+    const CLOSED: Self = Self::Closed;
+    fn message(opcode: u8, data: Vec<u8>) -> Result<Self, Error> {
+        if opcode != 1 { return Err(Error::Protocol); }
+        String::from_utf8(data).map(Self::Text).map_err(|_| Error::Utf8)
+    }
+}
+
 /// A janela possui este cliente; descartá-lo cancela inclusive a conexão pendente.
-pub struct Terminal {
+pub struct Socket<E> {
     commands: Sender<Frame>,
-    events: Receiver<Result<Event, Error>>,
+    events: Receiver<Result<E, Error>>,
     stop: Option<oneshot::Sender<()>>,
     task: JoinHandle<()>,
 }
+
+pub type Terminal = Socket<Event>;
+pub type TextSocket = Socket<TextEvent>;
 
 impl Terminal {
     /// `token` é a credencial da conexão de `api`, nunca o texto atual do formulário.
@@ -47,7 +73,29 @@ impl Terminal {
     /// No Hangar `shortcut`, que não pertence a sessão nenhuma.
     #[allow(clippy::too_many_arguments)]
     pub fn open(runtime: &Handle, api: &Api, session: &str, shortcut: Option<&str>, hangar: bool, token: String, cols: u16, rows: u16) -> Self {
-        let url = terminal_url(api, session, shortcut, hangar, &token, cols, rows);
+        Self::connect(runtime, terminal_url(api, session, shortcut, hangar, &token, cols, rows))
+    }
+
+    pub fn send(&self, bytes: &[u8]) -> Result<(), Error> { self.enqueue(2, bytes) }
+
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), Error> {
+        let (cols, rows) = dimensions(cols, rows);
+        let text = serde_json::json!({"t": "resize", "cols": cols, "rows": rows});
+        self.enqueue(1, text.to_string().as_bytes())
+    }
+}
+
+impl TextSocket {
+    /// `path` já leva a query; o token entra como no terminal, credencial da conexão de `api`.
+    pub fn open(runtime: &Handle, api: &Api, path: &str, token: String) -> Self {
+        Self::connect(runtime, text_url(api, path, &token))
+    }
+
+    pub fn send(&self, text: &str) -> Result<(), Error> { self.enqueue(1, text.as_bytes()) }
+}
+
+impl<E: Incoming> Socket<E> {
+    fn connect(runtime: &Handle, url: url::Url) -> Self {
         let (commands, input) = async_channel::bounded(8);
         let (output, events) = async_channel::bounded(8);
         let (stop, mut stopped) = oneshot::channel();
@@ -61,13 +109,13 @@ impl Terminal {
                 Err(error) => Err(error),
                 Ok(mut stream) => match pump(&mut stream, input, &output, &mut stopped).await {
                     Err(Error::Closed) => write_frame(&mut stream, 8, &1000u16.to_be_bytes()).await
-                        .map(|()| Event::Closed),
+                        .map(|()| E::CLOSED),
                     Err(error @ (Error::Protocol | Error::Utf8 | Error::TooLarge)) => {
                         let code: u16 = match error { Error::Utf8 => 1007, Error::TooLarge => 1009, _ => 1002 };
                         let _ = write_frame(&mut stream, 8, &code.to_be_bytes()).await;
                         Err(error)
                     }
-                    result => result.map(|_| Event::Closed),
+                    result => result.map(|_| E::CLOSED),
                 },
             };
             // O consumidor parado não pode manter a tarefa viva; EOF também sinaliza desconexão.
@@ -76,15 +124,7 @@ impl Terminal {
         Self { commands, events, stop: Some(stop), task }
     }
 
-    pub fn events(&self) -> Receiver<Result<Event, Error>> { self.events.clone() }
-
-    pub fn send(&self, bytes: &[u8]) -> Result<(), Error> { self.enqueue(2, bytes) }
-
-    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), Error> {
-        let (cols, rows) = dimensions(cols, rows);
-        let text = serde_json::json!({"t": "resize", "cols": cols, "rows": rows});
-        self.enqueue(1, text.to_string().as_bytes())
-    }
+    pub fn events(&self) -> Receiver<Result<E, Error>> { self.events.clone() }
 
     fn enqueue(&self, opcode: u8, bytes: &[u8]) -> Result<(), Error> {
         if self.stop.is_none() || self.task.is_finished() { return Err(Error::Closed); }
@@ -96,9 +136,20 @@ impl Terminal {
     pub fn close(&mut self) { if let Some(stop) = self.stop.take() { let _ = stop.send(()); } }
 }
 
-impl Drop for Terminal { fn drop(&mut self) { self.task.abort(); } }
+impl<E> Drop for Socket<E> { fn drop(&mut self) { self.task.abort(); } }
 
 fn dimensions(cols: u16, rows: u16) -> (u16, u16) { (cols.clamp(20, 500), rows.clamp(5, 200)) }
+
+/// Estende o caminho da base, como o terminal: servidor atrás de prefixo continua alcançável.
+fn text_url(api: &Api, path: &str, token: &str) -> url::Url {
+    let (path, query) = path.split_once('?').unwrap_or((path, ""));
+    let mut url = api.route();
+    url.path_segments_mut().expect("validated HTTP base").pop_if_empty()
+        .extend(path.split('/').filter(|part| !part.is_empty()));
+    url.set_query((!query.is_empty()).then_some(query));
+    url.query_pairs_mut().append_pair("token", token.trim());
+    url
+}
 
 /// O terminal No Hangar mora fora de qualquer sessão, na própria rota; o de atalho e o da sessão, na dela.
 fn terminal_url(api: &Api, session: &str, shortcut: Option<&str>, hangar: bool, token: &str, cols: u16, rows: u16) -> url::Url {
@@ -245,7 +296,7 @@ pub(crate) fn close_code(bytes: &[u8]) -> Result<Option<u16>, Error> {
     Ok(Some(code))
 }
 
-async fn deliver(output: &Sender<Result<Event, Error>>, event: Event, stop: &mut oneshot::Receiver<()>) -> Result<(), Error> {
+async fn deliver<E>(output: &Sender<Result<E, Error>>, event: E, stop: &mut oneshot::Receiver<()>) -> Result<(), Error> {
     tokio::select! {
         biased;
         _ = stop => Err(Error::Closed),
@@ -254,11 +305,13 @@ async fn deliver(output: &Sender<Result<Event, Error>>, event: Event, stop: &mut
     }
 }
 
-async fn pump(stream: &mut (impl AsyncRead + AsyncWrite + Unpin), input: Receiver<Frame>,
-    output: &Sender<Result<Event, Error>>, stop: &mut oneshot::Receiver<()>) -> Result<Option<u16>, Error> {
-    deliver(output, Event::Connected, stop).await?;
+async fn pump<E: Incoming>(stream: &mut (impl AsyncRead + AsyncWrite + Unpin), input: Receiver<Frame>,
+    output: &Sender<Result<E, Error>>, stop: &mut oneshot::Receiver<()>) -> Result<Option<u16>, Error> {
+    deliver(output, E::CONNECTED, stop).await?;
     let (mut reader, mut writer) = tokio::io::split(stream);
     let mut message = Message::default();
+    // `Message` esquece o opcode ao completar; a continuação (0) herda o do primeiro quadro.
+    let mut kind = 0;
     loop {
         let frame = {
             // Preserva a leitura parcial enquanto chegam teclas ou redimensionamentos.
@@ -283,9 +336,10 @@ async fn pump(stream: &mut (impl AsyncRead + AsyncWrite + Unpin), input: Receive
             }
             9 => write_frame(&mut writer, 10, &frame.data).await?,
             10 => {},
-            _ => if let Some(bytes) = message.push(frame)? {
-                deliver(output, Event::Data(bytes), stop).await?;
-            },
+            _ => {
+                if frame.opcode != 0 { kind = frame.opcode; }
+                if let Some(bytes) = message.push(frame)? { deliver(output, E::message(kind, bytes)?, stop).await?; }
+            }
         }
     }
 }
@@ -440,6 +494,40 @@ mod tests {
             assert!(matches!(events.recv().await, Ok(Ok(Event::Closed))));
             peer.await.unwrap();
             (&mut terminal.task).await.unwrap();
+        }).await.unwrap();
+    }
+
+    /// Aceita um cliente em `/api/voice?token=t` e devolve cada quadro de texto recebido.
+    async fn echo_text_server() -> (std::net::SocketAddr, JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") { request.push(socket.read_u8().await.unwrap()); }
+            let request = String::from_utf8(request).unwrap();
+            assert!(request.starts_with("GET /api/voice?token=t HTTP/1.1"));
+            let key = request.lines().find_map(|line| line.split_once(':')
+                .filter(|(name, _)| name.eq_ignore_ascii_case("sec-websocket-key")).map(|(_, v)| v.trim())).unwrap();
+            socket.write_all(format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n", accept_key(key)).as_bytes()).await.unwrap();
+            while let Ok(frame) = read_client_frame(&mut socket).await {
+                if frame.opcode != 1 { break; }
+                write_server_frame(&mut socket, 1, &frame.data).await.unwrap();
+            }
+        });
+        (addr, server)
+    }
+
+    #[tokio::test]
+    async fn text_socket_round_trips_text_frames() {
+        timeout(Duration::from_secs(3), async {
+            let (addr, _server) = echo_text_server().await;
+            let api = Api::new(&format!("http://{addr}"), "t").unwrap();
+            let socket = TextSocket::open(&Handle::current(), &api, "/api/voice", "t".to_owned());
+            let events = socket.events();
+            assert!(matches!(events.recv().await, Ok(Ok(TextEvent::Connected))));
+            socket.send(r#"{"type":"ping"}"#).unwrap();
+            assert!(matches!(events.recv().await, Ok(Ok(TextEvent::Text(t))) if t == r#"{"type":"ping"}"#));
         }).await.unwrap();
     }
 }
