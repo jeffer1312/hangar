@@ -81,7 +81,9 @@ fn shared_birth_allows_preparation_but_excludes_identity_changes() {
 fn acquire_does_not_queue_behind_the_blocking_pool() {
     let runtime = tokio::runtime::Builder::new_multi_thread().max_blocking_threads(1).enable_all().build().unwrap();
     let (release, hold) = std::sync::mpsc::channel::<()>();
-    let busy = runtime.spawn_blocking(move || { let _ = hold.recv(); });
+    let (started, running) = std::sync::mpsc::channel::<()>();
+    let busy = runtime.spawn_blocking(move || { started.send(()).unwrap(); let _ = hold.recv(); });
+    running.recv().unwrap();
     let root = tempfile::tempdir().unwrap();
     let key = AccountKey::new(Provider::Codex, root.path()).unwrap();
     let locks = AccountLocks::new(root.path().join("locks"));

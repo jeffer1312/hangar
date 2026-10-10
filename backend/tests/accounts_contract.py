@@ -22,31 +22,26 @@ FIXTURES = Path(__file__).parent / "fixtures" / "accounts_contract"
 CRATES = Path(__file__).resolve().parents[2] / "crates"
 
 
-_integration_tests_built = False
-
-
-def _build_integration_tests(log: Path) -> None:
-    """Uma vez por processo: o target pode ter vindo de outra fonte."""
-    global _integration_tests_built
-    if _integration_tests_built:
-        return
-    with log.open("w", encoding="utf-8") as output:
-        built = subprocess.run(["cargo", "test", "--locked", "-p", "hangar-server", "--test", "it", "--no-run"],
-                               cwd=CRATES, stdout=output, stderr=subprocess.STDOUT, timeout=900)
-    assert built.returncode == 0, f"Falha ao compilar os testes do hangar-server; log: {log}"
-    _integration_tests_built = True
+_integration_binary: Path | None = None
 
 
 def rust_integration_binary(build_log: Path | None = None) -> Path:
     """Executável dos testes de integração do hangar-server (`tests/it/`); as sondas são módulos dele e
-    rodam por `--exact <módulo>::<teste>`. Com `build_log`, compila antes (uma vez por processo)."""
-    if build_log is not None:
-        _build_integration_tests(build_log)
-    # O cargo roda em crates/: um CARGO_TARGET_DIR relativo vale a partir de lá.
-    deps = CRATES / (os.environ.get("CARGO_TARGET_DIR") or "target") / "debug" / "deps"
-    candidates = [p for p in deps.glob("it-*") if p.is_file() and p.suffix in {"", ".exe"}]
-    assert candidates, "compile os testes do hangar-server antes desta prova (cargo test -p hangar-server --test it --no-run)"
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+    rodam por `--exact <módulo>::<teste>`. Uma vez por processo, compila se preciso e pergunta ao cargo qual
+    é o executável: o arquivo `it-*` mais novo podia ser de outra configuração ou de outra versão."""
+    global _integration_binary
+    if _integration_binary is None:
+        with (build_log or Path(os.devnull)).open("w", encoding="utf-8") as erros:
+            built = subprocess.run(["cargo", "test", "--locked", "-p", "hangar-server", "--test", "it", "--no-run",
+                                    "--message-format=json"], cwd=CRATES, stdout=subprocess.PIPE, stderr=erros,
+                                   text=True, encoding="utf-8", timeout=900)
+        assert built.returncode == 0, f"Falha ao compilar os testes do hangar-server; log: {build_log}"
+        artefatos = [json.loads(linha) for linha in built.stdout.splitlines() if linha.startswith("{")]
+        executaveis = [a["executable"] for a in artefatos if a.get("reason") == "compiler-artifact"
+                       and a.get("target", {}).get("name") == "it" and a.get("executable")]
+        assert executaveis, "o cargo não informou o executável dos testes `it`"
+        _integration_binary = Path(executaveis[-1])
+    return _integration_binary
 
 
 _BRIDGE_OPERATIONS = frozenset({"bridge.prepare", "bridge.claude_window", "bridge.other_quotas"})

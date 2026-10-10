@@ -159,7 +159,10 @@ impl LocalWhisper {
                 let mut running = Running { process, key, address: format!("http://127.0.0.1:{port}"), record: None };
                 if let Some(path) = record {
                     if let Err(error) = record_process(&path, running.process.child.id().unwrap_or_default(), owner).await {
+                        // Sem o processo não há o que registrar: a saída antes da leitura é a mesma partida morta.
+                        let exited = !matches!(running.process.child.try_wait(), Ok(None));
                         running.stop().await;
+                        if exited && starts < 2 { starts += 1; continue; }
                         return Err(error);
                     }
                     running.record = Some(path);
