@@ -20,6 +20,8 @@ vi.mock('./liveVoice', () => ({
 }));
 vi.mock('./peers', () => ({ listarPeers: vi.fn(async () => [{ id: 'vps', base_url: 'https://vps.ts.net:8765', token: '••' }]) }));
 vi.mock('./auth', () => ({ listServers: () => [fakes.home, fakes.vps] }));
+// Cada teste reimporta o store (resetModules): o core real recompilado a cada vez estoura o prazo do teste.
+vi.mock('@hangar/core', () => ({ baseOf: (s: { baseUrl: string }) => s.baseUrl, probeServerResponse: vi.fn() }));
 
 let onVisibility: () => void;
 const doc = { visibilityState: 'hidden' };
