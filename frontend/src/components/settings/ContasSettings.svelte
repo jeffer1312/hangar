@@ -12,7 +12,7 @@
   // que é o nome no disco. Trocar os dois faz o Entrar e o Apagar mirarem uma conta que não
   // existe assim que a pessoa renomear a primeira.
   import { onDestroy, tick, untrack } from 'svelte';
-import { apagarConta, sairConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, deleteCodexAccountForServer, isAbortError, isTimeoutError, type Motor, type EnginesResponse } from '@hangar/core';
+import { apagarConta, claudeAccountFolder, sairConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, deleteCodexAccountForServer, isAbortError, isTimeoutError, type Motor, type EnginesResponse } from '@hangar/core';
   import { formatarIntervalo } from '../../lib/contaEstado';
   import { listarCredenciais, definirApelido, definirCookie, consumirRedefinicaoCodex,
     novaChaveIdempotente, type Credencial } from '../../lib/credenciais';
@@ -404,11 +404,12 @@ import { apagarConta, sairConta, apagarProvedorKimi, deleteEngine, deleteEngineF
     if (!alvo || apagando) return;
     // `confirmando` guarda o ID (chave única da lista); a rota espera o nome NO DISCO. Derivar
     // do estado atual evita mandar um nome velho se a lista mudou entre o clique e o fim da
-    // operação — e usar `nome_natural`, não `nome`, é o que faz apagar uma conta renomeada
-    // mirar a pasta certa em vez de um apelido que rota nenhuma conhece.
+    // operação. Conta Claude sai da pasta `.claude-<nome>`: o `nome_natural` dela já vem com o
+    // apelido, e o DELETE com o apelido não acha conta nenhuma.
     const conta = contas.find((x) => x.id === alvo);
     if (!conta) return;
-    const idDisco = conta.id.startsWith('chave:') ? conta.id.slice('chave:'.length) : conta.nome_natural;
+    const pasta = conta.tipo === 'claude' ? claudeAccountFolder(conta.path) : null;
+    const idDisco = conta.id.startsWith('chave:') ? conta.id.slice('chave:'.length) : pasta ?? conta.nome_natural;
     // Geração desta operação: "conta X apagada" pertence à máquina que recebeu o DELETE — troca
     // de ?srv= no meio do voo não deixa o relato da máquina antiga na tela da nova (rodada 2).
     const g = geracao;

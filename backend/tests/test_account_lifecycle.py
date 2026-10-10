@@ -82,18 +82,17 @@ def test_key_survives_missing_home_and_directory_recreation(tmp_path):
     assert (tmp_path / "locks" / f"{before.digest}.lock").exists()
 
 
-def test_rust_exclusion_blocks_python_birth_login_and_preparation(tmp_path, monkeypatch, rust_probe):
+def test_rust_exclusion_blocks_python_birth(tmp_path, monkeypatch, rust_probe):
     from app import account_lifecycle
     root = tmp_path / "locks"
     monkeypatch.setattr(account_lifecycle, "default_lock_root", lambda: root)
     account = accounts.Account("work", tmp_path / ".codex-work", False)
     account.home.mkdir()
-    service = CodexContasLogin(account_in_use=lambda account: False)
+    service = CodexContasLogin()
     with RustProbe(rust_probe, lock_path(root, "codex", account.home)) as exclusion:
         assert exclusion.state == "acquired"
-        for kind in ("creation", "prepare", "login"):
-            with pytest.raises(accounts.AccountError):
-                service._reserve(account, kind)
+        with pytest.raises(accounts.AccountError):
+            service.reserve_creation(account)
 
 
 def test_rust_preparation_coexists_with_python_birth(tmp_path, monkeypatch, rust_probe):
@@ -102,7 +101,7 @@ def test_rust_preparation_coexists_with_python_birth(tmp_path, monkeypatch, rust
     monkeypatch.setattr(account_lifecycle, "default_lock_root", lambda: root)
     account = accounts.Account("work", tmp_path / ".codex-work", False)
     account.home.mkdir()
-    service = CodexContasLogin(account_in_use=lambda account: False)
+    service = CodexContasLogin()
     with RustProbe(rust_probe, lock_path(root, "codex", account.home), "shared") as preparation:
         assert preparation.state == "acquired"
         birth = service.reserve_creation(account)
@@ -282,7 +281,7 @@ def test_claude_preparation_keeps_own_descriptor_after_birth_returns(tmp_path, m
     monkeypatch.setattr(contas, "_reconciliar", prepare)
     with ThreadPoolExecutor() as pool:
         try:
-            with contas.ciclo_conta("work", mode=account_lifecycle.GuardMode.SHARED) as cycle:
+            with contas.ciclo_conta("work") as cycle:
                 preparation = (pool.submit(cycle.reconciliar) if worker_cycle else
                                pool.submit(contas.reconciliar, "work"))
                 assert entered.wait(10), "preparo ficou bloqueado pelo nascimento"
@@ -642,7 +641,7 @@ def test_publication_worker_retains_descriptor_after_reservation_release(tmp_pat
     monkeypatch.setattr(account_bridge, "terminal_instances", lambda: {"birth": "1:$2:3"})
     home = tmp_path / ".codex-work"
     home.mkdir()
-    service = CodexContasLogin(account_in_use=lambda account: False)
+    service = CodexContasLogin()
     reservation = service.reserve_creation(accounts.Account("work", home, False))
     entered, proceed = threading.Event(), threading.Event()
     original = account_lifecycle.publish_terminal_birth
@@ -683,7 +682,7 @@ def test_python_creation_blocks_rust_exclusion_across_restart(tmp_path, monkeypa
     home = tmp_path / ".codex-work"
     home.mkdir()
     account = accounts.Account("work", home, False)
-    service = CodexContasLogin(account_in_use=lambda account: False)
+    service = CodexContasLogin()
     reservation = service.reserve_creation(account)
     try:
         for _ in range(2):

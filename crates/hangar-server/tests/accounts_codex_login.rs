@@ -350,3 +350,88 @@ async fn device_state_reads_destinations_locally_and_keeps_strict_profile_error(
     let error = strict.device_state(&bridge).await.unwrap_err();
     assert_eq!((error.status, error.code), (503, "device_bridge_unavailable"));
 }
+
+#[test]
+fn codex_sign_out_route_is_owned() {
+    assert!(hangar_server::migration_status::rust_route(
+        &axum::http::Method::POST,
+        "/api/codex-contas/alpha/logout"
+    ));
+}
+
+/// Sair desconecta pelo app-server nativo, confirma relendo e invalida os dois caches de login.
+#[cfg(unix)]
+#[tokio::test]
+async fn sign_out_disconnects_confirms_and_invalidates() {
+    use axum::{Router, routing::post};
+    use hangar_server::accounts::{
+        AccountKey, AccountService, GuardMode, Provider, bridge::AccountsBridge,
+        codex_login::CodexInvalidator, environment::AccountEnvironment,
+    };
+    use serde_json::{Value, json};
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    let root = tempfile::tempdir().unwrap();
+    let fixture = root.path().join("cli");
+    std::fs::create_dir_all(&fixture).unwrap();
+    let source = r#"const fs=require('fs'),p=require('path'),home=process.env.CODEX_HOME,out=p.join(home,'logged-out');
+require('readline').createInterface({input:process.stdin}).on('line', text=>{const m=JSON.parse(text);if(!m.id)return;
+if(m.method==='account/logout'&&!home.endsWith('stuck'))fs.writeFileSync(out,'');
+const result=m.method==='account/read'?{account:fs.existsSync(out)?null:{type:'chatgpt',email:'pessoa@exemplo.com',planType:'plus'}}:{};
+process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
+    let executable = fixture.join("codex");
+    std::fs::write(&executable, format!("#!/usr/bin/env node\n{source}")).unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut environment: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    let path = environment.iter().find(|(k, _)| k.eq_ignore_ascii_case("PATH")).unwrap().1.clone();
+    let dirs = std::iter::once(fixture.clone()).chain(std::env::split_paths(&path));
+    environment.insert("PATH".into(), std::env::join_paths(dirs).unwrap().to_string_lossy().into());
+    for name in ["HOME", "USERPROFILE"] {
+        environment.insert(name.into(), root.path().to_string_lossy().into());
+    }
+    environment.remove("CODEX_HOME");
+    let service = AccountService::new(AccountEnvironment::from_map(environment));
+    let invalidations = Arc::new(AtomicUsize::new(0));
+    let counted = invalidations.clone();
+    let router = Router::new()
+        .route(
+            "/internal/accounts/facts",
+            post(|body: axum::body::Bytes| async move {
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                json!([{"key":body["keys"][0],"facts":{"complete":true,"sessions":[],"pids":[]}}]).to_string()
+            }),
+        )
+        .route(
+            "/internal/accounts/codex-invalidate",
+            post(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+                async { json!({"ok":true}).to_string() }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let bridge = AccountsBridge::new(address, "synthetic".into(), "test".into()).unwrap();
+    let invalidator = CodexInvalidator::new(address, "synthetic".into(), "test".into()).unwrap();
+    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(address, "synthetic".into(), "test".into()));
+
+    let account = service.create(Provider::Codex, "work", |_| Ok(())).unwrap();
+    assert_eq!(service.read_codex_auth(&account).await["status"], "connected");
+    let auth = service
+        .sign_out_codex(&account, bridge.clone(), Some(runtime.clone()), invalidator.clone())
+        .await
+        .unwrap();
+    assert_eq!(auth["method"], "none");
+    assert_eq!(invalidations.load(Ordering::SeqCst), 1);
+    assert_eq!(service.read_codex_auth(&account).await["status"], "disconnected", "cache Rust ficou com o login antigo");
+    let key = AccountKey::new(Provider::Codex, &account.home).unwrap();
+    assert!(service.locks.try_acquire(&key, GuardMode::Exclusive).is_ok());
+
+    let stuck = service.create(Provider::Codex, "stuck", |_| Ok(())).unwrap();
+    let error = service
+        .sign_out_codex(&stuck, bridge, Some(runtime), invalidator)
+        .await
+        .unwrap_err();
+    assert_eq!((error.status, error.code), (502, "codex_account_sign_out_unconfirmed"));
+    server.abort();
+}

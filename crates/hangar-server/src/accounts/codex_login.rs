@@ -370,6 +370,81 @@ impl AccountService {
             Err("codex_account_login_failed")
         }
     }
+    /// Sair tira o login de baixo de quem usa a conta: exige a mesma exclusividade do login.
+    pub async fn sign_out_codex(
+        &self,
+        account: &Account,
+        bridge: super::bridge::AccountsBridge,
+        runtime: Option<Arc<crate::runtime::gateway::RuntimeRegistry>>,
+        invalidator: CodexInvalidator,
+    ) -> Result<Value, AccountError> {
+        // O auxiliar nativo termina e solta a guarda mesmo se o cliente HTTP desistir.
+        let (service, account) = (self.clone(), account.clone());
+        tokio::spawn(async move {
+            service
+                .sign_out_codex_owned(account, bridge, runtime, invalidator)
+                .await
+        })
+        .await
+        .map_err(|_| AccountError::io())?
+    }
+    async fn sign_out_codex_owned(
+        &self,
+        account: Account,
+        bridge: super::bridge::AccountsBridge,
+        runtime: Option<Arc<crate::runtime::gateway::RuntimeRegistry>>,
+        invalidator: CodexInvalidator,
+    ) -> Result<Value, AccountError> {
+        let key =
+            AccountKey::new(Provider::Codex, &account.home).map_err(|_| AccountError::io())?;
+        let gate = self.codex_logins.gate(&key);
+        let _serial = gate.lock().await;
+        let in_use = || AccountError::codex(409, "codex_account_in_use", Some(&account.id));
+        if self
+            .codex_logins
+            .attempt(&key)
+            .is_some_and(|attempt| !*attempt.done.borrow())
+        {
+            return Err(in_use());
+        }
+        let _guard = self
+            .locks
+            .try_acquire(&key, GuardMode::Exclusive)
+            .map_err(|_| in_use())?;
+        let current = self.resolve(Provider::Codex, &account.id)?;
+        if AccountKey::new(Provider::Codex, &current.home).ok().as_ref() != Some(&key) {
+            return Err(AccountError::io());
+        }
+        self.usage(&bridge, runtime.as_deref(), &key)
+            .await
+            .ensure_unused()
+            .map_err(|_| in_use())?;
+        let failed = || AccountError::codex(502, "codex_account_sign_out_failed", Some(&account.id));
+        let mut native = NativeProcess::open(self, &current).await.map_err(|_| failed())?;
+        let result = tokio::time::timeout(Duration::from_secs(30), async {
+            native.initialize().await.map_err(|_| failed())?;
+            native
+                .client
+                .request_method::<Value>("account/logout", Value::Null, Duration::from_secs(30))
+                .await
+                .map_err(|_| failed())?;
+            // Saiu, mas a releitura falhou: é "não confirmado", não "falhou".
+            Ok(native.read().await.ok())
+        })
+        .await
+        .unwrap_or_else(|_| Err(failed()));
+        native.close().await;
+        self.codex_auth.invalidate(&key);
+        let _ = invalidator.invalidate(&key).await;
+        match result? {
+            Some(auth) if auth["method"] == "none" => Ok(auth),
+            _ => Err(AccountError::codex(
+                502,
+                "codex_account_sign_out_unconfirmed",
+                Some(&account.id),
+            )),
+        }
+    }
     pub async fn cancel_codex_login(
         &self,
         account: &Account,

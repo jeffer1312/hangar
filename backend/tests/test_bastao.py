@@ -8,6 +8,7 @@ import json
 import pytest
 
 from app import bastao
+import codex_contas_apoio
 
 
 FIX = __import__("pathlib").Path(__file__).parent / "fixtures"
@@ -434,7 +435,7 @@ def test_origem_resumida_preserva_conta_codex(tmp_path, monkeypatch):
     monkeypatch.setattr(__import__("pathlib").Path, "home",
                         classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
-    work = codex_contas.create_account("work")
+    work = codex_contas_apoio.create_account("work")
     sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     path = work.home / "sessions" / "2026" / "09" / "09"
     path.mkdir(parents=True)
@@ -750,7 +751,7 @@ def test_post_bastao_codex_herda_conta_da_origem(api_client_bastao, monkeypatch,
     monkeypatch.setattr(__import__("pathlib").Path, "home",
                         classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
-    work = codex_contas.create_account("work")
+    work = codex_contas_apoio.create_account("work")
     sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     path = work.home / "sessions" / "2026" / "09" / "09"
     path.mkdir(parents=True)
@@ -785,8 +786,8 @@ def test_post_bastao_codex_recusa_conta_sucessora_diferente(api_client_bastao, m
     monkeypatch.setattr(__import__("pathlib").Path, "home",
                         classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
-    work = codex_contas.create_account("work")
-    other = codex_contas.create_account("other")
+    work = codex_contas_apoio.create_account("work")
+    other = codex_contas_apoio.create_account("other")
     sid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     path = work.home / "sessions" / "2026" / "09" / "09"
     path.mkdir(parents=True)

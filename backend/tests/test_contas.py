@@ -351,21 +351,6 @@ def test_nome_com_quebra_de_linha_e_recusado(casa):
     assert not (casa / ".claude-conta2\n").exists()
 
 
-def test_apagar_so_aceita_pasta_carimbada(casa):
-    (casa / ".claude-backup").mkdir()
-    with pytest.raises(contas.ContaError) as e:
-        contas.apagar("backup")
-    assert e.value.status == 404
-    assert (casa / ".claude-backup").is_dir()
-
-
-def test_apagar_remove_a_conta(casa):
-    """Digitou o nome errado no cadastro? Sem isto a pasta fica pra sempre no seletor."""
-    contas.criar("cotna2")
-    contas.apagar("cotna2")
-    assert not (casa / ".claude-cotna2").exists()
-
-
 def test_listar_devolve_so_conta_carimbada(casa):
     contas.criar("conta2")
     (casa / ".claude-backup").mkdir()
@@ -423,16 +408,15 @@ def test_drift_symlinkado_recusa_sem_tocar_o_alvo(casa):
 
 def test_pasta_raiz_symlinkada_nao_e_conta(casa):
     """~/.claude-evil como symlink pra fora com um marcador do lado de lá: sem a guarda, listar()
-    exibiria 'evil' e reconciliar/apagar remexeriam o diretório externo."""
+    exibiria 'evil' e reconciliar remexeria o diretório externo."""
     fora = casa / "fora"
     fora.mkdir()
     (fora / contas.MARCADOR).write_text("", encoding="utf-8")
     os.symlink(fora, casa / ".claude-evil")
     assert contas.listar() == []
-    for op in (contas.reconciliar, contas.apagar):
-        with pytest.raises(contas.ContaError) as e:
-            op("evil")
-        assert e.value.status == 404
+    with pytest.raises(contas.ContaError) as e:
+        contas.reconciliar("evil")
+    assert e.value.status == 404
 
 
 def test_reconciliar_recusa_projeto_fora_da_arvore(casa):

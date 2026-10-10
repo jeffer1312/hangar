@@ -73,5 +73,30 @@ plano="$(XDG_STATE_HOME="$estado" "$V" --plano --tudo --passos "shell rust" --de
 [[ "$plano" == "rust shell" ]] || { echo "FALHOU --de-novo ou ordem do plano: \"$plano\""; falhou=1; }
 rm -rf "$estado"
 
+# Poda do crates/target acima do teto: primeiro o incremental, depois os executáveis de teste mais
+# velhos (voltam com um link); apagar tudo só se ainda não couber.
+alvo() {   # monta um target falso: incremental 64 KB, rlib 64 KB, executáveis velho e novo de 64 KB
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/debug/incremental/x" "$d/debug/deps"
+    for f in debug/incremental/x/a debug/deps/libdep-1.rlib debug/deps/velho-1 debug/deps/novo-1; do
+        head -c 65536 /dev/urandom > "$d/$f"
+    done
+    chmod +x "$d/debug/deps/velho-1" "$d/debug/deps/novo-1"
+    touch -d '3 days ago' "$d/debug/deps/velho-1"
+    echo "$d"
+}
+podar() {   # $1 = teto em KB, $2 = arquivos que têm de sobrar (relativos a debug/)
+    local d sobrou
+    d="$(alvo)"
+    "$V" --podar "$d" "$1" >/dev/null 2>&1
+    sobrou="$( (cd "$d/debug" 2>/dev/null && find . -type f | sed 's|^\./||' | sort | tr '\n' ' ') )"
+    [[ "$sobrou" == "$2" ]] || { echo "FALHOU poda com teto $1 KB: sobrou \"$sobrou\" (esperado \"$2\")"; falhou=1; }
+    rm -rf "$d"
+}
+podar 1024 "deps/libdep-1.rlib deps/novo-1 deps/velho-1 incremental/x/a "
+podar 220 "deps/libdep-1.rlib deps/novo-1 deps/velho-1 "
+podar 160 "deps/libdep-1.rlib deps/novo-1 "
+podar 32 ""
+
 (( falhou )) && exit 1
 echo "ok: classificação do verificar-local"

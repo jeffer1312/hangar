@@ -14,7 +14,8 @@ def api_client(monkeypatch):
     monkeypatch.setattr(api_mod, "_session_exists", lambda name: True)
     monkeypatch.setattr(api_mod, "_codex_service", lambda: None)
     monkeypatch.setattr(api_mod.engines, "listar", lambda: {})
-    monkeypatch.setattr(api_mod.conta_estado, "logins", lambda configs: [])
+    from app import conta_estado
+    monkeypatch.setattr(conta_estado, "logins", lambda configs: [])
     monkeypatch.setattr(api_mod.runtime_config, "get", lambda field: None)
     from app.api import app
 

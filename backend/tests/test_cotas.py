@@ -1,114 +1,13 @@
-"""Cota por conta lida na fonte do provedor (app/cotas.py).
+"""Leitores de cota que ficam no Python (app/cotas.py) e a escolha de conta por folga.
 
-A I/O de rede mora em `_get_json` e é trocada aqui; o resto é lógica pura em volta dela
-(mesmo precedente do `conta_estado._auth_status`). Os payloads são cópias do que as APIs
-reais devolveram em 18/08/2026 — inclusive o detalhe que quebra parser ingênuo: o Kimi manda
+A I/O de rede mora em `_get_json` e é trocada aqui; o resto é lógica pura em volta dela. Os
+payloads são cópias do que as APIs reais devolveram em 18/08/2026 — inclusive o detalhe que quebra parser ingênuo: o Kimi manda
 `limit`/`remaining` como STRING e não tem campo `used`.
 """
-import json
-import time
-from pathlib import Path
-
 from app import cotas
 
 
-# ------------------------------------------------------------------------------------ Claude
-
-_USAGE_CLAUDE = {
-    "five_hour": {"utilization": 13.0, "resets_at": "2026-08-18T15:10:00.013519+00:00"},
-    "seven_day": {"utilization": 22.0, "resets_at": "2026-08-22T21:00:00.013548+00:00"},
-    "seven_day_opus": None,
-}
-
-
-def _cred(dir_conta: Path, *, token="sk-ant-oat01-x", expira_em=3600,
-          refresh: str | None = None, refresh_em=30 * 24 * 3600) -> Path:
-    dir_conta.mkdir(parents=True, exist_ok=True)
-    oauth = {
-        "accessToken": token,
-        "expiresAt": int((time.time() + expira_em) * 1000),   # a API manda MILISSEGUNDOS
-        "subscriptionType": "max",
-    }
-    # `refresh` separado do resto: credencial SEM refresh token é o caso "login de verdade", e é
-    # o padrão aqui de propósito — quem quer testar a renovação diz isso explicitamente.
-    if refresh is not None:
-        oauth["refreshToken"] = refresh
-        oauth["refreshTokenExpiresAt"] = int((time.time() + refresh_em) * 1000)
-    (dir_conta / ".credentials.json").write_text(json.dumps({"claudeAiOauth": oauth}),
-                                                 encoding="utf-8")
-    return dir_conta
-
-
-def test_claude_le_as_duas_janelas(tmp_path, monkeypatch):
-    monkeypatch.setattr(cotas, "_get_json", lambda url, headers: (200, _USAGE_CLAUDE))
-    estado, janelas, motivo = cotas._ler_claude(_cred(tmp_path / "c"))
-    assert (estado, motivo) == ("lida", None)
-    assert [(j.rotulo, j.pct) for j in janelas] == [("5h", 13.0), ("7d", 22.0)]
-    assert janelas[0].reset_ts is not None
-
-
-def test_claude_manda_o_token_da_conta(tmp_path, monkeypatch):
-    """Cada conta lê com a credencial DELA — é o bug que este módulo existe pra fechar."""
-    vistos = []
-    monkeypatch.setattr(cotas, "_get_json",
-                        lambda url, headers: (vistos.append(headers["Authorization"]),
-                                              (200, _USAGE_CLAUDE))[1])
-    cotas._ler_claude(_cred(tmp_path / "a", token="tok-a"))
-    cotas._ler_claude(_cred(tmp_path / "b", token="tok-b"))
-    assert vistos == ["Bearer tok-a", "Bearer tok-b"]
-
-
-def test_token_expirado_nao_gasta_requisicao(tmp_path, monkeypatch):
-    def _nunca(url, headers):
-        raise AssertionError("não pode bater na rede com token vencido")
-    monkeypatch.setattr(cotas, "_get_json", _nunca)
-    estado, janelas, motivo = cotas._ler_claude(_cred(tmp_path / "c", expira_em=-10))
-    # Sem refresh token no arquivo, o vencido é login de verdade — e nem tenta renovar.
-    assert (estado, janelas, motivo) == ("expirada", [], "login-necessario")
-
-
-def test_conta_sem_credencial_nao_e_zero(tmp_path, monkeypatch):
-    monkeypatch.setattr(cotas, "_get_json", lambda url, headers: (200, _USAGE_CLAUDE))
-    (tmp_path / "vazia").mkdir()
-    estado, janelas, _ = cotas._ler_claude(tmp_path / "vazia")
-    assert estado == "sem_credencial" and janelas == []
-
-
-def test_401_e_expirada_e_nao_indisponivel(tmp_path, monkeypatch):
-    monkeypatch.setattr(cotas, "_get_json", lambda url, headers: (401, None))
-    estado, _, motivo = cotas._ler_claude(_cred(tmp_path / "c"))
-    assert (estado, motivo) == ("expirada", "login-necessario")
-
-
-_LIMITS_CLAUDE = [
-    {"kind": "session", "group": "session", "percent": 26, "resets_at": None, "scope": None},
-    {"kind": "weekly_all", "group": "weekly", "percent": 64, "resets_at": None, "scope": None},
-    {"kind": "weekly_scoped", "group": "weekly", "percent": 79,
-     "resets_at": "2026-09-05T21:00:00.180023+00:00",
-     "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None}},
-]
-
-
-def test_janela_por_modelo_vem_de_limits(tmp_path, monkeypatch):
-    """Payload real de 04/09/2026: o limite do Fable só existe em `limits[]`, e era a janela
-    mais cheia da conta — a faixa mostrava 5h/7d verdes com o modelo a 79%."""
-    monkeypatch.setattr(cotas, "_get_json",
-                        lambda url, headers: (200, {**_USAGE_CLAUDE, "limits": _LIMITS_CLAUDE}))
-    estado, janelas, _ = cotas._ler_claude(_cred(tmp_path / "c"))
-    assert estado == "lida"
-    assert [(j.rotulo, j.pct) for j in janelas] == [("5h", 13.0), ("7d", 22.0), ("Fable", 79.0)]
-    assert janelas[2].reset_ts is not None
-    assert [j.por_modelo for j in janelas] == [False, False, True]
-
-
-def test_limits_estragado_nao_derruba_as_janelas_base(tmp_path, monkeypatch):
-    lixo = [None, {"kind": "weekly_scoped", "scope": "x", "percent": 1},
-            {"kind": "weekly_scoped", "scope": {"model": {"display_name": ""}}, "percent": 5},
-            {"kind": "weekly_scoped", "scope": {"model": {"display_name": "Opus"}}, "percent": True}]
-    monkeypatch.setattr(cotas, "_get_json",
-                        lambda url, headers: (200, {**_USAGE_CLAUDE, "limits": lixo}))
-    _, janelas, _ = cotas._ler_claude(_cred(tmp_path / "c"))
-    assert [j.rotulo for j in janelas] == ["5h", "7d"]
+# ------------------------------------------------------------------------- sugestão de conta
 
 
 def _conta(id, *pcts, ativa=False, estado="lida", provedor="claude"):
@@ -137,14 +36,6 @@ def test_sugestao_empate_fica_com_a_conta_padrao():
     s = cotas.sugerir_claude([_conta("claude:/outra", 30), _conta("claude:/padrao", 30, ativa=True)])
     assert (s.path, s.ativa) == ("/padrao", True)
 
-
-def test_formato_novo_nao_vira_zero(tmp_path, monkeypatch):
-    monkeypatch.setattr(cotas, "_get_json", lambda url, headers: (200, {"outra_coisa": 1}))
-    estado, janelas, motivo = cotas._ler_claude(_cred(tmp_path / "c"))
-    assert (estado, janelas, motivo) == ("indisponivel", [], "formato-desconhecido")
-
-
-# -------------------------------------------------------------------------------------- Kimi
 
 _USAGE_KIMI = {
     "usage": {"limit": "100", "remaining": "80", "resetTime": "2026-08-24T17:59:46.782017Z"},
@@ -229,238 +120,18 @@ def test_rotulo_vem_da_duracao_do_provedor():
     assert cotas._rotulo_janela(None) == "janela"
 
 
-# ------------------------------------------------------------------------------------- cache
+# ------------------------------------------------------------------------------ leitor isolado
 
 
-def _fonte(chave, leitura):
-    return cotas._Fonte(chave, chave, "claude", lambda: leitura)
-
-
-def test_queda_de_rede_nao_apaga_leitura_boa(monkeypatch):
-    monkeypatch.setattr(cotas, "_cache", {})
-    boa = [cotas.JanelaCota(rotulo="5h", pct=13.0)]
-    cotas._atualizar([_fonte("claude:/x", ("lida", boa, None))])
-    monkeypatch.setattr(cotas, "_TTL_S", -1)          # força reler
-    cotas._atualizar([_fonte("claude:/x", ("indisponivel", [], "sem-resposta"))])
-    guardada = cotas._cache["claude:/x"][1]
-    assert guardada.estado == "lida" and guardada.janelas[0].pct == 13.0
-
-
-def test_conta_deslogada_sobrescreve_o_numero_velho(monkeypatch):
-    """O contrário do de cima: `expirada` é fato sobre a conta — deixar o número antigo ali
-    faria conta deslogada parecer em uso."""
-    monkeypatch.setattr(cotas, "_cache", {})
-    cotas._atualizar([_fonte("claude:/x", ("lida", [cotas.JanelaCota(rotulo="5h", pct=13.0)], None))])
-    monkeypatch.setattr(cotas, "_TTL_S", -1)
-    cotas._atualizar([_fonte("claude:/x", ("expirada", [], "http-401"))])
-    guardada = cotas._cache["claude:/x"][1]
-    assert guardada.estado == "expirada" and guardada.janelas == []
-
-
-def test_429_espera_mais_que_o_ttl_antes_de_insistir(monkeypatch, tmp_path):
-    """Insistir no próximo poll só renova o 429 (medido 14/09/2026 com três restarts seguidos)."""
-    monkeypatch.setattr(cotas, "_cache", {})
-    monkeypatch.setattr(cotas, "_arquivo_cache", lambda: tmp_path / "c.json")
-    chamadas = []
-
-    def leitor():
-        chamadas.append(1)
-        return ("indisponivel", [], "http-429")
-
-    f = cotas._Fonte("claude:/x", "x", "claude", leitor)
-    cotas._atualizar([f])
-    carimbo = cotas._cache["claude:/x"][0]
-    assert carimbo - time.monotonic() > cotas._ESPERA_429_S - cotas._TTL_S - 5
-    monkeypatch.setattr(cotas, "_TTL_S", 0.0)         # TTL vencido, mas a espera do 429 não
-    cotas._atualizar([f])
-    assert len(chamadas) == 1
-
-
-def test_espera_do_429_sobrevive_ao_restart(monkeypatch, tmp_path):
-    """O carimbo adiado do 429 é gravado no futuro; descartá-lo na carga relia justamente a
-    fonte em espera — a leva a menos do mesmo incidente."""
-    arq = tmp_path / "c.json"
-    monkeypatch.setattr(cotas, "_arquivo_cache", lambda: arq)
-    monkeypatch.setattr(cotas, "_cache", {})
-    monkeypatch.setattr(cotas, "_cache_carregado", False)
-    cotas._atualizar([_fonte("claude:/x", ("indisponivel", [], "http-429"))])
-    monkeypatch.setattr(cotas, "_cache", {})
-    monkeypatch.setattr(cotas, "_cache_carregado", False)
-    chamadas = []
-    f = cotas._Fonte("claude:/x", "x", "claude", lambda: (chamadas.append(1), ("lida", [], None))[1])
-    cotas._atualizar([f])
-    assert not chamadas
-    assert cotas._cache["claude:/x"][0] > time.monotonic() + 100
-
-
-def test_cache_volta_do_disco_dentro_do_ttl(monkeypatch, tmp_path):
-    """Restart do backend não relê todas as contas: o que está no TTL volta do arquivo."""
-    arq = tmp_path / "c.json"
-    monkeypatch.setattr(cotas, "_arquivo_cache", lambda: arq)
-    monkeypatch.setattr(cotas, "_cache", {})
-    monkeypatch.setattr(cotas, "_cache_carregado", False)
-    cotas._atualizar([_fonte("claude:/x", ("lida", [cotas.JanelaCota(rotulo="5h", pct=13.0)], None))])
-    assert arq.is_file()
-    # "restart": memória zerada, arquivo fica
-    monkeypatch.setattr(cotas, "_cache", {})
-    monkeypatch.setattr(cotas, "_cache_carregado", False)
-    chamadas = []
-    f = cotas._Fonte("claude:/x", "x", "claude", lambda: (chamadas.append(1), ("lida", [], None))[1])
-    cotas._atualizar([f])
-    assert not chamadas
-    assert cotas._cache["claude:/x"][1].janelas[0].pct == 13.0
-
-
-def test_cache_do_disco_vencido_e_ignorado(monkeypatch, tmp_path):
-    arq = tmp_path / "c.json"
-    arq.write_text(json.dumps({"claude:/x": {"gravado_em": time.time() - 3600,
-                                             "cota": {"id": "claude:/x", "label": "x", "provedor": "claude",
-                                                      "estado": "lida", "janelas": []}}}), encoding="utf-8")
-    monkeypatch.setattr(cotas, "_arquivo_cache", lambda: arq)
-    monkeypatch.setattr(cotas, "_cache", {})
-    monkeypatch.setattr(cotas, "_cache_carregado", False)
-    chamadas = []
-    f = cotas._Fonte("claude:/x", "x", "claude", lambda: (chamadas.append(1), ("lida", [], None))[1])
-    cotas._atualizar([f])
-    assert chamadas == [1]
-
-
-def test_dentro_do_ttl_nao_relê(monkeypatch):
-    monkeypatch.setattr(cotas, "_cache", {})
-    chamadas = []
-
-    def leitor():
-        chamadas.append(1)
-        return ("lida", [cotas.JanelaCota(rotulo="5h", pct=1.0)], None)
-
-    f = cotas._Fonte("claude:/x", "x", "claude", leitor)
-    cotas._atualizar([f])
-    cotas._atualizar([f])
-    assert len(chamadas) == 1
-
-
-def test_forcar_relê_dentro_do_ttl(monkeypatch):
-    """O botão "atualizar" da aba Contas: quem aperta quer a leitura de AGORA, não a do cache
-    de 5 min — `forcar` trata toda fonte como vencida."""
-    monkeypatch.setattr(cotas, "_cache", {})
-    chamadas = []
-
-    def leitor():
-        chamadas.append(1)
-        return ("lida", [cotas.JanelaCota(rotulo="5h", pct=float(len(chamadas)))], None)
-
-    f = cotas._Fonte("claude:/x", "x", "claude", leitor)
-    cotas._atualizar([f])
-    cotas._atualizar([f], forcar=True)
-    assert len(chamadas) == 2
-    assert cotas._cache["claude:/x"][1].janelas[0].pct == 2.0
-
-
-def test_leitor_que_levanta_nao_derruba_a_lista(monkeypatch):
-    monkeypatch.setattr(cotas, "_cache", {})
-
+def test_leitor_que_levanta_nao_derruba_a_lista():
     def explode():
         raise RuntimeError("boom")
 
-    cotas._atualizar([cotas._Fonte("claude:/x", "x", "claude", explode)])
-    assert cotas._cache["claude:/x"][1].estado == "indisponivel"
+    estado, janelas, motivo = cotas._seguro(cotas._Fonte("kimi:x", "x", "kimi", explode))
+    assert (estado, janelas, motivo) == ("indisponivel", [], "erro-leitor")
 
 
-# ---------------------------------------------------------------- renovação delegada ao CLI
-
-
-def test_vencido_com_refresh_e_conta_livre_renova_e_le(tmp_path, monkeypatch):
-    """Token vencido + refresh vivo + ninguém usando a conta: renova pelo CLI e lê o número.
-
-    É o caso do dia a dia — conta parada, sessão nenhuma aberta nela. Sem isto a faixa mandava
-    "precisa entrar" para uma credencial que só precisava de um refresh.
-    """
-    dir_conta = _cred(tmp_path / "c", expira_em=-10, refresh="rt-1")
-    monkeypatch.setattr(cotas.renova_token, "esta_em_uso", lambda p: False)
-
-    chamou = []
-
-    def _renova(p):
-        chamou.append(p)
-        _cred(p, expira_em=3600, refresh="rt-2")   # o CLI grava o par NOVO (rotação)
-        return True
-
-    monkeypatch.setattr(cotas.renova_token, "renovar_por_cli", _renova)
-    monkeypatch.setattr(cotas, "_get_json", lambda url, headers: (200, {
-        "five_hour": {"utilization": 7, "resets_at": None},
-        "seven_day": {"utilization": 12, "resets_at": None},
-    }))
-    estado, janelas, motivo = cotas._ler_claude(dir_conta)
-    assert chamou == [dir_conta]
-    assert (estado, motivo) == ("lida", None)
-    assert [(j.rotulo, j.pct) for j in janelas] == [("5h", 7.0), ("7d", 12.0)]
-
-
-def test_vencido_com_sessao_viva_nao_renova(tmp_path, monkeypatch):
-    """Processo vivo naquela pasta: NÃO renova. O refresh da Anthropic rotaciona, e o par novo
-    deixaria a sessão viva com um refresh morto na memória."""
-    dir_conta = _cred(tmp_path / "c", expira_em=-10, refresh="rt-1")
-    monkeypatch.setattr(cotas.renova_token, "esta_em_uso", lambda p: True)
-    monkeypatch.setattr(cotas.renova_token, "renovar_por_cli",
-                        lambda p: (_ for _ in ()).throw(AssertionError("não pode renovar")))
-    monkeypatch.setattr(cotas, "_get_json",
-                        lambda url, headers: (_ for _ in ()).throw(AssertionError("nem rede")))
-    assert cotas._ler_claude(dir_conta) == ("expirada", [], "sessao-viva")
-
-
-def test_varredura_de_processos_falha_nao_renova(tmp_path, monkeypatch):
-    """Não deu pra olhar os processos = trata como em uso (fail-closed, regra do
-    `renova_token.esta_em_uso`). O contrário seria renovar por cima de uma sessão que existe e que
-    a varredura não conseguiu enxergar."""
-    dir_conta = _cred(tmp_path / "c", expira_em=-10, refresh="rt-1")
-    monkeypatch.setattr(cotas.renova_token, "esta_em_uso", lambda p: True)   # varredura falhou -> fail-closed
-    monkeypatch.setattr(cotas.renova_token, "renovar_por_cli",
-                        lambda p: (_ for _ in ()).throw(AssertionError("não pode renovar")))
-    assert cotas._ler_claude(dir_conta) == ("expirada", [], "sessao-viva")
-
-
-def test_conta_ativa_nunca_renova(tmp_path, monkeypatch):
-    """A conta padrão (~/.claude) fica de fora: processo que a usa não define CLAUDE_CONFIG_DIR,
-    então a varredura por ambiente não o enxerga — e ela se conserta sozinha no próximo turno."""
-    dir_conta = _cred(tmp_path / "c", expira_em=-10, refresh="rt-1")
-    monkeypatch.setattr(cotas.renova_token, "esta_em_uso", lambda p: False)
-    monkeypatch.setattr(cotas.renova_token, "renovar_por_cli",
-                        lambda p: (_ for _ in ()).throw(AssertionError("não pode renovar")))
-    assert cotas._ler_claude(dir_conta, ativa=True) == ("expirada", [], "sessao-viva")
-
-
-def test_renovacao_que_nao_grava_vira_motivo_proprio(tmp_path, monkeypatch):
-    """CLI chamado e o arquivo não mudou: some com o número, mas dizendo que a tentativa houve —
-    "precisa entrar" ali seria mentira, o refresh token continua no arquivo."""
-    dir_conta = _cred(tmp_path / "c", expira_em=-10, refresh="rt-1")
-    monkeypatch.setattr(cotas.renova_token, "esta_em_uso", lambda p: False)
-    monkeypatch.setattr(cotas.renova_token, "renovar_por_cli", lambda p: False)
-    assert cotas._ler_claude(dir_conta) == ("expirada", [], "renovacao-falhou")
-
-
-def test_401_com_refresh_vivo_tenta_renovar_e_nao_mente(tmp_path, monkeypatch):
-    """Provedor recusou um token que o relógio dizia bom: tenta renovar UMA vez e, se não der,
-    devolve o motivo de verdade.
-
-    O errado (e o que a primeira versão fazia) era responder "sessao-viva" só porque o refresh
-    ainda não venceu — sem ter olhado processo nenhum. A tela mandava "abra uma sessão nela" numa
-    conta revogada, e a leitura seguinte caía no mesmo 401 para sempre.
-    """
-    dir_conta = _cred(tmp_path / "c", refresh="rt-1")   # access VÁLIDO pelo relógio
-    monkeypatch.setattr(cotas.renova_token, "esta_em_uso", lambda p: False)
-    monkeypatch.setattr(cotas.renova_token, "renovar_por_cli", lambda p: False)
-    monkeypatch.setattr(cotas, "_get_json", lambda url, headers: (401, None))
-    assert cotas._ler_claude(dir_conta) == ("expirada", [], "renovacao-falhou")
-
-
-def test_401_depois_de_renovar_e_login_necessario(tmp_path, monkeypatch):
-    """Renovou e o provedor recusou o par NOVO: aí é login de verdade, e a recursão para."""
-    dir_conta = _cred(tmp_path / "c", refresh="rt-1")
-    monkeypatch.setattr(cotas.renova_token, "esta_em_uso", lambda p: False)
-    monkeypatch.setattr(cotas.renova_token, "renovar_por_cli",
-                        lambda p: bool(_cred(p, refresh="rt-2")))
-    monkeypatch.setattr(cotas, "_get_json", lambda url, headers: (401, None))
-    assert cotas._ler_claude(dir_conta) == ("expirada", [], "login-necessario")
+# --------------------------------------------------------------------- conta herdada acabando
 
 
 def test_conta_herdada_acabando_vai_para_a_de_mais_folga():

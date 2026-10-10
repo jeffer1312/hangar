@@ -100,18 +100,63 @@ fn exercise_stream<S: std::io::Read + std::io::Write>(old: S, peek: S) {
 /// mais de 3 s.
 const READ_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Sobe o cano numa porta livre. A porta sai de um bind que é solto antes do cano ocupá-la: com
+/// testes em paralelo, outro processo pode pegá-la nesse meio, e quem responde não é o cano.
+fn start_fake_tcp(first: std::net::SocketAddr) -> (FakeCano, std::net::SocketAddr) {
+    let mut address = first;
+    for _ in 0..5 {
+        let child = start_fake(&format!("tcp:{address}"));
+        if answers_as_cano(address) {
+            return (child, address);
+        }
+        address = free_port();
+    }
+    panic!("cano sintético não iniciou em nenhuma porta");
+}
+
+/// O `peek` só lê o retrato e sai: confere quem está na porta sem mexer no cano.
+fn answers_as_cano(address: std::net::SocketAddr) -> bool {
+    use std::io::{BufRead, Write};
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        if let Ok(mut stream) = std::net::TcpStream::connect(address) {
+            let _ = stream.set_read_timeout(Some(READ_WAIT));
+            let mut line = String::new();
+            return stream.write_all(b"peek secret-test\n").is_ok()
+                && std::io::BufReader::new(stream).read_line(&mut line).is_ok()
+                && line.contains("cano_snapshot");
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+fn free_port() -> std::net::SocketAddr {
+    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
+}
+
+#[test]
+fn tcp_start_survives_a_port_taken_by_someone_else() {
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = taken.local_addr().unwrap();
+    // O dono da porta aceita e fecha sem ler: do lado de cá, o pedido vira "connection reset".
+    std::thread::spawn(move || for stream in taken.incoming().flatten() { drop(stream) });
+    let (_child, address) = start_fake_tcp(address);
+    let mut stream = std::net::TcpStream::connect(address).unwrap();
+    stream.set_read_timeout(Some(READ_WAIT)).unwrap();
+    use std::io::{BufRead, Write};
+    stream.write_all(b"peek secret-test\n").unwrap();
+    let mut line = String::new();
+    std::io::BufReader::new(stream).read_line(&mut line).unwrap();
+    assert!(line.contains("cano_snapshot"), "{line}");
+}
+
 #[test]
 fn peek_keeps_old_writer_tcp() {
-    let address = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
-    let _child = start_fake(&format!("tcp:{address}"));
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    let old = loop {
-        match std::net::TcpStream::connect(address) {
-            Ok(stream) => break stream,
-            Err(_) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(10)),
-            Err(error) => panic!("cano sintético não iniciou: {error}"),
-        }
-    };
+    let (_child, address) = start_fake_tcp(free_port());
+    let old = std::net::TcpStream::connect(address).unwrap();
     let peek = std::net::TcpStream::connect(address).unwrap();
     for stream in [&old, &peek] { stream.set_read_timeout(Some(READ_WAIT)).unwrap(); }
     exercise_stream(old, peek);

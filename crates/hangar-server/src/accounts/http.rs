@@ -46,6 +46,7 @@ pub fn matches(method: &Method, path: &str) -> bool {
     if device_matches(method, path) { return true; }
     if matches!(*method,Method::GET|Method::POST|Method::DELETE) && path.strip_prefix("/api/codex-contas/")
         .and_then(|tail|tail.strip_suffix("/login")).is_some_and(|id|!id.is_empty() && !id.contains('/')) {return true;}
+    if *method == Method::POST && codex_sign_out(path).is_some() {return true;}
     if claude_matches(method, path) {
         return true;
     }
@@ -105,6 +106,15 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     }
     if claude_matches(&method, &path) {
         return claude_public(state, request).await;
+    }
+    if !deletion && let Some(id) = codex_sign_out(&path) {
+        let Ok(id) = percent_encoding::percent_decode_str(id).decode_utf8() else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        return match codex_sign_out_operation(&state, &id).await {
+            Ok(auth) => Json(auth).into_response(),
+            Err(err) => error(err),
+        };
     }
     if !deletion && path.ends_with("/login") {
         let id=path.trim_start_matches("/api/codex-contas/").trim_end_matches("/login");
@@ -326,9 +336,12 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
         Ok(bridge) => bridge,
         Err(_) => return error(AccountError::io()),
     };
-    let facts = service
-        .usage(&bridge, state.state.runtime.get().map(|r| &**r), &key)
-        .await;
+    let runtime = state.state.runtime.get().map(|r| &**r);
+    let facts = super::bridge::settle_usage(
+        || service.usage(&bridge, runtime, &key),
+        std::time::Duration::from_secs(10),
+    )
+    .await;
     match tokio::task::spawn_blocking(move || service.delete(provider, &account, &guard, &facts))
         .await
     {
@@ -383,6 +396,41 @@ async fn prepare_response(
     } else {
         Json(result).into_response()
     }
+}
+
+/// Pedido de conta que entrou pelas portas do Python (Connect, convidado), já autenticado lá.
+/// O caminho original vem em `x-hangar-path`; fora das rotas de conta do Rust, o Python atende.
+pub async fn private_public(
+    axum::extract::State(state): axum::extract::State<Arc<crate::routes::AppState>>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    mut request: Request,
+) -> Response {
+    if !crate::workspace_routes::private_ok(&state, peer, request.headers()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(path) = request
+        .headers()
+        .get("x-hangar-path")
+        .and_then(|value| value.to_str().ok())
+        .filter(|path| path.starts_with("/api/"))
+        .map(str::to_owned)
+    else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    if !matches(request.method(), &path) {
+        return (StatusCode::NOT_FOUND, Json(json!({"code":"account_route_not_owned"}))).into_response();
+    }
+    let target = match request.uri().query() {
+        Some(query) => format!("{path}?{query}"),
+        None => path,
+    };
+    let Ok(uri) = target.parse() else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    *request.uri_mut() = uri;
+    request.headers_mut().remove("x-hangar-internal");
+    request.headers_mut().remove("x-hangar-path");
+    public(state, request).await
 }
 
 pub async fn private(
@@ -465,6 +513,29 @@ async fn codex_operation(state:&crate::routes::AppState,action:&str,id:&str,atte
         _=>Err(AccountError::io()),
     };
     match result {Ok(value)=>Json(value).into_response(),Err(err)=>error(err)}
+}
+
+fn codex_sign_out(path: &str) -> Option<&str> {
+    path.strip_prefix("/api/codex-contas/")
+        .and_then(|tail| tail.strip_suffix("/logout"))
+        .filter(|id| !id.is_empty() && !id.contains('/'))
+}
+
+async fn codex_sign_out_operation(
+    state: &crate::routes::AppState,
+    id: &str,
+) -> Result<Value, AccountError> {
+    let account = state.accounts.resolve(Provider::Codex, id)?;
+    let bridge = bridge(state)?;
+    let invalidator = super::codex_login::CodexInvalidator::new(
+        state.cfg.upstream,
+        state.cfg.internal_secret.clone(),
+        bridge.instance().into(),
+    )?;
+    state
+        .accounts
+        .sign_out_codex(&account, bridge, state.state.runtime.get().cloned(), invalidator)
+        .await
 }
 
 fn device_matches(method: &Method, path: &str) -> bool {

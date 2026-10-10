@@ -105,15 +105,14 @@ def isolated_environment(root: Path) -> dict[str, str]:
 
 
 class PythonReference(HttpTransport):
-    """Filho com rotas reais, sem lifespan do servidor nem CLI/rede real."""
+    """Filho com as rotas internas que o Rust consome e a criação de sessão, sem lifespan do
+    servidor nem CLI/rede real."""
 
-    def __init__(self, root: Path, *, block_handlers: bool = False):
+    def __init__(self, root: Path):
         self.root = root
         root.mkdir(parents=True, exist_ok=True)
         self.log = (root / "worker.log").open("w", encoding="utf-8")
         arguments = [sys.executable, str(Path(__file__).resolve()), "--worker"]
-        if block_handlers:
-            arguments.append("--block-handlers")
         self.process = subprocess.Popen(arguments, cwd=root, env=isolated_environment(root),
                                         stdout=subprocess.PIPE, stderr=self.log, text=True,
                                         encoding="utf-8", errors="strict")
@@ -359,14 +358,13 @@ else send({id:m.id,error:{code:-32601,message:'método inesperado'}});
             self.process.stdout.close()
             self.process.stderr.close()
 
-def _worker(block_handlers: bool) -> None:
+def _worker() -> None:
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from unittest.mock import patch
     from fastapi import FastAPI
     from fastapi.responses import JSONResponse
-    from fastapi.routing import APIRoute
     from fastapi.testclient import TestClient
-    from app import api, conta_estado, codex_contas_api, codex_contas_login, cotas, credenciais, account_bridge
+    from app import api, codex_contas_login, credenciais, account_bridge
     import psutil
     from types import SimpleNamespace
     from app import internal_api, runtime_coordinator
@@ -397,23 +395,6 @@ def _worker(block_handlers: bool) -> None:
         target.mkdir(exist_ok=True)
         (target / ".hangar-codex-conta").write_text(json.dumps({"version": 1, "id": name}), encoding="utf-8")
         (target / "config.toml").write_text('cli_auth_credentials_store = "file"\n', encoding="utf-8")
-
-    class DisconnectedNative:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            await self.close()
-
-        async def close(self):
-            pass
-
-        async def request(self, method, params=None, **kwargs):
-            assert method == "account/read", f"chamada nativa não prevista: {method}"
-            return {"account": None}
 
     barriers = {}
     secondary = {"native_only": False}
@@ -485,16 +466,13 @@ def _worker(block_handlers: bool) -> None:
             threading.Thread(target=publish, daemon=True).start()
         return SessionInfo(name=name, cwd=cwd, provider=kwargs["provider"])
 
-    service = codex_contas_login.CodexContasLogin(native=DisconnectedNative, account_in_use=lambda account: False)
+    service = codex_contas_login.CodexContasLogin()
     app = FastAPI()
     internal_api.set_secret("contract-internal")
     app.include_router(internal_api.router)
     app.state.codex_contas_login = service
-    prefixes = {"/api/claude-configs": "claude", "/api/conta-estado": "claude",
-                "/api/codex-contas": "codex", "/api/cotas": "quotas",
-                "/api/credenciais/codex": "device"}
     calls = []
-    from app import login_conta
+    from app import claude_window
     windows = {}
     window_calls = []
     code_entered = threading.Event()
@@ -557,12 +535,6 @@ def _worker(block_handlers: bool) -> None:
     def claude_auth(path: str):
         from app import account_bridge
         return account_bridge.request_claude("auth", path=path)
-    for route in api.app.routes:
-        if isinstance(route, APIRoute) and route.path.startswith("/api/claude-configs"):
-            app.router.routes.append(route)
-    app.include_router(conta_estado.conta_estado_router)
-    app.include_router(codex_contas_api.codex_contas_router)
-    app.include_router(cotas.cotas_router)
     app.include_router(credenciais.credenciais_router)
 
     @app.post("/api/sessions")
@@ -697,18 +669,12 @@ def _worker(block_handlers: bool) -> None:
             response = await call_next(request)
             calls.append({"operation": "bridge.claude_window", "status": response.status_code})
             return response
-        prefix = next((prefix for prefix in prefixes if request.url.path.startswith(prefix)), None)
-        if prefix:
-            suffix = "catalog" if request.url.path == prefix else "operation"
-            operation = f"{prefixes[prefix]}.{suffix}"
-            entry = {"operation": operation, "method": request.method, "path": request.url.path}
-            calls.append(entry)
-            if block_handlers:
-                entry["status"] = 503
-                return JSONResponse({"detail": {"code": "contract_python_handler_blocked", "operation": operation}}, status_code=503)
-            response = await call_next(request)
-            entry["status"] = response.status_code
-            return response
+        if request.url.path.startswith(account_bridge.ACCOUNT_PREFIXES):
+            # Conta e cota são do Rust: o pedido que chega aqui fica no diário e é recusado.
+            operation = f"account:{request.method} {request.url.path}"
+            calls.append({"operation": operation, "status": 503})
+            return JSONResponse({"detail": {"code": "contract_python_handler_blocked", "operation": operation}},
+                                status_code=503)
         return await call_next(request)
 
     @app.post("/__contract__/runtime-instance")
@@ -777,11 +743,10 @@ def _worker(block_handlers: bool) -> None:
                 return original_connection(address, *args, **kwargs)
         return deny_external()
 
-    with patch.multiple(login_conta, _shell_criar=window_create, _shell_submeter=window_send,
-                        _shell_ler=lambda name: "https://claude.ai/oauth/authorize?fixture=1\nPaste code here if prompted",
-                        _shell_matar=window_close, _shell_code=window_code, create=True), \
+    with patch.multiple(claude_window, spawn=window_create, submit=window_send,
+                        read=lambda name: "https://claude.ai/oauth/authorize?fixture=1\nPaste code here if prompted",
+                        kill=window_close, send_code=window_code), \
             patch.object(runtime_coordinator, "current", return_value=instance), \
-            patch.object(conta_estado, "_auth_status", return_value={"loggedIn": False}), \
             patch.object(api.app.state, "codex_contas_login", service, create=True), \
             patch.object(api.registry, "create", side_effect=create_at_barrier), \
             patch.object(account_lifecycle, "publish_terminal_birth", side_effect=publish_at_barrier), \
@@ -834,65 +799,9 @@ def _worker(block_handlers: bool) -> None:
             server.serve_forever()
 
 
-REFERENCE_CASES = (
-    ("claude_catalog", "GET", "/api/claude-configs", None),
-    ("claude_state", "GET", "/api/conta-estado", None),
-    ("claude_invalid_name", "POST", "/api/claude-configs", {"nome": "conta\n"}),
-    ("claude_extra_field", "POST", "/api/claude-configs", {"nome": "valid", "extra": True}),
-    ("claude_missing_login", "POST", "/api/conta-estado/absent/login", None),
-    ("claude_login_idle", "GET", "/api/conta-estado/work/login/passo", None),
-    ("claude_login_cancel_idle", "POST", "/api/conta-estado/work/login/cancelar", None),
-    ("claude_logout_missing", "POST", "/api/claude-configs/absent/logout", None),
-    ("codex_catalog", "GET", "/api/codex-contas", None),
-    ("codex_missing", "DELETE", "/api/codex-contas/absent", None),
-    ("codex_protected", "DELETE", "/api/codex-contas/default", None),
-    ("codex_invalid_name", "POST", "/api/codex-contas", {"name": "conta\n"}),
-    ("codex_extra_field", "POST", "/api/codex-contas", {"name": "valid", "extra": True}),
-    ("codex_create", "POST", "/api/codex-contas", {"name": "fresh"}),
-    ("codex_duplicate", "POST", "/api/codex-contas", {"name": "fresh"}),
-    ("codex_prepare_idle", "GET", "/api/codex-contas/fresh/prepare", None),
-    ("codex_login_null", "GET", "/api/codex-contas/fresh/login", None),
-    ("codex_cancel_requires_attempt", "DELETE", "/api/codex-contas/fresh/login", None),
-    ("codex_cancel_old_attempt", "DELETE", "/api/codex-contas/fresh/login?attempt_id=old", None),
-    ("codex_reset_invalid_uuid", "POST", "/api/codex-contas/fresh/rate-limit-reset", {"idempotency_key": "invalid"}),
-    ("device_state", "GET", "/api/credenciais/codex", None),
-    ("device_login_idle", "GET", "/api/credenciais/codex/login", None),
-    ("device_cancel_idle", "DELETE", "/api/credenciais/codex/login", None),
-    ("quotas_disconnected", "GET", "/api/cotas", None),
-    ("quota_suggestion_empty", "GET", "/api/cotas/sugestao", None),
-    ("codex_delete", "DELETE", "/api/codex-contas/fresh", None),
-)
-
-
-def capture_reference(reference: PythonReference) -> dict:
-    result = {}
-    for name, method, path, payload in REFERENCE_CASES:
-        response = reference.request(method, path, json=payload)
-        if response.status_code == 404:
-            assert isinstance(response.json().get("detail"), dict) or name == "quota_suggestion_empty", \
-                f"rota de referência não montada: {method} {path}"
-        result[name] = {"method": method, "path": path, "status": response.status_code,
-                        "body": normalize(response.json(), root=reference.root)}
-        if name == "codex_create":
-            result[name]["tree"] = reference.tree("fresh")
-    return result
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Referência Python isolada de contas")
     parser.add_argument("--worker", action="store_true")
-    parser.add_argument("--block-handlers", action="store_true")
-    parser.add_argument("--capture", type=Path)
     arguments = parser.parse_args()
     if arguments.worker:
-        _worker(arguments.block_handlers)
-    elif arguments.capture:
-        import tempfile
-        with tempfile.TemporaryDirectory(prefix="hangar-accounts-contract-") as temporary:
-            reference = PythonReference(Path(temporary))
-            try:
-                result = capture_reference(reference)
-                arguments.capture.parent.mkdir(parents=True, exist_ok=True)
-                arguments.capture.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
-            finally:
-                reference.close()
+        _worker()

@@ -360,14 +360,9 @@ preparar_arvore() {   # $1 = sha, $2 = bundle ("-" = sem bundle); usa $SO
     # passos pela lista do `env -i`.
     if [[ "$SO" != windows ]]; then CARGO_ENV+=(CARGO_TARGET_DIR="$PWD/crates/target"); fi
     # Cada commit deixa artefatos com hash novo que nenhum build seguinte usa, e o target só cresce
-    # (52 GB em três dias). Passou do teto, limpa: a rodada compila do zero e o disco não enche.
-    local teto="${HANGAR_VERIFICAR_TARGET_GB:-40}" usado
-    if [[ "$SO" == linux && -d crates/target ]]; then
-        usado="$(du -sk crates/target | awk '{print int($1/1048576)}')"
-        if (( usado > teto )); then
-            echo "verificar-local: crates/target com ${usado} GB (teto ${teto} GB); limpando." >&3
-            rm -rf crates/target
-        fi
+    # (52 GB em três dias). Passou do teto, poda (ver podar_target) e o disco não enche.
+    if [[ "$SO" == linux ]]; then
+        podar_target crates/target $(( ${HANGAR_VERIFICAR_TARGET_GB:-40} * 1048576 )) >&3
     fi
     local livre minimo=4
     livre="$(df -Pk . | awk 'NR==2 {print int($4/1048576)}')"
@@ -488,9 +483,37 @@ exit \$rc"
     return "${PIPESTATUS[0]}"
 }
 
+# Poda do target acima do teto, do que volta mais barato ao mais caro: o cache incremental, depois os
+# executáveis de teste mais velhos (um por arquivo de tests/, ~180 MB cada, voltam só com o link).
+# Apagar tudo, que obriga a compilar do zero, só se ainda não couber. O disco é noatime: a idade é
+# a do mtime, que o link renova.
+podar_target() {   # $1 = target, $2 = teto em KB
+    local dir="$1" teto="$2" usado tamanho caminho
+    [[ -d "$dir" ]] || return 0
+    usado="$(du -sk "$dir" | awk '{print $1}')"
+    (( usado > teto )) || return 0
+    echo "verificar-local: $dir com $(( usado / 1048576 )) GB (teto $(( teto / 1048576 )) GB); podando."
+    rm -rf "$dir/debug/incremental"
+    usado="$(du -sk "$dir" | awk '{print $1}')"
+    while (( usado > teto )) && read -r _ tamanho caminho; do
+        rm -f "$caminho"
+        usado=$(( usado - tamanho ))
+    done < <(find "$dir/debug/deps" -maxdepth 1 -type f -perm -u+x -printf '%T@ %k %p\n' 2>/dev/null | sort -n)
+    usado="$(du -sk "$dir" | awk '{print $1}')"
+    if (( usado > teto )); then
+        echo "verificar-local: a poda não bastou; apagando $dir (a rodada compila do zero)."
+        rm -rf "$dir"
+    fi
+}
+
 # ── principal ─────────────────────────────────────────────────────────────────────────────────
 
 SCRIPT="$(realpath "$0" 2>/dev/null || echo "$0")"
+
+if [[ "${1:-}" == --podar ]]; then   # uso do teste: --podar <target> <teto em KB>
+    podar_target "$2" "$3"
+    exit 0
+fi
 
 if [[ "${1:-}" == --classificar ]]; then
     classificar

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
+  claudeAccountFolder,
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, formatElapsed, groupSelectedByServer, initials, nextAwaiting,
   pedeMarcacao,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn, relativeTime,
@@ -291,6 +292,19 @@ describe('effectiveGroupBy', () => {
     expect(effectiveGroupBy('project', 1)).toBe('project');
     expect(effectiveGroupBy('none', 1)).toBe('none');
     expect(effectiveGroupBy('none', 3)).toBe('none');
+  });
+});
+
+describe('claudeAccountFolder', () => {
+  it('é o nome que o DELETE da conta resolve, nunca o apelido', () => {
+    expect(claudeAccountFolder('/home/u/.claude-claude-200-5')).toBe('claude-200-5');
+    expect(claudeAccountFolder('C:\\Users\\u\\.claude-work')).toBe('work');
+  });
+  it('a pasta padrão e o que não é conta ficam sem nome', () => {
+    expect(claudeAccountFolder('/home/u/.claude')).toBeNull();
+    expect(claudeAccountFolder('/home/u/.claude-')).toBeNull();
+    expect(claudeAccountFolder(undefined)).toBeNull();
+    expect(claudeAccountFolder(null)).toBeNull();
   });
 });
 

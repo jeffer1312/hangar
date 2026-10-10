@@ -1,7 +1,7 @@
 """Login OAuth do ChatGPT feito pelo app e espalhado pros CLIs (app/oauth_codex.py).
 
-O que trava: o fluxo de dispositivo termina com o cofre gravado (0600) e os três stores escritos
-no formato de cada um; store que já tem login é mantido; CLI ausente é `nao-instalado`, não erro.
+O fluxo de dispositivo, o cofre (0600) e a escrita nos três stores são do Rust, provados aqui
+contra a referência isolada; o Python só lê e delega, e sem o dono recusa em vez de escrever.
 """
 import base64
 import json
@@ -116,59 +116,7 @@ def casa(tmp_path, monkeypatch):
     con.execute("create table auth_credentials (id integer primary key autoincrement, provider text not null, "
                 "credential_type text not null, data text not null, identity_key text)")
     con.commit(); con.close()
-    o._tentativa = None
     return tmp_path
-
-
-def test_fluxo_de_dispositivo_grava_cofre_e_os_tres_stores(casa, monkeypatch):
-    respostas = iter([
-        (200, {"device_auth_id": "d1", "user_code": "ABCD-1234", "interval": "0"}),
-        (403, {}),
-        (200, {"authorization_code": "c", "code_verifier": "v"}),
-        (200, {"access_token": _jwt(), "refresh_token": "r1", "id_token": "i1", "expires_in": 10}),
-    ])
-    monkeypatch.setattr(o, "_http", lambda url, corpo, form: next(respostas))
-    passo = o.iniciar(casa)
-    assert passo["etapa"] == "aguardando" and passo["user_code"] == "ABCD-1234"
-    assert passo["url"] == o.VERIFICATION_URL
-    for _ in range(100):
-        if o.passo()["etapa"] != "aguardando":
-            break
-        time.sleep(0.05)
-    p = o.passo()
-    assert p["etapa"] == "concluido", p
-    _assert_private_file(o.cofre())
-    assert {k: v["ok"] for k, v in p["resultado"].items()} == {"codex": True, "pi": True, "omp": True}
-    codex = json.loads((casa / ".codex" / "auth.json").read_text())
-    assert codex["auth_mode"] == "chatgpt" and codex["tokens"]["account_id"] == "acc-1"
-    pi = json.loads((casa / ".pi" / "agent" / "auth.json").read_text())["openai-codex"]
-    assert pi == {"type": "oauth", "access": _jwt(), "refresh": "r1", "expires": 4102444800000, "accountId": "acc-1"}
-    con = sqlite3.connect(casa / ".omp" / "agent" / "agent.db")
-    prov, tipo, dados, ident = con.execute("select provider, credential_type, data, identity_key from auth_credentials").fetchone()
-    assert (prov, tipo, ident) == ("openai-codex", "oauth", "acc-1")
-    assert json.loads(dados)["refresh"] == "r1" and "type" not in json.loads(dados)
-    assert o.estado(casa) == {"cofre": True, "plano": "plus", "expira_em": 4102444800000,
-                              "codex": True, "pi": True, "omp": True}
-
-
-def test_store_com_login_e_mantido_e_cli_ausente_nao_e_erro(casa):
-    (casa / ".codex" / "auth.json").write_text(json.dumps({"tokens": {"refresh_token": "dele"}}))
-    (casa / ".pi" / "agent" / "auth.json").write_text(json.dumps({"openai-codex": {"type": "oauth", "refresh": "dele"}}))
-    (casa / ".omp" / "agent" / "agent.db").unlink()
-    t = o.Tokens(access=_jwt(), refresh="novo", id_token="", expires_ms=1, account_id="acc-1")
-    r = o.propagar(t, casa)
-    assert r["codex"] == {"ok": True, "motivo": "ja-logado"}
-    assert r["pi"] == {"ok": True, "motivo": "ja-logado"}
-    assert r["omp"] == {"ok": False, "motivo": "nao-instalado"}
-    assert json.loads((casa / ".codex" / "auth.json").read_text())["tokens"]["refresh_token"] == "dele"
-
-
-def test_importar_do_codex_alimenta_o_cofre(casa):
-    (casa / ".codex" / "auth.json").write_text(json.dumps({
-        "tokens": {"access_token": _jwt("acc-9", "pro"), "refresh_token": "r9", "account_id": "acc-9"}}))
-    t = o.importar_do_codex(casa)
-    assert t and t.account_id == "acc-9" and t.plano == "pro"
-    assert o.ler_cofre().refresh == "r9"
 
 
 @pytest.mark.parametrize("mode", ["rust", "pending"])
@@ -178,16 +126,17 @@ def test_managed_propagation_never_falls_back_to_python_codex_writer(casa, monke
     from app import account_bridge, runtime_coordinator
     monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode=mode))
     monkeypatch.setattr(account_bridge, "_preparation_transport", None)
-    tokens = o.Tokens(access=_jwt(), refresh="fixture", id_token="", expires_ms=1, account_id="acc-1")
-    o.salvar_cofre(tokens)
+    o.cofre().parent.mkdir(parents=True)
+    o._gravar_json(o.cofre(), {"access": _jwt(), "refresh": "fixture", "id_token": "",
+                               "expires_ms": 1, "account_id": "acc-1"})
     with pytest.raises(HTTPException) as issue:
-        o.propagar(home=casa)
+        o.propagar()
     assert issue.value.status_code == 503
     assert not (casa / ".codex" / "auth.json").exists(), "Python reintroduziu escritor Codex no modo gerenciado"
 
 
 @pytest.fixture
-def managed_device(tmp_path, request):
+def managed_device(tmp_path):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from types import SimpleNamespace
     import threading
@@ -237,7 +186,7 @@ def managed_device(tmp_path, request):
     oauth = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=oauth.serve_forever, daemon=True)
     thread.start()
-    reference = PythonReference(tmp_path / "home", block_handlers=getattr(request, "param", True))
+    reference = PythonReference(tmp_path / "home")
     fixture.device_url = f"http://127.0.0.1:{oauth.server_port}"
     server = RustCodex(reference, device_url=fixture.device_url)
     fixture.reference, fixture.server = reference, server
@@ -377,27 +326,6 @@ def test_retired_secondary_routes_are_unavailable(managed_device):
     assert not (fixture.reference.root / ".pi/agent/auth.json").exists()
     with closing(sqlite3.connect(fixture.reference.root / ".omp/agent/agent.db")) as connection:
         assert connection.execute("select count(*) from auth_credentials").fetchone()[0] == 0
-
-
-@pytest.mark.parametrize("managed_device", [False], indirect=True)
-def test_legacy_python_consumers_delegate_and_pending_never_falls_back(managed_device):
-    fixture = managed_device
-    reference = fixture.reference
-    reference.request("POST", "/__contract__/claude-owner", {
-        "address": fixture.server.request("GET", "/__hangar_server/health").json()["terminal_address"], "mode": "rust"})
-    attempt = reference.request("POST", "/api/credenciais/codex/login")
-    assert attempt.status_code == 200, attempt.json()
-    assert attempt.json()["etapa"] == "aguardando"
-    assert fixture.server.request("GET", "/api/credenciais/codex/login").json() == attempt.json()
-    assert reference.request("DELETE", "/api/credenciais/codex/login").json() == {"etapa": "idle"}
-    reference.request("POST", "/__contract__/claude-owner", {"address": "127.0.0.1:1", "mode": "pending"})
-    for method, path in [("POST", "/api/credenciais/codex/login"), ("GET", "/api/credenciais/codex/login"),
-                         ("DELETE", "/api/credenciais/codex/login"), ("GET", "/api/credenciais/codex")]:
-        response = reference.request(method, path)
-        assert response.status_code == 503
-        assert response.json()["detail"]["code"] == "account_device_bridge_unavailable"
-    assert not (reference.root / ".codex/auth.json").exists()
-    assert not (reference.root / ".hangar/auth/openai-codex.json").exists()
 
 
 def test_legacy_restart_discards_attempt_and_releases_default_account_guard(managed_device):
@@ -760,24 +688,3 @@ def test_native_writer_reports_sanitized_sqlite_busy_expiry(managed_device, star
         lock.execute("ROLLBACK")
         lock.close()
     assert _omp_rows(database) == []
-
-
-def test_device_attempt_never_stays_waiting_after_an_unexpected_failure(monkeypatch):
-    from fastapi import HTTPException
-    from app import oauth_codex
-
-    monkeypatch.setattr(oauth_codex, "_http", lambda *a, **k: (200, {
-        "authorization_code": "synthetic-code", "code_verifier": "synthetic-verifier"}))
-    monkeypatch.setattr(oauth_codex, "_trocar_codigo", lambda *a: object())
-    monkeypatch.setattr(oauth_codex, "salvar_cofre", lambda tokens: None)
-
-    def owner_changed(*args, **kwargs):
-        # O dono mudou entre a leitura do modo e a gravação: a ponte recusa com 503.
-        raise HTTPException(503, detail="escritor indisponível")
-
-    monkeypatch.setattr(oauth_codex, "propagar", owner_changed)
-    attempt = oauth_codex.Tentativa(device_auth_id="synthetic", user_code="SYN-0000", intervalo_s=0.0)
-    attempt._parar.wait = lambda timeout=None: False
-    oauth_codex._vigiar(attempt, None)
-    assert attempt.etapa == "falhou"
-    assert attempt.erro

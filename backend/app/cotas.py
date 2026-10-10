@@ -1,78 +1,38 @@
-"""Cota por conta lida NA FONTE do provedor (janelas 5h/7d), não no sidecar de statusline.
+"""Cota por credencial lida NA FONTE do provedor: os leitores que o Rust não tem.
 
-Por que existe (medido 18/08/2026): a faixa do rodapé tirava o limite do último sidecar de
-statusline DENTRO da pasta da conta. Numa máquina onde `<conta>/.hangar-status` é um
-symlink pra pasta da conta padrão — o caso desta aqui — as três contas liam o MESMO arquivo e
-desenhavam o MESMO número; e mesmo sem o symlink, conta sem sessão aberta nunca teve leitura
-nenhuma. Cota não é propriedade da sessão, é da CREDENCIAL: quem responde tem que ser o provedor.
+Contas e cotas Claude/Codex são do Rust (`crates/hangar-server/src/accounts/`), dono do cache
+`cotas-cache.json`, do TTL e da espera após 429. Sem o Rust não há reserva: `listar_cotas` e
+`cotas_claude` devolvem nada. Ficam aqui só:
 
-Fontes, todas verificadas contra a API real em 18/08/2026:
-
- - Claude: GET https://api.anthropic.com/api/oauth/usage com o `accessToken` de
-   `<conta>/.credentials.json`. Devolve `five_hour`/`seven_day` com `utilization` (percentual) e
-   `resets_at` (ISO). NÃO é chamada de inferência — não consome cota nenhuma. O limite semanal
-   POR MODELO (o do Fable) não está nesses dois: vem só em `limits[]`, como `kind =
-   "weekly_scoped"` com `scope.model.display_name` e `percent` (medido 04/09/2026: 5h 26%,
-   7d 64%, Fable 79% — a janela que mais aperta era a que a faixa não mostrava).
- - Kimi: GET <base_url>/usages com a `api_key` de cada provider `type = "kimi"` do
-   `~/.kimi-code/config.toml`. A janela curta vem em `limits[]` (`window.duration == 300`
-   minutos) e a longa em `usage`. Os dois trazem `limit`/`remaining` como STRING, e o usado é
-   `limit - remaining`: campo `used` não existe nesta API (o refresher da statusline em
-   `scripts/omniroute-statusline.js` lê `detail.used` e por isso nunca desenhou a cota do Kimi).
- - OpenCode Zen: fora, de propósito. `/v1/usage`, `/v1/usages`, `/v1/me`, `/v1/balance` e
-   `/v1/account` respondem 404 (só `/v1/models` existe) — faltar a linha é melhor que inventar
-   número.
- - CommandCode: GET https://api.commandcode.ai/alpha/billing/credits com a `api_key` do engine
-   (verificado 21/08/2026). Rota NÃO documentada (a doc oficial não expõe usage; quem a usa é o
-   painel do site e o CodexBar) e fora do prefixo `/provider` do base_url — por isso a URL é
-   fixa. Devolve `windowLimits.fiveHour`/`weekly` com `used`/`cap` em USD e `resetAt` em
-   epoch-MILISSEGUNDOS, mais `credits` (sem teto na resposta, então não vira janela).
-
-Token expirado NÃO é renovado aqui. O refresh token da Anthropic rotaciona: gravar o par novo por
-baixo de um CLI vivo derrubaria a sessão dele. `expiresAt` no passado vira estado `expirada` sem
-nem gastar a requisição; 401/403 caem no mesmo estado.
+ - os leitores dos outros provedores, que o Rust pede por `/internal/accounts/quotas`
+   (`quota_facts`): Kimi (`<base_url>/usages`, `limit`/`remaining` em STRING), CommandCode
+   (`/alpha/billing/credits`, rota não documentada, `resetAt` em epoch-MILISSEGUNDOS) e OpenCode
+   (página do painel com cookie, ver `opencode_cota.py`);
+ - os leitores Codex que a transferência de conversa usa (`conversation_transfer.py`);
+ - o mapeamento de provider Kimi/Pi para o id da cota, que a lista de sessões usa.
 """
 import json
 import logging
 import math
-import os
-import threading
 import time
 import tomllib
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app import (apelidos, atomico, codex_appserver, codex_contas, contas, engines, log_paths,
-                 opencode_cota, renova_token)
+from app import apelidos, codex_appserver, codex_contas, engines, opencode_cota
 from app.adapters.kimi import sessions as kimi_sessions
-from app.auth import require_auth
-from app.config import list_config_dirs
 
 _log = logging.getLogger("hangar.cotas")
 
-cotas_router = APIRouter(prefix="/api/cotas")
-
-# 5 min: é a régua que o usuário pediu e o que a janela de 5h suporta sem mentir (1% de erro no
-# pior caso). Conta EM USO não depende deste TTL pra parecer viva — a statusline da sessão dela
-# continua desenhando o número no chat; aqui o que importa é a conta parada ter algum número.
+# Idade a partir da qual uma leitura do Rust é velha: o TTL do cache dele.
 _TTL_S = 300.0
-# 429 é o provedor pedindo pra parar: insistir no próximo poll só renova o 429. Medido em
-# 14/09/2026: três restarts do backend em 3 min releram as 5 contas de uma vez e todas ficaram
-# em "não informa cota".
-_ESPERA_429_S = 600.0
 _HTTP_TIMEOUT = 8.0
-_URL_CLAUDE = "https://api.anthropic.com/api/oauth/usage"
-# Mesmo cabeçalho que o CLI manda no endpoint OAuth; sem ele a rota responde, mas mandá-lo é o
-# contrato documentado do token `sk-ant-oat`.
-_BETA_CLAUDE = "oauth-2025-04-20"
 
 Estado = Literal["lida", "sem_credencial", "expirada", "indisponivel"]
 Provedor = Literal["claude", "kimi", "opencode", "commandcode", "codex"]
@@ -125,7 +85,6 @@ class CotaConta(BaseModel):
 
 # Resultado cru de um leitor: (estado, janelas, motivo).
 _Leitura = tuple[Estado, list[JanelaCota], str | None]
-_LeituraDetalhada = tuple[Estado, list[JanelaCota], str | None, ResetCredits | None]
 
 
 @dataclass(frozen=True)
@@ -133,7 +92,7 @@ class _Fonte:
     chave: str
     label: str
     provedor: Provedor
-    ler: Callable[[], _Leitura | _LeituraDetalhada]
+    ler: Callable[[], _Leitura]
     ativa: bool = False
 
 
@@ -164,131 +123,6 @@ def _iso_ts(v: object) -> float | None:
         return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
     except ValueError:
         return None
-
-
-# ---------------------------------------------------------------------------------- Claude
-
-
-def _janela_claude(o: object, rotulo: str) -> JanelaCota | None:
-    if not isinstance(o, dict):
-        return None
-    pct = o.get("utilization")
-    if not isinstance(pct, (int, float)) or isinstance(pct, bool):
-        return None
-    return JanelaCota(rotulo=rotulo, pct=float(pct), reset_ts=_iso_ts(o.get("resets_at")))
-
-
-def _token_claude(dir_conta: Path) -> tuple[str | None, _Leitura | None]:
-    """Token OAuth da conta, ou o motivo de não dar pra usar. `expiresAt` vem em MILISSEGUNDOS."""
-    try:
-        o = json.loads((dir_conta / ".credentials.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None, ("sem_credencial", [], "credencial-ilegivel")
-    oauth = o.get("claudeAiOauth") if isinstance(o, dict) else None
-    tok = oauth.get("accessToken") if isinstance(oauth, dict) else None
-    if not isinstance(tok, str) or not tok:
-        return None, ("sem_credencial", [], "sem-token")
-    exp = oauth.get("expiresAt")
-    if isinstance(exp, (int, float)) and not isinstance(exp, bool) and exp / 1000 <= time.time():
-        return None, ("expirada", [], "token-expirado")
-    return tok, None
-
-
-def _refresh_vivo(dir_conta: Path) -> bool:
-    """O refresh token da conta ainda vale? (`refreshTokenExpiresAt`, em MILISSEGUNDOS)
-
-    Separa os dois avisos que a tela precisa dar: refresh vivo = a conta esta so PARADA (basta
-    uma sessao nela); refresh vencido ou ausente = ai sim e login de verdade.
-    """
-    try:
-        o = json.loads((dir_conta / ".credentials.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    oauth = o.get("claudeAiOauth") if isinstance(o, dict) else None
-    if not isinstance(oauth, dict) or not oauth.get("refreshToken"):
-        return False
-    exp = oauth.get("refreshTokenExpiresAt")
-    if isinstance(exp, (int, float)) and not isinstance(exp, bool):
-        return exp / 1000 > time.time()
-    return True   # sem prazo no arquivo: trata como vivo (o pior caso e uma tentativa a toa)
-
-
-def _tentar_renovar(dir_conta: Path, ativa: bool) -> str | None:
-    """Renova a conta pelo caminho barato do `renova_token`. None = renovou; senão, o MOTIVO.
-
-    O motivo é código, não texto: a tela escolhe a frase por ele (`lib/cota.ts`). São três, e a
-    diferença entre eles é o que o usuário tem que fazer — nada (`sessao-viva`, volta sozinho no
-    próximo turno da sessão), login de verdade (`login-necessario`) ou olhar o log
-    (`renovacao-falhou`).
-
-    A conta ATIVA (o `~/.claude`) nunca é renovada aqui, e é limitação assumida: processo que usa
-    a pasta padrão NÃO define `CLAUDE_CONFIG_DIR`, então a varredura por ambiente não o enxerga —
-    e renovar por baixo de uma sessão viva a deixaria com um refresh que já rodou. Ela também é a
-    que mais tem sessão aberta, e a que se conserta sozinha assim que o usuário digita.
-    """
-    if not _refresh_vivo(dir_conta):
-        return "login-necessario"
-    if ativa or renova_token.esta_em_uso(dir_conta):
-        return "sessao-viva"
-    return None if renova_token.renovar_por_cli(dir_conta) else "renovacao-falhou"
-
-
-def _ler_claude(dir_conta: Path, ativa: bool = False, renovou_agora: bool = False) -> _Leitura:
-    """`renovou_agora` corta a recursão: com o par recém-gravado, um 401 é recusa de verdade."""
-    tok, falha = _token_claude(dir_conta)
-    if falha is not None and falha[2] == "token-expirado" and not renovou_agora:
-        # Vencido pelo relógio não é o fim: o refresh costuma estar vivo (medido: access de 8h,
-        # refresh de ~26 dias). Quem renova é o CLI, e só quando ninguém está usando a conta.
-        motivo = _tentar_renovar(dir_conta, ativa)
-        if motivo is not None:
-            return "expirada", [], motivo
-        tok, falha = _token_claude(dir_conta)
-        renovou_agora = True
-    if falha is not None:
-        return falha
-    status, j = _get_json(_URL_CLAUDE, {
-        "Authorization": f"Bearer {tok}",
-        "Accept": "application/json",
-        "anthropic-beta": _BETA_CLAUDE,
-    })
-    if status in (401, 403):
-        # O relógio dizia que o token valia e o provedor recusou (revogado, girado noutra máquina).
-        # Passa pela MESMA porta do vencido: sem isso o motivo "sessao-viva" saía sem ninguém ter
-        # olhado processo nenhum, e a tela mandava abrir uma sessão para uma conta que precisava de
-        # login — sem nunca tentar renovar, a cada 5 min, para sempre.
-        if not renovou_agora:
-            motivo = _tentar_renovar(dir_conta, ativa)
-            if motivo is None:
-                return _ler_claude(dir_conta, ativa, renovou_agora=True)
-            return "expirada", [], motivo
-        return "expirada", [], "login-necessario"
-    if not isinstance(j, dict):
-        return "indisponivel", [], (f"http-{status}" if status else "sem-resposta")
-    janelas = [w for w in (_janela_claude(j.get("five_hour"), "5h"),
-                           _janela_claude(j.get("seven_day"), "7d")) if w is not None]
-    if not janelas:
-        return "indisponivel", [], "formato-desconhecido"
-    janelas += _janelas_por_modelo(j.get("limits"))
-    return "lida", janelas, None
-
-
-def _janelas_por_modelo(limits: object) -> list[JanelaCota]:
-    """As janelas `weekly_scoped` de `limits[]`, rotuladas pelo nome do modelo ("Fable")."""
-    if not isinstance(limits, list):
-        return []
-    out = []
-    for lim in limits:
-        if not isinstance(lim, dict) or lim.get("kind") != "weekly_scoped":
-            continue
-        modelo = (lim.get("scope") or {}).get("model") if isinstance(lim.get("scope"), dict) else None
-        nome = modelo.get("display_name") if isinstance(modelo, dict) else None
-        pct = lim.get("percent")
-        if not isinstance(nome, str) or not nome or not isinstance(pct, (int, float)) \
-                or isinstance(pct, bool):
-            continue
-        out.append(JanelaCota(rotulo=nome, pct=float(pct), reset_ts=_iso_ts(lim.get("resets_at")),
-                              por_modelo=True))
-    return out
 
 
 # ------------------------------------------------------------------------------------ Kimi
@@ -415,13 +249,6 @@ def _ler_commandcode(api_key: str) -> _Leitura:
 
 # Presença da credencial do Codex, cacheada por raiz e assinatura do `auth.json`.
 _cred_codex_cache: dict[str, tuple[tuple[int, int], bool]] = {}
-_codex_auth_cache: Callable[[object], dict | None] | None = None
-
-
-def registrar_codex_auth_cache(leitor: Callable[[object], dict | None] | None) -> None:
-    """Conecta a identidade pública já cacheada pelo serviço de contas, sem abrir o CLI aqui."""
-    global _codex_auth_cache
-    _codex_auth_cache = leitor
 
 
 def _codex_home(home: Path | str | None = None) -> Path:
@@ -431,19 +258,6 @@ def _codex_home(home: Path | str | None = None) -> Path:
 def _auth_codex(home: Path | str | None = None) -> Path:
     """O `auth.json` da raiz Codex selecionada."""
     return _codex_home(home) / "auth.json"
-
-
-def _identidade_codex(home: Path) -> dict | None:
-    if _codex_auth_cache is None:
-        return None
-    try:
-        raiz = home.expanduser().resolve(strict=False)
-        account = next((item for item in codex_contas.list_accounts()
-                        if item.home.expanduser().resolve(strict=False) == raiz), None)
-        result = _codex_auth_cache(account) if account is not None else None
-    except Exception:  # noqa: BLE001 - identidade cacheada não pode derrubar o leitor de cotas
-        return None
-    return result if isinstance(result, dict) else None
 
 
 def _tem_credencial_codex(home: Path | str | None = None) -> bool:
@@ -475,16 +289,11 @@ def _tem_credencial_codex(home: Path | str | None = None) -> bool:
         except (OSError, ValueError):
             tem = False
         _cred_codex_cache[chave] = (assinatura, tem)
-    if tem:
-        return True
-    # A identidade do keyring tem TTL próprio, independente da assinatura do arquivo.
-    identidade = _identidade_codex(auth_path.parent)
-    return bool(identidade and identidade.get("method") == "oauth"
-                and identidade.get("status") == "connected")
+    return tem
 
 
 def id_conta_codex(home: Path | str | None = None) -> str | None:
-    """O id desta credencial no `/api/cotas`, ou None quando não há credencial.
+    """O id desta credencial na lista de cotas do Rust, ou None quando não há credencial.
 
     Uma função só porque o id vive em DOIS lugares: a fonte, aqui, e o campo `conta` da sessão
     Codex (`registry.list`). Ids diferentes fariam a pílula do topo procurar uma linha que a faixa
@@ -509,48 +318,6 @@ def _janela_codex(o: object) -> JanelaCota | None:
                       pct=max(0.0, min(100.0, pct)), reset_ts=reset or None)
 
 
-def codex_weekly_used(resposta: object) -> float | None:
-    if not isinstance(resposta, dict):
-        return None
-    limites = resposta.get("rateLimits")
-    if not isinstance(limites, dict):
-        return None
-    for janela in (limites.get("primary"), limites.get("secondary")):
-        if not isinstance(janela, dict) or _num(janela.get("windowDurationMins")) != 10080:
-            continue
-        pct = _num(janela.get("usedPercent"))
-        return max(0.0, min(100.0, pct)) if pct is not None else None
-    return None
-
-
-def codex_reset_credits(resposta: object) -> ResetCredits | None:
-    if not isinstance(resposta, dict):
-        return None
-    resumo = resposta.get("rateLimitResetCredits")
-    if not isinstance(resumo, dict):
-        return None
-    quantidade = resumo.get("availableCount")
-    if isinstance(quantidade, bool) or not isinstance(quantidade, int) or quantidade < 0:
-        return None
-    bruto = resumo.get("credits")
-    creditos = None
-    if isinstance(bruto, list):
-        creditos = []
-        for item in bruto:
-            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
-                continue
-            expira = item.get("expiresAt")
-            creditos.append(ResetCredit(
-                id=item["id"],
-                expires_at=expira if isinstance(expira, int) and not isinstance(expira, bool) else None,
-                title=item.get("title") if isinstance(item.get("title"), str) else None,
-                description=item.get("description") if isinstance(item.get("description"), str) else None,
-                status=item.get("status") if item.get("status") in
-                    ("available", "redeeming", "redeemed", "unknown") else "unknown",
-            ))
-    return ResetCredits(available_count=quantidade, credits=creditos)
-
-
 def _janela_http_codex(o: object) -> dict | None:
     if not isinstance(o, dict):
         return None
@@ -565,11 +332,11 @@ class _Http429Codex(Exception):
 
 
 def _rate_limits_http_codex(raiz: Path) -> dict | str | None:
-    """`/wham/usage` (+ a lista de redefinições) no formato do `account/rateLimits/read`.
+    """`/wham/usage` no formato do `account/rateLimits/read`.
 
     None = este caminho não serve agora e o app-server responde no lugar; "http-429" = o backend
     pediu pra parar, e o app-server bate no MESMO backend com o MESMO token — cair nele só
-    renovaria o 429, então a espera de `_ESPERA_429_S` vale para as duas rotas.
+    renovaria o 429, então a espera após 429 vale para as duas rotas.
     """
     def get(caminho: str) -> object:
         status, corpo = codex_appserver.backend_get(caminho, codex_home=raiz, timeout=_HTTP_TIMEOUT)
@@ -588,22 +355,6 @@ def _rate_limits_http_codex(raiz: Path) -> dict | str | None:
                                   "secondary": _janela_http_codex(limites.get("secondary_window"))}}
         if not any(_janela_codex(j) for j in r["rateLimits"].values()):
             raise codex_appserver.CodexIndisponivel("formato-desconhecido")
-        resumo = uso.get("rate_limit_reset_credits")
-        quantidade = resumo.get("available_count") if isinstance(resumo, dict) else None
-        if isinstance(quantidade, int) and quantidade > 0:
-            # A tela lista validade e estado de cada redefinição, e isso só vem nesta outra rota.
-            # Só é pedida quando o uso diz que há o que listar: o caso comum paga uma ida só.
-            lista = get("/wham/rate-limit-reset-credits")
-            creditos = lista.get("credits")
-            if not isinstance(creditos, list):
-                raise codex_appserver.CodexIndisponivel("formato-desconhecido")
-            r["rateLimitResetCredits"] = {
-                "availableCount": lista.get("available_count", quantidade),
-                "credits": [{**c, "expiresAt": int(t) if (t := _iso_ts(c.get("expires_at"))) else None}
-                            for c in creditos if isinstance(c, dict)],
-            }
-        elif isinstance(quantidade, int):
-            r["rateLimitResetCredits"] = {"availableCount": quantidade}
     except _Http429Codex:
         return "http-429"
     except codex_appserver.CodexIndisponivel as e:
@@ -614,7 +365,7 @@ def _rate_limits_http_codex(raiz: Path) -> dict | str | None:
     return r
 
 
-def _ler_codex_detalhada(home: Path | str | None = None) -> _LeituraDetalhada:
+def _ler_codex(home: Path | str | None = None) -> _Leitura:
     """Cota da conta do Codex: `/wham/usage` do backend do ChatGPT, com o app-server efêmero
     (`account/rateLimits/read`) de reserva.
 
@@ -626,39 +377,32 @@ def _ler_codex_detalhada(home: Path | str | None = None) -> _LeituraDetalhada:
     Nada aqui levanta, mesma regra do `_get_json`: um provedor que não responde não pode derrubar a
     lista das outras contas.
     """
-    # A fonte só nasce com credencial (ver `_fontes`), então isto cobre a corrida: um logout entre
-    # a montagem da fonte e a leitura pagaria o processo à toa e voltaria "falhou" no lugar de
-    # "não há credencial".
+    # Sem credencial não há o que perguntar: o processo seria pago à toa e voltaria "falhou" no
+    # lugar de "não há credencial".
     raiz = _codex_home(home)
     if not _tem_credencial_codex(raiz):
-        return "sem_credencial", [], None, None
+        return "sem_credencial", [], None
     r = _rate_limits_http_codex(raiz)
     if r == "http-429":
-        return "indisponivel", [], "http-429", None
+        return "indisponivel", [], "http-429"
     if r is None:
         try:
-            # Mesmo teto das fontes HTTP: `_atualizar` espera TODAS as leituras juntas, então uma
-            # fonte com teto maior que as outras vira o tempo de resposta do `/api/cotas` inteiro.
+            # Mesmo teto das fontes HTTP: quem lê espera a resposta antes de seguir.
             kwargs = {"codex_home": raiz} if home is not None else {}
             r = codex_appserver.perguntar("account/rateLimits/read", timeout=_HTTP_TIMEOUT,
                                           **kwargs)
         except codex_appserver.CodexAusente:
-            return "indisponivel", [], "codex-ausente", None
+            return "indisponivel", [], "codex-ausente"
         except (RuntimeError, OSError) as e:
             _log.info("cota: codex nao respondeu: %r", e)
-            return "indisponivel", [], "sem-resposta", None
+            return "indisponivel", [], "sem-resposta"
     limites = r.get("rateLimits")
     limites = limites if isinstance(limites, dict) else {}
     janelas = [j for j in (_janela_codex(limites.get("primary")),
                            _janela_codex(limites.get("secondary"))) if j is not None]
     if not janelas:
-        return "indisponivel", [], "formato-desconhecido", None
-    return "lida", janelas, None, codex_reset_credits(r)
-
-
-def _ler_codex(home: Path | str | None = None) -> _Leitura:
-    estado, janelas, motivo, _ = _ler_codex_detalhada(home)
-    return estado, janelas, motivo
+        return "indisponivel", [], "formato-desconhecido"
+    return "lida", janelas, None
 
 
 def _ler_opencode(cfg: dict[str, str]) -> _Leitura:
@@ -788,95 +532,7 @@ def conta_de_provider_pi(provider: str | None) -> str | None:
     return _mapa_pi().get(provider) if provider else None
 
 
-# ------------------------------------------------------------------------- fontes e cache
-
-_cache: dict[str, tuple[float, CotaConta]] = {}
-_lock = threading.Lock()
-_cache_carregado = False
-
-
-def _arquivo_cache() -> Path | None:
-    # Sob pytest o cache de disco fica fora: a suíte gravaria fontes de mentira no arquivo REAL
-    # da máquina. Teste do próprio cache
-    # substitui esta função por um caminho em tmp.
-    if "PYTEST_CURRENT_TEST" in os.environ:
-        return None
-    return log_paths.base().parent / "cotas-cache.json"
-
-
-def _carregar_cache() -> None:
-    """O cache era só memória: cada restart do backend relia todas as contas de uma vez — e uma
-    sequência de restarts virava 429 em todas. O que está dentro do TTL volta do disco."""
-    global _cache_carregado
-    if _cache_carregado:
-        return
-    _cache_carregado = True
-    arquivo = _arquivo_cache()
-    if arquivo is None:
-        return
-    try:
-        bruto = json.loads(arquivo.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return                                   # primeira subida: normal
-    except (OSError, ValueError):
-        _log.warning("cache de cotas ilegivel em %s; relendo todas as contas", arquivo, exc_info=True)
-        return
-    if not isinstance(bruto, dict):
-        return
-    agora, mono = time.time(), time.monotonic()
-    for chave, item in bruto.items():
-        try:
-            idade = agora - float(item["gravado_em"])
-            # Idade NEGATIVA é o carimbo adiado do 429 (gravado no futuro de propósito): tem que
-            # voltar, senão a fonte em espera é justamente a que o restart relê. O teto abaixo
-            # descarta relógio torto.
-            if idade < -_ESPERA_429_S or idade >= _TTL_S:
-                continue
-            _cache[chave] = (mono - idade, CotaConta.model_validate(item["cota"]))
-        except (KeyError, TypeError, ValueError):
-            continue
-
-
-def _gravar_cache() -> None:
-    """Chamado com `_lock` tomado. Falha de disco não derruba a leitura — o cache é otimização."""
-    alvo = _arquivo_cache()
-    if alvo is None:
-        return
-    agora, mono = time.time(), time.monotonic()
-    dados = {chave: {"gravado_em": agora - (mono - carimbo), "cota": cota.model_dump()}
-             for chave, (carimbo, cota) in _cache.items()}
-    try:
-        alvo.parent.mkdir(parents=True, exist_ok=True)
-        tmp = alvo.with_suffix(".tmp")
-        tmp.write_text(json.dumps(dados), encoding="utf-8")
-        atomico.substituir(tmp, alvo)
-    except OSError:
-        _log.warning("cache de cotas nao gravado em %s", alvo, exc_info=True)
-
-
-def _fontes() -> list[_Fonte]:
-    """Uma fonte por CREDENCIAL. As contas Claude usam o mesmo filtro da aba Contas (conta de
-    verdade ou a base do app) — pasta de backup não vira linha na faixa."""
-    out: list[_Fonte] = []
-    for c in list_config_dirs():
-        p = Path(c.path)
-        if contas.e_conta(p) or c.active:
-            out.append(_Fonte(f"claude:{c.path}", c.label, "claude",
-                              lambda p=p, at=bool(c.active): _ler_claude(p, at), bool(c.active)))
-    # Codex: uma linha por raiz registrada. A conta continua visível sem `auth.json`: ausência de
-    # credencial é estado da conta, não prova de que ela deixou de existir.
-    try:
-        contas_codex = codex_contas.list_visible_accounts()
-    except OSError:
-        _log.warning("cota: nao consegui listar contas Codex", exc_info=True)
-        contas_codex = []
-    for account in contas_codex:
-        raiz = account.home.expanduser().absolute().resolve(strict=False)
-        out.append(_Fonte(
-            f"codex:{raiz}", "Codex" if account.is_default else account.id, "codex",
-            lambda raiz=raiz: _ler_codex_detalhada(raiz),
-        ))
-    return out + _other_sources()
+# ------------------------------------------------------------------------- fontes
 
 
 def _other_sources() -> list[_Fonte]:
@@ -920,7 +576,7 @@ def _other_sources() -> list[_Fonte]:
     return out
 
 
-def _seguro(f: _Fonte) -> _Leitura | _LeituraDetalhada:
+def _seguro(f: _Fonte) -> _Leitura:
     try:
         return f.ler()
     except Exception:                                        # noqa: BLE001 - fail-soft por fonte
@@ -931,45 +587,9 @@ def _seguro(f: _Fonte) -> _Leitura | _LeituraDetalhada:
         return "indisponivel", [], "erro-leitor"
 
 
-def _atualizar(fontes: list[_Fonte], forcar: bool = False) -> None:
-    """Relê em paralelo as fontes fora do TTL. Falha de REDE não apaga leitura boa (o número
-    envelhece e a tela mostra a idade); `expirada`/`sem_credencial` são fato sobre a conta e
-    sobrescrevem — deixar número velho ali faria conta deslogada parecer em uso.
-
-    `forcar` ignora o TTL: é o botão "atualizar" da aba Contas — quem aperta quer a leitura
-    de AGORA, não a do cache de 5 min (o poll da faixa continua sem ele)."""
-    agora = time.monotonic()
-    with _lock:
-        _carregar_cache()
-        vencidas = [f for f in fontes
-                    if forcar or (h := _cache.get(f.chave)) is None or agora - h[0] >= _TTL_S]
-    if not vencidas:
-        return
-    with ThreadPoolExecutor(max_workers=min(8, len(vencidas))) as ex:
-        leituras = list(ex.map(_seguro, vencidas))
-    with _lock:
-        for f, leitura in zip(vencidas, leituras):
-            estado, janelas, motivo = leitura[:3]
-            reset_credits = leitura[3] if len(leitura) > 3 else None
-            anterior = _cache.get(f.chave)
-            # 429: o carimbo vai pro futuro, e a fonte só vence de novo depois da espera.
-            carimbo = time.monotonic() + (_ESPERA_429_S - _TTL_S if motivo == "http-429" else 0.0)
-            if estado == "indisponivel" and anterior is not None and anterior[1].estado == "lida":
-                # Mantém a leitura boa mas deixa o carimbo do TTL novo: sem isto uma queda de rede
-                # faria as 8 requisições voltarem a cada poll de 60s.
-                _cache[f.chave] = (carimbo, anterior[1])
-                continue
-            _cache[f.chave] = (carimbo, CotaConta(
-                id=f.chave, label=f.label, provedor=f.provedor, ativa=f.ativa, estado=estado,
-                janelas=janelas, ts=time.time() if estado == "lida" else None, motivo=motivo,
-                reset_credits=reset_credits,
-            ))
-        _gravar_cache()
-
-
 def quota_facts(action: str, ids: list[str]) -> dict:
     """Fornece leitores dos outros provedores; o cache compartilhado pertence ao Rust."""
-    sources = [source for source in _other_sources() if source.provedor not in {"claude", "codex"}]
+    sources = _other_sources()
     if action == "sources":
         return {"sources": [{"id":source.chave, "label":source.label,
                              "provedor":source.provedor, "ativa":source.ativa}
@@ -977,53 +597,25 @@ def quota_facts(action: str, ids: list[str]) -> dict:
     selected = [source for source in sources if source.chave in ids]
     readings = {}
     for source in selected:
-        value = _seguro(source)
-        state, windows, reason = value[:3]
+        state, windows, reason = _seguro(source)
         readings[source.chave] = CotaConta(id=source.chave, label=source.label,
             provedor=source.provedor, ativa=source.ativa, estado=state, janelas=windows,
-            ts=time.time() if state == "lida" else None, motivo=reason,
-            reset_credits=value[3] if len(value) > 3 else None).model_dump()
+            ts=time.time() if state == "lida" else None, motivo=reason).model_dump()
     return {"readings":readings}
 
 
-@cotas_router.get("", dependencies=[Depends(require_auth)], response_model=list[CotaConta])
 def listar_cotas(forcar: bool = False) -> list[CotaConta]:
-    """Consulta o escritor ativo, com TTL de cinco minutos e espera após 429."""
+    """Cotas do Rust, dono do cache com TTL de 5 min e espera após 429; sem ele, nenhuma."""
     from app import account_bridge
     owned = account_bridge.request_quotas(force=forcar)
-    if owned is not None:
-        return [CotaConta.model_validate(row) for row in owned]
-    fontes = _fontes()
-    _atualizar(fontes, forcar)
-    agora = time.time()
-    nomes = apelidos.ler()
-    saida = []
-    with _lock:
-        for f in fontes:
-            hit = _cache.get(f.chave)
-            if hit is None:
-                continue
-            c = hit[1]
-            saida.append(c.model_copy(update={
-                "label": nomes.get(c.id) or c.label,
-                "idade_s": (agora - c.ts) if c.ts is not None else None,
-                "refresh_expires_at": renova_token.refresh_expires_at(Path(c.id[len("claude:"):]))
-                                      if c.provedor == "claude" else None}))
-    return saida
+    return [CotaConta.model_validate(row) for row in owned or []]
 
 
 def cotas_claude(atualizar: bool = False) -> list[CotaConta]:
-    """Sem atualizar, lê somente o cache do escritor ativo."""
+    """Sem atualizar, só o que o Rust já tem em cache; sem o Rust, nenhuma."""
     from app import account_bridge
     owned = account_bridge.request_quotas(cached_only=not atualizar)
-    if owned is not None:
-        return [CotaConta.model_validate(row) for row in owned if row.get("provedor") == "claude"]
-    fontes = [f for f in _fontes() if f.provedor == "claude"]
-    if atualizar:
-        _atualizar(fontes)
-    with _lock:
-        _carregar_cache()
-        return [h[1] for f in fontes if (h := _cache.get(f.chave)) is not None]
+    return [CotaConta.model_validate(row) for row in owned or [] if row.get("provedor") == "claude"]
 
 
 class SugestaoConta(BaseModel):
@@ -1077,13 +669,3 @@ def conta_com_cota(config_dir: str | None, contas_lidas: list[CotaConta]) -> tup
     if s is None or s.id == atual.id or s.folga <= 100 - uso:
         return config_dir, None
     return s.path, f"conta {atual.label} com {uso:.0f}% de uso; a sessão nasceu em {s.label}"
-
-
-@cotas_router.get("/sugestao", dependencies=[Depends(require_auth)],
-                  response_model=SugestaoConta)
-def sugerir_conta() -> SugestaoConta:
-    """Conta Claude com mais folga pra uma sessão nova (`hangar-send --new … --conta auto`)."""
-    s = sugerir_claude(listar_cotas())
-    if s is None:
-        raise HTTPException(404, detail="sem-conta-legivel")
-    return s
