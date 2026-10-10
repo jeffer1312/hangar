@@ -7,12 +7,17 @@ import json
 
 import pytest
 
+from app import computer_control as cc
 from app import runtime_config as rc
 
 
 @pytest.fixture(autouse=True)
 def _isola(tmp_path, monkeypatch):
     monkeypatch.setattr(rc, "_backend_config_base", lambda: tmp_path)
+    # Gravar o Jev repassa ao MCP do Computer Use: sem isto a chave de teste ia para o ~/.claude.json real.
+    monkeypatch.setattr(cc, "_config_files", lambda: [tmp_path / ".claude.json"])
+    monkeypatch.setattr(cc, "_main_file", lambda: tmp_path / ".claude.json")
+    monkeypatch.setattr(cc, "_parked_file", lambda: tmp_path / "computer-control.json")
     yield
 
 
@@ -243,6 +248,16 @@ def test_env_jev_ligado_leva_endpoint_e_modelo_do_jev():
     env = rc.env_jev(True)
     assert env["JEV_ENDPOINT"] == "https://openrouter.ai/api/alpha/decisions"
     assert env["JEV_MODEL"] == "typesafe/jev-1.13-20260917"
+
+
+def test_env_jev_resolve_o_provedor_pela_chave():
+    rc.aplicar({"jev_api_key": "sk-or-x", "jev_endpoint": "", "jev_model": "typesafe/jev-latest"})
+    env = rc.env_jev(True)
+    assert env["JEV_ENDPOINT"] == rc.JEV_OPENROUTER_URL
+    assert env["JEV_MODEL"] == "~typesafe/jev-latest", "sem o til o OpenRouter recusa"
+    rc.aplicar({"jev_api_key": "apik-x", "jev_model": ""})
+    env = rc.env_jev(True)
+    assert (env["JEV_ENDPOINT"], env["JEV_MODEL"]) == (rc.JEV_TYPESAFE_URL, "jev-latest")
 
 
 def test_env_jev_desligado_nao_leva_endpoint_nem_modelo():

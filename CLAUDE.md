@@ -441,6 +441,12 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   etapas, códigos e origem da falha. Texto de conversa, credenciais e saídas brutas ficam fora
   dele. O shell Electron também escreve lá (`privado/shell.log`): lançado pelo `.desktop`, o
   console dele vai pro `/dev/null`. Detalhes e compatibilidade em [plataforma.md](docs/decisoes/plataforma.md#diário-de-uso-causa-e-contexto-no-arquivo-exportado).
+- **Uma configuração do Jev para navegador, orquestração, voz e Computer Use.** `jev_api_key`,
+  `jev_endpoint` e `jev_model` no `runtime_config`; no ambiente `TYPESAFE_API_KEY`, `JEV_ENDPOINT`
+  e `JEV_MODEL`, já resolvidos. Não existe chave do Jev só para o Computer Use. A regra do destino
+  (chave `sk-or-` ou endereço do OpenRouter) tem três cópias que mudam juntas: `destino_jev`,
+  `voice::jev::destination` e `jev_config` do `orq.py`. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#uma-configuração-do-jev-para-os-quatro-usos).
 - **Hangar Connect entra por `127.0.0.1:8768`, e nada que chega por ela é local.** O
   `ConnectPortGate` troca o cliente por `192.0.2.1` antes de qualquer checagem; nunca decidir
   "local" por cabeçalho. Cookie de login só autoriza `GET`/`HEAD` e, em https, só o

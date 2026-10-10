@@ -43,7 +43,6 @@ const LIST: Field[] = [
   { key: 'jev_texto_api_key', label: m.native_server_jev_text_key, help: m.native_server_jev_text_key_help, icon: 'Key', kind: SECRET },
   { key: 'jev_texto_modelo', label: m.native_server_jev_text_model, help: m.native_server_jev_text_model_help, icon: 'Bot', kind: TEXT },
   { key: 'jev_texto_cmd', label: m.native_server_jev_cmd, help: m.native_server_jev_cmd_help, icon: 'SquareTerminal', kind: TEXT },
-  { key: 'jev_windows_api_key', label: m.native_server_jev_windows_key, help: m.native_server_jev_windows_key_help, icon: 'Key', kind: SECRET },
   { key: 'groq_api_key', label: m.native_voice_groq, help: m.native_voice_groq_help, icon: 'Key', kind: SECRET },
   { key: 'transcription_base_url', label: m.native_voice_transcription_endpoint, help: m.native_voice_transcription_endpoint_help, icon: 'Globe', kind: TEXT },
   { key: 'transcription_model', label: m.native_voice_transcription_model, help: m.native_voice_transcription_model_help, icon: 'Bot', kind: TEXT },

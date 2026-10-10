@@ -251,8 +251,9 @@ fn parse_from(req: &HistoryRequest, offset: u64) -> io::Result<Parsed> {
 /// `_absorve` (pqueue.py:1044).
 fn absorb(p: &mut Parsed, ts: f64, i: u64, evs: Vec<ChatEvent>, held_ids: &mut HashSet<String>) {
     for ev in evs {
-        // Cada reenvio de um prompt barrado repete o id "held:"; a lista leva um só.
-        if ev.id.starts_with("held:") && !held_ids.insert(ev.id.clone()) {
+        // Cada reenvio de um prompt barrado repete o id "held:", e anexo e `remove` da mesma entrega
+        // repetem o "delivery:"; a lista leva um só.
+        if (ev.id.starts_with("held:") || ev.id.starts_with("delivery:")) && !held_ids.insert(ev.id.clone()) {
             continue;
         }
         let ets = ev.ts.filter(|t| *t != 0.0).unwrap_or(ts);

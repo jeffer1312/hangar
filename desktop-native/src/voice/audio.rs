@@ -74,12 +74,16 @@ struct Shared {
     failed: AtomicU8,
     // Vezes que a saída esvaziou no meio da fala: mede o "travando e pulando".
     underruns: AtomicU32,
+    // Das esvaziadas, as que cortaram áudio audível (o bloco anterior tinha voz); as outras são o fim de uma fala.
+    speech_underruns: AtomicU32,
     // Fluxo da reprodução no diário: amostras que entraram, que tocaram, descartadas pelo teto e quadros pedidos pela saída.
     flow: [AtomicU32; 4],
 }
 
 // Reserva antes de tocar: o áudio chega em rajadas pela rede, e tocar no ato esvazia a fila a cada atraso.
 const PRIME_SAMPLES: usize = RATE as usize * 240 / 1000;
+// RMS do bloco anterior acima do qual a esvaziada cortou voz audível, não o fim de uma fala.
+const SPEECH_LEVEL: f32 = 0.01;
 
 /// Estado do callback de saída: o que já foi reamostrado e se está juntando reserva.
 struct OutputState { resampler: Resampler, carry: VecDeque<f32>, priming: bool }
@@ -119,7 +123,7 @@ impl Audio {
         let shared = Arc::new(Shared {
             capture_cap: in_rate as usize / 5,
             capture: Default::default(), render: Default::default(), playback: Default::default(),
-            input_level: AtomicU32::new(0), output_level: AtomicU32::new(0), raw_peak: AtomicU32::new(0), failed: AtomicU8::new(0), underruns: AtomicU32::new(0), flow: Default::default(),
+            input_level: AtomicU32::new(0), output_level: AtomicU32::new(0), raw_peak: AtomicU32::new(0), failed: AtomicU8::new(0), underruns: AtomicU32::new(0), speech_underruns: AtomicU32::new(0), flow: Default::default(),
         });
         crate::voice::log(format!("audio in rate={in_rate} ch={in_channels} fmt={:?} out rate={out_rate} ch={out_channels} fmt={:?}",
             in_config.sample_format(), out_config.sample_format()));
@@ -204,6 +208,7 @@ impl Audio {
     pub fn playback_len(&self) -> usize { self.shared.playback.lock().unwrap().len() }
 
     pub fn take_underruns(&self) -> u32 { self.shared.underruns.swap(0, Ordering::Relaxed) }
+    pub fn take_speech_underruns(&self) -> u32 { self.shared.speech_underruns.swap(0, Ordering::Relaxed) }
 
     pub fn failed(&self) -> Option<AudioError> {
         match self.shared.failed.load(Ordering::Relaxed) { 1 => Some(AudioError::Microphone), 2 => Some(AudioError::Speaker), _ => None }
@@ -242,6 +247,7 @@ fn on_output<T: cpal::SizedSample + cpal::FromSample<f32>>(data: &mut [T], chann
     if !*priming && carry.len() < frames {
         *priming = true;
         shared.underruns.fetch_add(1, Ordering::Relaxed);
+        if f32::from_bits(shared.output_level.load(Ordering::Relaxed)) >= SPEECH_LEVEL { shared.speech_underruns.fetch_add(1, Ordering::Relaxed); }
     }
     let mono: Vec<f32> = (0..frames).map(|_| carry.pop_front().unwrap_or(0.0)).collect();
     shared.output_level.store(rms(&mono).to_bits(), Ordering::Relaxed);

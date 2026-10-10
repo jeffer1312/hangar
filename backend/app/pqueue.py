@@ -1147,7 +1147,8 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
             for ev in evs:
                 # Cada reenvio de um prompt barrado grava outra entrada com o MESMO id "held:". O
                 # SSE junta por id; a lista do historico nao, e id repetido quebra o {#each} do front.
-                if ev.id.startswith("held:"):
+                # O mesmo vale para "delivery:": sem terminal, anexo e `remove` da mesma entrega.
+                if ev.id.startswith(("held:", "delivery:")):
                     if ev.id in barrados:
                         continue
                     barrados.add(ev.id)

@@ -1,4 +1,4 @@
-//! Configuração do controle do Windows no servidor conectado.
+//! Configuração do Computer Use (Windows e Linux) no servidor conectado.
 use super::*;
 use super::device::Remote;
 use super::server_config::chip;
@@ -19,12 +19,14 @@ struct ConfigFile { enabled: bool }
 struct Cliproxy { preset_url: String, installed: bool, running: bool, has_keys: bool, key_is_cliproxy: bool }
 
 #[derive(Clone, Deserialize)]
-struct ComputerTarget { name: String, path: String, transport: String, host: String }
+struct ComputerTarget { name: String, path: String, transport: String, host: String, #[serde(default)] os: String }
 
 impl SearchableListItem for ComputerTarget {
     type Value = String;
     fn title(&self) -> SharedString {
-        format!("{} · {}", self.name, if self.transport == "local" { tr("computer_control_target_local") } else { self.host.clone() }).into()
+        // Nome de sistema é nome próprio, igual nos dois idiomas.
+        let system = match self.os.as_str() { "linux" => " · Linux", "windows" => " · Windows", _ => "" };
+        format!("{}{system} · {}", self.name, if self.transport == "local" { tr("computer_control_target_local") } else { self.host.clone() }).into()
     }
     fn value(&self) -> &String { &self.path }
 }
@@ -43,8 +45,10 @@ struct ComputerState {
     llm_key_set: bool,
     llm_key_tail: String,
     jev_key_set: bool,
-    jev_key_tail: String,
-    jev_key_from_settings: bool,
+    #[serde(default)]
+    jev_endpoint: String,
+    #[serde(default)]
+    jev_model: String,
     cliproxy: Cliproxy,
     targets: Vec<ComputerTarget>,
     ssh_hosts: Vec<String>,
@@ -598,18 +602,7 @@ impl Hangar {
 
     fn render_computer_llm(&self, state: &ComputerState, form: &ComputerForm, cx: &mut Context<Self>) -> Div {
         let disabled = self.computer.busy.is_some() || !self.computer.enabled;
-        let key_status = if !state.jev_key_set { tr("computer_control_key_missing") }
-            else if state.jev_key_from_settings { tr("computer_control_key_from_settings").replace("{tail}", &state.jev_key_tail) }
-            else { tr("computer_control_key_saved").replace("{tail}", &state.jev_key_tail) };
-        let mut section = div().flex().flex_col().gap_3()
-            .child(div().flex().flex_col().gap_1()
-                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(tr("computer_control_jev_key")))
-                .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(key_status))
-                .child(div().flex().child(Button::new("computer-jev-settings").outline().small()
-                    .label(tr_shared("jev_open_settings", &[])).disabled(self.computer.busy.is_some())
-                    .on_click(cx.listener(|this, _, window, cx| this.open_settings(Page::Jev, window, cx))))))
-            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(tr("computer_control_llm")))
-            .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("computer_control_llm_hint")));
+        let mut section = div().flex().flex_col().gap_3();
         let presets = [tr("computer_control_preset_cliproxy"), tr("computer_control_preset_custom")];
         section = section.child(super::settings::segments("computer-preset", &presets, usize::from(!self.computer.cliproxy),
             if disabled { 0 } else { 2 }, disabled,
@@ -686,10 +679,29 @@ impl Hangar {
                 |this, n, _, cx| { this.computer.effort = ["", "low", "medium", "high"][n].into(); cx.notify(); }, cx)))
     }
 
+    /// O passo 3: o Jev do Computer Use é a configuração única da página Jev, aqui só a situação dela.
+    fn render_computer_jev(&self, state: &ComputerState, cx: &mut Context<Self>) -> Div {
+        let provider = if state.jev_endpoint.contains("openrouter.ai") { "OpenRouter".to_owned() }
+            else if state.jev_endpoint.is_empty() || state.jev_endpoint == crate::voice::jev::TYPESAFE_URL { "TypeSafe".to_owned() }
+            else { state.jev_endpoint.clone() };
+        let text = if state.jev_key_set {
+            tr("computer_control_jev_status").replace("{provider}", &provider).replace("{model}", &state.jev_model)
+        } else { tr("computer_control_jev_missing") };
+        div().flex().flex_col().gap_2()
+            .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(text))
+            .child(div().flex().items_center().gap_2()
+                .child(if state.jev_key_set { chip(tr("computer_control_jev_ok"), theme::accent_text(), theme::accent_dim()) }
+                    else { chip(tr("server_jev_no_key"), theme::warning(), theme::raised()) })
+                .child(Button::new("computer-jev-settings").ghost().xsmall().label(tr("computer_control_jev_change")).icon(IconName::ArrowRight)
+                    .disabled(self.computer.busy.is_some())
+                    .on_click(cx.listener(|this, _, window, cx| this.open_settings(Page::Jev, window, cx)))))
+    }
+
     pub(super) fn render_computer(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut page = div().flex().flex_col().gap_4()
             .child(div().flex().items_center().gap_2()
                 .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(Page::Windows.title()))
+                .child(chip(tr("computer_control_platforms"), theme::accent_text(), theme::accent_dim()))
                 .child(chip(tr("server_scope"), theme::muted(), theme::raised())))
             .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("computer_control_what")));
         if self.api.is_none() {
@@ -713,43 +725,62 @@ impl Hangar {
         let installed = state.agent_exe.exists;
         let package = state.mode == "package";
         let target_missing = form.agent_config.read(cx).value().trim().is_empty();
+        let flow = [("computer_control_flow_session", "computer_control_flow_session_hint"), ("computer_control_flow_jev", "computer_control_flow_jev_hint"),
+            ("computer_control_flow_vision", "computer_control_flow_vision_hint")];
+        let mut strip = div().flex().items_center().gap_2();
+        for (n, (name, about)) in flow.into_iter().enumerate() {
+            if n > 0 { strip = strip.child(chrome::small_icon(IconName::ArrowRight, 14., theme::muted())); }
+            strip = strip.child(div().flex_1().min_w_0().p_3().rounded(px(8.)).border_1().border_color(theme::border()).flex().flex_col().gap(px(2.))
+                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(tr(name)))
+                .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr(about))));
+        }
+        page = page.child(strip);
+        let step = |n: u8, title: &str, body: Div| div().mt(px(-1.)).border_t_1().border_color(theme::border()).px_4().py(px(14.)).flex().gap(px(12.))
+            .child(div().size(px(24.)).flex_shrink_0().rounded_full().bg(theme::accent_dim()).text_color(theme::accent_text())
+                .text_size(px(12.)).font_weight(FontWeight::BOLD).flex().items_center().justify_center().child(n.to_string()))
+            .child(div().flex_1().min_w_0().flex().flex_col().gap_2()
+                .child(div().font_weight(FontWeight::SEMIBOLD).child(tr(title))).child(body));
         let mode = if !installed { tr_shared("computer_control_not_installed", &[]) }
             else if package { tr("computer_control_mode_package").replace("{tag}", &state.installed_tag) }
             else { tr("computer_control_mode_local").replace("{dir}", &state.project_dir) };
         let install_hint = if !installed { tr_shared("computer_control_install_hint", &[]) }
             else { tr(if package { "computer_control_mode_package_hint" } else { "computer_control_mode_local_hint" }) };
-        page = page.child(self.mark(settings_box().p_3().gap_1()
-            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).whitespace_normal().child(mode))
+        let program = div().flex().flex_col().gap_2()
+            .child(div().text_sm().font_weight(FontWeight::MEDIUM).whitespace_normal().child(mode))
             .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(install_hint))
             .child(div().flex().child(Button::new("computer-install").outline().small()
                 .label(tr(if matches!(self.computer.busy, Some(Write::Install)) { "computer_control_installing" }
                     else if installed && package { "computer_control_update" } else { "computer_control_install" }))
-                .disabled(busy).on_click(cx.listener(|this, _, _, cx| this.install_computer(cx))))), "computer_control_install"))
-            .child(self.mark(div().flex().flex_col().gap_1()
-                .child(Checkbox::new("computer-enable").checked(self.computer.enabled).disabled(busy || (!self.computer.enabled && (!installed || target_missing)))
-                    .label(tr("computer_control_enable"))
-                    .on_change(cx.listener(|this, checked: &bool, _, cx| { this.computer.enabled = *checked; cx.notify(); })))
-                .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("computer_control_enable_hint"))), "computer_control_enable"));
-        if !package && (installed || state.enabled) {
-            page = page.child(self.mark(input_row("computer_control_dir", &form.project_dir, busy), "computer_control_dir"));
-        }
+                .disabled(busy).on_click(cx.listener(|this, _, _, cx| this.install_computer(cx)))))
+            .when(!package && (installed || state.enabled), |el| el.child(self.mark(input_row("computer_control_dir", &form.project_dir, busy), "computer_control_dir")));
         let target = if let Some(picker) = &form.target_picker {
-            div().flex().flex_col().gap_1().child(div().text_sm().font_weight(FontWeight::MEDIUM).child(tr("computer_control_target")))
-                .child(Select::new(picker).small().disabled(busy || !installed).accessibility_label(tr("computer_control_target")))
-        } else { div().flex().flex_col().gap_1()
-            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(tr("computer_control_target")))
-            .child(div().text_sm().text_color(theme::muted()).whitespace_normal()
-                .child(tr_shared(if installed { "computer_control_target_empty" } else { "computer_control_install_hint" }, &[]))) };
-        page = page.child(self.mark(div().flex().items_end().gap_2()
+            div().child(Select::new(picker).small().disabled(busy || !installed).accessibility_label(tr("computer_control_target")))
+        } else { div().text_sm().text_color(theme::muted()).whitespace_normal()
+            .child(tr_shared(if installed { "computer_control_target_empty" } else { "computer_control_install_hint" }, &[])) };
+        let targets = div().flex().flex_col().gap_2()
+            .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("computer_control_target_hint")))
+            .child(div().flex().items_center().gap_2()
                 .child(div().flex_1().min_w_0().child(target))
                 .child(machines::FocusOnClick { id: "computer-new-target".into(),
                     button: Button::new("computer-new-target").outline().small().label(tr("computer_control_new_target"))
                         .disabled(busy || !installed),
                     open: Rc::new({ let owner = cx.entity().downgrade(); move |window, cx| {
                         let _ = owner.update(cx, |this, cx| this.open_computer_target(window, cx));
-                    } }) }), "computer_control_target"))
-            .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("computer_control_target_hint")))
-            .child(self.render_computer_llm(state, form, cx))
+                    } }) }));
+        let vision = div().flex().flex_col().gap_3()
+            .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("computer_control_llm_hint")))
+            .child(self.render_computer_llm(state, form, cx));
+        let enable = div().flex().flex_col().gap_1()
+            .child(Checkbox::new("computer-enable").checked(self.computer.enabled).disabled(busy || (!self.computer.enabled && (!installed || target_missing)))
+                .label(tr("computer_control_enabled"))
+                .on_change(cx.listener(|this, checked: &bool, _, cx| { this.computer.enabled = *checked; cx.notify(); })))
+            .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("computer_control_enable_hint")));
+        page = page.child(settings_box()
+                .child(self.mark(step(1, "computer_control_step_program", program), "computer_control_install"))
+                .child(self.mark(step(2, "computer_control_step_targets", targets), "computer_control_target"))
+                .child(self.mark(step(3, "computer_control_step_jev", self.render_computer_jev(state, cx)), "computer_control_step_jev"))
+                .child(self.mark(step(4, "computer_control_llm", vision), "computer_control_llm"))
+                .child(self.mark(step(5, "computer_control_enable", enable), "computer_control_enable")))
             .child(div().flex().child(Button::new("computer-save").primary().small()
                 .label(tr(if matches!(self.computer.busy, Some(Write::Save)) { "computer_control_saving" } else { "computer_control_save" }))
                 .disabled(busy || (self.computer.enabled && (!installed || target_missing))).on_click(cx.listener(|this, _, _, cx| this.save_computer(cx)))));

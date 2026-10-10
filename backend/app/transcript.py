@@ -452,6 +452,11 @@ def silent_attachment_timestamp(line: str) -> str | None:
     return tail.group(1) if tail else None
 
 
+def _delivery_id(value: object) -> str | None:
+    # Sem terminal, a mesma entrega grava o anexo `queued_command` e o `remove`: o id comum vira uma bolha só.
+    return f"delivery:{value}" if isinstance(value, str) and value else None
+
+
 def parse_obj(obj: dict) -> list[ChatEvent]:
     """Eventos de chat de UMA entrada (ja parseada) do transcript. Lista pq uma entrada pode
     carregar VARIOS blocos (tool calls paralelas = varios tool_result numa msg user so; assistant
@@ -513,8 +518,9 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
             # este ramo ele passaria batido e viraria bolha com o paragrafo de instrucao a mostra.
             if (peer := _peer_msg_embrulhado(queued)) is not None:
                 digest = hashlib.md5(queued.encode("utf-8", "replace")).hexdigest()[:8]
-                return [ChatEvent(kind="user_msg",
-                                  id=f"queued:{obj.get('timestamp', '')}:{digest}", text=peer)]
+                entrega = _delivery_id(obj.get("deliveryId"))
+                return [ChatEvent(kind="user_msg", text=peer, ts=_ts(obj) if entrega else None,
+                                  id=entrega or f"queued:{obj.get('timestamp', '')}:{digest}")]
             if _is_command_meta(queued):
                 return []
             cleaned = _strip_meta_blocks(queued)
@@ -528,8 +534,10 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
             # front, que deduplica por id, esconderia uma. Hash estavel (nao o hash() randomizado do
             # processo) pra o mesmo remove reparseado manter o id e nao duplicar na reconexao do SSE.
             digest = hashlib.md5(queued.encode("utf-8", "replace")).hexdigest()[:8]
-            return [ChatEvent(kind="user_msg",
-                              id=f"queued:{obj.get('timestamp', '')}:{digest}", text=cleaned)]
+            entrega = _delivery_id(obj.get("deliveryId"))
+            # Com entrega, este evento pode substituir o do anexo no SSE: leva o próprio horário.
+            return [ChatEvent(kind="user_msg", text=cleaned, ts=_ts(obj) if entrega else None,
+                              id=entrega or f"queued:{obj.get('timestamp', '')}:{digest}")]
         return []
 
     # Claude sem terminal: a msg orientada no meio do turno (stdin com turno em voo) entra como
@@ -547,7 +555,8 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
                 return []
             texto = _strip_meta_blocks(texto)
             if texto:
-                return [ChatEvent(kind="user_msg", id=uid, text=texto, ts=_ts(obj))]
+                return [ChatEvent(kind="user_msg", id=_delivery_id(att.get("delivery_id")) or uid,
+                                  text=texto, ts=_ts(obj))]
         if isinstance(att, dict) and att.get("type") == "hook_additional_context" and att.get("hookEvent") == "Stop":
             # Contexto devolvido no Stop reabre o turno: sem o aviso, a resposta seguinte aparece
             # sem motivo. Só o Stop — o de UserPromptSubmit vem em todo prompt e seria ruído.

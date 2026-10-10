@@ -89,7 +89,7 @@ def _pane(reg, tmp_path, monkeypatch, *, mata=True):
     from app import registry as R
     jsonl = str(tmp_path / "projects" / "x" / f"{SID}.jsonl")
     monkeypatch.setattr(reg, "_pane_of", lambda n: {"name": n, "cwd": str(tmp_path), "pid": 999})
-    monkeypatch.setattr(R.SessionRegistry, "_refuse_non_claude_resume", staticmethod(lambda p: None))
+    monkeypatch.setattr(R.SessionRegistry, "_refuse_non_claude_resume", staticmethod(lambda p, **_: False))
     monkeypatch.setattr(reg, "resolve_tracked", lambda n, c: (jsonl, True))
     monkeypatch.setattr(R, "_config_dir_of", lambda pid: tmp_path / ".claude-b")
     monkeypatch.setattr(R, "_engine_of", lambda pid: None)
@@ -154,6 +154,7 @@ def test_engine_tier_survives_transport_and_rollback(reg, tmp_path, monkeypatch,
     monkeypatch.setattr(R.tmux, "new_session", lambda name, cwd, cmd, *a, **k: commands.append(cmd) or True)
     if rollback:
         monkeypatch.setattr(S, "save", MagicMock(side_effect=OSError("sidecar indisponível")))
+        monkeypatch.setattr("app.terminal_input._wait_input_ready", lambda name, timeout=None: True)
         with pytest.raises(OSError, match="sidecar indisponível"):
             reg.para_headless("t1", "acceptEdits")
     else:

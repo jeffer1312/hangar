@@ -129,6 +129,165 @@ def test_live_resume_refuses_before_killing_protected_pane(monkeypatch, tmp_path
     kill.assert_not_called()
 
 
+_SID = "33333333-3333-3333-3333-333333333333"
+_PREFIX = ["/usr/bin/bwrap", "--bind", "/", "/", "--setenv", "HANGAR_ORQ_READ_ONLY", "1", "--"]
+
+
+def _protected_pane(monkeypatch, tmp_path, order):
+    """Pane Claude dentro do bwrap, na conta A, pronto para a troca de conta."""
+    from app import pqueue, registry
+    from app.adapters.claude_headless import sessions
+
+    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr(sessions, "_dir", lambda: tmp_path / "hl")
+    monkeypatch.setattr(sessions, "_trocando", {})
+    monkeypatch.setattr(registry.procinfo, "pid_vivo", lambda pid: False)
+    monkeypatch.setattr(registry.tmux, "has_session", lambda _: False)
+    reg = registry.SessionRegistry(str(tmp_path / "projects"))
+    jsonl = tmp_path / "projects" / "x" / f"{_SID}.jsonl"
+    monkeypatch.setattr(reg, "_pane_of", lambda n: {"name": n, "cwd": str(tmp_path), "pid": 999})
+    monkeypatch.setattr(reg, "resolve_tracked", lambda n, c: (str(jsonl), True))
+    monkeypatch.setattr(registry, "_descendant_pids", lambda pid: [999, 1000])
+    monkeypatch.setattr(registry, "_cmdline", lambda pid: " ".join(_PREFIX) if pid == 999 else "claude")
+    monkeypatch.setattr(registry, "agente_do_pane", lambda pid, children=None: ("claude", 1000))
+    monkeypatch.setattr(registry, "_config_dir_of", lambda pid: tmp_path / ".claude-a")
+    monkeypatch.setattr(registry, "_engine_of", lambda pid: None)
+    monkeypatch.setattr(registry.procinfo, "_model_of", lambda pid: ("sonnet", "high"))
+    monkeypatch.setattr(registry.procinfo, "_env_var_of", lambda pid, key: None)
+    monkeypatch.setattr(registry, "_escolhas_status", lambda sid: (None, None))
+    monkeypatch.setattr(registry.tmux, "kill_session", lambda n: order.append("kill") or True)
+    return reg
+
+
+def test_account_switch_reopens_read_only_pane_inside_bwrap_for_new_account(monkeypatch, tmp_path):
+    from app import registry
+    from app.adapters.claude_headless import sessions
+
+    order = []
+    prepare = Mock(side_effect=lambda cwd, runtime_dirs=(): order.append(("prepare", runtime_dirs)) or _PREFIX)
+    monkeypatch.setattr(orq_readonly, "prepare", prepare)
+    reg = _protected_pane(monkeypatch, tmp_path, order)
+    target = str(tmp_path / ".claude-b")
+
+    meta = reg.para_headless("review", "manual", target_config_dir=target)
+    assert order == [("prepare", (target,)), ("prepare", (str(tmp_path / ".claude-a"),)), "kill"]
+    assert meta["read_only"] is True and sessions.load("review")["read_only"] is True
+
+    # A API grava a conta nova no sidecar antes de reabrir o terminal.
+    sessions.update("review", config_dir=target)
+    hl = Mock(transcript_path_de=lambda m: str(tmp_path / "missing.jsonl"), escolhas=lambda n: (None, None))
+    monkeypatch.setattr("app.adapters.get_adapter", lambda key: hl)
+    pane = Mock(return_value=True)
+    monkeypatch.setattr(registry.tmux, "new_session", pane)
+    reg.para_terminal("review")
+    assert prepare.call_args == ((str(tmp_path),), {"runtime_dirs": (target,)})
+    argv = shlex.split(pane.call_args.args[2])
+    assert argv[:len(_PREFIX)] == _PREFIX and argv[len(_PREFIX):len(_PREFIX) + 2] == ["/bin/sh", "-c"]
+    inner = shlex.split(argv[-1])
+    assert inner[:3] == ["claude", "--session-id", _SID] and "--model" in inner
+    assert pane.call_args.args[3] == target
+
+
+@pytest.mark.parametrize("target", [None, "/accounts/b"])
+def test_read_only_pane_is_not_parked_without_working_protection(monkeypatch, tmp_path, target):
+    from app.adapters.claude_headless import sessions
+
+    order = []
+    monkeypatch.setattr(orq_readonly, "prepare", Mock(side_effect=ValueError("read-only exige bubblewrap")))
+    reg = _protected_pane(monkeypatch, tmp_path, order)
+    with pytest.raises(ValueError, match="recrie com --read-only" if target is None else "bubblewrap"):
+        reg.para_headless("review", "manual", target_config_dir=target)
+    assert order == [] and not sessions.exists("review")
+
+
+def test_parked_read_only_session_never_starts_without_terminal(tmp_path):
+    from app.adapters.claude_headless.adapter import ClaudeHeadlessAdapter, _Sessao
+
+    sess = _Sessao("review", {"name": "review", "cwd": str(tmp_path), "session_id": _SID, "read_only": True})
+    with pytest.raises(ValueError, match="terminal protegido"):
+        asyncio.run(ClaudeHeadlessAdapter()._launch_account_cano_owned(sess))
+
+
+@pytest.mark.parametrize("created,alive", [(True, True), (True, False), (False, False)])
+def test_sidecar_failure_reopens_origin_pane_with_protection_prepared_before_kill(monkeypatch, tmp_path, created, alive):
+    from app import registry
+    from app.adapters.claude_headless import sessions
+
+    order = []
+
+    def prepare(cwd, runtime_dirs=()):
+        assert "kill" not in order, "a proteção do pane de volta tem que estar pronta antes do kill"
+        order.append(("prepare", runtime_dirs))
+        return _PREFIX
+
+    monkeypatch.setattr(orq_readonly, "prepare", prepare)
+    reg = _protected_pane(monkeypatch, tmp_path, order)
+    monkeypatch.setattr(sessions, "save", Mock(side_effect=OSError("disco cheio")))
+    pane = Mock(return_value=created)
+    monkeypatch.setattr(registry.tmux, "new_session", pane)
+    # O pane que morre ao nascer não conta como reaberto.
+    monkeypatch.setattr(registry.tmux, "has_session", lambda _: alive)
+    monkeypatch.setattr("app.terminal_input._wait_input_ready", lambda name, timeout=None: alive)
+    reopened = created and alive
+    origin, target = str(tmp_path / ".claude-a"), str(tmp_path / ".claude-b")
+
+    with pytest.raises(OSError) as raised:
+        reg.para_headless("review", "manual", target_config_dir=target)
+    assert ("encerrada" in str(raised.value)) is not reopened
+    assert order == [("prepare", (target,)), ("prepare", (origin,)), "kill"]
+    argv = shlex.split(pane.call_args.args[2])
+    assert argv[:len(_PREFIX)] == _PREFIX and pane.call_args.args[3] == origin
+
+
+def test_parked_read_only_sidecar_is_not_transferred(monkeypatch, tmp_path):
+    from app import registry
+    from app.adapters.claude_headless import sessions
+    from app.conversation_transfer import TransferError
+    from app.models import SessionInfo
+
+    monkeypatch.setattr(sessions, "_dir", lambda: tmp_path / "hl")
+    sessions.save("review", str(tmp_path), _SID, read_only=True)
+    reg = registry.SessionRegistry(str(tmp_path / "projects"))
+    with pytest.raises(TransferError) as raised:
+        reg.transfer_origin(SessionInfo(name="review", cwd=str(tmp_path), provider="claude", headless=True))
+    assert raised.value.code == "session_transfer_read_only"
+
+
+def test_parked_read_only_sidecar_waits_for_terminal_without_retrying(monkeypatch, tmp_path):
+    from app.adapters.claude_headless import adapter as A, sessions
+
+    monkeypatch.setattr(sessions, "_dir", lambda: tmp_path / "hl")
+    monkeypatch.setattr(sessions, "_trocando", {})
+    sessions.save("review", str(tmp_path), _SID, read_only=True)
+    hl = A.ClaudeHeadlessAdapter()
+    hl._lancar_cano = Mock(side_effect=AssertionError("não pode lançar sem terminal"))
+    for _ in range(A._TETO_SUBIDAS + 1):
+        with pytest.raises(A._SubidaEsgotada, match="terminal protegido"):
+            asyncio.run(hl.launch_process("review"))
+        with pytest.raises(A._SubidaEsgotada, match="terminal protegido"):
+            asyncio.run(hl._spawn(A._Sessao("review", sessions.load("review"))))
+    # Nenhuma tentativa contada: sem espera crescente entre um prompt e outro.
+    assert "review" not in hl._subidas
+    assert sessions.load("review")["problema"][0] == "headless_nao_subiu"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="read-only só existe no Linux")
+@pytest.mark.parametrize("pane_pid", [999, None])
+def test_account_switch_refuses_when_protection_cannot_be_read(monkeypatch, tmp_path, pane_pid):
+    from app import registry
+
+    order = []
+    monkeypatch.setattr(orq_readonly, "prepare", Mock(side_effect=AssertionError("sem leitura não há prepare")))
+    reg = _protected_pane(monkeypatch, tmp_path, order)
+    monkeypatch.setattr(reg, "_pane_of", lambda n: {"name": n, "cwd": str(tmp_path), "pid": pane_pid})
+    monkeypatch.setattr(registry, "_cmdline", lambda pid: "claude")
+    monkeypatch.setattr(registry, "provider_of_pane", lambda pid: "claude")
+    monkeypatch.setattr(registry.procinfo, "_environ_legivel", lambda pid: False)
+    with pytest.raises(ValueError, match="não consegui confirmar"):
+        reg.para_headless("review", "manual", target_config_dir="/accounts/b")
+    assert order == []
+
+
 def test_codex_launcher_is_inside_protected_pane(monkeypatch, tmp_path):
     from app import registry
 
