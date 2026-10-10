@@ -63,7 +63,7 @@
   "sync_config_ativar": "Enable sync",
   "comum_beta": "Beta",
   "codex_voice_config_title": "Voice conversation",
-  "codex_voice_config_help": "Enables realtime voice conversation for Codex sessions on this machine. Experimental and off by default.",
+  "codex_voice_config_help": "Turns on live voice on this server: a spoken conversation that follows and switches sessions of any provider and sends them requests. Needs Codex installed and logged in here, and uses that account. Experimental and off by default.",
   "voice_message_origin": "Voice conversation",
   "voice_message_original": "View original message",
   "codex_voice_title": "Voice conversation",

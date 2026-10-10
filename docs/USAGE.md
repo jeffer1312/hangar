@@ -297,7 +297,7 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   - **Uma conversa por servidor.** Abrir a voz em outro aparelho passa a conversa para ele; o
     anterior mostra "A conversa passou para outro aparelho." Se o aparelho sair (app fechado, rede
     caiu), reabrir em até 2 minutos retoma a mesma conversa do assistente; depois disso ela termina.
-  - O áudio vai direto do aparelho ao Codex; o servidor só conduz a conversa. Só o dono usa a voz:
+  - O áudio vai direto do aparelho ao serviço de voz da OpenAI; o servidor só conduz a conversa. Só o dono usa a voz:
     num servidor aberto por convite o botão não aparece. O app Expo ainda não tem a voz.
 - **Limpeza do ditado:** o texto gravado pelo microfone passa por um modelo que aplica a correção
   que você falou em voz alta — dizer "usa o postgres, não, o redis" vira "Usa o Redis." —, tira

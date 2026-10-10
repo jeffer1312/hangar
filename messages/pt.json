@@ -63,7 +63,7 @@
   "sync_config_ativar": "Ativar sincronização",
   "comum_beta": "Beta",
   "codex_voice_config_title": "Conversa por voz",
-  "codex_voice_config_help": "Ativa a conversa em tempo real nas sessões Codex desta máquina. Recurso experimental e desligado por padrão.",
+  "codex_voice_config_help": "Liga a voz ao vivo neste servidor: uma conversa falada que acompanha e troca as sessões de qualquer provedor e manda pedidos a elas. Precisa do Codex instalado e logado aqui e gasta essa conta. Experimental e desligada por padrão.",
   "voice_message_origin": "Conversa de voz",
   "voice_message_original": "Ver mensagem original",
   "codex_voice_title": "Conversar por voz",

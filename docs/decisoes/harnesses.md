@@ -2955,7 +2955,7 @@ O tempo de silêncio que encerra a fala é fixo no Codex (`server_vad`). `append
 `Connected` é descartada pelo str0m. Eventos da voz levam número de chamada e passam antes do filtro
 de conexão do app: trocar de servidor não deixa ferramenta sem resposta. Resposta da sessão é
 deduplicada por id de evento; sessão que recebeu pedido e saiu da tela tem a resposta lida pelo
-histórico quando a lista mostra que ela parou. Gate: `codex_voice_beta` do servidor local
+histórico quando a lista mostra que ela parou. Gate da época: `codex_voice_beta` do servidor local
 (loopback) e `codex` encontrado.
 
 ## Voz: modo Planejar
