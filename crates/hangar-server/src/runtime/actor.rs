@@ -14,6 +14,11 @@ enum Core { Claude(ClaudeEngine),Codex(CodexEngine) }
 /// dos hooks do UserPromptSubmit: o teto dela fica acima da espera do Python (`PUBLICA_S`).
 const POLICY_TIMEOUT:Duration=Duration::from_secs(15);
 const PUBLISH_POLICY_TIMEOUT:Duration=Duration::from_secs(40);
+/// Python subindo depois de um restart (ou parado um instante): a política que só grava o arquivo da
+/// sessão espera por ele em vez de pôr a sessão em erro. Primeira espera e teto da série.
+const READY_FIRST_WAIT:Duration=Duration::from_secs(1);
+const READY_MAX_WAIT:Duration=Duration::from_secs(16);
+const READY_BUDGET:Duration=Duration::from_secs(120);
 /// Teto de um pedido de app aos mods: o mais longo da superfície (desenho de novo e clique, 6 s) mais
 /// 1 s de folga para o relógio do ator, abaixo dos 8 s em que o app desiste. O registro serializa os
 /// pedidos da sessão, então um pedido sem teto prenderia os seguintes.
@@ -36,6 +41,8 @@ pub struct PolicyClient {
     /// `config_dir` -> quando a consulta não chegou ao Python (transporte ou prazo).
     quota_down:Arc<std::sync::Mutex<BTreeMap<String,(Instant,())>>>,
     diag:crate::diag::DiagClient,
+    /// (primeira espera, teto) da repetição enquanto o Python não está pronto.
+    ready_retry:(Duration,Duration),
 }
 
 /// Guarda no mapa limitado a `QUOTA_ACCOUNTS`, tirando a entrada mais antiga para caber a nova.
@@ -50,8 +57,9 @@ fn remember<T>(cache:&std::sync::Mutex<BTreeMap<String,(Instant,T)>>,config_dir:
 impl PolicyClient {
     pub fn new(upstream:std::net::SocketAddr,secret:String,instance:String) -> Self {
         Self { upstream,diag:crate::diag::DiagClient::new(upstream,secret.clone()),secret,instance,http:crate::proxy::client(),
-            quota:Default::default(),quota_down:Default::default() }
+            quota:Default::default(),quota_down:Default::default(),ready_retry:(READY_FIRST_WAIT,READY_BUDGET) }
     }
+    pub fn with_ready_retry(mut self,first_wait:Duration,budget:Duration) -> Self { self.ready_retry = (first_wait,budget); self }
     /// Janelas de cota da conta, só quando vai formatar. Falha formata sem janelas e deixa o cache
     /// anterior como está; o log leva o código, nunca o dado.
     pub async fn quota_windows(&self,key:&str,config_dir:&str) -> Option<Value> {
@@ -86,14 +94,39 @@ impl PolicyClient {
         self.run_for(&target.key,target.generation,kind,request_id,payload,phase_id).await
     }
     pub async fn run_for(&self,key:&str,generation:u64,kind:&str,request_id:&RequestId,payload:Value,phase_id:&str) -> Result<Value,RuntimeError> {
+        // Só repete o que grava o arquivo da sessão ou calcula o comando (idempotente, e a mesma fase junta
+        // a chamada ainda em curso no Python); recado nativo e terminal escrevem na conversa.
+        let retries = kind.starts_with("session.") || kind == "launch_env";
+        let (mut wait,budget) = self.ready_retry;
+        let started = Instant::now();
+        loop {
+            match self.attempt(key,generation,kind,request_id,payload.clone(),phase_id).await {
+                Ok(value) => return Ok(value),
+                Err((error,detail)) if retries && not_ready(&error.code,&detail) && started.elapsed() + wait <= budget => {
+                    if crate::warn_limit::allow(Some(key),"policy_not_ready") {
+                        tracing::warn!(key=%key,generation,policy=%kind,code=%error.code,detail=%detail,"Python ainda não atende a política; tentando de novo");
+                    }
+                    tokio::time::sleep(wait).await;
+                    wait = (wait * 2).min(READY_MAX_WAIT);
+                }
+                Err((error,detail)) => {
+                    if crate::warn_limit::allow(Some(key),&error.code) {
+                        tracing::warn!(key=%key,generation,policy=%kind,code=%error.code,detail=%detail,"política do Python falhou");
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    }
+    async fn attempt(&self,key:&str,generation:u64,kind:&str,request_id:&RequestId,payload:Value,phase_id:&str) -> Result<Value,(RuntimeError,String)> {
         let body = json!({"key":key,"generation":generation,"request_id":request_id,"phase_id":phase_id,"kind":kind,"payload":payload});
         let request = axum::http::Request::post(format!("http://{}/internal/runtime/policy",self.upstream))
             .header("x-hangar-internal",&self.secret).header("x-hangar-runtime-instance",&self.instance)
             .header("content-type","application/json").body(axum::body::Body::from(body.to_string()))
-            .map_err(|_|failure("policy_request"))?;
+            .map_err(|_|(failure("policy_request"),String::new()))?;
         // Detalhe só de forma: status, tipo de erro, posição ou nome da exceção; nunca o corpo.
         let limit = if kind == "terminal_publish" { PUBLISH_POLICY_TIMEOUT } else { POLICY_TIMEOUT };
-        let result = tokio::time::timeout(limit,async {
+        tokio::time::timeout(limit,async {
             let response = self.http.request(request).await
                 .map_err(|error|(failure("policy_transport"),format!("connect={}",error.is_connect())))?;
             if !response.status().is_success() { return Err((failure("policy_refused"),format!("status={}",response.status().as_u16()))); }
@@ -106,14 +139,14 @@ impl PolicyClient {
                 return Err((failure("policy_failed"),format!("error_type={}",kind.unwrap_or("?"))));
             }
             Ok(value["data"].clone())
-        }).await.unwrap_or_else(|_|Err((failure("policy_timeout"),String::new())));
-        result.map_err(|(error,detail)|{
-            if crate::warn_limit::allow(Some(key),&error.code) {
-                tracing::warn!(key=%key,generation,policy=%kind,code=%error.code,detail=%detail,"política do Python falhou");
-            }
-            error
-        })
+        }).await.unwrap_or_else(|_|Err((failure("policy_timeout"),String::new())))
     }
+}
+
+/// O Python ainda não atende: fora do ar, travado, sem coordenador (503) ou sem o registro da chave,
+/// que ele só grava depois que o `open` do Rust responde (400). Recusa com resposta (`ok:false`) é definitiva.
+fn not_ready(code:&str,detail:&str) -> bool {
+    matches!(code,"policy_timeout" | "policy_transport") || code == "policy_refused" && matches!(detail,"status=400" | "status=503")
 }
 
 /// Sessão cujo processo o Rust sobe: pasta do arquivo dela e a primeira espera da religação.
@@ -1606,6 +1639,61 @@ fn take_mods(engine:&mut RuntimeEngine,waiters:&mut ModsWaiters,token:&mut u64,c
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Python falso da política: cada conexão leva a próxima resposta do roteiro (`None` derruba a conexão).
+    async fn scripted_policy(script:Vec<Option<(u16,Value)>>) -> (std::net::SocketAddr,Arc<AtomicU64>) {
+        use tokio::io::{AsyncBufReadExt,AsyncReadExt,AsyncWriteExt,BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let calls = Arc::new(AtomicU64::new(0));
+        let counter = calls.clone();
+        tokio::spawn(async move {
+            for reply in script {
+                let Ok((stream,_)) = listener.accept().await else { return };
+                counter.fetch_add(1,Ordering::SeqCst);
+                let mut reader = BufReader::new(stream);
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).await.unwrap_or(0) == 0 || line == "\r\n" { break; }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") { length = value.trim().parse().unwrap(); }
+                }
+                let mut body = vec![0;length]; reader.read_exact(&mut body).await.unwrap();
+                let Some((status,data)) = reply else { continue };
+                let data = data.to_string();
+                let response = format!("HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{data}",data.len());
+                reader.get_mut().write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        (address,calls)
+    }
+
+    async fn call(script:Vec<Option<(u16,Value)>>,kind:&str) -> (Result<Value,RuntimeError>,u64) {
+        let (address,calls) = scripted_policy(script).await;
+        let client = PolicyClient::new(address,"secret".into(),"instance".into()).with_ready_retry(Duration::from_millis(10),Duration::from_secs(5));
+        let result = client.run_for("key",1,kind,&RequestId::String("phase".into()),json!({"model":"m"}),"phase").await;
+        (result,calls.load(Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn python_not_ready_is_retried_and_a_definite_refusal_fails_at_once() {
+        let ok = Some((200,json!({"ok":true,"data":{"updated":true}})));
+        // Sem registro da chave (400), sem coordenador (503) e conexão caída: o arquivo da sessão espera o Python.
+        let (result,calls) = call(vec![Some((400,json!({}))),Some((503,json!({}))),None,ok.clone()],"session.patch_meta").await;
+        assert_eq!(result.unwrap()["updated"],true);
+        assert_eq!(calls,4);
+        // O serviço respondeu e recusou: definitivo, uma chamada só.
+        let (result,calls) = call(vec![Some((200,json!({"ok":false,"error_type":"ValueError"}))),ok.clone()],"session.patch_meta").await;
+        assert_eq!(result.unwrap_err().code,"policy_failed");
+        assert_eq!(calls,1);
+        let (result,calls) = call(vec![Some((500,json!({}))),ok.clone()],"session.patch_meta").await;
+        assert_eq!(result.unwrap_err().code,"policy_refused");
+        assert_eq!(calls,1);
+        // O recado nativo escreve na conversa: não repete nem com o Python subindo.
+        let (result,calls) = call(vec![Some((503,json!({}))),ok],"native_message").await;
+        assert_eq!(result.unwrap_err().code,"policy_refused");
+        assert_eq!(calls,1);
+    }
 
     #[tokio::test]
     async fn mods_call_to_an_actor_that_never_answers_gives_up_with_a_code() {

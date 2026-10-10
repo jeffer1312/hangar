@@ -685,7 +685,8 @@ async fn claude_actor(dir:&std::path::Path,cano:std::net::SocketAddr,policy:std:
     let queue = QueueActor::start(store,lease);
     let connection = cano::connect(&target.binding).await.unwrap();
     let engine = RuntimeEngine::new("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
-        .with_policy(PolicyClient::new(policy,"secret".into(),"instance".into()));
+        // Espera curta pelo Python: o teste de falha confere o erro depois da série.
+        .with_policy(PolicyClient::new(policy,"secret".into(),"instance".into()).with_ready_retry(std::time::Duration::from_millis(10),std::time::Duration::from_millis(200)));
     RuntimeActor::spawn(target,queue,connection,engine)
 }
 
