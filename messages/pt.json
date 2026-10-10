@@ -7812,5 +7812,8 @@
   "native_presence_tip_pc": "Com o app à vista, o celular não recebe avisos. Clique para ficar Fora.",
   "native_presence_tip_away": "O celular recebe os avisos. Clique para ficar No PC.",
   "native_presence_unsupported": "Nenhum servidor conectado tem No PC/Fora: atualize o servidor.",
-  "native_presence_failed": "No PC/Fora não mudou em {server}: {erro}"
+  "native_presence_failed": "No PC/Fora não mudou em {server}: {erro}",
+  "save_file_tap_again": "Toque de novo para salvar",
+  "save_file_failed": "Não deu para salvar o arquivo",
+  "save_file_downloading": "Baixando…"
 }

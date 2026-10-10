@@ -4,6 +4,7 @@
 import type BiggerPictureCtor from 'bigger-picture/vanilla';
 import * as m from '../paraglide/messages';
 import { closeViewerHistory, openViewerHistory, waitForViewerHistory } from './viewerHistory';
+import { saveFile } from './saveFile';
 
 // Visor de midia do app inteiro: chat, anexo de arquivo e folha de Anexos abrem POR AQUI.
 //
@@ -214,10 +215,32 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
     if (!faixa || !midia) return;
     const nome = faixa.querySelector('.visor-nome');
     const meta = faixa.querySelector('.visor-meta');
-    const baixar = faixa.querySelector<HTMLAnchorElement>('.visor-baixar');
+    const baixar = faixa.querySelector<HTMLButtonElement>('.visor-baixar');
     if (nome) nome.textContent = midia.nome;
     if (meta) meta.textContent = midia.meta ?? '';
-    if (baixar) { baixar.href = midia.url; baixar.download = midia.nome; }
+    if (baixar) mostrarBaixar(baixar, 'idle');
+  };
+
+  const mostrarBaixar = (botao: HTMLButtonElement, estado: 'idle' | 'busy' | 'again' | 'failed') => {
+    botao.disabled = estado === 'busy';
+    botao.textContent = estado === 'busy' ? '…' : estado === 'again' ? m.save_file_tap_again() : '⤓';
+    botao.title = estado === 'failed' ? m.save_file_failed() : m.visor_baixar();
+    botao.setAttribute('aria-label', botao.title);
+    const meta = faixa?.querySelector('.visor-meta');
+    if (meta && estado === 'failed') meta.textContent = m.save_file_failed();
+  };
+
+  const salvarAtual = async (botao: HTMLButtonElement) => {
+    const midia = midias[atual];
+    if (!midia) return;
+    mostrarBaixar(botao, 'busy');
+    try {
+      const r = await saveFile(midia.url, midia.nome);
+      mostrarBaixar(botao, r === 'tap-again' ? 'again' : 'idle');
+    } catch (e) {
+      console.error('visor: falhou ao salvar', e);
+      mostrarBaixar(botao, 'failed');
+    }
   };
 
   // A lib nao diz o indice no onUpdate, so o item — e o item e o objeto que devolvemos em paraItem,
@@ -244,10 +267,10 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
       meta.className = 'visor-meta';
       const acoes = document.createElement('span');
       acoes.className = 'visor-acoes';
-      const baixar = document.createElement('a');
+      const baixar = document.createElement('button');
+      baixar.type = 'button';
       baixar.className = 'visor-btn visor-baixar';
-      baixar.title = m.visor_baixar();
-      baixar.textContent = '⤓';
+      baixar.addEventListener('click', () => void salvarAtual(baixar));
       acoes.append(baixar);
       if (acao) {
         const botao = document.createElement('button');
