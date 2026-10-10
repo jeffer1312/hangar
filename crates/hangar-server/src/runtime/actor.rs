@@ -143,10 +143,10 @@ impl PolicyClient {
     }
 }
 
-/// O Python ainda não atende: fora do ar, travado, sem coordenador (503) ou sem o registro da chave,
-/// que ele só grava depois que o `open` do Rust responde (400). Recusa com resposta (`ok:false`) é definitiva.
+/// O Python ainda não atende: fora do ar, travado, ou 503 (sem coordenador, ou sem o registro da chave,
+/// que ele só grava depois que o `open` do Rust responde). 400 é pedido torto e `ok:false` é recusa: definitivos.
 fn not_ready(code:&str,detail:&str) -> bool {
-    matches!(code,"policy_timeout" | "policy_transport") || code == "policy_refused" && matches!(detail,"status=400" | "status=503")
+    matches!(code,"policy_timeout" | "policy_transport") || code == "policy_refused" && detail == "status=503"
 }
 
 /// Sessão cujo processo o Rust sobe: pasta do arquivo dela e a primeira espera da religação.
@@ -1678,10 +1678,14 @@ mod tests {
     #[tokio::test]
     async fn python_not_ready_is_retried_and_a_definite_refusal_fails_at_once() {
         let ok = Some((200,json!({"ok":true,"data":{"updated":true}})));
-        // Sem registro da chave (400), sem coordenador (503) e conexão caída: o arquivo da sessão espera o Python.
-        let (result,calls) = call(vec![Some((400,json!({}))),Some((503,json!({}))),None,ok.clone()],"session.patch_meta").await;
+        // Sem registro da chave ou sem coordenador (503) e conexão caída: o arquivo da sessão espera o Python.
+        let (result,calls) = call(vec![Some((503,json!({}))),Some((503,json!({}))),None,ok.clone()],"session.patch_meta").await;
         assert_eq!(result.unwrap()["updated"],true);
         assert_eq!(calls,4);
+        // Pedido torto (400): repetir não muda nada.
+        let (result,calls) = call(vec![Some((400,json!({}))),ok.clone()],"session.patch_meta").await;
+        assert_eq!(result.unwrap_err().code,"policy_refused");
+        assert_eq!(calls,1);
         // O serviço respondeu e recusou: definitivo, uma chamada só.
         let (result,calls) = call(vec![Some((200,json!({"ok":false,"error_type":"ValueError"}))),ok.clone()],"session.patch_meta").await;
         assert_eq!(result.unwrap_err().code,"policy_failed");

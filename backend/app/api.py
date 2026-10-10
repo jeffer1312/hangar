@@ -699,6 +699,7 @@ app.include_router(share_guest_api.router)
 app.include_router(external_pair_api.router)
 app.include_router(migration_status.router)
 app.include_router(internal_api.router)
+app.include_router(internal_api.ping_router)
 registry = SessionRegistry()
 registry_mod.apos_saida_codex = _codex_lease_released
 registry_mod.apos_renomear_codex = _codex_lease_renamed

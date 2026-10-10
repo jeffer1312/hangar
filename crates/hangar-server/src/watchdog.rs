@@ -21,10 +21,10 @@ fn unit_from(cgroup: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Marca no futuro (relógio que voltou) conta como recente: na dúvida, não religa.
 fn restarted_recently(mark: &Path) -> bool {
-    std::fs::metadata(mark).and_then(|m| m.modified()).ok()
-        .and_then(|at| SystemTime::now().duration_since(at).ok())
-        .is_some_and(|age| age < MIN_GAP)
+    let Ok(at) = std::fs::metadata(mark).and_then(|m| m.modified()) else { return false };
+    SystemTime::now().duration_since(at).map_or(true, |age| age < MIN_GAP)
 }
 
 async fn ping(http: &HttpClient, upstream: SocketAddr, secret: &str) -> bool {
@@ -54,14 +54,19 @@ pub async fn run(http: HttpClient, upstream: SocketAddr, secret: String, home: P
             fails = 0;
             continue;
         }
-        let _ = std::fs::create_dir_all(mark.parent().unwrap_or(&home)).and_then(|_| std::fs::write(&mark, b""));
+        // Sem a marca não há o intervalo de 15 min: religar assim viraria um laço de reinício.
+        if let Err(error) = std::fs::create_dir_all(mark.parent().unwrap_or(&home)).and_then(|_| std::fs::write(&mark, b"")) {
+            tracing::error!(code = "python_restart_unguarded", error = %error.kind(), "Python parado, mas sem gravar a marca o vigia não religa");
+            fails = 0;
+            continue;
+        }
         tracing::error!(code = "python_restart", unit = %unit, "Python parado há ~1 min: o vigia pede para religar o serviço");
         // `--no-block`: o próprio vigia mora no serviço que vai cair; esperar o fim seria morrer no meio.
         match tokio::process::Command::new("systemctl").args(["--user", "--no-block", "restart", &unit]).status().await {
-            Ok(status) if status.success() => {}
-            other => tracing::error!(code = "python_restart_failed", detail = ?other.map(|s| s.code()), "o systemctl não aceitou religar"),
+            Ok(status) if status.success() => return,
+            other => tracing::error!(code = "python_restart_failed", detail = ?other.map(|s| s.code()), "o systemctl não aceitou religar; o vigia segue"),
         }
-        return;
+        fails = 0;
     }
 }
 

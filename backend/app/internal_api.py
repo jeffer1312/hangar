@@ -68,7 +68,17 @@ def info_payload(name: str, provider: str, jsonl: str | None) -> dict:
 
 
 router = APIRouter(prefix="/internal", dependencies=[Depends(require_internal)], include_in_schema=False)
+# Fora do `router`: a dependência síncrona dele roda no pool de threads, e um pool cheio com o laço
+# são faria o vigia do Rust religar o serviço à toa. Aqui a checagem corre no próprio laço.
+ping_router = APIRouter(prefix="/internal", include_in_schema=False)
 _policy_calls = {}
+
+
+@ping_router.get("/ping")
+async def ping(request: Request) -> dict:
+    """Sem resposta, o laço do Python está parado (vigia do Rust)."""
+    require_internal(request)
+    return {"ok": True}
 
 
 async def _instance_body(request: Request, limit: int, *, modes=None):
@@ -191,9 +201,13 @@ async def runtime_policy(request: Request):
                 or type(body["request_id"]) not in (int, str) or not isinstance(body["phase_id"], str)
                 or not isinstance(body["kind"], str) or not isinstance(body["payload"], dict)):
             raise ValueError("serviço inválido")
-        slot = coordinator.slots[body["key"]]
     except (KeyError, TypeError, ValueError):
         raise HTTPException(400) from None
+    # Na subida o Rust pede a política antes de o open dele responder e a chave entrar aqui: 503 é
+    # "tente de novo", e o 400 fica só para pedido torto, que não adianta repetir.
+    slot = coordinator.slots.get(body["key"])
+    if slot is None:
+        raise HTTPException(503, detail={"code": "runtime_slot_pending"})
 
     def validate():
         with slot.guard:
@@ -450,12 +464,6 @@ async def state_service(name: str, request: Request) -> dict:
     except Exception as exc:
         diag.registrar("estado.servico_falhou", "erro", sessao=name, codigo=type(exc).__name__)
         return {"ok": False, "error_type": type(exc).__name__}
-
-
-@router.get("/ping")
-async def ping() -> dict:
-    """Responde no próprio laço: sem resposta, o laço do Python está parado (vigia do Rust)."""
-    return {"ok": True}
 
 
 @router.get("/migration/status")

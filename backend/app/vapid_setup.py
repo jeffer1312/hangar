@@ -32,7 +32,8 @@ def new_pair() -> tuple[str, str]:
 
 def with_keys(text: str) -> str | None:
     """O `.env` com as duas chaves no fim; None quando já tem as duas. Só uma delas é erro: não adivinha a outra."""
-    present = {line.split("=", 1)[0].strip() for line in text.splitlines()
+    # `export X=` também conta: acrescentar outro par trocaria a chave e derrubaria as inscrições.
+    present = {line.split("=", 1)[0].strip().removeprefix("export ").strip() for line in text.splitlines()
                if "=" in line and not line.lstrip().startswith("#") and line.split("=", 1)[1].strip()}
     found = [k for k in KEYS if k in present]
     if len(found) == len(KEYS):
