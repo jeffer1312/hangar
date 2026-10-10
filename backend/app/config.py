@@ -224,7 +224,8 @@ class Settings(BaseSettings):
     # desligado (degrada gracioso: subscribe vira no-op). CP_VAPID_PUBLIC/PRIVATE/SUBJECT.
     vapid_public: str = ""
     vapid_private: str = ""
-    vapid_subject: str = "mailto:hangar@local"
+    # O py_vapid recusa `mailto:` sem domínio com ponto: `hangar@local` derrubava todo envio.
+    vapid_subject: str = "mailto:push@hangar.dev.br"
     # Push extras (feature #2): "terminou" (working->idle apos turno longo) e "caiu" (dead). Cada um
     # com seu flag on/off; default ligado (mesmo padrao do awaiting, que nao tem flag proprio).
     notify_finished: bool = True   # CP_NOTIFY_FINISHED

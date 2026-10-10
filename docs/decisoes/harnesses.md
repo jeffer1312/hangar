@@ -2767,8 +2767,11 @@ O marcador `awaiting_input` era gravado e o loop pausava na hora, mas o push nun
 adapter. Prova real com VAPID temporário e um receptor local inscrito: o push chegou 4s depois da
 permissão (1,5s de nova checagem + 2s de agrupamento).
 
-Achado sem conserto: o `vapid_subject` padrão (`mailto:hangar@local`) é recusado pelo `py_vapid`
-("Missing 'sub' from claims"). Servidor com VAPID e sem `CP_VAPID_SUBJECT` não manda push nenhum.
+O `vapid_subject` padrão (`mailto:hangar@local`) era recusado pelo `py_vapid` ("Missing 'sub' from
+claims"): servidor com VAPID e sem `CP_VAPID_SUBJECT` não mandava push nenhum. Consertado em
+10/10/2026 com o padrão `mailto:push@hangar.dev.br`; no mesmo dia o instalador passou a gerar o
+par VAPID (`app/vapid_setup.py`), que nenhuma instalação recebia: sem ele o envio saía calado e o
+celular nem se inscrevia.
 
 ## Pensamento em voo no Claude sem terminal (13/09/2026, CLI 2.1.270)
 

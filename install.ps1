@@ -1060,6 +1060,9 @@ foreach ($a in $script:agentesNovos) {
     Mark-Item $a 'falhou' $nome
     Add-AppPending $nome 'agente-nao-instalou'
 }
+# Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve.
+if ((Nativo $pyVenvAgentes -m app.vapid_setup) -eq 0) { Ok 'chaves do push para o celular prontas' }
+else { Falha 'chaves do push para o celular' 'rodar na mao:  cd backend ; uv run python -m app.vapid_setup' }
 Pop-Location
 # Prova do minimo: sem nenhum agente o app abre, mas nao tem o que pilotar.
 if (-not @($todosAgentes | Where-Object { Tem $_ }).Count) {

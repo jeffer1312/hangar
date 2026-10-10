@@ -584,6 +584,9 @@ say "2/8 Backend"
 (cd backend && uv sync --quiet) || fail_with "$(net_code)" "uv sync falhou — o backend ficou sem as dependências"
 ok "dependências instaladas"
 mark_item backend ok "servidor do Hangar"
+# Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve.
+(cd backend && uv run --quiet --no-sync python -m app.vapid_setup) \
+  || anota_problema "chaves do push para o celular não geradas — rode: cd backend && uv run python -m app.vapid_setup" push
 nota "psutil NÃO entra aqui: no Linux existe /proc e ele é mais rápido (ver app/procinfo.py)"
 
 for a in $AGENTES_NOVOS; do
