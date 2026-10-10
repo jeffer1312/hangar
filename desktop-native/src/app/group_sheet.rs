@@ -102,7 +102,7 @@ impl Hangar {
 
     fn live(&self, name: &str) -> Option<&SessionInfo> { self.members_list().iter().find(|s| s.name == name) }
 
-    fn live_peers(&self, name: &str) -> Vec<String> { self.live(name).map(|s| s.peers().to_vec()).unwrap_or_default() }
+    pub(super) fn live_peers(&self, name: &str) -> Vec<String> { self.live(name).map(|s| s.peers().to_vec()).unwrap_or_default() }
 
     /// Com o "mandar pro grupo" ligado nesta sessão e o mesmo grupo de quando ligou: ela e os membros. Comando `/` vai só para
     /// ela (o servidor recusa comando em grupo).
@@ -114,6 +114,7 @@ impl Hangar {
     }
 
     fn toggle_send_to_group(&mut self, cx: &mut Context<Self>) {
+        self.dictation.cancel_pending_send();
         let Some(key) = self.selected_key() else { return };
         let on = self.group_targets(&key, "").is_some();
         let peers = self.live_peers(&key.name).join(",");

@@ -254,6 +254,59 @@ Este
     volta como cru, igual ao do provedor), e a `_cobertura` continua rejeitando o ditado curto cheio
     de `barra`/`traço traço` — 0,727 contra o piso 0,80 de `limpar`, idêntico pela Groq.
 
+## Transcrição no Rust e envio encerra o ditado
+
+Em 09/10/2026, a issue 116 separou instalação e execução do Whisper: o usuário instala
+whisper.cpp, modelo e FFmpeg, e informa seus caminhos no servidor escolhido. O Hangar inicia
+um processo próprio em loopback, comprova que a porta pertence a ele, serializa inferências e
+encerra sua árvore na saída. WAV PCM mono de 16 kHz não exige conversão; outros formatos usam
+o conversor configurado ou o FFmpeg no PATH. Erro local não cria reserva externa: a lista
+salva é a única ordem de serviços.
+
+O `hangar-server` atende STT pela ponte privada autenticada. Protocolo interno 51 nos dois
+lados. Multipart HTTP, parser JSON, vocabulário, cotas e processo local estão no Rust; o motor
+antigo de `transcribe.py` foi removido. O Python mantém autorização e upload das rotas públicas,
+DTOs e organização LLM, que são capacidades compartilhadas. Sem Rust, transcrição responde 503
+visível; não executa outro motor. Serviços compatíveis com OpenAI aceitam chave opcional,
+ElevenLabs conserva chave própria e o teste de um serviço nunca passa à reserva.
+
+Enviar no nativo e no PWA para a gravação e espera o resultado completo. A intenção guarda
+destino, rascunho e anexos; o resultado só envia se esses dados ainda correspondem ao clique.
+Falha conserva conteúdo, e alteração durante a espera exige um novo envio. O fluxo manual
+suprime a contagem do mãos-livres. No PWA, o último `dataavailable` entra antes de `onstop`,
+as tracks são encerradas antes do resultado e uma permissão tardia não reabre o microfone.
+
+Evidência focada: os testes nativos falharam com `Ready` em vez de `Stop`/`Wait` e os testes
+do Composer falharam por nenhuma chamada de parada ao enviar. Após a mudança, os 19 testes
+de ditado nativo e os sete casos de envio no PWA passaram. Os testes Rust usam um executável
+real de fixture para conferir reutilização, concorrência e encerramento, além de HTTP real
+para conferir multipart, JSON e autenticação da ponte.
+
+Prova real da mesma data: uma frase de 120 caracteres em português gerada pela ElevenLabs
+(`eleven_multilingual_v2`) foi convertida em WAV, WebM/Opus e M4A/AAC. Os seis pedidos pela
+fachada Python e pela ponte privada Rust conservaram a frase completa: whisper.cpp oficial
+`b5454`, modelo `small-q5_1`, em 2,63–3,20 s; OpenRouter com `openai/whisper-large-v3`, em
+0,77–7,42 s. Binário e modelo tiveram SHA-256 conferido contra GitHub e Hugging Face. Esses
+tempos são uma amostra, não garantia de latência. O padrão Groq existente continua
+`whisper-large-v3`; migrar a linguagem não troca o modelo escolhido.
+
+Na revisão do PR 141, uma inferência bloqueada revelou que o desligamento esperava o lock
+do processo e podia ultrapassar o prazo do Supervisor. O desligamento agora cancela a
+inferência, a conversão e a espera na fila antes de adquirir esse lock. Cancelamento não
+aciona reserva externa. A inicialização do servidor e a configuração recuperam um registro
+de processo órfão sem precisar iniciar outra transcrição. Fixtures com resposta bloqueada
+comprovaram encerramento
+em menos de 2 s e nenhuma chamada à reserva. O teste de áudio usa prazo de 300 s também na
+mensagem de erro; o seletor do Expo tem trava síncrona até concluir ou cancelar a seleção.
+
+O CI também expôs uma espera frágil na fixture de estado: o canal interno de SSE devolvia 404
+para uma sessão declarada viva. A fixture agora mantém o canal aberto. O contrato com o Codex
+instalado prepara a inicialização fria antes da leitura e ainda relê `unavailable` por até um
+minuto, sem ampliar o prazo de produção.
+Na captura, o executável temporário podia falhar ao nascer durante outros spawns. A fixture
+Unix usa um link para um script imutável, com os parâmetros em arquivos separados, como o
+observador de terminal já fazia. A espera bloqueada usa um pipe, sem atraso artificial.
+
 ## Transcrição, organização do texto e leitura são capacidades separadas
 
 (`VozSettings.svelte` + `transcribe.py` + `narrar._provedor`, 17/09/2026.) A tela móvel mostrava

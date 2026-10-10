@@ -54,6 +54,12 @@ impl std::fmt::Debug for Shared { fn fmt(&self, f: &mut std::fmt::Formatter<'_>)
 #[derive(Clone)]
 pub struct Api { client: Client, plain: Client, base: Url, token: String }
 
+impl Api {
+    pub fn server_address(&self) -> String {
+        format!("{}{}", self.base.origin().ascii_serialization(), self.base.path().trim_end_matches('/'))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Failure {
     pub status: Option<u16>,
@@ -266,6 +272,13 @@ impl Api {
     /// devolveu): corpo vazio, nada é salvo de novo.
     pub async fn transcribe_saved(&self, name: &str, filename: &str, clean: bool, style: Option<&str>) -> Result<Value, Failure> {
         Self::transcribed(self.client.post(self.transcribe_url(Some(name), Some(filename), clean, style))).await
+    }
+
+    pub async fn test_transcription_provider(&self, id: &str, filename: &str, bytes: Vec<u8>) -> Result<Value, Failure> {
+        if bytes.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
+        Self::transcribed(self.client.post(self.server_url(&["transcription", "providers", id, "test"], &[]))
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .header("X-Filename", crate::composer::encode_component(filename)).body(bytes)).await
     }
 
     fn transcribe_url(&self, name: Option<&str>, saved: Option<&str>, clean: bool, style: Option<&str>) -> Url {

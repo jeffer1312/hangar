@@ -44,7 +44,7 @@ mime_guess = "=2.0.5"
 base64 = "=0.23.1"
 rusqlite.workspace = true
 rayon.workspace = true
-reqwest = { workspace = true, features = ["rustls"] }
+reqwest = { workspace = true, features = ["rustls", "multipart"] }
 # Painel de terminal real (`term/`): PTY no Unix, ConPTY no Windows.
 portable-pty = "=0.9.0"
 unicode-normalization = "=0.1.25"
@@ -59,6 +59,9 @@ libc.workspace = true
 # Processos fora do Linux; no Linux o leitor é o /proc (`list/procs.rs`).
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock"] }
 
 [dev-dependencies]
 # Relógio pausado: as rodadas do `state::Monitor` contadas sem esperar o tempo real.

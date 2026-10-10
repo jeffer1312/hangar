@@ -27,7 +27,7 @@ pub const AREAS: [&str; 22] = [
 ];
 
 /// Trabalho que o Python pede ao Rust por trás (porta privada e canal do runtime).
-pub const PRIVATE: [&str; 6] = ["send_headless", "send_terminal", "terminal_observe", "workspace_bridge", "list_bridge", "pages_bridge"];
+pub const PRIVATE: [&str; 7] = ["send_headless", "send_terminal", "terminal_observe", "workspace_bridge", "list_bridge", "pages_bridge", "transcription_bridge"];
 
 const WINDOW_MINUTES: u64 = 10;
 const FACTS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -215,6 +215,7 @@ pub async fn count_bridge(req: Request, next: Next) -> Response {
         "/__hangar_server/workspace" => "workspace_bridge",
         "/__hangar_server/list" => "list_bridge",
         "/__hangar_server/pages" => "pages_bridge",
+        path if path.starts_with("/__hangar_server/transcription/") => "transcription_bridge",
         _ => "",
     };
     count_private(key);

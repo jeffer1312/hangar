@@ -1,10 +1,13 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import { getTranscriptionProvidersStatus } from '@hangar/core';
 import TranscriptionProviders from './TranscriptionProviders.svelte';
 import * as m from '../../paraglide/messages';
 import type { ConfigServidorStore } from '../../lib/serverConfig.svelte';
+import { overwriteGetLocale } from '../../paraglide/runtime';
+
+beforeEach(() => overwriteGetLocale(() => 'pt'));
 
 vi.mock('@hangar/core', async (orig) => ({
   ...(await orig<typeof import('@hangar/core')>()),
@@ -29,6 +32,17 @@ function montar(valor: unknown[]) {
 }
 
 describe('TranscriptionProviders', () => {
+  it('Whisper local pede arquivos do servidor e não pede chave de API', () => {
+    const local = { id: 'local', kind: 'whisper_cpp', name: '', base_url: '', api_key: '', model: '',
+      executable_path: '/opt/Whisper instalado/whisper-server', model_path: '/opt/Whisper instalado/model.bin',
+      language: 'pt', converter_path: '' };
+    const { alvo, app } = montar([local]);
+    expect(alvo.querySelector<HTMLInputElement>('input[name="executable_path"]')?.value).toBe(local.executable_path);
+    expect(alvo.querySelector<HTMLInputElement>('input[name="model_path"]')?.value).toBe(local.model_path);
+    expect(alvo.querySelector('input[type="password"]')).toBeNull();
+    expect(alvo.querySelector<HTMLAnchorElement>('a[href="https://github.com/ggml-org/whisper.cpp"]')).not.toBeNull();
+    unmount(app);
+  });
   it('vazia: diz que vale o serviço único', () => {
     const { alvo, app } = montar([]);
     expect(alvo.textContent).toContain(m.native_voice_providers_empty());
@@ -86,8 +100,8 @@ describe('TranscriptionProviders', () => {
     unmount(app);
   });
 
-  it('item sem chave avisa que falta a chave', () => {
-    const { alvo, app } = montar([ELEVEN, { ...GROQ, api_key: '' }]);
+  it('somente ElevenLabs sem chave avisa que falta a chave', () => {
+    const { alvo, app } = montar([{ ...ELEVEN, api_key: '' }, { ...GROQ, api_key: '' }]);
     expect(alvo.querySelectorAll('.falta')).toHaveLength(1);
     expect(alvo.textContent).toContain(m.native_voice_provider_missing_key());
     unmount(app);

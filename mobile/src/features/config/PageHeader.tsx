@@ -28,7 +28,7 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   );
 }
 
-export function Pill({ label, icon, onPress, disabled }: PageAction) {
+export function Pill({ label, icon, onPress, disabled = false }: PageAction) {
   const c = useSettingsColors();
   return (
     <Pressable
@@ -36,10 +36,9 @@ export function Pill({ label, icon, onPress, disabled }: PageAction) {
       disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ disabled: !!disabled }}
+      accessibilityState={{ disabled }}
       hitSlop={6}
-      style={({ pressed }) => [styles.pill, { borderColor: c.borderStrong }, pressed && { backgroundColor: c.hover },
-        disabled && { opacity: 0.45 }]}
+      style={({ pressed }) => [styles.pill, { borderColor: c.borderStrong, opacity: disabled ? 0.5 : 1 }, pressed && { backgroundColor: c.hover }]}
     >
       {icon ? <Icon name={icon} size={14} color={c.text} /> : null}
       <Text style={[styles.pillText, { color: c.text }]} numberOfLines={1}>{label}</Text>

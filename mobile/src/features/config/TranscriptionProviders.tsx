@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Pressable, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Linking, Pressable, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   editTranscriptionProviderKey, editTranscriptionProviderTarget, fmtWhen, getTranscriptionProvidersStatus, moveTranscriptionProvider,
-  parseTranscriptionProviders, transcriptionProviderKeepsKey,
+  parseTranscriptionProviders, transcriptionProviderKeepsKey, testTranscriptionProvider,
   type TranscriptionProviderConfig, type TranscriptionProviderStatus,
 } from '@hangar/core';
 import { BlockHead, Box, useInputStyle } from './ServerConfigParts';
@@ -13,6 +13,7 @@ import { useSettingsColors } from './colors';
 import { PROVIDERS, type ServerConfig } from './serverConfig';
 import { Icon, type IconName } from '../../ui/Icon';
 import * as m from '../../paraglide/messages';
+import { pickFile } from '../../ui/attachmentPicker';
 
 type Status = { state: 'loading' } | { state: 'error'; error: string } | { state: 'ready'; byId: Record<string, TranscriptionProviderStatus> };
 
@@ -25,7 +26,14 @@ export function TranscriptionProviders({ cfg }: { cfg: ServerConfig }) {
   const c = useSettingsColors();
   const input = useInputStyle();
   const [status, setStatus] = useState<Status>({ state: 'loading' });
+  const [tests, setTests] = useState<Record<string, { running: boolean; text: string; error: string }>>({});
+  const selectingAudio = useRef(false);
+  const currentServer = useRef(cfg.server);
+  currentServer.current = cfg.server;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const server = cfg.server;
+  useEffect(() => { setTests({}); }, [server]);
   const present = PROVIDERS in cfg.fields;
 
   const loadStatus = useCallback(() => {
@@ -49,7 +57,26 @@ export function TranscriptionProviders({ cfg }: { cfg: ServerConfig }) {
   const stored = parseTranscriptionProviders(cfg.fields[PROVIDERS]?.valor);
   const stage = (next: TranscriptionProviderConfig[]) => cfg.stage(PROVIDERS, next);
   const edit = (i: number, item: TranscriptionProviderConfig) => stage(list.map((p, n) => (n === i ? item : p)));
-  const kinds = [{ v: 'openai', label: m.native_voice_provider_kind_openai() }, { v: 'elevenlabs', label: m.native_voice_provider_kind_elevenlabs() }] as const;
+  const kinds = [{ v: 'openai', label: m.native_voice_provider_kind_openai() }, { v: 'elevenlabs', label: m.native_voice_provider_kind_elevenlabs() },
+    { v: 'whisper_cpp', label: m.native_voice_provider_kind_whisper() }] as const;
+  const testAudio = async (id: string) => {
+    if (!server || tests[id]?.running || selectingAudio.current) return;
+    selectingAudio.current = true;
+    try {
+      const file = await pickFile().finally(() => { selectingAudio.current = false; });
+      if (!file || !mounted.current || currentServer.current !== server) return;
+      setTests((old) => ({ ...old, [id]: { running: true, text: '', error: '' } }));
+      const audio = await fetch(file.uri).then((r) => r.blob());
+      const result = await testTranscriptionProvider(id, audio, file.name, server);
+      if (mounted.current && currentServer.current === server) {
+        setTests((old) => ({ ...old, [id]: { running: false, text: result.text, error: result.aviso || '' } }));
+        loadStatus();
+      }
+    } catch (error) {
+      if (mounted.current && currentServer.current === server) setTests((old) => ({ ...old,
+        [id]: { running: false, text: '', error: error instanceof Error ? error.message : m.erro_desconhecido() } }));
+    }
+  };
   const now = Date.now() / 1000;
   const add = () => stage([...list, {
     // ponytail: relógio + sorteio; dois toques nunca colidem na prática.
@@ -75,7 +102,7 @@ export function TranscriptionProviders({ cfg }: { cfg: ServerConfig }) {
         ) : null}
         {list.map((p, i) => {
           const state = status.state === 'ready' ? status.byId[p.id] : undefined;
-          const name = p.name.trim() || state?.name || (p.kind === 'elevenlabs'
+          const name = p.name.trim() || state?.name || (p.kind === 'whisper_cpp' ? m.native_voice_provider_kind_whisper() : p.kind === 'elevenlabs'
             ? m.native_voice_provider_kind_elevenlabs() : m.native_voice_provider_kind_openai());
           const title = `${i + 1}. ${name}`;
           const until = state?.waiting_until && state.waiting_until > now ? state.waiting_until : null;
@@ -110,9 +137,25 @@ export function TranscriptionProviders({ cfg }: { cfg: ServerConfig }) {
                     value={p.base_url} onChangeText={(t) => edit(i, editTranscriptionProviderTarget(p, { base_url: t }, saved))} />
                 </Labeled>
               ) : null}
-              <Labeled label={m.native_voice_provider_key()}>
+              {p.kind === 'whisper_cpp' ? <>
+                <Text style={[styles.help, { color: c.muted }]}>{m.native_voice_provider_local_help({ server: server?.label || m.native_voice_provider_current_server() })}</Text>
+                <Pressable accessibilityRole="link" onPress={() => void Linking.openURL('https://github.com/ggml-org/whisper.cpp')}>
+                  <Text style={[styles.help, { color: c.text }]}>{m.native_voice_provider_official()}</Text>
+                </Pressable>
+                {[
+                  { field: 'executable_path' as const, label: m.native_voice_provider_executable(), placeholder: 'whisper-server' },
+                  { field: 'model_path' as const, label: m.native_voice_provider_model_file(), placeholder: 'ggml-small.bin' },
+                  { field: 'language' as const, label: m.native_voice_provider_language(), placeholder: 'pt' },
+                  { field: 'converter_path' as const, label: m.native_voice_provider_converter(), placeholder: 'ffmpeg' },
+                ].map((item) => <Labeled key={item.field} label={item.label}>
+                  <TextInput {...input} accessibilityLabel={`${item.label}, ${title}`} autoCapitalize="none" autoCorrect={false}
+                    placeholder={item.placeholder} value={p[item.field] || ''} onChangeText={(value) => edit(i, { ...p, [item.field]: value })} />
+                </Labeled>)}
+                {state?.error ? <Text accessibilityRole="alert" style={[styles.help, { color: theme.tokens.status.error }]}>{state.error}</Text> : null}
+              </> : <>
+              <Labeled label={p.kind === 'openai' ? m.native_voice_provider_key_optional() : m.native_voice_provider_key()}>
                 {/* Como o ConfigRow: mostra só o digitado; apagar volta à máscara, que mantém a chave guardada. */}
-                <TextInput {...input} accessibilityLabel={`${m.native_voice_provider_key()}, ${title}`} secureTextEntry
+                <TextInput {...input} accessibilityLabel={`${p.kind === 'openai' ? m.native_voice_provider_key_optional() : m.native_voice_provider_key()}, ${title}`} secureTextEntry
                   autoCapitalize="none" autoCorrect={false} textContentType="none" autoComplete="off"
                   placeholder={mask ? m.native_server_secret_paste_new() : m.native_server_secret_paste()}
                   value={p.api_key === mask ? '' : p.api_key} onChangeText={(t) => edit(i, editTranscriptionProviderKey(p, t, keeps ? mask : undefined))} />
@@ -122,7 +165,7 @@ export function TranscriptionProviders({ cfg }: { cfg: ServerConfig }) {
                   <Text style={{ fontFamily: theme.base.fontMono }}>{keptMask}</Text> · {m.native_server_secret_set()}
                 </Text>
               ) : null}
-              {p.api_key ? null : (
+              {p.api_key || p.kind !== 'elevenlabs' ? null : (
                 <Text accessibilityRole="alert" style={[styles.small, { color: theme.tokens.status.warning }]}>{m.native_voice_provider_missing_key()}</Text>
               )}
               <Labeled label={m.native_voice_provider_model()}>
@@ -131,6 +174,13 @@ export function TranscriptionProviders({ cfg }: { cfg: ServerConfig }) {
                   placeholder={p.kind === 'elevenlabs' ? 'scribe_v2' : 'whisper-large-v3'}
                   autoCapitalize="none" autoCorrect={false} value={p.model} onChangeText={(t) => edit(i, { ...p, model: t })} />
               </Labeled>
+              </>}
+              <Pill label={tests[p.id]?.running ? m.native_voice_provider_test_running() : m.native_voice_provider_test_audio()}
+                disabled={PROVIDERS in cfg.draft || tests[p.id]?.running} onPress={() => void testAudio(p.id)} />
+              {PROVIDERS in cfg.draft ? <Text style={[styles.help, { color: c.muted }]}>{m.native_voice_provider_test_saved()}</Text> : null}
+              {tests[p.id]?.error ? <Text accessibilityRole="alert" style={[styles.help, { color: theme.tokens.status.error }]}>{tests[p.id].error}</Text> : null}
+              {tests[p.id]?.text ? <View><Text accessibilityLiveRegion="polite" style={[styles.help, { color: c.muted }]}>{m.native_voice_provider_test_success()}</Text>
+                <Text style={[styles.help, { color: c.text }]}>{tests[p.id].text}</Text></View> : null}
             </View>
           );
         })}

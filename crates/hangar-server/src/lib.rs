@@ -28,6 +28,7 @@ pub mod terminal_input;
 mod terminal_process;
 pub mod terminal_routes;
 pub mod transcript;
+pub mod transcription;
 pub mod workspace_routes;
 pub mod uploads;
 pub mod worktree_routes;
@@ -35,7 +36,7 @@ mod warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, eventos do side-events, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 50;
+pub const INTERNAL_PROTOCOL: u32 = 51;
 
 /// Todo socket TCP do servidor, aceito ou aberto. Sem isso o Nagle segura o último pedaço de uma
 /// resposta em pedaços até o ACK atrasado do outro lado; o asyncio do Python já liga sozinho.
@@ -72,6 +73,7 @@ pub async fn serve_until_with_state(
     stop: impl std::future::Future<Output = ()>,
 ) -> std::io::Result<()> {
     let cfg = state.cfg.clone();
+    let transcription = state.transcription.clone();
     let codex_logins=state.accounts.codex_logins.clone();
     let codex_readers=state.accounts.codex_readers.clone();
     let device_logins=state.accounts.device_logins.clone();
@@ -80,6 +82,9 @@ pub async fn serve_until_with_state(
     // Abortada na saída: o laço segura a ponte da lista, que sobreviveria ao servidor.
     let _shadow = list::shadow::spawn(state.list.clone(), state.diag.clone()).map(AbortOnDrop);
     let result=async {
+    if let Some(home) = std::env::home_dir() {
+        transcription.recover_on_startup(&home).await;
+    }
     if let Some(instance) = config::Config::runtime_instance().map_err(std::io::Error::other)? {
         let windows = accounts::claude_login::WindowClient::new(cfg.upstream, cfg.internal_secret.clone(), instance.clone())
             .map_err(|error| std::io::Error::other(error.code))?;
@@ -112,6 +117,7 @@ pub async fn serve_until_with_state(
         () = stop => Ok(()),
     }
     }.await;
+    transcription.shutdown().await;
     if let Some((stop,task))=refresh_loop {
         let _=stop.send(true);
         let _=task.await;
