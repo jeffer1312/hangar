@@ -31,7 +31,12 @@ export interface LiveVoiceHandlers {
   taken(): void;
   switchTo(target: { server: string; baseUrl: string | null; name: string }): boolean;
   levels(v: { input: number; output: number }): void;
+  /** Ações de tela que a voz pode pedir (`hangar_action`); vão no hello para o Jev e o organizador. */
+  actions(): LiveVoiceAction[];
+  runAction(id: string): boolean;
 }
+
+export interface LiveVoiceAction { id: string; label: string; description: string }
 
 export class LiveVoiceCall {
   private pc: RTCPeerConnection | null = null;
@@ -125,7 +130,8 @@ export class LiveVoiceCall {
         else this.send({ type: 'ping' });
       }, 10000);
       ws.onopen = () => {
-        this.send({ type: 'hello', client: 'pwa', screen: this.screen, caps: ['switch_session'] });
+        this.send({ type: 'hello', client: 'pwa', screen: this.screen, caps: ['switch_session', 'hangar_actions', 'hangar_action'],
+          actions: this.handlers.actions() });
         this.send({ type: 'offer', sdp: offer.sdp });
       };
       ws.onmessage = event => { void this.receive(event.data, pc); };
@@ -153,6 +159,15 @@ export class LiveVoiceCall {
   }
 
   private tool(call: number, name: string, args: Record<string, unknown>) {
+    if (name === 'hangar_actions') {
+      const text = this.handlers.actions().map(a => `- ${a.id}: ${a.label}. ${a.description}`).join('\n');
+      this.send({ type: 'tool_result', call, ok: true, text });
+      return;
+    }
+    if (name === 'hangar_action') {
+      this.send({ type: 'tool_result', call, ok: this.handlers.runAction(String(args.id ?? '')), text: '' });
+      return;
+    }
     if (name !== 'switch_session') {
       // Recusa sem texto: o servidor fala a recusa no idioma da voz.
       this.send({ type: 'tool_result', call, ok: false, text: '' });

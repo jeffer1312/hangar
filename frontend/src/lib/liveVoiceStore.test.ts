@@ -22,6 +22,7 @@ vi.mock('./peers', () => ({ listarPeers: vi.fn(async () => [{ id: 'vps', base_ur
 vi.mock('./auth', () => ({ listServers: () => [fakes.home, fakes.vps] }));
 // Cada teste reimporta o store (resetModules): o core real recompilado a cada vez estoura o prazo do teste.
 vi.mock('@hangar/core', () => ({ baseOf: (s: { baseUrl: string }) => s.baseUrl, probeServerResponse: vi.fn() }));
+vi.mock('../paraglide/messages', () => ({ live_voice_action_list_label: () => 'L', live_voice_action_list_description: () => 'D' }));
 
 let onVisibility: () => void;
 const doc = { visibilityState: 'hidden' };

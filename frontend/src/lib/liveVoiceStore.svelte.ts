@@ -5,6 +5,7 @@ import { baseOf, probeServerResponse, type Server } from '@hangar/core';
 import { listServers } from './auth';
 import { LiveVoiceCall, type LiveVoiceHandlers, type LiveVoiceScreen, type LiveVoiceState } from './liveVoice';
 import { listarPeers, type PeerView } from './peers';
+import * as m from '../paraglide/messages';
 
 export type LiveVoicePhase = 'idle' | 'connecting' | 'live' | 'closed';
 export type LiveVoiceTarget = { server: Server; name: string };
@@ -45,6 +46,7 @@ let voiceServer: Server | null = null;
 let peers: PeerView[] = [];
 let screen: LiveVoiceTarget | null = null;
 let navigate: Navigate | null = null;
+let showList: (() => boolean) | null = null;
 let lostAt: number | null = null;
 let attempt = 0;
 
@@ -97,6 +99,8 @@ const handlers: LiveVoiceHandlers = {
     return !!server && !!navigate && navigate({ server, name: target.name });
   },
   levels(v) { levels = v; },
+  actions: () => [{ id: 'session-list', label: m.live_voice_action_list_label(), description: m.live_voice_action_list_description() }],
+  runAction(id) { return id === 'session-list' && !!showList && showList(); },
 };
 
 function reopenIfLost() {
@@ -216,5 +220,10 @@ export const liveVoiceStore = {
   registerNavigator(fn: Navigate): () => void {
     navigate = fn;
     return () => { if (navigate === fn) navigate = null; };
+  },
+  /** O App registra quem volta para a lista de sessões. */
+  registerSessionList(fn: () => boolean): () => void {
+    showList = fn;
+    return () => { if (showList === fn) showList = null; };
   },
 };

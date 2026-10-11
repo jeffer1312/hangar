@@ -7819,5 +7819,7 @@
   "accounts_sheet_title": "Accounts",
   "accounts_switch_title": "Switch this conversation's account",
   "accounts_none": "No accounts on this server",
-  "accounts_open_aria": "Account {n}: see accounts and switch"
+  "accounts_open_aria": "Account {n}: see accounts and switch",
+  "live_voice_action_list_label": "Session list",
+  "live_voice_action_list_description": "Leaves the open conversation and goes back to the session list (the previous screen)"
 }

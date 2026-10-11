@@ -7819,5 +7819,7 @@
   "accounts_sheet_title": "Contas",
   "accounts_switch_title": "Trocar a conta desta conversa",
   "accounts_none": "Nenhuma conta neste servidor",
-  "accounts_open_aria": "Conta {n}: ver contas e trocar"
+  "accounts_open_aria": "Conta {n}: ver contas e trocar",
+  "live_voice_action_list_label": "Lista de sessões",
+  "live_voice_action_list_description": "Sai da conversa aberta e volta para a lista de sessões (a tela anterior)"
 }

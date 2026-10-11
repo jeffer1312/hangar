@@ -63,7 +63,8 @@ function media() {
 async function started(handlers: Partial<LiveVoiceHandlers> = {}) {
   const audio = { pause: vi.fn(), play: vi.fn(async () => {}), srcObject: null } as unknown as HTMLAudioElement;
   const call = new LiveVoiceCall(audio, {
-    phase: vi.fn(), state: vi.fn(), failed: vi.fn(), taken: vi.fn(), switchTo: vi.fn(() => false), levels: vi.fn(), ...handlers,
+    phase: vi.fn(), state: vi.fn(), failed: vi.fn(), taken: vi.fn(), switchTo: vi.fn(() => false), levels: vi.fn(),
+    actions: () => [{ id: 'session-list', label: 'L', description: 'D' }], runAction: vi.fn(() => false), ...handlers,
   });
   await call.start(server, { server: '', name: 'hangar' });
   const ws = FakeWs.last, pc = FakePc.last;
@@ -84,7 +85,8 @@ describe('LiveVoiceCall', () => {
   it('says hello with the PWA capability, sends the offer and applies the answer', async () => {
     const { call, ws, pc } = await started();
     expect(ws.url).toBe('wss://remote.test/api/voice?token=secret');
-    expect(ws.sent[0]).toEqual({ type: 'hello', client: 'pwa', screen: { server: '', name: 'hangar' }, caps: ['switch_session'] });
+    expect(ws.sent[0]).toEqual({ type: 'hello', client: 'pwa', screen: { server: '', name: 'hangar' }, caps: ['switch_session', 'hangar_actions', 'hangar_action'],
+      actions: [{ id: 'session-list', label: 'L', description: 'D' }] });
     expect(ws.sent[1].type).toBe('offer');
     ws.receive({ type: 'answer', sdp: 'v=0 answer' });
     await vi.waitFor(() => expect(pc.remoteDescription?.sdp).toBe('v=0 answer'));
@@ -97,6 +99,16 @@ describe('LiveVoiceCall', () => {
     ws.receive({ type: 'tool', call: 3, name: 'switch_session', args: { server: '', base_url: null, name: 'web' } });
     expect(switchTo).toHaveBeenCalledWith({ server: '', baseUrl: null, name: 'web' });
     expect(ws.sent.at(-1)).toEqual({ type: 'tool_result', call: 3, ok: true, text: '' });
+  });
+
+  it('lists its screen actions and runs the one the voice asks for', async () => {
+    const runAction = vi.fn(() => true);
+    const { ws } = await started({ runAction });
+    ws.receive({ type: 'tool', call: 5, name: 'hangar_actions', args: {} });
+    expect(ws.sent.at(-1)).toEqual({ type: 'tool_result', call: 5, ok: true, text: '- session-list: L. D' });
+    ws.receive({ type: 'tool', call: 6, name: 'hangar_action', args: { id: 'session-list', arg: null } });
+    expect(runAction).toHaveBeenCalledWith('session-list');
+    expect(ws.sent.at(-1)).toEqual({ type: 'tool_result', call: 6, ok: true, text: '' });
   });
 
   it('refuses a screen tool it does not support', async () => {

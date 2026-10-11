@@ -395,6 +395,7 @@
     navigateToChat(name);
     return true;
   }));
+  $effect(() => liveVoiceStore.registerSessionList(() => { navigateToSessions(); return true; }));
   $effect(() => {
     void route;
     // `route` já passou pelo selectServer síncrono: o ativo lido aqui é o da rota nova.
