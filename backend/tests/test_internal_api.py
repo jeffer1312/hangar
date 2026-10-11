@@ -322,3 +322,33 @@ def test_internal_term_origin_same_rules(monkeypatch):
         assert r.status_code == 400
     r = client.post("/internal/term/origin", json={"origin": "x", "host": None}, headers={"X-Hangar-Internal": "errado"})
     assert r.status_code == 404
+
+
+def test_quota_facts_runs_outside_the_default_pool():
+    # O Rust chama esta rota enquanto um pedido de cota do Python ocupa o pool padrão: lá dentro ela se trava.
+    import json
+    import threading
+    seen = []
+    def facts(action, ids):
+        seen.append(threading.current_thread().name)
+        return {"sources": []}
+    raw = json.dumps({"action": "sources", "ids": []}).encode()
+    with patch("app.internal_api._instance_body", AsyncMock(return_value=(None, None, raw))), \
+            patch("app.cotas.quota_facts", facts):
+        r = _client().post("/internal/accounts/quotas", headers={"X-Hangar-Internal": SECRET})
+    assert r.status_code == 200 and r.json() == {"sources": []}
+    assert seen and seen[0].startswith("quota-facts")
+
+
+def test_busy_pool_threads_sees_uvloop_default_executor_threads():
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from app.loop_monitor import _busy_pool_threads
+    release, started = threading.Event(), threading.Event()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(lambda: (started.set(), release.wait(5)))
+        assert started.wait(5)
+        try:
+            assert len(_busy_pool_threads()) == 1
+        finally:
+            release.set()
