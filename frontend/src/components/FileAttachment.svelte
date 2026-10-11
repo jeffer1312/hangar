@@ -34,7 +34,7 @@
       if (result === 'tap-again') saving[r.path] = 'again';
       else delete saving[r.path];
     } catch (e) {
-      console.error('anexo: falhou ao salvar', e);
+      console.error('attachment: save failed', e);
       saving[r.path] = 'failed';
     }
   }

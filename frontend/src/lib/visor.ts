@@ -238,7 +238,7 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
       const r = await saveFile(midia.url, midia.nome);
       mostrarBaixar(botao, r === 'tap-again' ? 'again' : 'idle');
     } catch (e) {
-      console.error('visor: falhou ao salvar', e);
+      console.error('viewer: save failed', e);
       mostrarBaixar(botao, 'failed');
     }
   };
