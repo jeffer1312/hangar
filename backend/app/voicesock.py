@@ -18,6 +18,7 @@ from uvicorn.protocols.utils import ClientDisconnected
 from app import guest_users, list_bridge
 from app.auth import _LOOPBACK, _blocked, _record_fail
 from app.config import settings
+from app.connect_port import CONNECT_PEER
 from app.share_gate import guest_of
 from app.termsock import _origem_aceita
 
@@ -43,7 +44,8 @@ async def _owner_only(ws: WebSocket) -> bool:
         return False
     token = ws.query_params.get("token", "")
     if not settings.auth_token or not secrets.compare_digest(token.encode(), settings.auth_token.encode()):
-        if host not in _LOOPBACK:
+        # Toda conexão do Connect chega com o mesmo endereço: contar as sem token bloquearia o dono.
+        if host not in _LOOPBACK and not (host == CONNECT_PEER and not token):
             _record_fail(host, now)
         await ws.close(code=1008)
         return False

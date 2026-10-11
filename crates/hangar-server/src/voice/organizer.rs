@@ -892,7 +892,11 @@ fn head_destructive(name: &str, args: &[&str]) -> bool {
         }
         "tmux" => args.iter().any(|a| a.starts_with("kill-")),
         "systemctl" => args.iter().any(|a| matches!(*a, "stop" | "restart" | "disable" | "kill")),
-        "docker" | "podman" => args.iter().any(|a| matches!(*a, "rm" | "rmi" | "prune" | "stop" | "kill" | "down")),
+        "docker" | "podman" => args.iter().any(|a| matches!(*a, "rm" | "rmi" | "prune" | "stop" | "kill" | "down" | "push")),
+        // Publicar não tem volta; editar arquivo (>, mv, cp, sed -i) é o acesso total que o usuário liberou.
+        "cargo" | "npm" | "pnpm" | "yarn" => has("publish") || has("unpublish"),
+        "twine" => has("upload"),
+        "rsync" => args.iter().any(|a| a.starts_with("--delete")),
         "kubectl" => has("delete"),
         "hangar-send" => has("--close"),
         "curl" | "wget" => args.windows(2).any(|w| matches!(w[0], "-x" | "--request" | "--method") && w[1] == "delete")
@@ -1315,7 +1319,8 @@ mod tests {
             "nice -n 10 rm x", "ionice -c3 rm x", "ionice -c 3 rm x", "env -u X rm x", "env A=1 rm x", "xargs -n 1 rm", "xargs -0 rm",
             "xargs -I {} rm {}", "sudo -u x ls", "\\rm x", "/bin/rm x", "/usr/bin/rm x",
             "\"C:\\Program Files\\Git\\bin\\bash.exe\" -lc 'rm x'", "find . -exec /bin/rm {} \\;", "docker stop web", "docker kill web",
-            "docker compose down", "psql -c 'DROP TABLE x'", "mysql -e \"delete from t\"", "sqlite3 db 'TRUNCATE t'",
+            "docker compose down", "docker push img", "cargo publish", "npm publish", "pnpm publish", "npm unpublish x",
+            "twine upload dist/*", "rsync -a --delete a/ b/", "psql -c 'DROP TABLE x'", "mysql -e \"delete from t\"", "sqlite3 db 'TRUNCATE t'",
             "sqlcmd -Q \"ALTER TABLE t\"", "Stop-Service x", "Restart-Computer", "Stop-Computer", "reg delete HKCU\\x /f", "format D:",
             "powershell -EncodedCommand AAAA", "pwsh -enc AAAA", "powershell -e AAAA", "powershell -File x.ps1", "", "   "] {
             assert!(destructive(bad), "{bad}");
