@@ -231,12 +231,15 @@ import { cachePrazo } from '../lib/cachePrazo';
           if (sn === sessionName) commands = c;
         })
         .catch(() => {
-          // endpoint indisponivel -> segue com lista vazia, sem quebrar a UI
+          // Lista indisponível: segue vazia, mas quem digita "/" fica sabendo (abaixo do campo).
+          if (sn === sessionName) comandosErro = true;
         });
     });
     return () => aquecimento.abort();
   });
 
+  let comandosErro = $state(false);
+  $effect(() => { void sessionName; comandosErro = false; });
   let textareaEl: HTMLTextAreaElement | undefined = $state();
 
   // Exposto pro pai (atalho de teclado desktop "/" foca o campo).
@@ -2247,6 +2250,9 @@ import { cachePrazo } from '../lib/cachePrazo';
     <SlashSuggest bind:this={slashSuggest} bind:activeOptionId={slashActiveOptionId}
       {commands} query={slashQuery} onPick={pickSlash} onComplete={(cmd) => void completeSlashToken(cmd)}
       onDismiss={() => (slashDismissed = inputText)} listboxId={slashListboxId} />
+    {#if comandosErro && commands.length === 0 && inputText.startsWith('/')}
+      <p class="comandos-erro" role="status">{m.composer_commands_failed()}</p>
+    {/if}
 
     <textarea
       bind:this={textareaEl}
@@ -2948,6 +2954,8 @@ import { cachePrazo } from '../lib/cachePrazo';
   .composer.celular .status-tab .tab-left { overflow: hidden; flex: 1 1 0; }
   .composer.celular .status-tab .tab-right { flex-shrink: 0; }
   .composer.celular .place-chip { min-width: 0; flex: 0 1 auto; overflow: hidden; }
+  /* Chips de ação (fila, shells, grupo) não quebram linha nem cedem: quem encolhe é a pasta. */
+  .composer.celular .status-tab .tab-left > .repo-chip:not(.place-chip) { flex-shrink: 0; white-space: nowrap; }
   .composer.celular .place-chip .place-folder { flex-shrink: 3; min-width: 24px; }
   .composer.celular .place-chip .repo-branch { flex-shrink: 1; min-width: 24px; }
   .composer.celular .repo-chip, .composer.celular .account-ring { position: relative; }
@@ -3199,6 +3207,7 @@ import { cachePrazo } from '../lib/cachePrazo';
      `.control-left >` não é enfeite: a regra base de .attach-btn vem DEPOIS neste arquivo e,
      em especificidade igual, venceria — o seletor composto desempata. */
   .composer.compacto .control-left > .attach-btn { width: 32px; min-width: 0; }  /* min-width fura o alvo global de 44px */
+  .comandos-erro { margin: 0 var(--space-3); font-size: var(--text-xs); color: var(--warning); }
   /* Celular: o desenho fica compacto, mas o alvo de toque chega a 44px por fora dele. */
   .composer.celular .model-pill, .composer.celular .control-left > .attach-btn { position: relative; }
   .composer.celular .model-pill::after { content: ''; position: absolute; inset: -7px 0; }

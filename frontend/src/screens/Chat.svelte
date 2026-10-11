@@ -63,7 +63,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     setPermissionMode,
     setModoExecucao,
     recarregarSessao,
-    setSessionAccount, type AccountTarget,
+    setSessionAccount, setSessionEngineAccount, archiveRefFromJsonl, resumeArchivedConversation, getEngines, getEnginesForServer, type AccountTarget, type CliProxyAccount,
     steerSession,
     broadcast,
     selectOption,
@@ -87,7 +87,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   import { dictations, draftStorageKey, parseStoredDraft, readMigrating } from '../lib/dictationStore.svelte';
   import { formataErro } from '@hangar/core';
   import { fmtDur } from '../lib/fmt';
-  import { hasSeam, mergeHistoryWithLive } from '@hangar/core';
+  import { hasSeam, mergeHistoryWithLiveRetiring } from '@hangar/core';
   import { especificidade, donoDaLinha } from '@hangar/core';
   import { parseStatusLine, queuedMessages } from '@hangar/core';
   import { mergeProjectShortcuts, runShortcutShell, runCodeCommand, sendsDirect, shortcutMissingSecret } from '@hangar/core';
@@ -199,6 +199,13 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
 
   let events = $state<ChatEvent[]>([]);
   const retiredQueuedIds = new Set<string>();
+  // Costura com o histórico: a bolha da fila que a mensagem real aposentou fica aposentada também
+  // para a reconexão do SSE, que reenvia a fila inteira.
+  function mergeAposentando(history: ChatEvent[], opts: Parameters<typeof mergeHistoryWithLiveRetiring>[2]): ChatEvent[] {
+    const r = mergeHistoryWithLiveRetiring(history, events, opts);
+    for (const id of r.retired) retiredQueuedIds.add(id);
+    return r.events;
+  }
   // Sobe a cada CARGA de histórico (pintar do cache, chegar a cauda, trocar de transcript). A
   // MessageList re-ancora a janela na cauda a cada mudança — sem isso, uma carga que chega com a
   // lista já montada pode ficar fora da fatia visível e a conversa para na mensagem anterior.
@@ -1224,6 +1231,61 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     if (trocandoConta || currentState !== 'idle') return;
     contaAlvo = contaMostrada = conta;
   }
+  // Sessão encerrada some da lista: guarda a última leitura para o "Retomar" saber transcript e conta.
+  let ultimaInfo = $state<SessionInfo | null>(null);
+  $effect(() => {
+    const s = sessaoAtual;
+    if (s) ultimaInfo = s;
+    else if (ultimaInfo && ultimaInfo.name !== sessionName) ultimaInfo = null;
+  });
+  $effect(() => { void sessionName; retomarErro = ''; });
+  const refRetomar = $derived((ultimaInfo?.provider ?? 'claude') === 'claude' ? archiveRefFromJsonl(ultimaInfo?.jsonl) : null);
+  let retomando = $state(false);
+  let retomarErro = $state('');
+  let retomarNoutra = $state(false);
+  async function retomar(configDir?: string | null) {
+    const ref = refRetomar;
+    if (!ref || retomando) return;
+    retomando = true;
+    retomarErro = '';
+    const conta = ultimaInfo?.conta;
+    const dir = configDir ?? (conta?.startsWith('claude:') ? conta.slice('claude:'.length) : null);
+    try {
+      const info = await resumeArchivedConversation(ref.project, ref.sessionId, ultimaInfo?.engine ?? null, dir,
+        'claude', null, sessionServer());
+      window.location.hash = `#/chat/${encodeURIComponent(chatServerId ?? '')}/${encodeURIComponent(info.name)}`;
+    } catch (e) {
+      retomarErro = e instanceof Error ? e.message : m.arquivo_retomar_erro();
+    } finally {
+      retomando = false;
+    }
+  }
+  // Sessão com motor GPT: as contas ChatGPT do proxy entram no cartão, como no nativo.
+  let contasMotor = $state<CliProxyAccount[] | null>(null);
+  let contaMotorAlvo = $state<CliProxyAccount | null>(null);
+  $effect(() => {
+    if (desktop || !accountsOpen || !sessionEngine) { if (!sessionEngine) contasMotor = null; return; }
+    const engine = sessionEngine;
+    const srv = sessionServer();
+    (srv ? getEnginesForServer(srv) : getEngines())
+      .then((r) => { contasMotor = (r.motores[engine]?.cliproxy_accounts ?? []).filter((a) => !!a.account && /^codex:./.test(a.credential_id)); })
+      .catch(() => { contasMotor = null; });
+  });
+  const contaMotorAtiva = $derived(contasMotor?.find((a) => a.credential_id === sessaoAtual?.conta)?.account ?? null);
+  async function executarTrocaContaMotor() {
+    const alvo = contaMotorAlvo;
+    contaMotorAlvo = null;
+    if (!alvo || trocandoConta || currentState !== 'idle') return;
+    trocandoConta = true;
+    try {
+      await setSessionEngineAccount(sessionName, alvo.account, sessionServer());
+      await loadSessionsForNav();
+    } catch (err) {
+      mostrarAviso(err);
+    } finally {
+      trocandoConta = false;
+    }
+  }
   async function executarTrocaConta() {
     const alvo = contaAlvo;
     if (!alvo || trocandoConta || currentState !== 'idle') return;
@@ -1973,7 +2035,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
         temMaisNoServidor = events.length >= TAIL_FIRST;
       } else {
         // O SSE abre antes desta carga: a costura preserva prefixo antigo, sufixo novo e fila local.
-        events = mergeHistoryWithLive(r.eventos, events, {
+        events = mergeAposentando(r.eventos, {
           preserveNoSeam: !registroCache?.size,
           removedIds: retiredQueuedIds,
           cachedEvents: registroCache ?? undefined,
@@ -2060,7 +2122,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
           histGap = 'unjoinable';
           return;
         }
-        events = mergeHistoryWithLive(full, events, { removedIds: retiredQueuedIds });
+        events = mergeAposentando(full, { removedIds: retiredQueuedIds });
         rebuildIndex();
         reseedDerived();
         histGap = '';
@@ -2572,7 +2634,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
       const fresh = await getHistory(sessionName, TAIL_FIRST, signal, undefined, sessionServer());
       if (g !== histGen || !alive) return;   // resposta velha/pos-destroy: NAO sobrescreve nem conecta
       const gap = !hasSeam(fresh, events);
-      events = mergeHistoryWithLive(fresh, events, {
+      events = mergeAposentando(fresh, {
         cachedEvents: before, removedIds: retiredQueuedIds,
       });
       rebuildIndex();
@@ -2873,7 +2935,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     try {
       await sendInput(sessionName, cmd, sessionServer());
     } catch (err) {
-      console.error('sendInput (command) error:', err);
+      mostrarAviso(err);
     }
   }
 
@@ -3116,7 +3178,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     try {
       await interrupt(sessionName, !!last, sessionServer());
     } catch (err) {
-      console.error('interrupt error:', err);
+      mostrarAviso(err);
     }
   }
 
@@ -3511,7 +3573,20 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     {/if}
     {#if currentState === 'dead'}
       <div class="dead-footer">
-        <p class="dead-text">{m.chat_sessao_encerrada()}</p>
+        {#if !desktop && refRetomar}
+          <!-- Celular: o rodapé do desenho, com Retomar (no nativo, a conversa fechada vira "Recentes"). -->
+          <p class="dead-text dead-title">{m.chat_encerrada_titulo()}</p>
+          <p class="dead-text">{m.chat_encerrada_texto()}</p>
+          {#if retomarErro}<p class="dead-text dead-erro" role="alert">{retomarErro}</p>{/if}
+          <div class="dead-acoes">
+            <button class="dead-btn dead-btn--primario" onclick={() => retomar()} disabled={retomando}>
+              {retomando ? m.comum_carregando() : m.chat_retomar()}
+            </button>
+            <button class="dead-btn" onclick={() => (retomarNoutra = true)} disabled={retomando}>{m.chat_retomar_noutra()}</button>
+          </div>
+        {:else}
+          <p class="dead-text">{m.chat_sessao_encerrada()}</p>
+        {/if}
         <button class="back-btn" onclick={onBack}>{'← '}{m.comum_voltar()}</button>
       </div>
     {:else if orqSession}
@@ -3690,7 +3765,16 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
                    serverKey={chatServerId ?? ''}
                    activeAccount={allSessions.find((s) => s.name === sessionName)?.conta ?? null}
                    onSwitch={contaTrocavel ? pedirTrocaConta : undefined}
-                   blocked={!modoLivre || trocandoConta} />
+                   blocked={!modoLivre || trocandoConta}
+                   onInterrupt={currentState === 'working' ? handleInterrupt : undefined}
+                   engineAccounts={sessionEngine ? contasMotor : null} activeEngineAccount={contaMotorAtiva}
+                   onSwitchEngineAccount={sessionEngine ? (a) => (contaMotorAlvo = a) : undefined}
+                   onOpenSettings={() => abrirConfig('contas', chatServerId ?? null)} />
+  {/if}
+  {#if !desktop}
+    <AccountsSheet open={retomarNoutra} onClose={() => (retomarNoutra = false)} {sessionName}
+                   serverKey={chatServerId ?? ''} activeAccount={ultimaInfo?.conta ?? null} blocked={false}
+                   pickOnly onPick={(dir) => retomar(dir)} />
   {/if}
   <MoreSheet open={moreOpen} onClose={() => (moreOpen = false)}
              shortcuts={customShortcuts} onShortcut={triggerShortcut}
@@ -3725,6 +3809,11 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
                   : m.conta_confirmar_msg({ conta: contaMostrada?.label ?? '' })}
                 confirmLabel={m.conta_confirmar_titulo({ conta: contaMostrada?.label ?? '' })}
                 onConfirm={executarTrocaConta} onClose={() => (contaAlvo = null)} />
+  <ConfirmSheet open={contaMotorAlvo !== null}
+                title={m.conta_confirmar_titulo({ conta: contaMotorAlvo?.label || contaMotorAlvo?.email || '' })}
+                message={m.conta_confirmar_msg({ conta: contaMotorAlvo?.label || contaMotorAlvo?.email || '' })}
+                confirmLabel={m.conta_confirmar_titulo({ conta: contaMotorAlvo?.label || contaMotorAlvo?.email || '' })}
+                onConfirm={executarTrocaContaMotor} onClose={() => (contaMotorAlvo = null)} />
   <ConfirmSheet open={pendingShortcut !== null}
                 title={pendingShortcut?.label ?? ''}
                 message={pendingShortcut?.type === 'shell' ? pendingShortcut.command : pendingShortcut?.text ?? null}
@@ -4312,6 +4401,15 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   .aviso-err:active { background: var(--bg-hover); }
 
   /* Dead state footer */
+  .dead-title { font-weight: 600; color: var(--text-primary); }
+  .dead-erro { color: var(--error); }
+  .dead-acoes { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; }
+  .dead-btn {
+    min-height: 44px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);
+    background: transparent; color: var(--text-primary); font-size: var(--text-sm); font-weight: 600;
+  }
+  .dead-btn--primario { background: var(--accent); color: #fff; border-color: transparent; }
+  .dead-btn:disabled { opacity: 0.6; }
   .dead-footer {
     display: flex;
     flex-direction: column;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatEvent } from './types';
-import { appendTail, hasSeam, mergeHistoryWithLive, prependOlder, queuedMessages } from './history';
+import { appendTail, hasSeam, mergeHistoryWithLive, mergeHistoryWithLiveRetiring, prependOlder, queuedMessages } from './history';
 
 const ev = (id: string): ChatEvent => ({ kind: 'user_msg', id, text: id });
 const ids = (evs: ChatEvent[] | null) => (evs ?? []).map((e) => e.id);
@@ -159,5 +159,20 @@ describe('mergeHistoryWithLive', () => {
     expect(ids(mergeHistoryWithLive(
       ['novo'].map(ev), [cached, live], { cachedEvents: new Set([cached]) },
     ))).toEqual(['novo', 'queued-atual']);
+  });
+});
+
+describe('mergeHistoryWithLiveRetiring: real que chega pelo /history', () => {
+  const user = (id: string, text: string, ts?: number, queued_ts?: number) => ({ kind: 'user_msg', id, text, ts, queued_ts }) as ChatEvent;
+  it('aposenta só a bolha da fila dona do texto', () => {
+    const current = [user('a', 'oi'), user('queued-1', 'ok', undefined, 100), user('queued-2', 'ok', undefined, 101)];
+    const r = mergeHistoryWithLiveRetiring([user('a', 'oi'), user('r1', 'ok', 102)], current);
+    expect(r.events.filter((e) => e.id.startsWith('queued-')).map((e) => e.id)).toEqual(['queued-2']);
+    expect(r.retired).toEqual(['queued-1']);
+  });
+  it('real mais antiga que a bolha não a aposenta', () => {
+    const r = mergeHistoryWithLiveRetiring([user('r0', 'ok', 50)], [user('queued-1', 'ok', undefined, 100)]);
+    expect(r.events.map((e) => e.id)).toContain('queued-1');
+    expect(r.retired).toEqual([]);
   });
 });

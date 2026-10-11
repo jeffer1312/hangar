@@ -3554,6 +3554,14 @@ export function listAccountTargets(name: string, server?: Server | null): Promis
 }
 
 /** Continua a mesma conversa noutra conta Claude (`path` de `listAccountTargets`). Só ociosa (409 com o motivo). */
+// Sessão com motor GPT do proxy: troca a conta ChatGPT (o nativo, confirm_engine_account).
+export function setSessionEngineAccount(name: string, account: string, server?: Server | null): Promise<{ ok: boolean }> {
+  return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/conta`, {
+    method: 'POST',
+    body: JSON.stringify({ engine_account: account }),
+  });
+}
+
 export function setSessionAccount(name: string, configDir: string, server?: Server | null): Promise<{ ok: boolean; config_dir: string }> {
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/conta`, {
     method: 'POST',

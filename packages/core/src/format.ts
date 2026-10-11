@@ -1037,3 +1037,9 @@ export function abbrevNum(n: number): string {
   }
   return String(Math.round(n));
 }
+
+/** Transcript do Claude (`<config>/projects/<projeto>/<uuid>.jsonl`) → o que o arquivo usa para retomar. */
+export function archiveRefFromJsonl(jsonl: string | null | undefined): { project: string; sessionId: string } | null {
+  const m = jsonl ? /\/projects\/([^/]+)\/([^/]+)\.jsonl$/.exec(jsonl) : null;
+  return m ? { project: m[1], sessionId: m[2] } : null;
+}
