@@ -1,8 +1,10 @@
 # App desktop nativo (desktop-native/, Rust/GPUI): compila Linux, Windows e macOS e publica numa release FIXA
 # `native-latest`, reescrita a cada push na main — o mesmo esquema do `dist-latest` do ci.yml. O app lê o
 # `native-latest.json` dessa release para oferecer o "Atualizar" (desktop-native/src/update.rs).
-# Push em outra branch publica na pré-release `native-<branch>` (fora de [A-Za-z0-9._-] vira `-`), que é a que o app
-# procura quando o servidor da máquina está no canal de testes dessa branch. O manifesto mantém o nome em toda release.
+# O canal de testes (`beta`) publica na pré-release `native-beta`, que é a que o app procura quando o servidor da
+# máquina está no canal dessa branch. O manifesto mantém o nome em toda release.
+# `check` (build e test em debug, Linux) roda em todo push; `build` + `publish` só na main e no canal.
+# `workflow_dispatch` em outra branch compila sem publicar. Trocar o canal é trocar `beta` aqui e no server.yml.
 name: Native
 
 on:
@@ -20,12 +22,50 @@ on:
   workflow_dispatch:
 
 # Dois pushes seguidos não publicam ao mesmo tempo: o segundo espera, e a release termina no commit mais novo.
+# Onde não publica, o push novo cancela a conferência do anterior.
 concurrency:
   group: ${{ github.ref_name == 'main' && 'native-latest' || format('native-{0}', github.ref_name) }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref_name != 'main' && github.ref_name != 'beta' }}
 
 jobs:
+  # `build` e não `check` do cargo: confere o mesmo binário e deixa as dependências no perfil que o `test` reaproveita.
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_INCREMENTAL: "0"
+    defaults:
+      run:
+        working-directory: desktop-native
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - run: &apt-linux |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libfontconfig-dev libfreetype-dev libwayland-dev \
+            libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan-dev libzstd-dev rpm
+      - uses: actions/cache/restore@v4
+        id: cache-check
+        with:
+          path: &cache-check |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop-native/target
+          key: native-check-${{ runner.os }}-${{ hashFiles('desktop-native/Cargo.lock', 'desktop-native/rust-toolchain.toml') }}-${{ hashFiles('desktop-native/vendor/**') }}
+          restore-keys: native-check-${{ runner.os }}-
+      - run: cargo build --locked
+      - run: cargo test --locked
+      - if: &grava-check github.ref == 'refs/heads/main' && steps.cache-check.outputs.cache-hit != 'true'
+        run: ../scripts/podar-target --cache target
+      - uses: actions/cache/save@v4
+        if: *grava-check
+        with:
+          path: *cache-check
+          key: ${{ steps.cache-check.outputs.cache-primary-key }}
+
   build:
+    if: github.ref_name == 'main' || github.ref_name == 'beta' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -61,10 +101,7 @@ jobs:
         with:
           fetch-depth: 0
       - if: runner.os == 'Linux'
-        run: &apt-linux |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libasound2-dev libfontconfig-dev libfreetype-dev libwayland-dev \
-            libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan-dev libzstd-dev rpm
+        run: *apt-linux
       # O rustup do runner lê o rust-toolchain.toml (1.98.1) no primeiro cargo. actions/cache e não rust-cache: a
       # política do repositório só libera actions do GitHub e de criadores verificados.
       # Só a main grava; as outras branches leem o dela. Cada branch gravando a própria cópia estourava o limite de
@@ -176,10 +213,10 @@ jobs:
           path: *cache-native
           key: ${{ steps.consulta.outputs.cache-primary-key }}
 
-  # Só este job escreve, como o `publica-dist` do ci.yml.
+  # Só este job escreve, como o `publica-dist` do ci.yml. Teste vermelho no `check` segura a publicação.
   publish:
-    needs: build
-    if: startsWith(github.ref, 'refs/heads/')
+    needs: [check, build]
+    if: startsWith(github.ref, 'refs/heads/') && (github.ref_name == 'main' || github.ref_name == 'beta')
     runs-on: ubuntu-latest
     permissions:
       contents: write

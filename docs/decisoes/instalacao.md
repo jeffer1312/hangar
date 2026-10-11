@@ -48,7 +48,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   topo com aviso na tela, e o auto-update espera; ele só avança com o topo inteiro publicado.
   Evidência em [Atualizar para no binário publicado](#atualizar-para-no-binário-publicado-06102026).
 - **O app nativo segue o canal do servidor desta máquina.** `pre_voo.alvo` fora da main → release
-  `native-<branch>`, que o `native.yml` publica a cada push na branch (mesma limpeza de nome no
+  `native-<branch>`, que o `native.yml` publica a cada push no canal `beta` (mesma limpeza de nome no
   workflow e no `update.rs`); a `native-latest` continua só da main. Branch sem release, ou sem o
   build da plataforma, mantém o app e avisa na página Sobre, nunca cai na main calada. Trocar de
   canal aceita versão de contagem menor porque o CI embute a branch (`HANGAR_NATIVE_CHANNEL`); build
@@ -104,6 +104,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   sai do perfil `dist` (`--profile dist`, em `target/dist/`); a branch, do `release`. O cache tem o
   perfil na chave e só guarda dependências de terceiros (`scripts/podar-target --cache`). Evidência em
   [Build Rust e CI menores](#build-rust-e-ci-menores-09102026).
+- **CI do Rust: testar em toda branch, compilar release e publicar só na `main` e no canal `beta`.**
+  Nas outras branches o `server.yml` roda só os testes e o `native.yml` só o `check` (build e test
+  em debug, Linux); push novo cancela a conferência do anterior. `workflow_dispatch` numa branch
+  compila sem publicar. O `publish` do nativo espera o `check`. Trocar o canal é trocar `beta` nos
+  dois arquivos. Evidência em
+  [CI do Rust: publicar só na main e no canal](#ci-do-rust-publicar-só-na-main-e-no-canal-05102026).
 - **O bloco do MCP `hangar` no `config.toml` do Codex é reconhecido pela TABELA, não só pelos
   marcadores.** O app desktop reescreve o arquivo sem comentários; quem só procura `# >>> hangar`
   anexa de novo, e o TOML com chave duplicada derruba o ChatGPT e o Codex juntos.
@@ -783,4 +789,35 @@ testes novos das correções abaixo vieram depois da medição).
   ambiente, deixa os dois perfis em pastas próprias e sem valor a espelhar entre os jobs.
 - **Cache do Actions em 10,98 GB** (limite 10 GB) antes: `server-v2` 2,5/2,2/1,6 GB, `native-*`
   0,8–0,9 GB, `backend-rust` 0,6 GB e 0,8 GB de uma chave sem `v2` que nenhum workflow usava.
+
+## CI do Rust: publicar só na main e no canal (05/10/2026)
+
+Medido em 05/10/2026, duração de cada job no GitHub (`gh run view --json jobs`), duas rodadas verdes
+de cada lado. Antes, todo push em qualquer branch compilava release com LTO fat nos três sistemas e
+publicava `native-<branch>`/`server-<branch>`:
+
+| Job | Antes (2 rodadas) | Depois, branch comum |
+|---|---|---|
+| Native Linux | 858 s · 751 s (release) | `check` 868 s frio · 277 s com cache |
+| Native Windows | 1077 s · 1357 s | não roda |
+| Native macOS | 1197 s · 1410 s | não roda |
+| Server Linux | 490 s · 561 s (teste + release) | `test` 262 s · 212 s |
+| Server Windows | 857 s · 1029 s | `test` 504 s · 486 s |
+| Server macOS | 872 s · 422 s | não roda (Server: só os testes) |
+
+- **A regra saiu sem querer no mesmo dia.** O `cd1e36ca2` (`Revert "Merge ci/faster-builds…"`,
+  sem motivo na mensagem) entrou pela branch `hangar-server-parte1` e não foi pedido. A otimização
+  de 09/10 (LTO só na `main`, cache enxuto) foi escrita em cima do CI já revertido, e as branches
+  voltaram a compilar e publicar pré-release a cada push. Em 10/10 a regra voltou sobre o CI de
+  09/10: o build por sistema com publicação no próprio job ficou, e os passos de release, contrato
+  do cano e publicação passaram a depender de `COMPILA`/`PUBLICA`. O canal virou `beta`; o
+  `hangar-server-parte1` já tinha sido mesclado.
+- **O `check` do nativo usa `cargo build`, não `cargo check`.** O perfil dev otimiza as dependências
+  (`opt-level = 3`). O `check` as refazia só em metadados, 373 s a frio, além do `test`. O `build`
+  confere o mesmo binário e deixa pronto o que o `test` usa: o `test` caiu de 525 s para 28 s.
+- **O contrato do cano só roda onde há binário de release** (main, canal, `workflow_dispatch`).
+  Numa branch comum ele não roda; quem mexe no `cano.py` confere com o `workflow_dispatch`.
+- **Releases de branch antigas continuam publicadas.** Uma branch que parou de publicar e já tinha
+  `native-<branch>`/`server-<branch>` segue servindo a última versão a quem estiver nela, porque o
+  `rust_release.py` só recua para a main quando recebe 404.
 
