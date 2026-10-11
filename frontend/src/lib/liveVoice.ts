@@ -169,7 +169,10 @@ export class LiveVoiceCall {
       let result: true | string;
       try {
         result = this.handlers.runAction(String(args.id ?? ''), typeof args.arg === 'string' && args.arg.trim() ? args.arg.trim() : null);
-      } catch (e) { console.warn('live voice: screen action failed', e); result = ''; }
+      } catch (e) {
+        console.warn('live voice: screen action failed', e);
+        result = e instanceof Error && e.message ? e.message : 'screen action failed';
+      }
       this.send({ type: 'tool_result', call, ok: result === true, text: result === true ? '' : result });
       return;
     }

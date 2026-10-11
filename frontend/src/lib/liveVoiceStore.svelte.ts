@@ -164,6 +164,10 @@ async function start(server: Server) {
   lostAt = null;
   error = null;
   voiceState = null;
+  // Quem falava na chamada anterior não vale para esta.
+  levels = { input: 0, output: 0 };
+  shownSpeaker = 'idle';
+  speakerSince = 0;
   open = true;
   phase = 'connecting';
   // A chamada não espera a lista: a tela de outra máquina só casa quando ela chega.

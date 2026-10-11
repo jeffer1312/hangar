@@ -886,10 +886,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // Voz ao vivo: as folhas desta conversa, pelos mesmos caminhos dos botões.
   $effect(() => liveVoiceStore.registerActions({
     'new-session': () => { startNew(); return true; },
-    terminal: () => {
-      abrirTerminalReal();
-      return xtermOpen || mirrorOpen || desktop ? true : m.live_voice_action_no_terminal();
-    },
+    terminal: () => abrirTerminalReal() || m.live_voice_action_no_terminal(),
     git: () => { gitOpen = true; return true; },
     activity: () => { if (desktop) ctxPanel.aba = 'atividade'; else activityOpen = true; return true; },
     'panel-close': () => {
@@ -1640,12 +1637,15 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // Painel de verdade no desktop; espelho no celular -- e tambem no desktop quando o SERVIDOR nao tem
   // a capacidade (Windows: `pty` e POSIX-only, o painel abriria morto). NAO reusar isto no onFallback
   // do AskUserQuestion: o fallback existe pra destravar picker, e o painel bloqueia o /answer (Task 3).
-  function abrirTerminalReal() {
+  /** `false` quando nada abriu (a voz conta o motivo em vez de dizer que abriu). */
+  function abrirTerminalReal(): boolean {
     // Sem pane só há o que os atalhos abriram: painel/terminal com as abas deles, nunca o espelho.
-    if (sessionHeadless && !temTerminalDeAtalho && hangarOf(chatServerId).length === 0) return;
+    if (sessionHeadless && !temTerminalDeAtalho && hangarOf(chatServerId).length === 0) return false;
     if (desktop && onOpenTerminalPanel && terminalPanelDisponivel) onOpenTerminalPanel(sessionHeadless);
     else if (!desktop && terminalCapazMobile) xtermOpen = true;
     else if (!sessionHeadless) mirrorOpen = true;
+    else return false;
+    return true;
   }
   // Terminais dos atalhos "shell" desta sessão (lib/shortcutTerminals.svelte.ts). Sessão sem pane
   // ganha o botão de terminal quando existe pelo menos um.

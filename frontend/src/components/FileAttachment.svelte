@@ -53,6 +53,12 @@
   function fail(r: FileRef) {
     failed = new Set(failed).add(r.path);
   }
+  // Miniatura recusada (formato que o servidor não reduz, proxy no meio): tenta o original antes de dar falha.
+  let thumbFailed = $state(new Set<string>());
+  function thumbError(r: FileRef) {
+    if (r.url || thumbFailed.has(r.path)) fail(r);
+    else thumbFailed = new Set(thumbFailed).add(r.path);
+  }
   function icon(kind: string): string {
     return kind === 'html' ? '🌐' : kind === 'pdf' ? '📄' : '📎';
   }
@@ -88,7 +94,7 @@
         <span class="att-broken" title={r.path}>⚠ {m.anexos_nao_carregou({ nome: r.name })}</span>
       {:else if r.kind === 'image'}
         <button class="thumb-btn" bind:this={botoes[r.path]} onclick={() => abrir(r)} aria-label={m.anexos_ver({ n: r.name })}>
-          <img class="thumb" src={r.url ?? fileUrl(sessionName, r.path, false, sessionServer(), 192)} alt={r.name} loading="lazy" onerror={() => fail(r)} />
+          <img class="thumb" src={r.url ?? fileUrl(sessionName, r.path, false, sessionServer(), thumbFailed.has(r.path) ? undefined : 192)} alt={r.name} loading="lazy" onerror={() => thumbError(r)} />
         </button>
       {:else if r.kind === 'video'}
         <button class="thumb-btn" bind:this={botoes[r.path]} onclick={() => abrir(r)} aria-label={m.anexos_tocar({ nome: r.name })}>

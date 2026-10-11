@@ -36,8 +36,9 @@
     working: m.live_voice_status_working, listening: m.codex_voice_listening,
   };
   const status = $derived(liveVoiceStore.status);
-  const busy = $derived(!!vs && vs.activity !== 'idle');
-  const thought = $derived(busy && vs ? thoughtTail(vs.thought) : []);
+  // Servidor mais antigo pode não mandar `activity`/`thought`: ausente vale ocioso e vazio.
+  const busy = $derived(!!vs?.activity && vs.activity !== 'idle');
+  const thought = $derived(busy && vs ? thoughtTail(vs.thought ?? '') : []);
 
   $effect(() => { if (liveVoiceStore.open && target) void liveVoiceStore.loadSettings(target, true); });
 
