@@ -46,7 +46,8 @@ impl Controller {
             },
             Want::Plan { name, text } => match self.resolve("finish_plan", &rows, &unreachable, &name) {
                 Ok(i) => self.send_plan_to((rows[i].0.clone(), rows[i].1.name.clone()), text),
-                Err(why) => self.voice.session_answer(format!("O plano não foi enviado nem perdido; continua guardado. {why}")),
+                Err(why) => self.voice.session_answer(format!("O plano não foi enviado nem perdido; continua guardado. {why} \
+                    Para reenviar, diga para qual sessão mandar e chame finish_plan de novo com session.")),
             },
         }
         self.rows = rows;

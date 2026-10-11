@@ -15,6 +15,8 @@ const MAX_WIDTH: u32 = 1024;
 const MAX_SOURCE_BYTES: u64 = 64 << 20;
 // Panorama extremo: sem teto, "lado menor = w" geraria uma faixa enorme.
 const MAX_LONG_SIDE: u32 = 2048;
+// Uma página com dezenas de fotos pediria todas juntas; duas por vez seguram CPU e memória.
+static DECODES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 const RASTER: &[&str] = &[
     "image/png",
     "image/jpeg",
@@ -56,7 +58,8 @@ pub(crate) async fn serve(
         Ok(m) => m,
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
     };
-    if !is_raster || meta.len() > MAX_SOURCE_BYTES {
+    // FIFO ou link para /dev/zero não tem fim nem tamanho confiável: nada de decodificar.
+    if !is_raster || !meta.is_file() || meta.len() > MAX_SOURCE_BYTES {
         return serve_open_file(file, path, headers, download, media).await;
     }
     let modified = meta
@@ -72,8 +75,12 @@ pub(crate) async fn serve(
             .insert(header::CACHE_CONTROL, "max-age=60".parse().unwrap());
         return r;
     }
+    let Ok(_permit) = DECODES.acquire().await else {
+        return serve_open_file(file, path, headers, download, media).await;
+    };
     let mut bytes = Vec::with_capacity(meta.len() as usize);
-    let outcome = match file.read_to_end(&mut bytes).await {
+    // O arquivo pode crescer depois do metadata: o teto vale na leitura também.
+    let outcome = match (&mut file).take(MAX_SOURCE_BYTES).read_to_end(&mut bytes).await {
         Ok(_) => tokio::task::spawn_blocking(move || reduce(&bytes, width))
             .await
             .map_err(|e| e.to_string())
@@ -119,8 +126,10 @@ fn reduce(bytes: &[u8], width: u32) -> image::ImageResult<Option<(Vec<u8>, &'sta
     limits.max_image_width = Some(16384);
     limits.max_image_height = Some(16384);
     let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
-    reader.limits(limits);
+    reader.limits(limits.clone());
     let mut decoder = reader.into_decoder()?;
+    // `into_decoder` não reserva o buffer de saída (só `decode` faz): sem isto o `max_alloc` não valeria aqui.
+    limits.reserve(decoder.total_bytes())?;
     // Foto de celular vem deitada com a rotação no EXIF; o navegador a aplica no original, e a
     // miniatura (sem EXIF) tem de sair já girada.
     let orientation = decoder.orientation()?;
@@ -191,6 +200,17 @@ mod tests {
     fn small_image_is_not_enlarged() {
         let src = encode(DynamicImage::ImageRgb8(RgbImage::new(100, 50)), ImageFormat::Png);
         assert!(reduce(&src, 192).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn non_regular_file_is_not_decoded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.png");
+        std::fs::create_dir(&path).unwrap();
+        let file = tokio::fs::File::open(&path).await.unwrap();
+        let r = serve(file, &path, &HeaderMap::new(), false, None, Some(64)).await;
+        let etag = r.headers().get(header::ETAG).map(|h| h.to_str().unwrap().to_owned()).unwrap_or_default();
+        assert!(!etag.contains("thumb"), "{etag}");
     }
 
     #[test]

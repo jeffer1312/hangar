@@ -647,7 +647,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                 Ok(Incoming::Request { id, method, params }) if method == "item/commandExecution/requestApproval" => {
                     let command = params["command"].as_str();
                     let destructive = command.is_none_or(organizer::destructive);
-                    let ok = organizer::approval_decision(command, spoken.allows(&params), &mut command_gate,
+                    let ok = organizer::approval_decision(command, spoken.text(&params),&mut command_gate,
                         params["turnId"].as_str().unwrap_or_default(), Instant::now());
                     // Só o desfecho: o texto do comando é conversa e não vai ao diário.
                     log(format!("command approval destructive={destructive} accepted={ok}"));
