@@ -338,10 +338,12 @@ impl Controller {
                 if error.certain {
                     if let Some((sent, keys)) = &mut self.sent_turn && *sent == turn { keys.remove(&key); }
                     self.watched.remove(&key);
+                } else {
+                    self.follow_sent(key);
                 }
                 self.action_failed("send_to_session", error.text);
             }
-            Done::Sent { error: None, .. } => {}
+            Done::Sent { key, error: None, .. } => self.follow_sent(key),
             Done::PlanDelivered => self.plan_key = None,
             Done::Closed { call, key, result } => {
                 self.closing = false;
@@ -486,6 +488,14 @@ impl Controller {
     fn fail(&mut self, call: CallId, code: &'static str, text: String) {
         self.voice.reply(call, tool_reply(text.clone(), false));
         self.action_failed(code, text);
+    }
+
+    /// Quem mandou trabalho para uma sessão quer saber de cada resposta dela, mesmo olhando outra.
+    fn follow_sent(&mut self, key: Key) {
+        if self.followed.insert(key) {
+            log(format!("follow on=true by=send count={}", self.followed.len()));
+            self.dirty = true;
+        }
     }
 
     fn action_failed(&mut self, code: &'static str, text: String) {

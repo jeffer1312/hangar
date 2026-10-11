@@ -169,6 +169,24 @@ async fn send_to_named_session_posts_input_once_per_turn() {
 }
 
 #[tokio::test]
+async fn sending_to_a_session_follows_every_later_reply() {
+    let mut rig = rig(&[], None).await;
+    push_speech(&rig.push, "turn-1", "manda pra web revisar o login");
+    push_tool(&rig.push, "s1", "send_to_session", json!({"request": "revisar o login", "session": "web"}), "turn-1");
+    assert_eq!(rig.reply("s1").await["success"], true);
+    rig.state("web acompanhada", |s| s["followed"].as_array().is_some_and(|f| f.iter().any(|e| e["name"] == "web"))).await;
+    for (id, text) in [("9", "primeira"), ("10", "segunda")] {
+        tokio::time::sleep(Duration::from_millis(1600)).await;
+        {
+            let mut api = rig.api.lock().unwrap();
+            api.history.insert("web".into(), json!([{"id": id, "kind": "assistant_msg", "text": text}]));
+            api.sessions = json!([{"name": "hangar", "provider": "claude", "state": "idle"}, {"name": "web", "provider": "codex", "state": "idle"}]);
+        }
+        rig.wait(&format!("resposta {id} da web"), summary_of("web")).await;
+    }
+}
+
+#[tokio::test]
 async fn unreachable_peer_is_named_and_send_fails_loud() {
     let mut rig = rig(&[], Some(json!({"vps": {"base_url": "http://127.0.0.1:9", "token": "x"}}))).await;
     push_tool(&rig.push, "l1", "list_sessions", json!({}), "turn-1");
