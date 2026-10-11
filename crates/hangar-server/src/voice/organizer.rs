@@ -154,8 +154,8 @@ pub fn tools() -> Value {
         tool("update_plan", "Modo Planejar: grava o plano inteiro em Markdown (substitui o anterior).", json!({"markdown": {"type": "string"}})),
         tool("read_plan", "Modo Planejar: devolve o plano atual.", json!({})),
         tool("ask_session", "Modo Planejar: pergunta curta à sessão sobre o que só ela sabe; a resposta chega depois.", json!({"question": {"type": "string"}})),
-        tool("finish_plan", "Modo Planejar: manda o plano à sessão, depois de o usuário confirmar a escolha falada. session: a sessão de destino que o usuário confirmou (pode não ser a da tela); sem ela, vai para a sessão em que o plano começou.",
-            json!({"action": {"type": "string", "enum": ["executar", "planejar"]}, "session": {"type": "string"}})),
+        tool_with("finish_plan", "Modo Planejar: manda o plano à sessão, depois de o usuário confirmar a escolha falada. session: a sessão de destino que o usuário confirmou (pode não ser a da tela); sem ela, vai para a sessão em que o plano começou.",
+            json!({"action": {"type": "string", "enum": ["executar", "planejar"]}, "session": {"type": "string"}}), &["action"]),
         tool("set_mode", "Troca entre o modo direto e o modo planejar quando o usuário pedir.",
             json!({"mode": {"type": "string", "enum": ["direto", "planejar"]}})),
         tool("switch_session", "Troca a sessão aberta no Hangar para a sessão com esse nome; use quando o usuário pedir para trocar, ir ou abrir outra sessão.",
@@ -1204,6 +1204,8 @@ mod tests {
         assert!(ORGANIZER_PROMPT.contains("do projeto ou de fora dele"));
         let observe = tools.as_array().unwrap().iter().find(|t| t["name"] == "observe_system").unwrap();
         assert_eq!(observe["inputSchema"]["required"], json!([]), "tudo opcional");
+        let finish = tools.as_array().unwrap().iter().find(|t| t["name"] == "finish_plan").unwrap();
+        assert_eq!(finish["inputSchema"]["required"], json!(["action"]), "sem session vai para a sessão em que o plano começou");
         let call = |tool: &str, args: Value| parse_tool(&json!({"tool": tool, "arguments": args}));
         assert!(matches!(call("click_screen", json!({"id": "#migration-open"})), ToolCall::ClickScreen { id, confirmed: false } if id == "migration-open"));
         assert!(matches!(call("observe_system", json!({"filter": "hangar", "sort": "memoria"})),
