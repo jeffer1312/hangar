@@ -186,6 +186,55 @@ async fn sending_to_a_session_follows_every_later_reply() {
     }
 }
 
+/// O caso real: o Planejar começou com a hangar na tela, a tela foi para a web e o usuário confirmou a web.
+#[tokio::test]
+async fn plan_goes_to_the_confirmed_session_after_a_screen_change_without_moving_the_screen() {
+    let mut rig = rig(&[], None).await;
+    push_speech(&rig.push, "turn-1", "modo planejar");
+    push_tool(&rig.push, "m1", "set_mode", json!({"mode": "planejar"}), "turn-1");
+    assert_eq!(rig.reply("m1").await["success"], true);
+    push_speech(&rig.push, "turn-2", "anota o plano");
+    push_tool(&rig.push, "p1", "update_plan", json!({"markdown": "# Plano da web\n- passo único"}), "turn-2");
+    assert_eq!(rig.reply("p1").await["success"], true);
+    rig.to_ctl.send(ToController::Device(ClientMsg::Screen { screen: Some(Screen { server: String::new(), name: "web".into() }) })).unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    push_speech(&rig.push, "turn-3", "terminei, manda pra web escrever o plano");
+    push_tool(&rig.push, "f1", "finish_plan", json!({"action": "planejar", "session": "web"}), "turn-3");
+    let armed = rig.reply("f1").await;
+    assert!(text(&armed).contains("sessão web"), "{armed}");
+    push_speech(&rig.push, "turn-4", "isso, pode mandar pra web");
+    push_tool(&rig.push, "f2", "finish_plan", json!({"action": "planejar", "session": "web"}), "turn-4");
+    assert_eq!(rig.reply("f2").await["success"], true);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let inputs = rig.api.lock().unwrap().inputs.clone();
+    assert_eq!(inputs.len(), 1, "{inputs:?}");
+    assert_eq!(inputs[0].0, "web");
+    assert!(inputs[0].1.contains("passo único"), "o plano inteiro vai junto: {}", inputs[0].1);
+    while let Ok(msg) = rig.device.try_recv() {
+        assert!(!matches!(&msg, ServerMsg::Tool { name, .. } if name == "switch_session"), "mandar o plano não troca a tela");
+    }
+}
+
+/// Sem destino dito e com a tela em outra sessão, a voz é avisada antes do sim e nada vai para a sessão errada sem ele.
+#[tokio::test]
+async fn plan_finish_warns_when_the_screen_moved_and_no_session_was_said() {
+    let mut rig = rig(&[], None).await;
+    push_speech(&rig.push, "turn-1", "modo planejar");
+    push_tool(&rig.push, "m1", "set_mode", json!({"mode": "planejar"}), "turn-1");
+    assert_eq!(rig.reply("m1").await["success"], true);
+    push_speech(&rig.push, "turn-2", "anota o plano");
+    push_tool(&rig.push, "p1", "update_plan", json!({"markdown": "# Plano"}), "turn-2");
+    assert_eq!(rig.reply("p1").await["success"], true);
+    rig.to_ctl.send(ToController::Device(ClientMsg::Screen { screen: Some(Screen { server: String::new(), name: "web".into() }) })).unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    push_speech(&rig.push, "turn-3", "terminei");
+    push_tool(&rig.push, "f1", "finish_plan", json!({"action": "executar"}), "turn-3");
+    let reply = rig.reply("f1").await;
+    let armed = text(&reply);
+    assert!(armed.contains("sessão hangar") && armed.contains("A tela agora é web"), "{armed}");
+    assert!(rig.api.lock().unwrap().inputs.is_empty());
+}
+
 #[tokio::test]
 async fn unreachable_peer_is_named_and_send_fails_loud() {
     let mut rig = rig(&[], Some(json!({"vps": {"base_url": "http://127.0.0.1:9", "token": "x"}}))).await;

@@ -88,6 +88,7 @@ enum Want {
     Unpair(CallId, String),
     Follow(CallId, String, bool),
     Send { call: CallId, request: String, name: String, turn: String },
+    Plan { name: String, text: String },
 }
 
 enum Done {

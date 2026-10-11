@@ -44,6 +44,10 @@ impl Controller {
                 Ok(i) => self.send_to(call, (rows[i].0.clone(), rows[i].1.name.clone()), request, turn),
                 Err(text) => self.voice.reply(call, tool_reply(text, false)),
             },
+            Want::Plan { name, text } => match self.resolve("finish_plan", &rows, &unreachable, &name) {
+                Ok(i) => self.send_plan_to((rows[i].0.clone(), rows[i].1.name.clone()), text),
+                Err(why) => self.voice.session_answer(format!("O plano não foi enviado nem perdido; continua guardado. {why}")),
+            },
         }
         self.rows = rows;
     }
@@ -309,14 +313,18 @@ impl Controller {
         });
     }
 
-    /// O plano foi escrito para uma sessão: vai para ela, esteja ou não na tela. A máquina é a de quando o plano nasceu;
-    /// o nome sozinho pode estar em outra máquina.
+    /// O plano vai para a sessão confirmada, esteja ou não na tela, e a tela não muda. A da nascença usa a máquina de então;
+    /// outro nome é resolvido como no envio nomeado (ambíguo ou ausente não vira palpite).
     pub(super) fn send_plan(&mut self, session: String, text: String) {
-        let Some(key) = self.plan_key.clone().filter(|(_, n)| *n == session) else {
-            log("plan target unknown");
-            self.voice.session_answer(format!("O plano não foi enviado: não sei em que máquina está a sessão {session}."));
-            return;
-        };
+        match self.plan_key.clone().filter(|(_, n)| *n == session) {
+            Some(key) => self.send_plan_to(key, text),
+            None => { log("plan target by name"); self.lookup(Want::Plan { name: session, text }); }
+        }
+    }
+
+    fn send_plan_to(&mut self, key: Key, text: String) {
+        // Quem manda trabalho acompanha as respostas, como no envio direto.
+        if self.followed.insert(key.clone()) { self.dirty = true; }
         self.watched.insert(key.clone());
         let ctx = self.ctx();
         tokio::spawn(async move {

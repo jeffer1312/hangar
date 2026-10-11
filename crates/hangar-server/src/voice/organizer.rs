@@ -68,8 +68,9 @@ Há dois modos. No modo Direto, siga as regras acima. No modo Planejar, NADA vai
   uma frase, sem lê-la como resultado.
 - send_to_session não funciona no modo Planejar.
 - Quando o usuário disser que terminou, leia um resumo do plano em até três frases e pergunte se deve mandar
-  para executar ou para escrever o plano de implementação; só então chame finish_plan com a escolha.
-  Depois que ele confirmar, chame finish_plan de novo.
+  para executar ou para escrever o plano de implementação, dizendo para qual sessão vai; só então chame finish_plan
+  com a escolha e, se ele disse outra sessão, com session. Depois que ele confirmar, chame finish_plan de novo
+  com a mesma escolha e o mesmo session. Mandar para uma sessão nunca troca a tela.
 - O modo muda quando o usuário pede ('modo planejar', 'modo direto', 'pensa mais', 'modo rápido') ou quando ele quer planejar
   junto com você; use set_mode, que troca também o modelo que pensa. Nome de sessão com 'planejar' ou 'direto' (como voz-planejar) é uma sessão: use switch_session.
 Sem session, send_to_session manda para a sessão ativa (a da tela no momento do envio). Para outra sessão, passe session; nunca
@@ -153,8 +154,8 @@ pub fn tools() -> Value {
         tool("update_plan", "Modo Planejar: grava o plano inteiro em Markdown (substitui o anterior).", json!({"markdown": {"type": "string"}})),
         tool("read_plan", "Modo Planejar: devolve o plano atual.", json!({})),
         tool("ask_session", "Modo Planejar: pergunta curta à sessão sobre o que só ela sabe; a resposta chega depois.", json!({"question": {"type": "string"}})),
-        tool("finish_plan", "Modo Planejar: manda o plano à sessão, depois de o usuário confirmar a escolha falada.",
-            json!({"action": {"type": "string", "enum": ["executar", "planejar"]}})),
+        tool("finish_plan", "Modo Planejar: manda o plano à sessão, depois de o usuário confirmar a escolha falada. session: a sessão de destino que o usuário confirmou (pode não ser a da tela); sem ela, vai para a sessão em que o plano começou.",
+            json!({"action": {"type": "string", "enum": ["executar", "planejar"]}, "session": {"type": "string"}})),
         tool("set_mode", "Troca entre o modo direto e o modo planejar quando o usuário pedir.",
             json!({"mode": {"type": "string", "enum": ["direto", "planejar"]}})),
         tool("switch_session", "Troca a sessão aberta no Hangar para a sessão com esse nome; use quando o usuário pedir para trocar, ir ou abrir outra sessão.",
@@ -310,7 +311,7 @@ pub enum FinishAction { Execute, WritePlan }
 
 pub enum ToolCall {
     ReadSession, Send { request: String, session: Option<String> }, Hold(String), Discard, Unknown(String),
-    UpdatePlan(String), ReadPlan, AskSession(String), FinishPlan { action: FinishAction }, SetMode(Mode), SwitchSession(String),
+    UpdatePlan(String), ReadPlan, AskSession(String), FinishPlan { action: FinishAction, session: Option<String> }, SetMode(Mode), SwitchSession(String),
     ListSessions, OpenSession(OpenRequest), CloseSession { name: String, confirmed: bool }, PairSessions(String, String), UnpairSession(String),
     FollowSession(String), UnfollowSession(String),
     HangarActions, HangarAction { id: String, arg: Option<String> }, Computer(String),
@@ -336,8 +337,8 @@ pub fn parse_tool(params: &Value) -> ToolCall {
         "read_plan" => ToolCall::ReadPlan,
         "ask_session" => arg("question").map_or_else(unknown, ToolCall::AskSession),
         "finish_plan" => match arg("action").as_deref() {
-            Some("executar") => ToolCall::FinishPlan { action: FinishAction::Execute },
-            Some("planejar") => ToolCall::FinishPlan { action: FinishAction::WritePlan },
+            Some("executar") => ToolCall::FinishPlan { action: FinishAction::Execute, session: arg("session") },
+            Some("planejar") => ToolCall::FinishPlan { action: FinishAction::WritePlan, session: arg("session") },
             _ => unknown(),
         },
         "switch_session" => arg("name").map_or_else(unknown, ToolCall::SwitchSession),
@@ -748,8 +749,18 @@ pub fn code_note(session: Option<&Path>, own: &Path) -> String {
 pub enum FinishStep { Arm, Send }
 
 /// Duas etapas: a primeira chamada só arma; envia a segunda, da mesma escolha, em outro turno falado.
-pub fn finish_step(armed: Option<(FinishAction, &str)>, action: FinishAction, turn: &str) -> FinishStep {
-    match armed { Some((a, t)) if a == action && t != turn => FinishStep::Send, _ => FinishStep::Arm }
+/// O "sim" vale para a escolha e para o destino que foram lidos ao usuário: mudar qualquer um rearma.
+pub fn finish_step(armed: Option<(FinishAction, &str, &str)>, action: FinishAction, turn: &str, destination: &str) -> FinishStep {
+    match armed { Some((a, t, d)) if a == action && t != turn && squash(d) == squash(destination) => FinishStep::Send, _ => FinishStep::Arm }
+}
+
+/// O que a voz ouve ao armar: o destino, e o aviso quando a tela mudou desde que o plano começou.
+pub fn finish_arm_note(destination: &str, screen: &str) -> String {
+    let moved = !screen.is_empty() && squash(screen) != squash(destination);
+    let warn = if moved { format!(" A tela agora é {screen}, não {destination}: pergunte ao usuário para qual sessão vai e passe session.") }
+        else { String::new() };
+    format!("O plano vai para a sessão {destination}.{warn} Leia o resumo dizendo o destino e peça confirmação; depois que o usuário \
+        confirmar, chame finish_plan de novo com a mesma escolha e o mesmo session.")
 }
 
 /// Quanto vale o "sim" a uma ação destrutiva armada.
@@ -780,7 +791,7 @@ pub fn clean_question(question: &str) -> Result<String, &'static str> {
 
 /// Estado do modo Planejar no laço da chamada.
 #[derive(Default)]
-pub struct Planner { pub mode: Mode, plans: PathBuf, plan: Option<(PlanFile, String)>, armed: Option<(FinishAction, String)>, asked: Option<String> }
+pub struct Planner { pub mode: Mode, plans: PathBuf, plan: Option<(PlanFile, String)>, armed: Option<(FinishAction, String, String)>, asked: Option<String> }
 
 impl Planner {
     /// `plans`: a pasta onde os planos nascem.
@@ -801,10 +812,14 @@ impl Planner {
         if mode == Mode::Plan { self.plan(target); }
         mode_note(mode, self.path())
     }
-    pub fn finish_step(&mut self, action: FinishAction, turn: &str) -> FinishStep {
-        let step = finish_step(self.armed.as_ref().map(|(a, t)| (*a, t.as_str())), action, turn);
-        self.armed = (step == FinishStep::Arm).then(|| (action, turn.to_owned()));
+    pub fn finish_step(&mut self, action: FinishAction, turn: &str, destination: &str) -> FinishStep {
+        let step = finish_step(self.armed.as_ref().map(|(a, t, d)| (*a, t.as_str(), d.as_str())), action, turn, destination);
+        self.armed = (step == FinishStep::Arm).then(|| (action, turn.to_owned(), destination.to_owned()));
         step
+    }
+    /// Para onde o plano vai: o destino que o usuário confirmou; sem ele, a sessão em que o plano nasceu; sem plano, a tela.
+    pub fn destination(&self, said: Option<&str>, screen: &str) -> String {
+        said.map(str::trim).filter(|s| !s.is_empty()).or(self.session()).unwrap_or(screen).to_owned()
     }
     /// Uma pergunta por turno falado, só no Planejar.
     pub fn ask(&mut self, turn: &str, question: &str) -> Result<String, &'static str> {
@@ -1024,8 +1039,10 @@ mod tests {
         assert!(matches!(call("read_plan", json!({})), ToolCall::ReadPlan));
         assert!(matches!(call("ask_session", json!({"question": "Qual banco vocês usam?"})), ToolCall::AskSession(_)));
         assert!(matches!(call("ask_session", json!({"question": " "})), ToolCall::Unknown(_)));
-        assert!(matches!(call("finish_plan", json!({"action": "executar"})), ToolCall::FinishPlan { action: FinishAction::Execute }));
-        assert!(matches!(call("finish_plan", json!({"action": "planejar"})), ToolCall::FinishPlan { action: FinishAction::WritePlan }));
+        assert!(matches!(call("finish_plan", json!({"action": "executar"})), ToolCall::FinishPlan { action: FinishAction::Execute, session: None }));
+        assert!(matches!(call("finish_plan", json!({"action": "planejar"})), ToolCall::FinishPlan { action: FinishAction::WritePlan, session: None }));
+        assert!(matches!(call("finish_plan", json!({"action": "planejar", "session": "TikTok"})),
+            ToolCall::FinishPlan { action: FinishAction::WritePlan, session: Some(s) } if s == "TikTok"));
         assert!(matches!(call("finish_plan", json!({"action": "outra"})), ToolCall::Unknown(_)));
         assert!(matches!(call("switch_session", json!({"name": "shop web"})), ToolCall::SwitchSession(n) if n == "shop web"));
         assert!(matches!(call("switch_session", json!({"name": " "})), ToolCall::Unknown(_)));
@@ -1161,15 +1178,29 @@ mod tests {
     #[test]
     fn finish_plan_needs_two_spoken_turns() {
         use FinishAction::{Execute, WritePlan};
-        assert_eq!(finish_step(None, Execute, "t1"), FinishStep::Arm);
-        assert_eq!(finish_step(Some((Execute, "t1")), Execute, "t1"), FinishStep::Arm, "mesmo turno não confirma");
-        assert_eq!(finish_step(Some((Execute, "t1")), WritePlan, "t2"), FinishStep::Arm, "outra escolha rearma");
-        assert_eq!(finish_step(Some((Execute, "t1")), Execute, "t2"), FinishStep::Send);
+        assert_eq!(finish_step(None, Execute, "t1", "s"), FinishStep::Arm);
+        assert_eq!(finish_step(Some((Execute, "t1", "s")), Execute, "t1", "s"), FinishStep::Arm, "mesmo turno não confirma");
+        assert_eq!(finish_step(Some((Execute, "t1", "s")), WritePlan, "t2", "s"), FinishStep::Arm, "outra escolha rearma");
+        assert_eq!(finish_step(Some((Execute, "t1", "s")), Execute, "t2", "TikTok"), FinishStep::Arm, "outro destino rearma");
+        assert_eq!(finish_step(Some((Execute, "t1", "s")), Execute, "t2", "s"), FinishStep::Send);
         let mut planner = Planner::default();
-        assert_eq!(planner.finish_step(Execute, "t1"), FinishStep::Arm);
-        assert_eq!(planner.finish_step(Execute, "t2"), FinishStep::Send);
+        assert_eq!(planner.finish_step(Execute, "t1", "s"), FinishStep::Arm);
+        assert_eq!(planner.finish_step(Execute, "t2", "s"), FinishStep::Send);
         planner.set_mode(Mode::Plan, "s");
-        assert_eq!(planner.finish_step(Execute, "t3"), FinishStep::Arm, "trocar de modo desarma");
+        assert_eq!(planner.finish_step(Execute, "t3", "s"), FinishStep::Arm, "trocar de modo desarma");
+    }
+
+    #[test]
+    fn plan_destination_is_the_confirmed_session_not_where_the_plan_began() {
+        let mut planner = Planner::default();
+        planner.set_mode(Mode::Plan, "voz-servidor-fim");
+        // A tela foi para a TikTok e o usuário confirmou a TikTok: o destino falado vence a sessão de nascença.
+        assert_eq!(planner.destination(Some(" TikTok "), "TikTok"), "TikTok");
+        assert_eq!(planner.destination(None, "TikTok"), "voz-servidor-fim", "sem destino dito, a sessão em que o plano nasceu");
+        assert_eq!(Planner::default().destination(None, "web"), "web", "sem plano, a da tela");
+        let note = finish_arm_note("voz-servidor-fim", "TikTok");
+        assert!(note.contains("voz-servidor-fim") && note.contains("TikTok") && note.contains("session"), "{note}");
+        assert!(!finish_arm_note("TikTok", "TikTok").contains("tela agora"));
     }
 
     #[test]
@@ -1219,12 +1250,12 @@ mod tests {
     fn sent_plan_returns_to_direct_and_keeps_the_plan() {
         let mut planner = Planner::default();
         planner.set_mode(Mode::Plan, "s");
-        planner.finish_step(FinishAction::Execute, "t1");
+        planner.finish_step(FinishAction::Execute, "t1", "s");
         planner.sent();
         assert_eq!(planner.mode, Mode::Direct);
         assert!(planner.path().is_some(), "envio recusado não perde o plano");
         assert_eq!(planner.session(), Some("s"));
-        assert_eq!(planner.finish_step(FinishAction::Execute, "t2"), FinishStep::Arm, "armado foi zerado");
+        assert_eq!(planner.finish_step(FinishAction::Execute, "t2", "s"), FinishStep::Arm, "armado foi zerado");
     }
 
     #[test]
@@ -1243,9 +1274,9 @@ mod tests {
         planner.set_mode(Mode::Plan, "a");
         planner.set_mode(Mode::Plan, "b");
         assert_eq!(planner.session(), Some("a"), "a sessão é a do nascimento");
-        planner.finish_step(FinishAction::Execute, "t1");
+        planner.finish_step(FinishAction::Execute, "t1", "a");
         planner.plan_changed();
-        assert_eq!(planner.finish_step(FinishAction::Execute, "t2"), FinishStep::Arm, "plano alterado desarma");
+        assert_eq!(planner.finish_step(FinishAction::Execute, "t2", "a"), FinishStep::Arm, "plano alterado desarma");
     }
 
     #[test]

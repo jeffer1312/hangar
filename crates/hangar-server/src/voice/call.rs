@@ -517,7 +517,8 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             }
                             Err(why) => { let _ = rpc.respond(id, tool_reply(why, false)).await; "refused-ask" }
                         },
-                        ToolCall::FinishPlan { action } => {
+                        ToolCall::FinishPlan { action, session } => {
+                            let destination = planner.destination(session.as_deref(), &target);
                             let content = match planner.read() {
                                 Ok(content) => content,
                                 Err(error) => {
@@ -530,16 +531,17 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             if content.trim().is_empty() {
                                 let _ = rpc.respond(id, tool_reply("Plano vazio; escreva o plano com update_plan antes.", false)).await;
                                 "refused-empty-plan"
-                            } else if planner.finish_step(action, params["turnId"].as_str().unwrap_or_default()) == FinishStep::Arm {
-                                let _ = rpc.respond(id, tool_reply("Leia o resumo e peça confirmação; chame finish_plan de novo depois que o usuário confirmar.", true)).await;
+                            } else if planner.finish_step(action, params["turnId"].as_str().unwrap_or_default(), &destination) == FinishStep::Arm {
+                                let _ = rpc.respond(id, tool_reply(organizer::finish_arm_note(&destination, &target), true)).await;
                                 "finish-armed"
                             } else {
                                 let path = planner.path().map(|p| p.to_path_buf()).unwrap_or_default();
-                                // Sessão de outra máquina não lê o arquivo daqui: o conteúdo vai junto.
-                                let text = finish_request(&path, action, target_cwd.is_none().then_some(content.as_str()));
-                                log(format!("plan sent bytes={}", text.len()));
-                                let session = planner.session().unwrap_or(&target).to_owned();
-                                let _ = events.send(VoiceEvent::SendPlan { session, text }).await;
+                                // Sessão de outra máquina não lê o arquivo daqui, e um destino fora da tela pode ser de outra
+                                // máquina: nos dois casos o conteúdo vai junto.
+                                let away = target_cwd.is_none() || organizer::squash(&destination) != organizer::squash(&target);
+                                let text = finish_request(&path, action, away.then_some(content.as_str()));
+                                log(format!("plan sent bytes={} named={}", text.len(), session.is_some()));
+                                let _ = events.send(VoiceEvent::SendPlan { session: destination, text }).await;
                                 planner.sent();
                                 let warn = apply_models(&rpc, &thread, &mut applied, &models, Mode::Direct, &defaults, &mut effective, events).await;
                                 let reply = format!("Plano enviado à sessão; o resultado chega depois. {}", warn.unwrap_or_default());
