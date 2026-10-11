@@ -16,6 +16,8 @@
   let { server, cwd, root, disabled = false, onChanged }: Props = $props();
   let tab = $state<'state' | 'switch' | 'create'>('state');
   let branches = $state<FolderBranches | null>(null);
+  let branchesFailed = $state(false);
+  let branchesSeq = 0;
   let newName = $state('');
   let newBase = $state('');
   let fetchedFor = '';
@@ -51,7 +53,7 @@
   // Pasta ou máquina nova: o estado anterior não vale.
   $effect(() => {
     void [server.id, cwd, root];
-    untrack(() => { tab = 'state'; branches = null; void load(); });
+    untrack(() => { tab = 'state'; branches = null; branchesFailed = false; branchesSeq++; void load(); });
   });
 
   $effect(() => {
@@ -59,9 +61,7 @@
     untrack(() => {
       const key = `${server.id}:${cwd}`;
       if (fetchedFor !== key && git?.repo) { fetchedFor = key; void act('fetch', true); }
-      if (!branches) {
-        getFolderBranchesForServer(server, cwd, undefined, root).then((b) => { branches = b; }).catch(() => {});
-      }
+      if (!branches) loadBranches();
     });
   });
 
@@ -70,8 +70,16 @@
     git = g;
     note = { kind: 'ok', text };
     branches = null;
-    getFolderBranchesForServer(server, cwd, undefined, root).then((b) => { branches = b; }).catch(() => {});
+    loadBranches();
     onChanged?.();
+  }
+
+  function loadBranches() {
+    const mine = ++branchesSeq;
+    branchesFailed = false;
+    getFolderBranchesForServer(server, cwd, undefined, root)
+      .then((b) => { if (mine === branchesSeq) branches = b; })
+      .catch(() => { if (mine === branchesSeq) branchesFailed = true; });
   }
 
   async function runGit(kind: 'switch' | 'create', target: string, confirmSessions = false) {
@@ -205,8 +213,13 @@
       <p class="branch">{git.current ?? 'HEAD'}</p>
       <p class="help" role="status">{statusLine}</p>
       {#if tab === 'switch'}
-        {#if !branches}
+        {#if branchesFailed && !branches}
+          <p class="help err" role="alert">{m.home_usage_load_failed()}</p>
+          <button type="button" class="btn full" onclick={() => loadBranches()}>{m.sync_retry()}</button>
+        {:else if !branches}
           <p class="help" role="status">{m.comum_carregando()}</p>
+        {:else if !branches.branches.length && !branches.remotes.length}
+          <p class="help">{m.ctx_sem_branches()}</p>
         {:else}
           <ul class="list">
             {#each [...branches.branches.map((b) => ({ name: b, remote: false })), ...branches.remotes.map((b) => ({ name: b, remote: true }))] as b (b.name + b.remote)}

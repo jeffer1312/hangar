@@ -114,7 +114,8 @@ export class NewChatDraft {
   #accountPicked = false;
   // Sessão já criada cujo primeiro envio falhou: tentar de novo reenvia nela em vez de criar outra,
   // desde que nenhuma escolha tenha mudado desde então.
-  #created: { choices: string; name: string } | null = null;
+  // `uploaded`: anexo já enviado a esta sessão → caminho no servidor; o reenvio não duplica a cópia.
+  #created: { choices: string; name: string; uploaded: Map<File, string> } | null = null;
 
   get serverObj(): Server | null { return this.servers.find((s) => s.id === this.server) ?? null; }
   get #choices(): string {
@@ -590,12 +591,17 @@ export class NewChatDraft {
         // O nome que vale é o devolvido pelo backend: ele pode desempatar de novo.
         name = info.name;
         // Releitura das escolhas: o nome da branch nova pode ter sido preenchido acima.
-        this.#created = { choices: this.#choices, name };
+        this.#created = { choices: this.#choices, name, uploaded: new Map() };
       }
+      const uploaded = this.#created?.uploaded;
       const parts: string[] = [];
       for (const file of this.attachments) {
         // Um anexo que falha segura a mensagem: ela não sai pela metade (create.rs, CreatedWithInput).
-        const { path } = await uploadFileForServer(server, name, file);
+        let path = uploaded?.get(file);
+        if (!path) {
+          ({ path } = await uploadFileForServer(server, name, file));
+          uploaded?.set(file, path);
+        }
         parts.push((file.type.startsWith('image/') ? `📎 ${m.board_imagem()}: ` : `📎 ${m.board_arquivo()}: `) + path);
       }
       await sendInputForServer(server, name, [text, ...parts].filter(Boolean).join('\n'));

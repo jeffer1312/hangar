@@ -6,6 +6,7 @@ const core = vi.hoisted(() => ({
   getCodexAccountsForServer: vi.fn(), getFolderBranchesForServer: vi.fn(), getRootsForServer: vi.fn(),
   listClaudeConfigs: vi.fn(), getClaudeAccountSuggestion: vi.fn(), getProviders: vi.fn(), modelOptions: vi.fn(),
   modelOptionsForServer: vi.fn(), getEnginesForServer: vi.fn(), getConfigForServer: vi.fn(), setClaudeDefaultsForServer: vi.fn(),
+  uploadFileForServer: vi.fn(),
 }));
 vi.mock('@hangar/core', async (orig) => ({ ...(await orig<object>()), ...core }));
 vi.mock('./auth', () => ({ listOwnServers: () => [srv], selectServer: vi.fn(() => true), getActiveId: () => 'pc' }));
@@ -72,6 +73,27 @@ describe('NewChatDraft.send', () => {
 
     expect(core.createSessionForServer).toHaveBeenCalledTimes(1);
     expect(core.sendInputForServer).toHaveBeenLastCalledWith(srv, 'proj', 'oi');
+  });
+
+  it('anexo que falha: tentar de novo reaproveita o anexo já enviado à mesma sessão', async () => {
+    core.fetchSessionsForServer.mockResolvedValue([]);
+    core.createSessionForServer.mockResolvedValue({ name: 'proj' });
+    core.sendInputForServer.mockResolvedValue(undefined);
+    core.uploadFileForServer
+      .mockResolvedValueOnce({ path: '/up/a.txt' })
+      .mockRejectedValueOnce(new Error('500: caiu'))
+      .mockResolvedValueOnce({ path: '/up/b.txt' });
+    const draft = await ready();
+    const a = new File(['a'], 'a.txt', { type: 'text/plain' });
+    const b = new File(['b'], 'b.txt', { type: 'text/plain' });
+    draft.attachments = [a, b];
+
+    await expect(draft.send('oi')).rejects.toThrow('caiu');
+    await draft.send('oi');
+
+    expect(core.createSessionForServer).toHaveBeenCalledTimes(1);
+    expect(core.uploadFileForServer.mock.calls.map((c) => c[2])).toEqual([a, b, b]);
+    expect(core.sendInputForServer).toHaveBeenCalledWith(srv, 'proj', expect.stringMatching(/\/up\/a\.txt[\s\S]*\/up\/b\.txt/));
   });
 
   it('trocar uma escolha depois da falha de envio cria sessão nova com a escolha nova', async () => {

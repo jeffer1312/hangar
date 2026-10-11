@@ -166,7 +166,9 @@
     const q = query.trim().toLowerCase();
     if (!q) return entries;
     const pool = allMode
-      ? roots.flatMap((r) => { const v = rootEntries[r.path]; return Array.isArray(v) ? v : []; })
+      // Raiz dentro de outra lista a mesma subpasta duas vezes; a chave do #each é o path.
+      ? [...new Map(roots.flatMap((r) => { const v = rootEntries[r.path]; return Array.isArray(v) ? v : []; })
+          .map((e) => [e.path, e] as const)).values()]
       : entries;
     return pool.filter(
       (e) => e.name.toLowerCase().includes(q) || relPath(e.path).toLowerCase().includes(q),
