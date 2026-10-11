@@ -260,9 +260,6 @@ impl RuntimeEngine {
                     Core::Codex(core)=>{
                         core.restore_rpc(id.into(),&phase.payload["frame"],phase.payload["state_revision"].as_u64().unwrap_or(0),
                             phase.payload["settings_revision"].as_u64().unwrap_or(0));
-                        if let Some(call_id) = state.operations.get(id).and_then(|root|root.payload["payload"]["call_id"].as_str()) {
-                            core.restore_voice_scope(id,call_id);
-                        }
                     },
                     Core::Claude(core)=>{
                         let mut frame = phase.payload["frame"].clone();
@@ -684,7 +681,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:CanoConnection
                         // Prévia só pelo canal do hub: no `events` ela subiria a
                         // revisão e o Python a decodificaria a cada delta.
                         if !live.channel(&channel,&data) { publish(&events,&target,&mut revision,&channel,data); }
-                    } else if ["voice","voice_target","rate"].contains(&channel.as_str()) {
+                    } else if channel == "rate" {
                         publish(&events,&target,&mut revision,&channel,data);
                     }
                 }
@@ -848,6 +845,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:CanoConnection
                     let mut commands = Vec::new();
                     for row in claimed.as_array().ok_or_else(||failure("queue_shape"))? {
                         let id = row["id"].as_str().ok_or_else(||failure("queue_entry"))?;
+                        // Controle da voz antiga que sobrou da versão anterior: não tem mais dono e não vira mensagem.
+                        if state.operations.get(id).is_some_and(|op|op.payload["kind"].as_str().is_some_and(|kind|kind.starts_with("voice_"))) { continue; }
                         let command = state.operations.get(id).and_then(|op|serde_json::from_value::<RuntimeCommand>(op.payload.clone()).ok())
                             .unwrap_or_else(||RuntimeCommand { operation_id:id.into(),kind:OperationKind::Input,
                                 payload:json!({"text":row["text"],"pre_transcript":row["pre_transcript"].as_bool().unwrap_or(false)}) });
@@ -939,8 +938,11 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:CanoConnection
                         });
                     }
                     Message::Snapshot(response) => {
+                        // Antes da primeira gravação a vista durável não tem retrato; o do motor é o mesmo que o `live` já publicou.
+                        let mut view = durable_view.clone();
+                        if view.get("public_state").is_none() { view["public_state"] = engine.view()["public_state"].clone(); }
                         let _ = response.send(Ok(json!({"key":target.key,"generation":target.generation,"revision":revision.value,
-                            "view":durable_view,"channels":channels,"error":error.as_ref().map(|e|e.code.clone())})));
+                            "view":view,"channels":channels,"error":error.as_ref().map(|e|e.code.clone())})));
                     }
                     Message::View(response) => { let _ = response.send(engine.view()); }
                     Message::Drain(response) => {

@@ -7,6 +7,7 @@ import copy
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Literal
 
@@ -98,6 +99,11 @@ async def _instance_body(request: Request, limit: int, *, modes=None):
     return coordinator, instance, raw
 
 
+# O Rust só chama esta rota enquanto responde a um pedido de cota do Python que já ocupa um thread do
+# pool padrão; no pool padrão ela esperaria por ele mesmo e os pedidos se travariam até o prazo do Rust.
+_quota_facts_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="quota-facts")
+
+
 @router.post("/accounts/quotas")
 async def quota_facts(request: Request):
     from app import cotas
@@ -111,7 +117,8 @@ async def quota_facts(request: Request):
             raise ValueError
     except (ValueError, TypeError):
         raise HTTPException(400) from None
-    return await asyncio.to_thread(cotas.quota_facts, body["action"], body["ids"])
+    return await asyncio.get_running_loop().run_in_executor(
+        _quota_facts_pool, cotas.quota_facts, body["action"], body["ids"])
 
 
 @router.post("/accounts/facts")

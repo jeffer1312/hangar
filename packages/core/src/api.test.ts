@@ -63,6 +63,15 @@ it.each(['https://hangar.example', 'https://desktop.example.ts.net', 'http://192
   expect(new URL(uploadUrl('s', 'Relatório.pdf', true)).searchParams.get('download')).toBe('1');
 });
 
+it('largura pede miniatura com w=; sem largura a URL fica igual', () => {
+  configureApi({ getBaseUrl: () => 'https://hangar.example', getToken: () => 'token-a', onUnauthorized: () => {},
+    origin: 'https://pwa.example', createEventSource: () => stubEventSource() });
+  expect(new URL(fileUrl('s', '/tmp/a.png', false, null, 192)).searchParams.get('w')).toBe('192');
+  expect(new URL(uploadUrl('s', 'a.png', false, null, 192)).searchParams.get('w')).toBe('192');
+  expect(fileUrl('s', '/tmp/a.png', false, null, undefined)).toBe(fileUrl('s', '/tmp/a.png'));
+  expect(uploadUrl('s', 'a.png')).toBe('https://hangar.example/api/sessions/s/uploads/a.png?token=token-a');
+});
+
 it('antes do prazo só a verificação explícita consulta o offline; resposta retira a marca', async () => {
   registrarFalha(server.id);
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}'));

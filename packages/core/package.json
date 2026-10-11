@@ -8,7 +8,7 @@
   "scripts": {
     "test": "flock -w 900 /tmp/hangar-verificacao.lock vitest run",
     "check": "flock -w 900 /tmp/hangar-verificacao.lock tsc --noEmit -p tsconfig.json",
-    "i18n:compile": "paraglide-js compile --project ../../project.inlang --outdir ./src/paraglide --strategy baseLocale",
+    "i18n:compile": "paraglide-js compile --project ../../project.inlang --outdir ./src/paraglide --strategy baseLocale --output-structure locale-modules",
     "pretest": "npm run i18n:compile",
     "precheck": "npm run i18n:compile"
   },

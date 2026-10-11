@@ -1986,9 +1986,6 @@ class CodexAdapter:
                 # O app-server também publica estados de outras threads, inclusive subagentes.
                 if params.get("threadId") is not None and params["threadId"] != sess["thread_id"]:
                     continue
-                if sess.get("voice_events") is not None:
-                    from app.codex_voice import forward
-                    forward(sess, notif)
                 if sess.get("headless") and notif.get("id") is not None:
                     # Pedido do servidor: na TUI quem responde é ela; aqui é o cartão do app.
                     if notif["method"] in sem_terminal.APROVACOES:

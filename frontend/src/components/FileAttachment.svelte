@@ -4,6 +4,7 @@
   import ModalDialog from './ModalDialog.svelte';
   import { fileUrl } from '@hangar/core';
   import { abrirVisor } from '../lib/visor';
+  import { saveFile } from '../lib/saveFile';
   import type { FileRef } from '@hangar/core';
 
   interface Props {
@@ -23,8 +24,40 @@
     // url absoluta (midia remota) usa direto; senao monta a do backend pelo path local.
     return r.url ?? fileUrl(sessionName, r.path, download, sessionServer());
   }
+  // path -> estado do salvar daquele arquivo; ausente = parado.
+  let saving = $state<Record<string, 'busy' | 'again' | 'failed'>>({});
+
+  async function save(r: FileRef) {
+    saving[r.path] = 'busy';
+    try {
+      const result = await saveFile(url(r, true), r.name);
+      if (result === 'tap-again') saving[r.path] = 'again';
+      else delete saving[r.path];
+    } catch (e) {
+      console.error('attachment: save failed', e);
+      saving[r.path] = 'failed';
+    }
+  }
+
+  function saveLabel(r: FileRef): string {
+    const s = saving[r.path];
+    return s === 'busy'
+      ? m.save_file_downloading()
+      : s === 'again'
+        ? m.save_file_tap_again()
+        : s === 'failed'
+          ? m.save_file_failed()
+          : `↓ ${m.visor_baixar()}`;
+  }
+
   function fail(r: FileRef) {
     failed = new Set(failed).add(r.path);
+  }
+  // Miniatura recusada (formato que o servidor não reduz, proxy no meio): tenta o original antes de dar falha.
+  let thumbFailed = $state(new Set<string>());
+  function thumbError(r: FileRef) {
+    if (r.url || thumbFailed.has(r.path)) fail(r);
+    else thumbFailed = new Set(thumbFailed).add(r.path);
   }
   function icon(kind: string): string {
     return kind === 'html' ? '🌐' : kind === 'pdf' ? '📄' : '📎';
@@ -61,7 +94,7 @@
         <span class="att-broken" title={r.path}>⚠ {m.anexos_nao_carregou({ nome: r.name })}</span>
       {:else if r.kind === 'image'}
         <button class="thumb-btn" bind:this={botoes[r.path]} onclick={() => abrir(r)} aria-label={m.anexos_ver({ n: r.name })}>
-          <img class="thumb" src={url(r)} alt={r.name} loading="lazy" onerror={() => fail(r)} />
+          <img class="thumb" src={r.url ?? fileUrl(sessionName, r.path, false, sessionServer(), thumbFailed.has(r.path) ? undefined : 192)} alt={r.name} loading="lazy" onerror={() => thumbError(r)} />
         </button>
       {:else if r.kind === 'video'}
         <button class="thumb-btn" bind:this={botoes[r.path]} onclick={() => abrir(r)} aria-label={m.anexos_tocar({ nome: r.name })}>
@@ -73,11 +106,11 @@
       {:else if r.kind === 'audio'}
         <audio class="att-audio" src={url(r)} controls onerror={() => fail(r)}></audio>
       {:else if r.kind === 'document'}
-        <a class="att-chip" href={url(r, true)} download={r.name} aria-label={m.anexos_baixar({ nome: r.name })}>
+        <button class="att-chip" type="button" disabled={saving[r.path] === 'busy'} onclick={() => save(r)} aria-label={m.anexos_baixar({ nome: r.name })}>
           <span class="att-ico" aria-hidden="true">📄</span>
           <span class="att-name">{r.name}</span>
-          <span class="att-open" aria-hidden="true">↓ {m.visor_baixar()}</span>
-        </a>
+          <span class="att-open" aria-live="polite">{saveLabel(r)}</span>
+        </button>
       {:else}
         <div class="att-document">
           <button class="att-chip" onclick={() => (open = r)}>
@@ -86,7 +119,7 @@
             <span class="att-open" aria-hidden="true">{m.paleta_abrir()} ›</span>
           </button>
           {#if r.kind === 'pdf'}
-            <a class="att-download" href={url(r, true)} download={r.name} aria-label={m.anexos_baixar({ nome: r.name })}>↓ {m.visor_baixar()}</a>
+            <button class="att-download" type="button" disabled={saving[r.path] === 'busy'} onclick={() => save(r)} aria-label={m.anexos_baixar({ nome: r.name })}>{saveLabel(r)}</button>
           {/if}
         </div>
       {/if}
@@ -106,7 +139,7 @@
         <div class="doc-bar">
           <span class="doc-name">{cur.name}</span>
           {#if cur.kind === 'pdf'}
-            <a class="doc-btn" href={url(cur, true)} download={cur.name} aria-label={m.anexos_baixar({ nome: cur.name })}>↓ {m.visor_baixar()}</a>
+            <button class="doc-btn" type="button" disabled={saving[cur.path] === 'busy'} onclick={() => save(cur)} aria-label={m.anexos_baixar({ nome: cur.name })}>{saveLabel(cur)}</button>
           {/if}
           <a class="doc-btn" href={url(cur)} target="_blank" rel="noopener noreferrer" aria-label={m.anexos_abrir_nova_aba({ nome: cur.name })}>↗ {m.anexos_nova_aba()}</a>
           <button class="doc-btn" type="button" onclick={() => (open = null)} aria-label={m.anexos_fechar_visualizacao()}>✕</button>

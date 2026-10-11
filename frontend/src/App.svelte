@@ -11,7 +11,7 @@
   import { encodeCompareIds, type CompareId } from '@hangar/core';
   import { peekStep, initialPeek } from '@hangar/core';
   import { parseHash, type Route } from './lib/route';
-  import { parseConfig, comConfig, TELAS_DE_SERVIDOR, type TelaConfig } from './lib/configRoute';
+  import { parseConfig, comConfig, TELAS_CONFIG, TELAS_DE_SERVIDOR, type TelaConfig } from './lib/configRoute';
   import { abrirConfig, fecharConfig } from './lib/configNav';
   import * as diag from './lib/diag';
   import Login from './screens/Login.svelte';
@@ -26,6 +26,8 @@
   import Compare from './screens/Compare.svelte';
   import DesktopShell from './components/DesktopShell.svelte';
   import SettingsModal from './components/settings/SettingsModal.svelte';
+  import AtualizarSheet from './components/AtualizarSheet.svelte';
+  import { atualizarUI } from './lib/atualizarUI.svelte';
   import TtsBar from './components/TtsBar.svelte';
   import TtsSelectionPill from './components/TtsSelectionPill.svelte';
   import CodeOverlay from './components/CodeOverlay.svelte';
@@ -35,6 +37,8 @@
   import { iniciarCodeActions } from './lib/codeActions.svelte';
   import { navegadorNativo } from './lib/navegadorNativo';
   import { sessionsStore } from './lib/sessionsStore.svelte';
+  import { liveVoiceStore } from './lib/liveVoiceStore.svelte';
+  import LiveVoiceSheet from './components/LiveVoiceSheet.svelte';
 
   // Deep-link do push (feature #5): a notif abre '/?server=<id>&session=<name>' — o router so olha
   // window.location.hash, entao sem isto os query params eram ignorados e sempre caia na lista.
@@ -387,6 +391,43 @@
     navigateTo('#/sessions');
   }
 
+  // Voz ao vivo: a voz abre sessões por aqui e fica sabendo de cada troca de conversa.
+  $effect(() => liveVoiceStore.registerNavigator(({ server, name }) => {
+    if (!selectServer(server.id)) return false;
+    navigateToChat(name);
+    return true;
+  }));
+  $effect(() => liveVoiceStore.registerActions({
+    'session-list': () => { navigateToSessions(); return true; },
+    settings: (arg) => {
+      const tela = (arg ?? 'root').toLowerCase();
+      if (!TELAS_CONFIG.includes(tela as TelaConfig)) return m.live_voice_action_bad_section({ section: arg ?? '' });
+      abrirConfig(tela as TelaConfig, getActiveId());
+      return true;
+    },
+    'settings-back': () => {
+      if (!parseConfig(window.location.hash)) return m.live_voice_action_not_open();
+      fecharConfig();
+      return true;
+    },
+    costs: () => { navigateTo('#/costs'); return true; },
+    usage: () => { navigateTo('#/uso'); return true; },
+    'report-back': () => {
+      if (!ehRelatorio(window.location.hash)) return m.live_voice_action_not_open();
+      voltarDoRelatorio();
+      return true;
+    },
+  }));
+  $effect(() => {
+    void route;
+    // `route` já passou pelo selectServer síncrono: o ativo lido aqui é o da rota nova.
+    const active = listOwnServers().find((s) => s.id === getActiveId()) ?? null;
+    untrack(() => {
+      liveVoiceStore.activeServer = active;
+      liveVoiceStore.setScreen(route.name === 'chat' && active ? { server: active, name: route.sessionName } : null);
+    });
+  });
+
   // Desktop: terminal No Hangar já tem o pedido de aba registrado por quem chamou; terminal "Na
   // sessão" pede ao DesktopShell o painel da sessão dona (a aba vem do foco já registrado).
   // Celular: nada consome o pedido sozinho, então vai pro Chat da sessão dona do terminal (o Chat
@@ -650,6 +691,10 @@
     <TtsSelectionPill />
   {/if}
   <CodeOverlay />
+  <!-- Painel da voz: aqui pelo mesmo motivo do TtsBar, a chamada atravessa a troca de conversa. -->
+  {#if !isDesktop && route.name !== 'login' && route.name !== 'loading'}
+    <LiveVoiceSheet />
+  {/if}
   <!-- Confirmação do arrasto de sessão sobre sessão (agrupar/sair): montada UMA vez aqui, reagindo
        a arrastarGrupo.pedido — as quatro superfícies que arrastam (Sidebar/Board/Canvas/celular,
        Task 3+) só chamam arrastarGrupo.soltar/pedirSaida, sem montar o diálogo cada uma. -->
@@ -678,6 +723,11 @@
       onVoltar={voltarConfig}
       onFechar={fecharConfig}
     />
+  {/if}
+  <!-- No desktop quem monta é o DesktopShell; o botão do Sobre no celular abre esta. -->
+  {#if !isDesktop}
+    <AtualizarSheet open={atualizarUI.aberta} onClose={() => atualizarUI.fechar()}
+                    trabalhando={sessionsStore.rows.filter((r) => r.state === 'working').length} />
   {/if}
 </div>
 

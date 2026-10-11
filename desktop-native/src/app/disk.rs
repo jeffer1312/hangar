@@ -267,13 +267,6 @@ impl Hangar {
         Some(real.to_str().map_or_else(|| real.clone(), |text| PathBuf::from(plain_path(text))))
     }
 
-    /// A pasta da sessão na tela neste disco; sessão de outra máquina ou ainda não resolvida: `None`.
-    pub(super) fn local_session_dir(&self) -> Option<PathBuf> {
-        self.session_api().filter(Api::is_loopback)?;
-        let real = self.local_dirs.get(self.selected.as_ref()?.cwd.as_ref()?).cloned().flatten()?;
-        Some(real.to_str().map_or_else(|| real.clone(), |text| PathBuf::from(plain_path(text))))
-    }
-
     /// Resolve em segundo plano a pasta real das sessões ainda não vistas; até chegar, elas seguem pelo backend.
     pub(super) fn resolve_local_dirs(&mut self, cx: &mut Context<Self>) {
         if !self.api.as_ref().is_some_and(|api| api.is_loopback()) { return; }

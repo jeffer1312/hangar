@@ -7,7 +7,7 @@
   import type { ContaChip } from '../lib/conta';
   import * as m from '../paraglide/messages';
   import { intlLocale } from '../lib/locale';
-  import { abbrevNum, rateLabel } from '@hangar/core';
+  import { abbrevNum } from '@hangar/core';
   import type { StatusFields, StatsEvent } from '@hangar/core';
 
   interface Props {
@@ -71,15 +71,18 @@
   const numeros = $derived.by(() => {
     const s = stats;
     if (!s) return [] as { value: string; label: string; largo?: boolean }[];
-    const out: { value: string; label: string; largo?: boolean }[] = [
-      { value: String(s.turns), label: m.uso_num_turnos() },
-      { value: String(s.steps), label: m.uso_num_chamadas() },
-    ];
+    const out: { value: string; label: string; largo?: boolean }[] = [];
+    // Turno zero com chamadas é sessão em que o turno não é contado (sem terminal), não "0 turnos".
+    if (s.turns > 0 || !s.steps) out.push({ value: String(s.turns), label: m.uso_num_turnos() });
+    out.push({ value: String(s.steps), label: m.uso_num_chamadas() });
     if (s.llm_ms) out.push({ value: fmtDur(s.llm_ms), label: m.uso_num_llm() });
     if (s.tool_ms) out.push({ value: fmtDur(s.tool_ms), label: m.uso_num_tools() });
-    if (s.tok_s) out.push({ value: `~${Math.round(s.tok_s)}`, label: m.uso_num_toks() });
-    if (s.tok_s_now) out.push({ value: rateLabel(s.tok_s_now, s.tok_s_exact), label: m.uso_num_toks_now() });
-    if (s.tok_s_recent) out.push({ value: rateLabel(s.tok_s_recent, s.tok_s_exact), label: m.uso_num_toks_recent() });
+    // O rótulo do nativo não diz a unidade; ela vai no valor, como lá.
+    const rate = (v: number, exact?: boolean) =>
+      (exact ? m.native_stats_rate_exact : m.native_stats_rate)({ n: String(Math.round(v)) });
+    if (s.tok_s) out.push({ value: rate(s.tok_s), label: m.native_ctx_card_rate() });
+    if (s.tok_s_now) out.push({ value: rate(s.tok_s_now, s.tok_s_exact), label: m.native_ctx_card_rate_now() });
+    if (s.tok_s_recent) out.push({ value: rate(s.tok_s_recent, s.tok_s_exact), label: m.native_ctx_card_rate_recent() });
     if (s.ttft_ms) out.push({ value: `~${fmtDur(s.ttft_ms)}`, label: m.uso_num_ttft() });
     if (s.cache_pct != null) out.push({ value: `${s.cache_pct}%`, label: m.uso_num_cache() });
     out.push({ value: `${abbrevNum(s.in_tok)} / ${abbrevNum(s.out_tok)}`, label: m.uso_num_io(), largo: true });

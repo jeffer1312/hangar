@@ -289,7 +289,8 @@ import { useSessionServer } from '../lib/sessionServer';
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
-    padding: var(--space-2) var(--space-4) var(--space-5);
+    /* A BottomSheet já dá a margem lateral; somar outra estreitava os itens. */
+    padding: var(--space-2) 0 var(--space-5);
   }
   .more-title {
     margin: 0 0 var(--space-2);
@@ -300,7 +301,7 @@ import { useSessionServer } from '../lib/sessionServer';
   .more-head { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
   .more-head .more-title { margin-bottom: 0; }
   .back {
-    width: 32px; height: 32px; flex-shrink: 0;
+    width: 44px; height: 44px; flex-shrink: 0;
     display: inline-flex; align-items: center; justify-content: center;
     background: transparent; color: var(--text-secondary); font-size: var(--text-lg);
     border-radius: var(--radius-sm);
@@ -329,7 +330,7 @@ import { useSessionServer } from '../lib/sessionServer';
     align-items: center;
     justify-content: center;
     border-radius: var(--radius-sm);
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
     color: var(--text-secondary);
   }
   .ico.on { color: var(--accent); background: var(--accent-dim); }
@@ -344,9 +345,13 @@ import { useSessionServer } from '../lib/sessionServer';
   .sub {
     font-size: var(--text-xs);
     color: var(--text-muted);
+    /* Duas linhas: cortado em uma, o subtítulo perdia justo a parte que explica a ação. */
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
   .pill {
     flex-shrink: 0;
@@ -356,7 +361,7 @@ import { useSessionServer } from '../lib/sessionServer';
     padding: 2px 8px;
     border-radius: var(--radius-full);
     color: var(--text-secondary);
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
   }
   .pill.on { color: var(--accent); background: var(--accent-dim); }
   .chev { flex-shrink: 0; color: var(--text-muted); font-size: var(--text-lg); line-height: 1; }

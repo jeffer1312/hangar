@@ -16,8 +16,9 @@
   import { untrack } from 'svelte';
   import * as m from '../paraglide/messages';
   import Popover from './Popover.svelte';
-  import { getModelOptions, setEngineModel } from '@hangar/core';
-  import type { ModelEffortBody, ModelOption } from '@hangar/core';
+  import { contextModel, engineModelChoice, getModelOptions, hasContext, setEngineModel, setServiceTier } from '@hangar/core';
+  import type { ModelEffortBody, ModelOption, ModelOptionsResponse } from '@hangar/core';
+  import { desktop } from '../lib/desktop.svelte';
 
   interface Props {
     open: boolean;
@@ -55,6 +56,31 @@
   let atual = $state<string | null>(null);        // o que esta valendo na sessao
   let escolhido = $state<string | null>(null);    // selecao local, ainda nao aplicada
   let aplicando = $state(false);
+  let catalog = $state<ModelOptionsResponse | null>(null);
+  // Celular: sessão de motor aplica ao tocar, como o nativo; Fast e 1M ficam aqui (controls.rs).
+  const celular = $derived(!desktop.atual);
+  const currentModel_ = $derived(catalog?.current?.model ?? '');
+  const tier = $derived(catalog?.current?.service_tier ?? null);
+  const currentAcceptsFast = $derived(!!catalog?.models.find((x) => x.id === contextModel(currentModel_, false))?.supports_fast);
+  const showEngineToggles = $derived(celular && kind === 'engine' && currentAcceptsFast && (tier === 'default' || tier === 'priority'));
+  let toggling = $state(false);
+  async function toggleFast(on: boolean) {
+    if (toggling) return;
+    toggling = true; err = null;
+    try { await setServiceTier(sessionName, on ? 'priority' : 'default', sessionServer()); await load(); }
+    catch (e) { err = e instanceof Error ? e.message : m.comum_falha_aplicar(); }
+    finally { toggling = false; }
+  }
+  async function toggleContext(on: boolean) {
+    if (toggling || !currentModel_) return;
+    toggling = true; err = null;
+    try {
+      const r = await setEngineModel(sessionName, { model: contextModel(currentModel_, on) }, sessionServer());
+      onApplied?.(r.model, currentEffort ?? null);
+      await load();
+    } catch (e) { err = e instanceof Error ? e.message : m.comum_falha_aplicar(); }
+    finally { toggling = false; }
+  }
 
   // Casa o modelo atual (statusline: 'Fable 5', 'Opus 5', 'k3') com uma linha da lista.
   //
@@ -98,6 +124,7 @@
       if (minha !== carga) return;
       kind = res.kind;
       models = res.models;
+      catalog = res;
       atual = matchCurrent(currentModel, res.models);
       escolhido = atual;
     } catch (e) {
@@ -136,7 +163,8 @@
   // Linha secundaria: no picker e a descricao do Claude Code; no motor, a janela real que o
   // provedor reporta. O id NAO se repete no motor — la ele ja E o titulo.
   function detalhe(md: ModelOption): string {
-    if (kind === 'claude') return md.desc ?? '';
+    // Celular: o id curto ("opus[1m]"), como o nativo, no lugar da descrição em inglês do CLI.
+    if (kind === 'claude') return celular ? md.id : md.desc ?? '';
     const n = md.context_length;
     if (!n) return '';
     return n >= 1_000_000
@@ -158,7 +186,9 @@
     err = null;
     try {
       if (kind === 'engine') {
-        const res = await setEngineModel(sessionName, { model: alvo.id, effort: currentEffort ?? undefined }, sessionServer());
+        const res = await setEngineModel(sessionName, {
+          model: catalog ? engineModelChoice(catalog, alvo.id) : alvo.id, effort: currentEffort ?? undefined,
+        }, sessionServer());
         if (res.effort_error) {
           // O modelo pegou e o esforco nao: dizer "tudo certo" seria reportar sucesso sobre algo
           // que ficou pela metade.
@@ -168,6 +198,12 @@
           return;
         }
         onApplied?.(res.model, currentEffort ?? null);
+        // No celular o toque já aplicou e Fast/1M moram logo abaixo da lista: fechar obrigaria reabrir.
+        if (celular) {
+          atual = alvo.id;
+          aplicando = false;
+          return;
+        }
       } else {
         // Nao se espera o picker: dispara, sai da frente e deixa a confirmacao com o usuario. Mas
         // a falha vai pra fora (`onFail`), nao pro console: o backend recusa a troca de verdade
@@ -200,7 +236,7 @@
         stroke-width="2" stroke-linecap="round" aria-hidden="true">
         <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
       </svg>
-      <input class="busca" type="search" data-foco bind:value={query}
+      <input class="busca" type="search" data-foco={celular ? undefined : true} bind:value={query}
         placeholder={m.comum_buscar_modelos()} aria-label={m.comum_buscar_modelo()} />
     </div>
   {/if}
@@ -228,7 +264,7 @@
             aria-pressed={escolhido === m.id}
             disabled={aplicando}
             data-foco={!buscavel && escolhido === m.id ? true : undefined}
-            onclick={() => (escolhido = m.id)}
+            onclick={() => { escolhido = m.id; if (celular && kind === 'engine' && m.id !== atual) void aplicar('session'); }}
           >
             <span class="txt">
               <span class="nome">{rotulo(m)}</span>
@@ -259,6 +295,17 @@
         <span class="chev" aria-hidden="true">›</span>
       </button>
     {/if}
+    {#if showEngineToggles}
+      <label class="linha toggle">
+        <input type="checkbox" checked={tier === 'priority'} disabled={toggling} onchange={(e) => toggleFast(e.currentTarget.checked)} />
+        <span class="txt"><span class="nome">{m.native_ctl_fast()}</span><span class="det">{m.native_ctl_fast_hint()}</span></span>
+      </label>
+      <label class="linha toggle">
+        <input type="checkbox" checked={hasContext(currentModel_)} disabled={toggling} onchange={(e) => toggleContext(e.currentTarget.checked)} />
+        <span class="txt"><span class="nome">{m.native_create_context_title()}</span><span class="det">{m.native_create_engine_context_help()}</span></span>
+      </label>
+    {/if}
+    {#if !(celular && kind === 'engine')}
     <div class="acoes">
       <button class="btn-aplicar" disabled={aplicando || !escolhido || escolhido === atual}
         onclick={() => aplicar('session')}>
@@ -270,10 +317,13 @@
         </button>
       {/if}
     </div>
+    {/if}
   {/if}
 </Popover>
 
 <style>
+  .toggle { display: flex; align-items: center; gap: 12px; min-height: 44px; cursor: pointer; }
+  .toggle input { width: 22px; height: 22px; flex: none; accent-color: var(--accent); }
   .busca-wrap {
     display: flex; align-items: center; gap: 6px;
     padding: 8px 10px; border-bottom: 1px solid var(--border-subtle);

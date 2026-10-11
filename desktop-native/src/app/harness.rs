@@ -723,11 +723,8 @@ impl Hangar {
                     .and_then(|value| serde_json::from_value::<CodexOptions>(value).map_err(|_| tr("invalid_response")));
                 match parsed {
                     Ok(options) if seq == self.harness.codex_options_seq => {
-                        // A opção beta só vale para a voz quando é do servidor desta máquina.
-                        if self.api.as_ref().is_some_and(Api::is_loopback) {
-                            self.voice.enabled = options.codex_voice_beta;
-                            if !options.codex_voice_beta { self.stop_voice(cx); }
-                        }
+                        // A opção beta liga a voz do servidor: a pílula relê a trava dele.
+                        if write { self.refresh_voice_gate(cx); }
                         self.harness.codex_options = Some(options);
                     }
                     Ok(_) if write => self.read_codex_options(true, cx),

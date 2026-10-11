@@ -280,10 +280,25 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   outros formatos usam o FFmpeg configurado ou encontrado no PATH. Falta de arquivo ou conversor
   aparece como erro. Só há reserva externa se você a acrescentar à lista. A transcrição requer
   o `hangar-server` Rust; o modo Python não contém um segundo motor.
-- **Conversa por voz com Codex (Beta):** nasce desligada. Ative em **Configurações → Harnesses →
-  Codex → Opções → Conversa por voz**. O botão **Voz · Beta** aparece nas sessões Codex daquele
-  servidor. A escolha vale só para esse servidor; desligar durante uma chamada encerra o microfone
-  e a conexão. A voz escolhida fica salva neste navegador.
+- **Voz ao vivo (Beta):** uma conversa falada com um assistente que lê e acompanha as sessões,
+  troca de sessão pela fala, manda pedidos a elas e, no modo **Planejar**, monta um plano antes de
+  mandar. Nasce desligada: ative em **Configurações → Harnesses → Codex → Opções → Conversa por
+  voz**, em cada servidor onde quiser usar. Precisa do `codex` instalado e logado nesse servidor; a
+  conversa gasta a conta Codex dele.
+  - **No PC (app nativo):** a pílula da voz fica na barra de cima. Ela atende também os pedidos de
+    tela (trocar de sessão, ler a tela, clicar, abrir telas do Hangar).
+  - **No celular (PWA):** o botão de microfone **Voz ao vivo** aparece no topo da lista de sessões e
+    da conversa quando o servidor ativo tem a voz ligada. Um toque começa a conversa nesse servidor;
+    com ela aberta, outro toque abre o painel (silenciar, modo **Direto**/**Planejar**, ajustes,
+    **Servidor da voz**, **Encerrar**). No celular a voz só troca de sessão; ler a tela e clicar
+    ficam para o PC.
+  - **Ajustes** (conta Codex, voz, modelo, esforço e velocidade de cada modo) ficam salvos no
+    servidor e valem para qualquer aparelho.
+  - **Uma conversa por servidor.** Abrir a voz em outro aparelho passa a conversa para ele; o
+    anterior mostra "A conversa passou para outro aparelho." Se o aparelho sair (app fechado, rede
+    caiu), reabrir em até 2 minutos retoma a mesma conversa do assistente; depois disso ela termina.
+  - O áudio vai direto do aparelho ao serviço de voz da OpenAI; o servidor só conduz a conversa. Só o dono usa a voz:
+    num servidor aberto por convite o botão não aparece. O app Expo ainda não tem a voz.
 - **Limpeza do ditado:** o texto gravado pelo microfone passa por um modelo que aplica a correção
   que você falou em voz alta — dizer "usa o postgres, não, o redis" vira "Usa o Redis." —, tira
   hesitação ("é... tipo assim...") e pontua. Preserva nome de arquivo, caminho, comando, sigla e

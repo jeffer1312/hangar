@@ -57,13 +57,15 @@ socket2 = "=0.6.5"
 # Perfil temporário e CDP do Chromium que mede e fotografa as páginas (`pages/chrome.rs`); mesma versão que o axum puxa.
 tempfile.workspace = true
 tokio-tungstenite.workspace = true
+# Processos fora do Linux (`list/procs.rs`; no Linux o leitor é o /proc) e o `observe_system` da voz.
+sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
+# Canal da voz que vários consumidores leem (`voice/rpc.rs`); mesma versão do nativo.
+async-channel = "=2.5.0"
+# Miniatura de imagem (`thumbnail.rs`); mesma versão e features do nativo.
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
-
-# Processos fora do Linux; no Linux o leitor é o /proc (`list/procs.rs`).
-[target.'cfg(not(target_os = "linux"))'.dependencies]
-sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock"] }
@@ -71,10 +73,6 @@ windows-sys = { workspace = true, features = ["Win32_NetworkManagement_IpHelper"
 [dev-dependencies]
 # Relógio pausado: as rodadas do `state::Monitor` contadas sem esperar o tempo real.
 tokio = { workspace = true, features = ["test-util"] }
-
-# O leitor `sysinfo` (`list/procs.rs`) também é testado no Linux.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
 
 [[test]]
 name = "it"

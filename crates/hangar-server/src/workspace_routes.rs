@@ -385,11 +385,16 @@ async fn run(
         return Ok(pass(st, Request::from_parts(parts, Body::from(bytes)), forward).await);
     };
     if tail == "file" {
+        let width = match crate::thumbnail::parse_width(params.get("w")) {
+            Ok(w) => w,
+            Err(r) => return Ok(r),
+        };
         let path = execute(st, op).await?;
         return Ok(serve_file(
             Path::new(path.as_str().unwrap_or("")),
             &parts.headers,
             bool_param(params.get("download"), false).unwrap_or(false),
+            width,
         )
         .await);
     }
@@ -970,12 +975,12 @@ fn ranges(value: &str, size: u64) -> Result<Vec<(u64, u64)>, RangeError> {
     }
     Ok(merged)
 }
-async fn serve_file(path: &Path, headers: &HeaderMap, download: bool) -> Response {
+async fn serve_file(path: &Path, headers: &HeaderMap, download: bool, width: Option<u32>) -> Response {
     let file = match tokio::fs::File::open(path).await {
         Ok(f) => f,
         Err(_) => return response(json!({"detail":"file not found"}), 404),
     };
-    serve_open_file(file, path, headers, download, None).await
+    crate::thumbnail::serve(file, path, headers, download, None, width).await
 }
 
 pub(crate) async fn serve_open_file(file: tokio::fs::File, path: &Path, headers: &HeaderMap, download: bool, media: Option<&str>) -> Response {

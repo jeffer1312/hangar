@@ -1,17 +1,39 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { providerName, SESSION_PROVIDERS } from '@hangar/core';
+  import { quotaFeed } from '../../lib/quotaFeed.svelte';
+  import { faixaDeCota } from '../../lib/cota';
   import BottomSheet from '../BottomSheet.svelte';
   import ProviderGlyph from '../icons/ProviderGlyph.svelte';
   import { valorModelo } from '../../lib/modelosPorConta';
   import type { NewChatDraft } from '../../lib/newChatDraft.svelte';
   import * as m from '../../paraglide/messages';
 
-  // Pílula de modelo dentro do compositor (glifo do provider + modelo + esforço) e a folha dela:
-  // provider em abas, a lista de modelos com "Padrão" primeiro, o esforço no rodapé.
+  // Pílula de modelo dentro do compositor e a folha dela, na ordem do menu do nativo
+  // (choices.rs render_model_menu): agentes, Provedor e conta ChatGPT, busca, modelos, raciocínio,
+  // Fast, Contexto estendido (1M) e "Usar como padrão".
   let { draft, disabled = false }: { draft: NewChatDraft; disabled?: boolean } = $props();
   let open = $state(false);
+  let query = $state('');
+  onMount(() => {
+    quotaFeed.retain();
+    return () => quotaFeed.release();
+  });
+  $effect(() => { quotaFeed.setServidor(draft.server); });
+  $effect(() => { if (open) query = ''; });
 
-  const models = $derived(draft.models.filter((mod) => mod.id !== 'default'));
+  const models = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    return draft.models.filter((mod) => mod.id !== 'default'
+      && (!q || `${mod.id} ${mod.name ?? ''}`.toLowerCase().includes(q)));
+  });
+  const engineNames = $derived(Object.keys(draft.engines));
+  // Cota da conta ChatGPT escolhida: a credencial do proxy é a mesma conta Codex do /api/cotas.
+  const proxyQuota = $derived.by(() => {
+    const cred = draft.proxyAccounts.find((a) => a.account === draft.engineAccount)?.credential_id;
+    const conta = cred ? faixaDeCota(quotaFeed.contas)?.find((c) => c.id === cred) : null;
+    return conta?.janelas.map((j) => `${j.rotulo} ${Math.round(j.pct)}%`).join(' · ') ?? '';
+  });
   const label = $derived(models.find((mod) => valorModelo(mod) === draft.model)?.name
     ?? (draft.model || providerName(draft.provider)));
 </script>
@@ -33,6 +55,29 @@
         </button>
       {/each}
     </div>
+
+    {#if draft.provider === 'claude' && engineNames.length > 0}
+      <label class="field">
+        <span class="muted">{m.native_create_engine()}</span>
+        <select value={draft.engine} onchange={(e) => draft.setEngine(e.currentTarget.value)}>
+          <option value="">{m.native_create_own_account()}</option>
+          {#each engineNames as name (name)}<option value={name}>{name}</option>{/each}
+        </select>
+      </label>
+      {#if draft.engine && draft.proxyAccounts.length > 0}
+        <label class="field">
+          <span class="muted">{m.native_create_chatgpt_account()}</span>
+          <select value={draft.engineAccount} onchange={(e) => draft.setEngineAccount(e.currentTarget.value)}>
+            {#each draft.proxyAccounts as a (a.account)}<option value={a.account}>{a.label || a.email || a.account}</option>{/each}
+          </select>
+          {#if proxyQuota}<small class="muted">{proxyQuota}</small>{/if}
+        </label>
+      {/if}
+    {/if}
+
+    {#if draft.models.length > 0}
+      <input class="search" type="search" bind:value={query} placeholder={m.newchat_model_search()} aria-label={m.newchat_model_search()} />
+    {/if}
 
     {#if draft.modelsLoading}
       <p class="muted" role="status">{m.comum_carregando()}</p>
@@ -69,6 +114,24 @@
         {/each}
       </div>
     {/if}
+
+    {#if draft.fastAvailable}
+      <label class="toggle">
+        <input type="checkbox" checked={draft.fastChoice === 'priority'}
+          onchange={(e) => (draft.fastChoice = e.currentTarget.checked ? 'priority' : 'default')} />
+        <span class="toggle-text"><b>{m.native_ctl_fast()}</b><small>{m.native_ctl_fast_hint()}</small></span>
+      </label>
+    {/if}
+    {#if draft.contextAvailable}
+      <label class="toggle">
+        <input type="checkbox" checked={draft.contextOn} onchange={(e) => draft.setContext(e.currentTarget.checked)} />
+        <span class="toggle-text"><b>{m.native_create_context_title()}</b><small>{m.native_create_engine_context_help()}</small></span>
+      </label>
+    {/if}
+    <label class="toggle">
+      <input type="checkbox" checked={draft.isDefault} onchange={(e) => draft.saveDefault(e.currentTarget.checked)} />
+      <span class="toggle-text"><b>{m.native_create_default_for_harness({ harness: providerName(draft.provider) })}</b></span>
+    </label>
   </div>
 </BottomSheet>
 
@@ -104,4 +167,14 @@
     background: transparent; color: var(--text-secondary); font-size: var(--text-xs); cursor: pointer;
   }
   .chip.on { background: var(--accent-dim); color: var(--text-primary); }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field select, .search {
+    min-height: 44px; padding: 0 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    background: var(--surface-inset); color: var(--text-primary); font-size: var(--text-sm);
+  }
+  .toggle { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 4px 4px; cursor: pointer; }
+  .toggle input { width: 22px; height: 22px; flex-shrink: 0; accent-color: var(--accent); }
+  .toggle-text { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-sm); color: var(--text-primary); }
+  .toggle-text b { font-weight: var(--fw-semibold); }
+  .toggle-text small { font-size: var(--text-xs); color: var(--text-muted); }
 </style>

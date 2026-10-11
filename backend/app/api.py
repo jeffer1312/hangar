@@ -6505,20 +6505,19 @@ async def limits(name: str):
     }
 
 
-@app.websocket("/api/sessions/{name}/codex/voice")
-async def codex_voice_socket(ws: WebSocket, name: str):
-    from app.codex_voice import voice_ws
-    await voice_ws(ws, name, get_adapter("codex"), _provider_of)
+@app.websocket("/api/voice")
+async def server_voice_socket(ws: WebSocket):
+    # O dono pela 8765 é atendido pelo Rust; aqui chega o Connect (e o convidado, para ser recusado).
+    from app import voicesock
+    await voicesock.voice_ws(ws)
 
 
-@app.get("/api/sessions/{name}/codex/voices", dependencies=[Depends(require_auth)])
-async def codex_voice_options(name: str):
-    from app.codex_voice import VOICES
-    if runtime_config.get("codex_voice_beta") is not True:
-        raise HTTPException(404, detail=erro("erro_recurso_desligado", "Recurso não habilitado."))
-    if _provider_of(name) != "codex":
-        raise HTTPException(400, detail=erro("erro_models_so_codex", "Somente sessões Codex."))
-    return {"voices": VOICES}
+@app.api_route("/api/voice/settings", methods=["GET", "PUT"], dependencies=[Depends(require_auth)])
+async def server_voice_settings(request: Request):
+    from app import voicesock
+    if voicesock.is_guest(request):
+        raise HTTPException(403, detail=erro("voice_owner_only", "Só o dono usa a voz do servidor."))
+    return await voicesock.forward_settings(request)
 
 
 class CodexModelBody(_StrictBody):

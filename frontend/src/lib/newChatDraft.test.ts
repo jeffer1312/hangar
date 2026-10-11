@@ -5,7 +5,8 @@ const core = vi.hoisted(() => ({
   createSessionForServer: vi.fn(), sendInputForServer: vi.fn(), fetchSessionsForServer: vi.fn(),
   getCodexAccountsForServer: vi.fn(), getFolderBranchesForServer: vi.fn(), getRootsForServer: vi.fn(),
   listClaudeConfigs: vi.fn(), getClaudeAccountSuggestion: vi.fn(), getProviders: vi.fn(), modelOptions: vi.fn(),
-  modelOptionsForServer: vi.fn(),
+  modelOptionsForServer: vi.fn(), getEnginesForServer: vi.fn(), getConfigForServer: vi.fn(), setClaudeDefaultsForServer: vi.fn(),
+  uploadFileForServer: vi.fn(),
 }));
 vi.mock('@hangar/core', async (orig) => ({ ...(await orig<object>()), ...core }));
 vi.mock('./auth', () => ({ listOwnServers: () => [srv], selectServer: vi.fn(() => true), getActiveId: () => 'pc' }));
@@ -34,6 +35,8 @@ beforeEach(() => {
   core.listClaudeConfigs.mockResolvedValue([{ path: '/c', label: 'c', active: true }]);
   core.modelOptions.mockResolvedValue({ models: [], reduced: false });
   core.modelOptionsForServer.mockResolvedValue({ models: [], reduced: false });
+  core.getEnginesForServer.mockResolvedValue({ motores: {}, arquivo_corrompido: false });
+  core.getConfigForServer.mockResolvedValue({ campos: { headless_default: { valor: true } } });
 });
 
 async function ready() {
@@ -70,6 +73,27 @@ describe('NewChatDraft.send', () => {
 
     expect(core.createSessionForServer).toHaveBeenCalledTimes(1);
     expect(core.sendInputForServer).toHaveBeenLastCalledWith(srv, 'proj', 'oi');
+  });
+
+  it('anexo que falha: tentar de novo reaproveita o anexo já enviado à mesma sessão', async () => {
+    core.fetchSessionsForServer.mockResolvedValue([]);
+    core.createSessionForServer.mockResolvedValue({ name: 'proj' });
+    core.sendInputForServer.mockResolvedValue(undefined);
+    core.uploadFileForServer
+      .mockResolvedValueOnce({ path: '/up/a.txt' })
+      .mockRejectedValueOnce(new Error('500: caiu'))
+      .mockResolvedValueOnce({ path: '/up/b.txt' });
+    const draft = await ready();
+    const a = new File(['a'], 'a.txt', { type: 'text/plain' });
+    const b = new File(['b'], 'b.txt', { type: 'text/plain' });
+    draft.attachments = [a, b];
+
+    await expect(draft.send('oi')).rejects.toThrow('caiu');
+    await draft.send('oi');
+
+    expect(core.createSessionForServer).toHaveBeenCalledTimes(1);
+    expect(core.uploadFileForServer.mock.calls.map((c) => c[2])).toEqual([a, b, b]);
+    expect(core.sendInputForServer).toHaveBeenCalledWith(srv, 'proj', expect.stringMatching(/\/up\/a\.txt[\s\S]*\/up\/b\.txt/));
   });
 
   it('trocar uma escolha depois da falha de envio cria sessão nova com a escolha nova', async () => {
@@ -251,5 +275,46 @@ describe('worktreeChoiceOf', () => {
   });
   it('nada escolhido', () => {
     expect(worktreeChoiceOf({ branch: '', newBranch: false, base: '', branchName: '' })).toBeNull();
+  });
+});
+
+describe('NewChatDraft — abertura igual à do desktop', () => {
+  it('Codex como padrão do servidor não herda o Bypass do Claude', async () => {
+    core.getProviders.mockResolvedValue({ claude: { disponivel: true }, codex: { disponivel: true, default: true } });
+    core.getCodexAccountsForServer.mockResolvedValue([{ id: 'gpt', is_default: true, auth: { status: 'connected' } }]);
+    const draft = await ready();
+    expect(draft.provider).toBe('codex');
+    expect(draft.permission).toBe('Full Access');
+  });
+
+  it('sem a config do servidor lida, headless fica nulo e o envio espera', async () => {
+    core.getConfigForServer.mockImplementation(never);
+    const draft = await ready();
+    expect(draft.headless).toBeNull();
+    expect(draft.loading).toBe(true);
+  });
+
+  it('Claude nasce em Bypass e manda o modo de execução lido do servidor', async () => {
+    core.getConfigForServer.mockResolvedValue({ campos: { headless_default: { valor: false } } });
+    core.fetchSessionsForServer.mockResolvedValue([]);
+    core.createSessionForServer.mockResolvedValue({ name: 'proj' });
+    core.sendInputForServer.mockResolvedValue(undefined);
+    const draft = await ready();
+    await draft.send('oi');
+    expect(core.createSessionForServer).toHaveBeenCalledWith(srv, expect.objectContaining({
+      provider: 'claude', permission_mode: 'bypassPermissions', headless: false }));
+  });
+});
+
+describe('NewChatDraft — Usar como padrão', () => {
+  it('só fica marcado enquanto a escolha bate com o padrão salvo', async () => {
+    core.modelOptions.mockResolvedValue({ models: [{ id: 'opus' }, { id: 'sonnet' }], reduced: false });
+    const draft = await ready();
+    await flush();
+    draft.setModel('opus');
+    await draft.saveDefault(true);
+    expect(draft.isDefault).toBe(true);
+    draft.setModel('sonnet');
+    expect(draft.isDefault).toBe(false);
   });
 });

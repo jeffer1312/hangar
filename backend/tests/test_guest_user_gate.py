@@ -58,10 +58,6 @@ def env(tmp_path, monkeypatch):
     def codex_mode(name: str):
         return {"ok": True}
 
-    @app.websocket("/api/sessions/{name}/codex/voice")
-    async def voice(ws: WebSocket, name: str):
-        await ws.accept()
-
     @app.websocket("/api/sessions/{name}/nav-remoto")
     async def nav(ws: WebSocket, name: str):
         await ws.accept()
@@ -138,11 +134,10 @@ def test_guest_port_with_clash_is_still_gated(env, monkeypatch):
     assert client.get("/api/config", headers=_h(tok)).status_code == 403
 
 
-@pytest.mark.parametrize("rota", ["codex/voice", "nav-remoto"])
-def test_guest_blocked_from_codex_voice_and_remote_browser(env, rota):
+def test_guest_blocked_from_remote_browser(env):
     client, _, tok = env
     with pytest.raises(WebSocketDisconnect) as e:
-        with client.websocket_connect(f"/api/sessions/minha/{rota}?token={tok}"):
+        with client.websocket_connect(f"/api/sessions/minha/nav-remoto?token={tok}"):
             pass
     assert e.value.code == 1008
 

@@ -167,35 +167,6 @@ fn late_ack_does_not_remove_reused_server_request() {
 }
 
 #[test]
-fn voice_organizer_uses_same_writer_without_changing_target_thread() {
-    let mut engine = engine();
-    engine.command(RuntimeCommand { operation_id:"voice-open".into(),kind:OperationKind::VoiceOpen,payload:json!({"call_id":"call-1"}) },clock(10.0)).unwrap();
-    let effects = engine.command(RuntimeCommand { operation_id:"voice-thread".into(),kind:OperationKind::VoiceRpc,
-        payload:json!({"call_id":"call-1","method":"thread/start","params":{"ephemeral":true,"sandbox":"read-only","approvalPolicy":"never"}}) },clock(11.0)).unwrap();
-    let id = frames(&effects)[0]["id"].clone();
-    line(&mut engine,json!({"id":id,"result":{"thread":{"id":"organizer-1"}}}),12.0);
-    assert_eq!(engine.control_view()["thread_id"],"thread-1");
-    let effects = line(&mut engine,json!({"id":7,"method":"item/tool/call","params":{"threadId":"organizer-1","name":"draft"}}),13.0);
-    assert!(effects.iter().any(|effect|matches!(effect,Effect::Publish { channel,data } if channel == "voice" && data["call_id"] == "call-1")));
-    assert!(!effects.iter().any(|effect|matches!(effect,Effect::Write { .. })));
-    assert!(engine.control_view()["pending"].as_array().unwrap().is_empty());
-    assert!(engine.command(RuntimeCommand { operation_id:"wrong-id".into(),kind:OperationKind::VoiceRespond,
-        payload:json!({"call_id":"call-1","request_id":"7","result":{}}) },clock(14.0)).is_err());
-    assert!(engine.command(RuntimeCommand { operation_id:"wrong-thread".into(),kind:OperationKind::VoiceRpc,
-        payload:json!({"call_id":"call-1","method":"turn/start","params":{"threadId":"thread-1","input":[]}}) },clock(15.0)).is_err());
-}
-
-#[test]
-fn voice_initialize_is_virtual_and_never_sends_another_initialize() {
-    let mut engine = engine();
-    engine.command(RuntimeCommand { operation_id:"open".into(),kind:OperationKind::VoiceOpen,payload:json!({"call_id":"call"}) },clock(10.0)).unwrap();
-    let effects = engine.command(RuntimeCommand { operation_id:"init".into(),kind:OperationKind::VoiceRpc,
-        payload:json!({"call_id":"call","method":"initialize","params":{}}) },clock(11.0)).unwrap();
-    assert!(frames(&effects).is_empty());
-    assert!(effects.iter().any(|effect|matches!(effect,Effect::Reply { disposition:Disposition::Accepted,.. })));
-}
-
-#[test]
 fn slash_skill_waits_for_catalog_before_starting_turn() {
     let mut engine = engine();
     let effects = engine.command(command(OperationKind::Input,json!({"text":"/skill Olá", "skill_name":"skill",
@@ -210,35 +181,6 @@ fn slash_skill_waits_for_catalog_before_starting_turn() {
     let input = frames(&effects)[0].clone();
     assert_eq!(input["method"],"turn/start");
     assert_eq!(input["params"]["input"][1],json!({"type":"skill","name":"skill","path":"/fake/skill"}));
-}
-
-#[test]
-fn organizer_request_before_thread_reply_is_preserved_once() {
-    let mut engine = engine();
-    engine.command(RuntimeCommand { operation_id:"open".into(),kind:OperationKind::VoiceOpen,payload:json!({"call_id":"call"}) },clock(10.0)).unwrap();
-    let effects = engine.command(RuntimeCommand { operation_id:"start".into(),kind:OperationKind::VoiceRpc,
-        payload:json!({"call_id":"call","method":"thread/start","params":{"ephemeral":true,"sandbox":"read-only","approvalPolicy":"never"}}) },clock(11.0)).unwrap();
-    let id = frames(&effects)[0]["id"].clone();
-    let request = json!({"id":7,"method":"item/tool/call","params":{"threadId":"organizer","name":"draft"}});
-    assert!(frames(&line(&mut engine,request.clone(),11.1)).is_empty());
-    let effects = line(&mut engine,json!({"id":id,"result":{"thread":{"id":"organizer"}}}),12.0);
-    assert_eq!(effects.iter().filter(|effect|matches!(effect,Effect::Publish { channel,.. } if channel == "voice")).count(),1);
-    let duplicate = line(&mut engine,request,12.1);
-    assert!(!duplicate.iter().any(|effect|matches!(effect,Effect::Publish { channel,.. } if channel == "voice")));
-}
-
-#[test]
-fn subagent_request_during_voice_start_reaches_the_card_once_the_voice_is_open() {
-    let mut engine = engine();
-    engine.command(RuntimeCommand { operation_id:"open".into(),kind:OperationKind::VoiceOpen,payload:json!({"call_id":"call"}) },clock(10.0)).unwrap();
-    let effects = engine.command(RuntimeCommand { operation_id:"start".into(),kind:OperationKind::VoiceRpc,
-        payload:json!({"call_id":"call","method":"thread/start","params":{"ephemeral":true,"sandbox":"read-only","approvalPolicy":"never"}}) },clock(11.0)).unwrap();
-    let id = frames(&effects)[0]["id"].clone();
-    line(&mut engine,json!({"id":12,"method":"item/commandExecution/requestApproval","params":{"threadId":"subagent","command":"ls"}}),11.1);
-    line(&mut engine,json!({"id":id,"result":{"thread":{"id":"organizer"}}}),12.0);
-    assert_eq!(engine.view()["state"],"awaiting_input");
-    let effects = engine.command(command(OperationKind::Select,json!({"option":1})),clock(13.0)).unwrap();
-    assert_eq!(reply_to(&effects,12)["result"]["decision"],"accept");
 }
 
 fn tier_notification(engine:&mut Engine,thread:&str,tier:Value,time:f64) -> Vec<Effect> {

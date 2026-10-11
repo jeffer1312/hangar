@@ -146,9 +146,13 @@ import * as m from '../paraglide/messages';
       searchSeq++; // resposta de antes de fechar não entra na busca nova
 
       // espera o sheet montar/animar antes de focar
-      requestAnimationFrame(() => searchEl?.focus());
+      focusSearch();
     }
   });
+  // No toque, foco automático abre o teclado por cima da lista; só a busca pura o pede de cara.
+  function focusSearch() {
+    if (searchOnly || matchMedia('(pointer: fine)').matches) requestAnimationFrame(() => searchEl?.focus());
+  }
   // Digitar refiltra -> o destaque volta pro topo pra nunca apontar pra um item fora da lista.
   $effect(() => {
     query;
@@ -163,7 +167,7 @@ import * as m from '../paraglide/messages';
     results = [];
     askAnswer = null; askErr = ''; asking = false;
     activeIdx = 0;
-    requestAnimationFrame(() => searchEl?.focus());
+    focusSearch();
   }
 
   // Busca de conteudo debounced (250ms): reage a query no modo "conversas". Cleanup cancela o timer
@@ -454,7 +458,8 @@ import * as m from '../paraglide/messages';
   <p class="kbd-hint" aria-hidden="true">{m.busca_atalhos()}</p>
   {/if}
 
-  {#if mode !== 'search'}
+  <!-- No celular tema e fundo já moram em Aparência. -->
+  {#if mode !== 'search' && desktop.atual}
     <div class="theme-row">
       <span class="theme-label">{m.config_tema_curto()}</span>
       <ThemeToggle />
@@ -518,7 +523,7 @@ import * as m from '../paraglide/messages';
   .tabs {
     display: flex;
     gap: var(--space-1);
-    background: var(--bg-surface);
+    background: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     padding: 3px;
@@ -690,12 +695,13 @@ import * as m from '../paraglide/messages';
   }
   @media (pointer: coarse) {
     .kbd-hint { display: none; }
+    .tab, .ask-btn, .retry-btn, .previa-btn { min-height: 44px; }
   }
 
   .search {
     width: 100%;
     height: 44px;
-    background: var(--bg-surface);
+    background: var(--surface-card);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
     color: var(--text-primary);
@@ -744,7 +750,7 @@ import * as m from '../paraglide/messages';
     box-shadow: inset 0 0 0 1px var(--border-default);
   }
   .row--current {
-    background: var(--bg-surface);
+    background: var(--surface-card);
   }
 
   .dot {
@@ -837,7 +843,7 @@ import * as m from '../paraglide/messages';
   .retry-btn:active { background: var(--accent-dim); }
   .ask-card {
     margin-top: var(--space-3); padding: var(--space-3);
-    background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
   }
   .ask-answer {
     margin: 0 0 var(--space-2); color: var(--text-primary);

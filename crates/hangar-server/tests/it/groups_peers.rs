@@ -130,3 +130,11 @@ async fn redirect_follows_without_authorization_to_another_host() {
     assert_eq!(client.call("lab", reqwest::Method::GET, "/dentro", None).await.unwrap(), Some(json!({"ok": "aqui"})));
     assert_eq!(*seen.lock().unwrap(), vec![None, Some("Bearer dono".to_owned())]);
 }
+
+#[test]
+fn enabled_ids_skip_disabled_and_app_only_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("peers.json");
+    std::fs::write(&path, r#"{"vps":{"base_url":"http://a","token":"t"},"off":{"base_url":"http://b","token":"t","enabled":false},"app":{"app":true}}"#).unwrap();
+    assert_eq!(PeerClient::new(PeerBook::new(Some(path))).enabled_ids(), vec!["vps".to_owned()]);
+}

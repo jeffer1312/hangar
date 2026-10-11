@@ -72,6 +72,8 @@ pub struct AppState {
     pub groups: Option<Arc<crate::groups::service::GroupService>>,
     /// Outras máquinas do dono (`peers.json`), para o par 1:1 entre máquinas.
     pub peers: Arc<crate::groups::peers::PeerClient>,
+    /// Voz ao vivo; o teste troca por um hub com pastas temporárias.
+    pub voice: Arc<crate::voice::hub::VoiceHub>,
 }
 
 impl AppState {
@@ -126,7 +128,8 @@ impl AppState {
             mods,
             pages: Arc::new(crate::pages::store::Store::new(crate::pages::store::Store::default_root())),
             chromium: crate::pages::chrome::find,
-            write_gate_wait: std::time::Duration::from_secs(30) }
+            write_gate_wait: std::time::Duration::from_secs(30),
+            voice: Arc::new(crate::voice::hub::VoiceHub::new()) }
     }
 
     pub(crate) fn skill_origins(&self, repo: &std::path::Path) -> crate::costs::origins::Origins {
@@ -221,6 +224,7 @@ pub async fn serve_with_state(listener: TcpListener, mut state: AppState) -> std
     // Bind LAN específico não recebe tráfego de loopback: a observação tem uma porta própria.
     let private = TcpListener::bind("127.0.0.1:0").await?;
     state.terminal_address = Some(private.local_addr()?);
+    state.voice.set_self(listener.local_addr()?, &state.cfg.auth_token);
     let state = Arc::new(state);
     // Abortada na saída: a tarefa segura o estado do servidor, que sobreviveria a ele.
     let _group_sweep = crate::groups::sweep::spawn(state.clone()).map(crate::AbortOnDrop);
@@ -253,10 +257,12 @@ pub fn terminal_router(state: Arc<AppState>) -> Router {
         .route("/__hangar_server/groups", axum::routing::post(crate::groups::bridge::private))
         .route("/__hangar_server/presence", axum::routing::get(crate::presence::private))
         .route("/__hangar_server/mods/{name}/{op}", axum::routing::post(crate::mods::routes::bridge))
+        .route("/__hangar_server/voice/settings", axum::routing::any(crate::voice::routes::private_settings))
         .layer(axum::middleware::from_fn(crate::migration_status::count_bridge));
-    // Painel e canal do estado ficam fora da contagem: conexões longas, não chamadas da ponte.
+    // Painel, canal do estado e voz ficam fora da contagem: conexões longas, não chamadas da ponte.
     router.route("/__hangar_server/term", get(crate::term::private_ws))
         .route("/__hangar_server/state/{name}/events", get(crate::side::private_events))
+        .route("/__hangar_server/voice", get(crate::voice::routes::private_ws))
         .with_state(state)
 }
 
@@ -281,6 +287,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/__hangar_server/mods/{name}/{op}", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/term", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/state/{name}/events", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+        .route("/__hangar_server/voice", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+        .route("/__hangar_server/voice/settings", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         // Outro método nessas rotas (preflight OPTIONS, HEAD) segue ao Python.
         .route("/api/sessions", get(crate::list::hub::list).fallback(pass_any))
         .route("/api/sessions/events", get(crate::list::hub::events).fallback(pass_any))
@@ -326,6 +334,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         // Mesmo caminho: o axum junta o POST à rota de cima (um repasse só, o dela).
         .route("/api/presence", axum::routing::post(crate::presence::route))
         .route("/api/presence/heartbeat", axum::routing::post(crate::presence::route).fallback(pass_any))
+        .route("/api/voice", get(crate::voice::routes::ws).fallback(pass_any))
+        .route("/api/voice/settings", get(crate::voice::routes::settings_route).fallback(pass_any))
+        // Mesmo caminho: o axum junta o PUT à rota de cima (um repasse só, o dela).
+        .route("/api/voice/settings", axum::routing::put(crate::voice::routes::settings_route))
         // Grupos (`/pair`, `/group-message`, `/pair/contract`, `/pair-remote`, `/unpair-remote`).
         .merge(crate::groups::routes::router())
         .fallback(pass_any)

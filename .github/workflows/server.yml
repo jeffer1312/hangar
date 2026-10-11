@@ -1,8 +1,10 @@
 # hangar-server e hangar-cano (crates/, Rust): testa e compila Linux, Windows e macOS e publica numa release FIXA
 # `server-latest`, reescrita a cada push na main, como o `native-latest` do native.yml. O instalador e a atualização
 # leem o `server-latest.json` dessa release e conferem o sha256 de cada binário antes de usar.
-# Push em outra branch publica na pré-release `server-<branch>` (fora de [A-Za-z0-9._-] vira `-`), que é a que o
-# backend/app/rust_release.py procura quando o checkout está nessa branch. O manifesto mantém o nome em toda release.
+# O canal de testes (`beta`) publica na pré-release `server-beta`, que é a que o backend/app/rust_release.py procura
+# quando o checkout está nessa branch. O manifesto mantém o nome em toda release.
+# As outras branches só testam: sem build de release, sem publicar. `workflow_dispatch` nelas compila sem publicar.
+# Trocar o canal é trocar `beta` aqui e no native.yml.
 name: Server
 
 on:
@@ -28,9 +30,10 @@ on:
   workflow_dispatch:
 
 # Dois pushes seguidos não publicam ao mesmo tempo: o segundo espera, e a release termina no commit mais novo.
+# Onde não publica, o push novo cancela a conferência do anterior.
 concurrency:
   group: ${{ github.ref_name == 'main' && 'server-latest' || format('server-{0}', github.ref_name) }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref_name != 'main' && github.ref_name != 'beta' }}
 
 jobs:
   build:
@@ -65,9 +68,12 @@ jobs:
     # O incremental não serve entre runs; a depuração reduzida vem do perfil dev do crates/Cargo.toml.
     # PERFIL: a main publica com o `dist` (LTO completo, uma unidade de código); a pré-release de branch, com o
     # `release` comum, que lê o cache do job `cache-release`.
+    # PUBLICA: main e canal. COMPILA: eles e o workflow_dispatch; nas outras branches só os testes rodam.
     env:
       CARGO_INCREMENTAL: "0"
       PERFIL: ${{ github.ref == 'refs/heads/main' && 'dist' || 'release' }}
+      PUBLICA: ${{ github.ref_name == 'main' || github.ref_name == 'beta' }}
+      COMPILA: ${{ github.ref_name == 'main' || github.ref_name == 'beta' || github.event_name == 'workflow_dispatch' }}
     # Escreve porque cada sistema publica no fim do próprio build; sem o token do git no checkout, o cargo
     # test e os build scripts não alcançam essa escrita.
     permissions:
@@ -114,6 +120,7 @@ jobs:
           restore-keys: server-v3-${{ runner.os }}-dev-
       - uses: actions/cache/restore@v4
         id: cache-perfil
+        if: env.COMPILA == 'true'
         with:
           path: &cache-perfil |
             crates/target/${{ env.PERFIL }}
@@ -131,11 +138,11 @@ jobs:
         with:
           path: *cache-dev
           key: ${{ steps.cache-dev.outputs.cache-primary-key }}
-      - if: matrix.target != ''
+      - if: matrix.target != '' && env.COMPILA == 'true'
         run: rustup target add ${{ matrix.target }}
       # Zig baixado direto (sha256 do index.json do ziglang.org): o repositório só libera actions da GitHub,
       # de criador verificado e o setup-uv, e uma action fora da lista derruba o workflow antes de começar.
-      - if: matrix.zigbuild
+      - if: matrix.zigbuild && env.COMPILA == 'true'
         run: &zig |
           curl -fsSL -o /tmp/zig.tar.xz https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
           echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz" | sha256sum -c -
@@ -143,10 +150,11 @@ jobs:
           echo /tmp/zig-x86_64-linux-0.16.0 >> "$GITHUB_PATH"
           cargo install cargo-zigbuild --locked --version =0.23.4
       # O sufixo .2.28 fixa a glibc mínima; o diretório de saída continua sem ele (target/<triplo>/<perfil>).
-      - run: &build-perfil cargo ${{ matrix.zigbuild && 'zigbuild' || 'build' }} --locked --profile "$PERFIL" --workspace ${{ matrix.target && format('--target {0}{1}', matrix.target, matrix.zigbuild && '.2.28' || '') || '' }}
+      - if: env.COMPILA == 'true'
+        run: &build-perfil cargo ${{ matrix.zigbuild && 'zigbuild' || 'build' }} --locked --profile "$PERFIL" --workspace ${{ matrix.target && format('--target {0}{1}', matrix.target, matrix.zigbuild && '.2.28' || '') || '' }}
       # Guarda: se o zigbuild deixar de fixar a glibc, o binário passa a exigir mais que o prometido.
       - name: glibc máxima exigida
-        if: matrix.zigbuild
+        if: matrix.zigbuild && env.COMPILA == 'true'
         run: |
           for bin in hangar-server hangar-cano; do
             top=$(objdump -T "${{ matrix.dir }}/${{ env.PERFIL }}/$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
@@ -164,13 +172,14 @@ jobs:
         working-directory: backend
         run: uv run pytest tests/test_runtime_process.py tests/test_runtime_queue_terminal_v2.py tests/test_runtime_terminal_fix.py tests/test_runtime_terminal_fix2.py tests/test_runtime_terminal_failure_policy.py tests/test_runtime_final_fixes.py -q
       - name: Contrato do cano contra o hangar-cano
-        if: matrix.platform == 'linux-x86_64'
+        if: matrix.platform == 'linux-x86_64' && env.COMPILA == 'true'
         working-directory: backend
         run: |
           # Sem o binário a suíte pula os casos Rust e sairia verde: aqui a falta é erro.
           test -x "$GITHUB_WORKSPACE/crates/${{ matrix.dir }}/${{ env.PERFIL }}/hangar-cano"
           CP_RUST_CANO_BIN=$GITHUB_WORKSPACE/crates/${{ matrix.dir }}/${{ env.PERFIL }}/hangar-cano uv run pytest tests/test_claude_headless_cano.py
       - name: Empacotar
+        if: env.COMPILA == 'true'
         run: |
           mkdir -p out
           for bin in hangar-server hangar-cano; do
@@ -187,7 +196,7 @@ jobs:
       # Cada sistema publica assim que o PRÓPRIO build passa: o Linux não espera Windows e macOS. Build que falha não
       # publica nada, e a release segue com o binário e a entrada anteriores daquele sistema.
       - name: Publicar na release
-        if: startsWith(github.ref, 'refs/heads/')
+        if: startsWith(github.ref, 'refs/heads/') && env.PUBLICA == 'true'
         working-directory: crates/out
         env:
           GH_TOKEN: ${{ github.token }}

@@ -5,7 +5,7 @@
 
 export type TelaConfig = 'root' | 'geral' | 'aparencia' | 'notificacoes' | 'anexos' | 'atalhos' | 'avancado' | 'sobre' | 'diario' | 'maquinas' | 'contas' | 'orquestracao' | 'voz' | 'harnesses' | 'sincronizacao' | 'shared-config' | 'jev' | 'computer' | 'migration';
 
-const TELAS: readonly TelaConfig[] = ['root', 'geral', 'aparencia', 'notificacoes', 'anexos', 'atalhos', 'avancado', 'sobre', 'diario', 'maquinas', 'contas', 'orquestracao', 'voz', 'harnesses', 'sincronizacao', 'shared-config', 'jev', 'computer', 'migration'];
+export const TELAS_CONFIG: readonly TelaConfig[] = ['root', 'geral', 'aparencia', 'notificacoes', 'anexos', 'atalhos', 'avancado', 'sobre', 'diario', 'maquinas', 'contas', 'orquestracao', 'voz', 'harnesses', 'sincronizacao', 'shared-config', 'jev', 'computer', 'migration'];
 
 // Rotas de tela que mudaram de nome: um link guardado por alguém não pode virar tela em branco.
 const RENOMEADAS: Record<string, TelaConfig> = { ditado: 'voz', servidores: 'maquinas', acesso: 'maquinas', motores: 'contas' };
@@ -29,7 +29,7 @@ export function parseConfig(hash: string): RotaConfig | null {
   // Tela desconhecida = painel fechado, caminho intacto. Nao adivinhar: um `?config=aparenca` com
   // typo abrindo a Aparencia esconderia o erro do link.
   const alvo = RENOMEADAS[tela ?? ''] ?? tela;
-  if (!alvo || !TELAS.includes(alvo as TelaConfig)) return null;
+  if (!alvo || !TELAS_CONFIG.includes(alvo as TelaConfig)) return null;
   const ses = p.get('ses');
   return { tela: alvo as TelaConfig, srv: p.get('srv') || null, ...(ses ? { ses } : {}) };
 }

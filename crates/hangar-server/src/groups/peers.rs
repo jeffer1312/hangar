@@ -33,6 +33,19 @@ impl PeerBook {
         Some(PeerCfg { base_url: field("base_url")?.trim_end_matches('/').to_owned(), token: field("token")?.to_owned() })
     }
 
+    /// Peers da varredura: com endereço e token, sem `enabled: false`.
+    pub fn enabled_ids(&self) -> Vec<String> {
+        let all = self.load();
+        let mut ids: Vec<String> = all.iter()
+            .filter(|(_, v)| v["enabled"] != Value::Bool(false)
+                && v["base_url"].as_str().is_some_and(|s| !s.is_empty())
+                && v["token"].as_str().is_some_and(|s| !s.is_empty()))
+            .map(|(k, _)| k.clone())
+            .collect();
+        ids.sort();
+        ids
+    }
+
     fn load(&self) -> Arc<Map<String, Value>> {
         let Some(path) = &self.path else { return Arc::default() };
         let Some(version) = version(path) else { return Arc::default() };
@@ -86,6 +99,11 @@ pub struct PeerClient { book: Arc<PeerBook>, http: OnceLock<reqwest::Client> }
 
 impl PeerClient {
     pub fn new(book: PeerBook) -> Self { Self { book: Arc::new(book), http: OnceLock::new() } }
+
+    pub fn enabled_ids(&self) -> Vec<String> { self.book.enabled_ids() }
+
+    /// Endereço do peer no `peers.json` (o aparelho abre a sessão de lá por ele); nunca o token.
+    pub fn base_url(&self, server: &str) -> Option<String> { self.book.get(server).map(|c| c.base_url) }
 
     /// `peers.call` (peers.py:401-411): prazo de 8 s por leitura e 16 s no total, corpo até 1 MiB,
     /// segue redirect como o Python. O `reqwest` tira o `Authorization` quando o redirect troca de

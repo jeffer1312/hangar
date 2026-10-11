@@ -5,8 +5,11 @@
   interface Props {
     caption: string;
     srcs: string[];
+    // Versão reduzida para desenhar; o visor abre sempre o `srcs` original.
+    thumbs?: string[];
   }
-  let { caption, srcs }: Props = $props();
+  let { caption, srcs, thumbs }: Props = $props();
+  let thumbFailed = $state(new Set<number>());
 
   // Abre no visor compartilhado (lib/visor.ts) com TODAS as imagens desta bolha: quem manda 4 fotos
   // de uma vez passa entre elas com as setas em vez de fechar e abrir uma a uma.
@@ -32,7 +35,9 @@
   <div class="thumb-row" class:thumb-row--multi={srcs.length > 1}>
     {#each srcs as src, i}
       <button class="thumb-btn" bind:this={botoes[i]} onclick={() => abrir(i)} aria-label={m.anexos_ver_original()}>
-        <img class="thumb" {src} alt={m.anexos_imagem_enviada()} loading="lazy" />
+        <!-- Miniatura recusada (formato que o servidor não reduz, proxy no meio) cai no original. -->
+        <img class="thumb" src={thumbs?.[i] && !thumbFailed.has(i) ? thumbs[i] : src} alt={m.anexos_imagem_enviada()} loading="lazy"
+          onerror={() => { if (thumbs?.[i] && !thumbFailed.has(i)) thumbFailed = new Set(thumbFailed).add(i); }} />
       </button>
     {/each}
   </div>

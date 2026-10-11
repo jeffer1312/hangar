@@ -2,7 +2,7 @@
 //! `WS /api/hangar-terminals/{ident}/term`. Um cano de bytes para o `tmux attach` da sessão; o
 //! servidor não interpreta nada. Quem não é o dono pelo `?token=` segue ao Python (convidado,
 //! token errado, bloqueio), que faz a porta de entrada e volta por `/__hangar_server/term`.
-mod origin;
+pub(crate) mod origin;
 mod pty;
 mod resolve;
 #[cfg(all(test, unix))]

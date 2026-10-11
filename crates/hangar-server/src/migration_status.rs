@@ -99,7 +99,8 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if crate::uploads::http::matches(method, path) { return true; }
     if crate::accounts::http::matches(method, path) { return true; }
     if *method == Method::GET {
-        if matches!(path, "/api/sessions" | "/api/sessions/events" | "/api/costs" | "/api/cotacao" | "/api/uso" | "/api/migration/status" | "/api/presence") {
+        if matches!(path, "/api/sessions" | "/api/sessions/events" | "/api/costs" | "/api/cotacao" | "/api/uso" | "/api/migration/status" | "/api/presence"
+            | "/api/voice" | "/api/voice/settings") {
             return true;
         }
         let tail = path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).map(|(_, t)| t);
@@ -110,6 +111,9 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         if path.strip_prefix("/api/hangar-terminals/").is_some_and(|r| r.ends_with("/term")) {
             return true;
         }
+    }
+    if *method == Method::PUT && path == "/api/voice/settings" {
+        return true;
     }
     // Interface dos mods: o Rust atende as sessões dele e repassa as outras (os contadores mostram).
     if *method == Method::POST {
@@ -363,8 +367,8 @@ mod tests {
             let path = line.split('"').nth(1).unwrap().replace("{name}", "x");
             if !path.starts_with("/api/") { continue; }
             let method = if line.contains("post(") { Method::POST } else if line.contains("delete(") { Method::DELETE } else if line.contains("get(") { Method::GET }
-                else { panic!("método que o leitor não conhece: {line}") };
-            assert!(!line.contains(").get(") && !line.contains(").post("), "dois métodos numa rota: {line}");
+                else if line.contains("put(") { Method::PUT } else { panic!("método que o leitor não conhece: {line}") };
+            assert!(!line.contains(").get(") && !line.contains(").post(") && !line.contains(").put("), "dois métodos numa rota: {line}");
             assert!(rust_route(&method, &path), "rota do roteador fora da tabela: {method} {path}");
             api += 1;
         }

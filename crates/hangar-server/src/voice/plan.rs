@@ -1,4 +1,4 @@
-//! Plano da conversa por voz em modo planejar: um .md por sessão, em `~/.hangar/voz/planos`.
+//! Plano da conversa por voz em modo planejar: um .md por sessão, em `<voz>/planos` (`~/.hangar/voz` em produção).
 use chrono::{DateTime, Local};
 use std::{io, path::PathBuf};
 
@@ -6,20 +6,8 @@ const LIMIT: usize = 200_000;
 
 pub struct PlanFile { pub path: PathBuf }
 
-fn voice_dir() -> PathBuf {
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_default();
-    home.join(".hangar").join("voz")
-}
-
-pub fn plans_dir() -> PathBuf { voice_dir().join("planos") }
-
-/// Pasta própria do organizador: a única que ele grava (é o cwd da thread em `workspace-write`).
-pub fn files_dir() -> PathBuf { voice_dir().join("arquivos") }
-
-pub fn new_plan(session: &str, now: DateTime<Local>) -> PlanFile { new_plan_in(&plans_dir(), session, now) }
-
-// Nome livre: plano já entregue ou de outra chamada no mesmo minuto não é sobrescrito.
-fn new_plan_in(dir: &std::path::Path, session: &str, now: DateTime<Local>) -> PlanFile {
+/// `dir`: a pasta de planos (`<voz>/planos`). Nome livre: plano já entregue ou de outra chamada no mesmo minuto não é sobrescrito.
+pub fn new_plan(dir: &std::path::Path, session: &str, now: DateTime<Local>) -> PlanFile {
     let safe: String = session.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' }).collect();
     let stem = format!("{safe}-{}", now.format("%Y-%m-%d-%H%M"));
     let mut path = dir.join(format!("{stem}.md"));
@@ -56,7 +44,7 @@ mod tests {
     #[test]
     fn file_name_is_sanitized_and_dated() {
         let when = chrono::Local.with_ymd_and_hms(2026, 10, 7, 19, 5, 0).unwrap();
-        let plan = new_plan("pm/../x y", when);
+        let plan = new_plan(std::path::Path::new("/nao-existe/planos"), "pm/../x y", when);
         assert_eq!(plan.path.file_name().unwrap().to_str().unwrap(), "pm-..-x-y-2026-10-07-1905.md");
     }
 
@@ -65,13 +53,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("voice-plan-name-{}", std::process::id()));
         let when = chrono::Local.with_ymd_and_hms(2026, 10, 7, 19, 5, 0).unwrap();
         let name = |p: &PlanFile| p.path.file_name().unwrap().to_str().unwrap().to_owned();
-        let first = new_plan_in(&dir, "s", when);
+        let first = new_plan(&dir, "s", when);
         assert_eq!(name(&first), "s-2026-10-07-1905.md");
         first.write("a").unwrap();
-        let second = new_plan_in(&dir, "s", when);
+        let second = new_plan(&dir, "s", when);
         assert_eq!(name(&second), "s-2026-10-07-1905-2.md");
         second.write("b").unwrap();
-        assert_eq!(name(&new_plan_in(&dir, "s", when)), "s-2026-10-07-1905-3.md");
+        assert_eq!(name(&new_plan(&dir, "s", when)), "s-2026-10-07-1905-3.md");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

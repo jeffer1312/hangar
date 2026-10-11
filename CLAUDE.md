@@ -30,9 +30,11 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
 - `difusor.py` — **uma fonte por chave, não uma por conexão**: monitor de estado,
   acumulador de estatísticas e git da listagem são compartilhados entre os SSE abertos.
   Por quê e o que quebrou antes: [`docs/decisoes/plataforma.md`](docs/decisoes/plataforma.md).
-- `codex_voice.py` + `CodexVoice.svelte` — voz do Codex no web, **beta e opt-in por
-  servidor** (`codex_voice_beta`, nasce `false`). Desligada, o botão não monta e o backend
-  recusa o WebSocket. Contrato completo:
+- Voz ao vivo — roda no `hangar-server` (`crates/hangar-server/src/voice/`), **beta e opt-in
+  por servidor** (`codex_voice_beta` no `runtime-config.json`, nasce `false`). Uma chamada por
+  servidor, só do dono (`/api/voice`; pelo Connect, a ponte `voicesock.py`); o áudio fica no
+  aparelho. Clientes: nativo (`desktop-native/src/voice/`) e PWA no celular
+  (`lib/liveVoice.ts`). Contrato: "Regras vigentes" de
   [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md).
 - `adapters/kimi/` + `hooks/kimi_state_hook.py` + `kimi_hook_installer.py` — Kimi Code runs in the
   same tmux-native shape as Pi: TUI in the pane, chat from
@@ -234,7 +236,9 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 - **Todo texto de interface vem de `m.<chave>()`** (Paraglide). `pt.json` e `en.json` no mesmo
   commit. Dado do servidor não vira chave. A trava `i18nGuard.test.ts` só desce. Rótulo de
   stub/fixture de teste que vive em árvore varrida pela trava é identificador (`abrir-term`),
-  nunca frase.
+  nunca frase. O Paraglide compila com `locale-modules` em todo lugar (scripts e `vite.config.ts`):
+  um módulo por mensagem deixava os testes 3 a 4 vezes mais lentos.
+  [Medição](docs/decisoes/frontend.md#paraglide-compila-um-módulo-por-idioma-11102026).
 - **Markdown NUNCA aparece cru.** Todo `.md` exibido passa por `renderMarkdown`. Um `<pre>` com
   `**` e `##` à mostra é bug, não estilo.
 - **Tela ou lista nova trata os quatro estados: carregando, vazio, erro e sucesso.**
@@ -450,8 +454,9 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
 - **Uma configuração do Jev para navegador, orquestração, voz e Computer Use.** `jev_api_key`,
   `jev_endpoint` e `jev_model` no `runtime_config`; no ambiente `TYPESAFE_API_KEY`, `JEV_ENDPOINT`
   e `JEV_MODEL`, já resolvidos. Não existe chave do Jev só para o Computer Use. A regra do destino
-  (chave `sk-or-` ou endereço do OpenRouter) tem três cópias que mudam juntas: `destino_jev`,
-  `voice::jev::destination` e `jev_config` do `orq.py`. Evidência em
+  (chave `sk-or-` ou endereço do OpenRouter) tem quatro cópias que mudam juntas: `destino_jev`,
+  `destination` em `crates/hangar-server/src/voice/jev.rs`, `jev::destination` em
+  `desktop-native/src/app/server_config.rs` e `jev_config` do `orq.py`. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#uma-configuração-do-jev-para-os-quatro-usos).
 - **Hangar Connect entra por `127.0.0.1:8768`, e nada que chega por ela é local.** O
   `ConnectPortGate` troca o cliente por `192.0.2.1` antes de qualquer checagem; nunca decidir

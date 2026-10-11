@@ -1,6 +1,7 @@
 <script lang="ts">
   import RateChips from './RateChips.svelte';
   import StateChip from './StateChip.svelte';
+  import LiveVoiceButton from './LiveVoiceButton.svelte';
   import * as m from '../paraglide/messages';
   import type { StatusFields } from '@hangar/core';
   import type { State } from '@hangar/core';
@@ -47,6 +48,8 @@
     // Conta Anthropic da sessão, ao lado do título tappável (celular): o desktop tem a pílula de
     // cota da barra de abas; no celular não havia como saber qual conta paga a sessão aberta.
     conta?: { label: string; nome: string; cor: string } | null;
+    // Tocar a conta abre as contas e a troca, sem abrir o seletor de sessão do título.
+    onContaTap?: () => void;
     // Desktop: breadcrumb (servidor › sessao › branch) no lugar do titulo centralizado + pilula de estado.
     crumbs?: { server: string; session: string; branch?: string; dirty?: boolean } | null;
     // Estado da sessao aberta, ao lado do breadcrumb (so no desktop; sem estado, sem pilula).
@@ -65,11 +68,12 @@
     loopColor?: string;
     onLoopTap?: () => void;
   }
-  let { title = 'Hangar', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenNavegador, onOpenRun, onOpenAttachments, runRunning = false, working = false, subtitle = null, subtitleHot = null, conta = null, crumbs = null, state, stateLabel, providerLabel = null, onProviderTap, loopLabel = null, loopColor, onLoopTap }: Props = $props();
+  let { title = 'Hangar', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenNavegador, onOpenRun, onOpenAttachments, runRunning = false, working = false, subtitle = null, subtitleHot = null, conta = null, onContaTap, crumbs = null, state, stateLabel, providerLabel = null, onProviderTap, loopLabel = null, loopColor, onLoopTap }: Props = $props();
 
   // Sinal do "⋯": no celular Rodar/Atividade moram dentro do menu, entao o estado deles precisa
   // aparecer no botao — senao voce so descobre que algo esta rodando abrindo o menu.
   const menuDot = $derived(runRunning || activityRunning || activityBadge > 0);
+  const celular = $derived(!!onTitleTap && !crumbs);
 </script>
 
 <!-- titulo-esquerda: o chat do celular. O nome encosta no voltar (centralizado ele ficava espremido
@@ -149,9 +153,23 @@
         {#if conta}
           <!-- Conta da sessão aberta: no celular é o único lugar que diz qual conta paga a conversa.
                Linha própria pra nunca cortar o nome; a cor da conta fica só na bolinha. -->
-          <span class="navbar-conta" title={m.sessao_conta({ n: conta.nome })}>
-            <span class="conta-dot" style="background: {conta.cor};" aria-hidden="true"></span>{conta.label}
-          </span>
+          {#if onContaTap}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <span
+              class="navbar-conta navbar-conta--tap"
+              role="button"
+              tabindex="0"
+              aria-label={m.accounts_open_aria({ n: conta.nome })}
+              onclick={(e) => { e.stopPropagation(); onContaTap(); }}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onContaTap(); } }}
+            >
+              <span class="conta-dot" style="background: {conta.cor};" aria-hidden="true"></span>{conta.label}<span class="conta-chev" aria-hidden="true">›</span>
+            </span>
+          {:else}
+            <span class="navbar-conta" title={m.sessao_conta({ n: conta.nome })}>
+              <span class="conta-dot" style="background: {conta.cor};" aria-hidden="true"></span>{conta.label}
+            </span>
+          {/if}
         {/if}
       </button>
     {:else if subtitle}
@@ -164,6 +182,8 @@
     {/if}
 
     <div class="nav-right">
+      <!-- Só a conversa do celular tem título tocável sem breadcrumb: o desktop não ganha a voz. -->
+      {#if onTitleTap && !crumbs}<LiveVoiceButton />{/if}
       {#if onOpenTerminal}
         <button class="nav-btn terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label={m.ctx_terminal()}>
           <span class="animated-icon" aria-hidden="true">
@@ -217,8 +237,9 @@
           {#if activityBadge > 0}<span class="activity-badge">{activityBadge}</span>{/if}
         </button>
       {/if}
-      {#if (status && onExpandUsage) || limited}
-        <RateChips {status} onExpand={onExpandUsage} {limited} {limitReset} variant={onTitleTap && !crumbs ? 'chip' : 'dial'} />
+      <!-- Celular: a cota mora no anel da conta, na faixa do campo; aqui só o aviso de limitada. -->
+      {#if (status && onExpandUsage && !celular) || limited}
+        <RateChips status={celular ? null : status} onExpand={onExpandUsage} {limited} {limitReset} variant={celular ? 'chip' : 'dial'} />
       {/if}
       <!-- Mostrador e menu CONVIVEM (antes o menu era um `else` do mostrador, entao nunca aparecia
            numa sessao com statusline). No celular o "⋯" guarda Rodar/Atividade; o ponto acende
@@ -232,7 +253,7 @@
           </svg>
           {#if menuDot}<span class="menu-dot" aria-hidden="true"></span>{/if}
         </button>
-      {:else if !((status && onExpandUsage) || limited)}
+      {:else if !((status && onExpandUsage && !celular) || limited)}
         <div class="nav-spacer"></div>
       {/if}
     </div>
@@ -387,6 +408,10 @@
     line-height: 1.2;
     color: var(--text-muted);
   }
+  /* Área de toque maior que a linha de texto, sem empurrar o layout. */
+  .navbar-conta--tap { padding: 8px 10px; margin: -8px -10px; cursor: pointer; }
+  .navbar-conta--tap:active { color: var(--text-secondary); }
+  .conta-chev { margin-left: 3px; }
   .conta-dot {
     display: inline-block;
     width: 6px;

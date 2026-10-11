@@ -168,6 +168,32 @@ const ENV_CODES: [&str; 31] = ["terminal", "pricing_offline", "claude_config_dir
 /// `ALERTA_ENV` do web: código do alerta e a mensagem dele.
 const ENV_ALERTS: [(&str, &str); 1] = [("codex_sync_desligado", "config_server_env_alerta_codex_sync")];
 
+/// Destino do Jev que a tela mostra: a mesma regra do servidor (`runtime_config.destino_jev`).
+pub(super) mod jev {
+    pub(in crate::app) const TYPESAFE_URL: &str = "https://api.typesafe.ai/v1/systemone";
+    pub(super) const TYPESAFE_MODEL: &str = "jev-latest";
+    pub(super) const OPENROUTER_URL: &str = "https://openrouter.ai/api/alpha/decisions";
+    pub(super) const OPENROUTER_MODEL: &str = "~typesafe/jev-latest";
+
+    pub(super) fn is_openrouter(key: &str, endpoint: Option<&str>) -> bool {
+        match endpoint.map(str::trim).filter(|v| !v.is_empty()) {
+            Some(endpoint) => endpoint.contains("openrouter.ai"),
+            None => key.trim().starts_with("sk-or-"),
+        }
+    }
+
+    /// No OpenRouter, `typesafe/jev-latest` ganha o `~` do apelido, sem o qual ele responde "does not exist".
+    pub(super) fn destination(key: &str, endpoint: Option<&str>, model: Option<&str>) -> (Option<String>, Option<String>) {
+        let (endpoint, model) = (endpoint.map(str::trim).filter(|v| !v.is_empty()), model.map(str::trim).filter(|v| !v.is_empty()));
+        if is_openrouter(key, endpoint) {
+            let mut model = model.unwrap_or(OPENROUTER_MODEL).to_owned();
+            if model.starts_with("typesafe/") && model.ends_with("-latest") { model.insert(0, '~'); }
+            return (Some(endpoint.unwrap_or(OPENROUTER_URL).to_owned()), Some(model));
+        }
+        (Some(endpoint.unwrap_or(TYPESAFE_URL).to_owned()), Some(model.unwrap_or(TYPESAFE_MODEL).to_owned()))
+    }
+}
+
 /// Rascunho do servidor: só entra chave que a última leitura boa trouxe. Sem `insert` fora deste módulo, nenhuma página
 /// grava por cima do que não foi lido (leitura em curso, que falhou ou reconexão deixam `campos` vazio).
 mod draft {
@@ -333,8 +359,8 @@ impl ServerConfig {
         let key = self.jev_key_head()?;
         let setting = |name: &str| Some(text_of(&self.current(name))).filter(|v| !v.trim().is_empty());
         let endpoint = setting("jev_endpoint");
-        let openrouter = crate::voice::jev::is_openrouter(&key, endpoint.as_deref());
-        let (url, model) = crate::voice::jev::destination(&key, endpoint.as_deref(), setting("jev_model").as_deref());
+        let openrouter = jev::is_openrouter(&key, endpoint.as_deref());
+        let (url, model) = jev::destination(&key, endpoint.as_deref(), setting("jev_model").as_deref());
         Some((openrouter, url.unwrap_or_default(), model.unwrap_or_default()))
     }
 
@@ -570,7 +596,7 @@ fn jev_model_value(which: JevModel, openrouter: bool) -> &'static str {
 
 /// Qual sugestão o modelo atual é; `None` para um modelo próprio. O apelido do mais novo também conta como ele.
 fn jev_model_preset(current: &str, openrouter: bool) -> Option<JevModel> {
-    let latest = if openrouter { crate::voice::jev::OPENROUTER_MODEL } else { crate::voice::jev::TYPESAFE_MODEL };
+    let latest = if openrouter { jev::OPENROUTER_MODEL } else { jev::TYPESAFE_MODEL };
     match current.trim() {
         "" => Some(JevModel::Latest),
         v if v == latest || (openrouter && v == "typesafe/jev-latest") => Some(JevModel::Latest),
@@ -1255,9 +1281,9 @@ impl Hangar {
         let s = &self.server_config;
         let key = s.jev_key_head().unwrap_or_default();
         let endpoint = text_of(&s.current("jev_endpoint")).trim().to_owned();
-        let defaults = [crate::voice::jev::TYPESAFE_URL, crate::voice::jev::OPENROUTER_URL];
+        let defaults = [jev::TYPESAFE_URL, jev::OPENROUTER_URL];
         if force || defaults.contains(&endpoint.as_str()) {
-            let by_key = crate::voice::jev::is_openrouter(&key, None);
+            let by_key = jev::is_openrouter(&key, None);
             let wanted = if openrouter == by_key { "" } else { defaults[usize::from(openrouter)] };
             if endpoint != wanted { self.set_jev_text("jev_endpoint", wanted, window, cx); }
         }
@@ -1897,15 +1923,24 @@ mod tests {
     }
 
     #[test]
+    fn the_key_picks_the_provider_and_its_defaults() {
+        use super::jev::{OPENROUTER_MODEL, OPENROUTER_URL, TYPESAFE_MODEL, TYPESAFE_URL, destination};
+        assert_eq!(destination("sk-or-v1-x", None, None), (Some(OPENROUTER_URL.into()), Some(OPENROUTER_MODEL.into())));
+        assert_eq!(destination("apik-x", None, None), (Some(TYPESAFE_URL.into()), Some(TYPESAFE_MODEL.into())));
+        assert_eq!(destination("sk-or-v1-x", None, Some("typesafe/jev-latest")).1.as_deref(), Some("~typesafe/jev-latest"), "sem o til o OpenRouter recusa");
+        assert_eq!(destination("apik-x", Some("https://proxy/v1"), Some("jev-1.13.0")), (Some("https://proxy/v1".into()), Some("jev-1.13.0".into())));
+    }
+
+    #[test]
     fn jev_route_reads_the_provider_from_the_key_or_its_mask() {
         let mut s = ServerConfig::default();
         assert_eq!(s.jev_route(), None, "sem chave");
         s.fields.insert("jev_api_key".into(), json!({"valor": "sk-o••••••••25ba", "definido": true}));
         s.fields.insert("jev_endpoint".into(), json!({"valor": ""}));
         s.fields.insert("jev_model".into(), json!({"valor": ""}));
-        assert_eq!(s.jev_route(), Some((true, crate::voice::jev::OPENROUTER_URL.into(), "~typesafe/jev-latest".into())));
+        assert_eq!(s.jev_route(), Some((true, super::jev::OPENROUTER_URL.into(), "~typesafe/jev-latest".into())));
         assert!(s.stage("jev_api_key", json!("apik-123")));
-        assert_eq!(s.jev_route(), Some((false, crate::voice::jev::TYPESAFE_URL.into(), "jev-latest".into())));
+        assert_eq!(s.jev_route(), Some((false, super::jev::TYPESAFE_URL.into(), "jev-latest".into())));
     }
 
     #[test]

@@ -72,14 +72,14 @@ fn age(secs: u64) -> String {
 
 /// Duas leituras separadas pela amostra: o uso de CPU é a diferença entre elas (100% = um núcleo inteiro).
 pub fn observe(request: &Request) -> String {
-    let kind = ProcessRefreshKind::new().with_cpu().with_memory().with_cmd(UpdateKind::OnlyIfNotSet);
+    let kind = ProcessRefreshKind::nothing().with_cpu().with_memory().with_cmd(UpdateKind::OnlyIfNotSet);
     let mut system = System::new();
     system.refresh_cpu_usage();
-    system.refresh_processes_specifics(ProcessesToUpdate::All, kind);
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
     std::thread::sleep(request.sample);
     system.refresh_cpu_usage();
     system.refresh_memory();
-    system.refresh_processes_specifics(ProcessesToUpdate::All, kind);
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
     let mut rows: Vec<(f32, u64, String)> = system.processes().values().filter_map(|p| {
         let name = p.name().to_string_lossy().into_owned();
         let args: Vec<String> = p.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();

@@ -78,7 +78,8 @@ classificar() {
             packages/*|frontend/*|messages/*|project.inlang/*|package.json|package-lock.json) front=1 ;;
         esac
         case "$f" in
-            mobile/*|packages/core/*|messages/*|project.inlang/*) mobile=1 ;;
+            # Só mudança no próprio app: o CI não testa o mobile, e core e mensagens já passam pelo front.
+            mobile/*) mobile=1 ;;
         esac
         case "$f" in
             desktop-native/*|crates/hangar-api/*|crates/hangar-workspace/*|crates/Cargo.toml|messages/*|VERSION) nativo=1 ;;
@@ -242,14 +243,16 @@ passo_pi() { node scripts/test-pi-hangar-state.mjs; }
 # Ambiente parecido com o do runner: HOME vazio (nada lê ~/.claude, ~/.hangar nem o tmux real) e
 # só o PATH das ferramentas. Caches de cargo/uv/npm continuam os da máquina.
 ambiente_limpo() {
-    local casa="$1" node_dir uv_dir
+    local casa="$1" node_dir uv_dir codex_dir=""
     node_dir="${NODE_DIR:-$(dirname "$(realpath "$(command -v node)")")}"
     uv_dir="$(dirname "$(command -v uv)")"
+    # O CI instala o codex no PATH; os contratos de contas precisam dele.
+    command -v codex >/dev/null && codex_dir="$(dirname "$(realpath "$(command -v codex)")"):"
     mkdir -p "$casa/tmux" "$casa/run"
     chmod 700 "$casa/run"
     LIMPO=(env -i
         HOME="$casa" USER="${USER:-$(id -un)}" LANG=C.UTF-8 TERM=dumb CI=1
-        PATH="$node_dir:$uv_dir:${CARGO_HOME:-$HOME/.cargo}/bin:/usr/local/bin:/usr/bin:/bin"
+        PATH="$node_dir:$uv_dir:$codex_dir${CARGO_HOME:-$HOME/.cargo}/bin:/usr/local/bin:/usr/bin:/bin"
         CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
         UV_CACHE_DIR="${UV_CACHE_DIR:-$HOME/.cache/uv}"
         UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-$HOME/.local/share/uv/python}"
@@ -400,7 +403,7 @@ rodar_passos() {   # $1 = sha, resto = passos; cwd = árvore preparada
             dur=$((SECONDS - ini)); resumo+=("FALHOU  $p ${dur}s  log: $log"); falhou=1
             echo "--- $SO/$p: fim do log ---"; tail -40 "$log"
         fi
-        echo "<< $SO: $p ${dur}s" >&3
+        echo "<< $SO: $p ${dur}s $( (( rc == 0 )) && echo ok || echo FALHOU)" >&3
     done
     rm -rf "$casa"
     echo "=== resumo $SO ${sha:0:10}"
@@ -501,12 +504,30 @@ podar_target() {   # $1 = target, $2 = teto em KB
     fi
 }
 
+# Repassa a entrada e copia as linhas de passo (>> começou, << terminou) para o arquivo de
+# andamento, com a hora em segundos: é dele que um painel acompanha uma rodada que não é a sua.
+marcar() {   # $1 = arquivo de andamento
+    local l
+    while IFS= read -r l; do
+        printf '%s\n' "$l"
+        [[ "$l" == ">> "* || "$l" == "<< "* ]] && printf '%(%s)T %s\n' -1 "$l" >> "$1"
+    done
+    # Sem isto a função sai com o código do último [[ ]] (1 quando a última linha não é de passo), e
+    # quem espera o Windows pelo `wait` deste filtro dá a VM como falha mesmo com tudo ok.
+    return 0
+}
+
 # ── principal ─────────────────────────────────────────────────────────────────────────────────
 
 SCRIPT="$(realpath "$0" 2>/dev/null || echo "$0")"
 
 if [[ "${1:-}" == --podar ]]; then   # uso do teste: --podar <target> <teto em KB>
     podar_target "$2" "$3"
+    exit 0
+fi
+
+if [[ "${1:-}" == --marcar ]]; then   # uso do teste: --marcar <arquivo>
+    marcar "$2"
     exit 0
 fi
 
@@ -625,17 +646,26 @@ echo "verificar-local: ${sha:0:10} contra ${base:0:10}"
 echo "  linux:   ${plano_lin:-nada}${plano_lin:+ ($PROCESSOS processos)}"
 [[ -n "$VM" ]] && echo "  windows: ${plano_win:-nada} (VM $VM)"
 
-mkdir -p "$ESTADO/logs"
+mkdir -p "$ESTADO/logs" "$ESTADO/andamento"
+find "$ESTADO/andamento" -type f -mtime +1 -delete 2>/dev/null
+# Um arquivo por rodada (o pid separa duas do mesmo commit): plano, fila, cada passo e o fim.
+ANDAMENTO="$ESTADO/andamento/${sha:0:10}-$$"
+printf '%(%s)T plano %s linux=%s windows=%s vm=%s\n' -1 "${sha:0:10}" "${plano_lin// /,}" "${plano_win// /,}" "$VM" > "$ANDAMENTO"
 [[ -d "$FIXO/.git" ]] || { mkdir -p "$(dirname "$FIXO")" && git clone -q --no-checkout "$ORIGEM" "$FIXO"; } || erro "não consegui criar $FIXO"
 
 rc_lin=0 rc_win=0
 saida_lin="$(mktemp)"
-trap 'rm -f "$saida_lin"' EXIT
-exec 3>&2
+trap 'rc_saida=$?; rm -f "$saida_lin"; printf "%(%s)T fim %s\n" -1 "$rc_saida" >> "$ANDAMENTO"' EXIT
+# Sem isto, morto por sinal o trap de saída lê o código do último comando (0) e grava "fim 0".
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+exec 3> >(marcar "$ANDAMENTO" >&2)
 (
     exec 9>"$TRAVA" || exit 10
     if ! flock -n 9; then
         echo "verificar-local: na fila, outra verificação roda nesta máquina…" >&2
+        printf '%(%s)T fila\n' -1 >> "$ANDAMENTO"
         flock 9 || exit 10
     fi
     # Busca primeiro, sob a trava: o Windows sai do mesmo clone.
@@ -644,9 +674,9 @@ exec 3>&2
     if [[ -n "$plano_win" ]]; then
         # shellcheck disable=SC2086
         # 9>&-: processo que sobrar de um passo não pode segurar a fila da máquina.
-        vm_rodar "$sha" $plano_win > "$ESTADO/logs/${sha:0:10}-windows.log" 2>&1 9>&- &
+        vm_rodar "$sha" $plano_win 2>&1 9>&- | marcar "$ANDAMENTO" > "$ESTADO/logs/${sha:0:10}-windows.log" 9>&- &
         win_pid=$!
-        echo ">> windows: rodando na VM $VM (log: $ESTADO/logs/${sha:0:10}-windows.log)" >&2
+        echo ">> windows: rodando na VM $VM (log: $ESTADO/logs/${sha:0:10}-windows.log)" >&3
     fi
     rl=0
     if [[ -n "$plano_lin" ]]; then

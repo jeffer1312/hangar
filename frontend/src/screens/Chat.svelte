@@ -17,6 +17,7 @@
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import UsageSheet from '../components/UsageSheet.svelte';
+  import AccountsSheet from '../components/AccountsSheet.svelte';
   import Git from '../components/Git.svelte';
   import PreviewSheet from '../components/PreviewSheet.svelte';
   import ActivitySheet from '../components/ActivitySheet.svelte';
@@ -62,7 +63,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     setPermissionMode,
     setModoExecucao,
     recarregarSessao,
-    setSessionAccount, type AccountTarget,
+    setSessionAccount, setSessionEngineAccount, archiveRefFromJsonl, resumeArchivedConversation, getEngines, getEnginesForServer, type AccountTarget, type CliProxyAccount,
     steerSession,
     broadcast,
     selectOption,
@@ -86,7 +87,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   import { dictations, draftStorageKey, parseStoredDraft, readMigrating } from '../lib/dictationStore.svelte';
   import { formataErro } from '@hangar/core';
   import { fmtDur } from '../lib/fmt';
-  import { hasSeam, mergeHistoryWithLive } from '@hangar/core';
+  import { hasSeam, mergeHistoryWithLiveRetiring } from '@hangar/core';
   import { especificidade, donoDaLinha } from '@hangar/core';
   import { parseStatusLine, queuedMessages } from '@hangar/core';
   import { mergeProjectShortcuts, runShortcutShell, runCodeCommand, sendsDirect, shortcutMissingSecret } from '@hangar/core';
@@ -110,9 +111,12 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   import { workspaceSessionKey } from '../lib/workspaceCommands';
   import { countAwaiting, nextAwaiting, providerName, untrackedReason, stateColors, isOrq } from '@hangar/core';
   import { chipDaConta } from '../lib/conta';
+  import { quotaFeed } from '../lib/quotaFeed.svelte';
+  import { faixaDeCota, piorJanela } from '../lib/cota';
   import * as diag from '../lib/diag';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
   import * as m from '../paraglide/messages';
+  import { liveVoiceStore } from '../lib/liveVoiceStore.svelte';
   import { ouvirTexto } from '../lib/ouvir';
   import { textoFalavelComCodigo } from '../lib/speakable';
   import { segredos } from '../lib/segredos.svelte';
@@ -195,6 +199,13 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
 
   let events = $state<ChatEvent[]>([]);
   const retiredQueuedIds = new Set<string>();
+  // Costura com o histórico: a bolha da fila que a mensagem real aposentou fica aposentada também
+  // para a reconexão do SSE, que reenvia a fila inteira.
+  function mergeAposentando(history: ChatEvent[], opts: Parameters<typeof mergeHistoryWithLiveRetiring>[2]): ChatEvent[] {
+    const r = mergeHistoryWithLiveRetiring(history, events, opts);
+    for (const id of r.retired) retiredQueuedIds.add(id);
+    return r.events;
+  }
   // Sobe a cada CARGA de histórico (pintar do cache, chegar a cauda, trocar de transcript). A
   // MessageList re-ancora a janela na cauda a cada mudança — sem isso, uma carga que chega com a
   // lista já montada pode ficar fora da fatia visível e a conversa para na mensagem anterior.
@@ -684,6 +695,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   let activityOpen = $state(false);
   // Menu "⋯" do celular: Rodar/Atividade saíram da NavBar pra sobrar largura pro nome da sessão.
   let moreOpen = $state(false);
+  let accountsOpen = $state(false);
   let shareOpen = $state(false);
   // Galeria de anexos: "⋯" no celular, botao inline no desktop.
   let anexosOpen = $state(false);
@@ -871,6 +883,19 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     createOpen = true;
   }
 
+  // Voz ao vivo: as folhas desta conversa, pelos mesmos caminhos dos botões.
+  $effect(() => liveVoiceStore.registerActions({
+    'new-session': () => { startNew(); return true; },
+    terminal: () => abrirTerminalReal() || m.live_voice_action_no_terminal(),
+    git: () => { gitOpen = true; return true; },
+    activity: () => { if (desktop) ctxPanel.aba = 'atividade'; else activityOpen = true; return true; },
+    'panel-close': () => {
+      if (!xtermOpen && !gitOpen && !activityOpen && !mirrorOpen) return m.live_voice_action_not_open();
+      xtermOpen = false; gitOpen = false; activityOpen = false; mirrorOpen = false;
+      return true;
+    },
+  }));
+
   async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: Provider,
                               engine?: string | null, model?: string | null, effort?: string | null,
                               permissionMode?: string | null, ompProfile?: string | null,
@@ -944,9 +969,9 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   }
 
   const anyOverlayOpen = () =>
-    switcherOpen || createOpen || usageOpen || btwOpen || gitOpen || runOpen || previewOpen || activityOpen || limitsOpen || mirrorOpen || xtermOpen || askOpen || moreOpen || anexosOpen;
+    switcherOpen || createOpen || usageOpen || btwOpen || gitOpen || runOpen || previewOpen || activityOpen || limitsOpen || mirrorOpen || xtermOpen || askOpen || moreOpen || anexosOpen || accountsOpen;
   function closeOverlays() {
-    switcherOpen = createOpen = usageOpen = btwOpen = gitOpen = runOpen = previewOpen = activityOpen = limitsOpen = moreOpen = anexosOpen = false;
+    switcherOpen = createOpen = usageOpen = btwOpen = gitOpen = runOpen = previewOpen = activityOpen = limitsOpen = moreOpen = anexosOpen = accountsOpen = false;
     if (mirrorOpen) closeMirror();
     xtermOpen = false;
     askOpen = false;
@@ -1203,6 +1228,61 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     if (trocandoConta || currentState !== 'idle') return;
     contaAlvo = contaMostrada = conta;
   }
+  // Sessão encerrada some da lista: guarda a última leitura para o "Retomar" saber transcript e conta.
+  let ultimaInfo = $state<SessionInfo | null>(null);
+  $effect(() => {
+    const s = sessaoAtual;
+    if (s) ultimaInfo = s;
+    else if (ultimaInfo && ultimaInfo.name !== sessionName) ultimaInfo = null;
+  });
+  $effect(() => { void sessionName; retomarErro = ''; });
+  const refRetomar = $derived((ultimaInfo?.provider ?? 'claude') === 'claude' ? archiveRefFromJsonl(ultimaInfo?.jsonl) : null);
+  let retomando = $state(false);
+  let retomarErro = $state('');
+  let retomarNoutra = $state(false);
+  async function retomar(configDir?: string | null) {
+    const ref = refRetomar;
+    if (!ref || retomando) return;
+    retomando = true;
+    retomarErro = '';
+    const conta = ultimaInfo?.conta;
+    const dir = configDir ?? (conta?.startsWith('claude:') ? conta.slice('claude:'.length) : null);
+    try {
+      const info = await resumeArchivedConversation(ref.project, ref.sessionId, ultimaInfo?.engine ?? null, dir,
+        'claude', null, sessionServer());
+      window.location.hash = `#/chat/${encodeURIComponent(chatServerId ?? '')}/${encodeURIComponent(info.name)}`;
+    } catch (e) {
+      retomarErro = e instanceof Error ? e.message : m.arquivo_retomar_erro();
+    } finally {
+      retomando = false;
+    }
+  }
+  // Sessão com motor GPT: as contas ChatGPT do proxy entram no cartão, como no nativo.
+  let contasMotor = $state<CliProxyAccount[] | null>(null);
+  let contaMotorAlvo = $state<CliProxyAccount | null>(null);
+  $effect(() => {
+    if (desktop || !accountsOpen || !sessionEngine) { if (!sessionEngine) contasMotor = null; return; }
+    const engine = sessionEngine;
+    const srv = sessionServer();
+    (srv ? getEnginesForServer(srv) : getEngines())
+      .then((r) => { contasMotor = (r.motores[engine]?.cliproxy_accounts ?? []).filter((a) => !!a.account && /^codex:./.test(a.credential_id)); })
+      .catch(() => { contasMotor = null; });
+  });
+  const contaMotorAtiva = $derived(contasMotor?.find((a) => a.credential_id === sessaoAtual?.conta)?.account ?? null);
+  async function executarTrocaContaMotor() {
+    const alvo = contaMotorAlvo;
+    contaMotorAlvo = null;
+    if (!alvo || trocandoConta || currentState !== 'idle') return;
+    trocandoConta = true;
+    try {
+      await setSessionEngineAccount(sessionName, alvo.account, sessionServer());
+      await loadSessionsForNav();
+    } catch (err) {
+      mostrarAviso(err);
+    } finally {
+      trocandoConta = false;
+    }
+  }
   async function executarTrocaConta() {
     const alvo = contaAlvo;
     if (!alvo || trocandoConta || currentState !== 'idle') return;
@@ -1452,21 +1532,6 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     return () => { vivo = false; };
   });
 
-  let codexVoiceBeta = $state(false);
-  $effect(() => {
-    let vivo = true;
-    const configMudou = (event: Event) => {
-      const detail = (event as CustomEvent<{ serverId: string | null; enabled: boolean }>).detail;
-      if (detail && (detail.serverId === null || detail.serverId === chatServerId)) codexVoiceBeta = detail.enabled === true;
-    };
-    window.addEventListener('hangar:codex-voice-config', configMudou);
-    const srvVoz = sessionServer();
-    (srvVoz ? getConfigForServer(srvVoz) : getConfig())
-      .then((c) => { if (vivo) codexVoiceBeta = c.campos.codex_voice_beta?.valor === true; })
-      .catch(() => {});
-    return () => { vivo = false; window.removeEventListener('hangar:codex-voice-config', configMudou); };
-  });
-
   // Pergunta nativa do Pi (tool `question`). O Pi nao tem o hook de AskUserQuestion do Claude, mas
   // nao precisa: o toolCall cai no transcript com o payload COMPLETO (pergunta, header, opcoes com
   // descricao) no instante da pergunta. Aqui o app sintetiza o MESMO AskQuestionPayload do Claude e
@@ -1572,12 +1637,15 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // Painel de verdade no desktop; espelho no celular -- e tambem no desktop quando o SERVIDOR nao tem
   // a capacidade (Windows: `pty` e POSIX-only, o painel abriria morto). NAO reusar isto no onFallback
   // do AskUserQuestion: o fallback existe pra destravar picker, e o painel bloqueia o /answer (Task 3).
-  function abrirTerminalReal() {
+  /** `false` quando nada abriu (a voz conta o motivo em vez de dizer que abriu). */
+  function abrirTerminalReal(): boolean {
     // Sem pane só há o que os atalhos abriram: painel/terminal com as abas deles, nunca o espelho.
-    if (sessionHeadless && !temTerminalDeAtalho && hangarOf(chatServerId).length === 0) return;
+    if (sessionHeadless && !temTerminalDeAtalho && hangarOf(chatServerId).length === 0) return false;
     if (desktop && onOpenTerminalPanel && terminalPanelDisponivel) onOpenTerminalPanel(sessionHeadless);
     else if (!desktop && terminalCapazMobile) xtermOpen = true;
     else if (!sessionHeadless) mirrorOpen = true;
+    else return false;
+    return true;
   }
   // Terminais dos atalhos "shell" desta sessão (lib/shortcutTerminals.svelte.ts). Sessão sem pane
   // ganha o botão de terminal quando existe pelo menos um.
@@ -1611,6 +1679,20 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // sob o título — com N servidores, sessões homônimas ficavam indistinguíveis no celular).
   const serverLabel = $derived(listServers().find((s) => s.id === chatServerId)?.label ?? '');
   const contaChip = $derived(chipDaConta(allSessions.find((s) => s.name === sessionName)?.conta));
+  // Anel da conta na faixa do campo (celular): a janela mais apertada da conta da sessão, como a
+  // pílula de cota do topo do nativo (accounts/usage.rs fullest).
+  const sessaoAtual = $derived(allSessions.find((s) => s.name === sessionName));
+  const contaPior = $derived.by(() => {
+    const conta = sessaoAtual?.conta;
+    const minha = conta ? faixaDeCota(quotaFeed.contas)?.find((c) => c.id === conta) : null;
+    return minha ? piorJanela([minha], status?.model ?? null) : null;
+  });
+  $effect(() => {
+    if (desktop) return;
+    quotaFeed.retain();
+    return () => quotaFeed.release();
+  });
+  $effect(() => { if (!desktop) quotaFeed.setServidor(chatServerId ?? ''); });
 
   // Chip de loop no header: dentro do chat não havia NENHUM sinal de loop ativo (só a lista tinha
   // badge). Os campos vêm do sessionsStore (singleton refcounted — zero SSE novo); tap abre o sheet.
@@ -1953,7 +2035,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
         temMaisNoServidor = events.length >= TAIL_FIRST;
       } else {
         // O SSE abre antes desta carga: a costura preserva prefixo antigo, sufixo novo e fila local.
-        events = mergeHistoryWithLive(r.eventos, events, {
+        events = mergeAposentando(r.eventos, {
           preserveNoSeam: !registroCache?.size,
           removedIds: retiredQueuedIds,
           cachedEvents: registroCache ?? undefined,
@@ -2040,7 +2122,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
           histGap = 'unjoinable';
           return;
         }
-        events = mergeHistoryWithLive(full, events, { removedIds: retiredQueuedIds });
+        events = mergeAposentando(full, { removedIds: retiredQueuedIds });
         rebuildIndex();
         reseedDerived();
         histGap = '';
@@ -2552,7 +2634,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
       const fresh = await getHistory(sessionName, TAIL_FIRST, signal, undefined, sessionServer());
       if (g !== histGen || !alive) return;   // resposta velha/pos-destroy: NAO sobrescreve nem conecta
       const gap = !hasSeam(fresh, events);
-      events = mergeHistoryWithLive(fresh, events, {
+      events = mergeAposentando(fresh, {
         cachedEvents: before, removedIds: retiredQueuedIds,
       });
       rebuildIndex();
@@ -2853,7 +2935,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     try {
       await sendInput(sessionName, cmd, sessionServer());
     } catch (err) {
-      console.error('sendInput (command) error:', err);
+      mostrarAviso(err);
     }
   }
 
@@ -3096,7 +3178,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     try {
       await interrupt(sessionName, !!last, sessionServer());
     } catch (err) {
-      console.error('interrupt error:', err);
+      mostrarAviso(err);
     }
   }
 
@@ -3163,7 +3245,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   {/if}
   <div class="navbar-mount" bind:this={navEl}>
     {#if !splitTab}
-    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} conta={desktop ? null : contaChip} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} stateLabel={codexWaitKey ? m.chat_codex_opening() : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (ctxPanel.aba = 'atividade') : undefined} {activityBadge} {activityRunning} onOpenTerminal={botaoTerminal ? abrirTerminalReal : undefined} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? alternarNavegador : undefined} onOpenRun={desktop && !orqSession ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} conta={desktop ? null : contaChip} onContaTap={desktop ? undefined : () => (accountsOpen = true)} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} stateLabel={codexWaitKey ? m.chat_codex_opening() : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (ctxPanel.aba = 'atividade') : undefined} {activityBadge} {activityRunning} onOpenTerminal={botaoTerminal ? abrirTerminalReal : undefined} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? alternarNavegador : undefined} onOpenRun={desktop && !orqSession ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
     {/if}
   </div>
 
@@ -3444,7 +3526,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
 
   <!-- Com o painel de contexto aberto o aviso vive LÁ (faixa acionável junto do resto do estado da
        sessão), e a pill flutuante daqui seria o mesmo recado duas vezes na mesma tela. -->
-  {#if recarregarMotivo && !recargaDispensada && !avisoErr && !painelCtxAberto}
+  {#if desktop && recarregarMotivo && !recargaDispensada && !avisoErr && !painelCtxAberto}
     <!-- O processo desta sessão está desatualizado (config da conta mudou depois de ele subir).
          Discreto e só enquanto há motivo: some sozinho depois do recarregar. -->
     <div class="recarga-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} role="status">
@@ -3477,9 +3559,34 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   {/if}
 
   <div class="bottom-dock" bind:this={dockEl}>
+    {#if !desktop && recarregarMotivo && !recargaDispensada && !avisoErr && currentState !== 'dead'}
+      <!-- Celular: o aviso entra no fluxo, acima do campo, em vez de flutuar sobre a conversa. -->
+      <div class="recarga-linha" role="status">
+        <span class="recarga-linha-text">{m.recarregar_aviso_config()}</span>
+        <button class="recarga-linha-btn" onclick={recarregar} disabled={currentState !== 'idle' || recarregando}
+                title={currentState !== 'idle' ? m.modo_so_ociosa() : m.recarregar_sessao_detalhe()}>
+          {m.recarregar_agora()}
+        </button>
+        <button class="recarga-linha-x" onclick={dispensarRecarga}
+                aria-label={m.recarregar_dispensar()} title={m.recarregar_dispensar_detalhe()}>×</button>
+      </div>
+    {/if}
     {#if currentState === 'dead'}
       <div class="dead-footer">
-        <p class="dead-text">{m.chat_sessao_encerrada()}</p>
+        {#if !desktop && refRetomar}
+          <!-- Celular: o rodapé do desenho, com Retomar (no nativo, a conversa fechada vira "Recentes"). -->
+          <p class="dead-text dead-title">{m.chat_encerrada_titulo()}</p>
+          <p class="dead-text">{m.chat_encerrada_texto()}</p>
+          {#if retomarErro}<p class="dead-text dead-erro" role="alert">{retomarErro}</p>{/if}
+          <div class="dead-acoes">
+            <button class="dead-btn dead-btn--primario" onclick={() => retomar()} disabled={retomando}>
+              {retomando ? m.comum_carregando() : m.chat_retomar()}
+            </button>
+            <button class="dead-btn" onclick={() => (retomarNoutra = true)} disabled={retomando}>{m.chat_retomar_noutra()}</button>
+          </div>
+        {:else}
+          <p class="dead-text">{m.chat_sessao_encerrada()}</p>
+        {/if}
         <button class="back-btn" onclick={onBack}>{'← '}{m.comum_voltar()}</button>
       </div>
     {:else if orqSession}
@@ -3543,7 +3650,6 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
         {sessionJsonl}
         bind:inputText={composerText}
         estreito={colunaEstreita}
-        voiceBeta={codexVoiceBeta}
         sessionState={currentState}
         sugestao={composerText ? '' : sugestao}
         status={status}
@@ -3571,6 +3677,12 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
         onToggleSendToPair={() => (sendToPair = !sendToPair)}
         shellsRodando={activity.runningShells}
         onOpenActivity={() => (desktop ? (ctxPanel.aba = 'atividade') : (activityOpen = true))}
+        sessionCwd={sessaoAtual?.cwd ?? null}
+        sessionBranch={sessaoAtual?.branch ?? null}
+        accountLabel={desktop ? null : contaChip?.label ?? null}
+        accountPct={contaPior?.janela.pct ?? null}
+        accountWindow={contaPior?.janela.rotulo ?? null}
+        onOpenAccounts={() => (accountsOpen = true)}
       />
     {/if}
   </div>
@@ -3648,6 +3760,22 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
        {events} {histGap} cwd={planSession?.cwd ?? null} />
 
   <RunSheet open={runOpen} {sessionName} onClose={() => (runOpen = false)} onRunningChange={(r) => (runRunning = r)} />
+  {#if !desktop}
+    <AccountsSheet open={accountsOpen} onClose={() => (accountsOpen = false)} {sessionName}
+                   serverKey={chatServerId ?? ''}
+                   activeAccount={allSessions.find((s) => s.name === sessionName)?.conta ?? null}
+                   onSwitch={contaTrocavel ? pedirTrocaConta : undefined}
+                   blocked={!modoLivre || trocandoConta}
+                   onInterrupt={currentState === 'working' ? handleInterrupt : undefined}
+                   engineAccounts={sessionEngine ? contasMotor : null} activeEngineAccount={contaMotorAtiva}
+                   onSwitchEngineAccount={sessionEngine ? (a) => (contaMotorAlvo = a) : undefined}
+                   onOpenSettings={() => abrirConfig('contas', chatServerId ?? null)} />
+  {/if}
+  {#if !desktop}
+    <AccountsSheet open={retomarNoutra} onClose={() => (retomarNoutra = false)} {sessionName}
+                   serverKey={chatServerId ?? ''} activeAccount={ultimaInfo?.conta ?? null} blocked={false}
+                   pickOnly onPick={(dir) => retomar(dir)} />
+  {/if}
   <MoreSheet open={moreOpen} onClose={() => (moreOpen = false)}
              shortcuts={customShortcuts} onShortcut={triggerShortcut}
              projectName={projectShortcuts?.name} projectError={projectShortcutsErr}
@@ -3681,6 +3809,11 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
                   : m.conta_confirmar_msg({ conta: contaMostrada?.label ?? '' })}
                 confirmLabel={m.conta_confirmar_titulo({ conta: contaMostrada?.label ?? '' })}
                 onConfirm={executarTrocaConta} onClose={() => (contaAlvo = null)} />
+  <ConfirmSheet open={contaMotorAlvo !== null}
+                title={m.conta_confirmar_titulo({ conta: contaMotorAlvo?.label || contaMotorAlvo?.email || '' })}
+                message={m.conta_confirmar_msg({ conta: contaMotorAlvo?.label || contaMotorAlvo?.email || '' })}
+                confirmLabel={m.conta_confirmar_titulo({ conta: contaMotorAlvo?.label || contaMotorAlvo?.email || '' })}
+                onConfirm={executarTrocaContaMotor} onClose={() => (contaMotorAlvo = null)} />
   <ConfirmSheet open={pendingShortcut !== null}
                 title={pendingShortcut?.label ?? ''}
                 message={pendingShortcut?.type === 'shell' ? pendingShortcut.command : pendingShortcut?.text ?? null}
@@ -4184,6 +4317,18 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
      transparência em vez de virar retângulo chapado (regra de vidro do CLAUDE.md). */
   /* Aviso "processo desatualizado": mesmo lugar do tui-pill, sem pulsar — é sugestão, não urgência.
      Menu flutuante sobre a conversa leva fundo sólido (regra do repo), não vidro. */
+  .recarga-linha {
+    display: flex; align-items: center; gap: var(--space-2); margin: 0 var(--space-4) var(--space-2);
+    padding: 4px 4px 4px var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    background: var(--surface-raised); font-size: var(--text-xs); color: var(--text-secondary);
+  }
+  .recarga-linha-text { flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .recarga-linha-btn {
+    min-height: 44px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-md);
+    background: var(--accent-dim); color: var(--text-primary); font-size: var(--text-xs); font-weight: 600; cursor: pointer;
+  }
+  .recarga-linha-btn:disabled { opacity: 0.5; cursor: default; }
+  .recarga-linha-x { width: 44px; height: 44px; border: 0; background: transparent; color: var(--text-muted); font-size: 18px; cursor: pointer; }
   .recarga-pill {
     position: absolute;
     left: 50%;
@@ -4256,6 +4401,15 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   .aviso-err:active { background: var(--bg-hover); }
 
   /* Dead state footer */
+  .dead-title { font-weight: 600; color: var(--text-primary); }
+  .dead-erro { color: var(--error); }
+  .dead-acoes { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; }
+  .dead-btn {
+    min-height: 44px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);
+    background: transparent; color: var(--text-primary); font-size: var(--text-sm); font-weight: 600;
+  }
+  .dead-btn--primario { background: var(--accent); color: #fff; border-color: transparent; }
+  .dead-btn:disabled { opacity: 0.6; }
   .dead-footer {
     display: flex;
     flex-direction: column;

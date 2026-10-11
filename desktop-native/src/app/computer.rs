@@ -682,7 +682,7 @@ impl Hangar {
     /// O passo 3: o Jev do Computer Use é a configuração única da página Jev, aqui só a situação dela.
     fn render_computer_jev(&self, state: &ComputerState, cx: &mut Context<Self>) -> Div {
         let provider = if state.jev_endpoint.contains("openrouter.ai") { "OpenRouter".to_owned() }
-            else if state.jev_endpoint.is_empty() || state.jev_endpoint == crate::voice::jev::TYPESAFE_URL { "TypeSafe".to_owned() }
+            else if state.jev_endpoint.is_empty() || state.jev_endpoint == super::server_config::jev::TYPESAFE_URL { "TypeSafe".to_owned() }
             else { state.jev_endpoint.clone() };
         let text = if state.jev_key_set {
             tr("computer_control_jev_status").replace("{provider}", &provider).replace("{model}", &state.jev_model)

@@ -11,6 +11,8 @@ from app import guest_users, plugin_bridge, registry, runtime_config, share_stor
 from app.models import SessionInfo
 
 _log = logging.getLogger("hangar.list")
+# Uma linha de log por sessão e motivo: os fatos são pedidos a cada 1,5 s.
+_problema_avisado: set[tuple[str, str]] = set()
 
 _OTHERS = frozenset({"codex", "pi", "omp", "kimi"})
 _STATE_FIELDS = ("state", "label", "question", "options", "problema", "status_line", "pending_questions",
@@ -182,7 +184,15 @@ def _problems(infos: list[SessionInfo]) -> dict[str, str]:
     for info in infos:
         if info.provider != "claude":
             continue
-        problem = hl.problema_de(info.name) if info.headless else runtime_problem(info.name)
+        try:
+            problem = hl.problema_de(info.name) if info.headless else runtime_problem(info.name)
+        except RuntimeError as exc:
+            # Sem fato novo só para ela (derrubar os fatos de todas tirava a lista do ar), mas com rastro:
+            # um RuntimeError de outra origem não pode esconder o problema da sessão calado.
+            if (info.name, str(exc)) not in _problema_avisado:
+                _problema_avisado.add((info.name, str(exc)))
+                _log.warning("lista: problema de %s indisponível: %s", info.name, exc)
+            continue
         if problem:
             out[info.name] = problem[0]
     return out

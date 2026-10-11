@@ -80,8 +80,8 @@
       {#each git.files as f (f.path)}
         {@const slash = f.path.lastIndexOf('/')}
         <div class="git-file-row" class:danger={confirmDiscard === f.path}>
-          <input class="ct-check" type="checkbox" checked={sel.has(f.path)}
-            onchange={() => toggle(f.path)} aria-label={m.git_incluir_no_commit({ path: f.path })} />
+          <label class="ct-check-alvo"><input class="ct-check" type="checkbox" checked={sel.has(f.path)}
+            onchange={() => toggle(f.path)} aria-label={m.git_incluir_no_commit({ path: f.path })} /></label>
           <button class="git-file" disabled={!!git.busy} onclick={() => abrirDiff(f.path)} title={m.git_ver_diff()}>
             <span class="git-file-tag" data-t={fileTag(f.code)}>{rotuloTag(f.code)}</span>
             <!-- basename em destaque: o dir trunca no COMECO (direction:rtl), o basename nunca encolhe.
@@ -143,6 +143,12 @@
 
   .ct-sel-row { display: flex; gap: var(--space-2); }
   .ct-check { flex-shrink: 0; margin: 0; }
+  .ct-check-alvo { display: flex; flex-shrink: 0; }
+  /* Só no toque: esta aba também é a do desktop web (GitColuna), que fica como está. */
+  @media (pointer: coarse) {
+    .ct-check-alvo { min-height: 44px; padding: 0 8px; align-items: center; }
+    .ct-check { width: 22px; height: 22px; }
+  }
 
   .git-back {
     align-self: flex-start; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md);

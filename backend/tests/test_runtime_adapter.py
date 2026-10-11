@@ -12,7 +12,6 @@ class Coordinator:
 
     def __init__(self):
         self.calls = []
-        self.voice_clients = {}
         self.target = SimpleNamespace(phase=runtime_coordinator.Phase.Rust,
             binding=SimpleNamespace(key="key", generation=2, provider="codex", headless=True, meta={}),
             view={"key":"key","generation":2,"revision":7,"channels":{},"view":{"alive":True,"ready":True,
@@ -206,22 +205,6 @@ def test_legacy_reserve_journals_controls(tmp_path, monkeypatch):
         asyncio.run(scenario())
     finally:
         coordinator.close_python_leases()
-
-
-def test_voice_broker_virtual_client_does_not_construct_legacy_client(owner, monkeypatch):
-    from app import codex_voice_broker
-    monkeypatch.setattr(codex_voice_broker, "AppServerClient", lambda: (_ for _ in ()).throw(AssertionError("cliente paralelo")))
-    client = SimpleNamespace(virtual=True)
-    broker = codex_voice_broker.VoiceBroker(SimpleNamespace(), "session", {"runtime_voice":True, "client":client}, None)
-    assert broker.client is client
-
-
-def test_voice_stream_failure_invalidates_old_workers(owner):
-    from app.runtime_adapter import NativeVoiceClient
-    client = NativeVoiceClient(owner, "session", "call", asyncio.Queue())
-    assert client.valid()
-    client.fail(RuntimeError("gap"))
-    assert not client.valid()
 
 
 def test_steer_queue_uses_one_owner_command(owner):

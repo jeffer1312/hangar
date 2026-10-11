@@ -49,7 +49,8 @@ def _busy_pool_threads() -> list[str]:
     frames = sys._current_frames()
     labels = []
     for t in threading.enumerate():
-        if not t.name.startswith("asyncio_"):
+        # asyncio nomeia `asyncio_N`; o uvloop, que o uvicorn usa quando instalado, `ThreadPoolExecutor-N_M`.
+        if not t.name.startswith(("asyncio_", "ThreadPoolExecutor-")):
             continue
         frame = frames.get(t.ident)
         if frame is None:

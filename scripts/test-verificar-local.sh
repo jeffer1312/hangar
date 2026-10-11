@@ -22,7 +22,8 @@ caso "crates/hangar-api/src/lib.rs" "rust backend nativo" "rust"
 caso "backend/app/registry.py" "backend" "runtime"
 caso "backend/app/runtime_terminal.py" "rust backend" "rust"
 caso "frontend/src/App.svelte" "backend front" ""
-caso "packages/core/src/api.ts" "backend front mobile" ""
+caso "packages/core/src/api.ts" "backend front" ""
+caso "messages/pt.json" "backend front nativo" ""
 caso "mobile/src/App.tsx" "backend mobile" ""
 caso "desktop-native/src/main.rs" "nativo" ""
 caso "install.ps1" "backend" "runtime"
@@ -97,6 +98,17 @@ podar 1024 "deps/libdep-1.rlib deps/novo-1 deps/velho-1 incremental/x/a "
 podar 220 "deps/libdep-1.rlib deps/novo-1 deps/velho-1 "
 podar 160 "deps/libdep-1.rlib deps/novo-1 "
 podar 32 ""
+
+# Andamento: repassa tudo e só as linhas de passo vão ao arquivo, com a hora na frente.
+anda="$(mktemp)"
+saida="$(printf '>> linux: rust…\ncompilando\n<< linux: rust 12s ok\n' | "$V" --marcar "$anda")"
+[[ "$saida" == $'>> linux: rust…\ncompilando\n<< linux: rust 12s ok' ]] || { echo "FALHOU --marcar não repassou a entrada: \"$saida\""; falhou=1; }
+[[ "$(sed 's/^[0-9]* //' "$anda" | tr '\n' '|')" == ">> linux: rust…|<< linux: rust 12s ok|" ]] || \
+    { echo "FALHOU --marcar gravou: \"$(cat "$anda")\""; falhou=1; }
+# Última linha que não é de passo (o resumo do Windows): o filtro sai com 0, senão a VM conta como falha.
+printf '<< windows: rust ok\n  ok      rust 1s\n' | "$V" --marcar "$anda" > /dev/null || \
+    { echo "FALHOU --marcar saiu com erro numa última linha que não é de passo"; falhou=1; }
+rm -f "$anda"
 
 (( falhou )) && exit 1
 echo "ok: classificação do verificar-local"

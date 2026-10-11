@@ -3,7 +3,8 @@ use std::{io,time::Duration};
 use tokio::process::{Child,Command};
 
 /// Autoridade do servidor que nenhum programa auxiliar (CLI de conta, ffmpeg) deve herdar.
-pub(crate) const PRIVATE_ENV_KEYS: [&str; 4] = ["HANGAR_INTERNAL_SECRET", "CP_AUTH_TOKEN", "HANGAR_RUNTIME_INSTANCE", "HANGAR_PLUGIN_TOKEN"];
+pub(crate) const PRIVATE_ENV_KEYS: [&str; 6] = ["HANGAR_INTERNAL_SECRET", "CP_AUTH_TOKEN", "HANGAR_RUNTIME_INSTANCE", "HANGAR_PLUGIN_TOKEN",
+    "HANGAR_SERVER_LISTEN", "HANGAR_SERVER_UPSTREAM"];
 
 pub(crate) trait OwnedTree: Send {
     fn terminate(&mut self)->io::Result<()>;

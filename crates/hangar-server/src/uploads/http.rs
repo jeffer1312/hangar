@@ -313,18 +313,23 @@ async fn execute(
         Ok(v) => v,
         Err(()) => return response(json!({"detail":"valor booleano inválido"}), 422),
     };
+    let width = match crate::thumbnail::parse_width(query.get("w")) {
+        Ok(w) => w,
+        Err(r) => return r,
+    };
     let (session, name) = (facts.session.clone(), filename.to_owned());
     let (path, file) = match blocking(move || store.open(&project, &session, &name)).await {
         Ok(v) => v,
         Err(e) => return storage_error(e, false),
     };
     let head = *req.method() == Method::HEAD;
-    let mut response = crate::workspace_routes::serve_open_file(
+    let mut response = crate::thumbnail::serve(
         tokio::fs::File::from_std(file),
         &path,
         req.headers(),
         download,
         Some(&facts.media),
+        width,
     )
     .await;
     if head {

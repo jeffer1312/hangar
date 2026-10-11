@@ -63,14 +63,9 @@ export interface CodexOpcoes {
   modelos: { model: string; default: number; max: number }[];
 }
 
-export function codexVoiceUrlForServer(server: Server, name: string, origin: string): string {
+export function liveVoiceUrlForServer(server: Server, origin: string): string {
   const base = (baseOf(server) || origin).replace(/\/$/, '').replace(/^http/, 'ws');
-  return `${base}/api/sessions/${encodeURIComponent(name)}/codex/voice?${new URLSearchParams({ token: server.token })}`;
-}
-
-export async function getCodexVoicesForServer(server: Server, name: string): Promise<string[]> {
-  const result = await apiFetchForServer<{ voices: string[] }>(server, `/api/sessions/${encodeURIComponent(name)}/codex/voices`);
-  return result.voices;
+  return `${base}/api/voice?${new URLSearchParams({ token: server.token })}`;
 }
 
 export function codexOpcoes(
@@ -109,9 +104,10 @@ export function transcriptImageUrl(name: string, id: string, idx: number, server
 
 // URL pra servir um arquivo CITADO na conversa (video/html/pdf/img por caminho). `?token` p/ <img>/
 // <video>/<iframe> (sem header). O backend so serve se o path estiver no transcript da sessao.
-export function fileUrl(name: string, path: string, download = false, server?: Server | null): string {
+// `width`: miniatura reduzida no servidor (o original continua sendo o padrao).
+export function fileUrl(name: string, path: string, download = false, server?: Server | null, width?: number): string {
   const t = (server ? server.token : apiEnv().getToken()) ?? '';
-  return `${server ? baseOf(server) : apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}&token=${encodeURIComponent(t)}${download ? '&download=1' : ''}`;
+  return `${server ? baseOf(server) : apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}&token=${encodeURIComponent(t)}${download ? '&download=1' : ''}${width ? `&w=${width}` : ''}`;
 }
 
 // URL nativa (sem token na query) — para WebView/Image nativo que manda Authorization header.
@@ -128,9 +124,9 @@ export function fileAuthHeader(server?: Server): Record<string, string> {
 
 // URL de uma imagem ENVIADA do phone (upload), servida do cofre (~/.hangar/uploads/<projeto>/<sessão>/).
 // `?token` igual as de cima: <img> nao manda header Authorization e cross-origin nao leva cookie.
-export function uploadUrl(name: string, filename: string, download = false, server?: Server | null): string {
+export function uploadUrl(name: string, filename: string, download = false, server?: Server | null, width?: number): string {
   const t = (server ? server.token : apiEnv().getToken()) ?? '';
-  return `${server ? baseOf(server) : apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}?token=${encodeURIComponent(t)}${download ? '&download=1' : ''}`;
+  return `${server ? baseOf(server) : apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}?token=${encodeURIComponent(t)}${download ? '&download=1' : ''}${width ? `&w=${width}` : ''}`;
 }
 
 export function uploadUrlNative(name: string, filename: string, server?: Server): string {
@@ -780,6 +776,8 @@ export interface CreateSessionBody {
   // Conta ChatGPT do CLIProxyAPI local (só Claude com motor) e Fast (`priority`) da sessão nova.
   engine_account?: string;
   service_tier?: 'default' | 'priority';
+  // Plugins e skills só desta sessão: a diferença do padrão do catálogo (só Claude, sessão nova).
+  claude_customizations?: ClaudeCustomizationDelta;
   // Branch já existente (local ou remota) em que a sessão nasce; vazio = a atual da pasta.
   branch?: string | null;
   // Com new_branch, `branch` é a branch NOVA criada a partir de `base` (vazio = a atual da pasta).
@@ -787,7 +785,7 @@ export interface CreateSessionBody {
   base?: string | null;
 }
 
-export type SessionOpeningExtras = Pick<CreateSessionBody, 'engine_account' | 'service_tier'>;
+export type SessionOpeningExtras = Pick<CreateSessionBody, 'engine_account' | 'service_tier' | 'claude_customizations'>;
 
 export function buildCreateSessionBody(body: CreateSessionBody): CreateSessionBody {
   const { codex_account, branch, new_branch, base, ...rest } = body;
@@ -821,6 +819,22 @@ function withCreationWarnings<T extends { avisos?: string[] }>(result: T): T {
     catch (error) { console.error('onSessionWarnings:', error); }
   }
   return result;
+}
+
+// GET /api/claude/customizations: plugins e skills da conta naquela pasta (dto.rs do nativo).
+export interface ClaudeSkill { name: string; description?: string; enabled: boolean; blocked?: boolean }
+export interface ClaudePlugin { id: string; name: string; description?: string; enabled: boolean; skills: ClaudeSkill[] }
+export interface ClaudeCustomizations { plugins: ClaudePlugin[]; skills: ClaudeSkill[]; warnings?: string[] }
+export interface ClaudeCustomizationDelta { plugins: Record<string, boolean>; skills: Record<string, boolean>; blocked_skills: string[] }
+export function getClaudeCustomizationsForServer(s: Server, cwd: string, configDir?: string | null): Promise<ClaudeCustomizations> {
+  const q = new URLSearchParams({ cwd, ...(configDir ? { config_dir: configDir } : {}) });
+  return apiFetchForServer(s, `/api/claude/customizations?${q}`, undefined, 20_000);
+}
+
+// POST /api/claude/defaults (Rust, claude_defaults.rs): grava no settings.json do principal da máquina.
+export interface ClaudeDefaultsBody { model?: string | null; effort?: string | null; permission?: string | null }
+export function setClaudeDefaultsForServer(s: Server, body: ClaudeDefaultsBody): Promise<{ ok: boolean; written: string[] }> {
+  return apiFetchForServer(s, '/api/claude/defaults', { method: 'POST', body: JSON.stringify(body) });
 }
 
 export function createSessionForServer(server: Server, body: CreateSessionBody): Promise<SessionInfo> {
@@ -1184,6 +1198,19 @@ export async function folderGitActionForServer(server: Server, cwd: string, acti
   return apiFetchForServer(server, `/api/fs/git/${action}`, { method: 'POST', body }, FOLDER_ACTION_MS);
 }
 
+// Troca e criação de branch da pasta (create/folder_git.rs). Erro sai com `code`: a recusa
+// `erro_git_folder_sessions` pede confirmação e reenvio com confirmSessions.
+export async function folderGitSwitchForServer(server: Server, cwd: string, branch: string, confirmSessions = false, root?: string): Promise<FolderGit> {
+  const body = JSON.stringify({ root: await folderRoot(server, cwd, undefined, root), path: cwd, branch, confirm_sessions: confirmSessions });
+  return apiFetchForServer(server, '/api/fs/git/switch', { method: 'POST', body }, FOLDER_ACTION_MS, true);
+}
+export async function folderGitBranchForServer(server: Server, cwd: string, name: string,
+  opts: { checkout: boolean; base?: string; confirmSessions?: boolean }, root?: string): Promise<FolderGit> {
+  const body = JSON.stringify({ root: await folderRoot(server, cwd, undefined, root), path: cwd, name, checkout: opts.checkout,
+    confirm_sessions: !!opts.confirmSessions, ...(opts.base ? { base: opts.base } : {}) });
+  return apiFetchForServer(server, '/api/fs/git/branch', { method: 'POST', body }, FOLDER_ACTION_MS, true);
+}
+
 export interface WorktreeChoice { branch: string; new_branch?: boolean; base?: string | null }
 export interface WorktreeStatus {
   path: string; repo: string; exists: boolean; branch: string | null; base: string | null;
@@ -1266,8 +1293,12 @@ export function mergedWorktreeBatch(r: WorktreeRepo): { deletable: WorktreeStatu
   };
 }
 
-export async function getWorktreesForServer(server: Server, signal?: AbortSignal): Promise<WorktreeRepo[]> {
-  const r = await apiFetchForServer<{ repos: WorktreeRepo[] }>(server, '/api/worktrees',
+export async function getWorktreesForServer(server: Server, signal?: AbortSignal,
+  opts?: { repo?: string; sizes?: boolean }): Promise<WorktreeRepo[]> {
+  // Com `repo`, só as worktrees daquela pasta; `sizes: false` pula o `du`, que é o que demora.
+  const q = opts ? '?' + new URLSearchParams({ ...(opts.repo ? { repo: opts.repo } : {}),
+    ...(opts.sizes === false ? { sizes: 'false' } : {}) }) : '';
+  const r = await apiFetchForServer<{ repos: WorktreeRepo[] }>(server, `/api/worktrees${q}`,
     { signal: comTeto(signal, FOLDER_READ_MS) }, FOLDER_READ_MS);
   return r.repos;
 }
@@ -2867,6 +2898,8 @@ export interface ModelOptionsResponse {
   engine: string | null;
   effort?: string | null;
   models: ModelOption[];
+  // O que vale na sessão agora: o sufixo `[1m]` do model diz se a janela de 1M está ligada.
+  current?: { model?: string | null; service_tier?: string | null };
 }
 
 /**
@@ -2943,6 +2976,15 @@ export function setEngineModel(
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/engine/model`, {
     method: 'POST',
     body: JSON.stringify(body),
+  });
+}
+
+// Fast da sessão viva (POST .../service-tier); `priority` liga, `default` volta ao padrão da conta.
+export function setServiceTier(name: string, tier: 'default' | 'priority', server?: Server | null): Promise<{ ok: boolean; service_tier: string }> {
+  _invalidarCatalogo(name);
+  return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/service-tier`, {
+    method: 'POST',
+    body: JSON.stringify({ service_tier: tier }),
   });
 }
 
@@ -3513,6 +3555,14 @@ export function listAccountTargets(name: string, server?: Server | null): Promis
 }
 
 /** Continua a mesma conversa noutra conta Claude (`path` de `listAccountTargets`). Só ociosa (409 com o motivo). */
+// Sessão com motor GPT do proxy: troca a conta ChatGPT (o nativo, confirm_engine_account).
+export function setSessionEngineAccount(name: string, account: string, server?: Server | null): Promise<{ ok: boolean }> {
+  return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/conta`, {
+    method: 'POST',
+    body: JSON.stringify({ engine_account: account }),
+  });
+}
+
 export function setSessionAccount(name: string, configDir: string, server?: Server | null): Promise<{ ok: boolean; config_dir: string }> {
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/conta`, {
     method: 'POST',

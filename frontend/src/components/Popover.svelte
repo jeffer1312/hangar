@@ -31,7 +31,8 @@
     if (!anchor) return;
     const r = anchor.getBoundingClientRect();
     const margem = 8;
-    const larg = Math.max(width ?? r.width, 260);
+    // Nunca mais larga que a tela: 340px estourava em celular de 320–355px.
+    const larg = Math.min(Math.max(width ?? r.width, 260), window.innerWidth - 2 * margem);
     const gap = 6;                                   // respiro entre a caixa e a pill
     const abaixo = window.innerHeight - r.bottom - margem - gap;
     const acima = r.top - margem - gap;              // espaco ATE O TOPO da pill, nao ate o fundo

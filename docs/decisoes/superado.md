@@ -177,3 +177,26 @@ haver prova real do Codex no Rust: o dono era fixo pelo provedor, o `matar_orfao
 varria os canos e o `-32601` valia para todo pedido do servidor sem tela. Hoje o Rust sobe, religa
 e mata o cano, responde os pedidos (o `-32601` ficou só para os sem tela) e atende as rotas só do Codex; o Python faz isso apenas no modo
 `python` (Rust ausente). Codex com terminal continua no Python até a 5C.
+
+## Voz Codex no web, por sessão
+
+(10/09/2026 até 10/10/2026 → [voz ao vivo no
+hangar-server](harnesses.md#voz-ao-vivo-no-hangar-server-10102026).) `codex_voice.py`,
+`codex_voice_broker.py`, `CodexVoice.svelte` e `lib/codexVoice.ts`: o botão **Voz · Beta** no
+compositor de uma sessão Codex usava a conta e o `app-server` daquela sessão, com uma chamada por
+sessão. O WebSocket do Hangar só levava sinalização e a posse da chamada (heartbeat com prazo). A
+conversa rodava numa thread efêmera organizadora; a thread de trabalho só recebia o pedido
+consolidado depois de confirmação noutra interação (rascunho imutável, revisão mudava o ID,
+repetição não reenviava, entrega pela fila durável). Shell, apps, hooks e MCPs ficavam desligados
+no organizador; modelo da sessão, esforço baixo. A voz escolhida ficava em `cp_codex_voice`, por
+navegador.
+
+Medições que continuam valendo como história: no CLI 0.154.0, WebRTC com `version: "v3"` negociou
+com login ChatGPT Pro, o transporte WebSocket do Codex exigiu API key e o WebRTC padrão foi
+recusado por versão do protocolo; `HandoffRequested` encaminhava a transcrição da última fala antes
+de avisar o cliente; só trocar o prompt não resolveu o envio de fragmentos; `appendText` sozinho
+adicionava contexto, mas não falava (o organizador passou a usar `appendSpeech`). Verificado com
+faixa silenciosa no navegador: ICE/DTLS conectados, silenciar desabilitava a track, desmontar
+encerrava track e peer; dois turnos de organização com entrada silenciosa devolveram "A sessão
+respondeu: pinguim azul". Saiu porque a voz passou a ser uma só por servidor, seguindo a tela em
+vez de presa a uma sessão Codex.

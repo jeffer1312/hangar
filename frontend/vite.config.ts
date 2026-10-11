@@ -172,6 +172,9 @@ export default defineConfig({
       // sistema (navigator.languages); sem nada disso, cai no en (o baseLocale). E o que faz
       // "Seguir o sistema" ser so apagar a chave do localStorage.
       strategy: ['localStorage', 'preferredLanguage', 'baseLocale'],
+      // Um módulo por idioma, igual ao i18n:compile: um por mensagem são ~8 mil arquivos, que o
+      // vitest transforma de novo em cada arquivo de teste. O bundle sai do mesmo tamanho.
+      outputStructure: 'locale-modules',
     }),
     svelte(),
     VitePWA({

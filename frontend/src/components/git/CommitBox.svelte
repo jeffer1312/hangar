@@ -75,9 +75,9 @@
     <p class="cb-hint">{m.git_branch_cria_da_atual()}</p>
   {/if}
   <div class="cb-actions">
-    <button class="cb-btn" disabled={!canCommit} onclick={() => doCommit(false)}>Commit</button>
+    <button class="cb-btn" disabled={!canCommit} onclick={() => doCommit(false)}>{m.git_commit()}</button>
     {#if !amend}
-      <button class="cb-btn primary" disabled={!canCommit} onclick={() => doCommit(true)}>Commit &amp; Push</button>
+      <button class="cb-btn primary" disabled={!canCommit} onclick={() => doCommit(true)}>{m.git_commit_push()}</button>
     {/if}
   </div>
 </div>
@@ -103,4 +103,13 @@
     background: var(--surface-raised); color: var(--text-secondary); font-size: var(--text-sm); cursor: pointer; }
   .cb-btn.primary { background: var(--accent); color: var(--bg-base); border-color: var(--accent); }
   .cb-btn:disabled { opacity: 0.5; cursor: default; }
+  /* Só no toque: o CommitBox também mora na coluna Git do desktop web, que fica como está. */
+  @media (pointer: coarse) {
+    .cb-opt { min-height: 44px; padding: 0 8px; }
+    .cb-opt input { width: 22px; height: 22px; margin: 0; }
+    /* Desabilitado com opacidade sobre o accent ainda parecia apertável. */
+    .cb-btn:disabled, .cb-btn.primary:disabled {
+      opacity: 1; background: var(--fill-subtle); color: var(--text-muted); border-color: var(--border-default);
+    }
+  }
 </style>

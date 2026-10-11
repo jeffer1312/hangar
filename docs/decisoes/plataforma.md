@@ -711,8 +711,10 @@ Computer Use (`jev_windows_api_key`, gravada só no `env` do MCP) saiu: duas cha
 diferentes eram a confusão da tela, e com chave do OpenRouter o Computer Use respondia 401 porque
 tinha a TypeSafe fixa.
 
-- **Uma regra de destino, em três cópias que precisam casar:** `runtime_config.destino_jev`
-  (Python), `voice::jev::destination` (nativo) e `jev_config` do `orq.py`. OpenRouter quando o
+- **Uma regra de destino, em quatro cópias que precisam casar:** `runtime_config.destino_jev`
+  (Python), `destination` em `crates/hangar-server/src/voice/jev.rs` (voz, que saiu do nativo para
+  o servidor em 10/10/2026), `jev::destination` em `desktop-native/src/app/server_config.rs` (tela
+  do Jev no nativo) e `jev_config` do `orq.py`. OpenRouter quando o
   endereço é dele ou, sem endereço, quando a chave começa com `sk-or-`. Padrões: TypeSafe
   `https://api.typesafe.ai/v1/systemone` + `jev-latest`; OpenRouter
   `https://openrouter.ai/api/alpha/decisions` + `~typesafe/jev-latest`. No OpenRouter,

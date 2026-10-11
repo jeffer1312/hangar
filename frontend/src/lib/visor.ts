@@ -4,6 +4,7 @@
 import type BiggerPictureCtor from 'bigger-picture/vanilla';
 import * as m from '../paraglide/messages';
 import { closeViewerHistory, openViewerHistory, waitForViewerHistory } from './viewerHistory';
+import { saveFile } from './saveFile';
 
 // Visor de midia do app inteiro: chat, anexo de arquivo e folha de Anexos abrem POR AQUI.
 //
@@ -135,13 +136,16 @@ export function obterInstancia() {
  * height o item nasce com `width: 0px; height: 0px` e o visor abre VAZIO — sem erro nenhum, o que
  * custou meia hora de "por que a imagem nao aparece".
  */
-function medir(el?: HTMLElement) {
+function medir(el: HTMLElement | undefined, url: string) {
   const img = el?.querySelector('img') as HTMLImageElement | null;
-  if (img?.naturalWidth) return { width: img.naturalWidth, height: img.naturalHeight };
+  // Miniatura reduzida no servidor (`w=`) tem a proporção mas não o tamanho do original.
+  if (img?.naturalWidth && img.src === new URL(url, location.href).href) return { width: img.naturalWidth, height: img.naturalHeight };
   const video = el?.querySelector('video') as HTMLVideoElement | null;
   if (video?.videoWidth) return { width: video.videoWidth, height: video.videoHeight };
   return null;
 }
+
+const TAMANHO_PROVISORIO = { width: 1600, height: 1200 };
 
 /** Mede carregando de fato — plano B de quando a miniatura ainda nao tem tamanho. Cai no cache do
  *  browser (mesma url da miniatura), entao na pratica resolve na hora. */
@@ -152,7 +156,7 @@ function medirCarregando(url: string): Promise<{ width: number; height: number }
     // Erro ou midia sem dimensao (video/audio, que nao carregam como <img>): um retangulo razoavel
     // e melhor que zero — mas quem NAO carregar de verdade aparece dito na faixa, pelo onError da
     // lib; sem isso um anexo expirado abria como retangulo cinza e ninguem sabia por que.
-    img.onerror = () => resolve({ width: 1600, height: 1200 });
+    img.onerror = () => resolve(TAMANHO_PROVISORIO);
     img.src = url;
   });
 }
@@ -193,9 +197,20 @@ export async function abrirVisor(midias: MidiaVisor[], inicio: number, acao?: Ac
 
 async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoVisor) {
   if (!midias.length) return;
-  const tamanhos = await Promise.all(
-    midias.map(async (x) => medir(x.element) ?? (await medirCarregando(x.url))),
-  );
+  // Só a tocada espera o original: medir todas baixava cada foto da conversa antes de abrir. As
+  // outras entram com o tamanho provisório e são medidas quando viram vizinhas da que está aberta.
+  const tamanhos = midias.map((x) => medir(x.element, x.url));
+  if (!tamanhos[inicio]) tamanhos[inicio] = await medirCarregando(midias[inicio].url);
+  const items = midias.map((x, i) => paraItem(x, tamanhos[i] ?? TAMANHO_PROVISORIO, i));
+  const semMedida = new Set(midias.flatMap((_, i) => (tamanhos[i] ? [] : [i])));
+  // A lib guarda os nossos objetos e lê width/height só ao montar o item, então mudar o objeto
+  // antes de o visor chegar nele basta. Vizinhas porque são as que a lib já pré-carrega.
+  const medirVizinhas = (i: number) => {
+    for (const j of [i - 1, i + 1].map((k) => (k + midias.length) % midias.length)) {
+      if (!semMedida.delete(j)) continue;
+      void medirCarregando(midias[j].url).then((t) => Object.assign(items[j], t));
+    }
+  };
   const bp = await obterInstancia();
   await waitForViewerHistory();
   let faixa: HTMLElement | null = null;
@@ -214,10 +229,32 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
     if (!faixa || !midia) return;
     const nome = faixa.querySelector('.visor-nome');
     const meta = faixa.querySelector('.visor-meta');
-    const baixar = faixa.querySelector<HTMLAnchorElement>('.visor-baixar');
+    const baixar = faixa.querySelector<HTMLButtonElement>('.visor-baixar');
     if (nome) nome.textContent = midia.nome;
     if (meta) meta.textContent = midia.meta ?? '';
-    if (baixar) { baixar.href = midia.url; baixar.download = midia.nome; }
+    if (baixar) mostrarBaixar(baixar, 'idle');
+  };
+
+  const mostrarBaixar = (botao: HTMLButtonElement, estado: 'idle' | 'busy' | 'again' | 'failed') => {
+    botao.disabled = estado === 'busy';
+    botao.textContent = estado === 'busy' ? '…' : estado === 'again' ? m.save_file_tap_again() : '⤓';
+    botao.title = estado === 'failed' ? m.save_file_failed() : m.visor_baixar();
+    botao.setAttribute('aria-label', botao.title);
+    const meta = faixa?.querySelector('.visor-meta');
+    if (meta && estado === 'failed') meta.textContent = m.save_file_failed();
+  };
+
+  const salvarAtual = async (botao: HTMLButtonElement) => {
+    const midia = midias[atual];
+    if (!midia) return;
+    mostrarBaixar(botao, 'busy');
+    try {
+      const r = await saveFile(midia.url, midia.nome);
+      mostrarBaixar(botao, r === 'tap-again' ? 'again' : 'idle');
+    } catch (e) {
+      console.error('viewer: save failed', e);
+      mostrarBaixar(botao, 'failed');
+    }
   };
 
   // A lib nao diz o indice no onUpdate, so o item — e o item e o objeto que devolvemos em paraItem,
@@ -225,7 +262,7 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
   const indiceDe = (item: { idx?: number }) => (typeof item?.idx === 'number' ? item.idx : -1);
 
   const options: Parameters<typeof bp.open>[0] = {
-    items: midias.map((x, i) => paraItem(x, tamanhos[i], i)),
+    items,
     position: inicio,
     onOpen(container) {
       // Esc fecha o VISOR, nao a folha atras dele. Precisa ser na CAPTURA: o BottomSheet tambem
@@ -244,10 +281,10 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
       meta.className = 'visor-meta';
       const acoes = document.createElement('span');
       acoes.className = 'visor-acoes';
-      const baixar = document.createElement('a');
+      const baixar = document.createElement('button');
+      baixar.type = 'button';
       baixar.className = 'visor-btn visor-baixar';
-      baixar.title = m.visor_baixar();
-      baixar.textContent = '⤓';
+      baixar.addEventListener('click', () => void salvarAtual(baixar));
       acoes.append(baixar);
       if (acao) {
         const botao = document.createElement('button');
@@ -269,10 +306,14 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
       soltarArrasto = ligarArrastoPraBaixo(wrap, () => bp.close());
       trocarArrasto(soltarArrasto);
       pintar(inicio);
+      medirVizinhas(inicio);
     },
     onUpdate(_container, item) {
       const i = indiceDe(item as { idx?: number });
-      if (i >= 0) pintar(i);
+      if (i >= 0) {
+        pintar(i);
+        medirVizinhas(i);
+      }
     },
     onError() {
       // A midia nao carregou (anexo expirado, servidor fora). Sem isto o visor abre um retangulo

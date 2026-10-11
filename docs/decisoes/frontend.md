@@ -3,6 +3,26 @@
 Decisões medidas, com data e número. O `CLAUDE.md` carrega a regra;
 a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 
+## Paraglide compila um módulo por idioma (11/10/2026)
+
+Regra: toda compilação do Paraglide (`i18n:compile` do core, do front e o `i18n:compile:core` do
+mobile, e o plugin do `vite.config.ts`) usa `locale-modules`. As duas formas escrevem na mesma pasta;
+misturar faz uma desfazer a outra.
+
+Medido na árvore do `verificar-local`, `vitest --maxWorkers=4`, Node 22:
+
+| Suíte | Um módulo por mensagem | Um por idioma |
+|---|---|---|
+| `@hangar/core` (59 arquivos) | 101 s (import 374 s somados) | 23 s (import 55 s) |
+| `frontend` (188 arquivos) | 833 s (import 3004 s) | 252 s (import 687 s) |
+| Arquivos gerados (core + front) | ~15.800 | 27 |
+| Bundle principal do `vite build` | 3,77 MiB, gzip 1,06 MiB | 3,77 MiB, gzip 1,03 MiB |
+
+O padrão `message-modules` existe para descartar mensagens não usadas no bundle, mas o app usa quase
+todas, e o bundle não mudou. O custo estava nos testes: cada arquivo de teste importa algum módulo com
+`m.*()`, e o vitest, que isola cada arquivo, transformava e carregava os ~8 mil módulos de novo.
+O build do Expo com o core nesse formato não foi conferido.
+
 ## Resize não é encolhimento de conteúdo na lista nativa (05/10/2026)
 
 A compensação do fim (`ListState::hold_tail`, teto de 160 px) compara alturas antes e depois de

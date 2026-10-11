@@ -583,8 +583,9 @@
                 ? img.filenames.slice(0, Math.max(0, img.filenames.length - ev.image_count))
                 : img.filenames)
             : []}
-          {@const srcs = [...enviadas.map((f) => uploadUrl(sessionName, f, false, sessionServer())),
-                          ...Array.from({ length: ev.image_count }, (_, i) => imageUrl ? imageUrl(ev.id, i) : transcriptImageUrl(sessionName, ev.id, i, sessionServer()))]}
+          {@const doTranscript = Array.from({ length: ev.image_count }, (_, i) => imageUrl ? imageUrl(ev.id, i) : transcriptImageUrl(sessionName, ev.id, i, sessionServer()))}
+          {@const srcs = [...enviadas.map((f) => uploadUrl(sessionName, f, false, sessionServer())), ...doTranscript]}
+          {@const thumbs = [...enviadas.map((f) => uploadUrl(sessionName, f, false, sessionServer(), 192)), ...doTranscript]}
           {#if peer}
             <!-- Recado de sessao-irma COM captura: continua sendo recado (chip "de: X", markdown),
                  so que com as miniaturas em cima. Sem este ramo a foto vencia e o recado saia
@@ -593,7 +594,7 @@
                         onForward={onForward ? () => onForward(forwardText) : null}
                         onOpenPeer={onOpenSession ? () => onOpenSession(peer.from) : null} />
           {:else}
-            <ImageBubble caption={img ? img.caption : ev.text ?? ''} {srcs} />
+            <ImageBubble caption={img ? img.caption : ev.text ?? ''} {srcs} {thumbs} />
           {/if}
         {:else if ev.id.startsWith('queued-') || ev.id.startsWith('held:')}
           <!-- Msg da fila durável ("queued-") ou recado preso em entrega bloqueada ("held:", o
@@ -604,7 +605,8 @@
                que mandou — falha tem que aparecer, nao sumir. -->
           <div class="queued-row" class:dim={working && !ev.desistiu}>
             {#if imgFotos}
-              <ImageBubble caption={imgFotos.caption} srcs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f, false, sessionServer()))} />
+              <ImageBubble caption={imgFotos.caption} srcs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f, false, sessionServer()))}
+                           thumbs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f, false, sessionServer(), 192))} />
             {:else if bastao}
               <!-- O kick-off da passagem chega SEMPRE por aqui: quem o entrega é a fila durável, e
                    não o terminal. Sem este ramo o cartão só existiria no caso que nunca acontece. -->
@@ -635,7 +637,8 @@
         {:else if sub}
           <SubagenteCard {sub} cru={ev.text ?? ''} ts={ev.ts} />
         {:else if imgFotos}
-          <ImageBubble caption={imgFotos.caption} srcs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f, false, sessionServer()))} />
+          <ImageBubble caption={imgFotos.caption} srcs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f, false, sessionServer()))}
+                           thumbs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f, false, sessionServer(), 192))} />
         {:else if bastao}
           <!-- Passagem de bastão: cartão com os dois passos e os dois avisos do kick-off. O recado
                inteiro continua no bloco fechado do cartão. -->
@@ -729,7 +732,8 @@
       {@const pimg = pimg0 && pimg0.filenames.length ? pimg0 : null}
       <div class="pending-bubble" class:solid={p.solid}>
         {#if pimg}
-          <ImageBubble caption={pimg.caption} srcs={pimg.filenames.map((f) => uploadUrl(sessionName, f, false, sessionServer()))} />
+          <ImageBubble caption={pimg.caption} srcs={pimg.filenames.map((f) => uploadUrl(sessionName, f, false, sessionServer()))}
+                       thumbs={pimg.filenames.map((f) => uploadUrl(sessionName, f, false, sessionServer(), 192))} />
         {:else}
           <UserBubble text={p.text} ts={undefined} />
         {/if}

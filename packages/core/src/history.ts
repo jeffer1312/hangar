@@ -6,6 +6,7 @@
 // real) volta, porque so acrescentamos ids ausentes — nunca reconstruimos a lista a partir do que
 // veio do backend.
 import type { ChatEvent } from './types';
+import { donoDaLinha } from './covers';
 
 export function queuedMessages(events: ChatEvent[], provider?: string | null, headless = false): ChatEvent[] {
   // Codex e Claude sem terminal: a fila é do processo, entregue não conta mais como espera.
@@ -53,6 +54,28 @@ export function appendTail(tail: ChatEvent[], current: ChatEvent[]): ChatEvent[]
   return fresh.length ? [...current, ...fresh] : current;
 }
 
+/** Mensagem real que chegou pelo REST aposenta a bolha da fila dona da linha, como o caminho do SSE
+ *  (Chat.svelte). Só reais que não estavam na tela, e só bolhas enfileiradas antes dela; a real cuja
+ *  bolha o Chat já aposentou (`retiredBefore`) não leva outra junto. */
+function retireQueuedCoveredBy(events: ChatEvent[], fresh: ReadonlySet<string>, retiredBefore: ChatEvent[]):
+  { events: ChatEvent[]; retired: string[] } {
+  let out = events;
+  const retired: string[] = [];
+  let pending = retiredBefore.filter((e) => !!e.text);
+  for (const real of events) {
+    if (real.kind !== 'user_msg' || !real.text || real.id.startsWith('queued-') || !fresh.has(real.id)) continue;
+    const consumed = donoDaLinha(real.text, pending.map((e) => e.text!));
+    if (consumed >= 0) { pending = pending.filter((_, i) => i !== consumed); continue; }
+    const filas = out.flatMap((e, i) => (e.kind === 'user_msg' && e.id.startsWith('queued-') && e.text
+      && (real.ts == null || e.queued_ts == null || real.ts >= e.queued_ts) ? [{ i, text: e.text }] : []));
+    const dono = donoDaLinha(real.text, filas.map((f) => f.text));
+    if (dono < 0) continue;
+    retired.push(out[filas[dono].i].id);
+    out = [...out.slice(0, filas[dono].i), ...out.slice(filas[dono].i + 1)];
+  }
+  return { events: out, retired };
+}
+
 /** Junta a cauda REST com eventos que o SSE já colocou na tela durante a mesma carga. */
 export function mergeHistoryWithLive(
   history: ChatEvent[],
@@ -63,8 +86,25 @@ export function mergeHistoryWithLive(
     cachedEvents?: ReadonlySet<ChatEvent>;
   } = {},
 ): ChatEvent[] {
+  return mergeHistoryWithLiveRetiring(history, current, options).events;
+}
+
+/** Igual ao `mergeHistoryWithLive`, devolvendo também as bolhas da fila aposentadas: quem chama as
+ *  soma ao que já retirou, para a reconexão do SSE não devolvê-las. */
+export function mergeHistoryWithLiveRetiring(
+  history: ChatEvent[],
+  current: ChatEvent[],
+  options: {
+    preserveNoSeam?: boolean;
+    removedIds?: ReadonlySet<string>;
+    cachedEvents?: ReadonlySet<ChatEvent>;
+  } = {},
+): { events: ChatEvent[]; retired: string[] } {
   const removed = options.removedIds ?? new Set<string>();
+  const retiredBefore = current.filter(e => removed.has(e.id) && e.id.startsWith('queued-'));
   const clean = history.filter(e => !removed.has(e.id));
+  const onScreen = new Set(current.map(e => e.id));
+  const fresh = new Set(clean.filter(e => !onScreen.has(e.id)).map(e => e.id));
   current = current.filter(e => !removed.has(e.id));
   let merged: ChatEvent[];
   if (!hasSeam(clean, current)) {
@@ -96,5 +136,5 @@ export function mergeHistoryWithLive(
     }
     merged.push(...current.slice(cursor).filter(e => !historyIds.has(e.id)));
   }
-  return merged.filter(e => !removed.has(e.id));
+  return retireQueuedCoveredBy(merged.filter(e => !removed.has(e.id)), fresh, retiredBefore);
 }

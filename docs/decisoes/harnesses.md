@@ -477,9 +477,30 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   pura: é limite da reserva sem Rust e do Windows. Ver
   [régua com o nome da sessão](#régua-com-o-nome-da-sessão-06102026).
 
-- **Voz no app nativo:** WebRTC do próprio nativo (o transporte websocket do realtime recusa login
-  ChatGPT); envio só a partir de fala do usuário, com espera de 1,5 s cancelada se ele voltar a
-  falar. Medição em "Voz no app nativo".
+- **Voz ao vivo roda no `hangar-server`, e o áudio fica no aparelho.** Organizador, regras e
+  ferramentas de sessão moram em `crates/hangar-server/src/voice/`; o aparelho (nativo ou PWA no
+  celular) só fala, ouve e atende as ferramentas de tela. O servidor só repassa a oferta e a
+  resposta WebRTC do `codex app-server` dele; nada de áudio passa por ele.
+  - **Só o dono.** `/api/voice` (WebSocket) e `GET`/`PUT /api/voice/settings` com `?token=` na 8765;
+    pelo Connect (8768), a ponte `backend/app/voicesock.py` liga às rotas privadas
+    `/__hangar_server/voice` e `/__hangar_server/voice/settings`. Convidado (8766, inclusive com
+    login próprio) é recusado.
+  - **Uma chamada por servidor; quem abre por último assume.** O aparelho anterior recebe `taken`.
+    2 minutos sem aparelho encerram a chamada; reabrir antes disso continua a mesma thread do
+    organizador (`thread/realtime/start` de novo, com `includeStartupContext: true`). A troca se
+    reconhece pelo `started` + `sdp` novos, nunca esperando o `closed` da anterior.
+  - **Catálogo de ferramentas fixo no `thread/start`**, pelas capacidades do primeiro dono:
+    `thread/settings/update` ignora `dynamicTools` sem erro. Dono posterior sem a ferramenta de
+    tela recebe a recusa escrita pelo servidor.
+  - **Aparelho calado por mais de 30 s derruba o socket** (os clientes mandam `ping` a cada 10 s).
+    Fim fatal da chamada manda `error{code, detail}` antes do `closed`.
+  - **Escolhas da chamada** (conta Codex, modelo, esforço, velocidade, voz) em
+    `~/.hangar/voz/config.json`, do Rust, gravado de forma atômica. A trava `codex_voice_beta` fica
+    no `runtime-config.json`, que o Rust só lê.
+  - Medição em [voz ao vivo no hangar-server](#voz-ao-vivo-no-hangar-server-10102026).
+- **Voz: WebRTC no aparelho:** o transporte websocket do realtime recusa login ChatGPT; envio só a
+  partir de fala do usuário, com espera de 1,5 s cancelada se ele voltar a falar. Medição em
+  "Voz no app nativo".
 - **Voz: modo Planejar:** nada vai à sessão até o fim; `finish_plan`, `ask_session` e `set_mode` só
   saem de fala do usuário, `finish_plan` em dois passos, e o envio só sai após silêncio do
   microfone. A leitura fora do projeto fica liberada (mesmo acesso da sessão). Medição em "Voz: modo Planejar".
@@ -496,7 +517,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   - **Como fecha:** no fim desse turno, volta a `workspace-write` na pasta própria; se a volta falhar, a
     tela avisa.
   - **Limite:** sem shell no Windows a edição é recusada.
-  - Modelo e esforço vêm do card da voz (padrão: modelo do config do Codex, esforço `low`).
+  - Modelo e esforço vêm dos ajustes da voz em `~/.hangar/voz/config.json` (padrão: modelo do
+    config do Codex, esforço `low`).
 - **Voz: o organizador conversa; envio à sessão só com intenção:** `send_to_session` só sai com pedido
   falado de mandar (linhas `user:` da transcrição, por 45 s) ou com o sim a uma confirmação armada noutro
   turno. A fala que a voz repassa de novo não cancela o envio e recebe uma nota no turno. O GPT-Live (v3)
@@ -2862,49 +2884,56 @@ o app-server. A troca continua recusada durante o turno, pois mudar o sandbox ex
 O formulário agora oferece os três modos e envia a escolha na criação; o Composer carrega o valor
 na montagem e o mostra também no layout compacto do PWA.
 
-## Voz Codex no web
+## Voz ao vivo no hangar-server (10/10/2026)
 
-(`codex_voice.py`, `CodexVoice.svelte`, `lib/codexVoice.ts`, 10/09/2026):
-  é beta e opt-in por servidor: `codex_voice_beta` nasce `false` no runtime config e aparece em
-  Harnesses → Codex → Opções. Desligada, o botão não monta e o backend recusa WebSocket e catálogo
-  de vozes; um front antigo não contorna a trava. O botão e a opção exibem o badge Beta. Salvar
-  atualiza o chat do mesmo servidor sem exigir reload; desligar durante uma chamada desmonta o
-  componente e encerra áudio/WebRTC pelo teardown existente.
-  o botão Voz usa a conta e o app-server da sessão aberta. A conversa roda numa thread efêmera
-  organizadora; a thread de trabalho só recebe o pedido consolidado depois da confirmação.
-  WebRTC com `version: "v3"` negociou com login ChatGPT Pro no CLI 0.154.0; o transporte WebSocket
-  do Codex exigiu API key e o padrão WebRTC foi recusado por versão do protocolo. O WebSocket do
-  **Hangar** só leva sinalização e mantém a posse da chamada (uma por sessão, heartbeat com prazo).
-  `_consumir` continua sendo o único leitor das notifications; a chamada mantém um ouvinte de estado
-  enquanto o SSE reconecta. O botão fica no compositor: o modal configura a chamada e fecha quando
-  conecta, deixando o indicador "Em voz". Reabrir/fechar os controles não desliga a voz. Encerrar
-  ou trocar de sessão libera áudio e envia realtime/stop,
-  sem fechar o cliente compartilhado nem cancelar o turno do agente. Ditado fica bloqueado durante
-  a chamada. A escolha fica em `cp_codex_voice`, por navegador/origem. O medidor usa RMS separado
-  do microfone e do áudio recebido; anima apenas o span HTML da marca, nunca o SVG.
-  Verificado com faixa silenciosa no navegador:
-  ICE/DTLS conectados, silenciar desabilita a track, desmontagem encerra a track e o peer. A fala
-  real foi exercitada na POC pelo usuário; interrupção nesta integração ainda requer teste falado.
-  O app Expo ainda não tem esse controle.
-  Encaminhamentos `<realtime_delegation>` são reconhecidos só na apresentação (`parseRealtimeDelegation`
-  no core): cabeçalho "Conversa de voz", pedido no corpo e envelope integral nos detalhes. O texto
-  original e seu ID continuam intactos; não usar `parsePeerMessage`, que também decide tráfego de pares.
-  Só trocar o prompt não resolveu o envio de fragmentos. No CLI 0.154.0, `HandoffRequested`
-  encaminha a transcrição da última fala antes de avisar o cliente. O organizador em
-  `codex_voice_broker.py` usa ferramentas dinâmicas para preparar/cancelar/confirmar um rascunho.
-  A confirmação deve vir de outra interação, pelo `userMessage` real do app-server, e corresponder
-  a uma autorização curta; o texto enviado é o rascunho imutável, não a confirmação. Revisão muda
-  o ID; repetição não reenvia. A fila durável existente recebe o pedido, inclusive se o alvo estiver
-  ocupado. Rascunhos ainda não enviados valem apenas durante a chamada. Shell, apps, hooks e MCPs
-  ficam desabilitados no organizador; o catálogo foi conferido no request do CLI real com provedor
-  local, sem modelo externo. O modelo é o da sessão, com esforço baixo, e há custo de organização
-  na mesma conta. Contexto inicial usa a cauda já lida pelo Hangar, sem pedir o histórico inteiro
-  pelo app-server. O organizador resume o resultado final e usa `appendSpeech`: `appendText` sozinho
-  adicionava contexto, mas não produziu fala no teste. Teste com dois turnos de organização e
-  entrada de áudio silenciosa confirmou pedido completo, resposta da sessão e retorno transcrito
-  "A sessão respondeu: pinguim azul". Pausas e confirmações por áudio ainda exigem teste falado.
+(`crates/hangar-server/src/voice/`, codex-cli 0.160.1.) A voz saiu do aparelho para o servidor:
+`call.rs` conduz a chamada com o `codex app-server` do servidor, `controller/` aplica as regras e
+as ferramentas de sessão, `hub.rs` guarda a única chamada do servidor, `routes.rs` serve
+`/api/voice` e `/api/voice/settings`, `protocol.rs` define as mensagens, `machines.rs` fala com a
+API HTTP deste servidor e com os peers, e `settings.rs` lê a trava e grava as escolhas. Substitui a
+voz por sessão do web (ver [superado](superado.md#voz-codex-no-web-por-sessão)) e o organizador
+que rodava dentro do nativo; as regras das entradas abaixo seguiram junto para o servidor.
+
+- **Áudio no aparelho.** O aparelho cria a oferta WebRTC e manda ao servidor, que a entrega ao
+  `thread/realtime/start` e devolve a resposta (`sdp`). A latência percebida não muda: o áudio vai
+  direto do aparelho à OpenAI.
+- **Clientes.** Nativo (`desktop-native/src/voice/mod.rs`, cliente fino com as cinco ferramentas de
+  tela: `switch_session`, `hangar_actions`, `hangar_action`, `read_screen`, `click_screen`) e PWA
+  (`frontend/src/lib/liveVoice.ts`, `liveVoiceStore`, `LiveVoiceButton`/`LiveVoiceSheet`, só nas
+  vistas de celular, só com `switch_session`). O app Expo não tem a voz.
+- **Só o dono.** A voz fala com o computador inteiro, então convidado nunca entra, nem com login
+  próprio. Pelo Connect, `voicesock.py` liga o socket do dono à rota privada do Rust.
+- **Passagem de chamada (provada em 10/10/2026, conta Codex padrão).** Teste descartável no nativo,
+  `app-server` real, uma thread do organizador e dois `thread/realtime/start` nela, cada um com oferta
+  WebRTC nova e nenhum par conectado (sem microfone nem alto-falante). Rodada 0 com
+  `includeStartupContext: false`, rodada 1 com `true`, 3 s entre elas; rodou duas vezes, mesmo
+  resultado.
+  - Rodada 0: `ok` do `start` → `thread/realtime/started` → `thread/realtime/sdp`, ~0,7–0,9 s após
+    o pedido.
+  - Rodada 1, com a rodada 0 ainda aberta: a mesma ordem, ~3,8–7,1 s após o pedido. Nenhum
+    `thread/realtime/closed` da conversa anterior chegou ao cliente; o único `closed`
+    (`reason=requested`) veio depois do `thread/realtime/stop` final. O `realtimeSessionId` é o id da
+    thread nas duas rodadas e não distingue uma conversa da outra.
+  - Por isso a troca se reconhece pelo `started` + `sdp` novos, e o par WebRTC antigo é do cliente.
+  - **Não conferido:** se o contexto falado passa para a segunda conversa ("meu número é sete" →
+    "qual é meu número?") e se as instruções iniciais se repetem no histórico a cada reinício; nem a
+    ordem com um par WebRTC conectado de verdade na rodada 0. Fica para o uso real.
+- **`dynamicTools` só no `thread/start` (medido em 10/10/2026).** `thread/settings/update` com
+  `dynamicTools` respondeu `ok` com `{}`, mas `ThreadSettingsUpdateParams` no esquema
+  (`codex app-server generate-json-schema --experimental`) não tem o campo, e ele é ignorado sem
+  erro. Só `ThreadStartParams` aceita `dynamicTools`: catálogo novo exige thread nova. Daí o
+  catálogo fixado pelas capacidades do primeiro dono; um dono posterior sem a ferramenta recebe a
+  recusa do servidor.
+- **Custo.** O servidor ganha um `app-server` por chamada ativa; o nativo deixou de abrir o seu.
+- Encaminhamentos `<realtime_delegation>` continuam reconhecidos só na apresentação
+  (`parseRealtimeDelegation` no core): cabeçalho "Conversa de voz", pedido no corpo e envelope
+  integral nos detalhes. Não usar `parsePeerMessage`, que também decide tráfego de pares.
 
 ## Voz no app nativo
+
+(Até 10/10/2026 o organizador e o `app-server` rodavam no nativo; hoje rodam no servidor, ver
+[voz ao vivo no hangar-server](#voz-ao-vivo-no-hangar-server-10102026). Áudio, WebRTC e eco
+continuam no aparelho.)
 
 (`desktop-native/src/voice/`, `app/voice_ui.rs`, 07/10/2026): a voz roda no nativo, segue a sessão
 aberta na tela (Claude ou Codex) e fala pela conta Codex desta máquina; backend e Python não mudam.
@@ -2926,12 +2955,13 @@ O tempo de silêncio que encerra a fala é fixo no Codex (`server_vad`). `append
 `Connected` é descartada pelo str0m. Eventos da voz levam número de chamada e passam antes do filtro
 de conexão do app: trocar de servidor não deixa ferramenta sem resposta. Resposta da sessão é
 deduplicada por id de evento; sessão que recebeu pedido e saiu da tela tem a resposta lida pelo
-histórico quando a lista mostra que ela parou. Gate: `codex_voice_beta` do servidor local
+histórico quando a lista mostra que ela parou. Gate da época: `codex_voice_beta` do servidor local
 (loopback) e `codex` encontrado.
 
 ## Voz: modo Planejar
 
-(`desktop-native/src/voice/organizer.rs`, 07/10/2026, Codex 0.160.1): a voz tem dois modos, trocados
+(`desktop-native/src/voice/organizer.rs`, hoje `crates/hangar-server/src/voice/organizer.rs` e
+`plan.rs`; 07/10/2026, Codex 0.160.1): a voz tem dois modos, trocados
 pela chave do painel ou falando ("vamos planejar", "volta pro direto"). **Direto** é o de antes: o
 pedido completo vai à sessão. **Planejar** não manda nada até o fim: o organizador escreve e
 reorganiza um plano (objetivo, decisões, pendências, pesquisas com fontes) em
@@ -2973,7 +3003,7 @@ Descartados: ferramentas de leitura restritas à pasta e desligar a pesquisa com
 
 ## Voz: assistente que conversa
 
-(`desktop-native/src/voice/`, 09/10/2026, Codex 0.160.1.) Numa chamada do Jefferson (diário de 09/10,
+(`desktop-native/src/voice/`, hoje `crates/hangar-server/src/voice/`; 09/10/2026, Codex 0.160.1.) Numa chamada do Jefferson (diário de 09/10,
 13:42–13:46) a voz falhou três vezes:
 - 13:43:02, `realtime answered without delegation`: a voz respondeu "não consigo ler a tela" sozinha.
   O prompt dela só dizia "não invente acesso à tela" e não dizia o que o organizador lê.
@@ -3016,7 +3046,7 @@ Descartados: ferramentas de leitura restritas à pasta e desligar a pesquisa com
   vão ao organizador por `turn/steer` com `[NOTA DO HANGAR]`, no turno da próxima fala.
 - **Processos.** O shell do Codex roda no bubblewrap com `--unshare-pid` (0.160.1). Só vê os
   processos dele, e o `read-only` faz o mesmo. A única saída é o `danger-full-access`, que também
-  tira o limite de escrita. Por isso a ferramenta `observe_system` roda no app (`sysinfo`, só o
+  tira o limite de escrita. Por isso a ferramenta `observe_system` roda fora do Codex, hoje no servidor (`voice/observe.rs`, `sysinfo`, só o
   recurso `system`): ela dá CPU, memória e processos, não lê o ambiente dos processos e mascara
   segredos na linha de comando.
 - **Ação de tela.** O `hangar_action` tem lista fixa. O `click_screen` clica por id da árvore de
@@ -3101,8 +3131,9 @@ Descartados: ferramentas de leitura restritas à pasta e desligar a pesquisa com
   conta. Troca por clique continua calada. Pedido do Jefferson: trocar pode ser só para ir até lá.
 
 **Destino do Jev: uma regra para todos os usos.**
-- A regra está em `runtime_config.destino_jev` (servidor), `voice::jev::destination` (app) e
-  `jev_config` (orq).
+- A regra está em quatro cópias que mudam juntas: `runtime_config.destino_jev` (Python),
+  `crates/hangar-server/src/voice/jev.rs` `destination` (voz no servidor),
+  `desktop-native/src/app/server_config.rs` `jev::destination` (tela do nativo) e `jev_config` (orq).
 - Vai ao OpenRouter quando o endereço é dele ou, sem endereço, quando a chave é dele (`sk-or-`).
   - Modelo vazio vira `typesafe/jev-1.13-20260917`, porque o OpenRouter recusa o nome da TypeSafe.
   - `typesafe/jev-latest` ganha o `~`: só `~typesafe/jev-latest` existe lá, e sem o til ele responde

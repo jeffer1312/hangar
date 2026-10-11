@@ -101,10 +101,14 @@ describe('SessionCard: diff stats e tempo (referência super.engineering)', () =
     unmount(comp);
   });
 
-  it('tempo relativo da última atividade aparece no fim da meta-line', () => {
-    const { el, comp } = montar(sessao({ last_activity: Date.now() / 1000 - 45 * 60 }));
-    expect(el.querySelector('.ago')?.textContent).toContain('45');
+  it('tempo da última resposta fica na linha do nome, só com a sessão parada', () => {
+    const at = Date.now() / 1000 - 45 * 60;
+    const { el, comp } = montar(sessao({ last_activity: at, last_reply_at: at }));
+    expect(el.querySelector('.name-row .ago')?.textContent).toContain('45');
+    const { el: el2, comp: comp2 } = montar(sessao({ state: 'working', last_reply_at: at }));
+    expect(el2.querySelector('.ago')).toBeNull();
     unmount(comp);
+    unmount(comp2);
   });
 
   it('sessão parada mostra a última resposta e o tempo na linha secundária', () => {
@@ -113,7 +117,7 @@ describe('SessionCard: diff stats e tempo (referência super.engineering)', () =
       last_reply_at: Date.now() / 1000 - 8 * 60,
     }));
     expect(el.querySelector('.status-sub.reply')?.textContent).toContain('Os testes focados passaram.');
-    expect(el.querySelector('.reply-time')?.textContent).toContain('8');
+    expect(el.querySelector('.ago')?.textContent).toContain('8');
     unmount(comp);
   });
 
@@ -177,5 +181,29 @@ describe('SessionCard: chip da worktree', () => {
     expect(convite.el.querySelector('.cwd')).not.toBeNull();
     unmount(convite.comp);
     localStorage.removeItem('cp_servers');
+  });
+});
+
+describe('SessionCard: linha de meta do nativo', () => {
+  it('branch principal não aparece; a de trabalho sim', () => {
+    const { el, comp } = montar(sessao({ branch: 'main' }));
+    expect(el.querySelector('.branch')).toBeNull();
+    const { el: el2, comp: comp2 } = montar(sessao({ branch: 'PM-1' }));
+    expect(el2.querySelector('.branch')?.textContent).toContain('PM-1');
+    unmount(comp);
+    unmount(comp2);
+  });
+
+  it('sessão de motor mostra o motor no lugar do agente', () => {
+    const { el, comp } = montar(sessao({ provider: 'claude', engine: 'kimi-k3' }));
+    expect(el.querySelector('.meta-line .prov-chip')?.textContent).toContain('kimi-k3');
+    expect(el.querySelector('.meta-line .prov-chip')?.textContent).not.toContain('Claude');
+    unmount(comp);
+  });
+
+  it('rótulo de trabalho corta no " ("', () => {
+    const { el, comp } = montar(sessao({ state: 'working', label: 'Pensando (12s · esc para interromper)' }));
+    expect(el.querySelector('.status-sub.working')?.textContent).toBe('Pensando');
+    unmount(comp);
   });
 });

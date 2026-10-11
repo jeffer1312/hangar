@@ -68,7 +68,7 @@
     "ios": "npm run i18n:compile && expo run:ios",
     "//eas-build-post-install": "Hook do EAS, roda depois do install e ANTES do bundle. Sem ele o build falha em 'Unable to resolve module .../paraglide/messages': as pastas paraglide são GERADAS e gitignored, e o EAS copia só o que o git rastreia. Os outros scripts que compilam o i18n (test, pretypecheck, android) não são chamados por ele. São DUAS: a do app e a do @hangar/core, que o app importa — sem a segunda o bundle quebra em packages/core/src/plan.ts.",
     "eas-build-post-install": "npm run i18n:compile:core && npm run i18n:compile",
-    "i18n:compile:core": "paraglide-js compile --project ../project.inlang --outdir ../packages/core/src/paraglide --strategy baseLocale",
+    "i18n:compile:core": "paraglide-js compile --project ../project.inlang --outdir ../packages/core/src/paraglide --strategy baseLocale --output-structure locale-modules",
     "web": "expo start --web",
     "pretypecheck": "npm run i18n:compile",
     "typecheck": "flock -w 900 /tmp/hangar-verificacao.lock tsc --noEmit",
