@@ -7102,6 +7102,7 @@
   "newchat_mic": "Dictate",
   "newchat_mic_stop": "Stop and transcribe",
   "newchat_worktree_existing": "Existing worktree",
+  "composer_account_ring_aria": "Account {account}: {window} {pct}% used. Switch account",
   "newchat_sem_conta_codex": "Choose a Codex account before sending.",
   "newchat_abrir_lista": "Open conversation list",
   "newchat_sem_servidor": "No machine of yours is registered to start a conversation. Add one in Settings.",

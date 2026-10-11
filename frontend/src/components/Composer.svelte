@@ -128,6 +128,14 @@ import { cachePrazo } from '../lib/cachePrazo';
     // Transcript da sessão: identidade do ditado (sessão recriada com o mesmo nome não recebe o
     // texto) e da barra guardada em `cp-ditado:<servidor>::<sessão>`.
     sessionJsonl?: string | null;
+    // Celular: a faixa vira o rodapé do desktop numa linha (app.rs, composer): pasta e branch à
+    // esquerda; anéis de contexto e da conta à direita. Pasta e branch caem na sessão sem statusline.
+    sessionCwd?: string | null;
+    sessionBranch?: string | null;
+    accountLabel?: string | null;
+    accountPct?: number | null;
+    accountWindow?: string | null;
+    onOpenAccounts?: () => void;
   }
   let {
     sessionName, sessionState, status, lastCache = null, onSend, onSteer, onCommand, onInterrupt, onOpenGit,
@@ -146,7 +154,11 @@ import { cachePrazo } from '../lib/cachePrazo';
     stats = null,
     estreito = false,
     sessionJsonl = null,
+    sessionCwd = null, sessionBranch = null,
+    accountLabel = null, accountPct = null, accountWindow = null, onOpenAccounts,
   }: Props = $props();
+  const placeFolder = $derived(status?.repo || (sessionCwd ? sessionCwd.replace(/\/+$/, '').split('/').pop() || '' : ''));
+  const placeBranch = $derived(status?.branch || sessionBranch || '');
   const sessionServer = useSessionServer();
   // O Composer é remontado por sessão ({#key} do Chat): servidor e nome não mudam nesta instância.
   const dictationServerId = sessionServer()?.id ?? '';
@@ -489,7 +501,8 @@ import { cachePrazo } from '../lib/cachePrazo';
   const temAba = $derived(
     !!status?.repo || !!lastCache || status?.ctxPct != null
     || !!onOpenPair || (temFilaPromovivel && isWorking && (filaCount > 0 || steeringQueue) && !!onSteer)
-    || (shellsRodando > 0 && !!onOpenActivity),
+    || (shellsRodando > 0 && !!onOpenActivity)
+    || (!desktop.atual && (!!placeFolder || !!accountLabel)),
   );
 
   // ── Contagem regressiva do maos-livres: 3s antes do envio automatico ────────
@@ -2091,6 +2104,16 @@ import { cachePrazo } from '../lib/cachePrazo';
           <span class="fila-acao">{steeringQueue ? m.askq_enviando() : (isCodex || headless) ? m.codex_orientar() : m.composer_fila_acao()}</span>
         </button>
       {/if}
+      {#if !desktop.atual && placeFolder}
+        <button class="repo-chip place-chip" title={m.composer_git_chip()} onclick={onOpenGit}>
+          <IconFolder size={13} />
+          <span class="repo-name place-folder">{placeFolder}</span>
+          {#if placeBranch}
+            <span class="repo-sep" aria-hidden="true">·</span>
+            <span class="repo-branch">{placeBranch}{#if status?.dirty}<span class="repo-dirty" aria-label={m.composer_alteracoes_nao_commitadas()}>*</span>{/if}</span>
+          {/if}
+        </button>
+      {/if}
       {#if shellsRodando > 0 && onOpenActivity}
         <!-- Shells de FUNDO: comando que continua rodando depois que a ferramenta respondeu. O
              terminal mostra "N shells still running" no rodapé e o app não mostrava nada — dava
@@ -2109,7 +2132,7 @@ import { cachePrazo } from '../lib/cachePrazo';
       {@render seletorModo()}
     {/if}
     <div class="tab-right">
-      {#if status?.repo}
+      {#if status?.repo && desktop.atual}
         <button class="repo-chip" title={m.composer_git_chip()} onclick={onOpenGit}>
           <IconFolder size={13} />
           <span class="repo-name">{status.repo}</span>
@@ -2119,7 +2142,7 @@ import { cachePrazo } from '../lib/cachePrazo';
           {/if}
         </button>
       {/if}
-        {#if lastCache}
+        {#if lastCache && desktop.atual}
           <!-- Prazo do cache. Nao e botao: nao ha o que fazer com ele alem de saber. -->
           <span
             class="cache-chip"
@@ -2142,6 +2165,13 @@ import { cachePrazo } from '../lib/cachePrazo';
         {:else}
           <ContextRing pct={status.ctxPct} size={22} />
         {/if}
+      {/if}
+      {#if !desktop.atual && accountLabel}
+        <button class="ctx-ring-btn account-ring" onclick={onOpenAccounts}
+          aria-label={m.composer_account_ring_aria({ account: accountLabel, window: accountWindow ?? '', pct: String(Math.round(accountPct ?? 0)) })}>
+          <span class="ctx-ring-mudo" aria-hidden="true"><ContextRing pct={accountPct ?? 0} size={22} /></span>
+          <span class="account-name">{accountLabel}{#if accountWindow}{' · '}{accountWindow}{/if}</span>
+        </button>
       {/if}
     </div>
   </div>
@@ -2914,6 +2944,16 @@ import { cachePrazo } from '../lib/cachePrazo';
   .composer.compacto .status-tab .tab-left { min-width: 32px; flex-shrink: 4; }
   .composer.compacto .status-tab .tab-right { min-width: 0; flex-shrink: 1; }
   .composer.compacto .status-tab .tab-right .repo-chip { overflow: hidden; }
+  /* Celular: uma linha só, sem rolar de lado; a pasta encolhe antes da branch, e os dois anéis ficam. */
+  .composer.celular .status-tab .tab-left { overflow: hidden; flex: 1 1 0; }
+  .composer.celular .status-tab .tab-right { flex-shrink: 0; }
+  .composer.celular .place-chip { min-width: 0; flex: 0 1 auto; overflow: hidden; }
+  .composer.celular .place-chip .place-folder { flex-shrink: 3; min-width: 24px; }
+  .composer.celular .place-chip .repo-branch { flex-shrink: 1; min-width: 24px; }
+  .composer.celular .repo-chip, .composer.celular .account-ring { position: relative; }
+  .composer.celular .repo-chip::after, .composer.celular .account-ring::after { content: ''; position: absolute; inset: -11px -4px; }
+  .account-ring { display: inline-flex; align-items: center; gap: 4px; max-width: 128px; }
+  .account-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
 
   /* Card unico que reune status, textarea e controles. */
   .composer-card {

@@ -73,6 +73,7 @@
   // Sinal do "⋯": no celular Rodar/Atividade moram dentro do menu, entao o estado deles precisa
   // aparecer no botao — senao voce so descobre que algo esta rodando abrindo o menu.
   const menuDot = $derived(runRunning || activityRunning || activityBadge > 0);
+  const celular = $derived(!!onTitleTap && !crumbs);
 </script>
 
 <!-- titulo-esquerda: o chat do celular. O nome encosta no voltar (centralizado ele ficava espremido
@@ -236,8 +237,9 @@
           {#if activityBadge > 0}<span class="activity-badge">{activityBadge}</span>{/if}
         </button>
       {/if}
-      {#if (status && onExpandUsage) || limited}
-        <RateChips {status} onExpand={onExpandUsage} {limited} {limitReset} variant={onTitleTap && !crumbs ? 'chip' : 'dial'} />
+      <!-- Celular: a cota mora no anel da conta, na faixa do campo; aqui só o aviso de limitada. -->
+      {#if (status && onExpandUsage && !celular) || limited}
+        <RateChips status={celular ? null : status} onExpand={onExpandUsage} {limited} {limitReset} variant={celular ? 'chip' : 'dial'} />
       {/if}
       <!-- Mostrador e menu CONVIVEM (antes o menu era um `else` do mostrador, entao nunca aparecia
            numa sessao com statusline). No celular o "⋯" guarda Rodar/Atividade; o ponto acende
@@ -251,7 +253,7 @@
           </svg>
           {#if menuDot}<span class="menu-dot" aria-hidden="true"></span>{/if}
         </button>
-      {:else if !((status && onExpandUsage) || limited)}
+      {:else if !((status && onExpandUsage && !celular) || limited)}
         <div class="nav-spacer"></div>
       {/if}
     </div>

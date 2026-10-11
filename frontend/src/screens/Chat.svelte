@@ -111,6 +111,8 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   import { workspaceSessionKey } from '../lib/workspaceCommands';
   import { countAwaiting, nextAwaiting, providerName, untrackedReason, stateColors, isOrq } from '@hangar/core';
   import { chipDaConta } from '../lib/conta';
+  import { quotaFeed } from '../lib/quotaFeed.svelte';
+  import { faixaDeCota, piorJanela } from '../lib/cota';
   import * as diag from '../lib/diag';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
   import * as m from '../paraglide/messages';
@@ -1615,6 +1617,20 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // sob o título — com N servidores, sessões homônimas ficavam indistinguíveis no celular).
   const serverLabel = $derived(listServers().find((s) => s.id === chatServerId)?.label ?? '');
   const contaChip = $derived(chipDaConta(allSessions.find((s) => s.name === sessionName)?.conta));
+  // Anel da conta na faixa do campo (celular): a janela mais apertada da conta da sessão, como a
+  // pílula de cota do topo do nativo (accounts/usage.rs fullest).
+  const sessaoAtual = $derived(allSessions.find((s) => s.name === sessionName));
+  const contaPior = $derived.by(() => {
+    const conta = sessaoAtual?.conta;
+    const minha = conta ? faixaDeCota(quotaFeed.contas)?.find((c) => c.id === conta) : null;
+    return minha ? piorJanela([minha], status?.model ?? null) : null;
+  });
+  $effect(() => {
+    if (desktop) return;
+    quotaFeed.retain();
+    return () => quotaFeed.release();
+  });
+  $effect(() => { if (!desktop) quotaFeed.setServidor(chatServerId ?? ''); });
 
   // Chip de loop no header: dentro do chat não havia NENHUM sinal de loop ativo (só a lista tinha
   // badge). Os campos vêm do sessionsStore (singleton refcounted — zero SSE novo); tap abre o sheet.
@@ -3448,7 +3464,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
 
   <!-- Com o painel de contexto aberto o aviso vive LÁ (faixa acionável junto do resto do estado da
        sessão), e a pill flutuante daqui seria o mesmo recado duas vezes na mesma tela. -->
-  {#if recarregarMotivo && !recargaDispensada && !avisoErr && !painelCtxAberto}
+  {#if desktop && recarregarMotivo && !recargaDispensada && !avisoErr && !painelCtxAberto}
     <!-- O processo desta sessão está desatualizado (config da conta mudou depois de ele subir).
          Discreto e só enquanto há motivo: some sozinho depois do recarregar. -->
     <div class="recarga-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} role="status">
@@ -3481,6 +3497,18 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   {/if}
 
   <div class="bottom-dock" bind:this={dockEl}>
+    {#if !desktop && recarregarMotivo && !recargaDispensada && !avisoErr && currentState !== 'dead'}
+      <!-- Celular: o aviso entra no fluxo, acima do campo, em vez de flutuar sobre a conversa. -->
+      <div class="recarga-linha" role="status">
+        <span class="recarga-linha-text">{m.recarregar_aviso_config()}</span>
+        <button class="recarga-linha-btn" onclick={recarregar} disabled={currentState !== 'idle' || recarregando}
+                title={currentState !== 'idle' ? m.modo_so_ociosa() : m.recarregar_sessao_detalhe()}>
+          {m.recarregar_agora()}
+        </button>
+        <button class="recarga-linha-x" onclick={dispensarRecarga}
+                aria-label={m.recarregar_dispensar()} title={m.recarregar_dispensar_detalhe()}>×</button>
+      </div>
+    {/if}
     {#if currentState === 'dead'}
       <div class="dead-footer">
         <p class="dead-text">{m.chat_sessao_encerrada()}</p>
@@ -3574,6 +3602,12 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
         onToggleSendToPair={() => (sendToPair = !sendToPair)}
         shellsRodando={activity.runningShells}
         onOpenActivity={() => (desktop ? (ctxPanel.aba = 'atividade') : (activityOpen = true))}
+        sessionCwd={sessaoAtual?.cwd ?? null}
+        sessionBranch={sessaoAtual?.branch ?? null}
+        accountLabel={desktop ? null : contaChip?.label ?? null}
+        accountPct={contaPior?.janela.pct ?? null}
+        accountWindow={contaPior?.janela.rotulo ?? null}
+        onOpenAccounts={() => (accountsOpen = true)}
       />
     {/if}
   </div>
@@ -4194,6 +4228,18 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
      transparência em vez de virar retângulo chapado (regra de vidro do CLAUDE.md). */
   /* Aviso "processo desatualizado": mesmo lugar do tui-pill, sem pulsar — é sugestão, não urgência.
      Menu flutuante sobre a conversa leva fundo sólido (regra do repo), não vidro. */
+  .recarga-linha {
+    display: flex; align-items: center; gap: var(--space-2); margin: 0 var(--space-4) var(--space-2);
+    padding: 4px 4px 4px var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    background: var(--surface-raised); font-size: var(--text-xs); color: var(--text-secondary);
+  }
+  .recarga-linha-text { flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .recarga-linha-btn {
+    min-height: 44px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-md);
+    background: var(--accent-dim); color: var(--text-primary); font-size: var(--text-xs); font-weight: 600; cursor: pointer;
+  }
+  .recarga-linha-btn:disabled { opacity: 0.5; cursor: default; }
+  .recarga-linha-x { width: 44px; height: 44px; border: 0; background: transparent; color: var(--text-muted); font-size: 18px; cursor: pointer; }
   .recarga-pill {
     position: absolute;
     left: 50%;
