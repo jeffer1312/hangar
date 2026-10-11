@@ -26,6 +26,19 @@
   }
   let { onPick, fill = false, selected = null, server, canCreate = false, searchAllOption = false }: Props = $props();
 
+  const LAST_ROOT_KEY = 'cp:last-root';
+
+  let roots = $state<FsRoot[]>([]);
+  let rootsLoading = $state(true);
+  let rootsError = $state(false);
+  let failText = $state('');
+  let activeRoot = $state<FsRoot | null>(null);
+  let path = $state('');                 // diretorio atual (default = raiz)
+  let entries = $state<FsEntry[]>([]);
+  let scanning = $state(false);
+  let scanError = $state<FsScanError | null>(null);
+  let query = $state('');
+
   const SEARCH_ALL_KEY = 'cp_create_search_all';
   let searchAll = $state((() => { try { return localStorage.getItem(SEARCH_ALL_KEY) === '1'; } catch { return false; } })());
   // Pastas de cada raiz, lidas uma vez enquanto o scanner está montado; `null` = falhou.
@@ -48,18 +61,6 @@
   const allLoading = $derived(allMode && roots.some((r) => rootEntries[r.path] === 'loading'));
   const allFailed = $derived(allMode ? roots.filter((r) => rootEntries[r.path] === null).map((r) => r.name) : []);
 
-  const LAST_ROOT_KEY = 'cp:last-root';
-
-  let roots = $state<FsRoot[]>([]);
-  let rootsLoading = $state(true);
-  let rootsError = $state(false);
-  let failText = $state('');
-  let activeRoot = $state<FsRoot | null>(null);
-  let path = $state('');                 // diretorio atual (default = raiz)
-  let entries = $state<FsEntry[]>([]);
-  let scanning = $state(false);
-  let scanError = $state<FsScanError | null>(null);
-  let query = $state('');
 
   // ── Carrega as raizes (chips) ──────────────────────────────────────────────
   onMount(async () => {

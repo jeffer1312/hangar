@@ -249,6 +249,8 @@
     ? !!fastModel.service_tiers?.some((t) => t.id === 'priority' && !t.hidden)
     : provider === 'claude' && !!proxyAccounts && !!fastModel.supports_fast));
 
+  // Declarado aqui porque a permissão e o 1M do celular dependem dele (o matchMedia fica mais abaixo).
+  let isDesktop = $state(false);
   let permissao = $state('');
   // Celular nasce como o desktop nativo (create.rs set_provider): Claude em Bypass. O desktop web fica como está.
   function permissaoPadrao(p: string): string {
@@ -703,7 +705,6 @@
 
   // No desktop a folha vira MODAL centrado (mesma decisao do SettingsModal: config/opcao nao
   // doca; ver CLAUDE.md "Config e opção moram em MODAL").
-  let isDesktop = $state(false);
   $effect(() => {
     const mq = window.matchMedia('(min-width: 820px)');
     const on = () => (isDesktop = mq.matches); on();
@@ -1430,10 +1431,10 @@
               value={selectedConfig ?? ''} filtroAcimaDe={isDesktop ? undefined : 8}
               opcoes={contasVisiveis.map((c) => ({
                 value: c.path, label: c.label, title: c.path,
-                hint: contaEsgotada(c.path) ? [cotaHint(c), m.cota_conta_no_limite()].filter(Boolean).join(' · ') : cotaHint(c) }))}
+                hint: contaEsgotada(c.path) ? [cotaHint(c), m.accounts_exhausted()].filter(Boolean).join(' · ') : cotaHint(c) }))}
               onchange={(v) => {
                 // Esgotada não é escolhível no celular (o nativo a apaga e não deixa clicar).
-                if (!isDesktop && contaEsgotada(v)) { avisoConta = m.cota_conta_no_limite(); contaErro = true; return; }
+                if (!isDesktop && contaEsgotada(v)) { avisoConta = m.accounts_exhausted(); contaErro = true; return; }
                 selectedConfig = v; contaEscolhidaAMao = true; carregarModelos();
               }} />
             <button type="button" class="ghost-btn conta-add" onclick={abrirCampoConta}
