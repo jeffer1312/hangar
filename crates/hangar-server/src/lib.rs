@@ -29,6 +29,7 @@ pub mod terminal_state;
 pub mod terminal_control;
 pub mod terminal_input;
 mod terminal_process;
+mod thumbnail;
 pub mod terminal_routes;
 pub mod transcript;
 pub mod transcription;

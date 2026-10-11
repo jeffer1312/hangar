@@ -61,6 +61,8 @@ tokio-tungstenite.workspace = true
 sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
 # Canal da voz que vários consumidores leem (`voice/rpc.rs`); mesma versão do nativo.
 async-channel = "=2.5.0"
+# Miniatura de imagem (`thumbnail.rs`); mesma versão e features do nativo.
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
