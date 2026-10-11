@@ -7862,5 +7862,10 @@
   "live_voice_action_unknown": "The phone does not know that action; see the list with hangar_actions.",
   "live_voice_action_not_open": "There are no settings or report open to close.",
   "live_voice_action_bad_section": "Unknown settings section: {section}.",
-  "live_voice_action_no_terminal": "This conversation has no terminal to open on the phone."
+  "live_voice_action_no_terminal": "This conversation has no terminal to open on the phone.",
+  "live_voice_status_you": "You are speaking",
+  "live_voice_status_voice": "Speaking",
+  "live_voice_status_thinking": "Thinking…",
+  "live_voice_status_searching": "Searching…",
+  "live_voice_status_working": "Working…"
 }

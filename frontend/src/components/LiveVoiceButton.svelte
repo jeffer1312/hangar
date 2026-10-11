@@ -12,6 +12,7 @@
   // Chamada aberta noutra máquina continua alcançável daqui, mesmo onde a voz está desligada.
   const visible = $derived(inCall || failed || !!(reply?.enabled && reply.codex));
   const level = (v: number) => `scaleY(${0.15 + v * 0.85})`;
+  const status = $derived(liveVoiceStore.status);
 
   $effect(() => { if (server && !server.invite) void liveVoiceStore.loadSettings(server); });
 
@@ -27,6 +28,11 @@
     aria-label={m.live_voice_open()} title={m.live_voice_open()}>
     {#if phase === 'connecting'}
       <HangarWorking size={18} />
+    {:else if phase === 'live' && status !== 'you' && status !== 'voice'}
+      <!-- Ninguém fala: ondas lentas ouvindo, rápidas e coloridas pensando ou agindo. -->
+      <span class="bars wave st-{status}" aria-hidden="true">
+        <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+      </span>
     {:else if phase === 'live'}
       <span class="bars" aria-hidden="true">
         <span class="bar" style:transform={level(liveVoiceStore.muted ? 0 : liveVoiceStore.levels.input)}></span>
@@ -60,10 +66,17 @@
   .bars { display: inline-flex; align-items: center; gap: 3px; height: 18px; }
   .bar { width: 3px; height: 18px; border-radius: 2px; background: var(--accent); transition: transform 80ms linear; }
   .bar.out { background: var(--success); }
+  .wave .bar { background: var(--text-muted); animation: lv-wave 1.6s ease-in-out infinite; transform: scaleY(0.25); }
+  .wave .bar:nth-child(2) { animation-delay: 0.2s; }
+  .wave .bar:nth-child(3) { animation-delay: 0.4s; }
+  .wave.st-thinking .bar { background: var(--text-primary); animation-duration: 0.7s; }
+  .wave.st-searching .bar, .wave.st-working .bar { background: var(--warning); animation-duration: 0.7s; }
+  .wave.st-muted .bar { animation: none; }
+  @keyframes lv-wave { 50% { transform: scaleY(0.75); } }
   .alert-dot {
     position: absolute; top: 7px; right: 7px;
     width: 8px; height: 8px; border-radius: 50%;
     background: var(--error);
   }
-  @media (prefers-reduced-motion: reduce) { .bar { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .bar { transition: none; animation: none !important; } }
 </style>

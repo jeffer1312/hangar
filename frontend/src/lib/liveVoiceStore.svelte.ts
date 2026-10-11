@@ -7,6 +7,7 @@ import { LiveVoiceCall, type LiveVoiceHandlers, type LiveVoiceScreen, type LiveV
 import { listarPeers, type PeerView } from './peers';
 import * as m from '../paraglide/messages';
 import { TELAS_CONFIG } from './configRoute';
+import { settledSpeaker, speaker, voiceStatus, type Speaker, type VoiceStatus } from './liveVoiceStatus';
 
 export type LiveVoicePhase = 'idle' | 'connecting' | 'live' | 'closed';
 export type LiveVoiceTarget = { server: Server; name: string };
@@ -38,6 +39,8 @@ let error = $state<{ code: string; detail?: string } | null>(null);
 let muted = $state(false);
 let open = $state(false);
 let levels = $state({ input: 0, output: 0 });
+let shownSpeaker = $state<Speaker>('idle');
+let speakerSince = 0;
 let activeServer = $state<Server | null>(null);
 let shownServer = $state<Server | null>(null);
 let settings = $state<Record<string, SettingsEntry>>({});
@@ -124,7 +127,10 @@ const handlers: LiveVoiceHandlers = {
     const server = fromVoice(target.server, target.baseUrl);
     return !!server && !!navigate && navigate({ server, name: target.name });
   },
-  levels(v) { levels = v; },
+  levels(v) {
+    levels = v;
+    [shownSpeaker, speakerSince] = settledSpeaker(shownSpeaker, speakerSince, speaker(v.input, v.output, muted), Date.now());
+  },
   actions: actionCatalog,
   runAction(id, arg) {
     if (id === 'voice-panel' || id === 'voice-panel-close') { open = id === 'voice-panel'; return true; }
@@ -223,6 +229,8 @@ export const liveVoiceStore = {
   get error() { return error; },
   get muted() { return muted; },
   get levels() { return levels; },
+  /** Rótulo da chamada: quem fala, mudo, ou o que a voz está fazendo (pensando, pesquisando…). */
+  get status(): VoiceStatus { return voiceStatus(phase === 'live', shownSpeaker, muted, voiceState?.activity); },
   get open() { return open; },
   set open(value: boolean) { open = value; },
   /** Servidor ativo do PWA, publicado pelo App a cada rota (o `getActiveId` não é reativo). */

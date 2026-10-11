@@ -4,6 +4,7 @@
   import { renderMarkdown } from '../lib/markdown';
   import { listarCredenciais, modelOptionsForServer, type Credencial, type ModelOption } from '@hangar/core';
   import * as m from '../paraglide/messages';
+  import { thoughtTail, type VoiceStatus } from '../lib/liveVoiceStatus';
 
   type Mode = 'direct' | 'plan';
   const MODES: Mode[] = ['direct', 'plan'];
@@ -29,6 +30,14 @@
   const entry = $derived(liveVoiceStore.settingsOf(target));
   const reply = $derived(entry?.reply ?? null);
   const vs = $derived(liveVoiceStore.state);
+  const STATUS: Record<VoiceStatus, () => string> = {
+    connecting: m.codex_voice_connecting, voice: m.live_voice_status_voice, muted: m.codex_voice_muted,
+    you: m.live_voice_status_you, thinking: m.live_voice_status_thinking, searching: m.live_voice_status_searching,
+    working: m.live_voice_status_working, listening: m.codex_voice_listening,
+  };
+  const status = $derived(liveVoiceStore.status);
+  const busy = $derived(!!vs && vs.activity !== 'idle');
+  const thought = $derived(busy && vs ? thoughtTail(vs.thought) : []);
 
   $effect(() => { if (liveVoiceStore.open && target) void liveVoiceStore.loadSettings(target, true); });
 
@@ -119,8 +128,9 @@
     <header class="lv-head">
       <h2 class="lv-title">{m.live_voice_open()}</h2>
       {#if inCall}
-        <p class="lv-status" role="status">
-          {phase === 'live' ? `${m.live_voice_live()} · ${elapsed}` : m.live_voice_connecting()}
+        <p class="lv-status lv-st-{status}" role="status">
+          <span class="lv-dot" aria-hidden="true"></span>
+          {phase === 'live' ? `${STATUS[status]()} · ${elapsed}` : m.live_voice_connecting()}
         </p>
       {/if}
       {#if target}
@@ -152,6 +162,13 @@
         </div>
 
         {#if vs.error}<p class="lv-detail">{vs.error.text}</p>{/if}
+
+        {#if busy && (vs.action || thought.length)}
+          <section class="lv-block lv-now" aria-live="polite">
+            {#if vs.action}<p class="lv-action">{vs.action.text}</p>{/if}
+            {#each thought as line, i (i)}<p class="lv-thought">{line}</p>{/each}
+          </section>
+        {/if}
 
         {#if vs.draft}
           <section class="lv-block">
@@ -276,7 +293,18 @@
   .lv { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); background: transparent; }
   .lv-head { display: flex; flex-direction: column; gap: 2px; }
   .lv-title { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); }
-  .lv-status { font-size: var(--text-sm); color: var(--accent); font-variant-numeric: tabular-nums; }
+  .lv-status { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--st, var(--text-muted)); font-variant-numeric: tabular-nums; }
+  .lv-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+  .lv-st-voice { --st: var(--success); }
+  .lv-st-you { --st: var(--accent); }
+  .lv-st-thinking { --st: var(--text-primary); }
+  .lv-st-searching, .lv-st-working { --st: var(--warning); }
+  .lv-st-thinking .lv-dot, .lv-st-searching .lv-dot, .lv-st-working .lv-dot { animation: lv-pulse 1s ease-in-out infinite; }
+  @keyframes lv-pulse { 50% { opacity: 0.3; } }
+  .lv-now { gap: 4px; }
+  .lv-action { font-size: var(--text-sm); color: var(--warning); }
+  .lv-thought { font-size: var(--text-xs); color: var(--text-muted); overflow-wrap: anywhere; }
+  @media (prefers-reduced-motion: reduce) { .lv-dot { animation: none !important; } }
   .lv-server, .lv-muted { font-size: var(--text-sm); color: var(--text-muted); }
   .lv-error { font-size: var(--text-sm); color: var(--error); }
   .lv-detail { font-size: var(--text-xs); color: var(--text-muted); word-break: break-word; }

@@ -7862,5 +7862,10 @@
   "live_voice_action_unknown": "O celular não conhece essa ação; veja a lista com hangar_actions.",
   "live_voice_action_not_open": "Não há configurações nem relatório abertos para fechar.",
   "live_voice_action_bad_section": "Seção de configurações desconhecida: {section}.",
-  "live_voice_action_no_terminal": "Esta conversa não tem terminal para abrir no celular."
+  "live_voice_action_no_terminal": "Esta conversa não tem terminal para abrir no celular.",
+  "live_voice_status_you": "Você está falando",
+  "live_voice_status_voice": "Falando",
+  "live_voice_status_thinking": "Pensando…",
+  "live_voice_status_searching": "Pesquisando…",
+  "live_voice_status_working": "Trabalhando…"
 }
