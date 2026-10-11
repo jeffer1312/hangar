@@ -653,10 +653,13 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                     log(format!("command approval destructive={destructive} accepted={ok}"));
                     let _ = rpc.respond(id, json!({"decision": if ok { "accept" } else { "decline" }})).await;
                 }
+                // Edição e permissão passam direto (acesso total), mas deixam rastro no diário: só o tipo, nunca o conteúdo.
                 Ok(Incoming::Request { id, method, .. }) if method == "item/fileChange/requestApproval" => {
+                    log("file change approval accepted=true");
                     let _ = rpc.respond(id, json!({"decision": "accept"})).await;
                 }
                 Ok(Incoming::Request { id, method, params }) if method == "item/permissions/requestApproval" => {
+                    log("permissions approval accepted=true scope=turn");
                     let _ = rpc.respond(id, json!({"permissions": params["permissions"], "scope": "turn"})).await;
                 }
                 Ok(Incoming::Request { id, method, .. }) => { log(format!("request {method} answered empty")); let _ = rpc.respond(id, json!({})).await; }
