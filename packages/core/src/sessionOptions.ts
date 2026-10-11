@@ -1,6 +1,6 @@
 // Opções de abertura de sessão, as mesmas do backend (model_args.py). Uma cópia só: a folha de
 // nova sessão, a orquestração e o app nativo divergiam quando cada um tinha a sua.
-import type { ModelOption } from './api';
+import type { ModelOption, ModelOptionsResponse } from './api';
 import type { Provider } from './types';
 
 export const SESSION_PROVIDERS: readonly Provider[] = ['claude', 'codex', 'pi', 'kimi', 'omp'];
@@ -44,3 +44,11 @@ export function contextModel(model: string, on: boolean): string {
   return on ? base + CONTEXT_SUFFIX : base;
 }
 export const hasContext = (model: string) => model.endsWith(CONTEXT_SUFFIX);
+
+/** Troca de modelo numa sessão de motor: mantém o 1M quando a sessão já está nele e o modelo novo
+ * aceita (controls.rs engine_model_choice). */
+export function engineModelChoice(res: ModelOptionsResponse, id: string): string {
+  const on = res.kind === 'engine' && hasContext(res.current?.model ?? '');
+  const accepts = res.models.find((x) => x.id === id)?.supports_fast === true;
+  return on && accepts ? contextModel(id, true) : id;
+}

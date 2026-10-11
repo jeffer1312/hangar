@@ -2006,7 +2006,7 @@ import { cachePrazo } from '../lib/cachePrazo';
   </div>
 {/snippet}
 
-<footer class="composer" class:compacto>
+<footer class="composer" class:compacto class:celular={!desktop.atual}>
   <input
     type="file"
     accept="*/*"
@@ -3159,6 +3159,10 @@ import { cachePrazo } from '../lib/cachePrazo';
      `.control-left >` não é enfeite: a regra base de .attach-btn vem DEPOIS neste arquivo e,
      em especificidade igual, venceria — o seletor composto desempata. */
   .composer.compacto .control-left > .attach-btn { width: 32px; min-width: 0; }  /* min-width fura o alvo global de 44px */
+  /* Celular: o desenho fica compacto, mas o alvo de toque chega a 44px por fora dele. */
+  .composer.celular .model-pill, .composer.celular .control-left > .attach-btn { position: relative; }
+  .composer.celular .model-pill::after { content: ''; position: absolute; inset: -7px 0; }
+  .composer.celular .control-left > .attach-btn::after { content: ''; position: absolute; inset: 0 -6px; }
   /* Anel de contexto de 26px vira 20 dentro do chip (o viewBox escala o desenho inteiro). */
   .composer.compacto .pill-duo .model-pill :global(svg) { width: 20px; height: 20px; }
 
