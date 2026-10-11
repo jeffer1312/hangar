@@ -182,7 +182,12 @@ def _problems(infos: list[SessionInfo]) -> dict[str, str]:
     for info in infos:
         if info.provider != "claude":
             continue
-        problem = hl.problema_de(info.name) if info.headless else runtime_problem(info.name)
+        try:
+            problem = hl.problema_de(info.name) if info.headless else runtime_problem(info.name)
+        except RuntimeError:
+            # Sessão cujo runtime ainda não publicou retrato: sem fato novo só para ela; derrubar os fatos
+            # de todas tirava a lista inteira do ar.
+            continue
         if problem:
             out[info.name] = problem[0]
     return out

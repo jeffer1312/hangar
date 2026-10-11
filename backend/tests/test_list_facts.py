@@ -218,3 +218,20 @@ def test_facts_held_question_for_claude_terminal(monkeypatch):
     out = _compute([_row("ct"), _row("ch", headless=True), _row("cx", "codex"), _row("ok")])
     # Sem terminal e outros provedores têm o próprio caminho da pergunta.
     assert out["held"] == held
+
+
+def test_one_session_without_snapshot_does_not_break_the_others(monkeypatch):
+    from types import SimpleNamespace
+
+    import app.adapters as adapters
+
+    class Headless:
+        def problema_de(self, name):
+            if name == "subindo":
+                raise RuntimeError("snapshot do runtime indisponível")
+            return ("headless_turno_erro", "x") if name == "quebrada" else None
+
+    monkeypatch.setattr(adapters, "get_adapter", lambda _key: Headless())
+    infos = [SimpleNamespace(name=n, provider="claude", headless=True) for n in ("subindo", "quebrada", "boa")]
+    # A sessão ainda sem retrato fica sem problema; as outras seguem com o delas.
+    assert list_facts._problems(infos) == {"quebrada": "headless_turno_erro"}
