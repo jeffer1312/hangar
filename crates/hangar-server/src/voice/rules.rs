@@ -130,7 +130,7 @@ pub fn match_session(query: &str, names: &[&str], on_active: &[bool]) -> Session
 }
 
 /// Palavras que acompanham o nome falado sem fazer parte dele.
-const NAME_FILLERS: [&str; 12] = ["a", "o", "as", "os", "da", "do", "de", "pra", "pro", "para", "sessao", "secao"];
+const NAME_FILLERS: [&str; 13] = ["a", "o", "as", "os", "da", "do", "de", "pra", "pro", "para", "sessao", "secao", "e"];
 
 /// Várias sessões casam com o nome falado: uma só no contexto (citada na conversa, acompanhada, falada há pouco, a da
 /// tela quando não é troca) decide; senão a raiz da família (hcc-rust-plano diante dos executores dela); senão continua
@@ -399,6 +399,10 @@ mod tests {
         assert_eq!(match_session("shop", &names, &active), SessionMatch::Many(vec![2, 3]));
         assert_eq!(match_session("cloudflare", &names, &active), SessionMatch::None);
         assert_eq!(match_session(" - ", &names, &active), SessionMatch::None, "consulta vazia não casa tudo");
+        let names = ["pwa-ux", "pwa-paridade", "voz-servidor-fim"];
+        let active = [true; 3];
+        assert_eq!(match_session("PWA e UX", &names, &active), SessionMatch::One(0), "'e' falado entre os pedaços");
+        assert_eq!(match_session("PWA e paridade", &names, &active), SessionMatch::One(1));
         let names = ["grupos-rust-plano", "rust-parte5-claude", "gpt-sol"];
         let active = [true; 3];
         assert_eq!(match_session("grupos", &names, &active), SessionMatch::One(0), "pedaço do nome");

@@ -475,7 +475,17 @@ pub fn switch_asked(spoken: &str, target: &str) -> bool {
             let joined: String = name[..k].concat();
             joined.chars().count() > 2 && target.contains(joined.as_str())
         }) || (name[0].chars().count() >= 3 && !NOT_NAMES.contains(&name[0].as_str()) && tokens.iter().any(|t| word_fits(&name[0], t)))
+            || misheard_first_word(name, &tokens)
     })
+}
+
+/// A transcrição erra a primeira palavra do nome ("vosso servidor fim" por voz-servidor-fim): vale se as duas seguintes
+/// casam com pedaços diferentes do nome. Uma só seria fraco demais ("vai ver o servidor").
+fn misheard_first_word(name: &[String], tokens: &[String]) -> bool {
+    let Some(rest) = name.get(1..3).filter(|r| r.len() == 2) else { return false };
+    let hits: Vec<usize> = rest.iter().filter_map(|w| (w.chars().count() >= 3 && !NOT_NAMES.contains(&w.as_str()))
+        .then(|| tokens.iter().position(|t| word_fits(w, t))).flatten()).collect();
+    hits.len() == 2 && hits[0] != hits[1]
 }
 
 /// "Sim" à pergunta da voz. "Vai"/"volta" entram pelos verbos de troca.
@@ -1097,6 +1107,10 @@ mod tests {
         assert!(switch_asked("volta pra voz", "voz-entendimento"), "pedaço do nome");
         assert!(!switch_asked("vai pra seção, P-Workstation", "shop-web"), "outra sessão da mesma máquina");
         assert!(!switch_asked("abre o arquivo do grupos e corrige", "grupos-rust-plano"), "juntar não pula para o nome no meio da frase");
+        assert!(switch_asked("Tá, vai no vosso servidor fim aí", "voz-servidor-fim"), "primeira palavra mal transcrita, o resto casa");
+        assert!(!switch_asked("vai ver o servidor", "voz-servidor-fim"), "uma palavra só depois da pulada não basta");
+        assert!(!switch_asked("vai mandar o fim do log", "voz-servidor-fim"), "palavras que não seguem o nome");
+        assert!(switch_asked("Vai na sessão PWA e UX", "pwa-ux"), "'e' entre os pedaços do nome");
         assert!(SWITCH_REFUSED.contains("só troco de sessão quando você pedir; o pedido vai para a sessão ativa"));
     }
 
