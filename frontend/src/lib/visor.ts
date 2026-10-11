@@ -144,6 +144,8 @@ function medir(el?: HTMLElement) {
   return null;
 }
 
+const TAMANHO_PROVISORIO = { width: 1600, height: 1200 };
+
 /** Mede carregando de fato — plano B de quando a miniatura ainda nao tem tamanho. Cai no cache do
  *  browser (mesma url da miniatura), entao na pratica resolve na hora. */
 function medirCarregando(url: string): Promise<{ width: number; height: number }> {
@@ -153,7 +155,7 @@ function medirCarregando(url: string): Promise<{ width: number; height: number }
     // Erro ou midia sem dimensao (video/audio, que nao carregam como <img>): um retangulo razoavel
     // e melhor que zero — mas quem NAO carregar de verdade aparece dito na faixa, pelo onError da
     // lib; sem isso um anexo expirado abria como retangulo cinza e ninguem sabia por que.
-    img.onerror = () => resolve({ width: 1600, height: 1200 });
+    img.onerror = () => resolve(TAMANHO_PROVISORIO);
     img.src = url;
   });
 }
@@ -194,9 +196,20 @@ export async function abrirVisor(midias: MidiaVisor[], inicio: number, acao?: Ac
 
 async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoVisor) {
   if (!midias.length) return;
-  const tamanhos = await Promise.all(
-    midias.map(async (x) => medir(x.element) ?? (await medirCarregando(x.url))),
-  );
+  // Só a tocada espera o original: medir todas baixava cada foto da conversa antes de abrir. As
+  // outras entram com o tamanho provisório e são medidas quando viram vizinhas da que está aberta.
+  const tamanhos = midias.map((x) => medir(x.element));
+  if (!tamanhos[inicio]) tamanhos[inicio] = await medirCarregando(midias[inicio].url);
+  const items = midias.map((x, i) => paraItem(x, tamanhos[i] ?? TAMANHO_PROVISORIO, i));
+  const semMedida = new Set(midias.flatMap((_, i) => (tamanhos[i] ? [] : [i])));
+  // A lib guarda os nossos objetos e lê width/height só ao montar o item, então mudar o objeto
+  // antes de o visor chegar nele basta. Vizinhas porque são as que a lib já pré-carrega.
+  const medirVizinhas = (i: number) => {
+    for (const j of [i - 1, i + 1].map((k) => (k + midias.length) % midias.length)) {
+      if (!semMedida.delete(j)) continue;
+      void medirCarregando(midias[j].url).then((t) => Object.assign(items[j], t));
+    }
+  };
   const bp = await obterInstancia();
   await waitForViewerHistory();
   let faixa: HTMLElement | null = null;
@@ -248,7 +261,7 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
   const indiceDe = (item: { idx?: number }) => (typeof item?.idx === 'number' ? item.idx : -1);
 
   const options: Parameters<typeof bp.open>[0] = {
-    items: midias.map((x, i) => paraItem(x, tamanhos[i], i)),
+    items,
     position: inicio,
     onOpen(container) {
       // Esc fecha o VISOR, nao a folha atras dele. Precisa ser na CAPTURA: o BottomSheet tambem
@@ -292,10 +305,14 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
       soltarArrasto = ligarArrastoPraBaixo(wrap, () => bp.close());
       trocarArrasto(soltarArrasto);
       pintar(inicio);
+      medirVizinhas(inicio);
     },
     onUpdate(_container, item) {
       const i = indiceDe(item as { idx?: number });
-      if (i >= 0) pintar(i);
+      if (i >= 0) {
+        pintar(i);
+        medirVizinhas(i);
+      }
     },
     onError() {
       // A midia nao carregou (anexo expirado, servidor fora). Sem isto o visor abre um retangulo
