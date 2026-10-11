@@ -938,8 +938,11 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:CanoConnection
                         });
                     }
                     Message::Snapshot(response) => {
+                        // Antes da primeira gravação a vista durável não tem retrato; o do motor é o mesmo que o `live` já publicou.
+                        let mut view = durable_view.clone();
+                        if view.get("public_state").is_none() { view["public_state"] = engine.view()["public_state"].clone(); }
                         let _ = response.send(Ok(json!({"key":target.key,"generation":target.generation,"revision":revision.value,
-                            "view":durable_view,"channels":channels,"error":error.as_ref().map(|e|e.code.clone())})));
+                            "view":view,"channels":channels,"error":error.as_ref().map(|e|e.code.clone())})));
                     }
                     Message::View(response) => { let _ = response.send(engine.view()); }
                     Message::Drain(response) => {
