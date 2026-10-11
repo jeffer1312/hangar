@@ -5,14 +5,14 @@ import {
   createSessionForServer, sendInputForServer, fetchSessionsForServer, getCodexAccountsForServer,
   getFolderBranchesForServer, getRootsForServer, listClaudeConfigs, getClaudeAccountSuggestion, getProviders,
   uniqueSessionName, basename, effortLevels, defaultCodexAccount, SESSION_PROVIDERS,
-  getEnginesForServer, getConfigForServer, contextModel, hasContext, setClaudeDefaultsForServer,
+  getEnginesForServer, getConfigForServer, contextModel, setClaudeDefaultsForServer,
   getWorktreesForServer, getCreationProgress, uploadFileForServer,
   type WorktreeStatus, type CreationProgress,
   type CodexAccount, type ConfigDirInfo, type FolderBranches, type FsRoot, type ModelOption, type Provider,
   type WorktreeChoice, type Motor, type CliProxyAccount,
 } from '@hangar/core';
 import { listOwnServers, selectServer, getActiveId, type Server } from './auth';
-import { carregarModelos, valorModelo } from './modelosPorConta';
+import { carregarModelos, matchRemembered, valorModelo } from './modelosPorConta';
 import { bestAccountWithQuota, exhaustedWindow, type ContaCota } from './cota';
 import * as m from '../paraglide/messages';
 
@@ -142,7 +142,11 @@ export class NewChatDraft {
   }
   // 1M só existe junto do Fast do motor (choices.rs render_engine_context).
   get contextAvailable(): boolean { return this.provider === 'claude' && this.fastAvailable; }
-  get bodyModel(): string | null { return this.model ? contextModel(this.model, this.contextOn && this.contextAvailable) : null; }
+  // Fora do motor, `opus[1m]` é linha própria da lista: o sufixo não pode cair.
+  get bodyModel(): string | null {
+    if (!this.model) return null;
+    return this.contextAvailable ? contextModel(this.model, this.contextOn) : this.model;
+  }
   // O que impede abrir no motor do proxy, na ordem do nativo; '' = pronto.
   get proxyBlocked(): string {
     const motor = this.motor;
@@ -462,10 +466,10 @@ export class NewChatDraft {
       // O padrão marcado vence o último modelo (choices.rs load_models), se ainda estiver na lista.
       const saved = this.#readDefault();
       this.savedDefault = saved;
-      const base = saved ? contextModel(saved.model, false) : '';
-      if (saved && (!base || r.models.some((x) => valorModelo(x) === base))) {
-        this.model = base;
-        this.contextOn = hasContext(saved.model);
+      const hit = saved?.model ? matchRemembered(saved.model, r.models, claude && !!this.engine, claude && !!this.engine && !!this.engineAccount) : null;
+      if (saved && (!saved.model || hit)) {
+        this.model = hit?.model ?? '';
+        this.contextOn = hit?.context ?? false;
         this.effort = this.levels.includes(saved.effort) ? saved.effort : '';
         if (saved.permission && !this.#permissionTouched) this.permission = saved.permission;
       }

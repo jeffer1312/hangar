@@ -15,6 +15,19 @@ export const temEscolhaDeModelo = (provider: string) =>
 // `pi --model k3` cru é ambíguo. Nos outros formatos não há provider e o id já é único.
 export const valorModelo = (m: ModelOption) => (m.provider ? `${m.provider}/${m.id}` : m.id);
 
+// Confere um valor lembrado (memória ou padrão salvo) contra a lista. Id exato primeiro: na conta
+// Anthropic `opus` e `opus[1m]` são linhas distintas. No motor a lista nunca traz `[1m]`, então lá
+// o modelo volta sem o sufixo; o 1M só volta na conta ChatGPT do proxy com Fast (choices.rs matched_model).
+export function matchRemembered(
+  value: string, models: ModelOption[], engine: boolean, proxyAccount: boolean,
+): { model: string; context: boolean } | null {
+  if (models.some((x) => valorModelo(x) === value)) return { model: value, context: false };
+  if (!engine) return null;
+  const base = contextModel(value, false);
+  const mod = models.find((x) => valorModelo(x) === base);
+  return mod ? { model: base, context: proxyAccount && hasContext(value) && !!mod.supports_fast } : null;
+}
+
 export interface CatalogoDaConta {
   models: ModelOption[];
   // Cache frio de uma conta Claude sem sessão viva: só `opus/sonnet/haiku`.
@@ -23,7 +36,7 @@ export interface CatalogoDaConta {
   // virar flag às cegas (a sessão subiria e falharia no primeiro turno).
   lembrado: string;
   esforcoLembrado: string;
-  // A janela de 1M lembrada vem separada do modelo: o valor da lista nunca carrega o sufixo `[1m]`.
+  // A janela de 1M lembrada da conta do proxy vem separada do modelo: lá a lista não carrega `[1m]`.
   contextoLembrado: boolean;
 }
 
@@ -44,12 +57,10 @@ export async function carregarModelos(
   if (chaveMemoria) {
     try {
       const l = localStorage.getItem(chaveMemoria);
-      const base = l ? contextModel(l, false) : '';
-      const mod = base ? r.models.find((x) => valorModelo(x) === base) : undefined;
-      if (mod) {
-        lembrado = base;
-        // `[1m]` só volta onde o nativo aceita (choices.rs matched_model): conta ChatGPT do proxy e modelo com Fast.
-        contextoLembrado = hasContext(l!) && q.provider === 'claude' && !!q.engineAccount && !!mod.supports_fast;
+      const hit = l ? matchRemembered(l, r.models, q.provider === 'claude' && !!q.engine, q.provider === 'claude' && !!q.engineAccount) : null;
+      if (hit) {
+        lembrado = hit.model;
+        contextoLembrado = hit.context;
       }
       esforcoLembrado = localStorage.getItem(chaveMemoria + ':effort') ?? '';
     } catch { /* storage bloqueado: sem memória, sem erro */ }

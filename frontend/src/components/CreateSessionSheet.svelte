@@ -13,9 +13,9 @@
            getCreationProgress, type CreationProgress,
            type ModelOption, type Motor, type CliProxyAccount, type SessionOpeningExtras, type ArchiveEntry,
            sanitizeSessionName, uniqueSessionName } from '@hangar/core';
-  import { carregarModelos as carregarModelosDaConta, temEscolhaDeModelo, valorModelo } from '../lib/modelosPorConta';
+  import { carregarModelos as carregarModelosDaConta, matchRemembered, temEscolhaDeModelo, valorModelo } from '../lib/modelosPorConta';
   import { basename, claudeAccountFolder, providerName, relativeTime, cotaDaConta, resumoCota, janelaEsgotada, effortLevels, SESSION_PROVIDERS,
-    contextModel, hasContext, setClaudeDefaultsForServer } from '@hangar/core';
+    contextModel, setClaudeDefaultsForServer } from '@hangar/core';
   import SessionOpeningFields from './SessionOpeningFields.svelte';
   import BranchChoice from './BranchChoice.svelte';
   import { renderMarkdown } from '../lib/markdown';
@@ -265,7 +265,8 @@
   let contextOn = $state(false);
   const contextAvailable = $derived(!isDesktop && provider === 'claude' && fastAvailable);
   $effect(() => { if (!contextAvailable && contextOn) contextOn = false; });
-  const modeloCriacao = $derived(modelo ? contextModel(modelo, contextOn && contextAvailable) : '');
+  // Fora do motor, `opus[1m]` é linha própria da lista: o sufixo não pode cair.
+  const modeloCriacao = $derived(!modelo ? '' : contextAvailable ? contextModel(modelo, contextOn) : modelo);
   // "Usar como padrão" do nativo (harness-defaults), no celular: localStorage + settings.json do Claude.
   let padraoSalvo = $state<{ model: string; effort: string; permission: string } | null>(null);
   let padraoErro = $state('');
@@ -422,10 +423,12 @@
       // Celular: o padrão marcado vence o último modelo, como o load_models do nativo.
       padraoSalvo = isDesktop ? null : lerPadrao();
       if (padraoSalvo) {
-        const base = contextModel(padraoSalvo.model, false);
-        if (!base || r.models.some((x) => valorModelo(x) === base)) {
-          modelo = base;
-          contextOn = hasContext(padraoSalvo.model);
+        const hit = padraoSalvo.model
+          ? matchRemembered(padraoSalvo.model, r.models, provider === 'claude' && !!engine,
+              provider === 'claude' && !!proxyAccounts && !!engineAccount) : null;
+        if (!padraoSalvo.model || hit) {
+          modelo = hit?.model ?? '';
+          contextOn = hit?.context ?? false;
           if (padraoSalvo.permission) permissao = padraoSalvo.permission;
         }
       }

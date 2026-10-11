@@ -198,6 +198,12 @@
           return;
         }
         onApplied?.(res.model, currentEffort ?? null);
+        // No celular o toque já aplicou e Fast/1M moram logo abaixo da lista: fechar obrigaria reabrir.
+        if (celular) {
+          atual = alvo.id;
+          aplicando = false;
+          return;
+        }
       } else {
         // Nao se espera o picker: dispara, sai da frente e deixa a confirmacao com o usuario. Mas
         // a falha vai pra fora (`onFail`), nao pro console: o backend recusa a troca de verdade

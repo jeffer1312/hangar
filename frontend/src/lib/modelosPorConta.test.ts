@@ -7,7 +7,7 @@ vi.mock('@hangar/core', async (orig) => ({
 }));
 
 import { modelOptions } from '@hangar/core';
-import { carregarModelos } from './modelosPorConta';
+import { carregarModelos, matchRemembered } from './modelosPorConta';
 
 describe('carregarModelos: lembrado com 1M', () => {
   beforeEach(() => localStorage.clear());
@@ -24,5 +24,25 @@ describe('carregarModelos: lembrado com 1M', () => {
     localStorage.setItem('k', 'gpt-4o[1m]');
     expect(await carregarModelos({ provider: 'claude', engine: 'gpt', engineAccount: 'a' }, 'k'))
       .toMatchObject({ lembrado: 'gpt-4o', contextoLembrado: false });
+  });
+
+  it('conta Anthropic: opus[1m] é linha própria e volta inteiro', async () => {
+    vi.mocked(modelOptions).mockResolvedValue({ models: [{ id: 'opus' }, { id: 'opus[1m]' }], reduced: false } as never);
+    localStorage.setItem('k', 'opus[1m]');
+    expect(await carregarModelos({ provider: 'claude' }, 'k'))
+      .toMatchObject({ lembrado: 'opus[1m]', contextoLembrado: false });
+    // Lista fria sem a linha de 1M: não troca calado pelo Opus comum.
+    vi.mocked(modelOptions).mockResolvedValue({ models: [{ id: 'opus' }], reduced: true } as never);
+    expect(await carregarModelos({ provider: 'claude' }, 'k')).toMatchObject({ lembrado: '' });
+  });
+});
+
+describe('matchRemembered', () => {
+  const models = [{ id: 'opus' }, { id: 'opus[1m]' }, { id: 'gpt-5.5', supports_fast: true }] as never;
+  it('id exato vence; base sem [1m] só no motor, 1M só na conta do proxy', () => {
+    expect(matchRemembered('opus[1m]', models, false, false)).toEqual({ model: 'opus[1m]', context: false });
+    expect(matchRemembered('gpt-5.5[1m]', models, false, false)).toBeNull();
+    expect(matchRemembered('gpt-5.5[1m]', models, true, false)).toEqual({ model: 'gpt-5.5', context: false });
+    expect(matchRemembered('gpt-5.5[1m]', models, true, true)).toEqual({ model: 'gpt-5.5', context: true });
   });
 });
