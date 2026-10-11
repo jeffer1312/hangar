@@ -2,7 +2,7 @@
 //! microfone e recebe a resposta SDP.
 use super::{SendVerdict, log, observe, organizer, usage};
 use super::organizer::{Effective, FinishStep, MIC_VOICE_LEVEL, Mode, ModeModel, ModeModels, Planner, REPEAT_NOTE, REPEAT_WINDOW, Results, SEND_UNCONFIRMED, SpeechHold,
-    Consent, SendConsent, SendGate, SpokenTurns, ToolCall, finish_request, parse_tool, repeated_handoff, send_allowed, settings_update, spoken_input, tool_reply,
+    ConfirmGate, Consent, SendConsent, SendGate, SpokenTurns, ToolCall, finish_request, parse_tool, repeated_handoff, send_allowed, settings_update, spoken_input, tool_reply,
     organizer_start, user_speech, ORGANIZER_PROMPT, VOICE_PROMPT};
 use super::rpc::{Incoming, Rpc, RpcError, handshake};
 use serde_json::{Value, json};
@@ -307,13 +307,8 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
     let mut context_failures = 0u32;
     let mut session_names: Vec<String> = Vec::new();
     let mut consent = Consent::send();
-    // Edição no projeto: a mesma trava, com os verbos de editar. `edit_pending` é a edição liberada que espera o turno
-    // seguinte (o acesso vale do próximo turno em diante); `edit_turn`, o turno aberto para fazê-la.
-    let mut edit_consent = Consent::edit();
-    let mut edit_pending: Option<(String, PathBuf)> = None;
-    let mut edit_turn: Option<String> = None;
-    // O acesso completo não fechou: nenhuma edição nova é liberada enquanto ele estiver aberto sem dono.
-    let mut edit_stuck = false;
+    // Comando destrutivo do organizador recusado à espera do sim falado.
+    let mut command_gate: ConfirmGate<String> = ConfirmGate::default();
     // Última fala repassada (para reconhecer a repetida) e os itens de fala já tratados.
     let mut last_input: Option<(String, Instant)> = None;
     let mut seen_items: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -458,7 +453,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                         }
                         ToolCall::FinishPlan { .. } | ToolCall::AskSession(_) | ToolCall::SetMode(_) | ToolCall::SwitchSession(_)
                             | ToolCall::OpenSession(_) | ToolCall::CloseSession { .. } | ToolCall::PairSessions(..) | ToolCall::UnpairSession(_)
-                            | ToolCall::HangarAction { .. } | ToolCall::Computer(_) | ToolCall::ClickScreen { .. } | ToolCall::EditFiles(_)
+                            | ToolCall::HangarAction { .. } | ToolCall::Computer(_) | ToolCall::ClickScreen { .. }
                             if !spoken.allows(&params) => {
                             let _ = rpc.respond(id, tool_reply("Só a pedido falado do usuário.", false)).await;
                             "refused-not-spoken"
@@ -566,41 +561,6 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             "click-screen"
                         }
                         ToolCall::Observe(request) => { let _ = events.send(VoiceEvent::Observe(CallId(id), request)).await; "observe" }
-                        ToolCall::EditFiles(_) if cfg!(windows) => {
-                            let _ = rpc.respond(id, tool_reply("No Windows você roda sem shell e não consegue editar; mande o pedido à sessão.", false)).await;
-                            "refused-windows"
-                        }
-                        ToolCall::EditFiles(_) if edit_stuck => {
-                            let _ = rpc.respond(id, tool_reply("O acesso completo da edição anterior não fechou; nenhuma edição nova até \
-                                encerrar a chamada. Mande o pedido à sessão.", false)).await;
-                            "refused-edit-stuck"
-                        }
-                        ToolCall::EditFiles(_) if !edit_consent.check(params["turnId"].as_str().unwrap_or_default(), Instant::now()) => {
-                            let _ = rpc.respond(id, tool_reply(organizer::EDIT_UNCONFIRMED, false)).await;
-                            "refused-unconfirmed"
-                        }
-                        ToolCall::EditFiles(request) => {
-                            // Acesso completo, como uma sessão normal: o arquivo pedido pode estar fora do projeto. A pasta de trabalho
-                            // é o projeto da sessão na tela quando ele é desta máquina, senão a pasta pessoal.
-                            let workdir = target_cwd.clone().or_else(std::env::home_dir).unwrap_or_else(|| own.clone());
-                            // O acesso vale do turno seguinte em diante: este termina calado e o Hangar abre o da edição.
-                            let open = json!({"threadId": thread, "sandboxPolicy": {"type": "dangerFullAccess"}, "cwd": workdir});
-                            match rpc.request("thread/settings/update", open).await {
-                                Ok(_) => {
-                                    edit_consent.used();
-                                    edit_pending = Some((request, workdir));
-                                    log(format!("edit access granted in_project={}", target_cwd.is_some()));
-                                    let _ = rpc.respond(id, tool_reply("Edição liberada. Termine este turno sem escrever nada: o Hangar abre em seguida \
-                                        um turno com acesso completo para você fazer a edição.", true)).await;
-                                    "edit-granted"
-                                }
-                                Err(error) => {
-                                    log(format!("edit access failed kind={}", rpc_error_kind(&error)));
-                                    let _ = rpc.respond(id, tool_reply("Não consegui liberar a edição; mande o pedido à sessão.", false)).await;
-                                    "edit-failed"
-                                }
-                            }
-                        }
                         ToolCall::Computer(objective) => { let _ = events.send(VoiceEvent::Computer(CallId(id), objective)).await; "computer" }
                         ToolCall::ListSessions => { let _ = events.send(VoiceEvent::ListSessions(CallId(id))).await; "list" }
                         ToolCall::OpenSession(request) => { let _ = events.send(VoiceEvent::OpenSession(CallId(id), request)).await; "open" }
@@ -683,6 +643,22 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                     log("request item/tool/requestUserInput answered empty");
                     let _ = rpc.respond(id, json!({"answers": {}})).await;
                 }
+                // O organizador tem acesso completo; só o comando destrutivo espera o sim falado do usuário.
+                Ok(Incoming::Request { id, method, params }) if method == "item/commandExecution/requestApproval" => {
+                    let command = params["command"].as_str();
+                    let destructive = command.is_none_or(organizer::destructive);
+                    let ok = organizer::approval_decision(command, spoken.allows(&params), &mut command_gate,
+                        params["turnId"].as_str().unwrap_or_default(), Instant::now());
+                    // Só o desfecho: o texto do comando é conversa e não vai ao diário.
+                    log(format!("command approval destructive={destructive} accepted={ok}"));
+                    let _ = rpc.respond(id, json!({"decision": if ok { "accept" } else { "decline" }})).await;
+                }
+                Ok(Incoming::Request { id, method, .. }) if method == "item/fileChange/requestApproval" => {
+                    let _ = rpc.respond(id, json!({"decision": "accept"})).await;
+                }
+                Ok(Incoming::Request { id, method, params }) if method == "item/permissions/requestApproval" => {
+                    let _ = rpc.respond(id, json!({"permissions": params["permissions"], "scope": "turn"})).await;
+                }
                 Ok(Incoming::Request { id, method, .. }) => { log(format!("request {method} answered empty")); let _ = rpc.respond(id, json!({})).await; }
                 Ok(Incoming::Notification { method, params }) => {
                     let ours = params["threadId"].as_str() == Some(thread.as_str());
@@ -723,7 +699,6 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             // Só fala nova vale como pedido de envio: a repetida reabriria um pedido já usado.
                             let speech = user_speech(&text);
                             let asked = consent.heard(&speech, &session_names, now);
-                            edit_consent.heard(&speech, &session_names, now);
                             if asked && refused_send.take().is_some_and(|at| now.saturating_duration_since(at) < organizer::CONFIRM_WINDOW) {
                                 log("send completed by next speech");
                                 let note = organizer::SEND_COMPLETED_NOTE.to_owned();
@@ -799,29 +774,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                                 log(format!("organizer failure: {:?}", VoiceFailure::Organizer));
                                 let _ = events.send(VoiceEvent::Failed(VoiceFailure::Organizer)).await;
                             }
-                            // Acabou o turno da edição (concluído, interrompido ou falho): o acesso ao projeto fecha já.
-                            if edit_turn.is_some() && edit_turn.as_deref() == params["turn"]["id"].as_str() {
-                                edit_turn = None;
-                                edit_stuck = !close_edit_access(&rpc, &thread, &own, events).await;
-                            }
-                            if let Some((request, project)) = edit_pending.take() {
-                                let text = format!("{} Edição liberada pelo usuário, com acesso completo a esta máquina (pasta de trabalho {}): \
-                                    {request}\nEdite agora pelo shell só os arquivos deste pedido, dentro ou fora do projeto, confira o resultado e diga \
-                                    numa frase o que mudou. Ao terminar, você volta a gravar só na sua pasta.", organizer::NOTE_PREFIX, project.display());
-                                match rpc.request("turn/start", json!({"threadId": thread, "input": [{"type": "text", "text": text}]})).await {
-                                    Ok(result) => {
-                                        if let Some(turn) = result["turn"]["id"].as_str() { edit_turn = Some(turn.to_owned()); results.mark_summary(turn.to_owned()); }
-                                        // Os resultados de sessão esperam o turno da edição acabar.
-                                        results.turn_started();
-                                        log("edit turn started");
-                                    }
-                                    Err(error) => {
-                                        log(format!("edit turn start failed kind={}", rpc_error_kind(&error)));
-                                        edit_stuck = !close_edit_access(&rpc, &thread, &own, events).await;
-                                        if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, &mut out, organizer_busy).await; }
-                                    }
-                                }
-                            } else if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, &mut out, organizer_busy).await; }
+                            if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, &mut out, organizer_busy).await; }
                         }
                         "item/completed" if params["item"]["type"] == "agentMessage" && params["item"]["phase"] != "commentary" => {
                             if results.take_summary(params["turnId"].as_str().unwrap_or_default())
@@ -912,18 +865,6 @@ async fn apply_models(rpc: &Rpc, thread: &str, applied: &mut ModeModel, models: 
     log(format!("settings update failed mode={mode:?}"));
     let _ = events.send(VoiceEvent::Failed(VoiceFailure::ModelSwitch)).await;
     Some("O modo mudou, mas o modelo que pensa não trocou; segue o anterior.")
-}
-
-/// Volta o organizador ao isolamento: grava só na pasta própria. Tenta duas vezes; falhando, avisa na tela, porque o acesso
-/// completo ficaria aberto nos turnos seguintes.
-async fn close_edit_access(rpc: &Rpc, thread: &str, own: &std::path::Path, events: &async_channel::Sender<VoiceEvent>) -> bool {
-    let back = json!({"threadId": thread, "sandboxPolicy": {"type": "workspaceWrite", "writableRoots": []}, "cwd": own});
-    for _ in 0..2 {
-        if rpc.request("thread/settings/update", back.clone()).await.is_ok() { log("edit access closed"); return true; }
-    }
-    log("edit access close failed");
-    let _ = events.send(VoiceEvent::Failed(VoiceFailure::Organizer)).await;
-    false
 }
 
 /// Fala que a voz puxa sozinha: `hold` a segura enquanto o usuário fala; `parked` a guarda enquanto nenhum aparelho ouve

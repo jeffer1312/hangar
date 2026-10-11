@@ -18,12 +18,16 @@ Converse, analise, explique e ajude a planejar. Mandar trabalho para uma sessão
 A entrada realtime_delegation traz a fala mais recente em input e a conversa em transcript_delta. A mesma fala pode chegar
 duas vezes (a segunda com a transcrição final): se ela só repete o que você já tratou, não repita a ação nem a resposta.
 O que você consegue fazer, em qualquer modo: ler a conversa da sessão na tela com read_session (o que ela fez, está fazendo,
-falou ou respondeu); ler o código do projeto pelo shell, pelo caminho completo que o contexto informa, sem alterar nada;
-ler a tela do Hangar com read_screen; pesquisar na internet; acompanhar sessões; observar e medir a máquina com
-observe_system (processos, CPU e memória, inclusive o Hangar rodando). 'O que a sessão está falando/fazendo' é a
-conversa dela: use read_session, nunca diga que não consegue ler a tela.
-O shell roda isolado: lê arquivos, mas não enxerga os processos da máquina (ps e /proc só mostram os dele). Para processos e
-uso de recursos, use observe_system; não conclua pelo shell que algo não está rodando.
+falou ou respondeu); usar esta máquina pelo shell com acesso completo: ler e editar arquivos (do projeto ou de fora dele,
+pelo caminho completo), rodar comandos e ver os processos; ler a tela do Hangar com read_screen; pesquisar na internet;
+acompanhar sessões; observar e medir a máquina também com observe_system (processos, CPU e memória numa amostra, inclusive
+o Hangar rodando). 'O que a sessão está falando/fazendo' é a conversa dela: use read_session,
+nunca diga que não consegue ler a tela.
+Quando o usuário pedir a você para editar, rodar ou conferir algo nesta máquina, faça direto pelo shell e diga numa frase
+o que mudou ou o que viu.
+Comandos destrutivos (apagar, sobrescrever histórico do git, parar processos ou serviços, publicar, push) o Hangar recusa
+na primeira vez: diga ao usuário numa frase exatamente o que vai ser feito e pergunte; só depois do sim falado dele rode
+de novo o mesmo comando, idêntico.
 De quem é o pedido, antes de qualquer ação:
 - Conversa com você: perguntas, opiniões, 'o que você acha', 'me explica', 'analisa', 'lê você', 'me ajuda a entender',
   pensar em voz alta, ideias pela metade. Responda você mesmo, lendo a sessão, o código ou a internet. Nada vai à sessão.
@@ -52,17 +56,13 @@ Quando a entrada começar por [RESULTADO DA SESSÃO <nome>], não use ferramenta
 até três frases, começando por 'A sessão <nome> respondeu:'. Preserve erros, pendências e perguntas. Sem código nem Markdown.
 Acompanhar: quando ele pedir para acompanhar uma sessão ('acompanha a hangar', 'me avisa quando a X responder'), chame
 follow_session; as respostas dela chegam sozinhas como [RESULTADO DA SESSÃO], mesmo fora da tela. unfollow_session para de acompanhar.
-Leia o código só pelo caminho completo; nunca abra credenciais (.ssh, .env, auth.json, chaves).
-Editar arquivos (do projeto ou de fora dele, como ~/.local/bin/delphi-vm): só quando o usuário pede explicitamente para VOCÊ
-editar ('edita o arquivo…', 'altera…', 'corrige você…') ou confirma 'pode editar'. Chame edit_files com o pedido inteiro, com os
-caminhos citados, e termine o turno sem escrever nada; o Hangar abre em seguida um turno com acesso completo, em que você edita
-pelo shell só os arquivos do pedido, confere o resultado e diz numa frase o que mudou. Sem esse pedido, nunca grave fora da sua
-pasta. Pedido de trabalho para a sessão continua sendo send_to_session; na dúvida, pergunte 'edito eu ou mando para a sessão?'.
+Use arquivos pelo caminho completo; nunca abra credenciais (.ssh, .env, auth.json, chaves).
+Trabalho que é PARA uma sessão continua indo por send_to_session; na dúvida, pergunte 'faço eu ou mando para a sessão?'.
 Há dois modos. No modo Direto, siga as regras acima. No modo Planejar, NADA vai à sessão até o fim:
 - Converse e escreva o plano com update_plan, sempre o documento inteiro em Markdown: Objetivo, Decisões,
   Pendências, Pesquisas (com links das fontes) e Próximos passos. Reorganize quando o usuário mudar de ideia.
 - Pesquise na internet quando ajudar e resuma o que achou em uma ou duas frases faladas; guarde o detalhe no plano.
-- Leia o código do projeto quando precisar; não edite nada, a não ser que ele peça explicitamente (edit_files).
+- Leia o código do projeto quando precisar; não altere arquivos, a não ser que ele peça.
 - Use ask_session só para o que apenas a sessão sabe; pergunta curta e objetiva. A resposta chega depois, numa
   entrada que começa por [RESPOSTA DA SESSÃO À PERGUNTA]: use-a para atualizar o plano e comente em no máximo
   uma frase, sem lê-la como resultado.
@@ -103,7 +103,7 @@ pub const VOICE_PROMPT: &str = "Você é a assistente de voz do Hangar, o app on
 Codex) em vários projetos. Fale português brasileiro, com calma, direta e curta: uma ou duas frases por vez.
 
 Por trás de você trabalha o organizador (Codex). Ele consegue: ler a conversa de qualquer sessão (o que ela fez, está
-fazendo, falou e respondeu); ler a tela do Hangar; ler o código do projeto; pesquisar na internet; conversar, analisar e
+fazendo, falou e respondeu); ler a tela do Hangar; ler e editar arquivos e rodar comandos nesta máquina; pesquisar na internet; conversar, analisar e
 planejar com o usuário; mandar pedidos para a sessão; trocar, abrir, fechar, agrupar e acompanhar sessões.
 
 Escuta
@@ -181,17 +181,12 @@ pub fn tools() -> Value {
             json!({"area": {"type": "string"}}), &[]),
         tool("computer", "Controla OUTRO programa deste computador (nunca o Hangar) a partir de um objetivo em português; demora e devolve concluído ou parou com o motivo.",
             json!({"objective": {"type": "string"}})),
-        tool("edit_files", "Libera você a gravar arquivos desta máquina, do projeto ou de fora dele (ex.: ~/.local/bin/delphi-vm), para \
-            fazer a edição que o usuário PEDIU EXPLICITAMENTE ('edita…', 'altera…', 'corrige você…'). request = o pedido inteiro, com os \
-            caminhos citados. Sem pedido explícito volta pedindo confirmação. A edição é feita no turno seguinte, que o Hangar abre com \
-            acesso completo; termine este turno sem escrever nada.",
-            json!({"request": {"type": "string"}})),
         tool_with("click_screen", "Clica num botão, aba ou item da janela do Hangar pelo id que read_screen mostrou (#id), quando não há hangar_action para ele. \
             Botão de apagar, fechar sessão, enviar, parar e afins volta pedindo confirmação: só chame com confirmed true depois do sim explícito do usuário.",
             json!({"id": {"type": "string"}, "confirmed": {"type": "boolean"}}), &["id"]),
         tool_with("observe_system", "Observa a máquina, só leitura: CPU, memória e carga, e os processos (pid, pai, nome, CPU%, memória, idade, linha de \
-            comando sem segredos), medidos numa amostra. Use para ver ou medir o Hangar em execução (filter 'hangar') ou qualquer programa; o shell não \
-            enxerga os processos da máquina. Para medir variação, chame de novo e compare.",
+            comando sem segredos), medidos numa amostra. Use para ver ou medir o Hangar em execução (filter 'hangar') ou qualquer programa. \
+            Para medir variação, chame de novo e compare.",
             json!({"filter": {"type": "string"}, "sort": {"type": "string", "enum": ["cpu", "memoria"]},
                 "sample_ms": {"type": "integer", "minimum": 200, "maximum": 5000}, "limit": {"type": "integer", "minimum": 1, "maximum": 80}}), &[]),
     ])
@@ -208,10 +203,12 @@ pub fn tools_for(caps: &[String]) -> Value {
 /// Esforço do organizador quando a pessoa não escolheu outro.
 pub const DEFAULT_EFFORT: &str = "low";
 
-/// `thread/start` do organizador. `workspace-write` com cwd na pasta própria: grava só nela (e no /tmp); o código da
-/// sessão é lido pelo caminho completo que a nota leva. Sem `"environments": []`: com ele o Codex não oferece o shell.
+/// `thread/start` do organizador. Acesso completo à máquina, como uma sessão; `untrusted` faz o Codex pedir aprovação
+/// dos comandos que ele não sabe seguros, e o laço da chamada recusa os destrutivos até o sim falado (`approval_decision`).
+/// cwd na pasta própria; o código da sessão vai pelo caminho completo que a nota leva. Sem `"environments": []`: com ele
+/// o Codex não oferece o shell.
 pub fn organizer_start(config: &Value, own: &Path, session: Option<&Path>, context: &str, pair: &ModeModel, tools: Value) -> Value {
-    let mut start = json!({"ephemeral": true, "cwd": own, "sandbox": "workspace-write", "approvalPolicy": "never",
+    let mut start = json!({"ephemeral": true, "cwd": own, "sandbox": "danger-full-access", "approvalPolicy": "untrusted",
         "baseInstructions": ORGANIZER_PROMPT, "developerInstructions": format!("{}\n\n{context}", code_note(session, own)),
         "config": thread_config(config, &pair.effort), "dynamicTools": tools});
     if let Some(model) = pair.model.as_deref().or_else(|| config["model"].as_str()) { start["model"] = json!(model); }
@@ -262,10 +259,9 @@ pub fn settings_update(thread: &str, from: &ModeModel, to: &ModeModel, default_m
 }
 
 pub fn thread_config(config: &Value, effort: &str) -> Value {
-    // O sandbox só foi provado no Linux; no Windows o organizador fica sem shell (e portanto não grava nada).
     // `agents.enabled`: o catálogo dos modelos novos liga o `spawn_agent` mesmo com `features.multi_agent` desligado, e numa thread
     // efêmera ele falha sempre (o filho copia o histórico gravado, que ela não tem).
-    let mut result = json!({"features.shell_tool": !cfg!(windows),"features.unified_exec": false, "features.apps": false, "agents.enabled": false,
+    let mut result = json!({"features.shell_tool": true, "features.unified_exec": false, "features.apps": false, "agents.enabled": false,
         "features.hooks": false, "features.multi_agent": false, "features.js_repl": false,
         "features.apply_patch_freeform": false, "web_search": "live", "project_doc_max_bytes": 0,
         "model_reasoning_effort": effort, "model_reasoning_summary": "concise"});
@@ -315,7 +311,7 @@ pub enum ToolCall {
     ListSessions, OpenSession(OpenRequest), CloseSession { name: String, confirmed: bool }, PairSessions(String, String), UnpairSession(String),
     FollowSession(String), UnfollowSession(String),
     HangarActions, HangarAction { id: String, arg: Option<String> }, Computer(String),
-    ClickScreen { id: String, confirmed: bool }, Observe(super::observe::Request), EditFiles(String),
+    ClickScreen { id: String, confirmed: bool }, Observe(super::observe::Request),
     ReadScreen(Option<String>),
 }
 
@@ -356,7 +352,6 @@ pub fn parse_tool(params: &Value) -> ToolCall {
         "hangar_action" => arg("id").map_or_else(unknown, |id| ToolCall::HangarAction { id, arg: arg("arg") }),
         "read_screen" => ToolCall::ReadScreen(arg("area")),
         "computer" => arg("objective").map_or_else(unknown, ToolCall::Computer),
-        "edit_files" => arg("request").map_or_else(unknown, ToolCall::EditFiles),
         "click_screen" => arg("id").map_or_else(unknown, |id| ToolCall::ClickScreen { id: id.trim_start_matches('#').to_owned(), confirmed: params["arguments"]["confirmed"] == true }),
         "observe_system" => ToolCall::Observe(super::observe::Request::new(arg("filter"), arg("sort").as_deref() == Some("memoria"),
             params["arguments"]["sample_ms"].as_u64(), params["arguments"]["limit"].as_u64())),
@@ -589,28 +584,7 @@ pub fn send_signals(spoken: &str, names: &[String]) -> (usize, usize, usize) {
 /// Quanto vale o pedido falado de envio ainda não usado: a fala seguinte pode completar o pedido sem repetir "manda".
 pub const SEND_ASK_WINDOW: Duration = Duration::from_secs(45);
 
-/// Gravar no projeto: só quando a fala pede edição. "Corrige o login" sozinho é pedido de trabalho e pode ser para a
-/// sessão: aí o organizador pergunta antes.
-const EDIT_VERBS: [&str; 18] = ["edita", "edite", "editar", "altera", "altere", "alterar", "modifica", "modifique", "modificar",
-    "grava", "grave", "gravar", "escreve", "escreva", "escrever", "salva", "salve", "salvar"];
-
-/// Verbos de mexer no código que só valem como pedido de edição dirigido a ele ("corrige você mesmo").
-/// "faz" e "muda" ficam de fora: "o que você faz?" é conversa, e a liberação é acesso total à máquina.
-const FIX_VERBS: [&str; 10] = ["corrige", "corrija", "conserta", "conserte", "implementa", "implemente", "ajusta", "ajuste", "arruma",
-    "arrume"];
-
-/// A fala pede para o organizador editar: um verbo de edição, ou "você/tu/mesmo" com um verbo de conserto
-/// ("corrige você", "você mesmo ajusta"), sem negação logo antes.
-pub fn edit_asked(spoken: &str, _names: &[String]) -> bool {
-    let words: Vec<String> = spoken.split(|c: char| !c.is_alphanumeric()).map(squash).filter(|w| !w.is_empty()).collect();
-    let is_yourself = |w: &String| matches!(w.as_str(), "voce" | "tu" | "mesmo" | "mesma");
-    // "você/mesmo" colado ao verbo de conserto: logo antes ("você ajusta") ou até duas depois ("corrige você mesmo").
-    let yourself_next_to = |at: usize| (at > 0 && is_yourself(&words[at - 1])) || words[at + 1..(at + 3).min(words.len())].iter().any(is_yourself);
-    let negated = |at: usize| words[at.saturating_sub(2)..at].iter().any(|w| SEND_NEGATIONS.contains(&w.as_str()));
-    words.iter().enumerate().any(|(at, w)| !negated(at) && (EDIT_VERBS.contains(&w.as_str()) || (FIX_VERBS.contains(&w.as_str()) && yourself_next_to(at))))
-}
-
-/// Ação só com intenção: pedido falado recente ("manda…", "edita…") ou o sim a uma pergunta de confirmação feita em
+/// Ação só com intenção: pedido falado recente ("manda…") ou o sim a uma pergunta de confirmação feita em
 /// outro turno. Sem isso, a chamada arma e o organizador pergunta. `asks` diz o que conta como pedido.
 /// Um pedido vale para o turno em que foi aceito: `granted` guarda os destinos já atendidos nele, e um destino a mais só
 /// passa se a fala o citou. Assim "manda pra A, pra B e pra C" manda três, e nem repete nem inventa um quarto.
@@ -624,8 +598,6 @@ pub enum SendConsent { Granted, Unconfirmed, NotNamed, Duplicate }
 impl Consent {
     /// Mandar para a sessão.
     pub fn send() -> Self { Self { asks: send_asked, asked: None, armed: None, blocked: None, granted: None } }
-    /// O organizador gravar no projeto.
-    pub fn edit() -> Self { Self { asks: edit_asked, asked: None, armed: None, blocked: None, granted: None } }
     /// `true` quando a fala é um pedido.
     pub fn heard(&mut self, spoken: &str, names: &[String], now: Instant) -> bool {
         let asked = (self.asks)(spoken, names);
@@ -677,9 +649,6 @@ impl Consent {
     /// O envio saiu: o próximo precisa de outro pedido.
     pub fn used(&mut self) { self.asked = None; }
 }
-
-pub const EDIT_UNCONFIRMED: &str = "Nada foi liberado: o usuário não pediu para você editar. Pergunte 'edito eu ou mando para a \
-    sessão?' e só chame edit_files de novo depois de ele pedir a você.";
 
 pub const SEND_UNCONFIRMED: &str = "Nada foi enviado: o usuário não pediu para mandar isso à sessão. Se for conversa com você, \
     responda você mesmo. Se for trabalho para a sessão, pergunte 'mando isso para a sessão?' e só chame send_to_session de novo \
@@ -736,12 +705,12 @@ pub fn finish_request(path: &Path, action: FinishAction, inline: Option<&str>) -
 }
 
 /// A pasta que o organizador lê é fixa na thread: trocar de sessão com outra pasta exige avisá-lo.
-/// Onde está o código da sessão na tela e onde o organizador pode gravar; vai no início e a cada troca de sessão.
+/// Onde está o código da sessão na tela e qual é a pasta própria; vai no início e a cada troca de sessão.
 pub fn code_note(session: Option<&Path>, own: &Path) -> String {
-    let write = format!("Fora da edição liberada por edit_files, você só grava arquivos em {}.", own.display());
+    let own = format!("Sua pasta de trabalho é {}.", own.display());
     match session {
-        Some(path) => format!("O código da sessão está em {}; leia por caminho completo. {write}", path.display()),
-        None => format!("O código da sessão atual não está disponível nesta máquina; não leia código. {write}"),
+        Some(path) => format!("O código da sessão está em {}; leia e edite por caminho completo. {own}", path.display()),
+        None => format!("O código da sessão atual não está disponível nesta máquina; não leia código. {own}"),
     }
 }
 
@@ -780,6 +749,76 @@ impl<T: PartialEq> ConfirmGate<T> {
         self.armed = if ok { None } else { Some((target, turn.to_owned(), now)) };
         ok
     }
+}
+
+/// Comando que apaga, reescreve histórico, para algo ou publica. Olha cada trecho da linha (`&&`, `;`, `|`, subshell) pelo
+/// comando que o abre; `bash -lc '…'` é aberto e conferido por dentro. Erra para o lado de pedir o sim.
+pub fn destructive(command: &str) -> bool {
+    let lower = command.to_lowercase();
+    lower.split(|c: char| matches!(c, ';' | '|' | '&' | '\n' | '(' | ')' | '`')).any(segment_destructive)
+}
+
+fn segment_destructive(segment: &str) -> bool {
+    let tokens: Vec<&str> = segment.split_whitespace().map(|t| t.trim_matches(|c| c == '\'' || c == '"' || c == '{' || c == '}' || c == '$')).filter(|t| !t.is_empty()).collect();
+    // Prefixos que só embrulham o comando de verdade.
+    let mut at = 0;
+    while let Some(t) = tokens.get(at) {
+        let wrapper = matches!(*t, "env" | "nohup" | "time" | "command" | "exec" | "nice" | "xargs" | "then" | "do" | "else");
+        if wrapper || (t.contains('=') && !t.starts_with('-')) || (at > 0 && t.starts_with('-') && matches!(tokens[at - 1], "env" | "nice" | "xargs")) {
+            at += 1;
+        } else { break; }
+    }
+    let Some(head) = tokens.get(at) else { return false };
+    let name = head.rsplit(['/', '\\']).next().unwrap_or(head).trim_end_matches(".exe");
+    let args = &tokens[at + 1..];
+    let has = |w: &str| args.contains(&w);
+    match name {
+        "sudo" | "doas" | "rm" | "rmdir" | "rd" | "unlink" | "shred" | "truncate" | "dd" | "kill" | "pkill" | "killall" | "shutdown"
+            | "reboot" | "poweroff" | "halt" | "remove-item" | "del" | "erase" | "stop-process" | "taskkill" => true,
+        n if n.starts_with("mkfs") || n.starts_with("format-") => true,
+        "bash" | "sh" | "zsh" | "dash" | "fish" | "pwsh" | "powershell" | "cmd" => {
+            // O que vem depois do -c/-lc/-command//c é outra linha de comando.
+            let script = args.iter().position(|a| matches!(*a, "-c" | "-lc" | "-ic" | "-command" | "/c" | "/k"))
+                .map(|p| args[p + 1..].join(" ")).unwrap_or_default();
+            destructive(&script)
+        }
+        "find" => has("-delete") || has("rm"),
+        "git" => {
+            // Pula as opções globais (-C caminho, -c chave=valor) até o subcomando.
+            let mut i = 0;
+            while let Some(a) = args.get(i) { if matches!(*a, "-c" | "--git-dir" | "--work-tree") { i += 2 } else if a.starts_with('-') { i += 1 } else { break } }
+            let (sub, rest) = match args.get(i) { Some(s) => (*s, &args[i + 1..]), None => return false };
+            let flag = |f: &str| rest.contains(&f);
+            match sub {
+                "push" | "clean" | "rebase" => true,
+                "reset" => flag("--hard"),
+                "checkout" => flag("--") || flag("-f") || flag("."),
+                "restore" => !(flag("--staged") && !flag("--worktree") && !flag("-w")),
+                "branch" => flag("-d") || flag("--delete"),
+                "stash" => flag("drop") || flag("clear"),
+                "commit" => flag("--amend"),
+                _ => false,
+            }
+        }
+        "tmux" => args.iter().any(|a| a.starts_with("kill-")),
+        "systemctl" => args.iter().any(|a| matches!(*a, "stop" | "restart" | "disable" | "kill")),
+        "docker" | "podman" => args.iter().any(|a| matches!(*a, "rm" | "rmi" | "prune")),
+        "kubectl" => has("delete"),
+        "hangar-send" => has("--close"),
+        "curl" | "wget" => args.windows(2).any(|w| matches!(w[0], "-x" | "--request" | "--method") && w[1] == "delete")
+            || args.iter().any(|a| matches!(*a, "-xdelete" | "--request=delete" | "--method=delete")),
+        "gh" => matches!(args, ["pr", "merge" | "close", ..] | ["release", "delete", ..] | ["repo", "delete", ..]),
+        "chmod" | "chown" => has("-r") || has("--recursive"),
+        _ => false,
+    }
+}
+
+/// Aprovação de um comando do organizador: o que não é destrutivo passa; o destrutivo passa só na segunda vez, idêntico,
+/// noutro turno falado depois de ter sido recusado num turno falado (o sim do usuário no meio). Turno sem fala nunca arma
+/// nem libera: um resumo de resultado não pode confirmar sozinho. Sem a linha de comando, vale como destrutivo.
+pub fn approval_decision(command: Option<&str>, spoken: bool, gate: &mut ConfirmGate<String>, turn: &str, now: Instant) -> bool {
+    if command.is_some_and(|c| !destructive(c)) { return true; }
+    spoken && gate.check(command.unwrap_or_default().to_owned(), true, turn, now)
 }
 
 /// Pergunta curta, numa linha só: o texto vira entrada do chat da sessão.
@@ -1052,11 +1091,10 @@ mod tests {
     }
 
     #[test]
-    fn announces_twenty_four_tools() {
+    fn announces_twenty_three_tools() {
         let tools = tools();
-        assert_eq!(tools.as_array().unwrap().len(), 24);
-        assert!(matches!(parse_tool(&json!({"tool": "edit_files", "arguments": {"request": "trocar o título em ~/.local/bin/x"}})),
-            ToolCall::EditFiles(r) if r == "trocar o título em ~/.local/bin/x"));
+        assert_eq!(tools.as_array().unwrap().len(), 23);
+        assert!(matches!(parse_tool(&json!({"tool": "edit_files", "arguments": {"request": "x"}})), ToolCall::Unknown(_)));
         assert!(ORGANIZER_PROMPT.contains("do projeto ou de fora dele"));
         let observe = tools.as_array().unwrap().iter().find(|t| t["name"] == "observe_system").unwrap();
         assert_eq!(observe["inputSchema"]["required"], json!([]), "tudo opcional");
@@ -1159,6 +1197,39 @@ mod tests {
     }
 
     #[test]
+    fn destructive_commands_are_recognized() {
+        for bad in ["rm -rf target", "/bin/bash -lc 'cd /p && rm x.txt'", "bash -lc \"git push origin main\"", "ls; rmdir old",
+            "find . -name '*.log' -delete", "find . -exec rm {} \\;", "git reset --hard HEAD~1", "git -C /p clean -fd",
+            "git checkout -- src/a.rs", "git restore src/a.rs", "git branch -D feat", "git stash drop", "git rebase main",
+            "git commit --amend -m x", "pkill -f hangar", "kill 123", "tmux kill-server", "systemctl --user restart hangar-backend",
+            "sudo ls", "docker system prune -a", "kubectl delete pod x", "hangar-send --close voz", "curl -X DELETE http://x/a",
+            "gh pr merge 12", "gh release delete v1", "chmod -R 777 /p", "dd if=/dev/zero of=x", "mkfs.ext4 /dev/sdb",
+            "cat x | xargs rm", "Remove-Item -Recurse C:\\x", "powershell -Command \"Stop-Process -Name x\"", "cmd /c rd /s /q C:\\x",
+            "taskkill /F /IM x.exe", "Format-Volume -DriveLetter D", "FOO=1 rm a", "echo $(rm a)"] {
+            assert!(destructive(bad), "{bad}");
+        }
+        for ok in ["git status", "ls -la", "cat x", "cargo test", "npm run build", "echo \"rm\"", "rg rm src", "git log --oneline",
+            "git checkout -b feat", "git restore --staged a.rs", "git branch", "curl http://x/delete", "ps aux | grep hangar",
+            "/bin/bash -lc 'cargo check -p x'", "git diff -- src", "chmod +x a.sh"] {
+            assert!(!destructive(ok), "{ok}");
+        }
+    }
+
+    #[test]
+    fn destructive_command_needs_a_spoken_yes_on_another_turn() {
+        let t0 = Instant::now();
+        let mut gate = ConfirmGate::default();
+        assert!(approval_decision(Some("cargo test"), false, &mut gate, "r1", t0), "o que não destrói passa sempre");
+        assert!(!approval_decision(Some("rm a"), true, &mut gate, "t1", t0), "primeira vez: recusa e arma");
+        assert!(!approval_decision(Some("rm a"), true, &mut gate, "t1", t0), "o mesmo turno não confirma sozinho");
+        assert!(!approval_decision(Some("rm a"), false, &mut gate, "r2", t0), "turno de resultado nunca libera");
+        assert!(!approval_decision(Some("rm b"), true, &mut gate, "t2", t0), "outro comando rearma");
+        assert!(approval_decision(Some("rm b"), true, &mut gate, "t3", t0 + Duration::from_secs(5)), "depois do sim, o mesmo comando passa");
+        assert!(!approval_decision(Some("rm b"), true, &mut gate, "t4", t0 + Duration::from_secs(6)), "a confirmação é consumida");
+        assert!(!approval_decision(None, true, &mut gate, "t5", t0), "sem comando vale como destrutivo");
+    }
+
+    #[test]
     fn plan_mode_refuses_direct_send() {
         assert!(send_allowed(Mode::Direct));
         assert!(!send_allowed(Mode::Plan));
@@ -1213,12 +1284,13 @@ mod tests {
     }
 
     #[test]
-    fn organizer_writes_only_in_own_folder_with_chosen_model_and_effort() {
+    fn organizer_has_full_access_with_chosen_model_and_effort() {
         let (own, session) = (Path::new("/h/.hangar/voz/arquivos"), Path::new("/p/a"));
         let config = json!({"model": "gpt-config"});
         let chosen = ModeModel { model: Some("gpt-x".into()), effort: "medium".into(), tier: Some(TIER_FAST.into()) };
         let start = organizer_start(&config, own, Some(session), "ctx", &chosen, tools());
-        assert_eq!(start["sandbox"], json!("workspace-write"));
+        assert_eq!(start["sandbox"], json!("danger-full-access"));
+        assert_eq!(start["approvalPolicy"], json!("untrusted"), "o Codex pede aprovação e o Hangar barra os destrutivos");
         assert_eq!(start["cwd"], json!(own));
         assert_eq!(start["model"], json!("gpt-x"));
         assert_eq!(start["serviceTier"], json!("priority"));
@@ -1542,16 +1614,6 @@ mod tests {
     }
 
     #[test]
-    fn talk_does_not_unlock_full_access_editing() {
-        for talk in ["o que você faz?", "a sessão faz o mesmo", "você muda de ideia rápido", "você viu? corrige isso depois na sessão"] {
-            assert!(!edit_asked(talk, &[]), "{talk}");
-        }
-        for ask in ["corrige você mesmo o script", "você ajusta o arquivo", "edita o delphi-vm", "arruma você"] {
-            assert!(edit_asked(ask, &[]), "{ask}");
-        }
-    }
-
-    #[test]
     fn gate_cancels_only_the_blocked_turn() {
         let mut gate = SendGate::default();
         let t0 = Instant::now();
@@ -1671,26 +1733,6 @@ mod tests {
         hold.heard_voice(now + MAX_HOLD);
         assert_eq!(hold.due(now + MAX_HOLD), vec!["resultado".to_owned()], "passou do teto: sai mesmo com voz");
         assert_eq!(hold.pending(), (0, 0));
-    }
-
-    #[test]
-    fn edit_needs_an_explicit_request_to_edit() {
-        assert!(edit_asked("edita o arquivo do login e troca o título", &[]));
-        assert!(edit_asked("altera esse texto no README", &[]));
-        assert!(edit_asked("corrige você mesmo esse erro", &[]), "pediu a ele, não à sessão");
-        assert!(edit_asked("pode salvar", &[]));
-        assert!(!edit_asked("corrige o login", &[]), "trabalho sem dizer quem: pergunta antes");
-        assert!(!edit_asked("o que esse arquivo faz?", &[]));
-        assert!(!edit_asked("o que você fala disso?", &[]), "'você' com verbo de conversa não é pedido de edição");
-        assert!(!edit_asked("não altera nada ainda", &[]), "negação logo antes");
-        let now = Instant::now();
-        let mut consent = Consent::edit();
-        consent.heard("o que você acha desse arquivo?", &[], now);
-        assert!(!consent.check("t1", now), "sem pedido: arma e pergunta");
-        assert!(consent.check("t2", now + Duration::from_secs(4)), "o 'pode editar' no turno seguinte libera");
-        let mut asked = Consent::edit();
-        asked.heard("edita o título da tela", &[], now);
-        assert!(asked.check("t1", now));
     }
 
     #[test]
@@ -1867,7 +1909,7 @@ mod tests {
         let config = thread_config(&json!({"mcp_servers": {"hangar": {}, "cloudflare": {}}, "plugins": {"ecc": {}}}), DEFAULT_EFFORT);
         assert_eq!(config["mcp_servers"]["hangar"], json!({"enabled": false}));
         assert_eq!(config["plugins"]["ecc"], json!({"enabled": false}));
-        assert_eq!(config["features.shell_tool"], json!(!cfg!(windows)));
+        assert_eq!(config["features.shell_tool"], json!(true));
         assert_eq!(config["web_search"], json!("live"));
     }
 
