@@ -124,11 +124,11 @@
       </div>
 
       <NewChatComposer bind:value={text} placeholder={m.native_composer({ agent: providerName(draft.provider) })}
-        busy={draft.sending} blocked={draft.loading} note={draft.note} onsend={send}>
+        busy={draft.sending} blocked={draft.loading || !!draft.proxyBlocked} note={draft.note} onsend={send}>
         {#snippet pills()}<ModelPill {draft} disabled={draft.sending} />{/snippet}
         {#snippet below()}
           <div class="bottom-pills">
-            <AccountPill server={draft.server} provider={draft.provider} configs={draft.configs}
+            <AccountPill server={draft.server} provider={draft.provider} configs={draft.accountChoices}
               codexAccounts={draft.codexAccounts}
               selected={draft.provider === 'codex' ? draft.codexAccount : draft.configDir}
               loading={draft.configsLoading || draft.codexLoading} disabled={draft.sending}

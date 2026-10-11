@@ -1,7 +1,7 @@
 // Catálogo de modelos de uma conta/provider ANTES de existir sessão (GET /api/model-options), com
 // a memória do último modelo escolhido. Vive fora do CreateSessionSheet porque a tela de
 // orquestração oferece a mesma escolha (provider → conta → modelo) e uma segunda cópia divergiria.
-import { modelOptions, modelOptionsForServer, type ModelOption, type Server } from '@hangar/core';
+import { contextModel, hasContext, modelOptions, modelOptionsForServer, type ModelOption, type Server } from '@hangar/core';
 
 // Os cinco escolhem modelo, cada um de uma fonte diferente (picker do Claude, `pi --list-models`,
 // config.toml do Kimi, `model/list` do Codex; omp reusa a fonte do Pi). Lista explícita:
@@ -23,6 +23,8 @@ export interface CatalogoDaConta {
   // virar flag às cegas (a sessão subiria e falharia no primeiro turno).
   lembrado: string;
   esforcoLembrado: string;
+  // A janela de 1M lembrada vem separada do modelo: o valor da lista nunca carrega o sufixo `[1m]`.
+  contextoLembrado: boolean;
 }
 
 export async function carregarModelos(
@@ -30,7 +32,7 @@ export async function carregarModelos(
     codexAccount?: string | null; engineAccount?: string | null; server?: Server | null; signal?: AbortSignal },
   chaveMemoria?: string,
 ): Promise<CatalogoDaConta> {
-  if (!temEscolhaDeModelo(q.provider)) return { models: [], reduced: false, lembrado: '', esforcoLembrado: '' };
+  if (!temEscolhaDeModelo(q.provider)) return { models: [], reduced: false, lembrado: '', esforcoLembrado: '', contextoLembrado: false };
   // A conta ChatGPT só entra quando existe: os chamadores sem ela seguem com a mesma chamada.
   const extra = q.engineAccount ? [q.engineAccount] as const : [] as const;
   const r = q.server
@@ -38,12 +40,19 @@ export async function carregarModelos(
     : await modelOptions(q.provider, q.engine, q.configDir, q.codexAccount, ...extra);
   let lembrado = '';
   let esforcoLembrado = '';
+  let contextoLembrado = false;
   if (chaveMemoria) {
     try {
       const l = localStorage.getItem(chaveMemoria);
-      if (l && r.models.some((mod) => valorModelo(mod) === l)) lembrado = l;
+      const base = l ? contextModel(l, false) : '';
+      const mod = base ? r.models.find((x) => valorModelo(x) === base) : undefined;
+      if (mod) {
+        lembrado = base;
+        // `[1m]` só volta onde o nativo aceita (choices.rs matched_model): conta ChatGPT do proxy e modelo com Fast.
+        contextoLembrado = hasContext(l!) && q.provider === 'claude' && !!q.engineAccount && !!mod.supports_fast;
+      }
       esforcoLembrado = localStorage.getItem(chaveMemoria + ':effort') ?? '';
     } catch { /* storage bloqueado: sem memória, sem erro */ }
   }
-  return { models: r.models, reduced: r.reduced, lembrado, esforcoLembrado };
+  return { models: r.models, reduced: r.reduced, lembrado, esforcoLembrado, contextoLembrado };
 }

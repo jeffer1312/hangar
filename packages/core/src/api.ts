@@ -818,6 +818,12 @@ function withCreationWarnings<T extends { avisos?: string[] }>(result: T): T {
   return result;
 }
 
+// POST /api/claude/defaults (Rust, claude_defaults.rs): grava no settings.json do principal da máquina.
+export interface ClaudeDefaultsBody { model?: string | null; effort?: string | null; permission?: string | null }
+export function setClaudeDefaultsForServer(s: Server, body: ClaudeDefaultsBody): Promise<{ ok: boolean; written: string[] }> {
+  return apiFetchForServer(s, '/api/claude/defaults', { method: 'POST', body: JSON.stringify(body) });
+}
+
 export function createSessionForServer(server: Server, body: CreateSessionBody): Promise<SessionInfo> {
   return apiFetchForServer<SessionInfo>(server, '/api/sessions', { method: 'POST', body: JSON.stringify(buildCreateSessionBody(body)) }, SESSION_BIRTH_MS)
     .then(withCreationWarnings);
@@ -2862,6 +2868,8 @@ export interface ModelOptionsResponse {
   engine: string | null;
   effort?: string | null;
   models: ModelOption[];
+  // O que vale na sessão agora: o sufixo `[1m]` do model diz se a janela de 1M está ligada.
+  current?: { model?: string | null; service_tier?: string | null };
 }
 
 /**

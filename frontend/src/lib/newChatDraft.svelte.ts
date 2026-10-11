@@ -5,11 +5,12 @@ import {
   createSessionForServer, sendInputForServer, fetchSessionsForServer, getCodexAccountsForServer,
   getFolderBranchesForServer, getRootsForServer, listClaudeConfigs, getClaudeAccountSuggestion, getProviders,
   uniqueSessionName, basename, effortLevels, defaultCodexAccount, SESSION_PROVIDERS,
+  getEnginesForServer, getConfigForServer, contextModel, hasContext, setClaudeDefaultsForServer,
   type CodexAccount, type ConfigDirInfo, type FolderBranches, type FsRoot, type ModelOption, type Provider,
-  type WorktreeChoice,
+  type WorktreeChoice, type Motor, type CliProxyAccount,
 } from '@hangar/core';
 import { listOwnServers, selectServer, getActiveId, type Server } from './auth';
-import { carregarModelos } from './modelosPorConta';
+import { carregarModelos, valorModelo } from './modelosPorConta';
 import { bestAccountWithQuota, exhaustedWindow, type ContaCota } from './cota';
 import * as m from '../paraglide/messages';
 
@@ -50,6 +51,22 @@ export class NewChatDraft {
   newBranch = $state(false);
   base = $state('');
   branchName = $state('');
+  // Motor GPT do proxy, conta ChatGPT, Fast e 1M: as mesmas escolhas da folha (CreateSessionSheet).
+  engine = $state('');
+  engines = $state<Record<string, Motor>>({});
+  enginesError = $state('');
+  engineAccount = $state('');
+  fastChoice = $state<'default' | 'priority' | null>(null);
+  contextOn = $state(false);
+  permission = $state('bypassPermissions');
+  // null = config do servidor ainda não lida: o corpo não manda o campo e vale o padrão do servidor.
+  headless = $state<boolean | null>(null);
+  executionError = $state('');
+  // Padrão marcado com "Usar como padrão" (o harness-defaults.json do nativo, aqui no localStorage).
+  savedDefault = $state<{ model: string; effort: string; permission: string } | null>(null);
+  #permissionTouched = false;
+  // Última leitura de cota; corta as contas de backup da pílula de conta.
+  #quotaLine = $state<ContaCota[] | null>(null);
 
   providers = $state<ProviderProbe>({});
   providersLoading = $state(false);
@@ -79,6 +96,8 @@ export class NewChatDraft {
   #codexSeq = 0;
   #modSeq = 0;
   #branchSeq = 0;
+  #engSeq = 0;
+  #execSeq = 0;
   #modelTouched = false;
   #providerPicked = false;
   // Só a escolha manual de CONTA desliga a troca automática por cota.
@@ -90,10 +109,47 @@ export class NewChatDraft {
   get serverObj(): Server | null { return this.servers.find((s) => s.id === this.server) ?? null; }
   get #choices(): string {
     return JSON.stringify([this.server, this.cwd, this.provider, this.configDir, this.codexAccount, this.model, this.effort, this.branch,
-      this.newBranch, this.base, this.branchName]);
+      this.newBranch, this.base, this.branchName, this.engine, this.engineAccount, this.fastChoice, this.contextOn,
+      this.permission, this.headless]);
   }
   /** Contas ou modelos ainda chegando: enviar agora mandaria conta/modelo vazios e cairia no padrão do servidor calado. */
-  get loading(): boolean { return this.providersLoading || this.configsLoading || this.codexLoading || this.modelsLoading; }
+  get loading(): boolean {
+    return this.providersLoading || this.configsLoading || this.codexLoading || this.modelsLoading
+      || (this.headless === null && !this.executionError);
+  }
+  get motor(): Motor | null { return this.provider === 'claude' && this.engine ? this.engines[this.engine] ?? null : null; }
+  // Só conta de credencial Codex do Hangar serve: é dela que sai a cota e o login do proxy.
+  get proxyAccounts(): CliProxyAccount[] {
+    return (this.motor?.cliproxy_accounts ?? []).filter((a) => !!a.account && /^codex:./.test(a.credential_id));
+  }
+  get #chosen(): ModelOption | null { return this.models.find((x) => valorModelo(x) === this.model) ?? null; }
+  get fastAvailable(): boolean {
+    const mod = this.#chosen;
+    if (!mod) return false;
+    return this.provider === 'codex'
+      ? !!mod.service_tiers?.some((t) => t.id === 'priority' && !t.hidden)
+      : this.provider === 'claude' && this.proxyAccounts.length > 0 && !!mod.supports_fast;
+  }
+  // 1M só existe junto do Fast do motor (choices.rs render_engine_context).
+  get contextAvailable(): boolean { return this.provider === 'claude' && this.fastAvailable; }
+  get bodyModel(): string | null { return this.model ? contextModel(this.model, this.contextOn && this.contextAvailable) : null; }
+  // O que impede abrir no motor do proxy, na ordem do nativo; '' = pronto.
+  get proxyBlocked(): string {
+    const motor = this.motor;
+    if (!motor) return '';
+    if (motor.cliproxy_error) return m.native_create_proxy_error({ reason: motor.cliproxy_error });
+    if (!motor.cliproxy_accounts) return '';
+    if (!motor.cliproxy_accounts.length) return m.native_create_proxy_no_accounts();
+    if (!this.proxyAccounts.some((a) => a.account === this.engineAccount)) return m.native_create_proxy_choose_account();
+    if (!this.modelsLoading && !this.modelsError && !this.models.length) return m.native_create_proxy_no_models();
+    return '';
+  }
+  // Contas que o /api/cotas conhece, mais a ativa (choices.rs:245); sem leitura, todas.
+  get accountChoices(): ConfigDirInfo[] {
+    const line = this.#quotaLine;
+    if (!line) return this.configs;
+    return this.configs.filter((c) => c.active || c.path === this.configDir || line.some((q) => q.id === `claude:${c.path}`));
+  }
   get levels(): readonly string[] { return effortLevels(this.provider, this.models, this.model); }
   get providerAvailable(): boolean { return this.providers[this.provider]?.disponivel !== false; }
 
@@ -111,10 +167,97 @@ export class NewChatDraft {
     selectServer(id);
     this.cwd = readStorage(cwdKey(id));
     this.branch = ''; this.newBranch = false; this.base = ''; this.branchName = '';
+    this.engines = {}; this.engine = ''; this.engineAccount = '';
     void this.loadProviders();
     void this.loadRoots();
+    void this.loadEngines();
+    void this.loadExecution();
     this.loadAccounts();
     void this.loadBranches();
+  }
+
+  async loadEngines() {
+    const seq = ++this.#engSeq;
+    const server = this.serverObj;
+    this.enginesError = '';
+    if (!server) return;
+    try {
+      const r = await getEnginesForServer(server);
+      if (seq === this.#engSeq) this.engines = r.motores ?? {};
+    } catch (e) {
+      if (seq === this.#engSeq) this.enginesError = errText(e, m.falha_conexao());
+    }
+  }
+
+  async loadExecution() {
+    const seq = ++this.#execSeq;
+    const server = this.serverObj;
+    this.headless = null;
+    this.executionError = '';
+    if (!server) return;
+    try {
+      const r = await getConfigForServer(server);
+      if (seq === this.#execSeq) this.headless = r.campos.headless_default?.valor !== false;
+    } catch (e) {
+      if (seq === this.#execSeq) this.executionError = errText(e, m.falha_conexao());
+    }
+  }
+
+  // Permissão de cada provider como o nativo (create.rs set_provider); motor e janela são do provider anterior.
+  #resetForProvider() {
+    this.#permissionTouched = false;
+    this.permission = this.provider === 'codex' ? 'Full Access' : this.provider === 'claude' ? 'bypassPermissions' : '';
+    this.engine = ''; this.engineAccount = ''; this.fastChoice = null; this.contextOn = false;
+  }
+
+  setEngine(name: string) {
+    this.#modelTouched = true;
+    if (name === this.engine) return;
+    this.engine = name;
+    this.engineAccount = this.proxyAccounts.find((a) => a.account === this.engineAccount)?.account ?? this.proxyAccounts[0]?.account ?? '';
+    this.fastChoice = null; this.contextOn = false;
+    void this.loadModels();
+  }
+
+  setEngineAccount(id: string) {
+    this.#modelTouched = true;
+    if (id === this.engineAccount) return;
+    this.engineAccount = id;
+    void this.loadModels();
+  }
+
+  setContext(on: boolean) { this.contextOn = on; }
+
+  setPermission(value: string) { this.#permissionTouched = true; this.permission = value; }
+
+  // Chave do nativo (default_key): servidor:provider:motor[:account:conta ChatGPT]; sem a conta Codex,
+  // porque o padrão vale "para todas as contas".
+  harnessKey(): string {
+    return `cp_harness_default:${this.server}:${this.provider}:${this.engine || '-'}`
+      + (this.provider === 'claude' && this.engineAccount ? `:account:${this.engineAccount}` : '');
+  }
+  get isDefault(): boolean {
+    const d = this.savedDefault;
+    return !!d && d.model === (this.bodyModel ?? '') && d.effort === this.effort && d.permission === this.permission;
+  }
+  async saveDefault(on: boolean) {
+    if (!on) { writeStorage(this.harnessKey(), ''); this.savedDefault = null; return; }
+    const saved = { model: this.bodyModel ?? '', effort: this.effort, permission: this.permission };
+    writeStorage(this.harnessKey(), JSON.stringify(saved));
+    this.savedDefault = saved;
+    // Só Claude na conta Anthropic grava no settings.json da máquina (o Rust recusa modelo de motor).
+    if (this.provider === 'claude' && !this.engine && this.serverObj) {
+      try {
+        await setClaudeDefaultsForServer(this.serverObj, { model: saved.model || null, effort: saved.effort || null, permission: saved.permission || null });
+      } catch (e) { this.sendError = m.native_create_default_failed({ erro: errText(e, m.falha_conexao()) }); }
+    }
+  }
+  #readDefault(): { model: string; effort: string; permission: string } | null {
+    try {
+      const raw = readStorage(this.harnessKey());
+      const d = raw ? JSON.parse(raw) : null;
+      return d && typeof d.model === 'string' ? { model: d.model, effort: String(d.effort ?? ''), permission: String(d.permission ?? '') } : null;
+    } catch { return null; }
   }
 
   setCwd(path: string) {
@@ -128,6 +271,7 @@ export class NewChatDraft {
     this.#providerPicked = true;
     if (p === this.provider) return;
     this.provider = p;
+    this.#resetForProvider();
     this.loadAccounts();
   }
 
@@ -141,6 +285,7 @@ export class NewChatDraft {
 
   /** Conta escolhida sem limite e sem escolha manual: troca sozinha pra conta com folga. */
   switchFromExhausted(linha: ContaCota[] | null) {
+    this.#quotaLine = linha;
     if (this.provider !== 'claude' || this.#accountPicked || this.configsLoading || !this.configDir) return;
     const atual = linha?.find((c) => c.id === `claude:${this.configDir}`);
     if (!exhaustedWindow(atual)) return;
@@ -161,12 +306,13 @@ export class NewChatDraft {
     this.#modelTouched = true;
     this.model = value;
     if (!this.levels.includes(this.effort)) this.effort = '';
+    if (!this.fastAvailable) { this.fastChoice = null; this.contextOn = false; }
   }
 
-  // Mesma chave da folha (`CreateSessionSheet`): a escolha feita num lugar vale no outro. Sem motor
-  // aqui, então o último segmento é `-` fora do Codex.
+  // Mesma chave da folha (`CreateSessionSheet`): a escolha feita num lugar vale no outro.
   memoryKey(): string {
-    return `cp_last_model:${this.server}:${this.provider}:${this.provider === 'codex' ? this.codexAccount : '-'}`;
+    return `cp_last_model:${this.server}:${this.provider}:${this.provider === 'codex' ? this.codexAccount : this.engine || '-'}`
+      + (this.provider === 'claude' && this.engineAccount ? `:account:${this.engineAccount}` : '');
   }
 
   async loadProviders() {
@@ -182,6 +328,7 @@ export class NewChatDraft {
       const preferred = SESSION_PROVIDERS.find((provider) => res[provider]?.default && res[provider]?.disponivel) ?? 'claude';
       if (!this.#providerPicked && !this.#modelTouched && !this.sending && preferred !== this.provider) {
         this.provider = preferred;
+        this.#resetForProvider();
         this.loadAccounts();
       }
     } catch (e) {
@@ -271,14 +418,28 @@ export class NewChatDraft {
     if (this.provider === 'codex' && (!this.codexAccount || !server)) { this.modelsLoading = false; return; }
     this.modelsLoading = true;
     try {
+      const claude = this.provider === 'claude';
       const r = await carregarModelos({
-        provider: this.provider, configDir: this.provider === 'claude' ? this.configDir : null,
+        provider: this.provider, configDir: claude ? this.configDir : null,
+        engine: claude ? this.engine || null : null,
+        engineAccount: claude && this.engine ? this.engineAccount || null : null,
         ...(this.provider === 'codex' ? { codexAccount: this.codexAccount, server } : {}),
       }, this.memoryKey());
       if (seq !== this.#modSeq) return;
       this.models = r.models;
       this.model = r.lembrado;
+      this.contextOn = r.contextoLembrado;
       this.effort = this.levels.includes(r.esforcoLembrado) ? r.esforcoLembrado : '';
+      // O padrão marcado vence o último modelo (choices.rs load_models), se ainda estiver na lista.
+      const saved = this.#readDefault();
+      this.savedDefault = saved;
+      const base = saved ? contextModel(saved.model, false) : '';
+      if (saved && (!base || r.models.some((x) => valorModelo(x) === base))) {
+        this.model = base;
+        this.contextOn = hasContext(saved.model);
+        this.effort = this.levels.includes(saved.effort) ? saved.effort : '';
+        if (saved.permission && !this.#permissionTouched) this.permission = saved.permission;
+      }
     } catch (e) {
       if (seq === this.#modSeq) this.modelsError = errText(e, m.criar_modelos_erro());
     } finally {
@@ -310,6 +471,9 @@ export class NewChatDraft {
     const claude = this.provider === 'claude';
     const text = [
       this.sendError,
+      this.proxyBlocked,
+      this.enginesError && `${m.native_create_engine()}: ${this.enginesError}`,
+      this.executionError && m.newchat_execution_failed({ erro: this.executionError }),
       this.rootsError && `${m.native_create_roots_failed()} ${this.rootsError}`,
       claude ? this.configsError : '',
       this.provider === 'codex' ? this.codexError : '',
@@ -340,17 +504,27 @@ export class NewChatDraft {
         const taken = new Set((await fetchSessionsForServer(server)).map((s) => s.name));
         // Memória antes de criar, como a folha: a escolha não se perde se a criação falhar.
         const key = this.memoryKey();
-        writeStorage(key, this.model);
+        writeStorage(key, this.bodyModel ?? '');
         writeStorage(`${key}:effort`, this.effort);
         const sessionName = uniqueSessionName(basename(cwd), taken);
         if (this.newBranch && !this.branchName.trim()) this.branchName = sessionName;
+        // Corpo do nativo (create.rs, create): motor, conta ChatGPT, Fast, execução e permissão.
+        const claude = this.provider === 'claude', codex = this.provider === 'codex';
+        const tier = this.fastAvailable ? this.fastChoice : null;
         const info = await createSessionForServer(server, {
           name: sessionName, cwd, provider: this.provider,
           // Sonda falhada deixa o Claude por omissão, e isso não é escolha a lembrar.
           remember_provider: this.#providerPicked || Object.keys(this.providers).length > 0,
-          config_dir: this.provider === 'claude' ? this.configDir : null,
-          codex_account: this.provider === 'codex' ? this.codexAccount : undefined,
-          model: this.model || null, effort: this.effort || null,
+          config_dir: claude ? this.configDir : null,
+          codex_account: codex ? this.codexAccount : undefined,
+          engine: claude ? this.engine || null : null,
+          ...(claude && this.engine && this.engineAccount ? { engine_account: this.engineAccount } : {}),
+          model: this.bodyModel, effort: this.effort || null,
+          ...(tier ? { service_tier: tier } : {}),
+          ...((claude || codex) && this.headless !== null ? { headless: this.headless } : {}),
+          ...(claude && this.permission ? { permission_mode: this.permission } : {}),
+          // O backend só aceita permissão no Codex sem terminal (api.py, _create_session_owned).
+          ...(codex && this.headless === true ? { permission_mode: this.permission || null } : {}),
           ...(worktreeChoiceOf(this) ?? {}),
         });
         // O nome que vale é o devolvido pelo backend: ele pode desempatar de novo.

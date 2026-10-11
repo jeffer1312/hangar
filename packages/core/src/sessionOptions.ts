@@ -36,3 +36,11 @@ export function permissionModes(provider: string, headless: boolean): readonly s
 }
 
 export const hasExecutionMode = (provider: string) => provider === 'claude' || provider === 'codex';
+
+const CONTEXT_SUFFIX = '[1m]';
+/** Janela de 1M do Claude com motor GPT: o backend lê só o sufixo do `model` (engines.catalog_model). */
+export function contextModel(model: string, on: boolean): string {
+  const base = model.endsWith(CONTEXT_SUFFIX) ? model.slice(0, -CONTEXT_SUFFIX.length) : model;
+  return on ? base + CONTEXT_SUFFIX : base;
+}
+export const hasContext = (model: string) => model.endsWith(CONTEXT_SUFFIX);

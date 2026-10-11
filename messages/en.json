@@ -7091,6 +7091,8 @@
   "conversas_vazio": "No conversations yet. Tap New conversation to start.",
   "conversas_servidor_falhou": "Couldn't load conversations from {servidor}.",
   "newchat_sem_pasta": "Choose a folder before sending.",
+  "newchat_execution_failed": "Could not read where the session runs: {erro}",
+  "newchat_model_search": "Search",
   "newchat_sem_conta_codex": "Choose a Codex account before sending.",
   "newchat_abrir_lista": "Open conversation list",
   "newchat_sem_servidor": "No machine of yours is registered to start a conversation. Add one in Settings.",

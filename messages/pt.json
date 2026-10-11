@@ -7091,6 +7091,8 @@
   "conversas_vazio": "Nenhuma conversa ainda. Toque em Nova conversa para começar.",
   "conversas_servidor_falhou": "Não consegui carregar as conversas de {servidor}.",
   "newchat_sem_pasta": "Escolha uma pasta antes de enviar.",
+  "newchat_execution_failed": "Não foi possível ler onde a sessão roda: {erro}",
+  "newchat_model_search": "Buscar",
   "newchat_sem_conta_codex": "Escolha uma conta do Codex antes de enviar.",
   "newchat_abrir_lista": "Abrir lista de conversas",
   "newchat_sem_servidor": "Nenhuma máquina sua cadastrada para abrir conversa. Adicione uma nas Configurações.",
