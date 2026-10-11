@@ -26,6 +26,8 @@
   import Compare from './screens/Compare.svelte';
   import DesktopShell from './components/DesktopShell.svelte';
   import SettingsModal from './components/settings/SettingsModal.svelte';
+  import AtualizarSheet from './components/AtualizarSheet.svelte';
+  import { atualizarUI } from './lib/atualizarUI.svelte';
   import TtsBar from './components/TtsBar.svelte';
   import TtsSelectionPill from './components/TtsSelectionPill.svelte';
   import CodeOverlay from './components/CodeOverlay.svelte';
@@ -721,6 +723,11 @@
       onVoltar={voltarConfig}
       onFechar={fecharConfig}
     />
+  {/if}
+  <!-- No desktop quem monta é o DesktopShell; o botão do Sobre no celular abre esta. -->
+  {#if !isDesktop}
+    <AtualizarSheet open={atualizarUI.aberta} onClose={() => atualizarUI.fechar()}
+                    trabalhando={sessionsStore.rows.filter((r) => r.state === 'working').length} />
   {/if}
 </div>
 
