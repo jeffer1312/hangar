@@ -33,7 +33,8 @@ export interface LiveVoiceHandlers {
   levels(v: { input: number; output: number }): void;
   /** Ações de tela que a voz pode pedir (`hangar_action`); vão no hello para o Jev e o organizador. */
   actions(): LiveVoiceAction[];
-  runAction(id: string): boolean;
+  /** `true` = feito; texto = o motivo da recusa, que a voz conta ao usuário. */
+  runAction(id: string, arg: string | null): true | string;
 }
 
 export interface LiveVoiceAction { id: string; label: string; description: string }
@@ -165,7 +166,11 @@ export class LiveVoiceCall {
       return;
     }
     if (name === 'hangar_action') {
-      this.send({ type: 'tool_result', call, ok: this.handlers.runAction(String(args.id ?? '')), text: '' });
+      let result: true | string;
+      try {
+        result = this.handlers.runAction(String(args.id ?? ''), typeof args.arg === 'string' && args.arg.trim() ? args.arg.trim() : null);
+      } catch (e) { console.warn('live voice: screen action failed', e); result = ''; }
+      this.send({ type: 'tool_result', call, ok: result === true, text: result === true ? '' : result });
       return;
     }
     if (name !== 'switch_session') {

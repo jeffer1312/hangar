@@ -22,7 +22,12 @@ vi.mock('./peers', () => ({ listarPeers: vi.fn(async () => [{ id: 'vps', base_ur
 vi.mock('./auth', () => ({ listServers: () => [fakes.home, fakes.vps] }));
 // Cada teste reimporta o store (resetModules): o core real recompilado a cada vez estoura o prazo do teste.
 vi.mock('@hangar/core', () => ({ baseOf: (s: { baseUrl: string }) => s.baseUrl, probeServerResponse: vi.fn() }));
-vi.mock('../paraglide/messages', () => ({ live_voice_action_list_label: () => 'L', live_voice_action_list_description: () => 'D' }));
+// Cada texto vira o nome da própria chave: dá para ver qual recusa saiu.
+const voiceKey = (key: string | symbol): key is string => typeof key === 'string' && key.startsWith('live_voice_');
+vi.mock('../paraglide/messages', () => new Proxy({}, {
+  get: (_t, key) => (voiceKey(key) ? () => key : undefined),
+  has: (_t, key) => voiceKey(key),
+}));
 
 let onVisibility: () => void;
 const doc = { visibilityState: 'hidden' };
@@ -69,6 +74,29 @@ describe('liveVoiceStore', () => {
     expect(call.handlers.switchTo({ server: '', baseUrl: null, name: 'hangar' })).toBe(true);
     expect(navigate).toHaveBeenLastCalledWith({ server: home, name: 'hangar' });
     expect(call.handlers.switchTo({ server: 'other', baseUrl: null, name: 'x' })).toBe(false);
+  });
+
+  it('screen_actions_run_where_the_screen_registered_them', async () => {
+    const voice = await store();
+    await voice.start(home);
+    const { handlers } = fakes.calls[0];
+    expect(handlers.actions().map(a => a.id)).toContain('git');
+    expect(handlers.runAction('git', null)).toBe('live_voice_action_unavailable');
+    const git = vi.fn((): true | string => true);
+    const off = voice.registerActions({ git });
+    expect(handlers.runAction('git', null)).toBe(true);
+    expect(git).toHaveBeenCalledOnce();
+    // Uma tela que sai não derruba a ação que outra registrou depois.
+    const other = vi.fn((): true | string => true);
+    voice.registerActions({ git: other });
+    off();
+    expect(handlers.runAction('git', null)).toBe(true);
+    expect(other).toHaveBeenCalledOnce();
+    expect(handlers.runAction('voice-panel', null)).toBe(true);
+    expect(voice.open).toBe(true);
+    expect(handlers.runAction('voice-panel-close', null)).toBe(true);
+    expect(voice.open).toBe(false);
+    expect(handlers.runAction('nada', null)).toBe('live_voice_action_unknown');
   });
 
   it('reopens_once_on_visible_after_connection_lost', async () => {

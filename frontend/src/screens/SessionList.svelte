@@ -6,6 +6,7 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { liveVoiceStore } from '../lib/liveVoiceStore.svelte';
 import * as m from '../paraglide/messages';
   import HangarMark from '../components/icons/HangarMark.svelte';
   import HangarRunning from '../components/HangarRunning.svelte';
@@ -73,6 +74,7 @@ import * as m from '../paraglide/messages';
     actionTimer = setTimeout(() => { actionMsg = ''; }, 4000);
   }
   let showCreateSheet = $state(false);
+  $effect(() => liveVoiceStore.registerActions({ 'new-session': () => { searchOpen = false; showCreateSheet = true; return true; } }));
   let drawerOpen = $state(false);    // menu lateral (hamburger): navegação + conta
   let searchOpen = $state(false);    // Buscar conversas (switcher em modo so-busca)
   // Fallback de foco das confirmações: o hamburger é o controle que SEMPRE sobra acessível, mesmo

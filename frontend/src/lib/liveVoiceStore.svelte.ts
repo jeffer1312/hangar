@@ -6,6 +6,7 @@ import { listServers } from './auth';
 import { LiveVoiceCall, type LiveVoiceHandlers, type LiveVoiceScreen, type LiveVoiceState } from './liveVoice';
 import { listarPeers, type PeerView } from './peers';
 import * as m from '../paraglide/messages';
+import { TELAS_CONFIG } from './configRoute';
 
 export type LiveVoicePhase = 'idle' | 'connecting' | 'live' | 'closed';
 export type LiveVoiceTarget = { server: Server; name: string };
@@ -46,7 +47,32 @@ let voiceServer: Server | null = null;
 let peers: PeerView[] = [];
 let screen: LiveVoiceTarget | null = null;
 let navigate: Navigate | null = null;
-let showList: (() => boolean) | null = null;
+/** `true` = feito; texto = por que não (vai para a voz contar ao usuário). */
+export type VoiceActionRun = (arg: string | null) => true | string;
+// Cada tela registra as ações que só ela executa; o catálogo é fixo porque vai no hello da chamada.
+const actionRuns = new Map<string, VoiceActionRun>();
+const ACTION_IDS = ['session-list', 'settings', 'settings-back', 'new-session', 'voice-panel', 'voice-panel-close',
+  'costs', 'usage', 'report-back', 'terminal', 'git', 'activity', 'panel-close'] as const;
+export type VoiceActionId = (typeof ACTION_IDS)[number];
+
+function actionCatalog() {
+  const texts: Record<VoiceActionId, [string, string]> = {
+    'session-list': [m.live_voice_action_list_label(), m.live_voice_action_list_description()],
+    settings: [m.live_voice_action_settings_label(), m.live_voice_action_settings_description({ sections: TELAS_CONFIG.join(', ') })],
+    'settings-back': [m.live_voice_action_settings_back_label(), m.live_voice_action_settings_back_description()],
+    'new-session': [m.live_voice_action_new_session_label(), m.live_voice_action_new_session_description()],
+    'voice-panel': [m.live_voice_action_voice_panel_label(), m.live_voice_action_voice_panel_description()],
+    'voice-panel-close': [m.live_voice_action_voice_panel_close_label(), m.live_voice_action_voice_panel_close_description()],
+    costs: [m.live_voice_action_costs_label(), m.live_voice_action_costs_description()],
+    usage: [m.live_voice_action_usage_label(), m.live_voice_action_usage_description()],
+    'report-back': [m.live_voice_action_report_back_label(), m.live_voice_action_report_back_description()],
+    terminal: [m.live_voice_action_terminal_label(), m.live_voice_action_terminal_description()],
+    git: [m.live_voice_action_git_label(), m.live_voice_action_git_description()],
+    activity: [m.live_voice_action_activity_label(), m.live_voice_action_activity_description()],
+    'panel-close': [m.live_voice_action_panel_close_label(), m.live_voice_action_panel_close_description()],
+  };
+  return ACTION_IDS.map(id => ({ id, label: texts[id][0], description: texts[id][1] }));
+}
 let lostAt: number | null = null;
 let attempt = 0;
 
@@ -99,8 +125,13 @@ const handlers: LiveVoiceHandlers = {
     return !!server && !!navigate && navigate({ server, name: target.name });
   },
   levels(v) { levels = v; },
-  actions: () => [{ id: 'session-list', label: m.live_voice_action_list_label(), description: m.live_voice_action_list_description() }],
-  runAction(id) { return id === 'session-list' && !!showList && showList(); },
+  actions: actionCatalog,
+  runAction(id, arg) {
+    if (id === 'voice-panel' || id === 'voice-panel-close') { open = id === 'voice-panel'; return true; }
+    const run = actionRuns.get(id);
+    if (run) return run(arg);
+    return (ACTION_IDS as readonly string[]).includes(id) ? m.live_voice_action_unavailable() : m.live_voice_action_unknown();
+  },
 };
 
 function reopenIfLost() {
@@ -221,9 +252,10 @@ export const liveVoiceStore = {
     navigate = fn;
     return () => { if (navigate === fn) navigate = null; };
   },
-  /** O App registra quem volta para a lista de sessões. */
-  registerSessionList(fn: () => boolean): () => void {
-    showList = fn;
-    return () => { if (showList === fn) showList = null; };
+  /** A tela montada registra as ações que ela executa; devolve o cancelamento (só tira as que ainda são dela). */
+  registerActions(runs: Partial<Record<VoiceActionId, VoiceActionRun>>): () => void {
+    const mine = Object.entries(runs) as [VoiceActionId, VoiceActionRun][];
+    for (const [id, run] of mine) actionRuns.set(id, run);
+    return () => { for (const [id, run] of mine) if (actionRuns.get(id) === run) actionRuns.delete(id); };
   },
 };

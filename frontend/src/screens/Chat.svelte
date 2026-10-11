@@ -114,6 +114,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   import * as diag from '../lib/diag';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
   import * as m from '../paraglide/messages';
+  import { liveVoiceStore } from '../lib/liveVoiceStore.svelte';
   import { ouvirTexto } from '../lib/ouvir';
   import { textoFalavelComCodigo } from '../lib/speakable';
   import { segredos } from '../lib/segredos.svelte';
@@ -872,6 +873,22 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     bastaoAlvo = { name: sessionName, cwd: planSession?.cwd ?? '', serverId: chatServerId };
     createOpen = true;
   }
+
+  // Voz ao vivo: as folhas desta conversa, pelos mesmos caminhos dos botões.
+  $effect(() => liveVoiceStore.registerActions({
+    'new-session': () => { startNew(); return true; },
+    terminal: () => {
+      abrirTerminalReal();
+      return xtermOpen || mirrorOpen || desktop ? true : m.live_voice_action_no_terminal();
+    },
+    git: () => { gitOpen = true; return true; },
+    activity: () => { if (desktop) ctxPanel.aba = 'atividade'; else activityOpen = true; return true; },
+    'panel-close': () => {
+      if (!xtermOpen && !gitOpen && !activityOpen && !mirrorOpen) return m.live_voice_action_not_open();
+      xtermOpen = false; gitOpen = false; activityOpen = false; mirrorOpen = false;
+      return true;
+    },
+  }));
 
   async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: Provider,
                               engine?: string | null, model?: string | null, effort?: string | null,

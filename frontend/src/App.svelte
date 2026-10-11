@@ -11,7 +11,7 @@
   import { encodeCompareIds, type CompareId } from '@hangar/core';
   import { peekStep, initialPeek } from '@hangar/core';
   import { parseHash, type Route } from './lib/route';
-  import { parseConfig, comConfig, TELAS_DE_SERVIDOR, type TelaConfig } from './lib/configRoute';
+  import { parseConfig, comConfig, TELAS_CONFIG, TELAS_DE_SERVIDOR, type TelaConfig } from './lib/configRoute';
   import { abrirConfig, fecharConfig } from './lib/configNav';
   import * as diag from './lib/diag';
   import Login from './screens/Login.svelte';
@@ -395,7 +395,27 @@
     navigateToChat(name);
     return true;
   }));
-  $effect(() => liveVoiceStore.registerSessionList(() => { navigateToSessions(); return true; }));
+  $effect(() => liveVoiceStore.registerActions({
+    'session-list': () => { navigateToSessions(); return true; },
+    settings: (arg) => {
+      const tela = (arg ?? 'root').toLowerCase();
+      if (!TELAS_CONFIG.includes(tela as TelaConfig)) return m.live_voice_action_bad_section({ section: arg ?? '' });
+      abrirConfig(tela as TelaConfig, getActiveId());
+      return true;
+    },
+    'settings-back': () => {
+      if (!parseConfig(window.location.hash)) return m.live_voice_action_not_open();
+      fecharConfig();
+      return true;
+    },
+    costs: () => { navigateTo('#/costs'); return true; },
+    usage: () => { navigateTo('#/uso'); return true; },
+    'report-back': () => {
+      if (!ehRelatorio(window.location.hash)) return m.live_voice_action_not_open();
+      voltarDoRelatorio();
+      return true;
+    },
+  }));
   $effect(() => {
     void route;
     // `route` já passou pelo selectServer síncrono: o ativo lido aqui é o da rota nova.
