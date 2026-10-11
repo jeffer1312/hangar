@@ -7887,5 +7887,6 @@
   "live_voice_status_voice": "Speaking",
   "live_voice_status_thinking": "Thinking…",
   "live_voice_status_searching": "Searching…",
-  "live_voice_status_working": "Working…"
+  "live_voice_status_working": "Working…",
+  "folder_branches_load_failed": "Couldn't load the branches."
 }

@@ -7887,5 +7887,6 @@
   "live_voice_status_voice": "Falando",
   "live_voice_status_thinking": "Pensando…",
   "live_voice_status_searching": "Pesquisando…",
-  "live_voice_status_working": "Trabalhando…"
+  "live_voice_status_working": "Trabalhando…",
+  "folder_branches_load_failed": "Não foi possível carregar as branches."
 }

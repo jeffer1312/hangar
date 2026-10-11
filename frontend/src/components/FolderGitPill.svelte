@@ -214,7 +214,7 @@
       <p class="help" role="status">{statusLine}</p>
       {#if tab === 'switch'}
         {#if branchesFailed && !branches}
-          <p class="help err" role="alert">{m.home_usage_load_failed()}</p>
+          <p class="help err" role="alert">{m.folder_branches_load_failed()}</p>
           <button type="button" class="btn full" onclick={() => loadBranches()}>{m.sync_retry()}</button>
         {:else if !branches}
           <p class="help" role="status">{m.comum_carregando()}</p>
