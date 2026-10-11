@@ -104,9 +104,10 @@ export function transcriptImageUrl(name: string, id: string, idx: number, server
 
 // URL pra servir um arquivo CITADO na conversa (video/html/pdf/img por caminho). `?token` p/ <img>/
 // <video>/<iframe> (sem header). O backend so serve se o path estiver no transcript da sessao.
-export function fileUrl(name: string, path: string, download = false, server?: Server | null): string {
+// `width`: miniatura reduzida no servidor (o original continua sendo o padrao).
+export function fileUrl(name: string, path: string, download = false, server?: Server | null, width?: number): string {
   const t = (server ? server.token : apiEnv().getToken()) ?? '';
-  return `${server ? baseOf(server) : apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}&token=${encodeURIComponent(t)}${download ? '&download=1' : ''}`;
+  return `${server ? baseOf(server) : apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}&token=${encodeURIComponent(t)}${download ? '&download=1' : ''}${width ? `&w=${width}` : ''}`;
 }
 
 // URL nativa (sem token na query) — para WebView/Image nativo que manda Authorization header.
@@ -123,9 +124,9 @@ export function fileAuthHeader(server?: Server): Record<string, string> {
 
 // URL de uma imagem ENVIADA do phone (upload), servida do cofre (~/.hangar/uploads/<projeto>/<sessão>/).
 // `?token` igual as de cima: <img> nao manda header Authorization e cross-origin nao leva cookie.
-export function uploadUrl(name: string, filename: string, download = false, server?: Server | null): string {
+export function uploadUrl(name: string, filename: string, download = false, server?: Server | null, width?: number): string {
   const t = (server ? server.token : apiEnv().getToken()) ?? '';
-  return `${server ? baseOf(server) : apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}?token=${encodeURIComponent(t)}${download ? '&download=1' : ''}`;
+  return `${server ? baseOf(server) : apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}?token=${encodeURIComponent(t)}${download ? '&download=1' : ''}${width ? `&w=${width}` : ''}`;
 }
 
 export function uploadUrlNative(name: string, filename: string, server?: Server): string {

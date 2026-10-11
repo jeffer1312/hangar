@@ -2792,7 +2792,7 @@ import { cachePrazo } from '../lib/cachePrazo';
                 class:baixando={reanexando === r.filename}
                 disabled={!!reanexando}
                 onclick={() => void reanexar(r.filename)}>
-          <img src={uploadUrl(sessionName, r.filename, false, sessionServer())} alt="" loading="lazy" />
+          <img src={uploadUrl(sessionName, r.filename, false, sessionServer(), 192)} alt="" loading="lazy" />
         </button>
       {/each}
     </div>

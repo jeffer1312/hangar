@@ -88,7 +88,7 @@
         <span class="att-broken" title={r.path}>⚠ {m.anexos_nao_carregou({ nome: r.name })}</span>
       {:else if r.kind === 'image'}
         <button class="thumb-btn" bind:this={botoes[r.path]} onclick={() => abrir(r)} aria-label={m.anexos_ver({ n: r.name })}>
-          <img class="thumb" src={url(r)} alt={r.name} loading="lazy" onerror={() => fail(r)} />
+          <img class="thumb" src={r.url ?? fileUrl(sessionName, r.path, false, sessionServer(), 192)} alt={r.name} loading="lazy" onerror={() => fail(r)} />
         </button>
       {:else if r.kind === 'video'}
         <button class="thumb-btn" bind:this={botoes[r.path]} onclick={() => abrir(r)} aria-label={m.anexos_tocar({ nome: r.name })}>

@@ -136,9 +136,10 @@ export function obterInstancia() {
  * height o item nasce com `width: 0px; height: 0px` e o visor abre VAZIO — sem erro nenhum, o que
  * custou meia hora de "por que a imagem nao aparece".
  */
-function medir(el?: HTMLElement) {
+function medir(el: HTMLElement | undefined, url: string) {
   const img = el?.querySelector('img') as HTMLImageElement | null;
-  if (img?.naturalWidth) return { width: img.naturalWidth, height: img.naturalHeight };
+  // Miniatura reduzida no servidor (`w=`) tem a proporção mas não o tamanho do original.
+  if (img?.naturalWidth && img.src === new URL(url, location.href).href) return { width: img.naturalWidth, height: img.naturalHeight };
   const video = el?.querySelector('video') as HTMLVideoElement | null;
   if (video?.videoWidth) return { width: video.videoWidth, height: video.videoHeight };
   return null;
@@ -198,7 +199,7 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
   if (!midias.length) return;
   // Só a tocada espera o original: medir todas baixava cada foto da conversa antes de abrir. As
   // outras entram com o tamanho provisório e são medidas quando viram vizinhas da que está aberta.
-  const tamanhos = midias.map((x) => medir(x.element));
+  const tamanhos = midias.map((x) => medir(x.element, x.url));
   if (!tamanhos[inicio]) tamanhos[inicio] = await medirCarregando(midias[inicio].url);
   const items = midias.map((x, i) => paraItem(x, tamanhos[i] ?? TAMANHO_PROVISORIO, i));
   const semMedida = new Set(midias.flatMap((_, i) => (tamanhos[i] ? [] : [i])));

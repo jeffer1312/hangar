@@ -137,7 +137,7 @@
           <li class="item" class:linha={ehAudio(f)}>
             {#if kind === 'image'}
               <button class="tile" bind:this={tiles[f.filename]} onclick={() => abrir(f)} aria-label={m.anexos_ver({ n: f.filename })}>
-                <img class="media" src={url(f)} alt={f.filename} loading="lazy" />
+                <img class="media" src={uploadUrl(sessionName, f.filename, false, sessionServer(), 192)} alt={f.filename} loading="lazy" />
               </button>
             {:else if kind === 'video' || kind === 'audio'}
               <!-- Audio toca NO PROPRIO CARD: um ditado nao merece tela cheia — e um play e uma

@@ -5,8 +5,10 @@
   interface Props {
     caption: string;
     srcs: string[];
+    // Versão reduzida para desenhar; o visor abre sempre o `srcs` original.
+    thumbs?: string[];
   }
-  let { caption, srcs }: Props = $props();
+  let { caption, srcs, thumbs }: Props = $props();
 
   // Abre no visor compartilhado (lib/visor.ts) com TODAS as imagens desta bolha: quem manda 4 fotos
   // de uma vez passa entre elas com as setas em vez de fechar e abrir uma a uma.
@@ -32,7 +34,7 @@
   <div class="thumb-row" class:thumb-row--multi={srcs.length > 1}>
     {#each srcs as src, i}
       <button class="thumb-btn" bind:this={botoes[i]} onclick={() => abrir(i)} aria-label={m.anexos_ver_original()}>
-        <img class="thumb" {src} alt={m.anexos_imagem_enviada()} loading="lazy" />
+        <img class="thumb" src={thumbs?.[i] ?? src} alt={m.anexos_imagem_enviada()} loading="lazy" />
       </button>
     {/each}
   </div>
