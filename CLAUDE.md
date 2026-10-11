@@ -236,7 +236,9 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 - **Todo texto de interface vem de `m.<chave>()`** (Paraglide). `pt.json` e `en.json` no mesmo
   commit. Dado do servidor não vira chave. A trava `i18nGuard.test.ts` só desce. Rótulo de
   stub/fixture de teste que vive em árvore varrida pela trava é identificador (`abrir-term`),
-  nunca frase.
+  nunca frase. O Paraglide compila com `locale-modules` em todo lugar (scripts e `vite.config.ts`):
+  um módulo por mensagem deixava os testes 3 a 4 vezes mais lentos.
+  [Medição](docs/decisoes/frontend.md#paraglide-compila-um-módulo-por-idioma-11102026).
 - **Markdown NUNCA aparece cru.** Todo `.md` exibido passa por `renderMarkdown`. Um `<pre>` com
   `**` e `##` à mostra é bug, não estilo.
 - **Tela ou lista nova trata os quatro estados: carregando, vazio, erro e sucesso.**
