@@ -82,7 +82,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   única (`flock`) e prioridade baixa, com HOME vazio e o `omp` fixo do CI; Windows por SSH na VM
   de `git config hangar.verificarWindows`, com mutex. O registro é pelo tree sha; a trava só o lê.
   Escape nos dois: `HANGAR_SEM_VERIFICACAO=1`. Na VM roda só o que o CI roda no Windows (Rust e os 6
-  `test_runtime_*`), nunca o pytest inteiro. Evidência em
+  `test_runtime_*`), nunca o pytest inteiro. O passo `mobile` só entra quando muda `mobile/`: o CI
+  não testa o app, e mudança no core ou nas mensagens já passa pelo `front` (à mão:
+  `--tudo --passos mobile`). Evidência em
   [Verificação local antes do push](#verificação-local-antes-do-push-06102026).
 - **No Linux a verificação prepara uma vez e roda os passos em faixas paralelas; o registro é por
   passo.** O preparo é o único que compila e instala, e o pytest roda com `pytest-xdist`, um arquivo

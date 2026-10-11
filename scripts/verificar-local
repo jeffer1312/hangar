@@ -78,7 +78,8 @@ classificar() {
             packages/*|frontend/*|messages/*|project.inlang/*|package.json|package-lock.json) front=1 ;;
         esac
         case "$f" in
-            mobile/*|packages/core/*|messages/*|project.inlang/*) mobile=1 ;;
+            # Só mudança no próprio app: o CI não testa o mobile, e core e mensagens já passam pelo front.
+            mobile/*) mobile=1 ;;
         esac
         case "$f" in
             desktop-native/*|crates/hangar-api/*|crates/hangar-workspace/*|crates/Cargo.toml|messages/*|VERSION) nativo=1 ;;
