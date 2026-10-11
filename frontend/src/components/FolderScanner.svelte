@@ -21,8 +21,32 @@
     server?: Server;
     /** Mostra "Nova pasta" no diretório atual. */
     canCreate?: boolean;
+    /** Mostra "Pesquisar em todas as pastas": a busca passa a varrer todas as raízes (create.rs refilter). */
+    searchAllOption?: boolean;
   }
-  let { onPick, fill = false, selected = null, server, canCreate = false }: Props = $props();
+  let { onPick, fill = false, selected = null, server, canCreate = false, searchAllOption = false }: Props = $props();
+
+  const SEARCH_ALL_KEY = 'cp_create_search_all';
+  let searchAll = $state((() => { try { return localStorage.getItem(SEARCH_ALL_KEY) === '1'; } catch { return false; } })());
+  // Pastas de cada raiz, lidas uma vez enquanto o scanner está montado; `null` = falhou.
+  let rootEntries = $state<Record<string, FsEntry[] | null | 'loading'>>({});
+  function setSearchAll(on: boolean) {
+    searchAll = on;
+    try { localStorage.setItem(SEARCH_ALL_KEY, on ? '1' : '0'); } catch { /* sem storage, vale só agora */ }
+  }
+  $effect(() => {
+    if (!searchAllOption || !searchAll || !query.trim()) return;
+    for (const r of roots) {
+      if (rootEntries[r.path] !== undefined) continue;
+      rootEntries[r.path] = 'loading';
+      scanDir(r.path, r.path, server)
+        .then((res) => { rootEntries[r.path] = res.error ? null : res.entries; })
+        .catch(() => { rootEntries[r.path] = null; });
+    }
+  });
+  const allMode = $derived(searchAllOption && searchAll && !!query.trim());
+  const allLoading = $derived(allMode && roots.some((r) => rootEntries[r.path] === 'loading'));
+  const allFailed = $derived(allMode ? roots.filter((r) => rootEntries[r.path] === null).map((r) => r.name) : []);
 
   const LAST_ROOT_KEY = 'cp:last-root';
 
@@ -140,7 +164,10 @@
   const filtered = $derived.by(() => {
     const q = query.trim().toLowerCase();
     if (!q) return entries;
-    return entries.filter(
+    const pool = allMode
+      ? roots.flatMap((r) => { const v = rootEntries[r.path]; return Array.isArray(v) ? v : []; })
+      : entries;
+    return pool.filter(
       (e) => e.name.toLowerCase().includes(q) || relPath(e.path).toLowerCase().includes(q),
     );
   });
@@ -197,6 +224,12 @@
       aria-label={m.arquivo_buscar_pasta()}
       onkeydown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
     />
+    {#if searchAllOption}
+      <label class="search-all">
+        <input type="checkbox" checked={searchAll} onchange={(e) => setSearchAll(e.currentTarget.checked)} />
+        <span>{m.native_create_search_all()}</span>
+      </label>
+    {/if}
 
     <!-- Breadcrumb (so quando aprofundou): toque numa migalha sobe -->
     {#if drilled}
@@ -232,7 +265,10 @@
 
     <!-- Coluna de subpastas -->
     <div class="rows" role="list">
-      {#if scanning}
+      {#if allFailed.length}
+        <p class="state-msg" role="alert">{m.arquivo_ler_falhou()} ({allFailed.join(', ')})</p>
+      {/if}
+      {#if scanning || allLoading}
         {#each Array(5) as _, i (i)}
           <div class="row-skel" aria-hidden="true">
             <span class="skel-line skel-name"></span>
@@ -270,6 +306,8 @@
 </div>
 
 <style>
+  .search-all { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: var(--text-sm); color: var(--text-primary); cursor: pointer; }
+  .search-all input { width: 22px; height: 22px; accent-color: var(--accent); }
   .scanner {
     display: flex;
     flex-direction: column;

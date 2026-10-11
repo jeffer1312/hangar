@@ -14,14 +14,19 @@
            type ModelOption, type Motor, type CliProxyAccount, type SessionOpeningExtras, type ArchiveEntry,
            sanitizeSessionName, uniqueSessionName } from '@hangar/core';
   import { carregarModelos as carregarModelosDaConta, temEscolhaDeModelo, valorModelo } from '../lib/modelosPorConta';
-  import { basename, claudeAccountFolder, providerName, relativeTime, cotaDaConta, resumoCota, janelaEsgotada, effortLevels, SESSION_PROVIDERS } from '@hangar/core';
+  import { basename, claudeAccountFolder, providerName, relativeTime, cotaDaConta, resumoCota, janelaEsgotada, effortLevels, SESSION_PROVIDERS,
+    contextModel, hasContext, setClaudeDefaultsForServer } from '@hangar/core';
   import SessionOpeningFields from './SessionOpeningFields.svelte';
   import BranchChoice from './BranchChoice.svelte';
   import { renderMarkdown } from '../lib/markdown';
   import { quotaFeed } from '../lib/quotaFeed.svelte';
   import { segredos } from '../lib/segredos.svelte';
   import { papelDo } from '../lib/papel.svelte';
-  import { faixaDeCota, faltaPara, motivoParado } from '../lib/cota';
+  import { faixaDeCota, faltaPara, motivoParado, exhaustedWindow, bestAccountWithQuota } from '../lib/cota';
+  import FolderGitPill from './FolderGitPill.svelte';
+  import CustomizationsSheet from './CustomizationsSheet.svelte';
+  import { emptyDelta, isEmptyDelta, deltaCount } from '../lib/customizations';
+  import type { ClaudeCustomizationDelta } from '@hangar/core';
   import type { ChatEvent } from '@hangar/core';
   import { selectServer, getActiveId, listOwnServers, serverColor, serverIdentidade } from '../lib/auth';
   import type { Server } from '../lib/auth';
@@ -245,6 +250,49 @@
     : provider === 'claude' && !!proxyAccounts && !!fastModel.supports_fast));
 
   let permissao = $state('');
+  // Celular nasce como o desktop nativo (create.rs set_provider): Claude em Bypass. O desktop web fica como está.
+  function permissaoPadrao(p: string): string {
+    return p === 'codex' ? 'Full Access' : p === 'claude' && !isDesktop ? 'bypassPermissions' : '';
+  }
+  // Plugins e skills só desta sessão (celular, Claude, sessão nova). O catálogo é da máquina, conta e
+  // pasta: trocar qualquer um descarta o que foi escolhido (customizations.rs set_context).
+  let custDelta = $state<ClaudeCustomizationDelta>(emptyDelta());
+  let custOpen = $state(false);
+  $effect(() => { void [targetServer, selectedConfig, picked]; custDelta = emptyDelta(); });
+  // Janela de 1M fica fora do valor do modelo: o sufixo só entra no corpo e na memória.
+  let contextOn = $state(false);
+  const contextAvailable = $derived(!isDesktop && provider === 'claude' && fastAvailable);
+  $effect(() => { if (!contextAvailable && contextOn) contextOn = false; });
+  const modeloCriacao = $derived(modelo ? contextModel(modelo, contextOn && contextAvailable) : '');
+  // "Usar como padrão" do nativo (harness-defaults), no celular: localStorage + settings.json do Claude.
+  let padraoSalvo = $state<{ model: string; effort: string; permission: string } | null>(null);
+  let padraoErro = $state('');
+  const chavePadrao = () => `cp_harness_default:${targetServer}:${provider}:${engine || '-'}`
+    + (provider === 'claude' && engineAccount ? `:account:${engineAccount}` : '');
+  function lerPadrao(): { model: string; effort: string; permission: string } | null {
+    try {
+      const raw = localStorage.getItem(chavePadrao());
+      const d = raw ? JSON.parse(raw) : null;
+      return d && typeof d.model === 'string' ? { model: d.model, effort: String(d.effort ?? ''), permission: String(d.permission ?? '') } : null;
+    } catch { return null; }
+  }
+  const ehPadrao = $derived(!!padraoSalvo && padraoSalvo.model === modeloCriacao && padraoSalvo.effort === esforco
+    && padraoSalvo.permission === permissao);
+  async function salvarPadrao(on: boolean) {
+    padraoErro = '';
+    try {
+      if (!on) { localStorage.removeItem(chavePadrao()); padraoSalvo = null; return; }
+      const salvo = { model: modeloCriacao, effort: esforco, permission: permissao };
+      localStorage.setItem(chavePadrao(), JSON.stringify(salvo));
+      padraoSalvo = salvo;
+    } catch { /* sem storage, o padrão não persiste */ }
+    const server = servers.find((x) => x.id === targetServer);
+    if (provider === 'claude' && !engine && server) {
+      try {
+        await setClaudeDefaultsForServer(server, { model: modeloCriacao || null, effort: esforco || null, permission: permissao || null });
+      } catch (e) { padraoErro = m.native_create_default_failed({ erro: e instanceof Error ? e.message : m.falha_conexao() }); }
+    }
+  }
   // Claude/Codex sem terminal: processo gerenciado pelo backend, sem tmux. Fora do modo bastão e
   // sem retomar conversa (a retomada nasce por outro caminho).
   let semTerminal = $state(true);
@@ -335,7 +383,7 @@
       if (!providerTouched && !modelChoiceTouched && !contaEscolhidaAMao && !querRetomar && !conversaAlvo
           && !retomando && !loading && preferred !== provider) {
         provider = preferred;
-        permissao = preferred === 'codex' ? 'Full Access' : '';
+        permissao = permissaoPadrao(preferred);
         carregarModelos();
       }
     } catch (e) {
@@ -368,11 +416,23 @@
       modelos = r.models;
       listaReduzida = r.reduced;
       if (r.lembrado) modelo = r.lembrado;
+      contextOn = !isDesktop && r.contextoLembrado;
+      // Celular: o padrão marcado vence o último modelo, como o load_models do nativo.
+      padraoSalvo = isDesktop ? null : lerPadrao();
+      if (padraoSalvo) {
+        const base = contextModel(padraoSalvo.model, false);
+        if (!base || r.models.some((x) => valorModelo(x) === base)) {
+          modelo = base;
+          contextOn = hasContext(padraoSalvo.model);
+          if (padraoSalvo.permission) permissao = padraoSalvo.permission;
+        }
+      }
       // O esforço lembrado só vale se couber no modelo que ficou. O `lembrado` já é conferido
       // contra a lista (modelosPorConta), mas o nível não era: com o modelo fora do catálogo o
       // campo de esforço nem aparece (`niveis.length > 0`) e o valor antigo ia pro create assim
       // mesmo — a sessão nascia com um `-c model_reasoning_effort=` que ninguém escolheu nem viu.
       esforco = effortLevels(provider, modelos, modelo).includes(r.esforcoLembrado) ? r.esforcoLembrado : '';
+      if (padraoSalvo && effortLevels(provider, modelos, modelo).includes(padraoSalvo.effort)) esforco = padraoSalvo.effort;
     } catch (e) {
       if (seq !== modSeq) return;
       modelosCarregando = false;
@@ -489,6 +549,22 @@
     return partes.length ? partes.join(' · ') : undefined;
   }
   const cotaSelecionada = $derived(selectedConfig ? cotaDaConta(cotaLinha, selectedConfig) ?? null : null);
+  // Celular: só as contas que o /api/cotas conhece, mais a ativa e a escolhida (choices.rs:245);
+  // sem leitura, todas. Pasta de backup não é conta.
+  const contasVisiveis = $derived(isDesktop || cotaLinha.length === 0 ? configs
+    : configs.filter((c) => c.active || c.path === selectedConfig || cotaLinha.some((q) => q.id === `claude:${c.path}`)));
+  const contaEsgotada = (path: string) => exhaustedWindow(cotaLinha.find((c) => c.id === `claude:${path}`));
+  // Conta escolhida esgotada e sem escolha manual: troca sozinha para a de mais folga (como a Nova conversa).
+  $effect(() => {
+    if (isDesktop || !open || provider !== 'claude' || contaEscolhidaAMao || !selectedConfig || !contaEsgotada(selectedConfig)) return;
+    const alvo = bestAccountWithQuota(cotaLinha, contasVisiveis.map((c) => c.path));
+    if (alvo && alvo !== selectedConfig) { selectedConfig = alvo; carregarModelos(); }
+  });
+  const cotaContaChatGpt = $derived.by(() => {
+    const cred = proxyEligible.find((a) => a.account === engineAccount)?.credential_id;
+    const c = cred ? cotaLinha.find((x) => x.id === cred) : null;
+    return c && c.estado === 'lida' && c.janelas.length ? c : null;
+  });
   const cotaCodexSelecionada = $derived(
     selectedCodex ? cotaLinha.find((c) => c.id === selectedCodex.credential_id) ?? null : null,
   );
@@ -715,7 +791,7 @@
       // anterior sobrevive à reabertura quando o fetch de contas falha — o reset de carregarModelos
       // fica atrás dele e não roda. Escolha de Pi indo pro create do Claude é pane no ar e erro no
       // primeiro turno, calado.
-      modelo = ''; esforco = ''; subagente = ''; permissao = '';
+      modelo = ''; esforco = ''; subagente = ''; permissao = permissaoPadrao(provider); contextOn = false;
       engineAccount = ''; fastChoice = null; modelosCarregando = false;
       jev = segredos.ligado('jev_padrao'); jevTocado = false;
       // A leitura do dono reaplica o padrão se a pessoa ainda não mexeu no interruptor.
@@ -994,7 +1070,7 @@
     // Sonda falhada deixa o Claude por omissão, e isso não é escolha a lembrar.
     const rememberProvider = providerTouched || Object.keys(providers).length > 0;
     const body = { name: name.trim(), cwd: picked, provider, codex_account: account, remember_provider: rememberProvider,
-      model: modelo || null, effort: esforco || null,
+      model: modeloCriacao || null, effort: esforco || null,
       ...(tierForCreation ? { service_tier: tierForCreation } : {}),
       // O Codex é criado por este corpo e retorna antes do `onCreate` lá embaixo: sem o `jev`
       // aqui, a caixa marcada nunca chegava ao backend e a sessão nascia no padrão do servidor.
@@ -1003,8 +1079,11 @@
       ...(provider === 'codex' && requestedHeadless !== undefined ? { headless: requestedHeadless,
         ...(requestedHeadless ? { permission_mode: permissao || null } : {}) } : {}) };
     // Só existe com motor do proxy escolhido; vai como argumento extra para não mudar a chamada dos outros.
-    const opening: SessionOpeningExtras | undefined = provider === 'claude' && proxyAccounts
-      ? { engine_account: engineAccount, ...(tierForCreation ? { service_tier: tierForCreation } : {}) } : undefined;
+    const custom = !isDesktop && provider === 'claude' && !baton && !conversaAlvo && !isEmptyDelta(custDelta)
+      ? { claude_customizations: $state.snapshot(custDelta) } : {};
+    const opening: SessionOpeningExtras | undefined = provider === 'claude' && (proxyAccounts || custom.claude_customizations)
+      ? { ...(proxyAccounts ? { engine_account: engineAccount } : {}), ...(tierForCreation ? { service_tier: tierForCreation } : {}), ...custom }
+      : undefined;
     const extra = opening ? [opening] as const : [] as const;
     try {
       // Memória ANTES do onCreate: se a criação falhar (rede, 400), a escolha não se perde — o
@@ -1013,7 +1092,7 @@
       // B6 da revisão final: campo em Padrão (vazio) REMOVE a chave — sem o removeItem, a
       // escolha "Padrão" nunca apagava a preferência antiga e a reabertura seguinte restaurava
       // o modelo que o usuário tinha acabado de descartar.
-      if (modelo) localStorage.setItem(chaveMemoria(), modelo);
+      if (modelo) localStorage.setItem(chaveMemoria(), modeloCriacao);
       else localStorage.removeItem(chaveMemoria());
       if (esforco) localStorage.setItem(chaveMemoria() + ':effort', esforco);
       else localStorage.removeItem(chaveMemoria() + ':effort');
@@ -1062,14 +1141,14 @@
       await salvarPadraoJev();
       if (provider === 'claude' && semTerminal) {
         // Os dois argumentos do fim só existem aqui: perfil (só omp) vazio e a flag sem terminal.
-        await onCreate(name.trim(), picked, selectedConfig, provider, engine || null, modelo || null,
+        await onCreate(name.trim(), picked, selectedConfig, provider, engine || null, modeloCriacao || null,
                        esforco || null, permissao || null, null, requestedHeadless, (!engine && subagente) || null, jev, worktreeChoice, ...extra);
       } else if (provider === 'claude' && !engine && subagente) {
-        await onCreate(name.trim(), picked, selectedConfig, provider, null, modelo || null,
-                       esforco || null, permissao || null, null, requestedHeadless, subagente, jev, worktreeChoice);
+        await onCreate(name.trim(), picked, selectedConfig, provider, null, modeloCriacao || null,
+                       esforco || null, permissao || null, null, requestedHeadless, subagente, jev, worktreeChoice, ...extra);
       } else {
         await onCreate(name.trim(), picked, provider === 'claude' ? selectedConfig : null, provider,
-                       provider === 'claude' ? (engine || null) : null, modelo || null, esforco || null,
+                       provider === 'claude' ? (engine || null) : null, modeloCriacao || null, esforco || null,
                        provider === 'claude' ? (permissao || null) : null,
                        // Explícitos até o fim: a cadeia posicional passou a ter o `jev` no 12º, e
                        // encurtá-la aqui faria o valor cair no argumento errado. `null`/`false` são
@@ -1149,7 +1228,8 @@
     <!-- Remonta ao trocar de servidor: o scanner busca roots/pastas do server ATIVO só no onMount;
          sem o key ele ficava com as pastas do server anterior até fechar o app. -->
     {#key targetServer}
-      <FolderScanner onPick={handlePick} fill={isDesktop} selected={picked} />
+      <!-- Celular: o passo 1 do nativo, com "Pesquisar em todas as pastas" e "+ Nova pasta". -->
+      <FolderScanner onPick={handlePick} fill={isDesktop} selected={picked} canCreate={!isDesktop} searchAllOption={!isDesktop} />
     {/key}
 
     <div class="advanced">
@@ -1233,6 +1313,7 @@
       {/if}
       <!-- Nome, modelo, esforco e permissao nao chegam ao `--resume`: ele reabre o transcript como
            ele estava. Deixa-los na tela com uma conversa escolhida seria oferecer escolha inerte. -->
+      {#if !isDesktop}<h3 class="sec">{m.native_create_group_session()}</h3>{/if}
       {#if !conversaAlvo}
       <div class="field">
         <label class="field-label" for="session-name">{m.comum_nome()}</label>
@@ -1250,7 +1331,7 @@
         />
       </div>
       <!-- Bastão vai por rota própria, que não cria worktree: o seletor nem aparece ali. -->
-      {#if codexServer && picked && !bastao}
+      {#if isDesktop && codexServer && picked && !bastao}
         <BranchChoice server={codexServer} cwd={picked} value={worktreeChoice} sessionName={name.trim()}
           onChange={(v) => (worktreeChoice = v)} />
       {/if}
@@ -1269,7 +1350,7 @@
               onclick={() => {
                 providerTouched = true;
                 if (p !== provider) {
-                  permissao = p === 'codex' ? 'Full Access' : '';
+                  permissao = permissaoPadrao(p);
                 }
                 provider = p;
                 carregarModelos();
@@ -1287,6 +1368,17 @@
         <p class="hint" role="alert">{m.criar_provider_ausente({ p: provider })}</p>
       {/if}
       </div>
+
+      {#if !isDesktop && provider === 'claude' && Object.keys(motores).length > 0 && !conversaAlvo}
+        <!-- Celular: o Provedor fica logo abaixo do agente, como o render_engine do nativo. -->
+        <div class="field">
+          <label class="field-label" for="engine-pick-sessao">{m.native_create_engine()}</label>
+          <Select id="engine-pick-sessao" class="field-input" ariaLabel={m.native_create_engine()} value={engine}
+            opcoes={[{ value: '', label: m.criar_claude_sua_conta() },
+                     ...Object.entries(motores).map(([nome, motor]) => ({ value: nome, label: motor.label ?? nome, hint: motor.model }))]}
+            onchange={(v) => { engine = v; carregarModelos(); }} />
+        </div>
+      {/if}
 
       {#if provider === 'codex'}
         <div class="field">
@@ -1335,10 +1427,15 @@
                  confirmação mostrar um nome e a requisição apagar OUTRO (o nome foi capturado antes
                  do await), e a troca ainda era descartada calada no fim da operação. -->
             <Select id="cfg-pick" class="field-input" ariaLabel={m.criar_conta_aria()} disabled={contaOcupada}
-              value={selectedConfig ?? ''}
-              opcoes={configs.map((c) => ({
-                value: c.path, label: c.label, hint: cotaHint(c), title: c.path }))}
-              onchange={(v) => { selectedConfig = v; contaEscolhidaAMao = true; carregarModelos(); }} />
+              value={selectedConfig ?? ''} filtroAcimaDe={isDesktop ? undefined : 8}
+              opcoes={contasVisiveis.map((c) => ({
+                value: c.path, label: c.label, title: c.path,
+                hint: contaEsgotada(c.path) ? [cotaHint(c), m.cota_conta_no_limite()].filter(Boolean).join(' · ') : cotaHint(c) }))}
+              onchange={(v) => {
+                // Esgotada não é escolhível no celular (o nativo a apaga e não deixa clicar).
+                if (!isDesktop && contaEsgotada(v)) { avisoConta = m.cota_conta_no_limite(); contaErro = true; return; }
+                selectedConfig = v; contaEscolhidaAMao = true; carregarModelos();
+              }} />
             <button type="button" class="ghost-btn conta-add" onclick={abrirCampoConta}
               disabled={contaOcupada} aria-busy={contaOcupada}
               aria-label={contaOcupada ? m.criar_criando_conta_aria() : m.criar_adicionar_conta_aria()}>
@@ -1410,6 +1507,14 @@
         </div>
       {/if}
 
+      {#if !isDesktop && codexServer && picked && !bastao && !conversaAlvo}
+        <div class="branch-row">
+          <BranchChoice server={codexServer} cwd={picked} value={worktreeChoice} sessionName={name.trim()}
+            onChange={(v) => (worktreeChoice = v)} />
+          <FolderGitPill server={codexServer} cwd={picked} disabled={loading} />
+        </div>
+      {/if}
+
       {#if headlessError}<p role="alert" class="error-msg">{headlessError}</p>{/if}
       {#if headlessInherited && (provider === 'claude' || provider === 'codex')}<p class="hint">{m.session_mode_server_default()}</p>{/if}
       <SessionOpeningFields {provider} models={modelos} engines={motores} reducedList={listaReduzida}
@@ -1419,6 +1524,8 @@
         bind:engine bind:subagent={subagente} bind:jev bind:ompProfile={perfilOmp}
         onEngineChange={() => carregarModelos()} onJevChange={() => (jevTocado = true)}
         onHeadlessChange={saveHeadlessDefault} executionDefault={headlessInherited}
+        runLabel={isDesktop ? undefined : m.native_create_group_run()} agentLabel={isDesktop ? undefined : m.native_create_group_agent()}
+        hideEngine={!isDesktop}
         executionDisabled={headlessSaving || loading || viewerRole === null}>
         {#snippet afterExecution()}
           {#if retomaveis.length}
@@ -1473,11 +1580,38 @@
                   value={engineAccount} disabled={loading}
                   opcoes={proxyEligible.map((a) => ({ value: a.account, label: a.label || a.email, hint: a.email }))}
                   onchange={(v) => { if (v !== engineAccount) { engineAccount = v; carregarModelos(); } }} />
+                {#if cotaContaChatGpt}
+                  <p class="conta-hint conta-cota">{#each cotaContaChatGpt.janelas as j, i (j.rotulo)}{#if i > 0}<span class="cota-sep">·</span>{/if}<span class="cota-jan" data-nivel={j.nivel}>{j.rotulo} {Math.round(j.pct)}%</span>{/each}</p>
+                {/if}
               {/if}
               {#if proxyNote}
                 <p class="hint" role={modelosCarregando ? 'status' : 'alert'}>{proxyNote}</p>
               {/if}
             </div>
+          {/if}
+          {#if contextAvailable && !conversaAlvo}
+            <label class="fast-check">
+              <input type="checkbox" role="switch" checked={contextOn} disabled={loading} onchange={(e) => (contextOn = e.currentTarget.checked)} />
+              <span class="fast-texto">
+                <span>{m.native_create_context_title()}</span>
+                <span class="hint">{m.native_create_engine_context_help()}</span>
+              </span>
+            </label>
+          {/if}
+          {#if !isDesktop && provider === 'claude' && !conversaAlvo && !bastao}
+            <button type="button" class="cust-row" onclick={() => (custOpen = true)}>
+              <span class="cust-nome">{m.native_create_customizations_title()}</span>
+              <span class="cust-valor">{isEmptyDelta(custDelta) ? m.native_create_customizations_default()
+                : deltaCount(custDelta) === 1 ? m.native_create_customizations_changes_one()
+                : m.native_create_customizations_changes({ n: String(deltaCount(custDelta)) })} · {m.native_create_customizations_choose()}</span>
+            </button>
+          {/if}
+          {#if !isDesktop && !conversaAlvo && !bastao}
+            <label class="fast-check">
+              <input type="checkbox" checked={ehPadrao} disabled={loading} onchange={(e) => salvarPadrao(e.currentTarget.checked)} />
+              <span class="fast-texto"><span>{m.native_create_default_for_harness({ harness: providerName(provider) })}</span></span>
+            </label>
+            {#if padraoErro}<p class="hint" role="alert">{padraoErro}</p>{/if}
           {/if}
           {#if showFast}
             <label class="fast-check">
@@ -1615,7 +1749,18 @@
   {/if}
 </BottomSheet>
 
+<CustomizationsSheet open={custOpen} server={servers.find((x) => x.id === targetServer) ?? null} cwd={picked}
+  configDir={selectedConfig} applied={custDelta} onApply={(d) => (custDelta = d)} onClose={() => (custOpen = false)} />
+
 <style>
+  .cust-row {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-height: 52px; padding: 8px 12px;
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: transparent; text-align: left; cursor: pointer;
+  }
+  .cust-nome { font-size: var(--text-sm); color: var(--text-primary); }
+  .cust-valor { font-size: var(--text-xs); color: var(--text-muted); }
+  .sec { margin: var(--space-4) 0 var(--space-1); font-size: var(--text-xs); font-weight: var(--fw-semibold); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+  .branch-row { display: flex; flex-direction: column; gap: var(--space-2); }
   .sheet-title {
     font-size: var(--text-xl);
     font-weight: 600;

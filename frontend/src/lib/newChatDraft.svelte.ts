@@ -6,6 +6,8 @@ import {
   getFolderBranchesForServer, getRootsForServer, listClaudeConfigs, getClaudeAccountSuggestion, getProviders,
   uniqueSessionName, basename, effortLevels, defaultCodexAccount, SESSION_PROVIDERS,
   getEnginesForServer, getConfigForServer, contextModel, hasContext, setClaudeDefaultsForServer,
+  getWorktreesForServer, getCreationProgress, uploadFileForServer,
+  type WorktreeStatus, type CreationProgress,
   type CodexAccount, type ConfigDirInfo, type FolderBranches, type FsRoot, type ModelOption, type Provider,
   type WorktreeChoice, type Motor, type CliProxyAccount,
 } from '@hangar/core';
@@ -51,6 +53,14 @@ export class NewChatDraft {
   newBranch = $state(false);
   base = $state('');
   branchName = $state('');
+  // Worktree que já existe escolhida como destino (create.rs: `existing`, só na tela compacta).
+  existing = $state<string | null>(null);
+  worktrees = $state<WorktreeStatus[]>([]);
+  // Anexos escolhidos antes de a sessão existir: sobem na sessão nova, logo depois de criá-la.
+  attachments = $state<File[]>([]);
+  progress = $state('');
+  sameFolder = $state(false);
+  #sameSeq = 0;
   // Motor GPT do proxy, conta ChatGPT, Fast e 1M: as mesmas escolhas da folha (CreateSessionSheet).
   engine = $state('');
   engines = $state<Record<string, Motor>>({});
@@ -109,7 +119,7 @@ export class NewChatDraft {
   get serverObj(): Server | null { return this.servers.find((s) => s.id === this.server) ?? null; }
   get #choices(): string {
     return JSON.stringify([this.server, this.cwd, this.provider, this.configDir, this.codexAccount, this.model, this.effort, this.branch,
-      this.newBranch, this.base, this.branchName, this.engine, this.engineAccount, this.fastChoice, this.contextOn,
+      this.newBranch, this.base, this.branchName, this.existing, this.engine, this.engineAccount, this.fastChoice, this.contextOn,
       this.permission, this.headless]);
   }
   /** Contas ou modelos ainda chegando: enviar agora mandaria conta/modelo vazios e cairia no padrão do servidor calado. */
@@ -166,8 +176,9 @@ export class NewChatDraft {
     this.server = id;
     selectServer(id);
     this.cwd = readStorage(cwdKey(id));
-    this.branch = ''; this.newBranch = false; this.base = ''; this.branchName = '';
+    this.branch = ''; this.newBranch = false; this.base = ''; this.branchName = ''; this.existing = null;
     this.engines = {}; this.engine = ''; this.engineAccount = '';
+    void this.checkSameFolder();
     void this.loadProviders();
     void this.loadRoots();
     void this.loadEngines();
@@ -262,9 +273,27 @@ export class NewChatDraft {
 
   setCwd(path: string) {
     this.cwd = path;
-    this.branch = ''; this.newBranch = false; this.base = ''; this.branchName = '';
+    this.branch = ''; this.newBranch = false; this.base = ''; this.branchName = ''; this.existing = null;
     writeStorage(cwdKey(this.server), path);
     void this.loadBranches();
+    void this.checkSameFolder();
+  }
+
+  // Pasta que já tem sessão: avisa, sem travar (o nome novo desempata), como o `same_folder` do nativo.
+  async checkSameFolder() {
+    const seq = ++this.#sameSeq;
+    const server = this.serverObj, cwd = this.cwd;
+    this.sameFolder = false;
+    if (!server || !cwd) return;
+    try {
+      const list = await fetchSessionsForServer(server);
+      if (seq === this.#sameSeq) this.sameFolder = list.some((x) => x.cwd === cwd);
+    } catch { /* a lista da sessão já mostra a máquina fora; aqui só não avisa */ }
+  }
+
+  pickExisting(path: string | null) {
+    this.existing = path;
+    if (path) { this.branch = ''; this.newBranch = false; }
   }
 
   setProvider(p: Provider) {
@@ -454,6 +483,13 @@ export class NewChatDraft {
     this.branchesError = '';
     if (!server || !cwd) { this.branchesLoading = false; return; }
     this.branchesLoading = true;
+    this.worktrees = [];
+    // Worktrees desta pasta, para o menu de branch oferecer as que já existem como destino.
+    getWorktreesForServer(server, undefined, { repo: cwd, sizes: false })
+      .then((repos) => {
+        if (seq === this.#branchSeq) this.worktrees = repos.flatMap((r) => r.worktrees).filter((w) => w.exists && w.path !== cwd);
+      })
+      .catch(() => { /* sem worktrees, o menu mostra só as branches */ });
     try {
       const res = await getFolderBranchesForServer(server, cwd);
       if (seq === this.#branchSeq) this.branches = res;
@@ -467,7 +503,7 @@ export class NewChatDraft {
 
   /** Aviso embaixo das pílulas, na prioridade do `note()` do nativo. */
   get note(): { text: string; warning: boolean } | null {
-    if (this.sending) return { text: m.native_new_chat_sending(), warning: false };
+    if (this.sending) return { text: this.progress || m.native_new_chat_sending(), warning: false };
     const claude = this.provider === 'claude';
     const text = [
       this.sendError,
@@ -483,9 +519,26 @@ export class NewChatDraft {
       claude && !this.configsLoading && !this.configsError && this.configs.length === 0 && this.#cfgSeq > 0
         ? m.native_new_chat_no_accounts() : '',
       !this.providerAvailable ? m.native_create_provider_missing({ p: this.provider }) : '',
+      this.sameFolder ? m.criar_ja_existe() : '',
       this.providersError && m.criar_providers_erro_detalhe({ erro: this.providersError }),
     ].find(Boolean);
     return text ? { text, warning: true } : null;
+  }
+
+  // Passo da criação a cada 800 ms (STEP_POLL do nativo) enquanto o POST espera.
+  #followCreation(name: string, server: Server): () => void {
+    let alive = true;
+    this.progress = '';
+    void (async () => {
+      while (alive) {
+        try {
+          const p = await getCreationProgress(name, server);
+          if (alive) this.progress = stepLabel(p) || this.progress;
+        } catch { /* consulta que falha deixa o último passo; a criação reporta o erro dela */ }
+        await new Promise((r) => setTimeout(r, 800));
+      }
+    })();
+    return () => { alive = false; this.progress = ''; };
   }
 
   async send(text: string): Promise<{ serverId: string; name: string }> {
@@ -506,13 +559,15 @@ export class NewChatDraft {
         const key = this.memoryKey();
         writeStorage(key, this.bodyModel ?? '');
         writeStorage(`${key}:effort`, this.effort);
-        const sessionName = uniqueSessionName(basename(cwd), taken);
+        const target = this.existing ?? cwd;
+        const sessionName = uniqueSessionName(basename(target), taken);
         if (this.newBranch && !this.branchName.trim()) this.branchName = sessionName;
         // Corpo do nativo (create.rs, create): motor, conta ChatGPT, Fast, execução e permissão.
         const claude = this.provider === 'claude', codex = this.provider === 'codex';
         const tier = this.fastAvailable ? this.fastChoice : null;
+        const stopProgress = this.#followCreation(sessionName, server);
         const info = await createSessionForServer(server, {
-          name: sessionName, cwd, provider: this.provider,
+          name: sessionName, cwd: target, provider: this.provider,
           // Sonda falhada deixa o Claude por omissão, e isso não é escolha a lembrar.
           remember_provider: this.#providerPicked || Object.keys(this.providers).length > 0,
           config_dir: claude ? this.configDir : null,
@@ -525,14 +580,22 @@ export class NewChatDraft {
           ...(claude && this.permission ? { permission_mode: this.permission } : {}),
           // O backend só aceita permissão no Codex sem terminal (api.py, _create_session_owned).
           ...(codex && this.headless === true ? { permission_mode: this.permission || null } : {}),
-          ...(worktreeChoiceOf(this) ?? {}),
-        });
+          // Worktree existente já é o cwd: branch nova ou outra branch não se somam a ela.
+          ...(this.existing ? {} : (worktreeChoiceOf(this) ?? {})),
+        }).finally(stopProgress);
         // O nome que vale é o devolvido pelo backend: ele pode desempatar de novo.
         name = info.name;
         // Releitura das escolhas: o nome da branch nova pode ter sido preenchido acima.
         this.#created = { choices: this.#choices, name };
       }
-      await sendInputForServer(server, name, text);
+      const parts: string[] = [];
+      for (const file of this.attachments) {
+        // Um anexo que falha segura a mensagem: ela não sai pela metade (create.rs, CreatedWithInput).
+        const { path } = await uploadFileForServer(server, name, file);
+        parts.push((file.type.startsWith('image/') ? `📎 ${m.board_imagem()}: ` : `📎 ${m.board_arquivo()}: `) + path);
+      }
+      await sendInputForServer(server, name, [text, ...parts].filter(Boolean).join('\n'));
+      this.attachments = [];
       this.#created = null;
       return { serverId: server.id, name };
     } catch (e) {
@@ -541,6 +604,15 @@ export class NewChatDraft {
     } finally {
       this.sending = false;
     }
+  }
+}
+
+function stepLabel(p: CreationProgress): string {
+  switch (p.step) {
+    case 'preparando': return m.criar_passo_preparando();
+    case 'conta': return m.criar_passo_conta({ conta: p.params.conta ?? '' });
+    case 'criando': return m.criar_passo_criando();
+    default: return '';
   }
 }
 

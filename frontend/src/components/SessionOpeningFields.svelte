@@ -41,6 +41,11 @@
     afterExecution?: Snippet;
     /** Depois de modelo/esforço/permissão (controle de contexto do Codex, teto e cota do papel). */
     afterChoices?: Snippet;
+    /** Celular: títulos das seções do nativo ("Execução", "Ajustes do agente") antes de cada bloco. */
+    runLabel?: string;
+    agentLabel?: string;
+    /** Celular: o motor vai para a seção da sessão, fora de "Mais opções" (o nativo, render_engine). */
+    hideEngine?: boolean;
   }
 
   let {
@@ -49,6 +54,7 @@
     headless = $bindable(), model = $bindable(), effort = $bindable(), permission = $bindable(),
     engine = $bindable(), subagent = $bindable(), jev = $bindable(), ompProfile = $bindable(),
     onEngineChange, onModelChoice, onJevChange, onHeadlessChange, executionDisabled = false, executionDefault = false, onExecutionDefault, afterExecution, afterChoices,
+    runLabel, agentLabel, hideEngine = false,
   }: Props = $props();
 
   const id = (name: string) => `${idPrefix}${name}`;
@@ -57,7 +63,7 @@
 
   const levels = $derived(effortLevels(provider, models, model));
   const modes = $derived(permissionModes(provider, headless && !executionDefault));
-  const hasEngine = $derived(provider === 'claude' && Object.keys(engines).length > 0);
+  const hasEngine = $derived(provider === 'claude' && Object.keys(engines).length > 0 && !hideEngine);
   const hasSubagent = $derived(!resuming && allowSubagent && provider === 'claude' && !engine && models.length > 0);
   const effortLabel = $derived(provider === 'pi' || provider === 'omp' ? m.criar_raciocinio() : m.composer_esforco());
   const engineLabel = $derived(engine ? (engines[engine]?.label ?? engine) : m.criar_claude_sua_conta());
@@ -73,6 +79,7 @@
   }
 </script>
 
+{#if runLabel && (!resuming && hasExecutionMode(provider) || afterExecution)}<h3 class="sec">{runLabel}</h3>{/if}
 {#if !resuming && hasExecutionMode(provider)}
   <!-- Logo abaixo da conta: decide se vai existir painel de terminal. -->
   <div class="field">
@@ -108,6 +115,7 @@
 {@render afterExecution?.()}
 
 {#if !resuming}
+  {#if agentLabel}<h3 class="sec">{agentLabel}</h3>{/if}
   {#if provider === 'omp'}
     <div class="field">
       <label class="field-label" for={id('omp-profile')}>{m.criar_perfil_omp()}</label>
@@ -218,6 +226,7 @@
 {/if}
 
 <style>
+  .sec { margin: var(--space-4) 0 var(--space-1); font-size: var(--text-xs); font-weight: var(--fw-semibold); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
   .hint { font-size: var(--text-sm); color: var(--text-secondary); margin-bottom: var(--space-3); }
   .model-hint { margin: 6px 0 0; font-size: 12px; opacity: 0.75; }
   .chevron { color: var(--text-muted); transition: transform 180ms var(--ease-out); }

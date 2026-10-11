@@ -13,6 +13,8 @@
   import AccountPill from '../components/newchat/AccountPill.svelte';
   import ModelPill from '../components/newchat/ModelPill.svelte';
   import NewChatComposer from '../components/newchat/NewChatComposer.svelte';
+  import NewChatAttach from '../components/newchat/NewChatAttach.svelte';
+  import NewChatMic from '../components/newchat/NewChatMic.svelte';
   import { quotaFeed } from '../lib/quotaFeed.svelte';
   import { faixaDeCota } from '../lib/cota';
   import { createNewChatDraft } from '../lib/newChatDraft.svelte';
@@ -43,6 +45,7 @@
   const machineLabel = $derived(draft.serverObj?.label ?? m.native_new_chat_machine());
   const branchLabel = $derived.by(() => {
     if (draft.branchesLoading) return m.native_create_checkout_loading();
+    if (draft.existing) return `${basename(draft.existing)} · ${m.newchat_worktree_existing()}`;
     if (draft.newBranch) return `${draft.branchName || m.worktree_nome_branch()} · ${m.native_create_checkout_worktree()}`;
     if (draft.branch) return `${draft.branch} · ${m.native_create_checkout_worktree()}`;
     return draft.branches?.current ?? m.native_create_checkout_current();
@@ -124,7 +127,26 @@
       </div>
 
       <NewChatComposer bind:value={text} placeholder={m.native_composer({ agent: providerName(draft.provider) })}
-        busy={draft.sending} blocked={draft.loading || !!draft.proxyBlocked} note={draft.note} onsend={send}>
+        busy={draft.sending} blocked={draft.loading || !!draft.proxyBlocked} note={draft.note} onsend={send}
+        hasAttachments={draft.attachments.length > 0}>
+        {#snippet top()}
+          {#if draft.attachments.length > 0}
+            <ul class="attached">
+              {#each draft.attachments as f, i (f.name + i)}
+                <li class="chip-file">
+                  <span class="chip-name">{f.name}</span>
+                  <button type="button" class="chip-x" aria-label={m.newchat_attach_remove({ nome: f.name })} disabled={draft.sending}
+                    onclick={() => (draft.attachments = draft.attachments.filter((_, j) => j !== i))}>×</button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        {/snippet}
+        {#snippet leading()}
+          <NewChatAttach disabled={draft.sending} onFiles={(files) => (draft.attachments = [...draft.attachments, ...files])} />
+          <NewChatMic server={draft.serverObj} disabled={draft.sending}
+            onText={(t) => (text = text.trim() ? `${text.trimEnd()} ${t}` : t)} onError={(msg) => (draft.sendError = msg)} />
+        {/snippet}
         {#snippet pills()}<ModelPill {draft} disabled={draft.sending} />{/snippet}
         {#snippet below()}
           <div class="bottom-pills">
@@ -140,7 +162,7 @@
               </QuietPill>
             {/if}
             {#if draft.serverObj && draft.cwd}
-              <FolderGitPill server={draft.serverObj} cwd={draft.cwd} disabled={draft.sending}
+              <FolderGitPill server={draft.serverObj} cwd={draft.cwd} disabled={draft.sending} onChanged={() => draft.loadBranches()}
                 root={draft.roots ? (pickFolderRoot(draft.roots, draft.cwd) ?? undefined) : undefined} />
             {/if}
             <button type="button" class="more" disabled={draft.sending} onclick={() => (moreOpen = true)}>{m.native_create_more()}</button>
@@ -184,13 +206,13 @@
       <li>
         <button type="button" class="row" class:on={draft.branch === '' && !draft.newBranch}
           aria-pressed={draft.branch === '' && !draft.newBranch}
-          onclick={() => { menu = null; draft.branch = ''; draft.newBranch = false; }}>
+          onclick={() => { menu = null; draft.branch = ''; draft.newBranch = false; draft.pickExisting(null); }}>
           <span>{m.native_create_checkout_current()}{draft.branches?.current ? ` · ${draft.branches.current}` : ''}</span>
         </button>
       </li>
       <li>
         <button type="button" class="row" class:on={draft.newBranch} aria-pressed={draft.newBranch}
-          onclick={() => { draft.newBranch = true; draft.branch = ''; draft.base = draft.base || (draft.branches ? defaultBase(draft.branches) : ''); }}>
+          onclick={() => { draft.pickExisting(null); draft.newBranch = true; draft.branch = ''; draft.base = draft.base || (draft.branches ? defaultBase(draft.branches) : ''); }}>
           <span>{m.worktree_nova_branch({ base: draft.base || draft.branches?.current || '' })}</span>
         </button>
       </li>
@@ -211,8 +233,17 @@
       {#each otherBranches as b (b)}
         <li>
           <button type="button" class="row" class:on={draft.branch === b} aria-pressed={draft.branch === b}
-            onclick={() => { menu = null; draft.branch = b; draft.newBranch = false; }}>
+            onclick={() => { menu = null; draft.pickExisting(null); draft.branch = b; draft.newBranch = false; }}>
             <span>{b}</span><span class="muted">{m.native_create_checkout_worktree()}</span>
+          </button>
+        </li>
+      {/each}
+      {#each draft.worktrees as wt (wt.path)}
+        <li>
+          <button type="button" class="row" class:on={draft.existing === wt.path} aria-pressed={draft.existing === wt.path}
+            onclick={() => { menu = null; draft.pickExisting(wt.path); }}>
+            <span>{wt.branch ?? basename(wt.path)}</span>
+            <span class="muted">{wt.sessions.length ? m.worktree_menu_ocupada({ nome: wt.sessions[0] }) : m.newchat_worktree_existing()}</span>
           </button>
         </li>
       {/each}
@@ -230,6 +261,16 @@
   onCreate={createFromSheet} onOpenSession={openChat} />
 
 <style>
+  .attached { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip-file {
+    display: inline-flex; align-items: center; gap: 2px; max-width: 100%; padding-left: 10px;
+    border-radius: var(--radius-full); background: var(--fill-subtle); font-size: var(--text-xs); color: var(--text-primary);
+  }
+  .chip-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip-x {
+    width: 44px; height: 32px; margin: -6px -8px -6px 0; display: inline-flex; align-items: center; justify-content: center;
+    border: 0; background: transparent; color: var(--text-muted); font-size: 18px; cursor: pointer;
+  }
   .home {
     flex: 0 1 auto; height: 100%; min-height: 0; display: flex; flex-direction: column; background: transparent; position: relative;
     padding: env(safe-area-inset-top) var(--space-3) calc(env(safe-area-inset-bottom) + var(--space-3));

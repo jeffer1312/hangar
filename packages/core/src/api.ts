@@ -775,6 +775,8 @@ export interface CreateSessionBody {
   // Conta ChatGPT do CLIProxyAPI local (só Claude com motor) e Fast (`priority`) da sessão nova.
   engine_account?: string;
   service_tier?: 'default' | 'priority';
+  // Plugins e skills só desta sessão: a diferença do padrão do catálogo (só Claude, sessão nova).
+  claude_customizations?: ClaudeCustomizationDelta;
   // Branch já existente (local ou remota) em que a sessão nasce; vazio = a atual da pasta.
   branch?: string | null;
   // Com new_branch, `branch` é a branch NOVA criada a partir de `base` (vazio = a atual da pasta).
@@ -782,7 +784,7 @@ export interface CreateSessionBody {
   base?: string | null;
 }
 
-export type SessionOpeningExtras = Pick<CreateSessionBody, 'engine_account' | 'service_tier'>;
+export type SessionOpeningExtras = Pick<CreateSessionBody, 'engine_account' | 'service_tier' | 'claude_customizations'>;
 
 export function buildCreateSessionBody(body: CreateSessionBody): CreateSessionBody {
   const { codex_account, branch, new_branch, base, ...rest } = body;
@@ -816,6 +818,16 @@ function withCreationWarnings<T extends { avisos?: string[] }>(result: T): T {
     catch (error) { console.error('onSessionWarnings:', error); }
   }
   return result;
+}
+
+// GET /api/claude/customizations: plugins e skills da conta naquela pasta (dto.rs do nativo).
+export interface ClaudeSkill { name: string; description?: string; enabled: boolean; blocked?: boolean }
+export interface ClaudePlugin { id: string; name: string; description?: string; enabled: boolean; skills: ClaudeSkill[] }
+export interface ClaudeCustomizations { plugins: ClaudePlugin[]; skills: ClaudeSkill[]; warnings?: string[] }
+export interface ClaudeCustomizationDelta { plugins: Record<string, boolean>; skills: Record<string, boolean>; blocked_skills: string[] }
+export function getClaudeCustomizationsForServer(s: Server, cwd: string, configDir?: string | null): Promise<ClaudeCustomizations> {
+  const q = new URLSearchParams({ cwd, ...(configDir ? { config_dir: configDir } : {}) });
+  return apiFetchForServer(s, `/api/claude/customizations?${q}`, undefined, 20_000);
 }
 
 // POST /api/claude/defaults (Rust, claude_defaults.rs): grava no settings.json do principal da máquina.
@@ -1185,6 +1197,19 @@ export async function folderGitActionForServer(server: Server, cwd: string, acti
   return apiFetchForServer(server, `/api/fs/git/${action}`, { method: 'POST', body }, FOLDER_ACTION_MS);
 }
 
+// Troca e criação de branch da pasta (create/folder_git.rs). Erro sai com `code`: a recusa
+// `erro_git_folder_sessions` pede confirmação e reenvio com confirmSessions.
+export async function folderGitSwitchForServer(server: Server, cwd: string, branch: string, confirmSessions = false, root?: string): Promise<FolderGit> {
+  const body = JSON.stringify({ root: await folderRoot(server, cwd, undefined, root), path: cwd, branch, confirm_sessions: confirmSessions });
+  return apiFetchForServer(server, '/api/fs/git/switch', { method: 'POST', body }, FOLDER_ACTION_MS, true);
+}
+export async function folderGitBranchForServer(server: Server, cwd: string, name: string,
+  opts: { checkout: boolean; base?: string; confirmSessions?: boolean }, root?: string): Promise<FolderGit> {
+  const body = JSON.stringify({ root: await folderRoot(server, cwd, undefined, root), path: cwd, name, checkout: opts.checkout,
+    confirm_sessions: !!opts.confirmSessions, ...(opts.base ? { base: opts.base } : {}) });
+  return apiFetchForServer(server, '/api/fs/git/branch', { method: 'POST', body }, FOLDER_ACTION_MS, true);
+}
+
 export interface WorktreeChoice { branch: string; new_branch?: boolean; base?: string | null }
 export interface WorktreeStatus {
   path: string; repo: string; exists: boolean; branch: string | null; base: string | null;
@@ -1267,8 +1292,12 @@ export function mergedWorktreeBatch(r: WorktreeRepo): { deletable: WorktreeStatu
   };
 }
 
-export async function getWorktreesForServer(server: Server, signal?: AbortSignal): Promise<WorktreeRepo[]> {
-  const r = await apiFetchForServer<{ repos: WorktreeRepo[] }>(server, '/api/worktrees',
+export async function getWorktreesForServer(server: Server, signal?: AbortSignal,
+  opts?: { repo?: string; sizes?: boolean }): Promise<WorktreeRepo[]> {
+  // Com `repo`, só as worktrees daquela pasta; `sizes: false` pula o `du`, que é o que demora.
+  const q = opts ? '?' + new URLSearchParams({ ...(opts.repo ? { repo: opts.repo } : {}),
+    ...(opts.sizes === false ? { sizes: 'false' } : {}) }) : '';
+  const r = await apiFetchForServer<{ repos: WorktreeRepo[] }>(server, `/api/worktrees${q}`,
     { signal: comTeto(signal, FOLDER_READ_MS) }, FOLDER_READ_MS);
   return r.repos;
 }
@@ -2946,6 +2975,15 @@ export function setEngineModel(
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/engine/model`, {
     method: 'POST',
     body: JSON.stringify(body),
+  });
+}
+
+// Fast da sessão viva (POST .../service-tier); `priority` liga, `default` volta ao padrão da conta.
+export function setServiceTier(name: string, tier: 'default' | 'priority', server?: Server | null): Promise<{ ok: boolean; service_tier: string }> {
+  _invalidarCatalogo(name);
+  return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/service-tier`, {
+    method: 'POST',
+    body: JSON.stringify({ service_tier: tier }),
   });
 }
 
