@@ -512,6 +512,9 @@ marcar() {   # $1 = arquivo de andamento
         printf '%s\n' "$l"
         [[ "$l" == ">> "* || "$l" == "<< "* ]] && printf '%(%s)T %s\n' -1 "$l" >> "$1"
     done
+    # Sem isto a função sai com o código do último [[ ]] (1 quando a última linha não é de passo), e
+    # quem espera o Windows pelo `wait` deste filtro dá a VM como falha mesmo com tudo ok.
+    return 0
 }
 
 # ── principal ─────────────────────────────────────────────────────────────────────────────────

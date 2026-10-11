@@ -105,6 +105,9 @@ saida="$(printf '>> linux: rust…\ncompilando\n<< linux: rust 12s ok\n' | "$V" 
 [[ "$saida" == $'>> linux: rust…\ncompilando\n<< linux: rust 12s ok' ]] || { echo "FALHOU --marcar não repassou a entrada: \"$saida\""; falhou=1; }
 [[ "$(sed 's/^[0-9]* //' "$anda" | tr '\n' '|')" == ">> linux: rust…|<< linux: rust 12s ok|" ]] || \
     { echo "FALHOU --marcar gravou: \"$(cat "$anda")\""; falhou=1; }
+# Última linha que não é de passo (o resumo do Windows): o filtro sai com 0, senão a VM conta como falha.
+printf '<< windows: rust ok\n  ok      rust 1s\n' | "$V" --marcar "$anda" > /dev/null || \
+    { echo "FALHOU --marcar saiu com erro numa última linha que não é de passo"; falhou=1; }
 rm -f "$anda"
 
 (( falhou )) && exit 1
