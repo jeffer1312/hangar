@@ -21,6 +21,10 @@ import * as m from '../paraglide/messages';
   import AccountMenu from '../components/AccountMenu.svelte';
   import LiveVoiceButton from '../components/LiveVoiceButton.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
+  import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
+  import { abrirConfig } from '../lib/configNav';
+  import { quotaFeed } from '../lib/quotaFeed.svelte';
+  import { faixaDeCota } from '../lib/cota';
   import { createSession, canPair, type DropResult } from '@hangar/core';
   import { listAllServers, getActiveId, selectServer, removeServer, renameServer, updateServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import type { AggSession, Provider, SessionOpeningExtras, WorktreeChoice } from '@hangar/core';
@@ -62,8 +66,10 @@ import * as m from '../paraglide/messages';
   );
   // Convite encerrado não é servidor offline: tem aviso próprio.
   const endedInvites = $derived(sessionsStore.byServer.filter((b) => b.server.inviteEnded).map((b) => b.server.label));
-  let error = $state('');
-  // Mensagem de AÇÃO (excluir/renomear), separada do `error` acima: aquele substitui a lista inteira
+  // Só quando TODOS os servidores próprios estão fora: um fora e outro vazio é lista vazia com aviso.
+  const ownBuckets = $derived(sessionsStore.byServer.filter((b) => !b.server.invite));
+  const listError = $derived(sessions.length === 0 && ownBuckets.length > 0 && ownBuckets.every((b) => b.error));
+  // Mensagem de AÇÃO (excluir/renomear), separada do `listError` acima: aquele substitui a lista inteira
   // (estado de "não consegui carregar"), e uma falha de exclusão não pode apagar a lista da tela.
   // Mesma forma do flash() da Sidebar, pra as duas views falharem igual.
   let actionMsg = $state('');
@@ -74,6 +80,9 @@ import * as m from '../paraglide/messages';
     actionTimer = setTimeout(() => { actionMsg = ''; }, 4000);
   }
   let showCreateSheet = $state(false);
+  // Passar o bastão pelo toque longo: a mesma folha de criar, travada na máquina da origem.
+  let bastaoAlvo = $state<{ name: string; cwd: string; serverId: string } | null>(null);
+  let shareAlvo = $state<{ name: string; serverId: string } | null>(null);
   $effect(() => liveVoiceStore.registerActions({ 'new-session': () => { searchOpen = false; showCreateSheet = true; return true; } }));
   let drawerOpen = $state(false);    // menu lateral (hamburger): navegação + conta
   let searchOpen = $state(false);    // Buscar conversas (switcher em modo so-busca)
@@ -392,6 +401,23 @@ import * as m from '../paraglide/messages';
     drawerOpen = true;
   }
 
+  // Cota da conta ativa no rodapé da gaveta: lida só com ela aberta, do servidor ativo.
+  $effect(() => {
+    if (!drawerOpen) return;
+    quotaFeed.retain();
+    quotaFeed.setServidor(settingsServerId ?? '');
+    return () => quotaFeed.release();
+  });
+  const activeQuota = $derived(faixaDeCota(quotaFeed.contas)?.find((c) => c.ativa && c.janelas.length > 0) ?? null);
+
+  // Encadear e agrupar pelo toque longo escolhem entre as sessões vivas, não só as filtradas.
+  const allSessions = () => sessions;
+  function arbiterOf(s: AggSession): (() => void) | undefined {
+    const arb = s.orq_arbiter ? sessions.find((x) => x.serverId === s.serverId && x.name === s.orq_arbiter) : null;
+    return arb ? () => openSession(arb) : undefined;
+  }
+  const showFolder = $derived(multiServer && model.groupBy === 'server');
+
   // Remover servidor pede confirmacao — o × de um toque removia na hora e, se fosse o unico
   // servidor, deslogava junto (com o token de pareamento la no PC). O remove real so acontece
   // no doDropServer. Revisão de entidade (round 4): o diálogo captura fingerprint+revision; o
@@ -433,12 +459,6 @@ import * as m from '../paraglide/messages';
     <LiveVoiceButton />
     <!-- Sem seleção em lote nem atalho de nova conversa aqui: a lista de conversas já traz o seu. -->
     {#if sessionOrganization.mode !== 'conversations'}
-      <button type="button" class="sl-icon-btn" onclick={() => { window.location.hash = '#/'; }}
-        aria-label={m.conversas_nova()} title={m.conversas_nova()}>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <path d="M12 5v14M5 12h14"/>
-        </svg>
-      </button>
       <button
         class="sl-icon-btn"
         class:active={model.selectMode}
@@ -502,10 +522,15 @@ import * as m from '../paraglide/messages';
         <div class="spinner-large" aria-label={m.comum_carregando()}>⟳</div>
         <p>{m.lista_carregando()}</p>
       </div>
-    {:else if error}
-      <div class="empty-state">
-        <p class="error-text">{error}</p>
-        <button class="retry-btn" onclick={() => sessionsStore.buscarAgora()}>{m.lista_tentar_novamente()}</button>
+    {:else if listError}
+      <div class="empty-state list-error" role="alert">
+        <p class="empty-title">{m.lista_erro_titulo({ servidores: ownBuckets.map((b) => b.server.label).join(', ') })}</p>
+        <p class="empty-sub">{m.lista_erro_texto()}</p>
+        <p class="empty-sub">{m.lista_erro_retentativa()}</p>
+        <div class="list-error-actions">
+          <button class="retry-btn primary" onclick={() => sessionsStore.buscarAgora()}>{m.busca_tentar_de_novo()}</button>
+          <button class="retry-btn" onclick={() => abrirConfig('maquinas', null)}>{m.lista_erro_ver_servidores()}</button>
+        </div>
       </div>
     {:else if sessions.length === 0}
       <div class="empty-state">
@@ -604,6 +629,11 @@ import * as m from '../paraglide/messages';
                         selectMode={model.selectMode}
                         selected={model.selected.has(`${session.serverId}:${session.name}`)}
                         onToggleSelect={() => model.toggleSelected(`${session.serverId}:${session.name}`)}
+                        {showFolder}
+                        peers={allSessions}
+                        onShare={() => (shareAlvo = { name: session.name, serverId: session.serverId })}
+                        onBastao={() => { bastaoAlvo = { name: session.name, cwd: session.cwd ?? '', serverId: session.serverId }; showCreateSheet = true; }}
+                        onOpenArbiter={arbiterOf(session)}
                       />
                     </div>
                   {/if}
@@ -658,6 +688,11 @@ import * as m from '../paraglide/messages';
               selectMode={model.selectMode}
               selected={model.selected.has(`${session.serverId}:${session.name}`)}
               onToggleSelect={() => model.toggleSelected(`${session.serverId}:${session.name}`)}
+              {showFolder}
+              peers={allSessions}
+              onShare={() => (shareAlvo = { name: session.name, serverId: session.serverId })}
+              onBastao={() => { bastaoAlvo = { name: session.name, cwd: session.cwd ?? '', serverId: session.serverId }; showCreateSheet = true; }}
+              onOpenArbiter={arbiterOf(session)}
             />
               </div>
             {/if}
@@ -761,6 +796,15 @@ import * as m from '../paraglide/messages';
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
         {m.nav_custos()}
       </button>
+      <button class="drawer-nav-item" onclick={() => { drawerOpen = false; window.location.hash = '#/uso'; }}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+        <span class="drawer-nav-text">
+          {m.nav_uso()}
+          {#if activeQuota}
+            <span class="drawer-quota">{activeQuota.label}{#each activeQuota.janelas.filter((j) => !j.porModelo) as j (j.rotulo)}<span class="drawer-quota-sep" aria-hidden="true"> · </span>{j.rotulo} {Math.round(j.pct)}%{/each}</span>
+          {/if}
+        </span>
+      </button>
     </nav>
     <div class="drawer-sep"></div>
     <div class="drawer-scroll">
@@ -798,10 +842,14 @@ import * as m from '../paraglide/messages';
     {servers}
     offline={servidoresOffline}
     latencias={sessionsStore.latencias}
-    onClose={() => (showCreateSheet = false)}
+    onClose={() => { showCreateSheet = false; bastaoAlvo = null; }}
     onCreate={handleCreate}
     onOpenSession={onNavigateToChat}
+    bastao={bastaoAlvo}
   />
+
+  <ShareSessionSheet open={shareAlvo !== null} name={shareAlvo?.name ?? ''} serverId={shareAlvo?.serverId ?? ''}
+                     onClose={() => (shareAlvo = null)} />
 
   <!-- Caso ambíguo do resume: várias sessões no mesmo cwd -> o usuário confirma QUAL conversa retomar. -->
   <BottomSheet open={model.resumeCandidates !== null} onClose={() => (model.resumeCandidates = null)} ariaLabel={m.sessao_retomar()}>
@@ -904,7 +952,7 @@ import * as m from '../paraglide/messages';
   }
   .pair-cod { font-weight: 600; }
   .pair-resto {
-    font-weight: 400; color: var(--text-muted); font-size: var(--text-xs);
+    font-weight: 400; color: var(--text-muted); font-size: var(--text-xs); margin-left: 4px;
   }
   .pair-await {
     flex-shrink: 0; font-size: var(--text-xs); font-weight: 700;
@@ -916,11 +964,10 @@ import * as m from '../paraglide/messages';
     flex-shrink: 0; font-size: var(--text-xs); color: var(--accent);
     background: var(--accent-dim); border-radius: var(--radius-full); padding: 1px 8px;
   }
-  /* Faixa-accent alinhada à coluna do texto do pair-head (~26px: 16 padding + ~10 chevron + 8 gap
-     - 2 da própria borda). margin-left (não padding) porque a borda precisa ficar FORA do card. */
+  /* Membro do grupo entra recuado até a coluna do texto do pair-head (16 padding + ~10 chevron);
+     o recuo basta, sem faixa colorida. */
   .pair-wrap.pair-member {
-    border-left: 2px solid var(--accent);
-    margin-left: calc(var(--space-4) + var(--space-2) - 2px);
+    margin-left: calc(var(--space-4) + var(--space-2));
   }
   /* Alvo do arrasto (Task 6, mesma receita da Sidebar/Board/Canvas): válido acende a borda de
      accent; recusado avisa sem travar — soltar aqui não faz nada, dragEnd reconfere canPair.
@@ -980,8 +1027,9 @@ import * as m from '../paraglide/messages';
   .sl-ham:active { background: var(--bg-hover); }
   /* a marca segue o --accent; o texto fica no tom normal do cabeçalho */
   .sl-brand :global(svg) { color: var(--accent); vertical-align: -3px; margin-right: 4px; }
+  /* O título não cede: quem encolhe com reticências é o chip do Hangar ao lado. */
   .sl-brand {
-    flex: 1;
+    flex: 0 0 auto;
     min-width: 0;
     font-size: var(--text-lg);
     font-weight: 700;
@@ -1009,7 +1057,7 @@ import * as m from '../paraglide/messages';
     overflow-y: scroll;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
-    padding: var(--space-2) 0 var(--space-4);
+    padding: var(--space-2) 0 calc(72px + env(safe-area-inset-bottom));
   }
   /* Broadcast-bar (feature #9) é fixa embaixo -> reserva espaço pra não cobrir a última linha. */
   .list-content.select-mode {
@@ -1022,7 +1070,12 @@ import * as m from '../paraglide/messages';
     flex-shrink: 0;
     padding: var(--space-3) var(--space-4) calc(env(safe-area-inset-bottom) + var(--space-3));
     border-top: 1px solid var(--border-subtle);
-    background: var(--bg-base);
+    background: var(--glass-panel);
+  }
+  /* Blur só onde o vidro é suportado; no iPhone fica a transparência. */
+  :global(html[data-liquid]) .sl-foot, :global(html[data-liquid]) .drawer, :global(html[data-liquid]) .broadcast-bar {
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
   }
   .cta-new {
     display: flex;
@@ -1062,7 +1115,7 @@ import * as m from '../paraglide/messages';
     width: min(310px, 86vw);
     display: flex;
     flex-direction: column;
-    background: var(--bg-base);
+    background: var(--glass-panel);
     border-right: 1px solid var(--border-default);
     box-shadow: 10px 0 44px rgba(0, 0, 0, 0.5);
     transform: translateX(-102%);
@@ -1123,6 +1176,8 @@ import * as m from '../paraglide/messages';
     transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
   }
   .drawer-nav-item svg { flex-shrink: 0; }
+  .drawer-nav-text { min-width: 0; display: flex; flex-direction: column; }
+  .drawer-quota { font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .drawer-nav-item:active { background: var(--bg-hover); color: var(--text-primary); }
   .drawer-nav-item.on { background: var(--accent-dim); color: var(--text-primary); font-weight: 600; }
   .drawer-scroll {
@@ -1156,9 +1211,10 @@ import * as m from '../paraglide/messages';
 
   .filter-input {
     display: block;
-    width: auto;
+    width: calc(100% - 2 * var(--space-4));
+    box-sizing: border-box;
     height: 44px;
-    background: var(--bg-surface);
+    background: var(--surface-inset);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
     color: var(--text-primary);
@@ -1187,7 +1243,7 @@ import * as m from '../paraglide/messages';
     gap: 2px;
     padding: 2px;
     height: 28px;
-    background: var(--bg-surface);
+    background: var(--surface-inset);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-full);
   }
@@ -1201,7 +1257,7 @@ import * as m from '../paraglide/messages';
     color: var(--text-secondary);
   }
   .group-toggle button.active {
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
     color: var(--text-primary);
   }
 
@@ -1240,7 +1296,7 @@ import * as m from '../paraglide/messages';
   .group-count {
     font-size: var(--text-xs);
     color: var(--text-muted);
-    background: var(--bg-surface);
+    background: var(--surface-inset);
     border-radius: var(--radius-full);
     padding: 1px 8px;
     min-width: 20px;
@@ -1274,7 +1330,7 @@ import * as m from '../paraglide/messages';
     right: 0;
     bottom: 0;
     z-index: 20;
-    background: var(--bg-elevated);
+    background: var(--glass-panel);
     border-top: 1px solid var(--border-default);
     padding: var(--space-3) var(--space-4) calc(env(safe-area-inset-bottom) + var(--space-3));
     display: flex;
@@ -1303,7 +1359,7 @@ import * as m from '../paraglide/messages';
   .broadcast-input {
     flex: 1;
     height: 44px;
-    background: var(--bg-base);
+    background: var(--surface-inset);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
     color: var(--text-primary);
@@ -1342,11 +1398,8 @@ import * as m from '../paraglide/messages';
     color: var(--text-muted);
   }
 
-  .error-text {
-    font-size: var(--text-sm);
-    color: var(--error);
-    text-align: center;
-  }
+  .list-error { padding-left: var(--space-5); padding-right: var(--space-5); text-align: center; }
+  .list-error-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
 
   .retry-btn {
     height: 44px;
@@ -1356,6 +1409,7 @@ import * as m from '../paraglide/messages';
     color: var(--text-secondary);
     font-size: var(--text-sm);
   }
+  .retry-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 
   .spinner-large {
     font-size: 32px;
@@ -1415,7 +1469,7 @@ import * as m from '../paraglide/messages';
     flex-direction: column;
     gap: 3px;
     padding: var(--space-3);
-    background: var(--bg-surface);
+    background: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     cursor: pointer;
