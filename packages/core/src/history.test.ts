@@ -171,7 +171,8 @@ describe('mergeHistoryWithLiveRetiring: real que chega pelo /history', () => {
     expect(r.retired).toEqual(['queued-1']);
   });
   it('real mais antiga que a bolha não a aposenta', () => {
-    const r = mergeHistoryWithLiveRetiring([user('r0', 'ok', 50)], [user('queued-1', 'ok', undefined, 100)]);
+    // Com o evento `a` em comum: sem costura a cauda REST manda e a fila sai por outro motivo.
+    const r = mergeHistoryWithLiveRetiring([user('a', 'oi'), user('r0', 'ok', 50)], [user('a', 'oi'), user('queued-1', 'ok', undefined, 100)]);
     expect(r.events.map((e) => e.id)).toContain('queued-1');
     expect(r.retired).toEqual([]);
   });

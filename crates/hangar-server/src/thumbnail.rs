@@ -202,6 +202,8 @@ mod tests {
         assert!(reduce(&src, 192).unwrap().is_none());
     }
 
+    // No Windows um diretório nem abre como arquivo; o caso só existe onde abre.
+    #[cfg(unix)]
     #[tokio::test]
     async fn non_regular_file_is_not_decoded() {
         let dir = tempfile::tempdir().unwrap();
