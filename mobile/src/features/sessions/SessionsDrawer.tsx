@@ -14,9 +14,10 @@ import { SessionList } from './SessionList';
 // Gaveta de sessões da tela inicial e do chat. Ocupa a altura toda (passa por baixo da barra de
 // status, como Claude/ChatGPT): quem usa monta numa `Screen edges={[]}`, e a margem segura fica só
 // no conteúdo, aqui dentro. `onClose` roda antes de toda navegação que a lista faz.
-export function SessionsDrawer({ ref, onClose, onOpenServers, children }: {
+export function SessionsDrawer({ ref, onClose, onNewConversation, onOpenServers, children }: {
   ref?: Ref<DrawerLayoutMethods>;
   onClose: () => void;
+  onNewConversation?: () => void;
   onOpenServers: () => void;
   children: ReactNode;
 }) {
@@ -32,7 +33,7 @@ export function SessionsDrawer({ ref, onClose, onOpenServers, children }: {
       keyboardDismissMode={DrawerKeyboardDismissMode.ON_DRAG}
       renderNavigationView={(progress) => (
         <DrawerPanel progress={progress}>
-          <SessionList onClose={onClose} onOpenServers={onOpenServers} />
+          <SessionList onClose={onClose} onNewConversation={onNewConversation} onOpenServers={onOpenServers} />
         </DrawerPanel>
       )}
     >

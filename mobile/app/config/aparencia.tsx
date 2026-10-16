@@ -30,6 +30,7 @@ import {
   type DestaquePergunta,
   type Ferramentas,
   type Fundo,
+  type HomeScreen,
   type Leitura,
   type Organizar,
   type Tema,
@@ -71,6 +72,7 @@ export default function Aparencia() {
   const graficoTabela = useAparencia((s) => s.graficoTabela);
   const destaquePergunta = useAparencia((s) => s.destaquePergunta);
   const organizar = useAparencia((s) => s.organizar);
+  const homeScreen = useAparencia((s) => s.homeScreen);
   const ap = useAparencia.getState;
 
   const scroll = useRef<ScrollView>(null);
@@ -137,6 +139,10 @@ export default function Aparencia() {
   const DESTAQUES: ReadonlyArray<Option<DestaquePergunta>> = [
     { v: 'accent', label: m.native_settings_ask_highlight_accent() },
     { v: 'amber', label: m.native_settings_ask_highlight_amber() },
+  ];
+  const HOME_SCREENS: ReadonlyArray<Option<HomeScreen>> = [
+    { v: 'sessions', label: m.home_open_app_sessions() },
+    { v: 'newConversation', label: m.home_open_app_conversation() },
   ];
   const ORGANIZAR: ReadonlyArray<Option<Organizar>> = [
     { v: 'sessions', label: m.aparencia_organizar_sessoes_opcao() },
@@ -242,6 +248,12 @@ export default function Aparencia() {
         subtitle={compacto ? m.native_settings_style_applied() : m.config_aparencia_estilo_dica()}
         extra={<Pill icon={compacto ? 'Check' : undefined} label={m.native_settings_style_compact()} onPress={() => ap().aplicarCompacto()} />}
       />
+
+      <SectionCard icon="List" title={m.home_open_app()}>
+        <View style={styles.tiles}>
+          <Segmented options={HOME_SCREENS} value={homeScreen} onChange={(value) => ap().setHomeScreen(value)} label={m.home_open_app()} />
+        </View>
+      </SectionCard>
 
       <SectionCard icon="Monitor" title={m.config_tema_curto()} subtitle={m.config_aparencia_tema_desc()} onLayout={at('theme')}>
         <View style={styles.tiles}>

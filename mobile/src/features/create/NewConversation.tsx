@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, ActivityIndicator, AppState, Keyboard, Pressable, ScrollView, Text, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, AppState, Keyboard, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import Animated, {
   Easing, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withSpring, withTiming,
 } from 'react-native-reanimated';
@@ -11,6 +11,8 @@ import { ComposerActions, ComposerBox, ComposerInput } from '../../chat/Composer
 import type { Server } from '@hangar/core';
 import { AnchoredPanel } from '../../ui/AnchoredPanel';
 import { Icon } from '../../ui/Icon';
+import { Glass } from '../../ui/Glass';
+import type { HomeScreen } from '../../stores/aparencia';
 import { AttachmentPreview } from '../../ui/AttachmentPreview';
 import { readClipboard, type PickedAttachment } from '../../ui/attachmentPicker';
 import { AttachSheet } from '../../ui/AttachSheet';
@@ -31,7 +33,15 @@ import * as m from '../../paraglide/messages';
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const RISE_SPRING = { damping: 18, stiffness: 210, mass: 1 };
 
+export type HomePresentation = {
+  mode: HomeScreen;
+  focusRequest: number;
+  onNewConversation: (focus: boolean) => void;
+  sessions: ReactNode;
+};
+
 type Props = {
+  home?: HomePresentation;
   server: Server;
   destination: ReactNode;
   destinationPending: boolean;
@@ -89,8 +99,11 @@ function HistoryButton({ onPress, disabled, busy }: { onPress: () => void; disab
 
 export function NewConversation({
   server, destination, destinationPending, providerLabel, folderPanel,
-  topPills, bottomPills, providerChip, resume, notices, body, blocked, keyboardOffset,
+  topPills, bottomPills, providerChip, resume, notices, body, blocked, keyboardOffset, home,
 }: Props) {
+  const collapsed = home?.mode === 'sessions';
+  const input = useRef<TextInput>(null);
+  const focusedRequest = useRef(0);
   const router = useRouter();
   const { theme } = useUnistyles();
   const serverId = server.id;
@@ -156,6 +169,32 @@ export function NewConversation({
   const dictation = useHomeDictation(server, (spoken) => {
     setText((current) => (current.trim() ? `${current.trimEnd()} ${spoken}` : spoken));
   });
+
+  const expansion = useSharedValue(collapsed ? 0 : 1);
+  const formHeight = useSharedValue(220);
+  const launcherHeight = useSharedValue(56);
+  useEffect(() => {
+    const target = collapsed ? 0 : 1;
+    expansion.value = reduced ? target : withTiming(target, { duration: 320, easing: Easing.out(Easing.cubic) });
+  }, [collapsed, reduced, expansion]);
+  const listStyle = useAnimatedStyle(() => ({ opacity: 1 - expansion.value, transform: [{ translateY: -60 * expansion.value }] }));
+  const conversationStyle = useAnimatedStyle(() => ({ opacity: expansion.value, transform: [{ translateY: 40 * (1 - expansion.value) }] }));
+  const frameStyle = useAnimatedStyle(() => ({ height: launcherHeight.value + (formHeight.value - launcherHeight.value) * expansion.value }));
+  const formStyle = useAnimatedStyle(() => ({ opacity: expansion.value, transform: [{ translateY: 16 * (1 - expansion.value) }] }));
+  const launcherStyle = useAnimatedStyle(() => ({ opacity: 1 - expansion.value }));
+
+  useEffect(() => {
+    if (!home) return;
+    if (collapsed) { focusedRequest.current = home.focusRequest; input.current?.blur(); return; }
+    if (home.focusRequest > focusedRequest.current && !dictation.gravando && !dictation.transcribing) {
+      focusedRequest.current = home.focusRequest;
+      input.current?.focus();
+    }
+  }, [home?.focusRequest, collapsed, dictation.gravando, dictation.transcribing]);
+  useEffect(() => {
+    // Voltar para a lista finaliza e transcreve; o microfone nunca continua escondido.
+    if (collapsed && dictation.gravando) void dictation.stop();
+  }, [collapsed, dictation.gravando, dictation.stop]);
 
   const [keyboardOpen, setKeyboardOpen] = useState(() => Keyboard.isVisible());
   useEffect(() => {
@@ -279,17 +318,24 @@ export function NewConversation({
   // Sem pasta escolhida o seletor ocupa o meio; escolhida, o meio fica com a marca, como no PC.
   const showPicker = destinationPending && sheet === null;
   // Com o teclado fechado e o campo vazio, o alto mostra o uso da máquina, como na tela inicial do PC.
-  const showUsage = !keyboardOpen && !hasContent;
+  const showUsage = home ? !collapsed : !keyboardOpen && !hasContent;
 
   return (
     <View style={styles.root}>
       <KeyboardAvoidingView behavior="padding" automaticOffset={keyboardOffset === undefined}
                             keyboardVerticalOffset={keyboardOffset} style={styles.keyboard}>
+      <View style={styles.middle}>
+      {home ? <Animated.View style={[styles.homeList, listStyle]} pointerEvents={collapsed ? 'auto' : 'none'}
+        accessibilityElementsHidden={!collapsed} importantForAccessibility={collapsed ? 'auto' : 'no-hide-descendants'}>
+        {home.sessions}
+      </Animated.View> : null}
+      <Animated.View style={[styles.states, home && conversationStyle]} pointerEvents={collapsed ? 'none' : 'auto'}
+        accessibilityElementsHidden={collapsed} importantForAccessibility={collapsed ? 'no-hide-descendants' : 'auto'}>
       <ScrollView style={styles.states} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        {!reduced && !showPicker && !pending ? <HomeIntroMark epoch={intro.epoch} /> : null}
+        {!home && !reduced && !showPicker && !pending ? <HomeIntroMark epoch={intro.epoch} /> : null}
         {showPicker ? destination : null}
         {!showPicker && !pending && showUsage ? (
-          <Animated.View style={[styles.usage, usageStyle]}>
+          <Animated.View style={[styles.usage, !home && usageStyle]}>
             <HomeUsageCard server={server} intro={reduced ? null : intro} />
           </Animated.View>
         ) : null}
@@ -352,18 +398,47 @@ export function NewConversation({
         {issue ? <Text style={styles.error} accessibilityRole="alert">{issue.message}</Text> : null}
         {!body && !blocked && !pending ? <Text style={styles.hint}>{m.nova_conversa_sem_destino()}</Text> : null}
       </ScrollView>
+      </Animated.View>
+      </View>
 
-      <Animated.View style={[styles.topPills, riseTopStyle]}>{topPills((opener) => openSheet('folder', opener))}</Animated.View>
+      <Animated.View style={home ? [styles.formFrame, frameStyle] : undefined}>
+      {home ? <Animated.View style={[styles.launcherPosition, launcherStyle]} pointerEvents={collapsed ? 'auto' : 'none'}
+        accessibilityElementsHidden={!collapsed} importantForAccessibility={collapsed ? 'auto' : 'no-hide-descendants'}
+        onLayout={(event) => { launcherHeight.value = event.nativeEvent.layout.height; }}>
+        <Glass variant="chrome" style={styles.launcher}>
+          <View style={styles.launcherRow}>
+            <Pressable style={styles.launcherText} accessibilityRole="button" accessibilityLabel={m.home_new_conversation()}
+              onPress={() => home.onNewConversation(true)}>
+              <Icon name="SquarePen" size={18} color={theme.tokens.text.secondary} />
+              <Text style={styles.hint} numberOfLines={1}>{m.home_new_conversation()}</Text>
+            </Pressable>
+            <Pressable style={styles.launcherMic} accessibilityRole="button"
+              accessibilityLabel={dictation.gravando ? m.composer_parar_gravacao() : m.composer_gravar_audio()}
+              accessibilityState={{ disabled: dictation.transcribing || busy, busy: dictation.transcribing }}
+              disabled={dictation.transcribing || busy}
+              onPress={() => { home.onNewConversation(false); void dictation.toggle(); }}>
+              {dictation.transcribing ? <ActivityIndicator size="small" />
+                : <Icon name={dictation.gravando ? 'Square' : 'Mic'} size={20} color={theme.tokens.text.secondary} />}
+            </Pressable>
+          </View>
+          {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}
+          {dictation.error ? <Text style={styles.error} accessibilityRole="alert">{dictation.error}</Text> : null}
+        </Glass>
+      </Animated.View> : null}
+      <Animated.View style={home ? [styles.measuredForm, formStyle] : undefined} pointerEvents={collapsed ? 'none' : 'auto'}
+        accessibilityElementsHidden={collapsed} importantForAccessibility={collapsed ? 'no-hide-descendants' : 'auto'}
+        onLayout={home ? (event) => { formHeight.value = event.nativeEvent.layout.height; } : undefined}>
+      <Animated.View style={[styles.topPills, !home && riseTopStyle]}>{topPills((opener) => openSheet('folder', opener))}</Animated.View>
 
-      <Animated.View style={riseStyle}>
+      <Animated.View style={!home ? riseStyle : undefined}>
 
       {/* A caixa do app de PC: campo em cima; anexo, conversas antigas, microfone e estilo do
           ditado à esquerda; o chip do provider e o Enviar à direita. */}
       <ComposerBox focused={focused}>
         {attachment ? <AttachmentPreview attachment={attachment} onRemove={removeAttachment} disabled={busy} /> : null}
-        <ComposerInput value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+        <ComposerInput ref={input} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
           placeholder={m.composer_mensagem_para({ nome: providerLabel })} accessibilityLabel={m.nova_conversa_placeholder()}
-          autoFocus={router.canGoBack?.() ?? true} recording={dictation.gravando} rms={dictation.rms} onCancelRecording={dictation.cancel} />
+          editable={!collapsed} autoFocus={!home && (router.canGoBack?.() ?? true)} recording={dictation.gravando} rms={dictation.rms} onCancelRecording={dictation.cancel} />
         {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}
         <ComposerActions attach={{ onPress: () => setAttachMenuOpen(true), disabled: busy || dictation.gravando }}
           mic={{ onPress: () => void dictation.toggle(), disabled: dictation.transcribing || busy, busy: dictation.transcribing, showBusy: true,
@@ -385,6 +460,8 @@ export function NewConversation({
         {attachError ? <Text style={styles.error} accessibilityRole="alert">{attachError}</Text> : null}
       </ComposerBox>
       <View style={styles.bottomPills}>{bottomPills}</View>
+      </Animated.View>
+      </Animated.View>
       </Animated.View>
       </KeyboardAvoidingView>
 
@@ -431,7 +508,16 @@ export function NewConversation({
 const styles = StyleSheet.create((theme) => ({
   root: { flex: 1, backgroundColor: 'transparent' },
   keyboard: { flex: 1 },
+  middle: { flex: 1, minHeight: 44, position: 'relative' },
+  homeList: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   states: { flex: 1, minHeight: 44 },
+  formFrame: { position: 'relative', overflow: 'hidden' },
+  measuredForm: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+  launcherPosition: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+  launcher: { marginHorizontal: theme.base.space[2], borderRadius: 26, paddingHorizontal: 12, paddingBottom: 2 },
+  launcherRow: { flexDirection: 'row', alignItems: 'center', minHeight: 54 },
+  launcherText: { flex: 1, minWidth: 0, minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  launcherMic: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   scroll: { flexGrow: 1, padding: theme.base.space[4], gap: theme.base.space[4] },
   // Como no PC: o uso fica no alto, longe da caixa de mensagem.
   usage: { paddingTop: theme.base.space[2] },

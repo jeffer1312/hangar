@@ -58,7 +58,7 @@ const nativeNavigation = {
 };
 const routerPush = vi.hoisted(() => vi.fn());
 const chatRow = vi.hoisted(() => ({ extra: {} as Record<string, unknown> }));
-const navigation = vi.hoisted(() => ({ back: vi.fn(), replace: vi.fn(), canGoBack: true }));
+const navigation = vi.hoisted(() => ({ back: vi.fn(), replace: vi.fn(), dismissTo: vi.fn(), canGoBack: true }));
 const route = vi.hoisted(() => ({ params: { server: 's1', name: 'sess' }, segments: ['s'] }));
 const realFirstInput = vi.hoisted(() => ({ enabled: false, send: vi.fn(), steer: vi.fn(), history: vi.fn(), transcribe: vi.fn(), relimpar: vi.fn(),
   upload: vi.fn(async () => ({ path: '/up/sess/ditado-1.m4a' })) }));
@@ -69,7 +69,7 @@ const voiceInput = vi.hoisted(() => ({ recording: false, simulateRecorder: false
   finishRecording: null as null | ((reason: MotivoFim) => void), onStopError: null as null | ((e: Error) => void) }));
 vi.mock('expo-router', () => ({
   useNavigation: () => nativeNavigation,
-  useRouter: () => ({ push: routerPush, back: navigation.back, replace: navigation.replace, canGoBack: () => navigation.canGoBack }),
+  useRouter: () => ({ push: routerPush, back: navigation.back, replace: navigation.replace, dismissTo: navigation.dismissTo, canGoBack: () => navigation.canGoBack }),
   useLocalSearchParams: () => route.params, useSegments: () => route.segments,
 }));
 vi.mock('@hangar/core', async (original) => ({
@@ -99,7 +99,9 @@ vi.mock('../stores/servers', () => {
 });
 vi.mock('../ui/Screen', () => ({ Screen: ({ children }: { children: ReactNode }) => createElement('div', null, children) }));
 // A gaveta puxa o gesture-handler nativo, que o vitest não carrega; aqui só o conteúdo importa.
-vi.mock('../features/sessions/SessionsDrawer', () => ({ SessionsDrawer: ({ children }: { children: ReactNode }) => createElement('div', null, children) }));
+vi.mock('../features/sessions/SessionsDrawer', () => ({ SessionsDrawer: ({ children, onClose, onNewConversation }: { children: ReactNode; onClose: () => void; onNewConversation?: () => void }) => createElement('div', null, children,
+  createElement('button', { 'aria-label': 'drawer-new-conversation', onClick: onNewConversation ?? onClose }),
+  createElement('button', { 'aria-label': 'drawer-navigation-close', onClick: onClose })) }));
 vi.mock('../features/sessions/ServerSheet', () => ({ ServerSheet: () => null }));
 vi.mock('react-native-keyboard-controller', () => ({
   KeyboardAvoidingView: ({ children }: { children: ReactNode }) => createElement('div', null, children),
@@ -394,6 +396,17 @@ describe('ações e atualização da conversa na rota', () => {
         onerror: null, onopen: null, readyState: 1 }) });
   });
   afterEach(() => { _resetChatsForTests(); chatRow.extra = {}; vi.useRealTimers(); });
+
+  it('Nova conversa da gaveta do chat pede compose na inicial, sem mudar o fechamento das demais navegações', async () => {
+    navigation.dismissTo.mockClear();
+    const { container, root } = await render(createElement(ChatScreen));
+    try {
+      await act(async () => button(container, 'drawer-new-conversation')!.click());
+      expect(navigation.dismissTo).toHaveBeenLastCalledWith({ pathname: '/', params: { compose: '1' } });
+      await act(async () => button(container, 'drawer-navigation-close')!.click());
+      expect(navigation.dismissTo).toHaveBeenLastCalledWith('/');
+    } finally { act(() => root.unmount()); }
+  });
 
   it('lista reserva o espaço real dos mods e volta ao vidro do composer quando eles saem', async () => {
     layouts.clear();

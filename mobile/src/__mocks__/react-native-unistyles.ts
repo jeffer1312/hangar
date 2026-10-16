@@ -5,6 +5,7 @@ const mockTheme: any = {
     border: { subtle: '#ccc', default: '#ccc' },
     status: { warning: '#f90', error: '#f00', success: '#0a0' },
     accent: { base: '#00f', dim: '#eef' },
+    pill: { input: { fg: '#b70' }, working: { fg: '#70f' }, idle: { fg: '#080' }, dead: { fg: '#888' } },
     bubbleUser: '#def',
     glass: {
       rgb: [38, 36, 44],

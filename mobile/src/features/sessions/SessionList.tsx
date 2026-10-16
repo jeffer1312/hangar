@@ -57,14 +57,15 @@ interface Section {
   data: AggSession[];
 }
 
-// Conteúdo da gaveta da tela inicial: `onClose` fecha a gaveta antes de navegar, e "Nova conversa"
-// só fecha, porque a tela de baixo já é a nova conversa.
 interface Props {
   onClose: () => void;
   onOpenServers: () => void;
+  onNewConversation?: () => void;
+  variant?: 'drawer' | 'home';
 }
 
-export function SessionList({ onClose, onOpenServers }: Props) {
+export function SessionList({ onClose, onOpenServers, onNewConversation = onClose, variant = 'drawer' }: Props) {
+  const home = variant === 'home';
   const { theme } = useUnistyles();
   const router = useRouter();
   const todos = useServers((s) => s.servers);
@@ -74,7 +75,9 @@ export function SessionList({ onClose, onOpenServers }: Props) {
   const rows = useSessions((s) => s.rows);
   const loading = useSessions((s) => s.loading);
   const agrupar = useAparencia((s) => s.agrupar);
-  const conversas = useAparencia((s) => s.organizar) === 'conversations';
+  const organizar = useAparencia((s) => s.organizar);
+  const conversas = !home && organizar === 'conversations';
+  const [readyExpanded, setReadyExpanded] = useState(false);
   const activeId = useServers((s) => s.activeId);
   const byServer = useSessions((s) => s.byServer);
   const [filtro, setFiltro] = useState('');
@@ -243,6 +246,16 @@ export function SessionList({ onClose, onOpenServers }: Props) {
   // Filtrar + ordenar + agrupar a lista inteira a cada render é caro, e arrastar um slider de
   // material re-renderiza todo mundo que lê o tema — inclusive esta tela.
   const sections = useMemo<Section[]>(() => {
+    if (home) return (['awaiting_input', 'working', 'idle'] as const).flatMap((state) => {
+      const anchors = rows.filter((row) => !row.outside && row.state === state);
+      if (!anchors.length) return [];
+      const visible = state === 'idle' && !readyExpanded ? anchors.slice(0, 1) : anchors;
+      const data = visible.flatMap((anchor) => [anchor, ...rows.filter((row) => row.state !== 'dead' &&
+        row.outside?.localServerId === anchor.serverId && row.outside.localSession === anchor.name)]);
+      const label = state === 'awaiting_input' ? m.home_sessions_awaiting()
+        : state === 'working' ? m.home_sessions_working() : m.home_sessions_ready();
+      return [{ id: state, label, color: null, attention: true, total: anchors.length, collapsed: false, data }];
+    });
     const visiveis = busca
       ? rows.filter((r) => r.name.toLowerCase().includes(busca) || (r.cwd ?? '').toLowerCase().includes(busca))
       : rows;
@@ -258,8 +271,8 @@ export function SessionList({ onClose, onOpenServers }: Props) {
       out.push({ id: g.id, label: g.label, color: g.color, attention: false, total: g.sessions.length, collapsed, data: collapsed ? [] : g.sessions });
     }
     return out;
-  }, [rows, busca, modo, recolhidos]);
-  const variosServidores = servers.length > 1;
+  }, [rows, busca, modo, recolhidos, home, readyExpanded]);
+  const variosServidores = (home ? todos.length : servers.length) > 1;
 
   const alternarGrupo = useCallback(
     (id: string) =>
@@ -386,12 +399,23 @@ export function SessionList({ onClose, onOpenServers }: Props) {
     </View>
   );
 
+  const machineErrors = byServer.filter((bucket) => bucket.error);
+  const machineStatus = home ? byServer.filter((bucket) => bucket.error || !bucket.loaded).map((bucket) => (
+    <View key={bucket.server.id} style={styles.machineStatus}>
+      {bucket.error ? (
+        <Text style={styles.machineError} accessibilityRole="alert" selectable>
+          {bucket.error === 'offline' ? m.lista_servidor_offline({ label: bucket.server.label }) : `${bucket.server.label}: ${bucket.error}`}
+        </Text>
+      ) : <Text style={styles.emptyTxt}>{`${bucket.server.label}: ${m.lista_carregando()}`}</Text>}
+    </View>
+  )) : null;
+
   let corpo: ReactNode;
   if (!ready) corpo = vazio(null, m.comum_carregando(), false, true);
-  else if (servers.length === 0) corpo = vazio(m.lista_nenhum_servidor(), m.lista_pareie_qr());
+  else if ((home ? todos.length : servers.length) === 0) corpo = vazio(m.lista_nenhum_servidor(), m.lista_pareie_qr());
   else if (conversas) {
-    corpo = <ConversationList header={itemNav('SquarePen', m.native_new_chat_title(), onClose, undefined, true)} onClose={onClose} />;
-  } else if (loading && rows.length === 0) corpo = vazio(null, m.lista_carregando(), false, true);
+    corpo = <ConversationList header={itemNav('SquarePen', m.native_new_chat_title(), onNewConversation, undefined, true)} onClose={onClose} />;
+  } else if (loading && (home ? sections.length === 0 : rows.length === 0)) corpo = vazio(null, m.lista_carregando(), false, true);
   else {
     corpo = (
       <SectionList
@@ -400,15 +424,16 @@ export function SessionList({ onClose, onOpenServers }: Props) {
         // Sem cabeçalho fixo: o painel é vidro, e um cabeçalho fixo transparente deixaria as linhas
         // passarem por baixo do texto dele.
         stickySectionHeadersEnabled={false}
-        ListHeaderComponent={
+        ListHeaderComponent={home ? null : (
           <View style={styles.navs}>
-            {itemNav('SquarePen', m.native_new_chat_title(), onClose, undefined, true)}
+            {itemNav('SquarePen', m.native_new_chat_title(), onNewConversation, undefined, true)}
             {itemNav('List', m.native_sidebar_all_sessions(), mostrarTodas, rows.length)}
           </View>
-        }
+        )}
         renderSectionHeader={({ section }) => {
           if (!section.label) return null;
-          const cor = section.attention ? theme.tokens.pill.input.fg : (section.color ?? theme.tokens.text.muted);
+          const cor = home ? theme.tokens.pill[section.id === 'awaiting_input' ? 'input' : section.id === 'working' ? 'working' : 'idle'].fg
+            : section.attention ? theme.tokens.pill.input.fg : (section.color ?? theme.tokens.text.muted);
           const conteudo = (
             <>
               {section.attention ? null : (
@@ -436,10 +461,17 @@ export function SessionList({ onClose, onOpenServers }: Props) {
             </Pressable>
           );
         }}
+        renderSectionFooter={({ section }) => home && section.id === 'idle' && section.total > 1 ? (
+          <Pressable onPress={() => setReadyExpanded((value) => !value)} style={styles.moreReady}
+            accessibilityRole="button" accessibilityState={{ expanded: readyExpanded }}>
+            <Text style={styles.moreReadyTxt}>{readyExpanded ? m.sessao_recolher() : m.home_sessions_more_ready({ n: section.total - 1 })}</Text>
+          </Pressable>
+        ) : null}
         renderItem={({ item, section }) => (
           <SessionRow
             session={item}
-            mostrarServidor={variosServidores && (section.attention || modo !== 'server')}
+            compact={home}
+            mostrarServidor={variosServidores && (home || section.attention || modo !== 'server')}
             onPress={abrir}
             onGit={abrirGit}
             onExcluir={excluir}
@@ -449,7 +481,8 @@ export function SessionList({ onClose, onOpenServers }: Props) {
             onPair={proprios.has(item.serverId) || item.outside ? fazerPar : undefined}
           />
         )}
-        ListEmptyComponent={busca ? vazio(m.lista_vazia_filtro(), null, true) : vazio(m.lista_nenhuma_ativa(), null)}
+        ListEmptyComponent={home && machineErrors.length ? null
+          : busca ? vazio(m.lista_vazia_filtro(), null, true) : vazio(m.lista_nenhuma_ativa(), null)}
         contentContainerStyle={styles.listContent}
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
@@ -461,11 +494,11 @@ export function SessionList({ onClose, onOpenServers }: Props) {
     <>
       {/* Sem caixa: a lista fica direto sobre o fundo escolhido em Aparência, como no app de PC. */}
       {/* A gaveta passa por baixo da barra de status e do indicador de início: a margem segura é daqui. */}
-      <View style={[styles.painel, { paddingTop: insets.top + 8, paddingBottom: Math.max(insets.bottom, 8) }]}>
-        {topo}
-        {conversas ? null : campoBusca}
+      <View style={[styles.painel, !home && { paddingTop: insets.top + 8, paddingBottom: Math.max(insets.bottom, 8) }]}>
+        {home ? machineStatus : topo}
+        {home || conversas ? null : campoBusca}
         <View style={styles.corpo}>{corpo}</View>
-        {rodape}
+        {home ? null : rodape}
       </View>
       <RenameSheet nome={renomeando?.name ?? null} onConfirmar={renomear} onFechar={() => setRenomeando(null)} />
       <WorktreeSheet server={wt?.server ?? null} path={wt?.path ?? null} onClose={() => setWt(null)} />
@@ -477,6 +510,10 @@ export function SessionList({ onClose, onOpenServers }: Props) {
 
 const styles = StyleSheet.create((theme) => ({
   painel: { flex: 1, paddingHorizontal: theme.base.space[2] },
+  machineStatus: { paddingHorizontal: 12, paddingVertical: 6 },
+  machineError: { color: theme.tokens.status.error, fontSize: theme.base.text.sm },
+  moreReady: { minHeight: 44, justifyContent: 'center', paddingLeft: 46, paddingRight: 12 },
+  moreReadyTxt: { color: theme.tokens.accent.base, fontSize: theme.base.text.sm },
   // Tudo alinha na mesma coluna de 12 pt das linhas: marca, ícones da navegação e marcas de estado.
   topo: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48, paddingLeft: 13 },
   // encolhe a marca, não os botões: com texto ampliado o nome empurrava as ações para fora

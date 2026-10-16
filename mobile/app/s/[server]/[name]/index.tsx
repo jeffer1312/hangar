@@ -428,11 +428,11 @@ export default function ChatScreen() {
   const problem = codexPreThread ? currentSession.problema : stateEvent?.problema;
   const problemDetail = codexPreThread ? null : stateEvent?.problema_detalhe;
 
-  // Na gaveta, toda navegação da lista sai deste chat (dismissTo) antes de ela empurrar o destino:
-  // a pilha fica sempre início → um chat, e "Nova conversa" (que só fecha a gaveta) leva ao início.
+  // A lista sai deste chat antes de empurrar outro destino; Nova conversa pede o campo na inicial.
   return (
     <Screen edges={[]}>
-      <SessionsDrawer onClose={() => router.dismissTo('/')} onOpenServers={() => setServersOpen(true)}>
+      <SessionsDrawer onClose={() => router.dismissTo('/')} onOpenServers={() => setServersOpen(true)}
+        onNewConversation={() => router.dismissTo({ pathname: '/', params: { compose: '1' } })}>
         <ChatHeader
           name={name}
           state={codexPreThread ? currentSession.state : stateEvent?.state ?? null}

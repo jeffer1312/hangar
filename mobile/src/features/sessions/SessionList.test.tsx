@@ -11,6 +11,8 @@ const calls = vi.hoisted(() => ({
   deleteSession: vi.fn(),
   error: vi.fn(),
   ok: vi.fn(),
+  push: vi.fn(),
+  organizar: 'sessions',
   listeners: new Map<string, (event: { data: string }) => void>(),
   stream: { addEventListener: vi.fn(), close: vi.fn(), onerror: null },
   sessions: [{ name: 'fixture', state: 'idle', jsonl: '/tmp/fixture.jsonl' }] as SessionInfo[],
@@ -36,17 +38,19 @@ vi.mock('../../stores/servers', async () => {
   };
 });
 vi.mock('../../stores/aparencia', () => ({
-  useAparencia: (select: (state: { agrupar: string; organizar: string }) => unknown) => select({ agrupar: 'project', organizar: 'sessions' }),
+  useAparencia: (select: (state: { agrupar: string; organizar: string }) => unknown) => select({ agrupar: 'project', organizar: calls.organizar }),
   ehGroupBy: () => false,
 }));
-vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: calls.push }) }));
 vi.mock('@react-native-menu/menu', () => ({ MenuView: ({ children }: { children: React.ReactNode }) => children }));
 vi.mock('../../ui/HangarMark', () => ({ HangarMark: () => null }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Toast', () => ({ toast: { erro: calls.error, ok: calls.ok } }));
 vi.mock('./SessionRow', () => ({
-  SessionRow: ({ session, onExcluir }: { session: AggSession; onExcluir: (session: AggSession) => void }) =>
-    React.createElement('button', { 'data-row': `${session.serverId}::${session.name}`, onClick: () => onExcluir(session) }, session.name),
+  SessionRow: ({ session, onExcluir, onPress, compact }: { session: AggSession; onExcluir: (session: AggSession) => void; onPress: (session: AggSession) => void; compact?: boolean }) =>
+    React.createElement('div', null,
+      React.createElement('button', { 'data-row': `${session.serverId}::${session.name}`, 'data-compact': String(!!compact), onClick: () => onExcluir(session) }, session.name),
+      React.createElement('button', { 'data-open': `${session.serverId}::${session.name}`, onClick: () => onPress(session) })),
 }));
 vi.mock('../pair/PairInviteSheet', () => ({ PairInviteSheet: () => null }));
 vi.mock('../voice/LiveVoiceChatButton', () => ({ LiveVoiceChatButton: () => null }));
@@ -55,12 +59,16 @@ vi.mock('../pair/leaveExternal', () => ({ leaveExternal: vi.fn() }));
 vi.mock('./ConversationList', () => ({ ConversationList: () => null }));
 vi.mock('./RenameSheet', () => ({ RenameSheet: () => null }));
 vi.mock('../worktrees/WorktreeSheet', () => ({ WorktreeSheet: () => null }));
-vi.mock('../../paraglide/messages', () => Object.fromEntries((
+vi.mock('../../paraglide/messages', () => ({ ...Object.fromEntries((
   'lista_agrupar_nenhum lista_agrupar_servidor lista_agrupar_projeto lista_agrupar ' +
   'native_brand lista_buscar lista_filtrar lista_filtro_limpar native_connected config_modal_titulo ' +
   'native_new_chat_title native_sidebar_all_sessions lista_sessoes_plural sessao_expandir sessao_recolher ' +
-  'lista_carregando lista_vazia_filtro lista_nenhuma_ativa comum_cancelar sessao_excluir sessao_excluir_curto servidor_nao_existe'
-).split(' ').map((key) => [key, () => key])));
+  'lista_carregando lista_vazia_filtro lista_nenhuma_ativa comum_cancelar sessao_excluir sessao_excluir_curto servidor_nao_existe ' +
+  'comum_carregando lista_nenhum_servidor lista_pareie_qr native_sidebar_awaiting home_sessions_awaiting home_sessions_working home_sessions_ready sessao_recolher'
+).split(' ').map((key) => [key, () => key])),
+  home_sessions_more_ready: ({ n }: { n: number }) => `home_sessions_more_ready:${n}`,
+  lista_servidor_offline: ({ label }: { label: string }) => `${label}:offline`,
+}));
 
 interface Section { id: string; data: AggSession[] }
 vi.mock('react-native', async (original) => ({
@@ -69,13 +77,15 @@ vi.mock('react-native', async (original) => ({
   RefreshControl: () => null,
   TextInput: ({ value, onChangeText, accessibilityLabel }: { value: string; onChangeText: (value: string) => void; accessibilityLabel: string }) =>
     React.createElement('input', { value, 'aria-label': accessibilityLabel, onInput: (event: React.FormEvent<HTMLInputElement>) => onChangeText(event.currentTarget.value) }),
-  SectionList: ({ sections, ListHeaderComponent, ListEmptyComponent, renderSectionHeader, renderItem }: {
+  SectionList: ({ sections, ListHeaderComponent, ListEmptyComponent, renderSectionHeader, renderSectionFooter, renderItem }: {
     sections: Section[]; ListHeaderComponent: React.ReactNode; ListEmptyComponent: React.ReactNode;
+    renderSectionFooter?: (props: { section: Section }) => React.ReactNode;
     renderSectionHeader: (props: { section: Section }) => React.ReactNode;
     renderItem: (props: { item: AggSession; section: Section }) => React.ReactNode;
   }) => React.createElement('div', null, ListHeaderComponent, sections.length ? sections.map((section) =>
-    React.createElement(React.Fragment, { key: section.id }, renderSectionHeader({ section }),
+    React.createElement('div', { key: section.id, 'data-section': section.id }, renderSectionHeader({ section }),
       section.data.map((item) => React.createElement(React.Fragment, { key: `${item.serverId}::${item.name}` }, renderItem({ item, section }))),
+      renderSectionFooter?.({ section }),
     )) : ListEmptyComponent),
 }));
 
@@ -87,9 +97,9 @@ const server = { id: 'srv1', label: 'fixture-server', baseUrl: 'https://fixture.
 let root: Root;
 let container: HTMLDivElement;
 
-async function mount() {
+async function mount(props: Partial<React.ComponentProps<typeof SessionList>> = {}) {
   await act(async () => {
-    root.render(React.createElement(SessionList, { onClose: vi.fn(), onOpenServers: vi.fn() }));
+    root.render(React.createElement(SessionList, { onClose: vi.fn(), onOpenServers: vi.fn(), ...props }));
   });
 }
 
@@ -105,6 +115,8 @@ beforeEach(() => {
   _resetSessionsForTests();
   vi.clearAllMocks();
   calls.deleteSession.mockReset();
+  calls.organizar = 'sessions';
+  calls.sessions = [{ name: 'fixture', state: 'idle', jsonl: '/tmp/fixture.jsonl' }];
   calls.listeners.clear();
   calls.stream.addEventListener.mockImplementation((event: string, listener: (event: { data: string }) => void) => calls.listeners.set(event, listener));
   useServers.setState({ servers: [server], ready: true, activeId: server.id });
@@ -120,6 +132,80 @@ afterEach(async () => {
 });
 
 describe('SessionList', () => {
+  it('home reúne máquinas por estado, ignora organizar e expande prontas sem perder ações', async () => {
+    calls.organizar = 'conversations';
+    const onClose = vi.fn();
+    await mount({ variant: 'home', onClose });
+    const row = useSessions.getState().rows[0];
+    const rows = [
+      { ...row, name: 'ready-a', state: 'idle' },
+      { ...row, name: 'waiting-b', state: 'awaiting_input', serverId: 'srv2', serverLabel: 'another-machine' },
+      { ...row, name: 'working-a', state: 'working' },
+      { ...row, name: 'ready-b', state: 'idle', serverId: 'srv2' },
+      { ...row, name: 'dead-a', state: 'dead' },
+    ] as AggSession[];
+    await act(async () => useSessions.setState({ rows, loading: false }));
+    expect([...container.querySelectorAll('[data-row]')].map((el) => el.textContent))
+      .toEqual(['waiting-b', 'working-a', 'ready-a']);
+    expect(container.textContent).toContain('home_sessions_more_ready:1');
+    expect(container.querySelector('input')).toBeNull();
+    expect(container.textContent).not.toContain('native_brand');
+    expect(container.textContent).not.toContain('native_sidebar_all_sessions');
+    expect(container.querySelector('[aria-label="config_modal_titulo"]')).toBeNull();
+    await act(async () => [...container.querySelectorAll('button')].find((b) => b.textContent === 'home_sessions_more_ready:1')!.click());
+    expect(container.querySelector('[data-row="srv2::ready-b"]')).not.toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-open="srv2::waiting-b"]')!.click());
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(calls.push).toHaveBeenCalledWith('/s/srv2/waiting-b');
+    calls.deleteSession.mockResolvedValueOnce({ ok: true });
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-row="srv1::working-a"]')!.click());
+    await act(async () => confirm()());
+    expect(calls.deleteSession).toHaveBeenCalledWith('working-a');
+  });
+
+  it('home mantém pares externos junto da âncora e conta só âncoras ao expandir prontas', async () => {
+    await mount({ variant: 'home' });
+    const row = useSessions.getState().rows[0];
+    const external = (name: string, anchor: string): AggSession => ({ ...row, name, state: 'awaiting_input', serverId: 'outside',
+      outside: { alias: 'peer', owner: 'owner', localServerId: 'srv1', localSession: anchor } });
+    await act(async () => useSessions.setState({ loading: false, rows: [
+      { ...row, name: 'working-anchor', state: 'working' }, external('working-outside', 'working-anchor'),
+      { ...row, name: 'ready-a', state: 'idle' }, external('ready-a-outside', 'ready-a'),
+      { ...row, name: 'ready-b', state: 'idle' }, external('ready-b-outside', 'ready-b'),
+    ] }));
+    const names = (section: string) => [...container.querySelectorAll(`[data-section="${section}"] [data-row]`)].map((el) => el.textContent);
+    expect(names('working')).toEqual(['working-anchor', 'working-outside']);
+    expect(container.querySelector('[data-section="awaiting_input"]')).toBeNull();
+    expect(names('idle')).toEqual(['ready-a', 'ready-a-outside']);
+    expect(container.textContent).toContain('home_sessions_more_ready:1');
+    await act(async () => [...container.querySelectorAll('button')].find((b) => b.textContent === 'home_sessions_more_ready:1')!.click());
+    expect(names('idle')).toEqual(['ready-a', 'ready-a-outside', 'ready-b', 'ready-b-outside']);
+    await act(async () => [...container.querySelectorAll('button')].find((b) => b.textContent === 'sessao_recolher')!.click());
+    expect(names('idle')).toEqual(['ready-a', 'ready-a-outside']);
+    expect(names('working')).toEqual(['working-anchor', 'working-outside']);
+  });
+
+  it('home mostra carregamento, vazio e falha identificada por máquina', async () => {
+    await mount({ variant: 'home' });
+    await act(async () => useSessions.setState({ rows: [], loading: true }));
+    expect(container.textContent).toContain('lista_carregando');
+    expect(container.textContent).not.toContain('lista_nenhuma_ativa');
+    await act(async () => useSessions.setState({ loading: false, byServer: [{ server, sessions: [], loaded: true, error: null }] }));
+    expect(container.textContent).toContain('lista_nenhuma_ativa');
+    await act(async () => useSessions.setState({ byServer: [{ server, sessions: [], loaded: true, error: 'list-unavailable' }] }));
+    expect(container.textContent).toContain('fixture-server: list-unavailable');
+    expect(container.textContent).not.toContain('lista_nenhuma_ativa');
+  });
+
+  it('Nova conversa usa sua ação própria sem confundir fechamento para navegação', async () => {
+    const onClose = vi.fn();
+    const onNewConversation = vi.fn();
+    await mount({ onClose, onNewConversation });
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="native_new_chat_title"]')!.click());
+    expect(onNewConversation).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it.each([null, { unknown_warning: true }])('esconde antes do DELETE terminar, bloqueia confirmação duplicada e mantém marca após sucesso (%j)', async (warning) => {
     let resolve!: (value: { ok: boolean; warning: unknown | null }) => void;
     calls.deleteSession.mockReturnValueOnce(new Promise((done) => { resolve = done; }));

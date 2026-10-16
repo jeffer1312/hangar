@@ -40,6 +40,7 @@ export type PairAction =
 interface Props {
   session: AggSession;
   mostrarServidor: boolean; // false quando a lista já está agrupada por servidor
+  compact?: boolean;
   // recebem a sessão: a lista passa a mesma função a todas as linhas, e o memo segura o render
   onPress: (s: AggSession) => void;
   onGit: (s: AggSession) => void;
@@ -56,7 +57,7 @@ interface Props {
 const vibrarAoAbrir =
   Platform.OS === 'android' ? () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {}) : undefined;
 
-export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcluir, onRenomear, onResume, onWorktree, onPair }: Props) {
+export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor, compact = false, onPress, onGit, onExcluir, onRenomear, onResume, onWorktree, onPair }: Props) {
   const { theme } = useUnistyles();
   // O orquestrador não se renomeia nem se fecha: o backend recusa, então a linha nem oferece.
   const orq = isOrq(s);
@@ -156,7 +157,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
       // kimi sem id é estado NORMAL pré-1º prompt, e codex sem thread ainda está no startup:
       // a tela da conversa espera o vínculo sem herdar transcript de outra sessão
       disabled={untracked && s.provider !== 'kimi' && s.provider !== 'codex'}
-      style={({ pressed }) => [styles.row, fora && styles.fora, pressed && { backgroundColor: superficie(theme, 0.6) }]}
+      style={({ pressed }) => [styles.row, compact && styles.compact, fora && styles.fora, pressed && { backgroundColor: superficie(theme, 0.6) }]}
       accessibilityRole="button"
       // rótulo composto: um label explícito no pai faz o RN descartar o texto dos filhos, e o
       // estado e a pergunta sumiriam do leitor de tela.
@@ -246,6 +247,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
 
 const styles = StyleSheet.create((theme) => ({
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, minHeight: 56, paddingVertical: 10, paddingHorizontal: 12, borderRadius: theme.base.radius.lg },
+  compact: { paddingVertical: 6, minHeight: 44 },
   // a marca alinha com a linha do nome, não com o centro do bloco
   lead: { width: 22, alignItems: 'center', paddingTop: 1 },
   col: { flex: 1, gap: 2, minWidth: 0 },

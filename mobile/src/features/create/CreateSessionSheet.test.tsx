@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const calls = vi.hoisted(() => ({
   roots: vi.fn(), scan: vi.fn(), sessions: vi.fn(), configs: vi.fn(), engines: vi.fn(), save: vi.fn(),
+  startDictation: vi.fn(), stopDictation: vi.fn(), transcribe: vi.fn(),
+  activeId: 'server-b', startPending: null as Promise<void> | null,
   target: null as null | { id: string; label: string; baseUrl: string; token: string },
   accounts: vi.fn(),
   providers: vi.fn(),
@@ -44,7 +46,8 @@ vi.mock('react-native', async (original) => {
     style: typeof props.style === 'function' ? props.style({ pressed: false }) : props.style,
   }),
   Alert: { alert: calls.alert },
-  TextInput: (props: { value?: string; accessibilityLabel?: string; onChangeText?: (value: string) => void }) => createElement('textarea', {
+  TextInput: (props: { ref?: React.Ref<HTMLTextAreaElement>; value?: string; accessibilityLabel?: string; onChangeText?: (value: string) => void }) => createElement('textarea', {
+    ref: props.ref,
     value: props.value,
     'aria-label': props.accessibilityLabel,
     onInput: (event: { currentTarget: { value: string } }) => props.onChangeText?.(event.currentTarget.value),
@@ -60,9 +63,16 @@ vi.mock('../ditado/EstiloPill', () => ({
   DictationStyleMenu: ({ open }: { open: boolean }) => open ? createElement('div', { role: 'dialog', 'aria-label': 'ditado_estilo_titulo' }) : null,
   useDictationStyleLabel: () => 'estilo',
 }));
-vi.mock('../usage/HomeUsageCard', async (original) => ({ ...await original<object>(), HomeUsageCard: () => null }));
-vi.mock('../../ui/AttachSheet', () => ({ AttachSheet: () => null }));
-vi.mock('../ditado/useDitado', () => ({ useDitado: () => ({ gravando: false, rms: 0, iniciar: () => {}, parar: () => {} }) }));
+vi.mock('../usage/HomeUsageCard', async (original) => ({ ...await original<object>(), HomeUsageCard: () => createElement('div', { 'data-home-usage': true }) }));
+vi.mock('../../ui/AttachSheet', () => ({ AttachSheet: ({ open, onPick, onClose }: { open: boolean; onPick: (attachment: unknown) => void; onClose: () => void }) => open ? createElement('button', {
+  'aria-label': 'pick-fixture', onClick: () => { onPick({ uri: 'file:///fixture.png', name: 'fixture.png', type: 'image/png', kind: 'image' }); onClose(); },
+}) : null }));
+vi.mock('../ditado/useDitado', () => ({ useDitado: ({ onFim }: { onFim: (file: File) => void }) => {
+  const [gravando, setGravando] = useState(false);
+  return { gravando, rms: 0, iniciar: async () => { calls.startDictation(); if (calls.startPending) await calls.startPending; setGravando(true); }, parar: async () => {
+    calls.stopDictation(); setGravando(false); onFim(new File(['audio'], 'fixture.wav', { type: 'audio/wav' }));
+  } };
+} }));
 vi.mock('../../ui/AnchoredPanel', () => ({
   AnchoredPanel: ({ open, children, label, onClose, onDismissed }: {
     open: boolean; children: ReactNode; label: string; onClose: () => void; onDismissed?: () => void;
@@ -98,7 +108,7 @@ vi.mock('../../stores/servers', () => ({
   useServers: Object.assign(
     // A máquina da conversa sai da pílula de máquina, não do servidor ativo: `target` só entra na lista.
     (selector: (state: { activeId: string; servers: typeof server[] }) => unknown) =>
-      selector({ activeId: server.id, servers: calls.target ? [server, calls.target] : [server] }),
+      selector({ activeId: calls.activeId, servers: calls.target ? [server, calls.target] : [server] }),
     { getState: () => ({ servers: calls.target ? [server, calls.target] : [server], active: () => server }) },
   ),
 }));
@@ -115,6 +125,7 @@ vi.mock('@react-native-menu/menu', () => ({
 }));
 vi.mock('@hangar/core', async (original) => ({
   ...await original<typeof import('@hangar/core')>(),
+  transcribeDictationForServer: calls.transcribe,
   listClaudeConfigsForServer: calls.configs,
   getRootsForServer: calls.roots, scanDirForServer: calls.scan, fetchSessionsForServer: calls.sessions,
   probeServerResponse: vi.fn().mockImplementation(async () => new Response(JSON.stringify(calls.cotas))),
@@ -217,7 +228,7 @@ vi.mock('../../paraglide/messages', () => ({
     'native_ctl_fast native_ctl_fast_on native_ctl_fast_off native_ctl_fast_hint native_ctl_fast_unavailable ' +
     'reasoning_level_low reasoning_level_medium reasoning_level_high reasoning_level_xhigh reasoning_level_max reasoning_level_ultra ' +
     'native_mode_plan native_mode_manual native_mode_auto native_mode_acceptEdits native_mode_bypassPermissions native_mode_dontAsk chat_mode_plan config_motores_modelo_padrao ' +
-    'codex_contexto_titulo codex_contexto_padrao codex_contexto_salvando comum_falha_aplicar config_server_tentar_de_novo'
+    'codex_contexto_titulo codex_contexto_padrao codex_contexto_salvando comum_falha_aplicar config_server_tentar_de_novo home_new_conversation'
   ).split(' ').map((k) => [k, () => k])),
 }));
 
@@ -246,8 +257,13 @@ describe('CreateSessionSheet Codex', () => {
     calls.pickerPeak = 0;
     calls.pickerHistory = [];
     calls.target = null;
+    calls.activeId = server.id;
+    calls.startPending = null;
     calls.cotas = [];
     calls.save.mockReset();
+    calls.startDictation.mockReset();
+    calls.stopDictation.mockReset();
+    calls.transcribe.mockReset().mockResolvedValue({ text: 'spoken-fixture' });
     calls.roots.mockReset().mockResolvedValue([{ name: 'Repo', path: '/repo' }]);
     calls.scan.mockReset().mockResolvedValue({ entries: [] });
     calls.sessions.mockReset().mockResolvedValue([]);
@@ -340,6 +356,119 @@ describe('CreateSessionSheet Codex', () => {
     await act(async () => Promise.resolve());
     return { container, root };
   }
+
+  it('home mantém campo, anexo e destino montados entre lista e criação, e uso durante a escrita', async () => {
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    let focusRequest = 0;
+    const show = async (mode: 'sessions' | 'newConversation') => act(async () => root.render(createElement(CreateSessionSheet, {
+      home: { mode, focusRequest, onNewConversation: vi.fn(), sessions: createElement('div', { 'data-home-list': true }) },
+    })));
+    await show('sessions');
+    expect(button(container, 'home_new_conversation')).toBeTruthy();
+    const input = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="nova_conversa_placeholder"]')!;
+    const focus = vi.spyOn(input, 'focus');
+    expect(focus).not.toHaveBeenCalled();
+    focusRequest++;
+    await show('newConversation');
+    expect(focus).toHaveBeenCalledTimes(1);
+    await act(async () => type(container, 'kept-draft'));
+    expect(container.querySelector('[data-home-usage]')).not.toBeNull();
+    await act(async () => button(container, 'composer_adicionar_ao_chat')!.click());
+    await act(async () => button(container, 'pick-fixture')!.click());
+    expect(container.textContent).toContain('fixture.png');
+    const folder = button(container, 'native_new_chat_folder: repo');
+    await show('sessions');
+    expect(container.querySelector('textarea[aria-label="nova_conversa_placeholder"]')).toBe(input);
+    focusRequest++;
+    await show('newConversation');
+    expect(input.value).toBe('kept-draft');
+    expect(container.textContent).toContain('fixture.png');
+    expect(button(container, 'native_new_chat_folder: repo')).toBe(folder);
+    expect(calls.create).not.toHaveBeenCalled();
+    expect(calls.send).not.toHaveBeenCalled();
+    await act(async () => root.unmount());
+  });
+
+  it('home inicia ditado pela faixa sem pedir teclado e transcreve ao voltar à lista', async () => {
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const onNewConversation = vi.fn(() => render('newConversation'));
+    const render = (mode: 'sessions' | 'newConversation') => root.render(createElement(CreateSessionSheet, {
+      home: { mode, focusRequest: 0, onNewConversation, sessions: createElement('div', { 'data-home-list': true }) },
+    }));
+    const show = async (mode: 'sessions' | 'newConversation') => act(async () => render(mode));
+    await show('sessions');
+    expect(button(container, 'home_new_conversation')).toBeTruthy();
+    const input = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="nova_conversa_placeholder"]')!;
+    const focus = vi.spyOn(input, 'focus');
+    const mic = container.querySelector<HTMLButtonElement>('button[aria-label="composer_gravar_audio"]')!;
+    await act(async () => mic.click());
+    expect(onNewConversation).toHaveBeenCalledWith(false);
+    expect(calls.startDictation).toHaveBeenCalledTimes(1);
+    expect(calls.stopDictation).not.toHaveBeenCalled();
+    expect(focus).not.toHaveBeenCalled();
+    await show('sessions');
+    expect(calls.stopDictation).toHaveBeenCalledTimes(1);
+    expect(calls.transcribe).toHaveBeenCalledTimes(1);
+    await show('newConversation');
+    expect(input.value).toBe('spoken-fixture');
+    await act(async () => root.unmount());
+  });
+
+  it('home conserva a máquina e recebe transcrição em voo quando o chat troca activeId', async () => {
+    calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+    const transcription = deferred<{ text: string }>();
+    calls.transcribe.mockReturnValueOnce(transcription.promise);
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const home = { mode: 'newConversation' as const, focusRequest: 0, onNewConversation: vi.fn(), sessions: null };
+    await act(async () => root.render(createElement(CreateSessionSheet, { home })));
+    const input = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="nova_conversa_placeholder"]')!;
+    await act(async () => button(container, 'composer_gravar_audio')!.click());
+    await act(async () => button(container, 'composer_parar_gravacao')!.click());
+    expect(calls.transcribe).toHaveBeenCalledTimes(1);
+    calls.activeId = 'server-c';
+    await act(async () => root.render(createElement(CreateSessionSheet, { home })));
+    expect(container.querySelector('textarea[aria-label="nova_conversa_placeholder"]')).toBe(input);
+    await act(async () => transcription.resolve({ text: 'kept-transcription' }));
+    expect(input.value).toBe('kept-transcription');
+    expect(button(container, 'native_new_chat_machine: Servidor B')).toBeTruthy();
+    await act(async () => root.unmount());
+  });
+
+  it('home cancela pedido de foco pendente na transcrição antes da próxima abertura por mic', async () => {
+    const transcription = deferred<{ text: string }>();
+    calls.transcribe.mockReturnValueOnce(transcription.promise);
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    let focusRequest = 0;
+    const onNewConversation = vi.fn((focus: boolean) => {
+      if (focus) focusRequest++;
+      render('newConversation');
+    });
+    const render = (mode: 'sessions' | 'newConversation'): void => root.render(createElement(CreateSessionSheet, {
+      home: { mode, focusRequest, onNewConversation, sessions: null },
+    }));
+    const show = async (mode: 'sessions' | 'newConversation') => act(async () => render(mode));
+    await show('newConversation');
+    const input = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="nova_conversa_placeholder"]')!;
+    const focus = vi.spyOn(input, 'focus');
+    await act(async () => button(container, 'composer_gravar_audio')!.click());
+    await act(async () => button(container, 'composer_parar_gravacao')!.click());
+    await show('sessions');
+    await act(async () => button(container, 'home_new_conversation')!.click());
+    expect(focus).not.toHaveBeenCalled();
+    await show('sessions');
+    await act(async () => transcription.resolve({ text: 'spoken-fixture' }));
+    const permission = deferred<void>();
+    calls.startPending = permission.promise;
+    await act(async () => button(container, 'composer_gravar_audio')!.click());
+    expect(calls.startDictation).toHaveBeenCalledTimes(2);
+    expect(focus).not.toHaveBeenCalled();
+    await act(async () => permission.resolve());
+    await act(async () => root.unmount());
+  });
 
   it('abre a máquina em painel ancorado e não cria sessão ao trocar o destino', async () => {
     calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };

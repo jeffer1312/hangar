@@ -24,6 +24,7 @@ export type Ferramentas = 'classic' | 'chips' | 'tree';
 export type DestaquePergunta = 'accent' | 'amber';
 /** Gaveta da tela inicial: sessões agrupadas ou conversas (vivas e fechadas) por recência. */
 export type Organizar = 'sessions' | 'conversations';
+export type HomeScreen = 'sessions' | 'newConversation';
 const TEMAS: Tema[] = ['system', 'light', 'dark'];
 const FUNDOS: Fundo[] = ['flat', 'texture', 'aurora', 'image'];
 const IDIOMAS: Idioma[] = ['system', 'pt', 'en'];
@@ -33,6 +34,8 @@ const FERRAMENTAS: Ferramentas[] = ['classic', 'chips', 'tree'];
 const DESTAQUES: DestaquePergunta[] = ['accent', 'amber'];
 const AGRUPAR: GroupBy[] = ['none', 'server', 'project'];
 const ORGANIZAR: Organizar[] = ['sessions', 'conversations'];
+const HOME_SCREENS: HomeScreen[] = ['sessions', 'newConversation'];
+const K_HOME_SCREEN = 'aparencia.homeScreen';
 const K = 'aparencia.tema';
 const K_IDIOMA = 'aparencia.idioma';
 const K_PENSAMENTO = 'aparencia.pensamentoTools';
@@ -173,6 +176,8 @@ interface Aparencia {
   setAgrupar: (v: GroupBy) => void;
   organizar: Organizar;
   setOrganizar: (v: Organizar) => void;
+  homeScreen: HomeScreen;
+  setHomeScreen: (v: HomeScreen) => void;
   fundo: Fundo;
   setFundo: (v: Fundo) => void;
   imagemUri: string | null;
@@ -265,6 +270,8 @@ export const useAparencia = create<Aparencia>((set, get) => {
     setAgrupar: (v) => { prefs.set(K_AGRUPAR, v); set({ agrupar: v }); },
     organizar: lerOpcao(K_ORGANIZAR, ORGANIZAR, 'sessions'),
     setOrganizar: (v) => { prefs.set(K_ORGANIZAR, v); set({ organizar: v }); },
+    homeScreen: lerOpcao(K_HOME_SCREEN, HOME_SCREENS, 'sessions'),
+    setHomeScreen: (v) => { prefs.set(K_HOME_SCREEN, v); set({ homeScreen: v }); },
     fundo: lerFundo(),
     // Passa pelo tema: com a Leitura Automática, imagem atrás liga o contraste do Texto.
     setFundo: (v) => material({ fundo: v }, () => prefs.set(K_FUNDO, v)),

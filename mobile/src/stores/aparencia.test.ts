@@ -86,6 +86,22 @@ describe('aparencia', () => {
     expect(comLixo.getState().agrupar).toBe('server');
   });
 
+  it('homeScreen abre em sessões, persiste a escolha e rejeita valor desconhecido', async () => {
+    const { useAparencia } = await import('./aparencia');
+    expect(useAparencia.getState().homeScreen).toBe('sessions');
+    useAparencia.getState().setHomeScreen('newConversation');
+    expect(mem.get('aparencia.homeScreen')).toBe('newConversation');
+    vi.resetModules();
+    const { useAparencia: restored } = await import('./aparencia');
+    expect(restored.getState().homeScreen).toBe('newConversation');
+    restored.getState().setHomeScreen('sessions');
+    expect(mem.get('aparencia.homeScreen')).toBe('sessions');
+    mem.set('aparencia.homeScreen', 'unknown');
+    vi.resetModules();
+    const { useAparencia: invalid } = await import('./aparencia');
+    expect(invalid.getState().homeScreen).toBe('sessions');
+  });
+
   it('material: padrões, persistência e valor gravado inválido', async () => {
     const { useAparencia } = await import('./aparencia');
     const s = useAparencia.getState();

@@ -19,7 +19,7 @@ import { CwdPicker } from './CwdPicker';
 import { ProviderPicker } from './ProviderPicker';
 import { BranchPicker } from './BranchPicker';
 import { CodexContextControl, useCodexContextControl } from './CodexContextControl';
-import { NewConversation } from './NewConversation';
+import { NewConversation, type HomePresentation } from './NewConversation';
 import { QuietPill } from './QuietPill';
 import { readChoices, readMachine, rememberChoices, rememberMachine, type NewChatChoices } from './choicesPrefs';
 import { superficie } from '../../theme/superficie';
@@ -58,22 +58,28 @@ function PanelSelect({
   </>;
 }
 
-export function CreateSessionSheet({ onClose, keyboardOffset }: { onClose?: () => void; keyboardOffset?: number }) {
+export function CreateSessionSheet({ onClose, keyboardOffset, home }: { onClose?: () => void; keyboardOffset?: number; home?: HomePresentation }) {
   const servers = useServers((s) => s.servers);
   const activeId = useServers((s) => s.activeId);
   // A máquina escolhida na pílula vale só para onde a conversa nasce; o servidor ativo é das Configurações.
-  const [machine, setMachine] = useState(readMachine);
+  const [machine, setMachine] = useState(() => {
+    const remembered = readMachine();
+    return servers.find((s) => s.id === remembered)?.id ?? servers.find((s) => s.id === activeId)?.id ?? servers[0]?.id ?? null;
+  });
   const target = servers.find((s) => s.id === machine) ?? servers.find((s) => s.id === activeId) ?? servers[0];
+  // Fixa também o destino que apareceu após a carga das máquinas ou a remoção da escolhida.
+  useEffect(() => { if (target && target.id !== machine) setMachine(target.id); }, [machine, target?.id]);
   const pickMachine = useCallback((id: string) => {
     rememberMachine(id);
     setMachine(id);
   }, []);
-  return target ? <CreateSessionForm key={`${target.id}:${target.baseUrl}`} active={target} machines={servers} onPickMachine={pickMachine} onClose={onClose} keyboardOffset={keyboardOffset} />
-    : <Text accessibilityRole="alert">{m.servidor_nao_existe()}</Text>;
+  return target ? <CreateSessionForm key={`${target.id}:${target.baseUrl}`} active={target} machines={servers} onPickMachine={pickMachine} onClose={onClose} keyboardOffset={keyboardOffset} home={home} />
+    : home?.mode === 'sessions' ? <View style={{ flex: 1 }}>{home.sessions}</View>
+      : <Text accessibilityRole="alert">{m.servidor_nao_existe()}</Text>;
 }
 
-function CreateSessionForm({ active, machines, onPickMachine, keyboardOffset }: {
-  active: Server; machines: Server[]; onPickMachine: (id: string) => void; onClose?: () => void; keyboardOffset?: number;
+function CreateSessionForm({ active, machines, onPickMachine, keyboardOffset, home }: {
+  active: Server; machines: Server[]; onPickMachine: (id: string) => void; onClose?: () => void; keyboardOffset?: number; home?: HomePresentation;
 }) {
   const router = useRouter();
   // O form remonta por máquina: estas são as escolhas guardadas para ela.
@@ -698,6 +704,7 @@ function CreateSessionForm({ active, machines, onPickMachine, keyboardOffset }: 
   return (
     <>
     <NewConversation
+      home={home}
       server={active}
       destination={destination}
       destinationPending={!picked}
