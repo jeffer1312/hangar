@@ -280,7 +280,7 @@ pub(super) enum WtDialog { Delete(String), Batch, Create }
 
 /// A confirmação do lote congela o que a pessoa viu: o lote apaga essas e só essas.
 /// `ready` sai sempre; de `with_changes` (alteração não commitada) só as marcadas em `picked`.
-pub(super) struct Batch { server: String, repo: String, ready: Vec<WorktreeStatus>, with_changes: Vec<WorktreeStatus>, picked: HashSet<String>, blocked: Vec<WorktreeStatus> }
+pub(super) struct Batch { repo: String, ready: Vec<WorktreeStatus>, with_changes: Vec<WorktreeStatus>, picked: HashSet<String>, blocked: Vec<WorktreeStatus> }
 
 impl Batch {
     fn chosen(&self) -> Vec<&WorktreeStatus> {
@@ -293,13 +293,22 @@ fn one_path_body(repo: &str, w: &WorktreeStatus) -> Value {
     json!({"repo": repo, "confirm": true, "paths": [&w.path], "lossy": if loses(w) { vec![&w.path] } else { vec![] }})
 }
 
-/// O lote em andamento: uma worktree por pedido, para o progresso ser o que o servidor confirmou.
+/// A limpeza em andamento: uma worktree por pedido, para o progresso ser o que o servidor confirmou.
 #[derive(Debug, Default)]
-pub(super) struct BatchRun { id: u64, total: usize, done: usize, current: Option<String>, removed: Vec<WorktreeStatus>, failed: Vec<(String, Option<String>)> }
+pub(super) struct BatchRun {
+    id: u64, server: String, machine: String, total: usize, done: usize,
+    current: Option<String>, removed: Vec<WorktreeStatus>, failed: Vec<(String, Option<String>)>,
+}
 
 impl BatchRun {
     fn new(total: usize) -> Self { Self { total, ..Default::default() } }
     fn finished(&self) -> bool { self.done >= self.total }
+    fn progress(&self) -> f32 { if self.total == 0 { 100. } else { self.done as f32 * 100. / self.total as f32 } }
+    fn summary(&self) -> String {
+        let folders: Vec<_> = self.removed.iter().filter(|w| w.exists).collect();
+        tr_shared("worktree_cleanup_summary", &[("feitas", &self.removed.len().to_string()), ("total", &self.total.to_string()),
+            ("pastas", &folders.len().to_string()), ("registros", &(self.removed.len() - folders.len()).to_string()), ("tamanho", &sum_label(folders))])
+    }
     /// `removed` sem ela é o servidor deixando de fora (mudou depois da confirmação); erro nunca conta como apagada.
     fn record(&mut self, w: WorktreeStatus, outcome: Result<Vec<String>, String>) -> bool {
         self.done += 1;
@@ -362,12 +371,9 @@ pub(super) struct Worktrees {
     panel_server: Option<String>,
     pub(super) detail: Remote<WorktreeStatus>,
     pub(super) delete_branch: bool,
-    pub(super) deleting: bool,
     /// Busca dos remotos: o pedido e quantos repositórios já terminaram, de quantos.
     fetch: Remote<()>,
     fetch_progress: (usize, usize),
-    /// Falha de apagar: fica fora do `detail` para o painel continuar mostrando a worktree.
-    pub(super) delete_error: Option<String>,
     filter: Filter,
     search: Option<Entity<InputState>>,
     _search_events: Option<Subscription>,
@@ -375,6 +381,8 @@ pub(super) struct Worktrees {
     dialog: Option<WtDialog>,
     batch: Option<Batch>,
     batch_run: Option<BatchRun>,
+    pub(super) cleanup_open: bool,
+    pub(super) cleanup_connection: Option<(String, String)>,
     batch_seq: u64,
     create: Option<NewWorktree>,
     next_create_id: u64,
@@ -387,7 +395,15 @@ pub(super) struct Worktrees {
 
 impl Worktrees {
     pub(super) fn status(&self, server: &str, path: &str) -> Option<&WorktreeStatus> { self.cache.get(&worktree_id(server, path)) }
-    fn busy(&self) -> bool { self.deleting || self.create.as_ref().is_some_and(|c| c.busy) }
+    fn busy(&self) -> bool { self.create.as_ref().is_some_and(|c| c.busy) }
+    fn cleanup_running(&self) -> bool { self.batch_run.as_ref().is_some_and(|run| !run.finished()) }
+
+    fn dismiss_cleanup(&mut self, id: u64) -> bool {
+        if !self.batch_run.as_ref().is_some_and(|r| r.id == id && r.finished()) { return false; }
+        self.batch_run = None;
+        self.cleanup_open = false;
+        true
+    }
 
     fn fetch_failure_labels(&self) -> Vec<String> {
         self.fetch_failed.iter().map(|(server, repo)| {
@@ -495,6 +511,14 @@ impl Render for DialogBody {
 }
 
 impl Hangar {
+    /// Conferir outra máquina não troca o rascunho da conexão atual ao cancelar.
+    pub(super) fn restore_cleanup_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((address, token)) = self.worktrees.cleanup_connection.take() {
+            self.address.update(cx, |input, cx| input.set_value(address, window, cx));
+            self.token.update(cx, |input, cx| input.set_value(token, window, cx));
+        }
+    }
+
     fn worktree_sources(&self) -> Vec<(String, String, Api)> {
         let mut sources: Vec<_> = self.servers.iter().filter(|s| !s.disabled && !s.invite && !s.ephemeral)
             .filter_map(|s| {
@@ -677,7 +701,6 @@ impl Hangar {
         self.worktrees.open = Some(worktree_id(&server, &path));
         self.worktrees.panel_server = Some(server.clone());
         self.worktrees.delete_branch = false;
-        self.worktrees.delete_error = None;
         let seq = self.worktrees.detail.start();
         self.worktree_get(&server.clone(), vec!["worktrees".into(), "detail".into()], vec![("path".into(), path)], 30, cx, move |this, result, cx| {
             let parsed = result.and_then(|v| serde_json::from_value::<WorktreeStatus>(v).map_err(|_| Failure::local("invalid_response")))
@@ -691,7 +714,6 @@ impl Hangar {
     fn close_worktree_panel(&mut self, cx: &mut Context<Self>) {
         self.worktrees.open = None;
         self.worktrees.panel_server = None;
-        self.worktrees.delete_error = None;
         self.worktrees.detail.reset();
         cx.notify();
     }
@@ -723,14 +745,13 @@ impl Hangar {
         let body = cx.new(|cx| DialogBody { _observe: cx.observe(&hangar, |_, _, cx| cx.notify()), hangar: hangar.downgrade(), draw });
         let weak = hangar.downgrade();
         window.open_dialog(cx, move |dialog, _, cx| {
-            // Com o pedido em voo o diálogo não fecha: a resposta (erro, sobra do lote) cairia no vazio.
+            // A criação ainda pertence ao diálogo; a limpeza tem estado próprio no cabeçalho.
             let busy = weak.upgrade().is_some_and(|h| h.read(cx).worktrees.busy());
             let close = weak.clone();
             popup::dialog(dialog).w(px(width)).keyboard(!busy).overlay_closable(!busy).close_button(!busy).child(body.clone())
                 .on_close(move |_, _, cx| { let _ = close.update(cx, |this, cx| {
                     this.worktrees.dialog = None;
                     this.worktrees.batch = None;
-                    this.worktrees.batch_run = None;
                     this.worktrees.create = None;
                     cx.notify();
                 }); })
@@ -749,7 +770,7 @@ impl Hangar {
     /// Cancelar: o fechar pelo programa não passa pelo `on_close`, então o estado do diálogo sai aqui.
     fn cancel_wt_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.worktrees.busy() { return; }
-        (self.worktrees.batch, self.worktrees.batch_run, self.worktrees.create) = (None, None, None);
+        (self.worktrees.batch, self.worktrees.create) = (None, None);
         if let Some(kind) = self.worktrees.dialog.clone() { self.finish_wt_dialog(&kind, window, cx); }
         cx.notify();
     }
@@ -757,64 +778,59 @@ impl Hangar {
     // ── Apagar ──────────────────────────────────────────────────────────────
 
     fn open_delete(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.cleanup_available(cx) { return; }
         self.worktrees.delete_branch = false;
-        self.worktrees.delete_error = None;
         self.open_wt_dialog(WtDialog::Delete(path), 520., Hangar::render_delete_dialog, window, cx);
     }
 
     fn delete_worktree(&mut self, s: WorktreeStatus, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(api) = self.worktree_api(&s.server) else { self.worktrees.delete_error = Some(self.machine_error(&s.server)); cx.notify(); return };
-        if self.worktrees.deleting { return; }
-        self.worktrees.deleting = true;
-        self.worktrees.delete_error = None;
         let body = json!({"repo": &s.repo, "path": &s.path, "confirm": !lost_files(&s).is_empty(),
                           "delete_branch": s.exists && self.worktrees.delete_branch, "keep_branch": !s.exists});
-        let task = self.runtime.spawn(async move { api.server_send(reqwest::Method::POST, &["worktrees", "delete"], Some(body), 150).await });
-        cx.spawn_in(window, async move |this, cx| {
-            let joined = task.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.worktrees.deleting = false;
-                match joined {
-                    Ok(Ok(_)) => {
-                        this.worktrees.forget(&s);
-                        this.finish_wt_dialog(&WtDialog::Delete(s.id()), window, cx);
-                        if this.worktrees.open.as_deref() == Some(s.id().as_str()) { this.close_worktree_panel(cx); }
-                        this.load_worktrees(false, cx);
-                    }
-                    Ok(Err(e)) => this.worktrees.delete_error = Some(Self::failure(&e)),
-                    Err(_) => this.worktrees.delete_error = Some(tr("delivery_uncertain")),
-                }
-                cx.notify();
-            });
-        }).detach();
-        cx.notify();
+        self.start_worktree_cleanup(vec![(s, "delete", body)], window, cx);
     }
 
     fn open_batch(&mut self, repo: &WorktreeRepo, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.cleanup_available(cx) { return; }
         let (deletable, blocked) = merged_batch(&repo.worktrees);
         if deletable.is_empty() { return; }
         let (ready_ones, with_changes) = deletable.into_iter().partition(ready);
-        self.worktrees.batch = Some(Batch { server: repo.server.clone(), repo: repo.repo.clone(), ready: ready_ones, with_changes, picked: HashSet::new(), blocked });
-        self.worktrees.batch_run = None;
+        self.worktrees.batch = Some(Batch { repo: repo.repo.clone(), ready: ready_ones, with_changes, picked: HashSet::new(), blocked });
         self.open_wt_dialog(WtDialog::Batch, 520., Hangar::render_batch_dialog, window, cx);
     }
 
     /// Manda só as que a confirmação mostrou, uma por pedido e em ordem: o progresso é real e um lote longo não estoura o prazo.
-    fn delete_batch(&mut self, cx: &mut Context<Self>) {
+    fn delete_batch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(batch) = self.worktrees.batch.as_ref() else { return };
-        let Some(api) = self.worktree_api(&batch.server) else { return };
-        if self.worktrees.deleting { return; }
-        let queue: Vec<WorktreeStatus> = batch.chosen().into_iter().cloned().collect();
-        if queue.is_empty() { return; }
-        let repo = batch.repo.clone();
+        let queue = batch.chosen().into_iter().map(|w| (w.clone(), "delete-merged", one_path_body(&batch.repo, w))).collect();
+        self.start_worktree_cleanup(queue, window, cx);
+    }
+
+    /// A falha fica disponível até ser lida e dispensada, antes de outra limpeza ocupar o indicador.
+    fn cleanup_available(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.worktrees.batch_run.as_ref().is_some_and(|r| !r.finished() || !r.failed.is_empty()) {
+            self.close_popups();
+            self.worktrees.cleanup_open = true;
+            cx.notify();
+            return false;
+        }
+        true
+    }
+
+    fn start_worktree_cleanup(&mut self, queue: Vec<(WorktreeStatus, &'static str, Value)>, window: &mut Window, cx: &mut Context<Self>) {
+        if queue.is_empty() || !self.cleanup_available(cx) { return; }
+        let server = queue[0].0.server.clone();
+        let api = self.worktree_api(&server);
+        let unavailable = self.machine_error(&server);
+        let machine = self.worktrees.machines.get(&server).map(|m| m.label.clone()).unwrap_or_else(|| server.clone());
         let runtime = self.runtime.clone();
-        self.worktrees.deleting = true;
         self.worktrees.batch_seq += 1;
         let id = self.worktrees.batch_seq;
-        self.worktrees.batch_run = Some(BatchRun { id, ..BatchRun::new(queue.len()) });
+        self.worktrees.batch_run = Some(BatchRun { id, server, machine, ..BatchRun::new(queue.len()) });
+        self.worktrees.batch = None;
+        if let Some(kind) = self.worktrees.dialog.clone() { self.finish_wt_dialog(&kind, window, cx); }
+        self.close_popups();
         cx.spawn(async move |this, cx| {
-            for w in queue {
-                // Sem este lote (conexão trocada zerou a página, ou outro tomou o lugar), para: o resto não tem onde aparecer.
+            for (w, action, body) in queue {
                 let go = this.update(cx, |this, cx| {
                     let Some(run) = this.worktrees.batch_run.as_mut().filter(|r| r.id == id) else { return false };
                     run.current = Some(base_name(&w.path));
@@ -822,12 +838,17 @@ impl Hangar {
                     true
                 });
                 if !matches!(go, Ok(true)) { break; }
-                let (api, body) = (api.clone(), one_path_body(&repo, &w));
-                let joined = runtime.spawn(async move { api.server_send(reqwest::Method::POST, &["worktrees", "delete-merged"], Some(body), 150).await }).await;
-                let outcome = match joined {
-                    Ok(Ok(v)) => v.get("removed").and_then(|r| serde_json::from_value::<Vec<String>>(r.clone()).ok()).ok_or_else(|| tr("invalid_response")),
-                    Ok(Err(e)) => Err(Self::failure(&e)),
-                    Err(_) => Err(tr("delivery_uncertain")),
+                // A API capturada é da origem, mesmo depois de trocar a máquina ativa.
+                let outcome = if let Some(api) = api.clone() {
+                    let joined = runtime.spawn(async move { api.server_send(reqwest::Method::POST, &["worktrees", action], Some(body), 150).await }).await;
+                    match joined {
+                        Ok(Ok(_)) if action == "delete" => Ok(vec![w.path.clone()]),
+                        Ok(Ok(v)) => v.get("removed").and_then(|r| serde_json::from_value::<Vec<String>>(r.clone()).ok()).ok_or_else(|| tr("invalid_response")),
+                        Ok(Err(e)) => Err(Self::failure(&e)),
+                        Err(_) => Err(tr("delivery_uncertain")),
+                    }
+                } else {
+                    Err(unavailable.clone())
                 };
                 let _ = this.update(cx, |this, cx| {
                     let removed = w.clone();
@@ -839,13 +860,22 @@ impl Hangar {
                     cx.notify();
                 });
             }
-            // Mesmo com falha parte pode ter saído: a lista relida mostra o que sobrou.
-            // Também na saída antecipada: `deleting` preso deixaria o diálogo sem Cancelar nem Apagar.
-            let _ = this.update(cx, |this, cx| {
-                if this.worktrees.batch_run.as_ref().is_none_or(|r| r.id == id) { this.worktrees.deleting = false; }
+            let hide = this.update(cx, |this, cx| {
+                if this.worktrees.batch_seq != id { return false; }
+                let success = this.worktrees.batch_run.as_ref().is_some_and(|r| r.id == id && r.finished() && r.failed.is_empty());
                 this.load_worktrees(false, cx);
                 cx.notify();
+                success
             });
+            if matches!(hide, Ok(true)) {
+                cx.background_executor().timer(Duration::from_secs(2)).await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.worktrees.batch_run.as_ref().is_some_and(|r| r.id == id && r.finished() && r.failed.is_empty()) {
+                        this.worktrees.dismiss_cleanup(id);
+                        cx.notify();
+                    }
+                });
+            }
         }).detach();
         cx.notify();
     }
@@ -1159,7 +1189,7 @@ impl Hangar {
         let ready_list: Vec<&WorktreeStatus> = repo.worktrees.iter().filter(|w| ready(w)).collect();
         let (clean_key, clean_n, clean_size) = if ready_list.is_empty() { ("worktree_clean_merged_with_changes", deletable.len(), sum_label(&deletable)) }
             else { ("worktree_limpar_mescladas", ready_list.len(), sum_label(ready_list.iter().copied())) };
-        let deleting = self.worktrees.deleting;
+        let deleting = self.worktrees.cleanup_running();
         let main = repo.worktrees.iter().find_map(|w| w.main_branch.clone());
         let path_line = match &main {
             Some(b) => format!("{} · {}", repo.repo, tr_shared("worktree_repo_principal", &[("branch", b)])),
@@ -1180,7 +1210,7 @@ impl Hangar {
                 .on_click(cx.listener(move |this, _, window, cx| this.open_create(server_new.clone(), repo_new.clone(), window, cx))))
             .when(!deletable.is_empty(), |el| el.child(Button::new(SharedString::from(format!("worktrees-clean-{}", worktree_id(&repo.server, &repo.repo)))).outline().small()
                 .label(tr_shared(clean_key, &[("n", &clean_n.to_string()), ("tamanho", &clean_size)]))
-                .loading(deleting).disabled(deleting)
+                .disabled(deleting)
                 .on_click(cx.listener(move |this, _, window, cx| this.open_batch(&repo_batch, window, cx)))));
         let (agents, mains): (Vec<&WorktreeStatus>, Vec<&WorktreeStatus>) = visible.into_iter().partition(|w| is_agent(w));
         let cols = div().flex().items_center().gap(px(12.)).px(px(10.)).pb(px(6.)).border_b_1().border_color(theme::border())
@@ -1269,7 +1299,7 @@ impl Hangar {
             .when(!w.exists, |el| {
                 let id = w.id();
                 el.child(div().flex().child(Button::new(SharedString::from(format!("worktree-clear-{id}"))).outline().xsmall()
-                    .label(tr_shared("worktree_clear_registration", &[])).disabled(!w.sessions.is_empty() || self.worktrees.deleting)
+                    .label(tr_shared("worktree_clear_registration", &[])).disabled(!w.sessions.is_empty() || self.worktrees.cleanup_running())
                     .on_click(cx.listener(move |this, _, window, cx| { cx.stop_propagation(); this.open_delete(id.clone(), window, cx); }))))
             });
         let branch_cell = div().flex_basis(px(0.)).flex_grow(1.).min_w_0().flex().flex_col().gap(px(2.)).text_size(px(12.5))
@@ -1400,7 +1430,7 @@ impl Hangar {
                 .on_click(cx.listener(move |this, _, window, cx| this.new_session_here(&here, window, cx))))
             .child(div().flex_1())
             .child(Button::new("worktree-delete").danger().small().label(tr_shared(if st.exists { "worktree_apagar_reticencias" } else { "worktree_clear_registration" }, &[]))
-                .disabled(blocked || self.worktrees.deleting)
+                .disabled(blocked || self.worktrees.cleanup_running())
                 .on_click(cx.listener(move |this, _, window, cx| this.open_delete(target.clone(), window, cx))));
         panel.child(head).children(sessions).child(diagram).child(facts).child(commits).children(files).child(actions)
             .when(blocked, |el| el.child(div().text_size(px(12.)).text_color(theme::warning_text())
@@ -1412,7 +1442,7 @@ impl Hangar {
         let Some(WtDialog::Delete(path)) = self.worktrees.dialog.clone() else { return div() };
         let fresh = self.worktrees.detail.ok().filter(|s| s.id() == path);
         let Some(st) = fresh.or_else(|| self.worktrees.cache.get(&path)).cloned() else { return div().child(loading_state()) };
-        let deleting = self.worktrees.deleting;
+        let deleting = self.worktrees.cleanup_running();
         if !st.exists {
             let machine = self.worktrees.machines.get(&st.server).map(|m| m.label.clone()).unwrap_or_else(|| st.server.clone());
             let target = st.clone();
@@ -1420,7 +1450,6 @@ impl Hangar {
                 .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).child(tr_shared("worktree_clear_registration_title", &[("nome", &title(&st))])))
                 .child(muted(format!("{machine} · {}", st.path)))
                 .child(tr_shared("worktree_clear_registration_description", &[]))
-                .when_some(self.worktrees.delete_error.clone(), |el, error| el.child(note_box(error, theme::danger()).id("worktree-delete-error").role(Role::Alert)))
                 .child(div().flex().justify_end().gap_2()
                     .child(Button::new("worktree-delete-cancel").outline().label(tr_shared("worktree_nova_cancelar", &[])).disabled(deleting)
                         .on_click(cx.listener(|this, _, window, cx| this.cancel_wt_dialog(window, cx))))
@@ -1465,8 +1494,6 @@ impl Hangar {
                 .label(tr_shared("worktree_apagar_branch_tambem", &[("n", &st.ahead.to_string())]))
                 .checked(self.worktrees.delete_branch).disabled(deleting)
                 .on_change(cx.listener(|this, checked: &bool, _, cx| { this.worktrees.delete_branch = *checked; cx.notify(); }))))
-            .when_some(self.worktrees.delete_error.clone(), |el, error| el.child(div().id("worktree-delete-error").role(Role::Alert)
-                .text_color(theme::danger()).child(error)))
             .child(div().flex().justify_end().gap_2()
                 .child(Button::new("worktree-delete-cancel").outline().label(tr_shared("worktree_nova_cancelar", &[])).disabled(deleting)
                     .on_click(cx.listener(|this, _, window, cx| this.cancel_wt_dialog(window, cx))))
@@ -1478,9 +1505,8 @@ impl Hangar {
 
     /// O lote de mescladas: cada uma com o que perde, e as que ficam de fora com o motivo.
     fn render_batch_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
-        if let Some(run) = self.worktrees.batch_run.as_ref() { return Self::render_batch_run(run, cx); }
         let Some(batch) = self.worktrees.batch.as_ref() else { return div() };
-        let deleting = self.worktrees.deleting;
+        let deleting = self.worktrees.cleanup_running();
         let n = batch.chosen().len().to_string();
         // Prontas entram sempre; a que tem arquivo ignorado mostra o que ele perde.
         let ready_rows = batch.ready.iter().map(|w| div().flex().flex_col().gap(px(2.))
@@ -1513,31 +1539,70 @@ impl Hangar {
                     .on_click(cx.listener(|this, _, window, cx| this.cancel_wt_dialog(window, cx))))
                 .child(Button::new("worktree-batch-confirm").danger().label(tr_shared("worktree_lote_apagar_n", &[("n", &n)])).loading(deleting)
                     .disabled(deleting || n == "0")
-                    .on_click(cx.listener(|this, _, _, cx| this.delete_batch(cx)))))
+                    .on_click(cx.listener(|this, _, window, cx| this.delete_batch(window, cx)))))
     }
 
-    /// O lote rodando ou terminado: a barra conta as que já voltaram; as que ficaram dizem por quê.
-    fn render_batch_run(run: &BatchRun, cx: &mut Context<Self>) -> Div {
+    pub(super) fn render_worktree_cleanup_trigger(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let run = self.worktrees.batch_run.as_ref()?;
         let finished = run.finished();
-        let summary = tr_shared("worktree_lote_progresso", &[("feitas", &run.removed.len().to_string()), ("total", &run.total.to_string()),
-            ("tamanho", &sum_label(&run.removed))]);
-        let value = if run.total == 0 { 100. } else { run.done as f32 * 100. / run.total as f32 };
-        div().flex().flex_col().gap(px(12.)).text_size(px(13.)).whitespace_normal()
-            .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD)
-                .child(tr_shared(if finished { "worktree_lote_fim_titulo" } else { "worktree_lote_apagando_titulo" }, &[])))
-            .child(Progress::new("worktree-batch-progress").value(value).accessibility_label(summary.clone()))
-            .child(muted(summary))
-            .when_some(run.current.as_ref().filter(|_| !finished), |el, name| el.child(muted(tr_shared("worktree_lote_apagando", &[("nome", name)]))))
+        let label = if !finished { tr_shared("worktree_cleanup_running", &[]) }
+            else if run.failed.is_empty() { tr_shared("worktree_cleanup_done", &[]) }
+            else { tr_shared("worktree_cleanup_failed", &[("n", &run.failed.len().to_string())]) };
+        let color = if !finished { theme::accent() } else if run.failed.is_empty() { theme::success_text() } else { theme::warning_text() };
+        let count = format!("{}/{}", run.done, run.total);
+        Some(popup::anchor(div().min_w_0(), "topbar-worktree-cleanup")
+            .child(Button::new("worktree-cleanup-toggle").ghost().h(px(28.)).w(px(190.)).min_w(px(140.)).px(px(6.))
+                .selected(self.worktrees.cleanup_open).accessibility_label(format!("{label} · {count} · {}", run.machine))
+                .child(div().w_full().min_w_0().flex().flex_col().gap(px(3.))
+                    .child(div().w_full().flex().items_center().gap(px(8.)).text_size(px(11.))
+                        .child(div().flex_1().min_w_0().truncate().text_color(color).child(label))
+                        .child(div().flex_shrink_0().text_color(theme::muted()).child(count)))
+                    .child(Progress::new("worktree-cleanup-top-progress").with_size(px(3.)).value(run.progress()).color(color)
+                        .accessibility_label(run.summary())))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    let open = !this.worktrees.cleanup_open;
+                    this.close_popups();
+                    this.worktrees.cleanup_open = open;
+                    cx.notify();
+                }))).into_any_element())
+    }
+
+    pub(super) fn render_worktree_cleanup_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let run = self.worktrees.batch_run.as_ref()?;
+        let (finished, id, server) = (run.finished(), run.id, run.server.clone());
+        Some(div().w_full().p(px(16.)).flex().flex_col().gap(px(12.)).text_size(px(13.)).whitespace_normal()
+            .child(div().flex().items_center().gap(px(10.))
+                .child(div().flex_1().font_weight(FontWeight::SEMIBOLD).child(tr_shared("worktree_cleanup_title", &[])))
+                .child(Button::new("worktree-cleanup-hide").ghost().size(px(20.)).icon(chrome::small_icon(IconName::Close, 12., theme::muted())).accessibility_label(tr("close"))
+                    .on_click(cx.listener(|this, _, _, cx| { this.worktrees.cleanup_open = false; cx.notify(); }))))
+            .child(muted(run.machine.clone()))
+            .child(Progress::new("worktree-cleanup-progress").value(run.progress()).accessibility_label(run.summary()))
+            .child(div().flex().flex_col().gap(px(4.)).children(run.summary().lines().map(|line| muted(line.to_owned()))))
+            .when(!finished, |el| el.child(muted(tr_shared("worktree_cleanup_background", &[]))))
+            .when_some(run.current.as_ref().filter(|_| !finished), |el, name| el.child(div().min_w_0().truncate()
+                .font_family(theme::MONO).text_size(px(12.)).child(name.clone())))
             .when(!run.failed.is_empty(), |el| el.child(div().id("worktree-batch-failed").role(Role::Alert).flex().flex_col().gap(px(2.))
+                .relative().max_h(px(200.)).overflow_y_scroll()
                 .text_color(theme::danger())
                 .child(tr_shared("worktree_lote_falhas", &[("n", &run.failed.len().to_string())]))
                 .children(run.failed.iter().map(|(name, error)| div().pl(px(10.)).child(match error {
                     None => tr_shared("worktree_lote_mudou", &[("nome", name)]),
                     Some(motivo) => tr_shared("worktree_lote_erro_item", &[("nome", name), ("motivo", motivo)]),
                 })))))
+            .when(!run.failed.is_empty(), |el| el.child(Button::new("worktree-cleanup-connection").outline().small()
+                .label(tr_shared("worktree_cleanup_connection", &[]))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.close_popups();
+                    if let Some(entry) = this.server_entry(&server).cloned() {
+                        this.worktrees.cleanup_connection = Some((this.address.read(cx).value().to_string(), this.token.read(cx).value().to_string()));
+                        this.address.update(cx, |input, cx| input.set_value(entry.address, window, cx));
+                        this.token.update(cx, |input, cx| input.set_value(entry.token, window, cx));
+                    }
+                    this.open_connection(window, cx);
+                }))))
             .when(finished, |el| el.child(div().flex().justify_end()
-                .child(Button::new("worktree-batch-close").primary().label(tr_shared("worktree_lote_fechar", &[]))
-                    .on_click(cx.listener(|this, _, window, cx| this.cancel_wt_dialog(window, cx))))))
+                .child(Button::new("worktree-cleanup-dismiss").primary().small().label(tr_shared("worktree_cleanup_dismiss", &[]))
+                    .on_click(cx.listener(move |this, _, _, cx| { this.worktrees.dismiss_cleanup(id); cx.notify(); }))))).into_any_element())
     }
 
     /// "Nova worktree": começar algo novo (branch e pasta saem da descrição) ou continuar uma branch que não está aberta.
@@ -1949,6 +2014,52 @@ mod tests {
         assert_eq!(run.removed.iter().map(|w| w.path.as_str()).collect::<Vec<_>>(), ["/r/a", "/r/d"]);
         assert_eq!(run.failed, [("b".to_owned(), None), ("c".to_owned(), Some("boom".to_owned()))]);
         assert_eq!(sum_label(&run.removed), tr_shared("worktree_tamanho_parcial", &[("tamanho", &fmt_size(2048))]));
+    }
+
+    #[test]
+    fn cleanup_progress_counts_failures_without_calling_them_removed() {
+        let mut run = BatchRun::new(3);
+        assert_eq!(run.progress(), 0.);
+        assert!(run.record(st(base("/r/a")), Ok(vec!["/r/a".into()])));
+        assert!(!run.record(st(base("/r/b")), Err("token_refused".into())));
+        assert_eq!(run.done, 2);
+        assert_eq!(run.removed.len(), 1);
+        assert_eq!(run.failed.len(), 1);
+        assert!(!run.finished());
+        assert!((run.progress() - 200. / 3.).abs() < 0.001);
+        assert!(!run.record(st(base("/r/c")), Ok(vec![])));
+        assert!(run.finished());
+        assert_eq!(run.progress(), 100.);
+        assert_eq!(run.removed.len(), 1);
+    }
+
+    #[test]
+    fn cleanup_summary_separates_registration_from_disk_space() {
+        let mut run = BatchRun::new(2);
+        let mut gone = st(base("/r/gone"));
+        gone.exists = false;
+        gone.size = Some(8192);
+        let mut folder = st(base("/r/folder"));
+        folder.size = Some(2048);
+        run.record(gone, Ok(vec!["/r/gone".into()]));
+        run.record(folder, Ok(vec!["/r/folder".into()]));
+        assert_eq!(run.summary(), tr_shared("worktree_cleanup_summary", &[("feitas", "2"), ("total", "2"),
+            ("pastas", "1"), ("registros", "1"), ("tamanho", &fmt_size(2048))]));
+    }
+
+    #[test]
+    fn cleanup_can_only_be_dismissed_when_its_own_run_has_finished() {
+        let mut wt = Worktrees { cleanup_open: true, batch_run: Some(BatchRun { id: 3, ..BatchRun::new(1) }), ..Default::default() };
+        assert!(wt.cleanup_running());
+        assert!(!wt.dismiss_cleanup(3));
+        assert!(wt.cleanup_open);
+        wt.batch_run.as_mut().unwrap().record(st(base("/r/a")), Err("token_refused".into()));
+        assert!(!wt.dismiss_cleanup(2));
+        assert!(wt.batch_run.is_some());
+        assert!(wt.dismiss_cleanup(3));
+        assert!(!wt.cleanup_running());
+        assert!(!wt.cleanup_open);
+        assert!(wt.batch_run.is_none());
     }
 
     #[test]

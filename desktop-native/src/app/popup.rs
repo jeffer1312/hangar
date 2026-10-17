@@ -65,10 +65,11 @@ impl<T: Clone> Presence<T> {
 
 /// Painel do compositor e a cópia do que ele mostra.
 #[derive(Clone)]
-enum Floating { Controls(super::controls::Open), Commands, Recent(Recent), NewChat(super::create::Menu), Usage, Context, Hangar, Voice, Machines, Artifacts }
+enum Floating { Controls(super::controls::Open), Commands, Recent(Recent), NewChat(super::create::Menu), Usage, Context, Hangar, Voice, Machines, Artifacts, WorktreeCleanup }
 
 impl Hangar {
     fn floating(&self) -> Option<Floating> {
+        if self.worktrees.cleanup_open { return Some(Floating::WorktreeCleanup); }
         // Sem o compositor na tela, o gatilho não foi desenhado e o painel não tem onde se prender.
         let page = self.settings.is_some() && !self.settings_ui.live;
         // O cartão aberto pela pílula da barra do topo existe em qualquer tela, com ou sem sessão.
@@ -97,7 +98,8 @@ impl Hangar {
     pub(super) fn close_popups(&mut self) -> bool {
         let folders = self.new_chat_folders.replace(None).is_some();
         let open = folders || self.controls_open() || self.command_panel || self.recent.is_some() || self.accounts.card || self.context_card
-            || self.hangar_open || self.voice.open || self.machines_tray.open || self.artifacts.open;
+            || self.hangar_open || self.voice.open || self.machines_tray.open || self.artifacts.open || self.worktrees.cleanup_open;
+        self.worktrees.cleanup_open = false;
         self.close_controls();
         self.hangar_open = false;
         self.machines_tray.open = false;
@@ -119,6 +121,7 @@ impl Hangar {
         if visible < 1. { motion::request_frame(window, cx); }
         let mut placement = Placement::Bottom;
         let (anchor, align, narrow, content) = match shown {
+            Floating::WorktreeCleanup => ("topbar-worktree-cleanup".to_owned(), Align::End, true, self.render_worktree_cleanup_panel(cx)),
             Floating::Controls(open) => (open.anchor(), Align::End, true, self.render_ctl_panel_for(open, window, cx)),
             Floating::Commands => ("composer".to_owned(), Align::Start, false, Some(self.render_command_panel(cx))),
             Floating::Usage => ((if self.accounts.card_top { "topbar-account" } else { "composer-account" }).to_owned(), Align::End, true,

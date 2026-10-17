@@ -1207,6 +1207,7 @@ impl Hangar {
     }
 
     fn connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.worktrees.cleanup_connection = None;
         let (address, token) = (self.address.read(cx).value().to_string(), self.token.read(cx).value().to_string());
         let api = match Api::new(&address, &token) {
             Ok(api) => api,
@@ -6820,6 +6821,7 @@ impl Render for Hangar {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" && this.api.is_some() {
                     this.connection_dialog = false;
+                    this.restore_cleanup_connection(window, cx);
                     this.connection_origin.take().and_then(|origin| origin.upgrade()).unwrap_or_else(|| this.root_focus.clone()).focus(window, cx);
                     cx.stop_propagation();
                     cx.notify();
@@ -6840,6 +6842,7 @@ impl Render for Hangar {
             .when(!entry_shown, |el| el.child(div().flex().justify_end().gap_2()
                 .when(self.api.is_some(), |el| el.child(Button::new("cancel").label(tr("cancel")).on_click(cx.listener(|this, _, window, cx| {
                     this.connection_dialog = false;
+                    this.restore_cleanup_connection(window, cx);
                     this.connection_origin.take().and_then(|origin| origin.upgrade()).unwrap_or_else(|| this.root_focus.clone()).focus(window, cx);
                     cx.notify();
                 }))))
@@ -7049,6 +7052,7 @@ impl Render for Hangar {
                 .on_any_mouse_down(cx.listener(|this, _, window, cx| {
                     if this.api.is_some() {
                         this.connection_dialog = false;
+                        this.restore_cleanup_connection(window, cx);
                         this.connection_origin.take().and_then(|origin| origin.upgrade()).unwrap_or_else(|| this.root_focus.clone()).focus(window, cx);
                         cx.notify();
                     }

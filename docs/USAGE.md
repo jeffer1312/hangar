@@ -252,6 +252,14 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   worktree. Se uma máquina não responder, as demais continuam visíveis e a falha permite tentar
   de novo. Para uma **Pasta sumida**, **Limpar registro** remove apenas aquela entrada do Git,
   conservando a branch, os commits e as conversas.
+- **Limpeza em segundo plano no app nativo:** após confirmar a exclusão de uma worktree,
+  a limpeza de um registro sem pasta ou um lote de mescladas, o diálogo fecha e a operação
+  continua. A barra no topo, à esquerda da conta e da cota, mostra quantos itens foram
+  processados. Clique nela para ver os detalhes; você pode trocar de conversa ou de servidor
+  enquanto a limpeza continua no computador de origem. Ao concluir sem falhas, o indicador
+  desaparece automaticamente. Falhas permanecem disponíveis até **Dispensar resultado**;
+  **Abrir Conexão** permite conferir a credencial do computador de origem. Um item que falha
+  não interrompe o restante do lote.
 - **Preferências de worktrees no app nativo:** em **Configurações → Worktrees**, escolha a pasta
   das novas worktrees de cada servidor. Deixe vazia para usar a pasta de worktrees do Hangar;
   as existentes continuam onde estão. A limpeza automática começa desligada. É possível ligá-la

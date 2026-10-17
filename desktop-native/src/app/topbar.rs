@@ -130,6 +130,8 @@ impl Hangar {
             }));
         let voice = self.render_voice_pill(cx);
         let presence = self.render_presence_button(cx);
+        let cleanup = self.render_worktree_cleanup_trigger(cx);
+        let cleaning = cleanup.is_some();
         let updater = cx.try_global::<crate::update::Handle>().map(|handle| handle.0.clone());
         let outdated = updater.as_ref().filter(|u| u.read(cx).server_outdated()).map(|u| {
             let (running, app) = u.read(cx).outdated_versions();
@@ -172,6 +174,7 @@ impl Hangar {
             })
             .map(|el| {
                 let controls = div().flex().justify_end().gap(px(6.))
+                    .children(cleanup.map(control))
                     .children(account.map(|account| shrinking(popup::anchor(div().min_w_0(), "topbar-account").child(account))))
                     .children(presence.map(control))
                     .child(control(Button::new("topbar-orq-history").ghost().icon(IconName::Clock).size(px(28.)).disabled(!online)
@@ -187,8 +190,9 @@ impl Hangar {
                     // Com o painel direito aberto, a busca centra no chat e os controles ficam sobre o painel; mais largos que
                     // ele, invadem o vazio do chat sem empurrar a busca.
                     Some(side) if side > 0. => el.child(div().flex_1().min_w_0().flex().child(div().flex_1()).child(shrinking(search).min_w(px(140.))).child(div().flex_1()))
-                        .child(controls.flex_shrink_0().w(px(side))),
-                    _ => el.child(div().flex_1()).child(shrinking(search).min_w(px(140.))).child(controls.flex_1().min_w_0()),
+                        .child(if cleaning { controls.flex_shrink_0().min_w(px(side)) } else { controls.flex_shrink_0().w(px(side)) }),
+                    _ => el.child(div().flex_1()).child(shrinking(search).min_w(px(140.)))
+                        .child(if cleaning { controls.flex_shrink_0() } else { controls.flex_1().min_w_0() }),
                 }
             })
             .when(cfg!(target_os = "windows"), |el| el.child(window_buttons(window, floating)));
