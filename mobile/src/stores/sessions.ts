@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { openSessionsStream, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, esquecerRota, rotaDecidida, probeServerResponse, comTeto, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
+import { openSessionsStream, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverRemoteRoute, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
 import type { SessionInfo, Server, AggSession, ExternalPair } from '@hangar/core';
 import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
@@ -279,6 +279,14 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       Math.max(HTTP_RETRY_DELAYS_MS[count - 1], Number.isNaN(requested) ? 0 : requested));
     httpRetryAt.set(s.id, Date.now() + delay);
   };
+  const refreshRemote = () => {
+    const current = useServers.getState().servers.find((server) => server.id === s.id);
+    if (current && !current.invite && current.lan?.id && !current.remote) {
+      void discoverRemoteRoute(current).then((remote) => {
+        if (remote && isCurrent(attempt)) useServers.getState().rememberRemote(current.id, remote, current);
+      });
+    }
+  };
   const receivedList = () => {
     countedHttpFailure = false;
     httpFailures.delete(s.id);
@@ -289,6 +297,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       discovered = true;
       machineDiscovery(s);
     }
+    refreshRemote();
   };
   const rejected = (status: number) => {
     if (s.invite && (status === 401 || status === 410)) {
@@ -327,6 +336,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
         if (timedOut && isCurrent(attempt)) {
           esquecerRota(s.id);
           registrarDiag({ evento: 'rota.falhou', nivel: 'aviso', codigo: 'route_timeout' }, s.baseUrl);
+          if (baseOf(s) === UNCONFIRMED_BASE) throw new Error('server_identity_unconfirmed');
         }
       } finally {
         clearTimeout(timer);
@@ -370,7 +380,11 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     let falhaDados = false;
     // ping mantém o watchdog do adapter vivo (wrap rearma). Sem listener,
     // ping não rearma e o adapter fecharia stream saudável.
-    es.addEventListener('ping', () => { if (active()) answered(); });
+    es.addEventListener('ping', () => {
+      if (!active()) return;
+      answered();
+      if (discovered) refreshRemote();
+    });
     es.addEventListener('sessions', (e) => {
       if (!active()) return;
       answered();

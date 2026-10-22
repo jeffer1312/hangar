@@ -19,7 +19,8 @@ vi.mock('react-native', async (original) => ({ ...await original<typeof import('
     React.createElement('input', { 'aria-label': p.accessibilityLabel, disabled: p.editable === false, value: p.value ?? '',
       onChange: (e: { target: { value: string } }) => p.onChangeText?.(e.target.value) }),
 }));
-vi.mock('../../ui/Sheet', () => ({ Sheet: ({ open, children }: { open?: boolean; children: ReactNode }) => open === false ? null : <div>{children}</div> }));
+vi.mock('../../ui/Sheet', () => ({ Sheet: ({ open, children }: { open?: boolean; children: ReactNode }) => open === false ? null : <div role="dialog">{children}</div> }));
+vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Toast', () => ({ toast: { ok: vi.fn(), erro: vi.fn() } }));
 vi.mock('../config/Pagina', () => ({ Pagina: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
@@ -79,6 +80,64 @@ beforeEach(async () => {
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('Máquinas: cadastro do aparelho', () => {
+  it('conserva todo o cadastro se a URL comprovada já pertence a outra entrada', async () => {
+    const saved = { ...machine, lan: { id: 'server-a', url: machine.baseUrl } };
+    const duplicate = { ...saved, id: 'own-b', baseUrl: 'https://replacement.test' };
+    mocks.vault.set('cp_servers_v1', JSON.stringify({ servers: [saved, duplicate], activeId: saved.id }));
+    await useServers.getState().load();
+    const before = structuredClone(useServers.getState().servers);
+    await render(); await click(m.mobile_machines_configure());
+    await type(m.mobile_machines_label(), 'fixture-draft');
+    await type(m.mobile_machines_endpoint(), duplicate.baseUrl);
+    await click(m.mobile_machines_save());
+
+    expect(useServers.getState().servers).toEqual(before);
+    expect(JSON.parse(mocks.vault.get('cp_servers_v1')!).servers).toEqual(before);
+    expect(container.textContent).toContain(m.mobile_machines_duplicate_address());
+    expect((container.querySelector(`input[aria-label="${m.mobile_machines_endpoint()}"]`) as HTMLInputElement).value).toBe(duplicate.baseUrl);
+  });
+
+  it('guarda a identidade comprovada durante a edição quando o cadastro antigo ainda não tinha uma', async () => {
+    await render(); await click(m.mobile_machines_configure());
+    await type(m.mobile_machines_endpoint(), 'https://replacement.test');
+    await click(m.mobile_machines_save());
+    expect(useServers.getState().servers[0].lan).toEqual({ url: '', id: 'server-a' });
+    await act(async () => useServers.getState().load());
+    expect(useServers.getState().servers[0].lan?.id).toBe('server-a');
+  });
+
+  it('abre a edição sem carregar configurações remotas até a pessoa abrir o diagnóstico', async () => {
+    await render(); await click(m.mobile_machines_configure());
+    expect(calls('/api/alcance')).toHaveLength(0);
+    expect(calls('/api/config')).toHaveLength(0);
+    expect(calls('/api/peers')).toHaveLength(0);
+
+    await click(m.mobile_machines_more());
+    await click(m.mobile_machines_technical());
+    expect(calls('/api/alcance')).toHaveLength(1);
+  });
+
+  it('corrige a URL com identidade conhecida mesmo quando o endereço antigo não responde', async () => {
+    const saved = { ...machine, lan: { id: 'server-a', url: machine.baseUrl } };
+    mocks.vault.set('cp_servers_v1', JSON.stringify({ servers: [saved], activeId: saved.id }));
+    await useServers.getState().load();
+    const original = mocks.fetch.getMockImplementation()!;
+    mocks.fetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === `${machine.baseUrl}/api/peers/identificador`) throw new TypeError('fixture-old-address-offline');
+      return original(url, init);
+    });
+    await render(); await click(m.mobile_machines_configure());
+    await type(m.mobile_machines_endpoint(), 'https://replacement.test');
+    await click(m.mobile_machines_save());
+
+    expect(useServers.getState().servers[0].baseUrl).toBe('https://replacement.test');
+    const destination = mocks.fetch.mock.calls.filter(([url]) => String(url).startsWith('https://replacement.test'));
+    expect(new URL(destination[0][0]).pathname).toBe('/api/peers/prova');
+    expect(new Headers(destination[0][1]?.headers).has('Authorization')).toBe(false);
+    expect(destination.some(([url, init]) => url === 'https://replacement.test/api/config'
+      && new Headers(init?.headers).get('Authorization') === `Bearer ${machine.token}`)).toBe(true);
+  });
+
   it('edita o apelido e persiste sem recriar a máquina nem trocar a seleção', async () => {
     await render(); await click(m.mobile_machines_configure());
     await type(m.mobile_machines_label(), 'fixture-renamed');
@@ -168,18 +227,41 @@ describe('Máquinas: cadastro do aparelho', () => {
     expect(useServers.getState().servers[0]).toEqual(machine);
     expect(JSON.parse(mocks.vault.get('cp_servers_v1')!).servers[0]).toEqual(machine);
     await act(async () => resolveConfig(json(config)));
-    expect(useServers.getState().servers[0]).toEqual({ ...machine, baseUrl: 'https://same-machine.test' });
+    expect(useServers.getState().servers[0]).toEqual({ ...machine, baseUrl: 'https://same-machine.test', lan: { url: '', id: 'server-a' } });
     expect(JSON.parse(mocks.vault.get('cp_servers_v1')!).servers[0].baseUrl).toBe('https://same-machine.test');
     expect(destination().slice(1).every(([, init]) => new Headers(init?.headers).get('Authorization') === `Bearer ${machine.token}`)).toBe(true);
   });
 });
 
 describe('Máquinas: ajustes no servidor', () => {
+  it('permite editar URL depois de salvar um novo identificador na mesma folha', async () => {
+    await act(async () => useServers.getState().rememberLan(machine.id, { id: 'server-a', url: machine.baseUrl }));
+    let identifier = 'server-a';
+    const original = mocks.fetch.getMockImplementation()!;
+    mocks.fetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/identificador') && init?.method === 'PUT') {
+        identifier = 'new-id';
+        return json({ identificador: identifier, avisos: [] });
+      }
+      if (new URL(url).pathname === '/api/peers/prova') return identityProof(url, identifier);
+      return original(url, init);
+    });
+    await render(); await click(m.mobile_machines_configure());
+    await click(m.mobile_machines_more()); await click(m.mobile_machines_technical());
+    await type(m.mobile_machines_identifier(), 'new-id');
+    await click(m.mobile_machines_save_identifier());
+    expect(useServers.getState().servers[0].lan?.id).toBe('new-id');
+    await type(m.mobile_machines_endpoint(), 'https://replacement.test');
+    await click(m.mobile_machines_save());
+    expect(useServers.getState().servers[0].baseUrl).toBe('https://replacement.test');
+  });
+
   it('não habilita o identificador após uma leitura recusada', async () => {
     const original = mocks.fetch.getMockImplementation()!;
     mocks.fetch.mockImplementation(async (url: string, init?: RequestInit) => url.endsWith('/identificador')
       ? json({ detail: 'fixture-id-refused' }, 403) : original(url, init));
     await render(); await click(m.mobile_machines_configure());
+    await click(m.mobile_machines_more()); await click(m.mobile_machines_technical());
     const input = container.querySelector(`input[aria-label="${m.mobile_machines_identifier()}"]`) as HTMLInputElement;
     expect(input.disabled).toBe(true);
     expect(container.textContent).toContain('fixture-id-refused');
@@ -192,6 +274,7 @@ describe('Máquinas: ajustes no servidor', () => {
     mocks.fetch.mockImplementation(async (url: string, init?: RequestInit) => init?.method === 'PUT' && url.endsWith('/identificador')
       ? json({ identificador: 'new-id', avisos: [{ id: 'peer-b', estado: 'falhou', motivo: 'fixture-peer-warning' }] }) : original(url, init));
     await render(); await click(m.mobile_machines_configure());
+    await click(m.mobile_machines_more()); await click(m.mobile_machines_technical());
     expect(useServers.getState().servers[0].label).toBe('10');
     await type(m.mobile_machines_identifier(), 'new-id');
     expect(calls('/identificador').filter(([, init]) => init?.method === 'PUT')).toHaveLength(0);
@@ -210,6 +293,7 @@ describe('Máquinas: ajustes no servidor', () => {
       return original(url, init);
     });
     await render(); await click(m.mobile_machines_configure());
+    await click(m.mobile_machines_more()); await click(m.mobile_machines_technical());
     expect(container.querySelector(`input[aria-label="${m.mobile_machines_bind()}"]`)).toBeNull();
     expect(container.textContent).toContain('https://public.test');
     expect(container.textContent).toContain('falhou · 23 ms · fixture-firewall');
@@ -223,6 +307,13 @@ describe('Máquinas: ajustes no servidor', () => {
 });
 
 describe('Máquinas: conexão e saída', () => {
+  it('mostra a causa de acesso recusado dentro do editor em vez de chamar de fora do ar', async () => {
+    useSessions.setState({ byServer: [{ server: machine, sessions: [], loaded: true, error: 'fixture-access-refused' }] });
+    await render(); await click(m.mobile_machines_configure());
+
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain('fixture-access-refused');
+  });
+
   it('usa loaded/error da lista compartilhada, inclusive com erro e lista anterior carregada', async () => {
     useSessions.setState({ byServer: [{ server: machine, sessions: [], loaded: true, error: 'offline' }] });
     await render();
@@ -233,7 +324,7 @@ describe('Máquinas: conexão e saída', () => {
   });
 
   it('sai só do aparelho, por ação nomeada e confirmada, sem encerrar sessões', async () => {
-    await render(); await click(m.mobile_machines_configure()); await click(m.mobile_machines_leave());
+    await render(); await click(m.mobile_machines_configure()); await click(m.mobile_machines_more()); await click(m.mobile_machines_leave());
     expect(useServers.getState().servers).toHaveLength(1);
     expect(mocks.alert.mock.calls.at(-1)![1]).toBe(m.mobile_machines_leave_body({ name: machine.label }));
     const accept = mocks.alert.mock.calls.at(-1)![2].find((b: { style?: string }) => b.style === 'destructive').onPress;
@@ -242,7 +333,7 @@ describe('Máquinas: conexão e saída', () => {
     expect(mocks.fetch.mock.calls.filter(([, init]) => init?.method && init.method !== 'GET')).toHaveLength(0);
   });
 
-  it('fechar a folha cancela a prova atrasada sem enviar token nem persistir', async () => {
+  it.each([{ kind: 'close', label: m.sessao_fechar }, { kind: 'cancel', label: m.comum_cancelar }])('fechar a folha por $kind cancela a prova atrasada sem enviar token nem persistir', async ({ label: closeLabel }) => {
     await render(); await click(m.mobile_machines_configure());
     let resolve!: (response: Response) => void;
     const pending = new Promise<Response>((done) => { resolve = done; });
@@ -255,7 +346,7 @@ describe('Máquinas: conexão e saída', () => {
     const [proofUrl, proofInit] = destination()[0];
     expect(new URL(proofUrl).pathname).toBe('/api/peers/prova');
     expect(proofInit?.signal?.aborted).toBe(false);
-    await click(m.sessao_fechar());
+    await click(closeLabel());
     expect(proofInit?.signal?.aborted).toBe(true);
     await act(async () => resolve(identityProof(proofUrl)));
     expect(destination()).toHaveLength(1);

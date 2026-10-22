@@ -43,6 +43,32 @@ const SAVED_SERVER = {
 const SAVED = { servers: [SAVED_SERVER], activeId: SAVED_SERVER.id };
 const VAULT_KEY = 'cp_servers_v1';
 
+test('trocar a identidade confirmada descarta a alternativa ligada ao identificador anterior', async () => {
+  const saved = { ...SAVED_SERVER, remote: { id: 'saved-machine', url: 'https://saved.tail.ts.net' } };
+  vault.set(VAULT_KEY, JSON.stringify({ servers: [saved], activeId: saved.id }));
+  await useServers.getState().load();
+
+  useServers.getState().rememberLan(saved.id, { id: 'renamed-machine', url: saved.lan.url });
+
+  expect(useServers.getState().servers[0].remote).toBeUndefined();
+});
+
+test('guarda a alternativa remota confirmada e ignora a resposta de uma credencial antiga', async () => {
+  vault.set(VAULT_KEY, JSON.stringify(SAVED));
+  await useServers.getState().load();
+  const remote = { id: 'saved-machine', url: 'https://saved.tail.ts.net' };
+  useServers.getState().rememberRemote(SAVED_SERVER.id, remote, SAVED_SERVER);
+  await settle();
+  expect(useServers.getState().servers[0].remote).toEqual(remote);
+  expect(JSON.parse(vault.get(VAULT_KEY)!).servers[0].remote).toEqual(remote);
+
+  useServers.getState().add({ baseUrl: SAVED_SERVER.baseUrl, token: 'new-token' });
+  const late = { id: 'saved-machine', url: 'https://old-response.tail.ts.net' };
+  useServers.getState().rememberRemote(SAVED_SERVER.id, late, SAVED_SERVER);
+  await settle();
+  expect(useServers.getState().servers[0].remote).toEqual(remote);
+});
+
 const mutations = [
   () => useServers.getState().add({ baseUrl: 'http://10.0.0.3:8765', token: 'new-token' }),
   () => useServers.getState().remove(SAVED_SERVER.id),
@@ -737,9 +763,9 @@ describe('importação só acrescenta', () => {
 });
 
 describe('update de máquina própria', () => {
-  const { lan: _lan, ...serverWithoutLan } = SAVED_SERVER;
+  const serverWithIdentity = { ...SAVED_SERVER, lan: { url: '', id: SAVED_SERVER.lan.id } };
 
-  test('trocar URL esquece a rota anterior e a LAN aprendida', async () => {
+  test('trocar URL descarta a LAN antiga, preserva a identidade e não duplica na importação', async () => {
     const { baseOf, decidirRota } = await import('@hangar/core');
     const oldServer = { ...SAVED_SERVER, baseUrl: 'http://127.0.0.1:8765' };
     vault.set(VAULT_KEY, JSON.stringify({ servers: [oldServer], activeId: oldServer.id }));
@@ -749,10 +775,13 @@ describe('update de máquina própria', () => {
 
     useServers.getState().update(oldServer.id, { baseUrl: 'http://10.0.0.4:8765' });
 
-    expect(baseOf(useServers.getState().active()!)).toBe('http://10.0.0.4:8765');
-    expect(useServers.getState().active()!.lan).toBeUndefined();
+    expect(baseOf(useServers.getState().active()!)).not.toBe(oldServer.baseUrl);
+    expect(useServers.getState().active()!.lan).toEqual({ url: '', id: oldServer.lan!.id });
     await useServers.getState().load();
-    expect(useServers.getState().active()).toEqual({ ...serverWithoutLan, baseUrl: 'http://10.0.0.4:8765' });
+    expect(useServers.getState().active()).toEqual({ ...serverWithIdentity, baseUrl: 'http://10.0.0.4:8765' });
+    expect(useServers.getState().appendImported([{ ...oldServer, id: 'imported-alias', baseUrl: 'https://owner.tail.ts.net' }])).toEqual([]);
+    expect(useServers.getState().servers).toHaveLength(1);
+    expect(useServers.getState().activeId).toBe(oldServer.id);
   });
 
   test.each([
@@ -782,7 +811,7 @@ describe('update de máquina própria', () => {
     useServers.getState().update(SAVED_SERVER.id, patch);
     await settle();
 
-    const expected = { servers: [{ ...serverWithoutLan, label: patch.label, baseUrl: patch.baseUrl }, other], activeId: other.id };
+    const expected = { servers: [{ ...serverWithIdentity, label: patch.label, baseUrl: patch.baseUrl }, other], activeId: other.id };
     expect(JSON.parse(vault.get(VAULT_KEY)!)).toEqual(expected);
     await useServers.getState().load();
     expect(useServers.getState()).toMatchObject(expected);
@@ -790,7 +819,7 @@ describe('update de máquina própria', () => {
 
   test.each([
     [{ label: 'Outro nome' }, { ...SAVED_SERVER, label: 'Outro nome' }],
-    [{ baseUrl: 'http://10.0.0.4:8765' }, { ...serverWithoutLan, baseUrl: 'http://10.0.0.4:8765' }],
+    [{ baseUrl: 'http://10.0.0.4:8765' }, { ...serverWithIdentity, baseUrl: 'http://10.0.0.4:8765' }],
   ])('aceita edição parcial: %j', async (patch, expected) => {
     vault.set(VAULT_KEY, JSON.stringify(SAVED));
     await useServers.getState().load();
@@ -896,7 +925,7 @@ describe('update de máquina própria', () => {
     useServers.getState().update(SAVED_SERVER.id, { baseUrl: invite.baseUrl });
     await useServers.getState().load();
 
-    const expected = { servers: [{ ...serverWithoutLan, baseUrl: invite.baseUrl }, invite], activeId: SAVED_SERVER.id };
+    const expected = { servers: [{ ...serverWithIdentity, baseUrl: invite.baseUrl }, invite], activeId: SAVED_SERVER.id };
     expect(useServers.getState()).toMatchObject(expected);
     expect(JSON.parse(vault.get(VAULT_KEY)!)).toEqual(expected);
   });

@@ -177,10 +177,25 @@ export function mergeImportedMachines(state: { servers: Server[]; activeId: stri
   const identities = new Set(state.servers.filter(isOwnMachine).map((s) => s.lan?.id.trim()).filter((id): id is string => !!id));
   const ids = new Set([SERVIDOR_CANDIDATO, ...state.servers.map((s) => s.id)]);
   const added: Server[] = [];
+  const updated = new Map<string, Server>();
   for (const server of incoming.filter(isOwnMachine)) {
     const baseUrl = key(server.baseUrl);
     const identity = server.lan?.id.trim();
-    if (seen.has(baseUrl) || identity && identities.has(identity)) continue;
+    if (seen.has(baseUrl)) continue;
+    if (identity && identities.has(identity)) {
+      const existing = [...state.servers, ...added].find((s) => isOwnMachine(s) && s.lan?.id === identity);
+      const host = new URL(baseUrl).hostname;
+      const tailnetIp = /^100\.(\d+)\.\d+\.\d+$/.exec(host);
+      const remoteAddress = host.endsWith('.ts.net') || !!tailnetIp && Number(tailnetIp[1]) >= 64 && Number(tailnetIp[1]) <= 127;
+      if (existing && existing.token === server.token && !existing.remote
+        && remoteAddress) {
+        const replacement = { ...existing, remote: { url: baseUrl, id: identity } };
+        const index = added.findIndex((s) => s.id === existing.id);
+        if (index >= 0) added[index] = replacement;
+        else updated.set(existing.id, replacement);
+      }
+      continue;
+    }
     let id = server.id;
     for (let suffix = 2; ids.has(id); suffix++) id = `${server.id}_${suffix}`;
     added.push({ ...server, id, baseUrl });
@@ -189,7 +204,7 @@ export function mergeImportedMachines(state: { servers: Server[]; activeId: stri
     ids.add(id);
   }
   return {
-    servers: added.length ? [...state.servers, ...added] : state.servers,
+    servers: added.length || updated.size ? [...state.servers.map((s) => updated.get(s.id) ?? s), ...added] : state.servers,
     activeId: state.servers.some((s) => s.id === state.activeId) ? state.activeId : added[0]?.id ?? state.activeId,
     added,
   };

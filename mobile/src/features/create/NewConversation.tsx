@@ -345,7 +345,7 @@ export function NewConversation({
         {showPicker ? destination : null}
         {!showPicker && !pending && showUsage ? (
           <Animated.View style={[styles.usage, !home && usageStyle]}>
-            <HomeUsageCard server={server} intro={reduced ? null : intro} />
+            <HomeUsageCard intro={reduced ? null : intro} />
           </Animated.View>
         ) : null}
         {!showPicker && !pending && !showUsage ? (

@@ -25,7 +25,7 @@ export function useReportSelection() {
   const servers = useServers((s) => s.servers);
   const period = useUsagePreferences((s) => s.period);
   const off = useUsagePreferences((s) => s.off);
-  const own = servers.filter((s) => !s.invite && !s.disabled);
+  const own = servers.filter((s) => !s.invite && !s.disabled && !s.ephemeral);
   return { period, own, selected: own.filter((s) => !off.includes(s.id)) };
 }
 
@@ -35,20 +35,30 @@ export function Copy({ children, title = false, muted = false }: { children: Rea
   return <Text style={{ color: muted ? c.muted : c.text, fontSize: title ? theme.base.text.lg : theme.base.text.sm, fontWeight: title ? '600' : '400' }}>{children}</Text>;
 }
 
-export function Action({ label, accessibilityLabel, onPress, selected = false, disabled = false, icon }: { label: string; accessibilityLabel?: string; onPress: () => void; selected?: boolean; disabled?: boolean; icon?: IconName }) {
+export function Action({ label, accessibilityLabel, onPress, selected = false, disabled = false, icon, iconOnly = false }: { label: string; accessibilityLabel?: string; onPress: () => void; selected?: boolean; disabled?: boolean; icon?: IconName; iconOnly?: boolean }) {
   const { theme } = useUnistyles();
   const c = useSettingsColors();
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? label} accessibilityState={{ selected, disabled }} disabled={disabled} onPress={onPress}
-    style={{ minHeight: 44, paddingHorizontal: theme.base.space[3], paddingVertical: theme.base.space[2], borderRadius: theme.base.radius.md, backgroundColor: selected ? c.accentDim : 'transparent', flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], opacity: disabled ? 0.45 : 1 }}>
+    style={{ minHeight: 44, ...(iconOnly ? { minWidth: 44 } : {}), paddingHorizontal: theme.base.space[3], paddingVertical: theme.base.space[2], borderRadius: theme.base.radius.md, backgroundColor: selected ? c.accentDim : 'transparent', flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], opacity: disabled ? 0.45 : 1 }}>
     {icon && <Icon name={icon} size={18} color={c.accentText} />}
-    <Text style={{ color: selected ? c.accentText : c.text, fontSize: theme.base.text.sm, flexShrink: 1 }}>{label}</Text>
+    {!iconOnly && <Text style={{ color: selected ? c.accentText : c.text, fontSize: theme.base.text.sm, flexShrink: 1 }}>{label}</Text>}
   </Pressable>;
 }
 
-export function Card({ children }: { children: ReactNode }) {
+export function Card({ children, flat = false }: { children: ReactNode; flat?: boolean }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
-  return <View style={{ padding: theme.base.space[4], gap: theme.base.space[2], backgroundColor: c.inset, borderRadius: theme.base.radius.lg }}>{children}</View>;
+  return <View style={{ padding: flat ? 0 : theme.base.space[4], paddingVertical: theme.base.space[4], gap: theme.base.space[2], backgroundColor: flat ? 'transparent' : c.inset, borderRadius: flat ? 0 : theme.base.radius.lg, ...(flat ? { borderTopWidth: 1, borderColor: c.borderStrong } : {}) }}>{children}</View>;
+}
+
+export function Metric({ label, value, primary = false, children }: { label: string; value: string; primary?: boolean; children?: ReactNode }) {
+  const { theme } = useUnistyles();
+  const c = useSettingsColors();
+  return <View style={{ gap: SPACE[1.5], paddingVertical: SPACE[3], minWidth: 0 }}>
+    <Copy muted>{label}</Copy>
+    <Text style={{ color: c.text, fontSize: primary ? theme.base.text.xl : theme.base.text.lg, fontWeight: '600', fontVariant: ['tabular-nums'] }}>{value}</Text>
+    {children}
+  </View>;
 }
 
 export function Grid({ children }: { children: ReactNode }) {
@@ -71,15 +81,15 @@ export function Paged<T>({ items, render }: { items: T[]; render: (item: T, inde
   </View>;
 }
 
-export function Choice({ label, options, values, onChange, max }: { label: string; options: { key: string; label?: string | null }[]; values: string[]; onChange: (values: string[]) => void; max?: number }) {
+export function Choice({ label, options, values, onChange, max, closeOnSelect = false, triggerLabel }: { label: string; options: { key: string; label?: string | null }[]; values: string[]; onChange: (values: string[]) => void; max?: number; closeOnSelect?: boolean; triggerLabel?: string }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const all = [...options];
   for (const key of values) if (!all.some((item) => item.key === key)) all.push({ key });
   const matches = all.filter((item) => `${item.key} ${item.label ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   return <>
-    <Action label={label} icon="ListFilter" selected={values.length > 0} onPress={() => setOpen(true)} />
-    {values.length > 0 && <Copy muted>{values.map((key) => all.find((item) => item.key === key)?.label ?? key).join(' · ')}</Copy>}
+    <Action label={triggerLabel ?? label} accessibilityLabel={label} icon={triggerLabel ? 'ChevronDown' : 'ListFilter'} selected={values.length > 0} onPress={() => setOpen(true)} />
+    {!triggerLabel && values.length > 0 && <Copy muted>{values.map((key) => all.find((item) => item.key === key)?.label ?? key).join(' · ')}</Copy>}
     {open && <Sheet open onDismiss={() => setOpen(false)} sizes={['large']} scrollable>
       <ScrollView contentContainerStyle={{ padding: SPACE[4], gap: SPACE[2] }} keyboardShouldPersistTaps="handled">
         <Copy title>{label}</Copy>
@@ -87,22 +97,25 @@ export function Choice({ label, options, values, onChange, max }: { label: strin
         <Action label={m.uso_limpar()} onPress={() => onChange([])} />
         <Paged key={query} items={matches} render={(item) => <Action label={item.label ?? item.key} accessibilityLabel={`${label}: ${item.label ?? item.key}`} selected={values.includes(item.key)}
           disabled={!values.includes(item.key) && max !== undefined && max > 1 && values.length >= max}
-          icon={values.includes(item.key) ? 'CheckSquare' : 'Square'} onPress={() => onChange(values.includes(item.key) ? values.filter((v) => v !== item.key) : max === 1 ? [item.key] : [...values, item.key])} />} />
+          icon={values.includes(item.key) ? 'CheckSquare' : 'Square'} onPress={() => { if (closeOnSelect) setOpen(false); onChange(values.includes(item.key) ? values.filter((v) => v !== item.key) : max === 1 ? [item.key] : [...values, item.key]); }} />} />
         <Action label={m.native_close()} icon="X" onPress={() => setOpen(false)} />
       </ScrollView>
     </Sheet>}
   </>;
 }
 
-export function ReportFrame({ title, back, sibling, onSibling, children }: { title: string; back: () => void; sibling: string; onSibling: () => void; children: ReactNode }) {
+export function ReportFrame({ title, back, sibling, onSibling, children, compact = false }: { title: string; back: () => void; sibling: string; onSibling: () => void; children: ReactNode; compact?: boolean }) {
   const router = useRouter();
   const header = useGlassHeader();
   const canGoBack = router.canGoBack();
-  const headerOptions = useMemo(() => ({ ...header, title, headerLeft: canGoBack ? undefined : () => <HeaderBack onPress={back} /> }), [header, title, canGoBack, back]);
+  const headerSibling = compact ? onSibling : undefined;
+  const headerOptions = useMemo(() => ({ ...header, title, headerLeft: canGoBack ? undefined : () => <HeaderBack onPress={back} />,
+    ...(headerSibling ? { headerRight: () => <Action label={sibling} icon="ChartNoAxesCombined" iconOnly onPress={headerSibling} /> } : {}),
+  }), [header, title, canGoBack, back, headerSibling, sibling]);
   return <>
     <Stack.Screen options={headerOptions} />
     <Pagina>
-      <Action label={sibling} icon="ChartNoAxesCombined" onPress={onSibling} />{children}
+      {compact ? <View style={{ gap: SPACE[2] }}>{children}</View> : <><Action label={sibling} icon="ChartNoAxesCombined" onPress={onSibling} />{children}</>}
     </Pagina>
   </>;
 }
@@ -145,10 +158,11 @@ export function Composition({ label, items }: { label: string; items: { label: s
 export interface ChartSeries { key: string; label: string; color: string }
 export interface ChartDay { key: string; values: (number | null)[]; detail?: string }
 
-export function Columns({ label, days, series, format = number, axisFormat = compactNumber, onPress, lines = false }: { label: string; days: ChartDay[]; series: ChartSeries[]; format?: (value: number) => string; axisFormat?: (value: number) => string; onPress?: (key: string) => void; lines?: boolean }) {
+export function Columns({ label, days, series, format = number, axisFormat = compactNumber, onPress, lines = false, fit = false }: { label: string; days: ChartDay[]; series: ChartSeries[]; format?: (value: number) => string; axisFormat?: (value: number) => string; onPress?: (key: string) => void; lines?: boolean; fit?: boolean }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [plotWidth, setPlotWidth] = useState(264);
   if (!days.length) return <Copy muted>{m.uso_sem_dias()}</Copy>;
   const describe = (day: ChartDay) => {
     const sum = day.values.some((value) => value === null) ? '—' : format(day.values.reduce<number>((value, part) => value + (part ?? 0), 0));
@@ -156,12 +170,12 @@ export function Columns({ label, days, series, format = number, axisFormat = com
   };
   const selected = days.find((day) => day.key === selectedDay);
   const maximum = Math.max(1, ...days.map((day) => lines ? Math.max(0, ...day.values.map((value) => value ?? 0)) : day.values.reduce<number>((sum, value) => sum + Math.max(0, value ?? 0), 0)));
-  const step = Math.max(64, 264 / days.length);
+  const step = fit ? plotWidth / days.length : Math.max(64, 264 / days.length);
   const width = days.length * step;
   const height = 180;
   return <View accessibilityLabel={label} style={{ gap: theme.base.space[2] }}><View style={{ flexDirection: 'row', gap: theme.base.space[2] }}>
     <View style={{ width: 64, flexShrink: 0, height, justifyContent: 'space-between' }}>{[maximum, maximum / 2, 0].map((value, index) => <Text key={index} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={{ color: c.muted, fontSize: theme.base.text.sm }}>{axisFormat(value)}</Text>)}</View>
-    <ScrollView horizontal style={{ flex: 1, flexShrink: 1, minWidth: 0 }}><View style={{ width }}>
+    <ScrollView horizontal scrollEnabled={!fit} onLayout={(event) => { if (fit) setPlotWidth(Math.max(1, event.nativeEvent.layout.width)); }} style={{ flex: 1, flexShrink: 1, minWidth: 0 }}><View style={{ width }}>
       <Svg width={width} height={height} accessible={false}>
         {[0, 0.25, 0.5, 0.75, 1].map((ratio) => <Line key={ratio} x1={0} x2={width} y1={height * ratio} y2={height * ratio} stroke={c.borderStrong} />)}
         {lines ? series.map((item, seriesIndex) => {
@@ -184,15 +198,19 @@ export function Columns({ label, days, series, format = number, axisFormat = com
           });
         })}
       </Svg>
-      <View style={{ position: 'absolute', top: 0, left: 0, flexDirection: 'row' }}>{days.map((day) => <Pressable key={day.key} accessibilityRole="button" accessibilityLabel={describe(day)} onPress={() => onPress ? onPress(day.key) : setSelectedDay(day.key)} style={{ width: step, height, minHeight: 44 }} />)}</View>
-      <View style={{ flexDirection: 'row' }}>{days.map((day) => <Text key={day.key} numberOfLines={1} accessibilityLabel={day.key} style={{ width: step, paddingTop: theme.base.space[2], textAlign: 'center', color: c.muted, fontSize: theme.base.text.xxxs }}>{`${day.key.slice(8, 10)}/${day.key.slice(5, 7)}`}</Text>)}</View>
+      {fit ? <Pressable accessibilityRole="button" accessibilityLabel={describe(selected ?? days[0])} onPress={(event) => {
+        const day = days[Math.min(days.length - 1, Math.max(0, Math.floor(event.nativeEvent.locationX / step)))];
+        if (day) { if (onPress) onPress(day.key); else setSelectedDay(day.key); }
+      }} style={{ position: 'absolute', top: 0, left: 0, width, height, minHeight: 44 }} /> :
+        <View style={{ position: 'absolute', top: 0, left: 0, flexDirection: 'row' }}>{days.map((day) => <Pressable key={day.key} accessibilityRole="button" accessibilityLabel={describe(day)} onPress={() => onPress ? onPress(day.key) : setSelectedDay(day.key)} style={{ width: step, height, minHeight: 44 }} />)}</View>}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>{(fit ? [...new Set([days[0], days[Math.floor((days.length - 1) / 2)], days[days.length - 1]])] : days).map((day) => <Text key={day.key} numberOfLines={1} accessibilityLabel={day.key} style={{ ...(fit ? {} : { width: step }), paddingTop: theme.base.space[2], textAlign: 'center', color: c.muted, fontSize: theme.base.text.xxxs }}>{`${day.key.slice(8, 10)}/${day.key.slice(5, 7)}`}</Text>)}</View>
     </View></ScrollView>
-  </View>{!onPress && selected && <Copy>{describe(selected)}</Copy>}</View>;
+  </View>{fit && <Choice label={m.custos_dia()} options={days.map((day) => ({ key: day.key, label: describe(day) }))} values={[]} max={1} closeOnSelect onChange={(keys) => { if (keys[0]) { if (onPress) onPress(keys[0]); else setSelectedDay(keys[0]); } }} />}{!onPress && selected && <Copy>{describe(selected)}</Copy>}</View>;
 }
 
-export function Bar({ label, value, max, detail, onPress, color }: { label: string; value: number; max: number; detail: string; onPress?: () => void; color?: string }) {
+export function Bar({ label, value, max, detail, onPress, color, compact = false }: { label: string; value: number; max: number; detail: string; onPress?: () => void; color?: string; compact?: boolean }) {
   const c = useSettingsColors();
-  const body = <View style={{ gap: SPACE[1.5], paddingVertical: SPACE[2] }}><Copy>{label}</Copy><Copy>{detail}</Copy>
+  const body = <View style={{ gap: SPACE[1.5], paddingVertical: SPACE[2] }}>{compact ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: SPACE[2] }}><View style={{ flexShrink: 1 }}><Copy>{label}</Copy></View><Copy>{detail}</Copy></View> : <><Copy>{label}</Copy><Copy>{detail}</Copy></>}
     <View style={{ height: 5, backgroundColor: c.hover, borderRadius: RADIUS.xs }}><View style={{ height: 5, width: `${Math.max(0, Math.min(100, max > 0 ? value / max * 100 : 0))}%`, backgroundColor: color ?? c.accent, borderRadius: RADIUS.xs }} /></View>
   </View>;
   return onPress ? <Pressable accessibilityRole="button" accessibilityLabel={`${label}: ${detail}`} onPress={onPress} style={{ minHeight: 44 }}>{body}</Pressable> : <View accessible accessibilityLabel={`${label}: ${detail}`}>{body}</View>;

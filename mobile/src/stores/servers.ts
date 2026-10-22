@@ -19,10 +19,12 @@ function isPersisted(value: unknown): value is Persisted {
       const server = s as Record<string, unknown>;
       if (!['id', 'label', 'baseUrl', 'token'].every((key) => typeof server[key] === 'string')) return false;
       if (!['disabled', 'invite', 'inviteEnded', 'removed', 'ephemeral'].every((key) => server[key] === undefined || typeof server[key] === 'boolean')) return false;
-      if (server.lan === undefined) return true;
-      if (!server.lan || typeof server.lan !== 'object') return false;
-      const lan = server.lan as Record<string, unknown>;
-      return typeof lan.url === 'string' && typeof lan.id === 'string';
+      return ['lan', 'remote'].every((key) => {
+        if (server[key] === undefined) return true;
+        if (!server[key] || typeof server[key] !== 'object') return false;
+        const route = server[key] as Record<string, unknown>;
+        return typeof route.url === 'string' && typeof route.id === 'string';
+      });
     });
 }
 
@@ -54,7 +56,8 @@ export interface ServersState {
   markInvalid(id: string): void;
   ensureActive(id: string): boolean;
   limparAviso(): void;
-  rememberLan(id: string, lan: LanInfo): void;
+  rememberLan(id: string, lan: LanInfo, source?: Server): void;
+  rememberRemote(id: string, remote: LanInfo, source: Server): void;
   applyPairs(pairs: ExternalPair[]): PairAttach[];
   markEnded(id: string): void;
   ensureOwnActive(): void;
@@ -199,6 +202,7 @@ export const useServers = create<ServersState>((set, get) => {
     // Só máquina própria troca o token: a entrada do par no mesmo endereço tem o token de convidado.
     const existing = get().servers.find((s) => s.baseUrl === base && !s.invite);
     if (existing) naming.get(existing.id)?.abort();
+    if (existing && existing.token !== token) esquecerRota(existing.id);
     const s: Server = existing
       ? { ...existing, token }
       : { id: `s_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, label: label ?? m.native_settings_group_server(), baseUrl: base, token };
@@ -251,6 +255,7 @@ export const useServers = create<ServersState>((set, get) => {
   },
   remove(id) {
     naming.get(resolveId(id))?.abort();
+    esquecerRota(resolveId(id));
     change((p) => {
       const target = resolveId(id);
       const servers = p.servers.filter((s) => s.id !== target);
@@ -273,7 +278,9 @@ export const useServers = create<ServersState>((set, get) => {
         const server = { ...s, label: patch.label ?? s.label, baseUrl: baseUrl ?? s.baseUrl };
         if (baseUrl !== undefined && baseUrl !== s.baseUrl.replace(/\/+$/, '')) {
           esquecerRota(s.id);
-          delete server.lan;
+          const identity = s.lan?.id || s.remote?.id;
+          if (identity) server.lan = { url: '', id: identity };
+          else delete server.lan;
         }
         return server;
       }),
@@ -315,8 +322,21 @@ export const useServers = create<ServersState>((set, get) => {
   markEnded(id) {
     set({ servers: get().servers.map((s) => (s.id === id && s.invite ? { ...s, inviteEnded: true } : s)) });
   },
-  rememberLan(id, lan) {
-    change((p) => ({ ...p, servers: p.servers.map((s) => s.id === resolveId(id) ? { ...s, lan } : s) }), false);
+  rememberLan(id, lan, source) {
+    const current = get().servers.find((s) => s.id === resolveId(id));
+    if (source && (!current || current.baseUrl !== source.baseUrl || current.token !== source.token)) return;
+    change((p) => ({ ...p, servers: p.servers.map((s) => {
+      if (s.id !== resolveId(id)) return s;
+      const server = { ...s, lan };
+      if (server.remote?.id !== lan.id) delete server.remote;
+      return server;
+    }) }), false);
+  },
+  rememberRemote(id, remote, source) {
+    const current = get().servers.find((s) => s.id === resolveId(id));
+    if (!current || current.invite || current.baseUrl !== source.baseUrl || current.token !== source.token
+      || remote.id !== current.lan?.id || current.remote?.url === remote.url && current.remote.id === remote.id) return;
+    change((p) => ({ ...p, servers: p.servers.map((s) => s.id === resolveId(id) ? { ...s, remote } : s) }), false);
   },
   });
 });

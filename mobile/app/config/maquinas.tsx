@@ -42,7 +42,7 @@ export default function Maquinas() {
     <Pagina>
       <PageHeader
         title={m.maquinas_titulo()}
-        subtitle={m.maquinas_intro()}
+        subtitle={m.mobile_machines_list_hint()}
         actions={[
           { icon: 'Plus', label: m.sessao_adicionar_servidor(), onPress: () => setAdding({ owner: active }) },
           ...(servers.length ? [{ icon: 'Link' as const, label: m.native_par_menu(), onPress: parear }] : []),
@@ -60,7 +60,7 @@ export default function Maquinas() {
               icon="Monitor"
               title={s.label}
               description={s.baseUrl}
-              onPress={() => useServers.getState().setActive(s.id)}
+              onPress={() => setEditingId(s.id)}
               onLongPress={() => remover(s)}
               right={<ConnectionDot label={s.label} loaded={bucket?.loaded ?? false} error={error} />}
             >

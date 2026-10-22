@@ -1,6 +1,6 @@
 import { apiEnv, type EventSourceLike } from './apiEnv';
 import type { Server } from './servers';
-import { baseOf } from './rota';
+import { baseOf, decidirRota, rotaDecidida, UNCONFIRMED_BASE } from './rota';
 import type { CodexAccount, CodexIntegracaoEstado, CodexLoginAttempt, CodexResetOutcome, Credencial } from './credenciais';
 import * as m from './paraglide/messages';
 import { localeAtual } from './i18n';
@@ -261,9 +261,28 @@ async function sessionFetch<T>(server: Server | null | undefined, path: string, 
 // quem precisa do STATUS ou de um header — hoje o histórico condicional (304 + ETag), que não tem
 // corpo pra desserializar e cujo status não é erro. O diário e o rastreio de "sem rede/voltou"
 // ficam aqui: um fetch escrito à mão sairia do registro sem ninguém notar.
+function ensureConfirmedRoute(base: string): void {
+  if (base === UNCONFIRMED_BASE) {
+    throw Object.assign(new Error(m.mobile_machines_identity_unconfirmed()), { status: 409, code: 'server_identity_unconfirmed' });
+  }
+}
+
 async function apiFetchRes(path: string, init?: RequestInit, server?: Server, probe = false, countsOutage = true, fetcher: typeof fetch = fetch): Promise<Response> {
+  if (server && baseOf(server) === UNCONFIRMED_BASE && (!rotaDecidida(server.id, server) || probe)) {
+    const signal = init?.signal;
+    if (signal?.aborted) throw signal.reason;
+    const route = decidirRota(server);
+    if (signal) await new Promise<void>((resolve, reject) => {
+      const aborted = () => reject(signal.reason);
+      signal.addEventListener('abort', aborted, { once: true });
+      void route.then(() => { signal.removeEventListener('abort', aborted); resolve(); });
+    });
+    else await route;
+    if (signal?.aborted) throw signal.reason;
+  }
   const destino = server?.baseUrl ?? apiEnv().getBaseUrl();
   const base = server ? baseOf(server) : destino;
+  ensureConfirmedRoute(base);
   // Servidor de convite só atende a sessão compartilhada e as rotas do chat: o resto nem sai
   // daqui, senão cada tela aberta enche a rede e o diário de 403.
   const convite = server ? server.invite === true : apiEnv().isInvite?.() === true;
@@ -3263,6 +3282,7 @@ export async function narrarSelecao(
 export function openEventStream(name: string, lastEventId?: string | null, req = novoReq(), server?: Server | null): EventSourceLike {
   if (server) return openEventStreamForServer(server, name, req, lastEventId);
   const base = apiEnv().getBaseUrl();
+  ensureConfirmedRoute(base);
   const token = apiEnv().getToken();
   const path = `/api/sessions/${encodeURIComponent(name)}/events`;
 
@@ -3334,6 +3354,7 @@ export function deleteGuestForServer(server: Server, id: string): Promise<{ ok: 
 export function openSessionsStream(s: Server, req = novoReq()): EventSourceLike {
   const o = apiEnv().origin;
   const base = baseOf(s);
+  ensureConfirmedRoute(base);
   const isSameOrigin = !!o && (!base || base === o);
   const params = new URLSearchParams();
   if (!isSameOrigin) params.set('token', s.token);
@@ -3351,6 +3372,7 @@ export function openEventStreamForServer(s: Server, name: string, req = novoReq(
   const path = `/api/sessions/${encodeURIComponent(name)}/events`;
   const o = apiEnv().origin;
   const base = baseOf(s);
+  ensureConfirmedRoute(base);
   const isSameOrigin = !!o && (!base || base === o);
   const params = new URLSearchParams();
   if (!isSameOrigin) params.set('token', s.token);

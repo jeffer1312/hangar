@@ -8,6 +8,8 @@ export interface Server {
   id: string; label: string; baseUrl: string; token: string;
   disabled?: boolean; invite?: boolean; inviteEnded?: boolean;
   lan?: LanInfo;
+  /** Alternativa Tailscale aprendida e confirmada como a mesma máquina. */
+  remote?: LanInfo;
   // Saiu da lista com um chat dele aberto: toda chamada é recusada, nunca vai ao ativo.
   removed?: boolean;
   // Entrada montada só para um par externo (`reconcilePairEntries`): não é guardada nem vira seção.

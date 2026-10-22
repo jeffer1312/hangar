@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ updateAll: vi.fn(), notification: vi.fn() }));
 vi.mock('@hangar/core', async (original) => ({ ...await original<typeof import('@hangar/core')>(), updateAll: mocks.updateAll }));
 vi.mock('react-native', async (original) => ({ ...await original<typeof import('react-native')>(), Platform: { OS: 'ios' } }));
+vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 vi.mock('expo-haptics', async (original) => ({ ...await original<typeof import('expo-haptics')>(), notificationAsync: mocks.notification }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => children }));

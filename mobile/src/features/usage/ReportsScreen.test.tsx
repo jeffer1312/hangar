@@ -14,9 +14,9 @@ const router = { push: net.push, back: net.back, canGoBack: () => net.canGoBack 
 vi.mock('expo-router', () => ({
   useRouter: () => router,
   useIsFocused: () => net.focused,
-  Stack: { Screen: ({ options }: { options: { title: string; headerLeft?: () => ReactNode } }) => {
+  Stack: { Screen: ({ options }: { options: { title: string; headerLeft?: () => ReactNode; headerRight?: () => ReactNode } }) => {
     net.screen(options);
-    return options.headerLeft?.() ?? null;
+    return React.createElement(React.Fragment, null, options.headerLeft?.(), options.headerRight?.());
   } },
 }));
 vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 72 }));
@@ -26,7 +26,13 @@ vi.mock('expo-secure-store', () => ({ getItemAsync: vi.fn(async () => null), set
 vi.mock('../../ui/Screen', () => ({ Screen: ({ children }: { children: ReactNode }) => children }));
 vi.mock('../../ui/Sheet', () => ({ Sheet: ({ open, children }: { open: boolean; children: ReactNode }) => React.createElement('section', { 'data-sheet-mounted': true }, open ? React.createElement('aside', null, children) : null) }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
-vi.mock('react-native', async (original) => ({ ...await original<typeof import('react-native')>(), TextInput: ({ value, onChangeText, accessibilityLabel }: { value: string; onChangeText: (text: string) => void; accessibilityLabel: string }) => React.createElement('input', { value, 'aria-label': accessibilityLabel, onInput: (event: React.FormEvent<HTMLInputElement>) => onChangeText(event.currentTarget.value) }) }));
+vi.mock('react-native', async (original) => {
+  const module = await original<typeof import('react-native')>();
+  return { ...module,
+    Pressable: ({ onPress, ...props }: React.ComponentProps<typeof module.Pressable>) => React.createElement(module.Pressable, { ...props, onPress: () => onPress?.({ nativeEvent: { locationX: 0 } } as never) }),
+    TextInput: ({ value, onChangeText, accessibilityLabel }: { value: string; onChangeText: (text: string) => void; accessibilityLabel: string }) => React.createElement('input', { value, 'aria-label': accessibilityLabel, onInput: (event: React.FormEvent<HTMLInputElement>) => onChangeText(event.currentTarget.value) }),
+  };
+});
 vi.mock('react-native-svg', () => {
   const tag = (name: string) => ({ children, ...props }: Record<string, unknown>) => React.createElement(name, props, children as ReactNode);
   return { default: tag('svg'), Rect: tag('rect'), Line: tag('line'), Polyline: tag('polyline'), Circle: tag('circle'), Text: tag('text') };
@@ -50,7 +56,13 @@ const usage = (period: string, filters: UsoFiltros) => ({ ...filters, applied: {
 let root: Root;
 let node: HTMLDivElement;
 const click = async (label: string) => {
-  const button = [...node.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === label || b.getAttribute('aria-label')?.startsWith(`${label}: `) || b.textContent === label);
+  const find = () => [...node.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === label || b.getAttribute('aria-label')?.startsWith(`${label}: `) || b.textContent === label || /^\d{4}-\d{2}-\d{2}$/.test(label) && b.textContent?.startsWith(`${label}: `));
+  if (!find() && !node.querySelector('aside')) {
+    if ([m.custos_dim_provedor(), m.custos_dim_fonte(), m.custos_dim_projeto(), m.custos_dim_modelo(), m.custos_dim_maquina(), m.custos_servidores_relatorio(), m.custos_limpar_filtros(), m.custos_so_subagente(), m.custos_so_conversa()].some((value) => value === label)) await click(m.custos_filtros());
+    else if ([m.custos_periodo_1d(), m.custos_periodo_7d(), m.custos_periodo_30d(), m.custos_periodo_90d(), m.custos_periodo_tudo()].some((value) => value === label)) await click(m.custos_periodo());
+    else if (/^\d{4}-\d{2}-\d{2}$/.test(label)) await click(m.custos_dia());
+  }
+  const button = find();
   expect(button, label).toBeTruthy();
   await act(async () => button!.click());
 };
@@ -67,6 +79,106 @@ beforeEach(() => {
   node = document.createElement('div'); root = createRoot(node);
 });
 afterEach(async () => { await act(async () => root.unmount()); configureLocale({ getLocale: () => previousLocale }); overwriteGetLocale(() => previousMessageLocale); });
+
+it('atalhos CLI acumulam escolhas e removem só o valor tocado', async () => {
+  useServers.setState({ servers: [a] });
+  net.costs.mockImplementation((_server: Server, period: string) => Promise.resolve({ ...costs(period), combos: [{ ...combo, source: 'claude', cost: 4 }, { ...combo, source: 'codex', cost: 7 }] }));
+  await act(async () => root.render(React.createElement(CostsScreen)));
+  const shortcuts = () => [...node.querySelectorAll<HTMLButtonElement>('button')].filter((button) => /^(claude|codex) ·/.test(button.getAttribute('aria-label') ?? ''));
+  const shortcut = (source: string) => shortcuts().find((button) => button.getAttribute('aria-label')?.startsWith(`${source} ·`))!;
+  await act(async () => shortcut('claude').click());
+  await act(async () => shortcut('codex').click());
+  const summary = () => [...node.querySelectorAll('span')].find((span) => span.textContent === m.custos_custo_periodo())!.parentElement!;
+  expect(summary().textContent).toContain('US$ 11,00');
+  await act(async () => shortcut('claude').click());
+  expect(summary().textContent).toContain('US$ 7,00');
+});
+
+it('recorte vazio usa ausência e aviso de tarifa considera só a seleção', async () => {
+  useServers.setState({ servers: [a] });
+  net.costs.mockImplementation((_server: Server, period: string) => Promise.resolve({ ...costs(period), sem_tarifa: ['missing'], combos: [{ ...combo, model: 'known', source: 'claude', cost: 4 }, { ...combo, model: 'missing', source: 'codex', cost: 0 }] }));
+  await act(async () => root.render(React.createElement(CostsScreen)));
+  await click('claude');
+  expect(node.textContent).not.toContain(m.custos_estimativa_incompleta({ n: 1 }));
+  await click(m.custos_so_subagente());
+  const summary = [...node.querySelectorAll('span')].find((span) => span.textContent === m.custos_custo_periodo())!.parentElement!;
+  expect(summary.textContent).toContain(m.custos_recorte_vazio());
+  expect(summary.textContent).not.toContain('US$ 0,00');
+});
+
+it('período novo remove escolhas indisponíveis sem apagar as que ainda existem', async () => {
+  useServers.setState({ servers: [a] });
+  net.costs.mockImplementation((_server: Server, period: string) => Promise.resolve({ ...costs(period), combos: [{ ...combo, source: 'claude', project: period === '30d' ? '/old-project' : '/new-project', cost: 4 }] }));
+  await act(async () => root.render(React.createElement(CostsScreen)));
+  await click(m.custos_dim_projeto());
+  await click(`${m.custos_dim_projeto()}: /old-project`);
+  await click(m.native_close());
+  await click('claude');
+  await click(m.custos_periodo_7d());
+  await click(m.custos_dim_projeto());
+  expect(node.querySelector('aside')?.textContent).not.toContain('/old-project');
+  expect(node.querySelector('aside')?.textContent).toContain('/new-project');
+});
+
+it('Custos começa compacto com filtros recolhidos e intervalo inteiro no gráfico', async () => {
+  useServers.setState({ servers: [a] });
+  net.costs.mockImplementation((_server: Server, period: string) => Promise.resolve({ ...costs(period), combos: Array.from({ length: 90 }, (_, index) => ({ ...combo, dia: new Date(Date.UTC(2026, 7, 1 + index)).toISOString().slice(0, 10) })) }));
+  await act(async () => root.render(React.createElement(CostsScreen)));
+  expect(node.querySelector(`button[aria-label="${m.custos_dim_projeto()}"]`)).toBeNull();
+  await click(m.custos_filtros());
+  expect(node.querySelector(`button[aria-label="${m.custos_dim_projeto()}"]`)).toBeTruthy();
+  await click(m.custos_filtros());
+  expect(node.querySelector(`button[aria-label="${m.custos_dim_projeto()}"]`)).toBeNull();
+  const chart = node.querySelector(`[aria-label="${m.custos_grafico_diario({ metrica: m.ctx_tokens() })}"]`)!;
+  expect(Number(chart.querySelector('svg')?.getAttribute('width'))).toBeLessThanOrEqual(264);
+  expect(chart.querySelectorAll('rect')).toHaveLength(270);
+});
+
+it('topo de Custos prioriza período abrangência e indicadores e conserva contexto na metodologia', async () => {
+  net.costs.mockImplementation((_server: Server, period: string) => Promise.resolve({ ...costs(period), usd_brl: 5 }));
+  await act(async () => root.render(React.createElement(CostsScreen)));
+  expect(node.textContent).not.toContain(m.uso_painel_titulo());
+  expect(node.textContent).not.toContain(m.custos_aviso_estimativa());
+  expect(node.textContent).not.toContain(m.custos_usd_brl({ taxa: '5' }));
+  expect(node.textContent).not.toContain(m.custos_preco_tabela());
+  expect(node.textContent).toContain(`${m.custos_periodo_30d()} · ${m.custos_somando_maquinas({ n: 2, m: 2 })}`);
+  const period = node.querySelector<HTMLButtonElement>(`button[aria-label="${m.custos_periodo()}"]`)!;
+  expect(period.textContent).toBe(m.custos_periodo_30d());
+  expect(net.screen.mock.calls.at(-1)![0].headerRight).toBeTypeOf('function');
+  await click(m.uso_painel_titulo());
+  expect(net.push).toHaveBeenCalledWith('/stats');
+  await click(m.custos_como_calculamos());
+  expect(node.textContent).toContain(m.custos_aviso_estimativa());
+  expect(node.textContent).toContain(m.custos_usd_brl({ taxa: '5' }));
+  expect(node.textContent).toContain(m.custos_preco_tabela());
+  await act(async () => root.render(React.createElement(StatsScreen)));
+  expect(net.screen.mock.calls.at(-1)![0].headerRight).toBeUndefined();
+  expect(node.textContent).toContain(m.nav_custos());
+});
+
+it('atalho legado troca o único CLI selecionado quando não há detalhamento', async () => {
+  useServers.setState({ servers: [a] });
+  net.costs.mockImplementation((_server: Server, period: string) => Promise.resolve({ ...costs(period), combos: [], by_source: [{ ...combo, key: 'claude', cost: 4 }, { ...combo, key: 'codex', cost: 7 }] }));
+  await act(async () => root.render(React.createElement(CostsScreen)));
+  const shortcut = (source: string) => [...node.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.getAttribute('aria-label')?.startsWith(`${source} ·`))!;
+  await act(async () => shortcut('claude').click());
+  await act(async () => shortcut('codex').click());
+  const summary = [...node.querySelectorAll('span')].find((span) => span.textContent === m.custos_custo_periodo())!.parentElement!;
+  expect(summary.textContent).toContain('US$ 7,00');
+});
+
+it('falha parcial ao atualizar conserva o projeto exclusivo da máquina ausente', async () => {
+  let offline = false;
+  net.costs.mockImplementation((server: Server, period: string) => server.id === b.id && offline ? Promise.reject(new Error('offline')) : Promise.resolve({ ...costs(period), combos: [{ ...combo, project: server.id === b.id ? '/wanted' : '/other', cost: 4 }] }));
+  await act(async () => root.render(React.createElement(CostsScreen)));
+  await click(m.custos_dim_projeto()); await click(`${m.custos_dim_projeto()}: /wanted`); await click(m.native_close());
+  offline = true;
+  await click(m.custos_atualizar());
+  expect(node.textContent).toContain(`${m.custos_dim_projeto()}: /wanted`);
+  expect(node.textContent).toContain(`Machine B: ${m.native_network_error()}`);
+  const summary = [...node.querySelectorAll('span')].find((span) => span.textContent === m.custos_custo_periodo())!.parentElement!;
+  expect(summary.textContent).not.toContain('US$ 4,00');
+});
 
 it.each([CostsScreen, StatsScreen])('preserva opções do cabeçalho ao redesenhar relatório sem alteração', async (Screen) => {
   await act(async () => root.render(React.createElement(Screen)));
@@ -144,9 +256,9 @@ it('barras de custos preservam rótulo e valores grandes em linhas próprias', a
   expect(bar.getAttribute('aria-label')).toContain(`${m.custos_input_sem_cache()}: 786.211.945 · US$ 2.730,88`);
 });
 
-it('custos sequenciais seguem a ordem desktop com oito cartões e metodologia recolhida', async () => {
+it('custos sequenciais preservam oito indicadores e análises com controles compactos', async () => {
   await act(async () => root.render(React.createElement(CostsScreen)));
-  const headings = [m.custos_consumo_estimativa(), m.custos_periodo(), m.custos_moeda(), m.custos_filtros(), m.custos_todas_fontes(), m.custos_custo_periodo(), m.custos_tokens_novos(), m.custos_tokens_processados(), m.custos_cache_na_entrada(), m.custos_economia_cache(), m.custos_custo_por_milhao(), m.custos_cache_perdido(), m.custos_cache_1h(), m.custos_uso_por_dia(), m.custos_para_onde_dolar(), m.custos_o_que_cache(), m.custos_por_provedor(), m.custos_por_fonte(), m.custos_por_maquina(), m.uso_graf_areas(), m.custos_por_projeto(), m.custos_sessoes_caras(), m.custos_por_modelo(), m.lista_comparar(), m.custos_como_calculamos()];
+  const headings = [m.custos_periodo_30d(), m.mobile_costs_filters(), m.custos_todas_fontes(), m.custos_custo_periodo(), m.custos_tokens_novos(), m.custos_tokens_processados(), m.custos_cache_na_entrada(), m.custos_economia_cache(), m.custos_custo_por_milhao(), m.custos_cache_perdido(), m.custos_cache_1h(), m.custos_uso_por_dia(), m.custos_para_onde_dolar(), m.custos_o_que_cache(), m.custos_por_provedor(), m.custos_por_fonte(), m.custos_por_maquina(), m.uso_graf_areas(), m.custos_por_projeto(), m.custos_sessoes_caras(), m.custos_por_modelo(), m.lista_comparar(), m.custos_como_calculamos()];
   const text = node.textContent!;
   let previous = -1;
   for (const label of headings) {
@@ -237,7 +349,8 @@ it.each([
   const scroll = axis(m.ctx_tokens()).nextElementSibling as HTMLElement;
   expect(Number.parseFloat(scroll.style.minWidth)).toBe(0); expect(scroll.style.flexShrink).toBe('1');
   expect(chart(m.ctx_tokens()).textContent).toContain('01/10'); expect(chart(m.ctx_tokens()).textContent).toContain('03/10');
-  const last = chart(m.ctx_tokens()).querySelector<HTMLButtonElement>('button[aria-label^="2026-10-03:"]')!;
+  await click(m.custos_dia());
+  const last = [...node.querySelectorAll<HTMLButtonElement>('aside button')].find((button) => button.textContent?.startsWith('2026-10-03:'))!;
   expect(last.getAttribute('aria-label')).toContain(locale === 'pt' ? '311.768.499' : '311,768,499');
   await act(async () => last.click());
   expect(node.querySelector('aside')?.textContent).toContain('2026-10-03');
@@ -302,7 +415,10 @@ it.each(['pt', 'en'] as const)('diário usa colunas empilhadas tocáveis, legend
   expect(node.textContent).toContain(m.custos_empilhado_por({ modo: m.custos_dim_fonte() }));
   const costChart = node.querySelector(`[aria-label="${m.custos_grafico_diario({ metrica: m.custos_estimativa_api() })}"]`)!;
   expect(costChart.querySelectorAll('rect')).toHaveLength(2);
-  expect(costChart.querySelector('button[aria-label^="2026-10-03:"]')?.getAttribute('aria-label')).toContain('codex');
+  await click(m.custos_dia());
+  expect(node.querySelector('aside')?.textContent).toContain('2026-10-03:');
+  expect(node.querySelector('aside')?.textContent).toContain('codex');
+  await click(m.native_close());
   await click('codex');
   expect(costChart.querySelectorAll('rect')).toHaveLength(1);
   await click('claude · 130');
@@ -350,7 +466,10 @@ it('comparação desenha linhas e pontos diários ou semanais com métrica indep
   expect(chart(m.custos_estimativa_api(), m.custos_semana()).querySelectorAll('circle')).toHaveLength(4);
   const weeklySection = chart(m.custos_estimativa_api(), m.custos_semana()).parentElement!;
   expect(weeklySection.textContent).toContain('28/09'); expect(weeklySection.textContent).toContain('05/10');
-  expect(weeklySection.querySelector('button[aria-label^="2026-09-28:"]')).toBeTruthy(); expect(weeklySection.querySelector('button[aria-label^="2026-10-05:"]')).toBeTruthy();
+  expect(weeklySection.querySelector('button[aria-label^="2026-09-28:"]')).toBeTruthy();
+  await act(async () => weeklySection.querySelector<HTMLButtonElement>(`button[aria-label="${m.custos_dia()}"]`)!.click());
+  expect(node.querySelector('aside')?.textContent).toContain('2026-10-05:');
+  await click(m.native_close());
   expect(weeklySection.textContent).toContain(m.custos_ponto_semana());
 });
 
@@ -368,7 +487,7 @@ it.each([true, false])('provedores usam nomes das contas e prefixo único sem pe
   const ranking = [...node.querySelectorAll('span')].find((span) => span.textContent === m.custos_por_provedor())!.parentElement!;
   for (const [, , label] of providers) {
     expect(ranking.querySelector(`button[aria-label^="${label}:"]`), label).toBeTruthy();
-    expect(ranking.querySelector(`div[role="image"][aria-label^="${label}:"]`), label).toBeTruthy();
+    expect(ranking.querySelectorAll(`button[aria-label^="${label}:"]`), label).toHaveLength(1);
   }
   expect(ranking.textContent).not.toContain('Claude Code · Claude Code ·');
   expect(ranking.textContent).not.toContain('Codex · Codex ·');

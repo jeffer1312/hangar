@@ -27,7 +27,7 @@ export function configureCore() {
       const a = useServers.getState().active();
       return a ? baseOf(a) : '';
     },
-    rememberLan: (id, lan) => useServers.getState().rememberLan(id, lan),
+    rememberLan: (id, lan, source) => useServers.getState().rememberLan(id, lan, source),
     getToken: () => useServers.getState().active()?.token ?? null,
     onSessionWarnings: (warnings) => toast.aviso(warnings.join('\n')),
     onUnauthorized: () => {

@@ -6,15 +6,17 @@ import * as m from '../../paraglide/messages';
 export type ReportKind = 'costs' | 'usage';
 type Reports = { costs: CostReport; usage: UsoReport };
 export interface ReportPart<R> { id: string; label: string; report: Partial<R> | null; pending: boolean; error?: string; warming?: { read: number; total: number } }
+// A Home desmonta ao abrir o teclado; o resumo conserva também os avisos de leitura parcial.
+let summaryCache: { key: string; at: number; parts: ReportPart<CostReport>[] } | undefined;
 
-export function useReports<K extends ReportKind>(kind: K, servers: Server[], period: string, filters: UsoFiltros, active: boolean) {
+export function useReports<K extends ReportKind>(kind: K, servers: Server[], period: string, filters: UsoFiltros, active: boolean, summary = false) {
   const [foreground, setForeground] = useState(AppState.currentState === 'active');
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => setForeground(state === 'active'));
     return () => subscription.remove();
   }, []);
-  const chosen = servers.filter((s) => !s.invite && !s.disabled);
-  const key = JSON.stringify([kind, chosen, period, filters]);
+  const chosen = servers.filter((s) => !s.invite && !s.disabled && !s.ephemeral).sort((a, b) => a.id.localeCompare(b.id));
+  const key = JSON.stringify([kind, chosen, period, filters, summary]);
   const [attempt, setAttempt] = useState(0);
   const fresh = useRef(false);
   const refresh = useCallback(() => { fresh.current = true; setAttempt((n) => n + 1); }, []);
@@ -27,16 +29,25 @@ export function useReports<K extends ReportKind>(kind: K, servers: Server[], per
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const force = fresh.current;
     fresh.current = false;
+    if (kind === 'costs' && summary && !force && summaryCache?.key === key && Date.now() - summaryCache.at < 60_000) {
+      setState({ key: requestKey, parts: summaryCache.parts as ReportPart<Reports[K]>[] });
+      return;
+    }
     setState({ key: requestKey, parts: chosen.map((s) => ({ id: s.id, label: s.label, report: null, pending: true })) });
     const update = (server: Server, patch: Partial<ReportPart<Reports[K]>>) => {
-      if (alive) setState((previous) => previous.key !== requestKey ? previous : {
-        key: requestKey, parts: previous.parts.map((part) => part.id === server.id ? { ...part, ...patch } : part),
+      if (alive) setState((previous) => {
+        if (previous.key !== requestKey) return previous;
+        const parts = previous.parts.map((part) => part.id === server.id ? { ...part, ...patch } : part);
+        if (kind === 'costs' && summary && parts.every((part) => !part.pending) && parts.some((part) => part.report && !part.error)) {
+          summaryCache = { key, at: Date.now(), parts: parts as ReportPart<CostReport>[] };
+        }
+        return { key: requestKey, parts };
       });
     };
     const read = async (server: Server, tries: number) => {
       try {
         const report = (kind === 'costs'
-          ? await fetchCostsForServer(server, period, force, false)
+          ? await fetchCostsForServer(server, period, force, summary)
           : await fetchUsoForServer(server, period, filters, force)) as Partial<Reports[K]>;
         if (!alive) return;
         if (!report || !report.totals || typeof report.totals !== 'object') throw new Error(m.home_usage_load_failed());

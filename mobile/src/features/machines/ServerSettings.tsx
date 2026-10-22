@@ -7,6 +7,7 @@ import { InfoNotice } from '../config/InfoNotice';
 import { Pill } from '../config/PageHeader';
 import { ensureActive, readIdentifier, readReach, saveIdentifier, validIdentifier, type MachineId, type Reach, type Warning } from './api';
 import { Field, Notice, styles, useMachineAction } from './parts';
+import { useServers } from '../../stores/servers';
 import * as m from '../../paraglide/messages';
 
 export function ServerSettings({ server }: { server: Server }) {
@@ -45,6 +46,7 @@ export function ServerSettings({ server }: { server: Server }) {
           {idRead.error ? <Pill label={m.mobile_machines_retry()} onPress={loadIdentity} disabled={idRead.busy} /> : null}
           <Pill label={idSave.busy ? m.mobile_machines_busy() : m.mobile_machines_save_identifier()} disabled={!identity || idRead.busy || idSave.busy || !validIdentifier(identifier)}
             onPress={() => idSave.run((signal) => saveIdentifier(server, identifier, signal), (value) => {
+              useServers.getState().rememberLan(server.id, { url: identity!.lan_url, id: value.identificador }, server);
               setIdentity({ ...identity!, identificador: value.identificador }); setIdentifier(value.identificador); setWarnings(value.avisos);
             }, m.mobile_machines_saved())} />
         </View>

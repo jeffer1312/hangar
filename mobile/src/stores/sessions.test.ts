@@ -142,6 +142,37 @@ test('descoberta espera lista válida e roda uma vez por conexão, inclusive ap�
   release();
 });
 
+test('descobre Tailscale que ficou disponível depois da primeira lista sem reconectar o SSE', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  let available = false;
+  const server = { ...useServers.getState().servers[0], lan: { url: 'http://192.168.1.4:8765', id: 'owner' } };
+  useServers.setState({ servers: [server] });
+  fetchMock.mockImplementation(async (url: string) => {
+    const parsed = new URL(url);
+    if (parsed.pathname === '/api/alcance') return response({ enderecos: available ? [{ tipo: 'tailscale', url: 'http://100.64.0.2:8765' }] : [] });
+    if (parsed.pathname === '/api/peers/prova') {
+      const challenge = parsed.searchParams.get('desafio');
+      return response({ identificador: 'owner', prova: createHmac('sha256', server.token).update(`${challenge}|owner`).digest('hex') });
+    }
+    return response([]);
+  });
+  const release = useSessions.getState().retain();
+  await settle();
+  created[0].trigger('sessions', '[]');
+  await settle();
+  expect(useServers.getState().servers[0].remote).toBeUndefined();
+  available = true;
+  created[0].trigger('ping', '');
+  await settle();
+  expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/alcance'))).toHaveLength(1);
+  vi.setSystemTime(Date.now() + 31_000);
+  created[0].trigger('ping', '');
+  await settle();
+  expect(useServers.getState().servers[0].remote).toEqual({ url: 'http://100.64.0.2:8765', id: 'owner' });
+  expect(created).toHaveLength(1);
+  release();
+});
+
 test('dois retain() = um createEventSource; release dos dois = close() uma vez', async () => {
   const rel1 = useSessions.getState().retain();
   await settle();
@@ -402,6 +433,15 @@ test.each([
     expect(created).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
     if (resumeEarly) await vi.advanceTimersByTimeAsync(1);
+    if (lan) {
+      expect(useSessions.getState().rows).toEqual([]);
+      expect(useSessions.getState().loading).toBe(false);
+      expect(listRequests()).toHaveLength(0);
+      expect(created).toHaveLength(0);
+      expect(fetchMock.mock.calls.every(([, init]) => !new Headers(init?.headers).has('Authorization'))).toBe(true);
+      return;
+    }
+    if (resumeEarly) await vi.advanceTimersByTimeAsync(6000);
     expect(useSessions.getState().rows.map((row) => row.name)).toEqual(['principal']);
     expect(useSessions.getState().loading).toBe(false);
     expect(listRequests()).toHaveLength(1);
@@ -419,8 +459,8 @@ test.each([
     await vi.advanceTimersByTimeAsync(1999);
     expect(created).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);
-    // O prazo da promessa original já acabou; só falta o turno do timer de 0 ms.
-    await vi.advanceTimersByTimeAsync(1);
+    // A conexão nova não reaproveita a decisão que expirou.
+    await vi.advanceTimersByTimeAsync(6001);
     expect(listRequests()).toHaveLength(2);
     expect(created).toHaveLength(2);
     expect(new URL(created[1].url).origin).toBe(target.baseUrl);
@@ -428,7 +468,7 @@ test.each([
     expect(useSessions.getState().byServer[0].error).toBeNull();
     created[1].trigger('sessions', '[{"name":"reconnected","state":"idle"}]');
     expect(useSessions.getState().rows.map((row) => row.name)).toEqual(['reconnected']);
-    expect(fetchMock.mock.calls.filter(([url]) => new URL(url).pathname === `/api/peers/${pending}`)).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => new URL(url).pathname === `/api/peers/${pending}`)).toHaveLength(resumeEarly ? 3 : 2);
     const proofs = fetchMock.mock.calls.filter(([url]) => new URL(url).pathname === '/api/peers/prova');
     expect(proofs).toHaveLength(lan ? 1 : 0);
     for (const [, init] of proofs) {
@@ -459,7 +499,7 @@ test('prova LAN tardia do token antigo não autoriza rota do token novo', async 
     return controller.signal;
   });
   const target = {
-    id: 'srv1', label: 'srv1', baseUrl: 'http://10.0.0.1:8765', token: 'old-token',
+    id: 'srv1', label: 'srv1', baseUrl: 'https://home.tail.ts.net', token: 'old-token',
     lan: { url: 'http://192.168.1.2:8765', id: 'home' },
   };
   useServers.setState({ servers: [target], activeId: target.id });
@@ -472,8 +512,8 @@ test('prova LAN tardia do token antigo não autoriza rota do token novo', async 
     const parsed = new URL(url);
     if (url === `${target.baseUrl}/api/peers/identificador`) return Promise.resolve(response({}));
     if (parsed.origin === target.lan.url && parsed.pathname === '/api/peers/prova') {
-      challenge = parsed.searchParams.get('desafio') ?? '';
-      proofSignal = init?.signal ?? undefined;
+      challenge ||= parsed.searchParams.get('desafio') ?? '';
+      proofSignal ??= init?.signal ?? undefined;
       return proof.promise;
     }
     if ([target.baseUrl, target.lan.url].includes(parsed.origin) && parsed.pathname === '/api/sessions') {
@@ -492,9 +532,9 @@ test('prova LAN tardia do token antigo não autoriza rota do token novo', async 
     await vi.advanceTimersByTimeAsync(6000);
     expect(proofSignal?.aborted).toBe(true);
     expect(created).toHaveLength(0);
-    // A tentativa nova compartilha a prova antiga, sem iniciar outra sondagem.
+    // Credencial nova exige sondagem nova; o resultado antigo não a autoriza.
     expect(fetchMock.mock.calls.map(([url]) => new URL(url).pathname).filter((path) => path.startsWith('/api/peers/'))).toEqual([
-      '/api/peers/identificador', '/api/peers/prova',
+      '/api/peers/identificador', '/api/peers/prova', '/api/peers/identificador', '/api/peers/prova',
     ]);
     await vi.advanceTimersByTimeAsync(1000);
     proof.resolve(response({

@@ -131,6 +131,19 @@ describe('endereços de importação', () => {
 });
 
 describe('merge só acrescenta', () => {
+  test.each(['https://home.tail.ts.net', 'http://100.64.0.2:8765'])('guarda o Tailscale da mesma máquina como alternativa sem duplicar o cadastro local: %s', (baseUrl) => {
+    const saved = { ...machine, baseUrl: 'http://192.168.1.2:8765', lan: { id: 'confirmed-home', url: 'http://192.168.1.2:8765' } };
+    const remote = { ...machine, id: 'alias', baseUrl, lan: { id: 'confirmed-home', url: saved.baseUrl } };
+
+    const result = mergeImportedMachines({ servers: [saved], activeId: saved.id }, [remote]);
+
+    expect(result.servers).toHaveLength(1);
+    expect(result.servers[0].baseUrl).toBe(saved.baseUrl);
+    expect(result.servers[0].remote).toEqual({ url: remote.baseUrl, id: 'confirmed-home' });
+    expect(result.added).toEqual([]);
+    expect(result.activeId).toBe(saved.id);
+  });
+
   test('mesma identidade confirmada em outro endereço não duplica nem usa o apelido como identidade', () => {
     const saved = { ...machine, label: 'fixture-custom-nickname', disabled: true, lan: { id: 'confirmed-home', url: '' } };
     const alias = { ...machine, id: 'alias', baseUrl: 'https://home-alias.test', label: 'confirmed-home', token: 'alias-token', lan: { id: 'confirmed-home', url: 'http://192.168.0.2' } };

@@ -1,21 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ScrollView, Text, TextInput, View, type TextInputProps } from 'react-native';
+import { Pressable, ScrollView, Text, TextInput, View, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { ReactNode } from 'react';
 import { Sheet } from '../../ui/Sheet';
-import { PageHeader } from '../config/PageHeader';
+import { Icon } from '../../ui/Icon';
 import { useSettingsColors } from '../config/colors';
 import { ensureActive, reason, type Directions } from './api';
 import * as m from '../../paraglide/messages';
 
 export function MachineSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   const insets = useSafeAreaInsets();
+  const c = useSettingsColors();
   return <Sheet open sizes={['large']} scrollable onDismiss={onClose}>
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
-      <PageHeader title={title} actions={[{ label: m.sessao_fechar(), onPress: onClose }]} />
-      {children}
-    </ScrollView>
+    <KeyboardAvoidingView automaticOffset behavior="padding" style={{ flex: 1 }}>
+      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
+        <View style={styles.heading}>
+          <Text accessibilityRole="header" style={[styles.title, { color: c.text }]}>{title}</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel={m.sessao_fechar()} onPress={onClose} style={styles.close}>
+            <Icon name="X" size={21} color={c.muted} />
+          </Pressable>
+        </View>
+        {children}
+      </ScrollView>
+    </KeyboardAvoidingView>
   </Sheet>;
 }
 export function ConnectionDot({ label, loaded, error }: { label: string; loaded: boolean; error?: string | null }) {
@@ -29,14 +38,16 @@ export function ConnectionDot({ label, loaded, error }: { label: string; loaded:
 export function Field({ label, ...props }: TextInputProps & { label: string }) {
   const c = useSettingsColors();
   return <View style={styles.field}>
-    <Text style={{ color: c.text }}>{label}</Text>
+    <Text style={[styles.fieldLabel, { color: c.text }]}>{label}</Text>
     <TextInput autoCapitalize="none" autoCorrect={false} {...props} accessibilityLabel={label}
       placeholderTextColor={c.faint} style={[styles.input, { color: c.text, borderColor: c.borderStrong, backgroundColor: c.inset }]} />
   </View>;
 }
 export function Notice({ text, error = false }: { text: string; error?: boolean }) {
   const c = useSettingsColors();
-  return text ? <Text accessibilityRole={error ? 'alert' : undefined} accessibilityLiveRegion="polite" style={{ color: c.text }}>{text}</Text> : null;
+  const { theme } = useUnistyles();
+  return text ? <Text selectable accessibilityRole={error ? 'alert' : undefined} accessibilityLiveRegion="polite"
+    style={[styles.notice, { color: error ? theme.tokens.status.error : c.text }]}>{text}</Text> : null;
 }
 
 export function DirectionsNotice({ value }: { value: Directions }) {
@@ -79,6 +90,11 @@ export function useMachineAction() {
 }
 export const styles = StyleSheet.create((theme) => ({
   sheet: { padding: theme.base.space[4], gap: theme.base.space[4] },
+  heading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: theme.base.space[3] },
+  title: { flex: 1, fontSize: theme.base.text.xl, fontWeight: theme.base.weight.semibold },
+  close: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  fieldLabel: { fontSize: theme.base.text.sm },
+  notice: { fontSize: theme.base.text.xs, lineHeight: 19 },
   field: { gap: theme.base.space[2], paddingVertical: theme.base.space[2] },
   input: { minHeight: 44, paddingHorizontal: theme.base.space[3], paddingVertical: theme.base.space[2], borderWidth: 1, borderRadius: theme.base.radius.sm, fontSize: theme.base.text.sm },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.base.space[2], paddingVertical: theme.base.space[2] },

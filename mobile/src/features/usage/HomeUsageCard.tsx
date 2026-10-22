@@ -1,24 +1,21 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, Text, View, type StyleProp, type TextStyle } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { Aquecendo, fetchCostsForServer, motivoDoServidor, intlLocale, localeAtual, type CostReport, type DimBucket, type Server } from '@hangar/core';
+import { mergeReports, intlLocale, localeAtual, type CostReport, type DimBucket } from '@hangar/core';
 import { useSettingsColors } from '../config/colors';
+import { useServers } from '../../stores/servers';
+import { useReports } from './useReports';
 import * as m from '../../paraglide/messages';
 
-// Resumo de uso da máquina na tela inicial (porte de desktop-native/src/app/home_usage.rs).
+// Resumo das máquinas próprias na tela inicial.
 type Period = 'all' | '30d' | '7d' | '1d';
 type Tab = 'overview' | 'models';
 type Summary = { report: Partial<CostReport>; totals: DimBucket; models: DimBucket[]; days: Map<string, number> };
 
-const WARM_MS = 3000;
-const WARM_TRIES = 100;
-const STALE_MS = 60_000;
-
 // Escolhas e última leitura em memória: o cartão desmonta a cada vez que o teclado abre.
 let lastPeriod: Period = 'all';
 let lastTab: Tab = 'overview';
-let cache: { key: string; at: number; summary: Summary } | null = null;
 // Aparição da tela que já contou: o cartão remonta quando o teclado fecha e não deve contar de novo.
 let playedEpoch = -1;
 
@@ -106,19 +103,17 @@ function Week({ startAt, delay, children }: { startAt: number | null; delay: num
 
 const whole = (n: number) => String(Math.round(n));
 
-export function HomeUsageCard({ server, intro = null }: { server: Server; intro?: HomeIntro | null }) {
+export function HomeUsageCard({ intro = null }: { intro?: HomeIntro | null }) {
   const { theme } = useUnistyles();
   const c = useSettingsColors();
   const [period, setPeriodState] = useState<Period>(lastPeriod);
   const [tab, setTabState] = useState<Tab>(lastTab);
-  const [summary, setSummary] = useState<Summary | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [warming, setWarming] = useState<{ read: number; total: number } | null>(null);
-  const [error, setError] = useState('');
-  const [attempt, setAttempt] = useState(0);
-  const seq = useRef(0);
-  const serverRef = useRef(server);
-  serverRef.current = server;
+  const servers = useServers((s) => s.servers);
+  const load = useReports('costs', servers, period, {}, true, true);
+  const summary = useMemo(() => load.accepted ? summarize(mergeReports(load.parts, period).report) : null, [load.parts, load.accepted, period]);
+  const loading = load.loading;
+  const warming = load.parts.find((part) => part.warming)?.warming;
+  const error = load.parts.filter((part) => part.error).map((part) => `${part.label}: ${part.error}`).join('\n');
 
   const setPeriod = (p: Period) => { lastPeriod = p; setPeriodState(p); };
 
@@ -132,52 +127,6 @@ export function HomeUsageCard({ server, intro = null }: { server: Server; intro?
   });
   const startAt = summary && played.current.summary === summary ? played.current.startAt : null;
   const setTab = (t: Tab) => { lastTab = t; played.current.summary = null; setTabState(t); };
-
-  // Troca de máquina ou de período relê; a leitura anterior não pode mais escrever.
-  useEffect(() => {
-    const mine = ++seq.current;
-    const key = `${server.id}|${period}`;
-    if (attempt === 0 && cache?.key === key && Date.now() - cache.at < STALE_MS) {
-      setSummary(cache.summary);
-      setLoading(false);
-      setError('');
-      return;
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    setSummary(null);
-    setLoading(true);
-    setError('');
-    setWarming(null);
-    (async () => {
-      for (let tries = 0; ; tries++) {
-        try {
-          const r = await fetchCostsForServer(serverRef.current, period, false, true);
-          if (mine !== seq.current) return;
-          if (r.applied?.period !== period) setError(m.home_usage_period_unsupported());
-          else if (!r.totals) setError(m.home_usage_load_failed());
-          else {
-            const s = summarize(r);
-            cache = { key, at: Date.now(), summary: s };
-            setSummary(s);
-          }
-          break;
-        } catch (e) {
-          if (mine !== seq.current) return;
-          if (e instanceof Aquecendo && tries < WARM_TRIES) {
-            setWarming({ read: e.lidos, total: e.total });
-            await new Promise<void>((ok) => { timer = setTimeout(ok, WARM_MS); });
-            if (mine !== seq.current) return;
-            continue;
-          }
-          setError(e instanceof Aquecendo ? m.home_usage_warming_timeout() : motivoDoServidor(e) ?? m.home_usage_load_failed());
-          break;
-        }
-      }
-      setWarming(null);
-      setLoading(false);
-    })();
-    return () => { seq.current++; clearTimeout(timer); };
-  }, [server.id, period, attempt]);
 
   const muted = { color: c.muted };
   const header = (
@@ -203,17 +152,17 @@ export function HomeUsageCard({ server, intro = null }: { server: Server; intro?
   );
 
   let body: ReactNode;
-  if (loading) {
+  if (loading && !summary) {
     body = (
       <Text style={[styles.note, muted]} accessibilityRole="text" accessibilityLiveRegion="polite">
         {warming ? m.home_usage_warming({ read: String(warming.read), total: String(warming.total) }) : m.native_loading()}
       </Text>
     );
-  } else if (error) {
+  } else if (error && !summary) {
     body = (
       <View style={styles.errorBox}>
         <Text style={[styles.note, { color: theme.tokens.status.warning }]} accessibilityRole="alert">{error}</Text>
-        <Pressable accessibilityRole="button" onPress={() => setAttempt((n) => n + 1)} hitSlop={6} style={styles.retry}>
+        <Pressable accessibilityRole="button" onPress={load.refresh} hitSlop={6} style={styles.retry}>
           <Text style={[styles.retryText, { color: c.accentText }]}>{m.sync_retry()}</Text>
         </Pressable>
       </View>
@@ -312,6 +261,11 @@ export function HomeUsageCard({ server, intro = null }: { server: Server; intro?
       accessibilityLabel={m.home_usage_overview()}
     >
       {header}
+      {summary && (loading || error) ? <View accessibilityLiveRegion="polite">
+        <Text style={[styles.note, muted]}>{m.custos_total_parcial()}</Text>
+        {load.parts.filter((part) => part.pending || part.error).map((part) => <Text key={part.id} style={[styles.note, muted]}>{`${part.label}: ${part.error ?? m.native_loading()}`}</Text>)}
+        {!!error && <Pressable accessibilityRole="button" onPress={load.refresh} hitSlop={6} style={styles.retry}><Text style={[styles.retryText, { color: c.accentText }]}>{m.sync_retry()}</Text></Pressable>}
+      </View> : null}
       {body}
     </View>
   );
