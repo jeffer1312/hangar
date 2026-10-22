@@ -100,6 +100,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if matches!(*method, Method::GET | Method::PUT) && path == "/api/session-defaults" { return true; }
     if *method == Method::POST && path == "/api/push/expo/subscribe" { return true; }
     if crate::orq_conductor::matches(method, path) { return true; }
+    if crate::prewarm::http::matches(method, path) { return true; }
     if crate::session_media::is_media(method, path) { return true; }
     if crate::accounts::http::matches(method, path) { return true; }
     // SideStore no aparelho do cabo (`device_install::routes`): nunca repassado.

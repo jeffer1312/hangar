@@ -541,7 +541,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/sessions/{name}", axum::routing::delete(crate::session_write::bridge::delete).fallback(pass_any))
         .route("/api/sessions/creation-progress", get(crate::session_open::server::creation_progress).fallback(pass_any))
         // Reserva pré-aquecida do Claude sem terminal: só o dono; outro método segue ao Python.
-        .route(crate::prewarm::http::PATH, axum::routing::put(crate::prewarm::http::put).fallback(pass_any))
+        .route("/api/sessions/prewarm", axum::routing::put(crate::prewarm::http::put).fallback(pass_any))
         .route("/api/sessions/prewarm/{id}", axum::routing::delete(crate::prewarm::http::delete).fallback(pass_any))
         // Bastão do dono: o Python prepara o dossiê e a sucessora Claude com terminal nasce aqui.
         .route("/api/sessions/{name}/bastao", axum::routing::post(crate::session_open::server::bastao).fallback(pass_any))

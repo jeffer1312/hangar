@@ -38,7 +38,7 @@ vi.mock('../lib/sessionListModel.svelte', () => ({ createSessionListModel: (opti
 }) }));
 const draft = {
   servers, serverObj: servers[0], server: 'a', attachments: [], worktrees: [], branches: null,
-  init: () => {}, switchFromExhausted: () => {},
+  init: () => {}, switchFromExhausted: () => {}, syncReserve: () => {}, releaseReserve: () => {},
 };
 vi.mock('../lib/newChatDraft.svelte', () => ({ createNewChatDraft: () => draft }));
 vi.mock('../lib/quotaFeed.svelte', () => ({ quotaFeed: { contas: [] } }));
