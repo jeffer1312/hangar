@@ -592,10 +592,13 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   "local" por cabeçalho. Cookie de login só autoriza `GET`/`HEAD` e, em https, só o
   `__Host-cp_token`: máquinas do Connect dividem o mesmo site. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#connect-a-porta-dele-nunca-é-local).
-- **Backend novo nasce no Rust (`crates/`), não em `backend/app/`.** Rota, ponte, poller ou
-  integração nova vai para o `hangar-server`. O Python só é tocado quando o Rust precisa de um fato
-  ou rota que ainda mora lá, ou na porta que é dele (8768 do Connect), e nela ele só repassa ao
-  Rust, num sentido.
+- **Nada nasce no Python: o objetivo é tirá-lo do projeto.** Rota, ponte, poller, integração e
+  qualquer recurso novo vão para o `hangar-server` (`crates/`). Sem pedido explícito do usuário, no
+  `backend/app/` só se apaga código. Toda linha que ACRESCENTA no Python — lógica, releitura,
+  cache, ponte, rota, repasse ao Rust, condição de modo, compatibilidade — é perguntada ao usuário
+  ANTES de escrever, dizendo o que é, por que o Rust sozinho não basta e o que se perde sem ela.
+  Vale para migração, correção e subagente (que para e pergunta pela sessão). Linha nova no Python
+  sem essa autorização é defeito na revisão, mesmo que "só repasse".
 - **Migrar do Python para o Rust é migrar o caminho inteiro.** Antes de dar a migração por feita,
   procure nos dois lados todo chamador da responsabilidade (rotas `/internal/*`, `*_bridge`,
   `to_thread` que esperam o Rust) e apague o que ficou no Python. O Rust nunca pergunta ao Python o
