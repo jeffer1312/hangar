@@ -202,21 +202,23 @@ def test_rust_diag_refuses_malformed_body(raw):
     assert not [c for c in registrar.call_args_list if c.args[0].startswith("rust.")]
 
 
-def test_list_facts_route_carries_the_shadow_flag():
-    """Contrato 26: o pedido do Rust diz se é da sombra; sem a chave é contrato velho."""
+def test_list_facts_route_takes_only_rows_and_pane_pids():
+    """O pedido do Rust leva só linhas e pids; o contrato velho (contagem do dono, sombra) é recusado."""
     seen = []
 
-    async def compute(rows, owner_clients, pane_pids, shadow):
-        seen.append(shadow)
-        return {"shadow": None}
+    async def compute(rows, pane_pids):
+        seen.append(pane_pids)
+        return {"states": {}}
 
-    body = {"rows": [], "owner_clients": 0, "pane_pids": {}}
+    body = {"rows": [], "pane_pids": {"p": 1}}
     with patch("app.list_facts.compute", compute):
-        old = _client().post("/internal/list/facts", json=body, headers={"X-Hangar-Internal": SECRET})
-        wrong = _client().post("/internal/list/facts", json={**body, "shadow": 1}, headers={"X-Hangar-Internal": SECRET})
-        ok = _client().post("/internal/list/facts", json={**body, "shadow": True}, headers={"X-Hangar-Internal": SECRET})
+        old = _client().post("/internal/list/facts", json={**body, "owner_clients": 0, "shadow": False},
+                             headers={"X-Hangar-Internal": SECRET})
+        wrong = _client().post("/internal/list/facts", json={**body, "pane_pids": {"p": "1"}}, headers={"X-Hangar-Internal": SECRET})
+        ok = _client().post("/internal/list/facts", json=body, headers={"X-Hangar-Internal": SECRET})
     assert (old.status_code, wrong.status_code, ok.status_code) == (400, 400, 200)
-    assert seen == [True]
+    assert ok.json() == {"states": {}}
+    assert seen == [{"p": 1}]
 
 
 def test_busy_pool_threads_sees_uvloop_default_executor_threads():

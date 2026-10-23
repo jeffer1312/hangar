@@ -229,7 +229,7 @@ impl Sources for NativeSources {
                     None
                 }
             };
-            Ok(permission_gate(state.list.owner_clients() > 0 || state.list.python_apps() > 0 || state.side.hubs.app_present(), attached,
+            Ok(permission_gate(state.list.owner_clients() > 0 || state.side.hubs.app_present(), attached,
                 mode.as_ref().map(|mode| mode.current.as_str())))
         })
     }

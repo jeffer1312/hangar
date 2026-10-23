@@ -1,0 +1,765 @@
+{
+ "command": "uv run python tests/fixtures/contract/list_facts/gen_list_facts.py",
+ "guests": [
+  {
+   "case": "sem_arquivo",
+   "file": null,
+   "hidden": [],
+   "names": {
+    "a": "k:1"
+   },
+   "owners": {}
+  },
+  {
+   "case": "dono_escondido",
+   "file": {
+    "guests": [
+     {
+      "id": "g1",
+      "name": "ana",
+      "owner_sees": false,
+      "root": "/r",
+      "token_hash": "h"
+     }
+    ],
+    "sessions": {
+     "a": {
+      "guest": "g1",
+      "life": "k:1"
+     }
+    }
+   },
+   "hidden": [
+    "a"
+   ],
+   "names": {
+    "a": "k:1",
+    "b": "k:2"
+   },
+   "owners": {
+    "a": "ana"
+   }
+  },
+  {
+   "case": "outra_vida",
+   "file": {
+    "guests": [
+     {
+      "id": "g1",
+      "name": "ana",
+      "root": "/r",
+      "token_hash": "h"
+     }
+    ],
+    "sessions": {
+     "a": {
+      "guest": "g1",
+      "life": "k:1"
+     }
+    }
+   },
+   "hidden": [],
+   "names": {
+    "a": "k:9"
+   },
+   "owners": {}
+  },
+  {
+   "case": "vida_gravada_vazia",
+   "file": {
+    "guests": [
+     {
+      "id": "g1",
+      "name": "ana",
+      "root": "/r",
+      "token_hash": "h"
+     }
+    ],
+    "sessions": {
+     "a": {
+      "guest": "g1",
+      "life": null
+     }
+    }
+   },
+   "hidden": [],
+   "names": {
+    "a": "k:1"
+   },
+   "owners": {
+    "a": "ana"
+   }
+  },
+  {
+   "case": "vida_desconhecida",
+   "file": {
+    "guests": [
+     {
+      "id": "g1",
+      "name": "ana",
+      "root": "/r",
+      "token_hash": "h"
+     }
+    ],
+    "sessions": {
+     "a": {
+      "guest": "g1",
+      "life": "k:1"
+     }
+    }
+   },
+   "hidden": [],
+   "names": {
+    "a": null
+   },
+   "owners": {
+    "a": "ana"
+   }
+  },
+  {
+   "case": "convidado_sumido",
+   "file": {
+    "guests": [
+     {
+      "id": "g1",
+      "name": "ana",
+      "root": "/r",
+      "token_hash": "h"
+     }
+    ],
+    "sessions": {
+     "a": {
+      "guest": "g2",
+      "life": "k:1"
+     }
+    }
+   },
+   "hidden": [],
+   "names": {
+    "a": "k:1"
+   },
+   "owners": {}
+  },
+  {
+   "case": "campo_de_sobra",
+   "file": {
+    "guests": [
+     {
+      "id": "g1",
+      "name": "ana",
+      "root": "/r",
+      "token_hash": "h",
+      "x": 1
+     }
+    ],
+    "sessions": {
+     "a": {
+      "guest": "g1",
+      "life": "k:1"
+     }
+    }
+   },
+   "hidden": [],
+   "names": {
+    "a": "k:1"
+   },
+   "owners": {}
+  }
+ ],
+ "origin_commit": "2b9d8ea4008ed20948f75c722c6c446f0d5eab15",
+ "orq": [
+  {
+   "case": "viva_trabalhando",
+   "rows": [
+    {
+     "cwd": "/repo",
+     "jsonl": "⟦HOME⟧/.hangar/orq/run-g1/timeline-run-g1.jsonl",
+     "last_activity": -5.0,
+     "name": "g1-orq",
+     "orq_arbiter": "arb",
+     "pair_gid": "g1",
+     "state": "working"
+    }
+   ],
+   "runs": [
+    {
+     "dir": "run-g1",
+     "events": [
+      {
+       "gid": "g1",
+       "tipo": "execucao_inicio"
+      }
+     ],
+     "heartbeat": {
+      "interval_s": 60,
+      "ts": -10.0
+     },
+     "orq": {
+      "arbiter": "arb",
+      "auto": true,
+      "repo": "/repo"
+     },
+     "timeline": -5.0
+    }
+   ]
+  },
+  {
+   "case": "viva_parada",
+   "rows": [
+    {
+     "cwd": "/repo",
+     "jsonl": "⟦HOME⟧/.hangar/orq/run-g2/timeline-run-g2.jsonl",
+     "last_activity": -600.0,
+     "name": "g2-orq",
+     "orq_arbiter": "hb-arb",
+     "pair_gid": "g2",
+     "state": "idle"
+    }
+   ],
+   "runs": [
+    {
+     "dir": "run-g2",
+     "events": [
+      {
+       "gid": "g2",
+       "tipo": "execucao_inicio"
+      }
+     ],
+     "heartbeat": {
+      "arbiter": "hb-arb",
+      "interval_s": 60,
+      "ts": -10.0
+     },
+     "orq": {
+      "arbiter": "arb",
+      "auto": true,
+      "repo": "/repo"
+     },
+     "timeline": -600.0
+    }
+   ]
+  },
+  {
+   "case": "vigia_parado",
+   "rows": [],
+   "runs": [
+    {
+     "dir": "run-g3",
+     "events": [
+      {
+       "gid": "g3",
+       "tipo": "execucao_inicio"
+      }
+     ],
+     "heartbeat": {
+      "interval_s": 60,
+      "ts": -1000.0
+     },
+     "orq": {
+      "arbiter": "arb",
+      "auto": true,
+      "repo": "/repo"
+     },
+     "timeline": -5.0
+    }
+   ]
+  },
+  {
+   "case": "encerrada",
+   "rows": [],
+   "runs": [
+    {
+     "dir": "run-g4",
+     "events": [
+      {
+       "gid": "g4",
+       "tipo": "execucao_inicio"
+      },
+      {
+       "tipo": "execucao_fim"
+      }
+     ],
+     "heartbeat": {
+      "interval_s": 60,
+      "ts": -10.0
+     },
+     "orq": {
+      "arbiter": "arb",
+      "auto": true,
+      "repo": "/repo"
+     },
+     "timeline": -5.0
+    }
+   ]
+  },
+  {
+   "case": "nao_auto",
+   "rows": [],
+   "runs": [
+    {
+     "dir": "run-g5",
+     "events": [
+      {
+       "gid": "g5",
+       "tipo": "execucao_inicio"
+      }
+     ],
+     "heartbeat": {
+      "interval_s": 60,
+      "ts": -10.0
+     },
+     "orq": {
+      "arbiter": "arb",
+      "auto": false,
+      "repo": "/repo"
+     },
+     "timeline": -5.0
+    }
+   ]
+  },
+  {
+   "case": "duas",
+   "rows": [
+    {
+     "cwd": "/repo",
+     "jsonl": "⟦HOME⟧/.hangar/orq/run-g6/timeline-run-g6.jsonl",
+     "last_activity": -300.0,
+     "name": "g6-orq",
+     "orq_arbiter": "arb",
+     "pair_gid": "g6",
+     "state": "idle"
+    },
+    {
+     "cwd": "/repo",
+     "jsonl": "⟦HOME⟧/.hangar/orq/run-g7/timeline-run-g7.jsonl",
+     "last_activity": -5.0,
+     "name": "g7-orq",
+     "orq_arbiter": "arb",
+     "pair_gid": "g7",
+     "state": "working"
+    }
+   ],
+   "runs": [
+    {
+     "dir": "run-g7",
+     "events": [
+      {
+       "gid": "g7",
+       "tipo": "execucao_inicio"
+      }
+     ],
+     "heartbeat": {
+      "interval_s": 60,
+      "ts": -10.0
+     },
+     "orq": {
+      "arbiter": "arb",
+      "auto": true,
+      "repo": "/repo"
+     },
+     "timeline": -5.0
+    },
+    {
+     "dir": "run-g6",
+     "events": [
+      {
+       "gid": "g6",
+       "tipo": "execucao_inicio"
+      }
+     ],
+     "heartbeat": {
+      "interval_s": 60,
+      "ts": -10.0
+     },
+     "orq": {
+      "arbiter": "arb",
+      "auto": true,
+      "repo": "/repo"
+     },
+     "timeline": -300.0
+    }
+   ]
+  }
+ ],
+ "thread_key": [
+  {
+   "home": "/x/.codex",
+   "key": "[\"/x/.codex\", \"th-1\"]",
+   "thread": "th-1"
+  },
+  {
+   "home": "/x/a b/.codex/",
+   "key": "[\"/x/a b/.codex\", \"ç\"]",
+   "thread": "ç"
+  }
+ ],
+ "transfers": [
+  {
+   "case": "em_curso_na_linha",
+   "error": false,
+   "files": {
+    ".hangar/conversation-transfers/11111111-1111-4111-8111-111111111111.json": "{\"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"fx-a\", \"source_life\": \"k:old\", \"phase\": \"source_stopped\", \"source\": {\"path\": \"⟦HOME⟧/src.jsonl\", \"provider\": \"claude\", \"digest\": \"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\", \"selected_uuids\": [\"u0\"]}, \"origin_meta\": {\"name\": \"fx-a\", \"cwd\": \"/w\", \"session_id\": \"src\", \"key\": \"kk\", \"jsonl\": \"⟦HOME⟧/src.jsonl\", \"headless\": true, \"engine\": null, \"config_dir\": \"⟦HOME⟧/.claude\"}, \"destination_meta\": {\"thread_id\": \"th-1\", \"codex_home\": \"⟦HOME⟧/.codex\", \"lifecycle_id\": \"k:new\", \"key\": \"new\"}, \"boundary\": null, \"error_code\": null}",
+    ".hangar/conversation-transfers/indexes/life-41ffc5eb08d3d9bde9e66e435c8506b5904662921f7051b5e15d73b5d23c765a.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/life-76c06dbc1111cbba2240050093e070b2acfbefd7964c5104235e1e52495d2dbb.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/session-dec02e6ea261a9a3055fa0d038f9348a68b862fbcccd6d45f618868974f71bcc.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/thread-bf53d59fd48bcb4700eb034d3a60a410052954887972ba773c638eb5d04005f4.json": "[\"11111111-1111-4111-8111-111111111111\"]"
+   },
+   "frozen": [
+    "fx-a"
+   ],
+   "records": [
+    {
+     "boundary": null,
+     "destination_meta": {
+      "codex_home": "⟦HOME⟧/.codex",
+      "key": "new",
+      "lifecycle_id": "k:new",
+      "thread_id": "th-1"
+     },
+     "error_code": null,
+     "id": "11111111-1111-4111-8111-111111111111",
+     "name": "fx-a",
+     "origin_meta": {
+      "config_dir": "⟦HOME⟧/.claude",
+      "cwd": "/w",
+      "engine": null,
+      "headless": true,
+      "jsonl": "⟦HOME⟧/src.jsonl",
+      "key": "kk",
+      "name": "fx-a",
+      "session_id": "src"
+     },
+     "phase": "source_stopped",
+     "source": {
+      "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "path": "⟦HOME⟧/src.jsonl",
+      "provider": "claude",
+      "selected_uuids": [
+       "u0"
+      ]
+     },
+     "source_life": "k:old"
+    }
+   ],
+   "rows": [
+    {
+     "headless": true,
+     "jsonl": "⟦HOME⟧/src.jsonl",
+     "lifecycle_id": "k:old",
+     "name": "fx-a",
+     "provider": "claude"
+    }
+   ],
+   "sidecars": {},
+   "touched": [
+    {
+     "codex_home": null,
+     "conta": "claude:⟦HOME⟧/.claude",
+     "cwd": "/w",
+     "engine": null,
+     "headless": true,
+     "jsonl": "⟦HOME⟧/src.jsonl",
+     "lifecycle_id": "k:old",
+     "name": "fx-a",
+     "problema": null,
+     "provider": "claude",
+     "transfer_id": "11111111-1111-4111-8111-111111111111",
+     "transfer_phase": "source_stopped"
+    }
+   ]
+  },
+  {
+   "case": "em_curso_sem_linha",
+   "error": false,
+   "files": {
+    ".hangar/conversation-transfers/11111111-1111-4111-8111-111111111111.json": "{\"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"fx-b\", \"source_life\": \"k:old\", \"phase\": \"restore_failed\", \"source\": {\"path\": \"⟦HOME⟧/src.jsonl\", \"provider\": \"claude\", \"digest\": \"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\", \"selected_uuids\": [\"u0\"]}, \"origin_meta\": {\"name\": \"fx-b\", \"cwd\": \"/w\", \"session_id\": \"src\", \"key\": \"kk\", \"jsonl\": \"⟦HOME⟧/src.jsonl\", \"headless\": true, \"engine\": null, \"config_dir\": \"⟦HOME⟧/.claude\"}, \"destination_meta\": {\"thread_id\": \"th-1\", \"codex_home\": \"⟦HOME⟧/.codex\", \"lifecycle_id\": \"k:new\", \"key\": \"new\"}, \"boundary\": null, \"error_code\": \"transfer_restore_failed\"}",
+    ".hangar/conversation-transfers/indexes/life-41ffc5eb08d3d9bde9e66e435c8506b5904662921f7051b5e15d73b5d23c765a.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/life-76c06dbc1111cbba2240050093e070b2acfbefd7964c5104235e1e52495d2dbb.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/session-24a859027dbc81848b34d4241223c3c532ae361b1e4c9c0ed2e4b1b2ac34bd1e.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/thread-38e0938ac245aacdfd630dc8b8f43ed8e46ddcea4c9acd5fc4539054046221f7.json": "[\"11111111-1111-4111-8111-111111111111\"]"
+   },
+   "frozen": [
+    "fx-b"
+   ],
+   "records": [
+    {
+     "boundary": null,
+     "destination_meta": {
+      "codex_home": "⟦HOME⟧/.codex",
+      "key": "new",
+      "lifecycle_id": "k:new",
+      "thread_id": "th-1"
+     },
+     "error_code": "transfer_restore_failed",
+     "id": "11111111-1111-4111-8111-111111111111",
+     "name": "fx-b",
+     "origin_meta": {
+      "config_dir": "⟦HOME⟧/.claude",
+      "cwd": "/w",
+      "engine": null,
+      "headless": true,
+      "jsonl": "⟦HOME⟧/src.jsonl",
+      "key": "kk",
+      "name": "fx-b",
+      "session_id": "src"
+     },
+     "phase": "restore_failed",
+     "source": {
+      "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "path": "⟦HOME⟧/src.jsonl",
+      "provider": "claude",
+      "selected_uuids": [
+       "u0"
+      ]
+     },
+     "source_life": "k:old"
+    }
+   ],
+   "rows": [],
+   "sidecars": {},
+   "touched": [
+    {
+     "codex_home": null,
+     "conta": "claude:⟦HOME⟧/.claude",
+     "cwd": "/w",
+     "engine": null,
+     "headless": true,
+     "jsonl": "⟦HOME⟧/src.jsonl",
+     "lifecycle_id": "k:old",
+     "name": "fx-b",
+     "problema": "transfer_restore_failed",
+     "provider": "claude",
+     "transfer_id": "11111111-1111-4111-8111-111111111111",
+     "transfer_phase": "restore_failed"
+    }
+   ]
+  },
+  {
+   "case": "completa_pela_vida_nova",
+   "error": false,
+   "files": {
+    ".hangar/conversation-transfers/11111111-1111-4111-8111-111111111111.json": "{\"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"fx-c\", \"source_life\": \"k:old\", \"phase\": \"complete\", \"source\": {\"path\": \"⟦HOME⟧/src.jsonl\", \"provider\": \"claude\", \"digest\": \"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\", \"selected_uuids\": [\"u0\"]}, \"origin_meta\": {\"name\": \"fx-c\", \"cwd\": \"/w\", \"session_id\": \"src\", \"key\": \"kk\", \"jsonl\": \"⟦HOME⟧/src.jsonl\", \"headless\": true, \"engine\": null, \"config_dir\": \"⟦HOME⟧/.claude\"}, \"destination_meta\": {\"thread_id\": \"th-1\", \"codex_home\": \"⟦HOME⟧/.codex\", \"lifecycle_id\": \"k:new\", \"key\": \"new\"}, \"boundary\": null, \"error_code\": null}",
+    ".hangar/conversation-transfers/indexes/life-41ffc5eb08d3d9bde9e66e435c8506b5904662921f7051b5e15d73b5d23c765a.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/life-76c06dbc1111cbba2240050093e070b2acfbefd7964c5104235e1e52495d2dbb.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/session-c38d0dee21d9c57345fdfdf3f94b33abae7a9bbf6da5c3c53e2b9d9915c3c7b1.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/thread-2e52c96ad9e1d89f52f4f8dc7b60d6b27abf75640c4b48313ece6b2b0167acba.json": "[\"11111111-1111-4111-8111-111111111111\"]"
+   },
+   "frozen": [],
+   "records": [
+    {
+     "boundary": null,
+     "destination_meta": {
+      "codex_home": "⟦HOME⟧/.codex",
+      "key": "new",
+      "lifecycle_id": "k:new",
+      "thread_id": "th-1"
+     },
+     "error_code": null,
+     "id": "11111111-1111-4111-8111-111111111111",
+     "name": "fx-c",
+     "origin_meta": {
+      "config_dir": "⟦HOME⟧/.claude",
+      "cwd": "/w",
+      "engine": null,
+      "headless": true,
+      "jsonl": "⟦HOME⟧/src.jsonl",
+      "key": "kk",
+      "name": "fx-c",
+      "session_id": "src"
+     },
+     "phase": "complete",
+     "source": {
+      "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "path": "⟦HOME⟧/src.jsonl",
+      "provider": "claude",
+      "selected_uuids": [
+       "u0"
+      ]
+     },
+     "source_life": "k:old"
+    }
+   ],
+   "rows": [
+    {
+     "lifecycle_id": "k:new",
+     "name": "fx-c",
+     "provider": "claude"
+    }
+   ],
+   "sidecars": {},
+   "touched": [
+    {
+     "codex_home": null,
+     "conta": null,
+     "cwd": null,
+     "engine": null,
+     "headless": false,
+     "jsonl": null,
+     "lifecycle_id": "k:new",
+     "name": "fx-c",
+     "problema": null,
+     "provider": "claude",
+     "transfer_id": "11111111-1111-4111-8111-111111111111",
+     "transfer_phase": "complete"
+    }
+   ]
+  },
+  {
+   "case": "recriada_com_o_nome",
+   "error": false,
+   "files": {
+    ".hangar/conversation-transfers/11111111-1111-4111-8111-111111111111.json": "{\"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"fx-d\", \"source_life\": \"k:old\", \"phase\": \"source_stopped\", \"source\": {\"path\": \"⟦HOME⟧/src.jsonl\", \"provider\": \"claude\", \"digest\": \"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\", \"selected_uuids\": [\"u0\"]}, \"origin_meta\": {\"name\": \"fx-d\", \"cwd\": \"/w\", \"session_id\": \"src\", \"key\": \"kk\", \"jsonl\": \"⟦HOME⟧/src.jsonl\", \"headless\": true, \"engine\": null, \"config_dir\": \"⟦HOME⟧/.claude\"}, \"destination_meta\": {\"thread_id\": \"th-1\", \"codex_home\": \"⟦HOME⟧/.codex\", \"lifecycle_id\": \"k:new\", \"key\": \"new\"}, \"boundary\": null, \"error_code\": null}",
+    ".hangar/conversation-transfers/indexes/life-41ffc5eb08d3d9bde9e66e435c8506b5904662921f7051b5e15d73b5d23c765a.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/life-76c06dbc1111cbba2240050093e070b2acfbefd7964c5104235e1e52495d2dbb.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/session-13fd7f2038ebaa546cd4ad1a809e978a5232ebf82649833a46f6523929ee5df2.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/thread-8f19c887e547953d2ab1c71997737a345885b515428a2716c9f8ac46d799420d.json": "[\"11111111-1111-4111-8111-111111111111\"]"
+   },
+   "frozen": [],
+   "records": [
+    {
+     "boundary": null,
+     "destination_meta": {
+      "codex_home": "⟦HOME⟧/.codex",
+      "key": "new",
+      "lifecycle_id": "k:new",
+      "thread_id": "th-1"
+     },
+     "error_code": null,
+     "id": "11111111-1111-4111-8111-111111111111",
+     "name": "fx-d",
+     "origin_meta": {
+      "config_dir": "⟦HOME⟧/.claude",
+      "cwd": "/w",
+      "engine": null,
+      "headless": true,
+      "jsonl": "⟦HOME⟧/src.jsonl",
+      "key": "kk",
+      "name": "fx-d",
+      "session_id": "src"
+     },
+     "phase": "source_stopped",
+     "source": {
+      "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "path": "⟦HOME⟧/src.jsonl",
+      "provider": "claude",
+      "selected_uuids": [
+       "u0"
+      ]
+     },
+     "source_life": "k:old"
+    }
+   ],
+   "rows": [
+    {
+     "lifecycle_id": "k:outra",
+     "name": "fx-d",
+     "provider": "claude"
+    }
+   ],
+   "sidecars": {},
+   "touched": []
+  },
+  {
+   "case": "codex_pela_thread",
+   "error": false,
+   "files": {
+    ".hangar/codex-sessions/fx-e.json": "{\"name\": \"fx-e\", \"thread_id\": \"th-1\", \"codex_home\": \"⟦HOME⟧/.codex\"}",
+    ".hangar/conversation-transfers/11111111-1111-4111-8111-111111111111.json": "{\"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"fx-e\", \"source_life\": \"k:old\", \"phase\": \"imported\", \"source\": {\"path\": \"⟦HOME⟧/src.jsonl\", \"provider\": \"claude\", \"digest\": \"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\", \"selected_uuids\": [\"u0\"]}, \"origin_meta\": {\"name\": \"fx-e\", \"cwd\": \"/w\", \"session_id\": \"src\", \"key\": \"kk\", \"jsonl\": \"⟦HOME⟧/src.jsonl\", \"headless\": true, \"engine\": null, \"config_dir\": \"⟦HOME⟧/.claude\"}, \"destination_meta\": {\"thread_id\": \"th-1\", \"codex_home\": \"⟦HOME⟧/.codex\", \"lifecycle_id\": \"k:new\", \"key\": \"new\"}, \"boundary\": null, \"error_code\": null}",
+    ".hangar/conversation-transfers/indexes/life-41ffc5eb08d3d9bde9e66e435c8506b5904662921f7051b5e15d73b5d23c765a.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/life-76c06dbc1111cbba2240050093e070b2acfbefd7964c5104235e1e52495d2dbb.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/session-0bd173575d4ba0c6b26e6719baa503f58c5344f100dadc7409b64e3affad79bc.json": "[\"11111111-1111-4111-8111-111111111111\"]",
+    ".hangar/conversation-transfers/indexes/thread-522130cd0d3b53c6b84a0ec066dc3ec2db178be295631f6bbbb4a9054f7baefc.json": "[\"11111111-1111-4111-8111-111111111111\"]"
+   },
+   "frozen": [
+    "fx-e"
+   ],
+   "records": [
+    {
+     "boundary": null,
+     "destination_meta": {
+      "codex_home": "⟦HOME⟧/.codex",
+      "key": "new",
+      "lifecycle_id": "k:new",
+      "thread_id": "th-1"
+     },
+     "error_code": null,
+     "id": "11111111-1111-4111-8111-111111111111",
+     "name": "fx-e",
+     "origin_meta": {
+      "config_dir": "⟦HOME⟧/.claude",
+      "cwd": "/w",
+      "engine": null,
+      "headless": true,
+      "jsonl": "⟦HOME⟧/src.jsonl",
+      "key": "kk",
+      "name": "fx-e",
+      "session_id": "src"
+     },
+     "phase": "imported",
+     "source": {
+      "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "path": "⟦HOME⟧/src.jsonl",
+      "provider": "claude",
+      "selected_uuids": [
+       "u0"
+      ]
+     },
+     "source_life": "k:old"
+    }
+   ],
+   "rows": [
+    {
+     "codex_home": "⟦HOME⟧/.codex",
+     "lifecycle_id": "k:x",
+     "name": "fx-e",
+     "provider": "codex"
+    }
+   ],
+   "sidecars": {
+    "codex-sessions/fx-e.json": {
+     "codex_home": "⟦HOME⟧/.codex",
+     "name": "fx-e",
+     "thread_id": "th-1"
+    }
+   },
+   "touched": [
+    {
+     "codex_home": null,
+     "conta": "claude:⟦HOME⟧/.claude",
+     "cwd": "/w",
+     "engine": null,
+     "headless": true,
+     "jsonl": "⟦HOME⟧/src.jsonl",
+     "lifecycle_id": "k:old",
+     "name": "fx-e",
+     "problema": null,
+     "provider": "claude",
+     "transfer_id": "11111111-1111-4111-8111-111111111111",
+     "transfer_phase": "imported"
+    }
+   ]
+  },
+  {
+   "case": "sidecar_aponta_ausente",
+   "error": true,
+   "files": {
+    ".hangar/claude-headless/fx-f.json": "{\"name\": \"fx-f\", \"transfer_id\": \"22222222-2222-4222-8222-222222222222\"}"
+   },
+   "records": [],
+   "rows": [
+    {
+     "headless": true,
+     "lifecycle_id": "k:old",
+     "name": "fx-f",
+     "provider": "claude"
+    }
+   ],
+   "sidecars": {
+    "claude-headless/fx-f.json": {
+     "name": "fx-f",
+     "transfer_id": "22222222-2222-4222-8222-222222222222"
+    }
+   }
+  }
+ ]
+}

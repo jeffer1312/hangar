@@ -133,8 +133,6 @@ pub async fn serve_until_with_guest(
     let device_logins=state.accounts.device_logins.clone();
     let mut runtime_registry=None;
     let mut refresh_loop=None;
-    // Abortada na saída: o laço segura a ponte da lista, que sobreviveria ao servidor.
-    let _shadow = list::shadow::spawn(state.list.clone(), state.diag.clone()).map(AbortOnDrop);
     let result=async {
     if let Some(home) = std::env::home_dir() {
         transcription.recover_on_startup(&home).await;

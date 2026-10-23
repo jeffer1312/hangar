@@ -31,7 +31,7 @@ use hangar_server::share::pairs::PairStore;
 use hangar_server::share::store::{Kind, ShareStore};
 use hangar_server::share::tunnel::Real;
 use hangar_server::terminal_input::TerminalBinding;
-use list_support::{calls, names, set_facts, write_marker};
+use list_support::{calls, names, write_marker};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_tungstenite::tungstenite;
@@ -209,15 +209,14 @@ async fn stream_da_lista_filtrado_e_sem_contar_app() {
     std::fs::create_dir_all(pending.parent().unwrap()).unwrap();
     std::fs::write(&pending, json!({"s0": {"url": "http://127.0.0.1:5173/", "ts": now}}).to_string()).unwrap();
     let srv = list_srv(dir.path(), 2).await;
-    set_facts(&srv.python, "shortcuts", json!("{\"s0\":[]}"));
     let t = srv.g.token("s0", Kind::Share);
     let mut es = open_sse(format!("http://{}/api/sessions/events?token={t}", srv.guest)).await;
     let ev = next_named(&mut es, "sessions").await;
     assert_eq!(names(&serde_json::from_str(&ev.data).unwrap()), ["s0"]);
-    // O produtor roda só com o convidado, e o Python sabe que nenhuma lista do dono está aberta.
+    // O produtor roda só com o convidado, que não conta como lista do dono aberta.
     let root = dir.path().to_owned();
     wait_until(move || calls(&root, "list-panes") >= 2).await;
-    assert_eq!(srv.python.list_facts_last.lock().unwrap()["owner_clients"], 0);
+    assert_eq!(srv.st.list.owner_clients(), 0);
     write_marker(dir.path(), 0, "working");
     loop {
         let ev = next_non_ping(&mut es).await;

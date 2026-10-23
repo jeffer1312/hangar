@@ -14,7 +14,8 @@ use std::time::Duration;
 
 pub fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() }
 
-/// `n` sessões Claude paradas (`s0`..), marcador `idle`, pane pronto; `fail` presente = recusa.
+/// `n` sessões Claude paradas (`s0`..), marcador `idle`, pane pronto; `fail` presente = recusa,
+/// `slow` presente = o `list-panes` demora 0,8 s.
 pub fn sessions(root: &Path, n: usize) -> std::path::PathBuf {
     let home = root.join("home");
     let mut panes = String::new();
@@ -31,8 +32,8 @@ pub fn sessions(root: &Path, n: usize) -> std::path::PathBuf {
     }
     let script = root.join("tmux");
     crate::write_executable(&script, format!(
-        "#!/bin/sh\necho \"$1\" >> '{log}'\n[ -e '{fail}' ] && exit 2\n[ \"$1\" = list-panes ] || {{ printf '● pronto\\n❯\\n'; exit 0; }}\nprintf '{panes}'\n",
-        log = root.join("calls.log").display(), fail = root.join("fail").display()));
+        "#!/bin/sh\necho \"$1\" >> '{log}'\n[ -e '{fail}' ] && exit 2\n[ \"$1\" = list-panes ] || {{ printf '● pronto\\n❯\\n'; exit 0; }}\n[ -e '{slow}' ] && sleep 0.8\nprintf '{panes}'\n",
+        log = root.join("calls.log").display(), fail = root.join("fail").display(), slow = root.join("slow").display()));
     script
 }
 
@@ -88,10 +89,6 @@ pub async fn open(addr: SocketAddr) -> Events {
 }
 
 pub fn names(v: &Value) -> Vec<&str> { v.as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect() }
-
-pub fn set_facts(python: &fake::Fake, key: &str, value: Value) {
-    python.list_facts.lock().unwrap().0[key] = value;
-}
 
 
 pub fn write_marker(root: &Path, i: usize, state: &str) {
