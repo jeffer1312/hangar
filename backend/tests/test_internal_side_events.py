@@ -184,3 +184,29 @@ def test_rota_side_events_so_atende_conexao_interna_com_segredo(tmp_path, monkey
         internal_api.set_secret(None)
 
 
+
+
+async def _eventos_por(gen, segundos):
+    vistos = []
+    try:
+        async with asyncio.timeout(segundos):
+            async for ev in gen:
+                vistos.append(ev["event"])
+    except TimeoutError:
+        pass
+    finally:
+        await gen.aclose()
+    return vistos
+
+
+@pytest.mark.parametrize("side", [True, False])
+async def test_faixa_stats_e_do_rust_na_conexao_interna(tmp_path, fila, monkeypatch, side):
+    # ST-R1: com o Rust de pé a faixa sai do hub dele; o `/events` do próprio Python (Connect, modo python) segue com ela.
+    monkeypatch.setattr(sse, "get_adapter", lambda provider: _Adapter())
+    jsonl = tmp_path / "faixa.jsonl"
+    linhas = [{"type": "user", "timestamp": "2026-10-23T12:00:00Z", "message": {"content": "oi"}},
+              {"type": "assistant", "timestamp": "2026-10-23T12:00:02Z",
+               "message": {"id": "m1", "usage": {"input_tokens": 1, "output_tokens": 5}}}]
+    jsonl.write_text("".join(json.dumps(linha) + "\n" for linha in linhas))
+    vistos = await _eventos_por(sse.merged_events(f"faixa-{side}", str(jsonl), side=side), 1.5)
+    assert ("stats" in vistos) is not side, vistos

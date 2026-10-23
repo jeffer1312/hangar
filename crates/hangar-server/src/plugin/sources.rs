@@ -9,50 +9,68 @@ use crate::terminal_input::{CommandRequest, ProcessIo, TerminalBinding, Terminal
 use super::routes::{Discovery, Identity, MeasuredContext, SourceFuture, Sources};
 use super::{PermissionGate, ServiceError};
 
+/// Medidas exatas de uma vida: as últimas chamadas (tokens, segundos, fim no relógio de parede) e a
+/// soma e a contagem das 1ªs respostas (Codex).
+struct Life { binding: InteractionBinding, calls: VecDeque<(u64, f64, f64)>, first: (f64, u32) }
+
+/// Medida exata do stream por vida da sessão: plugin (Claude com terminal) e canal `rate` do ator (Claude
+/// sem terminal e Codex). Vida nova da mesma chave zera; vida mais velha é recusada.
 #[derive(Default)]
-pub struct RateStore { samples: Mutex<HashMap<String, (InteractionBinding, VecDeque<(u64, f64, f64)>)>> }
+pub struct RateStore { samples: Mutex<HashMap<String, Life>> }
 
 impl RateStore {
+    fn with_life<T>(&self, binding: &InteractionBinding, change: impl FnOnce(&mut Life) -> T) -> Result<T, ServiceError> {
+        let mut samples = self.samples.lock().map_err(|_| ServiceError("plugin_rate_unavailable"))?;
+        let entry = samples.entry(binding.key.clone()).or_insert_with(|| Life { binding: binding.clone(), calls: VecDeque::new(), first: (0.0, 0) });
+        if entry.binding != *binding {
+            if binding.generation <= entry.binding.generation { return Err(ServiceError("plugin_conversation_mismatch")); }
+            *entry = Life { binding: binding.clone(), calls: VecDeque::new(), first: (0.0, 0) };
+        }
+        Ok(change(entry))
+    }
+
     pub fn record(&self, binding: &InteractionBinding, tokens: u64, seconds: f64, finished: f64) -> Result<(), ServiceError> {
         if binding.key.is_empty() || binding.conversation.is_empty() || !seconds.is_finite() || seconds < 0.0 || !finished.is_finite() {
             return Err(ServiceError("plugin_body_invalid"));
         }
-        if tokens == 0 || seconds < 0.2 { return Ok(()); }
-        let mut samples = self.samples.lock().map_err(|_| ServiceError("plugin_rate_unavailable"))?;
-        let entry = samples.entry(binding.key.clone()).or_insert_with(|| (binding.clone(), VecDeque::new()));
-        if entry.0 != *binding {
-            if binding.generation <= entry.0.generation { return Err(ServiceError("plugin_conversation_mismatch")); }
-            *entry = (binding.clone(), VecDeque::new());
-        }
-        if entry.1.len() == 10 { entry.1.pop_front(); }
-        entry.1.push_back((tokens, seconds, finished));
-        Ok(())
+        if tokens == 0 || seconds < crate::stats::MIN_GEN_S { return Ok(()); }
+        self.with_life(binding, |life| {
+            if life.calls.len() == crate::stats::RECENT_CALLS { life.calls.pop_front(); }
+            life.calls.push_back((tokens, seconds, finished));
+        })
     }
 
+    /// Do início do turno ao 1º texto da resposta (Codex); a faixa mostra a média da vida.
+    pub fn record_first_response(&self, binding: &InteractionBinding, seconds: f64) -> Result<(), ServiceError> {
+        if binding.key.is_empty() || binding.conversation.is_empty() || !seconds.is_finite() || seconds < 0.0 {
+            return Err(ServiceError("plugin_body_invalid"));
+        }
+        self.with_life(binding, |life| life.first = (life.first.0 + seconds, life.first.1 + 1))
+    }
+
+    /// Como o `LiveRate.snapshot` do Python: a 1ª resposta sai sempre que houver; as velocidades somem só
+    /// quando o transcript tem resposta mais nova que a última medida mais a folga (quem media parou).
     pub fn snapshot(&self, binding: &InteractionBinding, transcript_call_ts: Option<f64>) -> Map<String, Value> {
-        let Some(ts) = transcript_call_ts.filter(|ts| ts.is_finite()) else { return Map::new() };
+        let mut out = Map::new();
         let Ok(samples) = self.samples.lock() else {
             tracing::warn!(code = "plugin_rate_unavailable", "taxa: memória indisponível, não publica medição exata");
-            return Map::new();
+            return out;
         };
-        let Some((_, calls)) = samples.get(&binding.key).filter(|(life, _)| life == binding) else { return Map::new() };
-        let Some(last) = calls.back().filter(|last| ts <= last.2 + 30.0) else { return Map::new() };
-        let tokens: f64 = calls.iter().map(|(tokens, _, _)| *tokens as f64).sum();
-        let seconds: f64 = calls.iter().map(|(_, seconds, _)| seconds).sum();
-        let rounded = |value: f64| format!("{value:.1}").parse::<f64>().unwrap();
-        json!({"tok_s_now":rounded(last.0 as f64 / last.1),"tok_s_recent":rounded(tokens / seconds),"tok_s_exact":true}).as_object().unwrap().clone()
-    }
-
-    pub fn overlay(&self, binding: &InteractionBinding, transcript_call_ts: Option<f64>, stats: &mut Value) {
-        let Some(stats) = stats.as_object_mut() else { return };
-        // A precisão antiga não é prova do plugin desta vida; os demais cálculos permanecem intactos.
-        if stats.remove("tok_s_exact") == Some(json!(true)) { stats.remove("tok_s_now"); stats.remove("tok_s_recent"); }
-        stats.extend(self.snapshot(binding, transcript_call_ts));
+        let Some(life) = samples.get(&binding.key).filter(|life| life.binding == *binding) else { return out };
+        if life.first.1 > 0 {
+            out.insert("ttft_ms".into(), ((life.first.0 * 1000.0 / life.first.1 as f64) as i64).into());
+        }
+        let Some(last) = life.calls.back() else { return out };
+        if transcript_call_ts.is_some_and(|ts| ts > last.2 + 30.0) { return out; }
+        let calls: Vec<(i64, f64)> = life.calls.iter().map(|(tokens, seconds, _)| (*tokens as i64, *seconds)).collect();
+        out.extend(crate::stats::rates(&calls));
+        out.insert("tok_s_exact".into(), true.into());
+        out
     }
 
     pub fn forget_binding(&self, binding: &InteractionBinding) {
         if let Ok(mut samples) = self.samples.lock() {
-            if samples.get(&binding.key).is_some_and(|(life, _)| life == binding) { samples.remove(&binding.key); }
+            if samples.get(&binding.key).is_some_and(|life| life.binding == *binding) { samples.remove(&binding.key); }
         } else { tracing::warn!(code = "plugin_rate_unavailable", "taxa: limpeza da vida recusada pela memória"); }
     }
     pub fn forget(&self, key: &str) {
@@ -68,18 +86,6 @@ impl RateStore {
 pub fn permission_gate(app_present: bool, terminal_attached: Option<bool>, mode: Option<&str>) -> PermissionGate {
     let mode_without_dialog = matches!(mode, Some("auto" | "dontAsk"));
     PermissionGate { app_present, terminal_attached: terminal_attached.unwrap_or(true), mode_without_dialog }
-}
-
-/// Relógio da última resposta principal; usa o mesmo parser do transcript, não mtime.
-pub fn last_call_ts(jsonl: &std::path::Path, conversation: &str) -> Option<f64> {
-    let size = std::fs::metadata(jsonl).ok()?.len();
-    crate::tail::backfill(jsonl, conversation, crate::transcript::Provider::Claude, None, size).iter().rev().find_map(|frame| {
-        let text = std::str::from_utf8(frame).ok()?;
-        let data = text.lines().find_map(|line| line.strip_prefix("data: "))?;
-        let event: Value = serde_json::from_str(data).ok()?;
-        matches!(event["kind"].as_str(), Some("assistant_msg" | "tool_use" | "thinking"))
-            .then(|| event["ts"].as_f64()).flatten().filter(|ts| ts.is_finite())
-    })
 }
 
 pub struct NativeSources { state: Weak<AppState>, io: Arc<dyn TerminalIo> }
@@ -337,7 +343,8 @@ mod tests {
         assert_eq!(rates.snapshot(&first, Some(10.0))["tok_s_now"], 50.0);
         assert!(rates.snapshot(&first, Some(41.0)).is_empty());
         assert!(rates.snapshot(&binding(2), Some(10.0)).is_empty());
-        assert!(rates.snapshot(&first, None).is_empty(), "sem prova do transcript não aplica taxa antiga");
+        // S4 (copiar o Python): sem resposta no transcript ainda, a medida exata vale.
+        assert_eq!(rates.snapshot(&first, None)["tok_s_exact"], true);
         rates.record(&first, 100, 0.1, 12.0).unwrap();
         assert_eq!(rates.snapshot(&first, Some(10.0))["tok_s_now"], 50.0);
         rates.forget("k");
@@ -356,13 +363,19 @@ mod tests {
         assert_eq!(rates.snapshot(&second, Some(12.0))["tok_s_now"], 100.0);
     }
 
+    /// ST-35/S7: a média da 1ª resposta do Codex sai mesmo sem velocidade medida, e só da vida atual.
     #[test]
-    fn unavailable_exact_rate_preserves_estimates_and_other_stats() {
+    fn first_response_average_is_per_life_and_shown_without_rates() {
         let rates = RateStore::default();
-        let mut stats = json!({"tokens":321,"tok_s_now":9.0,"tok_s_exact":false});
-        rates.overlay(&binding(1), None, &mut stats);
-        assert_eq!(stats["tok_s_now"], 9.0);
-        assert_eq!(stats["tokens"], 321);
+        rates.record_first_response(&binding(1), 1.0).unwrap();
+        rates.record_first_response(&binding(1), 2.0).unwrap();
+        let snap = rates.snapshot(&binding(1), None);
+        assert_eq!(snap["ttft_ms"], 1500);
+        assert!(snap.get("tok_s_exact").is_none());
+        assert!(rates.record_first_response(&binding(1), f64::NAN).is_err());
+        rates.record_first_response(&binding(2), 4.0).unwrap();
+        assert_eq!(rates.snapshot(&binding(2), None)["ttft_ms"], 4000);
+        assert!(rates.snapshot(&binding(1), None).is_empty());
     }
 
     #[test]
@@ -376,17 +389,4 @@ mod tests {
         assert_eq!(super::super::routes::discover(&body,&rows).unwrap_err().0,"plugin_identity_ambiguous");
     }
 
-    #[test]
-    fn stats_overlay_keeps_the_existing_payload_and_removes_stale_exact_rate() {
-        let rates = RateStore::default();
-        let life = binding(1);
-        rates.record(&life, 100, 2.0, 10.0).unwrap();
-        let mut stats = json!({"tokens":321,"turns":4,"tok_s_now":9.0,"tok_s_exact":true});
-        rates.overlay(&life, Some(10.0), &mut stats);
-        assert_eq!(stats["tokens"], 321);
-        assert_eq!(stats["turns"], 4);
-        assert_eq!(stats["tok_s_now"], 50.0);
-        rates.overlay(&life, Some(50.0), &mut stats);
-        assert!(stats.get("tok_s_exact").is_none());
-    }
 }

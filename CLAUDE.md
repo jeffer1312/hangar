@@ -607,9 +607,10 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   e a linha. Conferir antes de afirmar que algo "é do Rust" ou "ainda é do Python".
   - Chat Claude/Codex: `/history`, `/events`, mensagens, estado, prévia e fila são do Rust. Cada
     conversa aberta mantém a conexão interna `side-events` (`side.rs` `side_once` →
-    `internal_api.py` → `sse.merged_events(side=True)`), da qual sai só `stats` (custo e tokens,
-    `stats.py` relendo o transcript a cada 1 s), `nav` e a faixa de plugin que o `mods` do Rust não
-    atende.
+    `internal_api.py` → `sse.merged_events(side=True)`), da qual sai só `nav` e a faixa de plugin
+    que o `mods` do Rust não atende. A faixa `stats` é do hub do Rust (`stats.rs`, um produtor por
+    ligação, medida exata do `RateStore` por vida); o `stats.py` só serve o `/events` do próprio
+    Python (Connect, convidado pelo Python, modo `python`) e o consumo da orquestração.
   - Lista do dono: montada pelo Rust, mas todo tique com lista aberta pede `POST
     /internal/list/facts` (`list/facts.rs` → `list_facts.py`), mesmo sem Pi/omp/Kimi: estado e
     passos do Codex, problema das sessões Claude, transferências, orquestrações, donos de
@@ -632,7 +633,7 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   O Rust atende `/history` e `/events` de Claude/Codex, `/api/costs`, `/api/uso`, `/api/cotacao` e o
   custo de sessão Codex com o token do dono, e o terminal real do dono (só pelo
   `?token=`, sem conferir Origin). Custos e uso têm índice próprio
-  (`custos-rust.sqlite3`) no cache local; stats continuam no Python. Contas Claude/Codex e
+  (`custos-rust.sqlite3`) no cache local; a faixa `stats` do chat também é do Rust. Contas Claude/Codex e
   cotas são só do Rust: no modo `python` respondem `accounts_need_rust_server`, sem reserva
   Python. Anexos, o `/transcribe` da sessão, a saída ao vivo de ferramenta (`bash-output`,
   `tool-progress`) e a imagem colada no terminal são só do Rust, com a sessão tirada da lista dele:

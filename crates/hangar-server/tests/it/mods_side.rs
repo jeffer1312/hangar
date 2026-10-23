@@ -58,11 +58,11 @@ async fn python_band_is_dropped_for_owned_session() {
     wait_until(|| python.side_conns() == 1).await;
     python.push_side("plugin_ui", &json!({"above": null, "panes": []}).to_string());
     python.push_side("plugin_toast", &json!({"id": "py-1", "text": "velho", "plugin": "m", "timeoutMs": 4000}).to_string());
-    python.push_side("stats", "{}");
+    python.push_side("nav", "{}");
     loop {
         let event = next_non_ping(&mut events).await;
         assert!(event.event != "plugin_ui" && event.event != "plugin_toast", "o Python não sobrescreve a interface do Rust");
-        if event.event == "stats" { break; }
+        if event.event == "nav" { break; }
     }
 }
 
@@ -81,11 +81,11 @@ async fn rebind_keeps_the_rust_band() {
     next_named(&mut events, "reset").await;
     wait_until(|| python.side_conns() == 2).await;
     assert_eq!(next_named(&mut events, "plugin_ui").await.data, band("rust").to_string(), "a faixa volta com o reset");
-    python.push_side("stats", "{}");
+    python.push_side("nav", "{}");
     loop {
         let event = next_non_ping(&mut events).await;
         assert!(event.event != "plugin_ui", "a faixa volta uma vez só");
-        if event.event == "stats" { break; }
+        if event.event == "nav" { break; }
     }
 }
 

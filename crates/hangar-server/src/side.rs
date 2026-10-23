@@ -403,6 +403,8 @@ pub struct Hub {
     owners: std::sync::atomic::AtomicUsize,
     /// Produtor da fila da geração atual (`queue_feed::run`); renasce a cada troca de conversa.
     queue_feed: Mutex<Option<tokio::task::AbortHandle>>,
+    /// Produtor do `stats` da geração atual (`stats::run`); renasce a cada troca de conversa.
+    stats_feed: Mutex<Option<tokio::task::AbortHandle>>,
     /// Vigia da fila desta sessão (`queue_panel::watch`); sai no `close`.
     queue_watch: Mutex<Option<tokio::task::AbortHandle>>,
     /// Acorda a vigia da fila: arquivo da fila mudou, a troca de conversa limpou o retrato ou o caminho chegou.
@@ -474,6 +476,7 @@ impl Hub {
                 guests: std::sync::atomic::AtomicUsize::new(0),
                 owners: std::sync::atomic::AtomicUsize::new(owners),
                 queue_feed: Mutex::new(None),
+                stats_feed: Mutex::new(None),
                 queue_watch: Mutex::new(None),
                 queue_wake: Arc::new(Notify::new()),
                 queue_path: Mutex::new(None),
@@ -483,6 +486,7 @@ impl Hub {
         });
         if let Some((generation, binding)) = hub.source_binding() {
             hub.start_queue_feed(generation, &binding);
+            hub.start_stats_feed(generation, &binding);
         }
         hub.ensure_monitor();
         hub.restart_side();
@@ -679,7 +683,20 @@ impl Hub {
         if let Some(feed) = self.queue_feed.lock().unwrap().take() {
             feed.abort();
         }
+        if let Some(feed) = self.stats_feed.lock().unwrap().take() {
+            feed.abort();
+        }
     }
+
+    /// Produtor do `stats` da geração dada, chamado junto com o da fila e sob a mesma trava.
+    fn start_stats_feed(self: &Arc<Self>, generation: u64, binding: &Binding) {
+        let feed = tokio::spawn(crate::stats::run(Arc::downgrade(self), generation, binding.clone(), self.ctx.watchers.clone()));
+        if let Some(old) = self.stats_feed.lock().unwrap().replace(feed.abort_handle()) {
+            old.abort();
+        }
+    }
+
+    pub(crate) fn plugin_rates(&self) -> Arc<crate::plugin::sources::RateStore> { self.ctx.hubs.plugin_rates() }
 
     /// Assina o canal e copia o retrato dos eventos do estado (canal privado).
     fn subscribe_state(&self) -> Option<(broadcast::Receiver<Out>, Vec<Bytes>, &'static [&'static str])> {
@@ -836,6 +853,7 @@ impl Hub {
             close_on_tail_death(Arc::downgrade(self), generation),
         );
         self.start_queue_feed(generation, &binding);
+        self.start_stats_feed(generation, &binding);
         *bound = Some(Bound { binding, generation, tail });
         *self.committed.lock().unwrap() = None;
         // O estado retido era da conversa anterior: não volta depois da troca.
@@ -1174,7 +1192,12 @@ async fn side_once(hub: &Arc<Hub>, attempt: &mut u32) -> SideEnd {
         }
         match ev.event.as_str() {
             "ping" => {}
-            "stats" => overlay_plugin_rate(hub, &ev.data).await,
+            // A faixa é do produtor do hub (`stats::run`); um Python antigo que ainda a mande não a sobrescreve.
+            "stats" => {
+                if crate::warn_limit::allow(Some(&hub.name), "stats_python_leak") {
+                    tracing::warn!(session = %hub.name, code = "stats_python_leak", "faixa: o Python mandou `stats` de conversa do Rust; descartado");
+                }
+            }
             event => {
                 // Sessão sem terminal atendida pelo Rust: faixa e avisos vêm dele (dono único). Um
                 // `plugin_ui` velho do Python (sessão que mudou de modo) não pode sobrescrevê-los.
@@ -1185,39 +1208,6 @@ async fn side_once(hub: &Arc<Hub>, attempt: &mut u32) -> SideEnd {
             }
         }
     }
-}
-
-async fn overlay_plugin_rate(hub: &Arc<Hub>, data: &str) {
-    let Some(runtime) = hub.ctx.runtime.get() else { hub.deliver("stats", data); return };
-    let Some(binding) = hub.binding().filter(|binding| binding.provider == Provider::Claude) else {
-        hub.deliver("stats", data); return;
-    };
-    let generation = hub.generation();
-    let Ok(mut stats) = serde_json::from_str::<serde_json::Value>(data) else {
-        tracing::warn!(session = %hub.name, code = "plugin_stats_invalid", "estatísticas da sessão não são JSON");
-        return;
-    };
-    let reading = runtime.interaction_binding_readonly(&hub.name).await;
-    match reading {
-        Ok(life) if life.conversation == binding.key => {
-            let (path, conversation) = (binding.jsonl.clone(), life.conversation.clone());
-            let ts = match tokio::task::spawn_blocking(move || crate::plugin::sources::last_call_ts(&path, &conversation)).await {
-                Ok(ts) => ts,
-                Err(_) => { tracing::warn!(session = %hub.name, code = "plugin_rate_transcript_failed", "taxa: relógio do transcript indisponível"); None },
-            };
-            if hub.generation() != generation || runtime.interaction_binding_readonly(&hub.name).await.ok().as_ref() != Some(&life) { return; }
-            hub.ctx.hubs.plugin_rates().overlay(&life, ts, &mut stats);
-        }
-        _ => {
-            if let Some(stats) = stats.as_object_mut() {
-                if stats.remove("tok_s_exact") == Some(serde_json::json!(true)) { stats.remove("tok_s_now"); stats.remove("tok_s_recent"); }
-            }
-            if crate::warn_limit::allow(Some(&hub.name), "plugin_rate_binding_unavailable") {
-                tracing::warn!(session = %hub.name, code = "plugin_rate_binding_unavailable", "taxa: vínculo não confirmado; mantém os demais dados");
-            }
-        }
-    }
-    if hub.generation() == generation { hub.deliver("stats", &stats.to_string()); }
 }
 
 /// Evento da conexão interna (fora `info` e `ping`). Com o dono do estado vivo, os eventos dele

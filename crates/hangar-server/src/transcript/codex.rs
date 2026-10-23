@@ -15,6 +15,10 @@ use super::{event, finish, pyjson};
 static CONTEXT_WRAPPER: LazyLock<Regex> = LazyLock::new(|| {
     py_re(r"\A(<(?:environment_context|recommended_plugins|[a-z][a-z_ ]*instructions)>|# AGENTS\.md instructions(?: for |[ \t]*\r?\n\s*<INSTRUCTIONS>))")
 });
+/// `_is_context_wrapper` (rollout.py:63): contexto que o Codex injeta como `user`, não pedido humano.
+pub(crate) fn is_context_wrapper(text: &str) -> bool {
+    CONTEXT_WRAPPER.is_match(strip(text))
+}
 static TURN_ABORTED: LazyLock<Regex> = LazyLock::new(|| py_re(r"(?s)\A<turn_aborted>.*</turn_aborted>\z"));
 static HOOK_PROMPT: LazyLock<Regex> = LazyLock::new(|| py_re(r"(?s)\A<hook_prompt\b[^>]*>(.*)</hook_prompt>\z"));
 static SKILL: LazyLock<Regex> = LazyLock::new(|| {

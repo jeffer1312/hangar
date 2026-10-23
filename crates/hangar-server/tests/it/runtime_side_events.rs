@@ -29,12 +29,20 @@ async fn two_clients_one_source() {
     next_any(&mut a).await;
     next_any(&mut b).await;
     wait_until(|| python.side_conns() == 1).await;
-    // O estado do Claude sem terminal é do feed do Rust; `stats` segue vindo da conexão interna.
-    let stats = json!({"turns":1});
-    python.push_side("stats", &stats.to_string());
-    assert_eq!(next_named(&mut a, "stats").await.data, stats.to_string());
-    assert_eq!(next_named(&mut b, "stats").await.data, stats.to_string());
+    // O estado e a faixa do Claude sem terminal são do Rust: um produtor só para os dois aparelhos, e o
+    // `stats` que um Python antigo mande pela conexão interna não sobrescreve a faixa.
+    python.push_side("stats", &json!({"turns": 99}).to_string());
+    let line = json!({"type":"assistant","timestamp":"2026-10-23T12:00:02Z","message":{"id":"m1","usage":{"input_tokens":4,"output_tokens":6}}});
+    let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+    std::io::Write::write_all(&mut file, format!("{line}\n").as_bytes()).unwrap();
+    let stats = next_named(&mut a, "stats").await.data;
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&stats).unwrap()["out_tok"], 6, "{stats}");
+    assert_eq!(next_named(&mut b, "stats").await.data, stats);
     assert_eq!(python.side_conns(), 1);
+    // S1: a conta recomeça sem nenhuma chamada (arquivo truncado) e a faixa velha sai da tela.
+    let user = json!({"type":"user","timestamp":"2026-10-23T12:00:05Z","message":{"content":"oi"}});
+    std::fs::write(&path, format!("{user}\n")).unwrap();
+    assert_eq!(next_named(&mut a, "stats").await.data, "null");
 }
 
 #[tokio::test]

@@ -45,6 +45,7 @@ pub mod share_reach;
 pub mod side;
 pub mod share;
 pub mod state;
+pub mod stats;
 pub mod subagents;
 pub mod tail;
 pub mod term;
