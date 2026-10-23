@@ -7,4 +7,4 @@ mod launch;
 pub mod pipe;
 pub mod proxy;
 
-pub use engine::{Engine, Warm};
+pub use engine::{Engine, POPUP_GONE, Warm};

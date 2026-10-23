@@ -38,6 +38,18 @@ pub(super) enum PanelEvent {
 
 impl EventEmitter<PanelEvent> for BrowserPanel {}
 
+#[cfg(target_os = "linux")]
+type Ctl =Rc<crate::browser::control::Controller<crate::browser::control::CdpPage>>;
+
+/// Janela que a página abriu com `window.opener` (login OAuth): ocupa o painel, e o agente age nela, até fechar.
+#[cfg(target_os = "linux")]
+struct Popup {
+    engine: Rc<Engine>,
+    /// Controlador, CDP e atividade da página de origem, devolvidos quando o popup fecha.
+    opener: (Option<Ctl>, Option<Rc<crate::browser::cdp::Cdp>>, Option<Task<()>>),
+    _drain: Task<()>,
+}
+
 /// Erros guardados para a lista do selo; a contagem segue além disso.
 const ERRORS_KEPT: usize = 100;
 
@@ -62,6 +74,8 @@ pub(super) struct BrowserPanel {
     frames: std::sync::Arc<std::sync::Mutex<Option<async_channel::Sender<crate::browser::relay::ViewerEvent>>>>,
     /// Nasce na primeira navegação, que tem a janela.
     engine: Option<Result<Rc<Engine>, String>>,
+    #[cfg(target_os = "linux")]
+    popup: Option<Popup>,
     /// Endereço a abrir quando o motor terminar de nascer; `Some` enquanto ele nasce.
     starting: Option<(String, By)>,
     _start: Option<Task<()>>,
@@ -206,14 +220,111 @@ impl BrowserPanel {
             cx.on_blur(&focus, window, |this, _, _| if let Some(engine) = this.engine() { engine.focus(false) }),
         ];
         Self { key, #[cfg(not(target_os = "macos"))] controller: None, #[cfg(not(target_os = "macos"))] cdp: None,
-            #[cfg(not(target_os = "macos"))] relay: Default::default(), #[cfg(not(target_os = "macos"))] viewer: Rc::default(), #[cfg(target_os = "linux")] frames: Default::default(), #[cfg(not(target_os = "macos"))] import_pending: false, #[cfg(not(target_os = "macos"))] importing: false, #[cfg(not(target_os = "macos"))] import_site: None, #[cfg(not(target_os = "macos"))] login_hint: None, #[cfg(not(target_os = "macos"))] hint_checked: None, #[cfg(not(target_os = "macos"))] login_request: None, #[cfg(not(target_os = "macos"))] login_reply: None, #[cfg(target_os = "linux")] cookie_sources: Vec::new(), engine: None, starting: None, _start: None, events, address, dialog_input, page: model::PageState::default(), invalid: None, #[cfg(not(target_os = "macos"))] cookies_status: None, #[cfg(target_os = "linux")] last_fill: None, focus,
+            #[cfg(not(target_os = "macos"))] relay: Default::default(), #[cfg(not(target_os = "macos"))] viewer: Rc::default(), #[cfg(target_os = "linux")] frames: Default::default(), #[cfg(not(target_os = "macos"))] import_pending: false, #[cfg(not(target_os = "macos"))] importing: false, #[cfg(not(target_os = "macos"))] import_site: None, #[cfg(not(target_os = "macos"))] login_hint: None, #[cfg(not(target_os = "macos"))] hint_checked: None, #[cfg(not(target_os = "macos"))] login_request: None, #[cfg(not(target_os = "macos"))] login_reply: None, #[cfg(target_os = "linux")] cookie_sources: Vec::new(), engine: None, #[cfg(target_os = "linux")] popup: None, starting: None, _start: None, events, address, dialog_input, page: model::PageState::default(), invalid: None, #[cfg(not(target_os = "macos"))] cookies_status: None, #[cfg(target_os = "linux")] last_fill: None, focus,
             origin: Rc::default(), #[cfg(target_os = "linux")] emulated: None, page_scale: Rc::new(Cell::new(1.)), #[cfg(target_os = "windows")] still: None, #[cfg(target_os = "windows")] released: Vec::new(), #[cfg(target_os = "windows")] cover_gen: 0, #[cfg(target_os = "linux")] page_zoom: (1., 0., 0.), shown: false, local_notice: None, #[cfg(target_os = "linux")] cursor: CursorStyle::Arrow, #[cfg(target_os = "linux")] cursor_probe: (false, None), page_errors: Default::default(), error_count: 0, errors_open: false, shooting: false, #[cfg(not(target_os = "macos"))] pick: Default::default(), copied: false, dismissed_notice: 0, address_stale: false, #[cfg(not(target_os = "macos"))] agent: None, #[cfg(not(target_os = "macos"))] agent_running: 0,
             #[cfg(not(target_os = "macos"))] agent_seq: 0, #[cfg(not(target_os = "macos"))] paused: None, #[cfg(not(target_os = "macos"))] session_working: false, #[cfg(target_os = "windows")] agent_finished_at: None, #[cfg(not(target_os = "macos"))] _activity: None, #[cfg(target_os = "windows")] idle: Cell::new(0), #[cfg(not(target_os = "macos"))] sidecar: Default::default(), #[cfg(target_os = "linux")] scale: Rc::default(), _drain: drain, _subscriptions: subscriptions }
     }
 
-    fn engine(&self) -> Option<&Rc<Engine>> { self.engine.as_ref()?.as_ref().ok() }
+    /// A página na tela: o popup aberto, senão a da sessão.
+    fn engine(&self) -> Option<&Rc<Engine>> {
+        #[cfg(target_os = "linux")]
+        if let Some(popup) = &self.popup { return Some(&popup.engine); }
+        self.engine.as_ref()?.as_ref().ok()
+    }
 
+    /// Evento da página da sessão. Com popup aberto ela fica parada atrás dele, e o estado dela é relido quando ele fecha.
     fn receive(&mut self, event: crate::browser::Event, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(target_os = "linux")]
+        match event {
+            crate::browser::Event::Popup(target) => return self.adopt_popup(target, window, cx),
+            crate::browser::Event::Closed => return,
+            _ if self.popup.is_some() => return,
+            _ => {}
+        }
+        self.apply(event, window, cx);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn receive_popup(&mut self, event: crate::browser::Event, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            crate::browser::Event::Closed => self.close_popup(window, cx),
+            event => {
+                self.apply(event, window, cx);
+                // Popup que caiu ou se soltou sem o `targetDestroyed` não prende o painel nem o agente nele.
+                if self.popup.as_ref().is_some_and(|p| !p.engine.alive()) { self.close_popup(window, cx); }
+            }
+        }
+    }
+
+    /// Motor próprio no popup; a página da sessão sai da tela e o controlador do agente passa a ele.
+    #[cfg(target_os = "linux")]
+    fn adopt_popup(&mut self, target: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Ok(origin)) = &self.engine else { return };
+        let (events, received) = async_channel::unbounded();
+        let (adopting, origin) = (origin.adopt(target, events), Rc::downgrade(origin));
+        cx.spawn_in(window, async move |this, cx| {
+            let adopted = adopting.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let engine = match adopted {
+                    Ok(engine) => Rc::new(engine),
+                    Err(e) if e.starts_with(crate::browser::POPUP_GONE) => return,
+                    Err(e) => {
+                        eprintln!("[nav] popup da pagina nao abriu: {e}");
+                        this.local_notice = Some(tr("browser_popup_failed").replace("{e}", &e));
+                        return cx.notify();
+                    }
+                };
+                // A página que abriu o popup foi trocada no meio: ele cai junto (o `Drop` fecha o alvo).
+                if !matches!((&this.engine, origin.upgrade()), (Some(Ok(now)), Some(was)) if Rc::ptr_eq(now, &was)) { return; }
+                let drain = cx.spawn_in(window, async move |this, cx| {
+                    while let Ok(event) = received.recv().await {
+                        if this.update_in(cx, |this, window, cx| this.receive_popup(event, window, cx)).is_err() { break; }
+                    }
+                });
+                if !engine.alive() { return; }
+                this.stop_pick(cx);
+                this.drop_viewer();
+                let opener = match this.popup.take() {
+                    // Popup novo no lugar do anterior, que fecha.
+                    Some(old) => old.opener,
+                    None => {
+                        if let Some(origin) = this.engine() { origin.hide(); }
+                        (this.controller.take(), this.cdp.take(), this._activity.take())
+                    }
+                };
+                this.popup = Some(Popup { engine: engine.clone(), opener, _drain: drain });
+                this.attach(&engine, cx);
+                this.apply(crate::browser::Event::State(engine.page()), window, cx);
+            });
+        }).detach();
+    }
+
+    /// Popup fechado (por ele mesmo ou pela pessoa): a página de origem volta à tela com o controlador dela.
+    #[cfg(target_os = "linux")]
+    fn close_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.popup.is_none() { return; }
+        self.stop_pick(cx);
+        self.drop_viewer();
+        let Some(Popup { opener, .. }) = self.popup.take() else { return };
+        (self.controller, self.cdp, self._activity) = opener;
+        self.scale.set(0.);
+        if let Some(ctl) = self.controller.clone() {
+            let hidden = !self.shown;
+            cx.spawn(async move |_, _| ctl.set_hidden(hidden).await).detach();
+        }
+        if let Some(origin) = self.engine() { let page = origin.page(); self.apply(crate::browser::Event::State(page), window, cx); }
+        cx.notify();
+    }
+
+    /// A tela remota do celular segue a sessão CDP de um alvo: na troca de página ela sai, e o próximo espectador entra
+    /// na que está na tela.
+    #[cfg(target_os = "linux")]
+    fn drop_viewer(&self) {
+        self.end_viewer();
+        self.relay.borrow_mut().take();
+    }
+
+    fn apply(&mut self, event: crate::browser::Event, window: &mut Window, cx: &mut Context<Self>) {
         #[cfg(target_os = "windows")]
         if let crate::browser::Event::UserInput = event { return self.user_input(cx); }
         #[cfg(target_os = "windows")]
@@ -370,6 +481,9 @@ impl BrowserPanel {
     /// Navega, ou faz o motor nascer e navega quando ele ficar pronto.
     pub(super) fn go(&mut self, url: String, by: By, window: &mut Window, cx: &mut Context<Self>) {
         self.invalid = None;
+        // Popup que caiu sem fechar não leva junto a página da sessão.
+        #[cfg(target_os = "linux")]
+        if self.popup.as_ref().is_some_and(|p| !p.engine.alive()) { self.close_popup(window, cx); }
         // Motor que falhou (ou o Chromium que caiu) volta a ser tentado no próximo `open`.
         #[cfg(not(target_os = "macos"))]
         if matches!(&self.engine, Some(Err(_))) || self.engine().is_some_and(|e| !e.alive()) { self.drop_engine(); }
@@ -514,6 +628,8 @@ impl BrowserPanel {
     /// Motor que falhou ou cujo Chromium caiu: some com tudo o que falava com ele, e o próximo `open` o refaz.
     #[cfg(not(target_os = "macos"))]
     fn drop_engine(&mut self) {
+        #[cfg(target_os = "linux")]
+        { self.popup = None; }
         self.end_viewer();
         self.relay.borrow_mut().take();
         self.pick.reset();
@@ -1545,6 +1661,14 @@ impl Render for BrowserPanel {
             .child(div().flex_1().min_w_0().text_size(px(11.)).text_color(theme::warning()).whitespace_normal().child(text))
             .child(chrome::icon_button(SharedString::from(format!("{id}-close")), IconName::Close, tr("close"), cx)
                 .on_click(cx.listener(move |this, _, _, cx| { close(this); cx.notify(); })));
+        #[cfg(target_os = "linux")]
+        if self.popup.is_some() {
+            root = root.child(div().id("browser-popup").flex_shrink_0().flex().items_center().gap_2().px_3().py(px(4.))
+                .border_b_1().border_color(theme::border()).role(Role::Status)
+                .child(div().flex_1().min_w_0().text_size(px(11.)).text_color(theme::muted()).whitespace_normal().child(tr("browser_popup_open")))
+                .child(Button::new("browser-popup-close").outline().xsmall().icon(IconName::Close).label(tr("browser_popup_close"))
+                    .on_click(cx.listener(|this, _, window, cx| this.close_popup(window, cx)))));
+        }
         let page_notice = self.page.notice.clone().filter(|_| self.page.notice_seq != self.dismissed_notice);
         if let Some(text) = page_notice { root = root.child(notice_line("browser-page-notice", text, cx, |this| this.dismissed_notice = this.page.notice_seq)); }
         if let Some(text) = self.local_notice.clone() { root = root.child(notice_line("browser-local-notice", text, cx, |this| this.local_notice = None)); }
