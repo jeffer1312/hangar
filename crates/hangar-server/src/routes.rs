@@ -275,6 +275,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _group_sweep = crate::groups::sweep::spawn(state.clone()).map(crate::AbortOnDrop);
     let _link_return = crate::groups::link_return::spawn(state.clone()).map(crate::AbortOnDrop);
     let _federation = crate::groups::federation::spawn(state.clone()).map(crate::AbortOnDrop);
+    // O aviso no celular é decidido aqui, com ou sem lista aberta.
+    let _push_watch: Vec<crate::AbortOnDrop> = crate::push::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
     let _limit_switch = crate::session_write::limit_switch::spawn(state.clone()).map(crate::AbortOnDrop);
     // Sem a fotografia do Python a varredura não revoga nada (ver `life::sweep`); o túnel religa já.
     let _share_sweep = state.share.clone().map(|share| crate::AbortOnDrop(tokio::spawn(
@@ -570,6 +572,11 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_any))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
         .route("/api/push/expo/subscribe", axum::routing::post(crate::push_expo::subscribe))
+        .route("/api/push/vapid", get(crate::push::http::route).fallback(pass_any))
+        .route("/api/push/settings", get(crate::push::http::route).fallback(pass_any))
+        .route("/api/push/subscribe", axum::routing::post(crate::push::http::route).fallback(pass_any))
+        .route("/api/push/mute", axum::routing::post(crate::push::http::route).fallback(pass_any))
+        .route("/api/push/quiet-hours", axum::routing::post(crate::push::http::route).fallback(pass_any))
         .route("/api/presence", get(crate::presence::route).fallback(pass_any))
         // Mesmo caminho: o axum junta o POST à rota de cima (um repasse só, o dela).
         .route("/api/presence", axum::routing::post(crate::presence::route))

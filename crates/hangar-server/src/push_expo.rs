@@ -100,6 +100,15 @@ pub async fn private(State(state): State<Arc<AppState>>, ConnectInfo(peer): Conn
     StatusCode::ACCEPTED.into_response()
 }
 
+/// O aviso que o próprio Rust decidiu (`push::send`): mesmo envio do `private`, sem a volta HTTP.
+pub(crate) fn send(state: &AppState, session: &str, title: (String, String), body: (String, String), list: bool) {
+    let base = state.accounts.env.base.get("HANGAR_EXPO_PUSH_URL").filter(|v| !v.is_empty())
+        .map_or("https://exp.host", String::as_str).trim_end_matches('/').to_owned();
+    let notify = Notify { session: session.to_owned(), title: Localized { pt: title.0, en: title.1 },
+        body: Localized { pt: body.0, en: body.1 }, list };
+    tokio::spawn(deliver(path(&state.accounts.env.home), base, state.diag.clone(), notify));
+}
+
 async fn post(client: &reqwest::Client, url: String, body: Value) -> Result<Value, &'static str> {
     let response = client.post(url).header("content-type", "application/json").body(body.to_string())
         .send().await.map_err(|_| "push_expo_unreachable")?;

@@ -1270,16 +1270,6 @@ def _do_notify_awaiting(session_id: str) -> None:
         if getattr(info, "headless", False):
             # Sem pane: quem sabe da permissão/pergunta em aberto é o adapter. `registry.list`
             # não calcula estado (sai sempre idle), então ler dali nunca mandava o push.
-            from app import runtime_coordinator
-            coordinator = runtime_coordinator.current()
-            if coordinator is not None and coordinator.managed_runtime(info.name):
-                # Com o Rust de pé a sessão é dele: o estado é o último que ele publicou.
-                state = ((coordinator.slot(info.name).view or {}).get("view") or {}).get("public_state")
-                if not isinstance(state, dict):
-                    _log.warning("push aguardando: sem a vista do Rust para %s; push não enviado", info.name)
-                    return False
-                info.state, info.question = state.get("state"), state.get("question")
-                return state.get("state") == "awaiting_input"
             snap = get_adapter(CLAUDE_HEADLESS).snapshot(info.name)
             if snap is None:
                 return False
