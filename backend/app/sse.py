@@ -1222,7 +1222,10 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     if count_app:
         if not side:
             tasks.append(asyncio.create_task(toast_pump()))
-        tasks.append(asyncio.create_task(nav_pump()))
+        from app import account_bridge
+        # Com o Rust de pé o pedido de navegador é dele (`nav_requests.rs`).
+        if account_bridge.owner_mode() == "python":
+            tasks.append(asyncio.create_task(nav_pump()))
     # NUCLEO (conexao): instrumentacao do CICLO DE VIDA do stream. O sintoma relatado é "a conversa
     # para e só volta fechando/abrindo o app", e o log de acesso do uvicorn só mostra a conexão
     # FECHANDO — sem duração, sem motivo, sem quanto foi entregue. Sem isso a causa (queda de rede

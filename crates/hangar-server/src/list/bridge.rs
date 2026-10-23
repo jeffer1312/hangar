@@ -267,6 +267,8 @@ pub struct ListBridge {
     test_plugins: Mutex<Option<BTreeMap<String, Result<crate::state::facts::PluginReading, String>>>>,
     /// Transcripts da última rodada do dono, para a limpeza das páginas; `None` = rodada incerta.
     live_jsonl: Mutex<Option<(Instant, HashSet<String>)>>,
+    /// Pedidos de navegador do agente: a lista os publica, e sessão que acaba ou troca de nome os leva junto.
+    pub nav: Arc<crate::nav_requests::NavStore>,
 }
 
 /// Tarefa bloqueante que entrou em pânico: o hook já registrou onde; aqui fica qual operação.
@@ -283,7 +285,8 @@ impl ListBridge {
     pub fn new(env: ListEnv, facts: FactsClient) -> Self {
         let (caches, demoted) = (Arc::<Caches>::default(), Arc::<crate::state::demote::Demoted>::default());
         caches.classify.with(|c| c.hooks.set_demoted(demoted.clone()));
-        Self { env: Arc::new(env), shadow_facts: facts.sibling(), facts, caches, runtime: std::sync::OnceLock::new(),
+        let nav = Arc::new(crate::nav_requests::NavStore::load(env.dirs.as_ref().map(|d| d.home.as_path())));
+        Self { nav, env: Arc::new(env), shadow_facts: facts.sibling(), facts, caches, runtime: std::sync::OnceLock::new(),
             shares: std::sync::OnceLock::new(), owner_clients: AtomicU32::new(0), seen: Mutex::default(), python_apps: Mutex::default(),
             discovery: tokio::sync::Mutex::new(None),
             snapshot: tokio::sync::Mutex::new(None), git_running: Arc::default(),
@@ -788,6 +791,7 @@ impl ListBridge {
 
     /// `_forget`: nome reusado por outra sessão não herda nada da morta. Não espera, como `seed`.
     pub fn forget(&self, name: &str) {
+        self.nav.forget(name);
         lock(&self.plugin_projection).remove(name);
         let c = &self.caches;
         let n = name.to_owned();
@@ -798,6 +802,7 @@ impl ListBridge {
 
     /// Não espera, como `seed`.
     pub fn rename(&self, old: &str, new: &str) {
+        self.nav.rename(old, new);
         let mut projected = lock(&self.plugin_projection);
         projected.remove(old); projected.remove(new);
         drop(projected);

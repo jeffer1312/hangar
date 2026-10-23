@@ -183,15 +183,16 @@ async def test_guest_channel_failure_closes_the_stream(rust):
     assert exc.value.code == "state_channel_off"
 
 
-async def test_side_events_keeps_nav_ping_and_leaves_mods_and_queue_to_the_hub(rust):
+async def test_side_events_keeps_ping_and_leaves_mods_nav_and_queue_to_the_hub(rust):
     adapter, jsonl = rust
     pqueue.PromptQueue("s").append("manda isso depois", delivered=False)
     sse.nav_pendente("s", "http://localhost:5173")
     plugin_bridge._store_toast("s", "Jenkins configurado.", 9000, "demo")
     plugin_bridge._guardar_faixa("s", {"type": "Box"}, 80, [])
-    vistos = await _por(sse.merged_events("s", str(jsonl), side=True), 1.5)
-    assert {"nav", "ping"} <= set(_nomes(vistos))
+    vistos = await _por(sse.merged_events("s", str(jsonl), side=True, count_app=True), 1.5)
+    assert "ping" in _nomes(vistos)
     assert not {"plugin_ui", "plugin_toast"} & set(_nomes(vistos)), "faixa e avisos de mod são do Rust"
+    assert "nav" not in _nomes(vistos), "o pedido de navegador é do Rust"
     assert "info" not in _nomes(vistos), "a conversa é escolhida pelo Rust"
     assert not {"message", "queue_confirmed"} & set(_nomes(vistos)), "a fila sai do hub"
     assert not {"state", "preview", "ask_question", "suggest"} & set(_nomes(vistos))
@@ -351,9 +352,9 @@ async def test_codex_turning_rust_owned_moves_the_queue_to_the_channel(codex, mo
 
 
 @pytest.mark.parametrize("count_app", [False, True])
-async def test_nav_marker_only_reaches_owner_connections(rust, count_app):
-    # A url do rascunho de página leva o token do dono: convidado e par externo (count_app=False)
-    # nunca recebem o marcador; o dono pela porta do Connect recebe.
+async def test_python_never_delivers_the_nav_marker_while_rust_owns_it(rust, count_app):
+    # Com o Rust de pé o pedido de navegador é dele (`nav_requests.rs`): o Python não o entrega a
+    # ninguém, nem ao dono pela porta do Connect. A url leva o token do dono.
     _adapter, jsonl = rust
     sse.nav_pendente("s", "http://127.0.0.1:8765/api/sessions/s/pages/abc?token=segredo")
     vistos = []
@@ -370,9 +371,8 @@ async def test_nav_marker_only_reaches_owner_connections(rust, count_app):
         finally:
             await gen.aclose()
     sse.nav_confirmar("s")
-    assert ("nav" in _nomes(vistos)) is count_app
-    if not count_app:
-        assert not any("segredo" in str(e.get("data", "")) for e in vistos)
+    assert "nav" not in _nomes(vistos)
+    assert not any("segredo" in str(e.get("data", "")) for e in vistos)
 
 
 # --- Claude sem terminal: o feed do hub é dono dos seis, sugestão incluída ---

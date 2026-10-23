@@ -93,16 +93,13 @@ def test_facts_transfer_overrides_by_name(monkeypatch):
     assert sorted(out["frozen"]) == ["nova", "troca"]
 
 
-def test_facts_nav_expired_not_returned(monkeypatch, tmp_path):
-    monkeypatch.setattr(sse, "_nav_arquivo", lambda: tmp_path / "pendentes.json")
+def test_facts_leave_the_browser_request_to_rust(monkeypatch, tmp_path):
+    # O pedido de navegador é do Rust (`nav_requests.rs`): os fatos não o levam mais.
+    monkeypatch.setattr(sse, "_nav_arquivo", lambda: tmp_path / "_pendentes.json")
     sse._NAV_MARCADORES.clear()
-    monkeypatch.setattr(sse, "_nav_carregado", False)
     sse.nav_pendente("viva", "http://a")
-    sse.nav_pendente("velha", "http://b")
-    sse._NAV_MARCADORES["velha"]["ts"] -= sse._NAV_TTL_S + 1
     out = _compute([])
-    assert set(out["nav"]) == {"viva"}
-    assert out["nav"]["viva"]["url"] == "http://a"
+    assert "nav" not in out
     json.dumps(out)
     sse._NAV_MARCADORES.clear()
 

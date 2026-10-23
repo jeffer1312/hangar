@@ -203,9 +203,12 @@ async fn lista_do_convidado_marca_o_tipo_de_cada_sessao() {
 #[tokio::test(flavor = "multi_thread")]
 async fn stream_da_lista_filtrado_e_sem_contar_app() {
     let dir = tempfile::tempdir().unwrap();
-    let srv = list_srv(dir.path(), 2).await;
     // O dono tem pedido de navegador e terminal de atalho: nenhum dos dois vai ao convidado.
-    set_facts(&srv.python, "nav", json!({"s0": {"url": "http://127.0.0.1:5173/", "ts": 7.0}}));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+    let pending = dir.path().join("home/.hangar/nav/_pendentes.json");
+    std::fs::create_dir_all(pending.parent().unwrap()).unwrap();
+    std::fs::write(&pending, json!({"s0": {"url": "http://127.0.0.1:5173/", "ts": now}}).to_string()).unwrap();
+    let srv = list_srv(dir.path(), 2).await;
     set_facts(&srv.python, "shortcuts", json!("{\"s0\":[]}"));
     let t = srv.g.token("s0", Kind::Share);
     let mut es = open_sse(format!("http://{}/api/sessions/events?token={t}", srv.guest)).await;

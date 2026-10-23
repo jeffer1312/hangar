@@ -25,6 +25,7 @@ pub mod mcp;
 pub mod mermaid;
 pub mod migration_status;
 pub mod mods;
+pub mod nav_requests;
 pub mod pages;
 pub mod prewarm;
 pub(crate) mod queue_feed;

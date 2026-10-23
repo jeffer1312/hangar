@@ -1690,7 +1690,8 @@ Sem a ponte, cada um mantinha uma fazenda de symlinks à mão apontando pro
   `pop` em memória entregue ao PRIMEIRO stream da sessão que passasse: o celular lendo a mesma
   sessão comia o evento (medido: 7 conexões da VPS contra 2 locais) e o desktop nunca via; e
   reiniciar o backend perdia o pedido. Hoje é um marcador `{url, ts}` por sessão em
-  `~/.hangar/nav/pendentes.json`, entregue **uma vez por conexão** nos dois streams — o da sessão
+  `~/.hangar/nav/_pendentes.json` (do Rust, `nav_requests.rs`, desde 23/10/2026; o Python só o
+  relê para a 8768 e o modo `python`), entregue **uma vez por conexão** nos dois streams — o da sessão
   e o da **lista**, que é o único que o desktop mantém aberto o tempo todo — e apagado quando o
   shell confirma que criou o view (`DELETE /nav`) ou em 10 min. Do lado do shell, o view nasce
   **escondido** (`setVisible(false)`) e já carrega: o agente dirige por CDP na hora, e o

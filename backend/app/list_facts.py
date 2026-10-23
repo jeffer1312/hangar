@@ -44,8 +44,6 @@ async def compute(rows: list[dict], owner_clients: int, pane_pids: dict[str, int
         await sse._list_registry.list_with_state(others, state_only=True)
     # Tudo o que lê disco numa ida só ao threadpool.
     out = await internal_thread(_files, infos, others, pane_pids)
-    # No laço: `nav_pendente`/`nav_confirmar` mexem no mesmo mapa daqui, sem trava.
-    out["nav"] = dict(sse.nav_vivos())
     loop = asyncio.get_running_loop()
     if _shortcuts._loop is not loop:
         # Leitura de outro laço nunca termina neste: recomeça (testes, reinício do servidor).
@@ -69,8 +67,6 @@ async def _shadow(infos: list[SessionInfo], pane_pids: dict[str, int]) -> dict:
     others = [by_name[i.name] for i in infos if i.provider in _OTHERS and i.name in by_name]
     out = await internal_thread(_files, infos, [], pane_pids)
     out["states"] = {i.name: {f: getattr(i, f) for f in (*_STATE_FIELDS, "conta")} for i in others}
-    # `nav_vivos` grava ao vencer marcador; a sombra não serve navegador.
-    out["nav"] = {}
     out["shortcuts"] = None
     out["shadow"] = None if served is None else {i.name: _row_sig(i) for i in served}
     return out

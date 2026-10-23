@@ -69,8 +69,12 @@ async fn error_then_recovery_reemits_same_list() {
 async fn nav_once_per_client() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), 1).await;
-    set_facts(&srv.python, "nav", json!({"s0": {"url": "http://127.0.0.1:5173/", "ts": 7.0}}));
     let mut a = open(srv.addr).await;
+    // O pedido nasce no Rust, sem ir ao Python, e a lista aberta o recebe sem esperar o tique.
+    let r = client().post(format!("http://{}/api/sessions/s0/nav", srv.addr)).bearer_auth(OWNER)
+        .json(&json!({"url": "127.0.0.1:5173/"})).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(srv.python.hits_to("/api/sessions/s0/nav"), 0);
     let nav = next_named(&mut a, "nav").await;
     assert_eq!(serde_json::from_str::<Value>(&nav.data).unwrap(), json!({"name": "s0", "url": "http://127.0.0.1:5173/"}));
     let mut b = open(srv.addr).await;

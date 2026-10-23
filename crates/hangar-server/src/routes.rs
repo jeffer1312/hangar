@@ -543,6 +543,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Reserva pré-aquecida do Claude sem terminal: só o dono; outro método segue ao Python.
         .route("/api/sessions/prewarm", axum::routing::put(crate::prewarm::http::put).fallback(pass_any))
         .route("/api/sessions/prewarm/{id}", axum::routing::delete(crate::prewarm::http::delete).fallback(pass_any))
+        // Pedido de navegador do agente: só o dono; o Connect chega pela ponte (`forwarded`).
+        .route("/api/sessions/{name}/nav", axum::routing::post(crate::nav_requests::open).delete(crate::nav_requests::confirm).fallback(pass_any))
         // Bastão do dono: o Python prepara o dossiê e a sucessora Claude com terminal nasce aqui.
         .route("/api/sessions/{name}/bastao", axum::routing::post(crate::session_open::server::bastao).fallback(pass_any))
         // Retomar do Arquivo e o `/resume` ao vivo: a abertura e a reabertura do Rust, com a conversa que já existe.
@@ -930,6 +932,8 @@ async fn events(
     if let Some(info) = &info { lease.hub.learn_queue(info); }
     let hub = lease.hub.clone();
     let (tx, rx) = mpsc::channel::<Queued>(64);
+    // Pedido de navegador ainda vivo: o aparelho do dono que abre a conversa agora também o recebe.
+    if !guest && let Some(frame) = crate::nav_requests::chat_frame(&st, &name) { let _ = tx.try_send(frame.into()); }
     tokio::spawn(client_loop(lease, resume, tx));
     let mut resp = Response::new(Body::from_stream(device_stream(rx, hub, deltas, guest).map(Ok::<Bytes, Infallible>)));
     let h = resp.headers_mut();

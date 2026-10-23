@@ -346,19 +346,12 @@ async def _lifespan(app: FastAPI):
     )
     app.state.omp_plugin_sync = omp_sync
     await omp_sync.start()
-    # Em tarefa: o download dos binários na primeira vez não pode segurar a subida. Criada colada no
-    # `try`: falha no meio da subida não pode deixar o frpc e o Caddy sem quem os pare.
-    from app import connect as connect_mod
-    connect_task = asyncio.create_task(connect_mod.start(), name="connect-start")
     try:
         yield
     finally:
         diag.registrar("backend.encerrando")
         await runtime.shutdown()
         await runtime.close_events()
-        connect_task.cancel()
-        await asyncio.gather(connect_task, return_exceptions=True)
-        await connect_mod.stop()
         costs_sources.cancelar_aquecimento()
         # Claude sem terminal fica vivo no cano: só fecha a conexão; o próximo backend religa.
         if _transfer_recovery is not None:
@@ -7501,7 +7494,6 @@ async def connect_put(body: ConnectBody):
         connect.save(body.code)
     except connect.ConnectError as e:
         raise HTTPException(e.status, detail=erro(e.code, e.msg)) from None
-    await connect.start()
     return connect.status()
 
 
