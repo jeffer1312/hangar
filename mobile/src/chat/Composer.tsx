@@ -298,7 +298,10 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   // Cada anexo sobe assim que entra no campo; o Enviar só espera o que ainda está no ar. A chave é a
   // uri: anexo removido sai do mapa e o resultado que chegar depois não volta para a lista.
   const uploadsRef = useRef(new Map<string, Promise<string>>());
+  const failedUploadsRef = useRef(new Set<string>());
   const recordUpload = useCallback((uri: string, path: string, target: UploadTarget): boolean => {
+    // Desmontado, a lista em memória é velha: gravá-la apagaria o que outra montagem pôs no rascunho.
+    if (!mountedRef.current) return true;
     const list = attachmentsRef.current;
     if (!list.some((a) => a.uri === uri && a.uploadedPath !== path)) return true;
     const next = list.map((a) => (a.uri === uri ? { ...a, uploadedPath: path, uploadedFor: target } : a));
@@ -310,13 +313,14 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     const running = uploadsRef.current.get(attach.uri);
     if (running) return running;
     const target = { serverId: origin.serverId, name: origin.name, transcript: transcriptRef.current };
-    const upload: Promise<string> = (async () => {
+    // O corpo só lê `upload` depois do primeiro await, quando ele já foi atribuído.
+    let upload!: Promise<string>;
+    upload = (async () => {
       const server = useServers.getState().servers.find((s) => s.id === origin.serverId);
       if (!server) throw new Error(m.chat_servidor_removido());
       const blob = await (await fetch(attach.uri)).blob();
       const path = (await uploadFileForServer(server, origin.name, new File([blob], attach.name, { type: attach.mime }))).path;
-      // Desmontado, a lista em memória é velha: gravá-la apagaria o que outra montagem pôs no rascunho.
-      if (mountedRef.current && uploadsRef.current.get(attach.uri) === upload) recordUpload(attach.uri, path, target);
+      if (uploadsRef.current.get(attach.uri) === upload) recordUpload(attach.uri, path, target);
       return path;
     })();
     uploadsRef.current.set(attach.uri, upload);
@@ -429,8 +433,10 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   useEffect(() => {
     const target = { serverId: origin.serverId, name: origin.name, transcript: transcriptRef.current };
     for (const a of pendingAttachments) {
-      // A falha fica para o Enviar, que tenta de novo e mostra o motivo.
-      if (!reusableUploadPath(a, target)) startUpload(a).catch(() => {});
+      // A falha fica para o Enviar, que tenta de novo e mostra o motivo; aqui não sobe o mesmo arquivo de novo.
+      if (!reusableUploadPath(a, target) && !failedUploadsRef.current.has(a.uri)) {
+        startUpload(a).catch(() => { failedUploadsRef.current.add(a.uri); });
+      }
     }
   }, [pendingAttachments, origin, startUpload]);
 
@@ -772,7 +778,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     // Como o texto, os anexos enviados saem do campo já; só a falha os devolve, com o caminho do upload.
     const uploadedSent = attachmentsRef.current.filter((a) => sentAttachments.some((x) => x.uri === a.uri));
     const unsent = attachmentsRef.current.filter((a) => !uploadedSent.includes(a));
-    const attachmentsLeft = uploadedSent.length > 0 && persistDraft({ attachments: unsent });
+    const attachmentsLeft = mountedRef.current && uploadedSent.length > 0 && persistDraft({ attachments: unsent });
     if (attachmentsLeft) setPendingAttachments(unsent);
     let groupPendingId: string | null = null;
     try {
@@ -816,7 +822,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       if (groupPendingId) {
         chat.use.setState((current) => ({ pending: current.pending.filter((item) => item.id !== groupPendingId) }));
       }
-      if (attachmentsLeft) {
+      if (attachmentsLeft && mountedRef.current) {
         const back = mergeAttachments(uploadedSent, attachmentsRef.current);
         if (persistDraft({ attachments: back })) setPendingAttachments(back);
       }

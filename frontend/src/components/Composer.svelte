@@ -2087,6 +2087,8 @@ import { cachePrazo } from '../lib/cachePrazo';
         // e aí o índice de todo mundo depois dele anda, e o anel ia parar no tile errado (pior: um
         // anexo que nunca subiu ganhava 100%). A referência do objeto sobrevive ao filter.
         for (const a of [...attachments]) {
+          // Removido durante o envio: fica fora da mensagem e não sobe de novo.
+          if (!attachments.includes(a)) continue;
           // Reusa o upload começado ao anexar (nunca sobe o mesmo arquivo duas vezes). Se ele
           // falhou, tenta mais uma vez aqui; falhou de novo, cai no catch de sempre.
           const nova = !a.subida || a.subidaChave !== chaveSubida();
@@ -2098,8 +2100,11 @@ import { cachePrazo } from '../lib/cachePrazo';
             if (nova) throw e;
             r = a.subida === subida ? await subir(a) : null;
           }
-          // null = removido no meio do envio: fica fora da mensagem.
-          if (!r) continue;
+          // null com o anexo ainda na lista = a sessão trocou no meio: falha visível, rascunho fica.
+          if (!r) {
+            if (!attachments.includes(a)) continue;
+            throw new Error(m.composer_falha_envio());
+          }
           const { path, frames, transcript } = r;
           parts.push((a.isImage ? `📎 ${m.board_imagem()}: ` : `📎 ${m.board_arquivo()}: `) + path);
           // Video: o backend extraiu quadros ao longo da duracao e transcreveu a fala. Os quadros
