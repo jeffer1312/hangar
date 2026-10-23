@@ -350,9 +350,9 @@ async def test_codex_turning_rust_owned_moves_the_queue_to_the_channel(codex, mo
 
 
 @pytest.mark.parametrize("count_app", [False, True])
-async def test_nav_marker_only_reaches_owner_connections(rust, count_app):
-    # A url do rascunho de página leva o token do dono: convidado e par externo (count_app=False)
-    # nunca recebem o marcador; o dono pela porta do Connect recebe.
+async def test_python_never_delivers_the_nav_marker_while_rust_owns_it(rust, count_app):
+    # Com o Rust de pé o pedido de navegador é dele (`nav_requests.rs`): o Python não o entrega a
+    # ninguém, nem ao dono pela porta do Connect. A url leva o token do dono.
     _adapter, jsonl = rust
     sse.nav_pendente("s", "http://127.0.0.1:8765/api/sessions/s/pages/abc?token=segredo")
     vistos = []
@@ -369,9 +369,8 @@ async def test_nav_marker_only_reaches_owner_connections(rust, count_app):
         finally:
             await gen.aclose()
     sse.nav_confirmar("s")
-    assert ("nav" in _nomes(vistos)) is count_app
-    if not count_app:
-        assert not any("segredo" in str(e.get("data", "")) for e in vistos)
+    assert "nav" not in _nomes(vistos)
+    assert not any("segredo" in str(e.get("data", "")) for e in vistos)
 
 
 # --- Claude sem terminal: o feed do hub é dono dos seis, sugestão incluída ---
