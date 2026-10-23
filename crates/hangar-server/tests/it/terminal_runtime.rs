@@ -2272,3 +2272,26 @@ async fn model_picker_b11_repeated_id_answers_from_the_journal() {
     h.stop().await.unwrap();
 }
 
+#[tokio::test]
+async fn queued_row_goes_out_at_turn_end_and_is_confirmed_without_any_drain_or_confirm_request() {
+    // Sem hub nem aparelho ninguém pede `drain` ou `confirm`: o relógio do ator entrega no fim do turno e
+    // confirma pelo transcript, também depois de reiniciar com a linha esperando.
+    use std::sync::atomic::Ordering::Release;
+    let f=Fixture::new().await; f.idle.store(false,Release);
+    let h=f.start();
+    h.queue("append-a".into(),Action::Append {text:"fim do turno".into(),delivered:false,ts:None,pre_transcript:false,entry_id:Some("a".into())}).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(f.sent_prompts().is_empty(),"turno em andamento: nada é escrito");
+    f.idle.store(true,Release);
+    f.wait_for("entregue no fim do turno",||f.sent_prompts()==vec!["fim do turno".to_string()]).await;
+    std::fs::write(&f.target.transcript,format!("{}\n",json!({"type":"user","sessionId":"sid","uuid":"a-echo","timestamp":chrono::Utc::now().to_rfc3339(),"message":{"content":"fim do turno"}}))).unwrap();
+    f.wait_for("confirmada pelo transcript",||f.state()["rows"][0]["confirmed"]==true).await;
+    f.idle.store(false,Release);
+    h.queue("append-b".into(),Action::Append {text:"depois do reinicio".into(),delivered:false,ts:None,pre_transcript:false,entry_id:Some("b".into())}).await.unwrap();
+    h.stop().await.unwrap();
+    f.idle.store(true,Release);
+    let h=f.start();
+    f.wait_for("entregue depois do reinício",||f.sent_prompts().last().map(String::as_str)==Some("depois do reinicio")).await;
+    h.stop().await.unwrap();
+}
+

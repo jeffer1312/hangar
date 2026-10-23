@@ -317,9 +317,6 @@ async def _lifespan(app: FastAPI):
     threading.Thread(target=_usd_brl, name="usd-brl-warm", daemon=True).start()
     # Catálogo do pi/omp em fundo: a primeira lista de modelos depois do restart levava segundos.
     pi_catalog.warm()
-    # Primeira coleta de custos/uso desta subida, em background e só depois de o boot assentar:
-    # máquina nova varre 1 GB+ de transcript sem ninguém ter clicado, e a tela já abre pronta.
-    costs_sources.agendar_aquecimento(30)
     from app import transcript_index
     transcript_index.start_background()
     # A linha vive no loop do servidor, mas o send_prompt roda em thread — ver pi_inbox.entregar_sync.
