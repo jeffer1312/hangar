@@ -283,8 +283,8 @@ def mint(name: str, key: str | None = None) -> str:
     a sessão viva batendo 403 para sempre. Com a chave dentro do token, a conferência se refaz
     igual depois do restart sem guardar nada. Não é o bearer do app: é um HMAC dele, de mão única.
 
-    O formato só com o nome é o dos processos lançados antes da chave, e o da cópia do `/ui` que o
-    Rust manda com o nome atual; dois processos com o mesmo nome têm o mesmo token nele.
+    O formato só com o nome é o dos processos lançados antes da chave; dois processos com o mesmo
+    nome têm o mesmo token nele.
     """
     from app.config import settings
     segredo = (settings.auth_token or "hangar").encode()

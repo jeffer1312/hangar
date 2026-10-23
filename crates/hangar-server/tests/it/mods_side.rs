@@ -100,8 +100,10 @@ async fn forget_clears_the_band() {
     assert!(cleared["above"].is_null() && cleared["panes"] == json!([]));
 }
 
+/// Sessão sem entrada no Rust (o `claude` aberto à mão): a faixa e os avisos vêm da ponte do plugin no Rust,
+/// e o que o Python ainda mandasse pela conexão interna não chega aos aparelhos.
 #[tokio::test]
-async fn python_band_and_toast_pass_when_rust_does_not_own_the_session() {
+async fn the_band_of_a_session_rust_does_not_own_comes_from_the_rust_bridge_not_python() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("conversation.jsonl");
     append_lines(&path, 0..1);
@@ -110,9 +112,16 @@ async fn python_band_and_toast_pass_when_rust_does_not_own_the_session() {
     let server = spawn_state(AppState::new(config(upstream, "127.0.0.1"))).await;
     let mut events = sse(open_events(server, "s", "", &[]).await);
     wait_until(|| python.side_conns() == 1).await;
-    python.push_side("plugin_ui", &json!({"above": null, "panes": []}).to_string());
-    assert_eq!(next_named(&mut events, "plugin_ui").await.data, json!({"above": null, "panes": []}).to_string());
+    python.push_side("plugin_ui", &json!({"above": {"type": "Box"}, "panes": []}).to_string());
     python.push_side("plugin_toast", &json!({"id": "py-1", "text": "do python", "plugin": "m", "timeoutMs": 4000}).to_string());
+    let post = |route: &str, body: Value| client().post(format!("http://{server}/api/plugin/{route}"))
+        .header("content-type", "application/json").body(body.to_string()).send();
+    let token = hangar_server::mods::bridge::mint(OWNER, "s");
+    assert_eq!(post("ui", json!({"sessao": "s", "token": token, "above": null, "panes": []})).await.unwrap().status(), 200);
+    assert_eq!(post("toast", json!({"sessao": "s", "token": token, "text": "do rust", "plugin": "m"})).await.unwrap().status(), 200);
+    let ui: Value = serde_json::from_str(&next_named(&mut events, "plugin_ui").await.data).unwrap();
+    assert_eq!(ui, json!({"above": null, "panes": []}), "a faixa do Python não chega antes da do Rust");
     let toast: Value = serde_json::from_str(&next_named(&mut events, "plugin_toast").await.data).unwrap();
-    assert_eq!(toast["text"], "do python");
+    assert_eq!(toast["text"], "do rust");
+    assert_eq!(python.hits_to("/api/plugin/ui") + python.hits_to("/api/plugin/toast"), 0);
 }

@@ -1208,15 +1208,17 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         stats_task,
         *state_tasks.values(),
         asyncio.create_task(ping_loop()),
-        asyncio.create_task(band_pump()),
     ]
-    # Conexão interna do Rust: quem escolhe e troca o transcript é ele, que religa esta conexão.
+    # Conexão interna do Rust: quem escolhe e troca o transcript é ele, que religa esta conexão. Faixa e
+    # avisos de mod de Claude e Codex também são dele (`Mods`), inclusive da sessão aberta à mão.
     if not side:
         tasks.append(asyncio.create_task(jsonl_watcher()))
+        tasks.append(asyncio.create_task(band_pump()))
     # Aviso de mod pode trazer texto sensível do dono: convidado não recebe. O marcador do navegador
     # também não: a url da página de rascunho leva o token do dono.
     if count_app:
-        tasks.append(asyncio.create_task(toast_pump()))
+        if not side:
+            tasks.append(asyncio.create_task(toast_pump()))
         tasks.append(asyncio.create_task(nav_pump()))
     # NUCLEO (conexao): instrumentacao do CICLO DE VIDA do stream. O sintoma relatado é "a conversa
     # para e só volta fechando/abrindo o app", e o log de acesso do uvicorn só mostra a conexão

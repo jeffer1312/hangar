@@ -231,9 +231,7 @@ impl Sources for NativeSources {
         Box::pin(async move {
             let state = self.state()?;
             if self.identity(&identity.name).await?.binding != identity.binding { return Err(ServiceError("plugin_conversation_mismatch")); }
-            // Falta só o espelho da sessão com terminal já ligada: sem faixa (`above` nulo) ele ainda traz os `caps`,
-            // e fora do terminal o `/ui` não teria onde cair.
-            Ok(state.mods.terminal_mirrored(&identity.name) != Some(false))
+            Ok(state.mods.band_present(&identity.name))
         })
     }
     fn context<'a>(&'a self, identity: &'a Identity, context: MeasuredContext) -> SourceFuture<'a, ()> {
