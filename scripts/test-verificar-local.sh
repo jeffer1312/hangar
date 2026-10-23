@@ -155,6 +155,20 @@ podar 220 "deps/libdep-1.rlib deps/novo-1 deps/velho-1 "
 podar 160 "deps/libdep-1.rlib deps/novo-1 "
 podar 32 ""
 
+# Memória curta põe as faixas em fila: limite padrão 6 GB, ajustável; leitura falha conta como curta.
+memoria() {   # $1 = MemAvailable em kB ("" = sem a linha), $2 = limite em GB ("" = padrão), $3 = curta|folga
+    local f r; f="$(mktemp)"
+    printf 'MemTotal: 24000000 kB\n' > "$f"
+    [[ -n "$1" ]] && printf 'MemAvailable: %s kB\n' "$1" >> "$f"
+    if HANGAR_VERIFICAR_MEMINFO="$f" HANGAR_VERIFICAR_MEM_GB="$2" "$V" --memoria-curta; then r=curta; else r=folga; fi
+    [[ "$r" == "$3" ]] || { echo "FALHOU memória $1 kB, limite \"$2\": $r (esperado $3)"; falhou=1; }
+    rm -f "$f"
+}
+memoria 2000000 "" curta
+memoria 20000000 "" folga
+memoria 2000000 1 folga
+memoria "" "" curta
+
 # Andamento: repassa tudo e só as linhas de passo vão ao arquivo, com a hora na frente.
 anda="$(mktemp)"
 saida="$(printf '>> linux: rust…\ncompilando\n<< linux: rust 12s ok\n' | "$V" --marcar "$anda")"

@@ -20,7 +20,8 @@
 # Teto do crates/target da árvore fixa: HANGAR_VERIFICAR_TARGET_GB (padrão 40); passou, limpa.
 # Com n > 1, os passos do Linux rodam em faixas paralelas (rust | backend | nativo | front e mobile |
 # os leves), e n vale por faixa: o pytest e o vitest usam n processos e o cargo do preparo até n
-# jobs. Com 1, tudo em fila, como antes.
+# jobs. Com 1, tudo em fila, como antes. Memória disponível abaixo de HANGAR_VERIFICAR_MEM_GB
+# (padrão 6) ao abrir uma faixa: ela espera a anterior terminar, com os mesmos passos.
 #
 # A árvore verificada é um clone fixo por máquina, não o checkout de quem chama: compila só o que
 # mudou desde a última verificação, nunca mistura binário de outro checkout e deixa o checkout
@@ -361,11 +362,20 @@ passo_front_rapido() {
     (( ${#rel[@]} )) || return 0
     (cd packages/core && npx vitest related --run --passWithNoTests "${rel[@]}") || return 1
     # O core é reexportado inteiro pelo index: "relacionado" a um arquivo dele é quase todo teste do
-    # front (mais de 40 min). Core sozinho fica com os testes dele e o tsc/svelte-check acima; o
-    # comportamento do front que depende dele é do CI.
-    local front=()
-    for f in "${rel[@]}"; do [[ "$f" == "$PWD"/frontend/* ]] && front+=("$f"); done
-    (( ${#front[@]} )) || { echo "só o core mudou: testes do front ficam para o CI"; return 0; }
+    # front (mais de 40 min). Do front entram os arquivos que importam um nome que o diff do core
+    # mudou (direto ou por quem o usa dentro do core), e o vitest acha os testes deles.
+    local front=() core=() base_arg=() sel
+    for f in "${rel[@]}"; do
+        [[ "$f" == "$PWD"/frontend/* ]] && front+=("$f")
+        [[ "$f" == "$PWD"/packages/core/* ]] && core+=("$f")
+    done
+    [[ -n "${HANGAR_VERIFICAR_BASE:-}" ]] && base_arg=(--base "$HANGAR_VERIFICAR_BASE")
+    if (( ${#core[@]} )); then
+        sel="$(node scripts/core-front-tests.mjs "${base_arg[@]}" "${core[@]}")" || return 1
+        [[ -n "$sel" ]] && mapfile -t -O "${#front[@]}" front <<< "$sel"
+        echo "core mudou: $(grep -c . <<< "$sel") arquivos do front usam o que mudou"
+    fi
+    (( ${#front[@]} )) || return 0
     (cd frontend && npx vitest related --run --passWithNoTests "${front[@]}")
 }
 
@@ -452,6 +462,14 @@ node_da_arvore() {
     dirname "$(realpath "$(command -v node)")"
 }
 
+# Sai 0 quando a memória disponível está abaixo do limite (HANGAR_VERIFICAR_MEM_GB, padrão 6). Sem
+# leitura, conta como curta: a faixa espera em vez de arriscar o swap.
+memoria_curta() {
+    local kb
+    kb="$(awk '/^MemAvailable:/ {print $2}' "${HANGAR_VERIFICAR_MEMINFO:-/proc/meminfo}" 2>/dev/null)"
+    [[ -z "$kb" ]] || (( kb < ${HANGAR_VERIFICAR_MEM_GB:-6} * 1048576 ))
+}
+
 # Preparo e depois os passos em faixas; com PROCESSOS=1, uma faixa só, na ordem do plano. Imprime
 # um resumo único, no formato do rodar_passos.
 rodar_em_faixas() {   # $1 = sha, resto = passos
@@ -476,6 +494,12 @@ rodar_em_faixas() {   # $1 = sha, resto = passos
     (( ${#web[@]} )) && faixas+=("${web[*]}")
     local i pids=() falhou=0
     for i in "${!faixas[@]}"; do
+        # Com a memória curta, a faixa seguinte espera a anterior: os mesmos passos, sem swap.
+        if (( i > 0 )) && memoria_curta; then
+            echo "verificar-local: memória livre abaixo de ${HANGAR_VERIFICAR_MEM_GB:-6} GB, faixa $i espera a anterior" >&3
+            for p in "${pids[@]}"; do wait "$p" || falhou=1; done
+            pids=()
+        fi
         # shellcheck disable=SC2086
         rodar_passos "$sha" ${faixas[$i]} > "$saidas/faixa-$i" 2>&1 &
         pids+=($!)
@@ -707,6 +731,11 @@ if [[ "${1:-}" == --podar ]]; then   # uso do teste: --podar <target> <teto em K
     exit 0
 fi
 
+if [[ "${1:-}" == --memoria-curta ]]; then   # uso do teste
+    memoria_curta
+    exit $?
+fi
+
 if [[ "${1:-}" == --marcar ]]; then   # uso do teste: --marcar <arquivo>
     marcar "$2"
     exit 0
@@ -884,7 +913,8 @@ exec 3> >(marcar "$ANDAMENTO" >&2)
     rl=0
     if [[ -n "$plano_lin" ]]; then
         # shellcheck disable=SC2086
-        ORIGEM="$ORIGEM" HANGAR_VERIFICAR_PROCESSOS="$PROCESSOS" HANGAR_VERIFICAR_ARQUIVOS="${arquivos:-}" nice -n 10 ionice -c 3 \
+        ORIGEM="$ORIGEM" HANGAR_VERIFICAR_PROCESSOS="$PROCESSOS" HANGAR_VERIFICAR_ARQUIVOS="${arquivos:-}" \
+            HANGAR_VERIFICAR_BASE="$base" nice -n 10 ionice -c 3 \
             bash "$SCRIPT" --executar linux "$sha" - $plano_lin 9>&- | tee "$saida_lin"
         rl=${PIPESTATUS[0]}
     fi

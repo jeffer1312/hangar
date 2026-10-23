@@ -7,5 +7,7 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts'],
     globals: true,
+    // A transformação de cada módulo (as mensagens do Paraglide pesam) fica em disco entre rodadas.
+    experimental: { fsModuleCache: true },
   },
 });

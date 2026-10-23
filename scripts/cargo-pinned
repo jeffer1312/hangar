@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Roda o cargo do crates/ no target compartilhado da máquina (target-dir do ~/.cargo/config.toml)
+# e copia os executáveis que ele produziu para crates/target/<perfil>/ deste checkout, dentro da
+# mesma trava. Quem executa o binário fora do cargo (pytest, CP_RUST_SERVER_BIN) usa a cópia: o
+# build de outra worktree reescreve o executável do target comum, nunca o deste checkout.
+#
+# Uso:  scripts/cargo-pinned build -p hangar-server [--release]
+#       scripts/cargo-pinned test -p hangar-server --test it <filtro>
+# Pega a trava da máquina (HANGAR_BUILD_LOCK, padrão /tmp/hangar-build.lock) sozinho: não envolva
+# com outro flock nela, ou espera para sempre. Prioridade baixa e CARGO_BUILD_JOBS (padrão 2).
+set -euo pipefail
+
+raiz="$(git rev-parse --show-toplevel)"
+cd "$raiz/crates"
+exec 9>"${HANGAR_BUILD_LOCK:-/tmp/hangar-build.lock}"
+flock 9
+
+alvo="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)"
+proprio="$(realpath -m "$raiz/crates/target")"
+[[ "$(realpath -m "$alvo")" == "$proprio" ]] && alvo=""
+
+nice -n 19 ionice -c 3 cargo "$@" -j "${CARGO_BUILD_JOBS:-2}" --message-format=json-render-diagnostics |
+    # No `cargo test` a saída dos testes vem misturada às mensagens do cargo: ela passa adiante.
+    jq -rR --unbuffered '. as $l | (try fromjson catch null) as $j
+        | if ($j | type) != "object" then "L\t" + $l
+          elif $j.reason == "compiler-artifact" and $j.executable != null and ($j.profile.test | not)
+          then "E\t" + $j.executable else empty end' |
+    while IFS= read -r l; do
+        if [[ "$l" == L$'\t'* ]]; then printf '%s\n' "${l#L$'\t'}"; continue; fi
+        exe="${l#E$'\t'}"
+        [[ -n "$alvo" && "$exe" == "$alvo"/* ]] || continue
+        dest="$proprio/${exe#"$alvo"/}"
+        mkdir -p "$(dirname "$dest")"
+        cp -f "$exe" "$dest.tmp"
+        mv -f "$dest.tmp" "$dest"
+    done

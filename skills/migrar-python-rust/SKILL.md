@@ -118,9 +118,8 @@ commit, decisão) | plataforma`. Mostre a contagem por área e peça a aprovaç�
 
 1. Commite tudo antes de abrir worktrees. Rotas independentes, ou cuja base já foi mesclada,
    abrem juntas: um subagente por rota, cada um numa worktree própria a partir da ponta da branch
-   (no Claude Code, `isolation: "worktree"`), no máximo 3 por vez. Confira o disco antes: cada
-   worktree compila do zero o próprio `crates/target` (~7 GB). Rota que depende de outra espera a
-   base ser mesclada.
+   (no Claude Code, `isolation: "worktree"`), no máximo 3 por vez. Todas compilam no target
+   comum da máquina, só o que mudou. Rota que depende de outra espera a base ser mesclada.
 2. O subagente recebe os caminhos absolutos dos arquivos de fase (`.superpowers/` não vai para a
    worktree) e o recorte da rota: as linhas do inventário, o contrato e as decisões que a tocam,
    as armadilhas da fase 4 e as regras abaixo. Devolve cada ID fechado com o teste que o prova e
@@ -132,9 +131,9 @@ commit, decisão) | plataforma`. Mostre a contagem por área e peça a aprovaç�
    contrato e o recorte do inventário. A correção volta ao subagente que escreveu; a sessão
    confere o diff e os testes dela, sem nova rodada do revisor.
 4. A sessão mescla uma worktree por vez: resolve o conflito, sobe o protocolo (regra 7) e roda
-   `cargo test --workspace` e o pytest da área antes da mesclagem seguinte. Nada se mescla sobre
-   branch vermelha: falha volta à rota até ficar verde. Worktree mesclada é apagada; rota que
-   dependia dela abre agora.
+   os testes da rota e dos arquivos do conflito; falha volta à rota até ficar verde. A bateria
+   inteira roda uma vez, após a última mesclagem, antes do push. Worktree mesclada é apagada;
+   rota que dependia dela abre agora.
 
 **Regras de cada item, para o subagente e para a sessão:**
 
@@ -147,9 +146,10 @@ commit, decisão) | plataforma`. Mostre a contagem por área e peça a aprovaç�
 4. Toda entrada externa (JSONL, texto de pane, payload HTTP, sidecar) passa por `proptest` ou
    fuzz sem pânico.
 5. Falha visível com código; nunca sucesso falso; nunca reserva Python com o Rust de pé.
-6. Um escritor por worktree. Cada worktree compila no próprio `crates/target`, nunca
-   compartilhado entre checkouts (já rodou binário velho), com `nice -n 19 ionice -c 3` e `-j 3`.
-   Teste e diferencial usam porta e config dir próprios da worktree, nunca o backend real.
+6. Um escritor por worktree. Compile por `scripts/cargo-pinned` (target comum, trava, `-j 2`):
+   pytest e diferencial rodam a cópia que ele fixa no `crates/target` da worktree. Durante a rota,
+   só o teste dela (`cargo-pinned test -p hangar-server --test it <filtro>`), com porta e config
+   dir próprios da worktree, nunca o backend real.
 7. Contrato interno mudou (rota `/internal`, evento, variável do filho): a sessão sobe
    `INTERNAL_PROTOCOL` (Rust) e `RUST_SERVER_PROTOCOL` (Python) no mesmo commit, na mesclagem; o
    subagente só avisa que a rota dele muda o contrato.

@@ -99,6 +99,7 @@ npm --prefix frontend run dev              # Vite dev server
 npm --prefix frontend run build            # production build — does NOT typecheck
 npm --prefix frontend run check            # svelte-check + tsc — THIS is the type gate
 
+scripts/cargo-pinned build -p hangar-server   # target comum da máquina, trava e -j 2; fixa o binário em crates/target da worktree
 scripts/verificar-local                    # só o ligado aos arquivos mudados (o que a trava pre-push exige)
 scripts/verificar-local --completo         # o que o CI rodaria para o commit (Linux + VM Windows)
 scripts/verificar-local --passos rust      # repete só um passo (o que já passou nesta árvore fica gravado)

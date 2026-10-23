@@ -24,5 +24,7 @@ export default defineConfig({
     // `.svelte.ts` — e testar componente que reage a MUDANÇA de prop (abrir/fechar) precisa de uma
     // prop reativa de verdade, não de um objeto solto.
     include: ['src/**/*.test.ts', 'src/**/*.test.svelte.ts'],
+    // A transformação de cada módulo (as mensagens do Paraglide pesam) fica em disco entre rodadas.
+    experimental: { fsModuleCache: true },
   },
 });
