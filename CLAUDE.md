@@ -602,6 +602,26 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   que ele mesmo já é dono, e o Python nunca repergunta ao Rust dentro de uma chamada que o Rust
   fez: a volta Rust → Python → Rust prende o pool do Python e trava o backend na subida. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#migrar-é-migrar-o-caminho-inteiro).
+- **O que ainda passa pelo Python com o Rust de pé (modo `rust`).** Esta lista é o inventário
+  vivo: migração que tira um item o apaga daqui no mesmo commit; item novo só entra com o arquivo
+  e a linha. Conferir antes de afirmar que algo "é do Rust" ou "ainda é do Python".
+  - Chat Claude/Codex: `/history`, `/events`, mensagens, estado, prévia e fila são do Rust. Cada
+    conversa aberta mantém a conexão interna `side-events` (`side.rs` `side_once` →
+    `internal_api.py` → `sse.merged_events(side=True)`), da qual sai só `stats` (custo e tokens,
+    `stats.py` relendo o transcript a cada 1 s), `nav` e a faixa de plugin que o `mods` do Rust não
+    atende.
+  - Lista do dono: montada pelo Rust, mas todo tique com lista aberta pede `POST
+    /internal/list/facts` (`list/facts.rs` → `list_facts.py`), mesmo sem Pi/omp/Kimi: estado e
+    passos do Codex, problema das sessões Claude, transferências, orquestrações, donos de
+    convidado, navegador, atalhos e `owner_apps`.
+  - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (cada abertura),
+    `workspace/context`, `worktrees/context`, `orq/*`, `transcription/config`, `costs/scopes`,
+    `diag`, `ping`, `list/demote`, e a cópia do `/api/plugin/ui` (`mods/bridge.rs`).
+  - Partes inteiras ainda no Python: Pi, omp e Kimi; Arquivo; orquestração (lista, timeline,
+    lançamento); transferência Claude→Codex; navegador (`/nav`, `navegador`); peers; loops,
+    workflows e runners; atualização; porta 8768 do Connect e login de convidado.
+  - Tarefas próprias do Python em modo `rust`: `hook_state.watch` (push e drain), `watch_sessions`
+    do Codex a cada 2 s, `stall_watch`, índice do Arquivo, `git fetch`, atualização automática.
 - **Qual conversa é a da sessão é o Rust que decide** (`locate.rs`, a descoberta da lista), e a
   troca de transcript só vale lida duas vezes seguidas; provider, modo do Codex ou outra vida da
   sessão trocam na hora. Com o chat ao vivo aberto, o `/history` segue o transcript que o hub
@@ -609,7 +629,7 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   (`RuntimeRegistry::request_reopen`), sem pedir ao Python. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#a-conversa-da-sessão-é-escolhida-pelo-rust-e-a-troca-espera-duas-leituras).
 - **A porta 8765 é do `hangar-server` (Rust); o Python escuta atrás, numa porta de loopback.**
-  Ele atende `/history` e `/events` de Claude/Codex, `/api/costs`, `/api/uso`, `/api/cotacao` e o
+  O Rust atende `/history` e `/events` de Claude/Codex, `/api/costs`, `/api/uso`, `/api/cotacao` e o
   custo de sessão Codex com o token do dono, e o terminal real do dono (só pelo
   `?token=`, sem conferir Origin). Custos e uso têm índice próprio
   (`custos-rust.sqlite3`) no cache local; stats continuam no Python. Contas Claude/Codex e
