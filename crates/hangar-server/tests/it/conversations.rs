@@ -102,15 +102,16 @@ async fn devices_share_one_internal_connection_and_late_one_gets_snapshot() {
     messages(&mut a, 1).await;
     wait_until(|| fake.side_conns() == 1).await;
 
-    // `stats` segue do Python; `state` de Claude com terminal é do `Monitor` do Rust, e a fila, do
-    // produtor do hub (testes em `side.rs`).
-    let state = r#"{"turns":3}"#;
-    fake.push_side("stats", state);
-    assert_eq!(next_named(&mut a, "stats").await.data, state);
+    // A faixa sai do produtor do hub, lendo o transcript (ST-24/ST-30): quem entra depois recebe o retrato.
+    let mut file = std::fs::OpenOptions::new().append(true).open(&_jsonl).unwrap();
+    std::io::Write::write_all(&mut file, br#"{"type":"assistant","timestamp":"2026-10-23T12:00:02Z","message":{"id":"m1","usage":{"input_tokens":4,"output_tokens":6}}}
+"#).unwrap();
+    let stats = next_named(&mut a, "stats").await.data;
+    assert_eq!(serde_json::from_str::<Value>(&stats).unwrap()["out_tok"], 6);
 
     let mut b = sse(open_events(srv, "s", "", &[]).await);
     assert_eq!(id_of(&messages(&mut b, 1).await[0]), "u0");
-    assert_eq!(next_named(&mut b, "stats").await.data, state);
+    assert_eq!(next_named(&mut b, "stats").await.data, stats);
 
     assert_eq!(fake.side_conns(), 1);
     assert_eq!(fake.side_apps(), vec!["1".to_string()]);
@@ -154,9 +155,9 @@ async fn transcript_read_twice_resets_every_device_and_follows_new_file() {
     wait_until(|| fake.side_conns() == 2).await;
     assert_eq!(fake.side_jsonls()[1], b_path.to_string_lossy());
     let marker = r#"{"turns":42}"#;
-    fake.push_side("stats", marker);
+    fake.push_side("nav", marker);
     for es in &mut devices {
-        no_reset_until(es, "stats", marker).await;
+        no_reset_until(es, "nav", marker).await;
     }
 }
 
@@ -199,8 +200,8 @@ async fn transcript_read_once_keeps_the_conversation() {
     fake.set_info(info_json("claude", &a_path));
     readings(&fake, 2).await;
     let marker = r#"{"turns":9}"#;
-    fake.push_side("stats", marker);
-    no_reset_until(&mut a, "stats", marker).await;
+    fake.push_side("nav", marker);
+    no_reset_until(&mut a, "nav", marker).await;
     // Um aparelho que entra com a leitura solta também não troca nada.
     fake.set_info(info_json("claude", &other));
     let mut b = sse(open_events(srv, "s", "", &[]).await);
@@ -223,8 +224,8 @@ async fn reading_without_transcript_keeps_the_conversation() {
     fake.set_info(json!({"provider": "claude", "session_key": "", "history": {}}));
     readings(&fake, 2).await;
     let marker = r#"{"turns":3}"#;
-    fake.push_side("stats", marker);
-    no_reset_until(&mut a, "stats", marker).await;
+    fake.push_side("nav", marker);
+    no_reset_until(&mut a, "nav", marker).await;
     assert_eq!(fake.side_conns(), 1);
 }
 
@@ -289,9 +290,9 @@ async fn same_name_with_new_transcript_never_serves_the_dead_one() {
     // A vigia lê a mesma conversa nova: nenhum reset a mais, nenhuma religação a mais.
     readings(&fake, 2).await;
     let marker = r#"{"turns":42}"#;
-    fake.push_side("stats", marker);
-    no_reset_until(&mut a, "stats", marker).await;
-    no_reset_until(&mut b, "stats", marker).await;
+    fake.push_side("nav", marker);
+    no_reset_until(&mut a, "nav", marker).await;
+    no_reset_until(&mut b, "nav", marker).await;
     assert_eq!(fake.side_conns(), 2);
 }
 
@@ -391,11 +392,11 @@ async fn python_state_events_never_reach_devices_of_a_claude_terminal_session() 
         fake.push_side(event, data);
     }
     let marker = r#"{"turns":7}"#;
-    fake.push_side("stats", marker);
+    fake.push_side("nav", marker);
     loop {
         let ev = next_any(&mut a).await;
         assert!(!ev.data.contains("python"), "evento do estado vindo do Python: {} {}", ev.event, ev.data);
-        if ev.event == "stats" && ev.data == marker {
+        if ev.event == "nav" && ev.data == marker {
             break;
         }
     }

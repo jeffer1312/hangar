@@ -1091,6 +1091,10 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         // revisão e o Python a decodificaria a cada delta.
                         if !live.channel(&channel,&data) { publish(&events,&target,&mut revision,&channel,data); }
                     } else if channel == "rate" {
+                        if let Some(registry) = engine.lifecycle.as_ref().and_then(std::sync::Weak::upgrade) {
+                            registry.record_rate(&target.name,&target.key,target.generation,&data);
+                        }
+                        // O `/events` que o Python ainda serve (Connect, modo `python`) mede pela cópia dele.
                         publish(&events,&target,&mut revision,&channel,data);
                     }
                 }

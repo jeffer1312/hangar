@@ -17,11 +17,13 @@ use serde_json::Value;
 
 pub use history::{history_etag, merged_history, HistoryRequest, InternalInfo, TAIL_WINDOW};
 pub use py::ts_of_iso;
+pub(crate) use claude::{is_command_meta, strip_meta_blocks};
+pub(crate) use codex::is_context_wrapper;
 
 /// Linhas com texto que não viraram objeto JSON. O Python pula calado; aqui o log mostra a conta.
 pub static SKIPPED_LINES: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Provider {
     Claude,
     ClaudeHeadless,

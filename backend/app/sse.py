@@ -977,6 +977,9 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         # Faixa de estatísticas (turnos/steps/tokens/tempos) — fold incremental do MESMO arquivo
         # do transcript, IO no threadpool. FEATURE, não núcleo: diferente dos outros pumps, erro
         # aqui NUNCA derruba o stream (regra do incidente 2026-07-23) — loga e a faixa some.
+        # Na conexão interna (Claude e Codex com o Rust de pé) a faixa é do hub do Rust (`stats.rs`).
+        if side:
+            return
         acc = StatsAccumulator.compartilhado(current_provider, path)
         if acc is None:
             return                           # provider sem fold -> sem faixa
