@@ -72,7 +72,8 @@ export function buildSessionSections(rows: AggSession[], mode: GroupBy, search: 
   const rest = agruparSessoes(own.filter((r) => r.state !== 'awaiting_input' && r.state !== 'working'), mode);
   if (mode === 'server') rest.sort((a, b) => a.label.localeCompare(b.label));
   if (mode === 'none' && top.some((g) => g.sessions.length)) rest[0].label = m.home_sessions_ready();
-  const gathered = gatherGroups([...top, ...rest], groupOf, collapsedGroups);
+  // Buscando, o bloco abre: o membro achado pode não ser o primeiro.
+  const gathered = gatherGroups([...top, ...rest], groupOf, search ? new Set() : collapsedGroups);
   const groups = placeOutside(gathered.sections, visible.filter((r) => r.outside), mode, liveRows);
   if (mode === 'server' && preferredServerId) {
     const rank = (id: string) => id === 'state:awaiting_input' ? 0 : id === 'state:working' ? 1 : 2;
@@ -81,6 +82,8 @@ export function buildSessionSections(rows: AggSession[], mode: GroupBy, search: 
   }
   return groups.filter((g) => g.sessions.length).map((g) => {
     const collapsed = !!g.label && collapsedGroups.has(sessionGroupKey(mode, g.id));
-    return { id: g.id, label: g.label, color: g.color, total: g.sessions.length, collapsed, data: collapsed ? [] : g.sessions, heads: gathered.heads };
+    // o grupo recolhido ainda conta todos os membros
+    const total = g.sessions.reduce((n, r) => { const h = gathered.heads.get(rowKey(r)); return n + (h?.collapsed ? h.size : 1); }, 0);
+    return { id: g.id, label: g.label, color: g.color, total, collapsed, data: collapsed ? [] : g.sessions, heads: gathered.heads };
   });
 }

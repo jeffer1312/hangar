@@ -55,7 +55,10 @@ describe('grupo entre máquinas na lista', () => {
     const closed = buildSessionSections(asking, 'server', '', new Set([head.id]), undefined, groups);
     const flat = closed.flatMap((s) => s.data.map(key));
     expect(flat.filter((k) => /ABC-1|abc2/.test(k))).toHaveLength(1);
+    expect(closed.reduce((n, s) => n + s.total, 0)).toBe(rows.length);
     expect(flat).toEqual(expect.arrayContaining(['nb::solta', 'vm::outra']));
+    const searching = buildSessionSections(asking, 'server', 'abc2', new Set([head.id]), undefined, groups);
+    expect(searching.flatMap((s) => s.data.map(key))).toContain('vm::abc2-app');
     expect([...closed[0].heads.values()]).toMatchObject([{ id: head.id, collapsed: true, size: 4, awaiting: 1 }]);
   });
 

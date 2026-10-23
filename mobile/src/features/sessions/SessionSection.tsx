@@ -43,7 +43,7 @@ export function GroupBlockHeader({ head, onToggle }: { head: GroupHead; onToggle
       accessibilityState={{ expanded: !head.collapsed }}
       accessibilityHint={head.collapsed ? m.sessao_expandir() : m.sessao_recolher()}>
       <GroupGlyph size={14} color={muted} />
-      <Text style={[styles.groupHeadLabel, { color: theme.tokens.text.primary }]} numberOfLines={2}>{head.label}</Text>
+      <Text accessibilityRole="header" style={[styles.groupHeadLabel, { color: theme.tokens.text.primary }]} numberOfLines={2}>{head.label}</Text>
       {machines ? <Text style={[styles.count, { color: muted }]} numberOfLines={1}>{machines}</Text> : null}
       {head.awaiting > 0 ? <View style={[styles.badge, { backgroundColor: superficie(theme, 0.5) }]}>
         <Text style={[styles.count, { color: theme.tokens.pill.input.fg }]}>{head.awaiting}</Text>
