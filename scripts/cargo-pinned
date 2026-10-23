@@ -8,6 +8,7 @@
 #       scripts/cargo-pinned test -p hangar-server --test it <filtro>
 # Pega a trava da máquina (HANGAR_BUILD_LOCK, padrão /tmp/hangar-build.lock) sozinho: não envolva
 # com outro flock nela, ou espera para sempre. Prioridade baixa e CARGO_BUILD_JOBS (padrão 2).
+# Argumentos do executável de teste (depois de `--`) não passam: o script acrescenta flags no fim.
 set -euo pipefail
 
 raiz="$(git rev-parse --show-toplevel)"
@@ -28,7 +29,11 @@ nice -n 19 ionice -c 3 cargo "$@" -j "${CARGO_BUILD_JOBS:-2}" --message-format=j
     while IFS= read -r l; do
         if [[ "$l" == L$'\t'* ]]; then printf '%s\n' "${l#L$'\t'}"; continue; fi
         exe="${l#E$'\t'}"
-        [[ -n "$alvo" && "$exe" == "$alvo"/* ]] || continue
+        [[ -n "$alvo" ]] || continue
+        if [[ "$exe" != "$alvo"/* ]]; then
+            echo "cargo-pinned: $exe fora de $alvo, não fixado em crates/target" >&2
+            continue
+        fi
         dest="$proprio/${exe#"$alvo"/}"
         mkdir -p "$(dirname "$dest")"
         cp -f "$exe" "$dest.tmp"

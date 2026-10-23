@@ -365,10 +365,15 @@ passo_front_rapido() {
     # front (mais de 40 min). Do front entram os arquivos que importam um nome que o diff do core
     # mudou (direto ou por quem o usa dentro do core), e o vitest acha os testes deles.
     local front=() core=() base_arg=() sel
-    for f in "${rel[@]}"; do
-        [[ "$f" == "$PWD"/frontend/* ]] && front+=("$f")
-        [[ "$f" == "$PWD"/packages/core/* ]] && core+=("$f")
-    done
+    for f in "${rel[@]}"; do [[ "$f" == "$PWD"/frontend/* ]] && front+=("$f"); done
+    # Do diff, apagados inclusive (o seletor os trata como "todo o front"); fora de src/ não se
+    # sabe o que muda, e o índice vale por todo o front.
+    while IFS= read -r f; do
+        case "$f" in
+            packages/core/src/*) core+=("$PWD/$f") ;;
+            packages/core/*) core+=("$PWD/packages/core/src/index.ts") ;;
+        esac
+    done <<< "$web"
     [[ -n "${HANGAR_VERIFICAR_BASE:-}" ]] && base_arg=(--base "$HANGAR_VERIFICAR_BASE")
     if (( ${#core[@]} )); then
         sel="$(node scripts/core-front-tests.mjs "${base_arg[@]}" "${core[@]}")" || return 1

@@ -105,8 +105,10 @@ for (const f of andar(path.join(raiz, "frontend/src"), (n) => /\.(ts|tsx|svelte)
     const txt = ler(f);
     if (!txt.includes("@hangar/core")) continue;
     const nomes = new Set();
-    const dinamico = /(?<!typeof\s*)import\(\s*['"]@hangar\/core['"]\s*\)/.test(txt);
-    for (const m of txt.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]@hangar\/core['"]/g)) lista(m[1]).forEach(([a]) => nomes.add(a));
+    // Import dinâmico e `export *` do core não dizem o nome: o arquivo entra sempre.
+    const dinamico = /(?<!typeof\s*)import\(\s*['"]@hangar\/core['"]\s*\)|export\s+\*\s+from\s*['"]@hangar\/core['"]/.test(txt);
+    // Reexportar conta como usar: quem importa do arquivo do front recebe o nome do core.
+    for (const m of txt.matchAll(/(?:import|export)\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]@hangar\/core['"]/g)) lista(m[1]).forEach(([a]) => nomes.add(a));
     for (const m of txt.matchAll(/import\s+(?:type\s+)?\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*['"]@hangar\/core['"]/g)) {
         for (const u of txt.matchAll(new RegExp(`(?<![\\w$])${m[1].replace(/\$/g, "\\$")}\\.([A-Za-z_$][\\w$]*)`, "g"))) nomes.add(u[1]);
     }

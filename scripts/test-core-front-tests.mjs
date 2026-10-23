@@ -29,6 +29,7 @@ escreve("frontend/src/z.test.ts", "import * as core from '@hangar/core';\ncore.f
 escreve("frontend/src/w.test.ts", "import { outra } from \"@hangar/core\";\n");
 escreve("frontend/src/v.test.ts", "vi.mock('@hangar/core', async (o) => ({ ...(await o()) }));\nimport { Tipo } from '@hangar/core';\n");
 escreve("frontend/src/u.ts", "const m = await import('@hangar/core');\n");
+escreve("frontend/src/t.ts", "export { ka } from '@hangar/core';\nexport type { Tipo as T } from '@hangar/core';\n");
 
 let falhou = false;
 const caso = (mudados, esperado) => {
@@ -40,16 +41,17 @@ const caso = (mudados, esperado) => {
     }
 };
 // a.ts: ka direto, fb porque b.ts importa a.ts; import dinâmico do core não diz o nome: entra sempre.
-caso(["packages/core/src/a.ts"], "frontend/src/x.ts frontend/src/z.test.ts frontend/src/u.ts");
+// t.ts só reexporta: quem importa dele usa o nome do core do mesmo jeito.
+caso(["packages/core/src/a.ts"], "frontend/src/x.ts frontend/src/z.test.ts frontend/src/u.ts frontend/src/t.ts");
 caso(["packages/core/src/c.ts"], "frontend/src/y.svelte frontend/src/w.test.ts frontend/src/u.ts");
-caso(["packages/core/src/d.ts"], "frontend/src/x.ts frontend/src/v.test.ts frontend/src/u.ts");
+caso(["packages/core/src/d.ts"], "frontend/src/x.ts frontend/src/v.test.ts frontend/src/u.ts frontend/src/t.ts");
 // Teste do core não muda o front; índice mudado vale para todos os que importam o core.
 caso(["packages/core/src/a.test.ts"], "");
 caso(["packages/core/src/index.ts"],
-    "frontend/src/u.ts frontend/src/v.test.ts frontend/src/w.test.ts frontend/src/x.ts frontend/src/y.svelte frontend/src/z.test.ts");
+    "frontend/src/t.ts frontend/src/u.ts frontend/src/v.test.ts frontend/src/w.test.ts frontend/src/x.ts frontend/src/y.svelte frontend/src/z.test.ts");
 // Arquivo do core apagado: não dá para saber o que ele publicava, vale para todos.
 caso(["packages/core/src/sumiu.ts"],
-    "frontend/src/u.ts frontend/src/v.test.ts frontend/src/w.test.ts frontend/src/x.ts frontend/src/y.svelte frontend/src/z.test.ts");
+    "frontend/src/t.ts frontend/src/u.ts frontend/src/v.test.ts frontend/src/w.test.ts frontend/src/x.ts frontend/src/y.svelte frontend/src/z.test.ts");
 
 // Com --base: só as declarações que o diff tocou, e quem as usa.
 const git = (...a) => execFileSync("git", a, { cwd: raiz, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
@@ -64,7 +66,7 @@ const muda = (de, para) => escreve("packages/core/src/a.ts", ler("packages/core/
 const ler = (rel) => fs.readFileSync(path.join(raiz, rel), "utf8");
 
 muda("ka = 2", "ka = 5");
-comBase(["packages/core/src/a.ts"], "frontend/src/x.ts frontend/src/u.ts");
+comBase(["packages/core/src/a.ts"], "frontend/src/x.ts frontend/src/u.ts frontend/src/t.ts");
 muda("ka = 5", "ka = 2");
 muda("return interno()", "return interno() + 1");
 comBase(["packages/core/src/a.ts"], "frontend/src/z.test.ts frontend/src/u.ts");
