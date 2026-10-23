@@ -418,7 +418,8 @@ async fn until_state(es: &mut Events, data: &str) -> Vec<String> {
 #[tokio::test(flavor = "multi_thread")]
 async fn guest_events_drop_plugin_toast_and_nav() {
     let dir = tempfile::tempdir().unwrap();
-    let srv = plain_srv(dir.path(), |_| {}).await;
+    let mut mods = None;
+    let srv = plain_srv(dir.path(), |st| mods = Some(st.mods.clone())).await;
     codex_session(&srv, dir.path());
     let t = srv.g.token("s", Kind::Share);
     let mut owner = sse(open_events(srv.owner, "s", "", &[]).await);
@@ -426,7 +427,8 @@ async fn guest_events_drop_plugin_toast_and_nav() {
     srv.python.push_side("state", "\"m0\"");
     until_state(&mut owner, "\"m0\"").await;
     until_state(&mut guest, "\"m0\"").await;
-    srv.python.push_side("plugin_toast", &json!({"id": "a1", "timeoutMs": 60000, "text": "segredo"}).to_string());
+    // O aviso de mod é do `Mods` do Rust; o que viesse pela conexão interna seria descartado.
+    mods.unwrap().loose_toast("s", "m", "segredo", 60000);
     srv.python.push_side("nav", &json!({"url": "http://127.0.0.1:5173/?token=dono"}).to_string());
     srv.python.push_side("state", "\"m1\"");
     let seen = until_state(&mut owner, "\"m1\"").await;
