@@ -3,6 +3,31 @@
 Decisões medidas, com data e número. O `CLAUDE.md` carrega a regra;
 a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 
+## Configurações do Expo: listas de ajustes agrupados (23/10/2026)
+
+Na revisão de Servidores, Jefferson apontou cartões grandes para uma única informação,
+rótulos repetidos e opções sem propósito claro. As referências escolhidas foram as
+configurações do PS Remote Play e do Gmail: linhas com valor atual, opções relacionadas no
+mesmo grupo e detalhes acessíveis ao tocar. O mock interativo nesse formato foi aprovado;
+essa aprovação é de direção visual, não uma conferência da implementação no app.
+
+- A lista de servidores mostra nome e estado em cada linha. Tocar na máquina abre a edição;
+  os botões Configurar e Testar conexão deixam de se repetir em todos os itens.
+- Nome e endereço são editáveis diretamente. Conexão, teste e opções avançadas ficam em
+  linhas agrupadas; Salvar aparece no cabeçalho da edição.
+- Identificação, acesso ao terminal, diagnóstico e manutenção têm destinos claros. Campos
+  técnicos somente de leitura ficam no diagnóstico; explicações acompanham a opção que
+  precisam esclarecer, sem repetir o título do grupo ou do campo.
+- Preserve o tema, a navegação e as funções existentes. Use essa direção quando outras
+  configurações do Expo forem melhoradas, sem ampliar o trabalho atual para todas as telas.
+
+Em Servidores, a edição usa a pilha de `/config`, com páginas para conexão, identificação,
+terminal e diagnóstico. A busca do Tailscale reúne `/api/peers/descobrir` dos servidores
+conectados e `/api/alcance` da própria máquina, pois a lista de vizinhos não inclui a dona.
+IP e DNS da mesma máquina aparecem uma vez. Escolher um resultado exige a prova de identidade
+antes de enviar o token; o endereço remoto entra na entrada existente, preservando nome, ID,
+URL principal e credencial. Falha mantém o cadastro e mostra a causa.
+
 ## App iOS (mobile/): interface e desempenho (16/10/2026)
 
 Duas rodadas no app Expo, no iPhone. A de desempenho mediu a CPU do app com o chat aberto: de ~68%

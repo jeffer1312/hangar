@@ -2,12 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, View } from 'react-native';
 import type { Server } from '@hangar/core';
 import { ownServers, useServers } from '../../stores/servers';
-import { SectionCard } from '../config/SectionCard';
-import { SettingsRow } from '../config/SettingsRow';
+import { MachineGroup, MachineRow, MachineField } from './MachineRows';
 import { InfoNotice } from '../config/InfoNotice';
 import { Pill } from '../config/PageHeader';
 import { enablePeer, ensureActive, measureDirections, normalizeUrl, readIdentifier, readPeers, reason, registerPeer, removePeer, type Directions, type Peer } from './api';
-import { DirectionsNotice, Field, Notice, styles, useMachineAction } from './parts';
+import { DirectionsNotice, Notice, styles, useMachineAction } from './parts';
 import * as m from '../../paraglide/messages';
 
 export function PeerSettings({ server }: { server: Server }) {
@@ -18,6 +17,8 @@ export function PeerSettings({ server }: { server: Server }) {
   const [address, setAddress] = useState('');
   const [token, setToken] = useState('');
   const [checks, setChecks] = useState<Record<string, Directions>>({});
+  const [selected, setSelected] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   const read = useMachineAction();
   const write = useMachineAction();
   const alive = useRef(true);
@@ -61,13 +62,17 @@ export function PeerSettings({ server }: { server: Server }) {
     ], { cancelable: true, onDismiss: cancel });
   };
   const busy = read.busy || write.busy || asking;
-  return <SectionCard icon="Network" title={m.mobile_machines_peers()}>
-    <View style={styles.content}>
+  return <>
       {read.busy ? <InfoNotice text={m.native_server_loading()} /> : null}
       <Notice text={read.error || write.error} error /><Notice text={write.message} />
       {read.error ? <Pill label={m.mobile_machines_retry()} onPress={load} disabled={busy} /> : null}
       {peers?.length === 0 ? <InfoNotice text={m.mobile_machines_no_peers()} /> : null}
-      {peers?.map((peer) => <SettingsRow key={peer.id} title={peer.id} description={peer.base_url}>
+      {peers?.length ? <MachineGroup>{peers.map((peer) => <View key={peer.id}>
+        <MachineRow title={peer.id} value={peer.enabled ? m.mobile_machines_peer_enable_state() : m.mobile_machines_peer_disable_state()}
+          expanded={selected === peer.id}
+          description={selected === peer.id ? peer.base_url : undefined}
+          onPress={() => setSelected((value) => value === peer.id ? null : peer.id)} />
+        {selected === peer.id ? <View style={styles.content}>
         <View style={styles.actions}>
           <Pill label={m.mobile_machines_check()} onPress={() => check(peer)} disabled={busy} />
           <Pill label={peer.enabled ? m.mobile_machines_peer_disable() : m.mobile_machines_peer_enable()} disabled={busy}
@@ -75,20 +80,27 @@ export function PeerSettings({ server }: { server: Server }) {
           <Pill label={m.lista_remover()} onPress={() => remove(peer)} disabled={busy} />
         </View>
         {checks[peer.id] ? <DirectionsNotice value={checks[peer.id]} /> : null}
-      </SettingsRow>)}
+        </View> : null}
+      </View>)}</MachineGroup> : null}
+      <MachineGroup><MachineRow title={m.mobile_machines_add_peer()} action onPress={() => setAdding((value) => !value)} disabled={busy} /></MachineGroup>
+      {adding ? <>
+      <View style={styles.actions}>
       {candidates.map((candidate) => <Pill key={candidate.id} label={m.mobile_machines_use_saved({ name: candidate.label })} disabled={busy}
         onPress={() => write.run((signal) => readIdentifier(candidate, signal), (identity) => {
           setIdentifier(identity.identificador); setAddress(candidate.baseUrl); setToken(candidate.token);
         })} />)}
-      <Field label={m.mobile_machines_peer_id()} value={identifier} onChangeText={setIdentifier} editable={!busy} />
-      <Field label={m.mobile_machines_peer_url()} value={address} onChangeText={setAddress} editable={!busy} keyboardType="url" />
-      <Field label={m.mobile_machines_token()} value={token} onChangeText={setToken} editable={!busy} secureTextEntry autoComplete="off" />
-      <View style={styles.actions}><Pill label={write.busy ? m.mobile_machines_busy() : m.mobile_machines_add_peer()} disabled={busy}
+      </View>
+      <MachineGroup>
+      <MachineField label={m.mobile_machines_peer_id()} value={identifier} onChangeText={setIdentifier} editable={!busy} stacked />
+      <MachineField label={m.mobile_machines_peer_url()} value={address} onChangeText={setAddress} editable={!busy} keyboardType="url" stacked />
+      <MachineField label={m.mobile_machines_token()} value={token} onChangeText={setToken} editable={!busy} secureTextEntry autoComplete="off" stacked />
+      </MachineGroup>
+      <View style={styles.actions}><Pill label={write.busy ? m.mobile_machines_busy() : m.mobile_machines_save()} disabled={busy}
         onPress={() => write.run((signal) => {
           const base = normalizeUrl(address);
           const credential = token.trim();
           return registerPeer(server, identifier, base, credential, signal);
         }, applyPeers, m.mobile_machines_saved())} /></View>
-    </View>
-  </SectionCard>;
+      </> : null}
+  </>;
 }

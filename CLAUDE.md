@@ -261,6 +261,12 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 - **Config e opção moram em MODAL, não em painel docado.** Só o `DesktopSessionContext` fica
   docado. Tela de config usa **container query**, nunca media query — quem aperta a linha é a
   largura do painel.
+- **Configurações do Expo usam listas de ajustes agrupados.** Cada linha mostra o nome e o
+  valor atual; o toque edita ou abre os detalhes. Agrupe opções relacionadas, com rótulos únicos
+  e explicações curtas quando ajudarem a decidir. Ações frequentes ficam à vista; diagnóstico
+  e manutenção entram em telas próprias. Preserve as funções ao reorganizar, sem cartões por
+  informação, cabeçalhos duplicados ou botões repetidos em cada item. Ao melhorar outras
+  configurações, siga a [direção aprovada em Servidores](docs/decisoes/frontend.md#configurações-do-expo-listas-de-ajustes-agrupados-23102026).
 - **Transparência é padrão, não enfeite.** Superfície dentro de painel de vidro é `transparent`;
   precisando de material próprio, `--surface-raised` / `--surface-inset`. `--bg-elevated` cru só
   para realce de estado. Verificação: ligue um papel de parede e procure retângulo opaco.

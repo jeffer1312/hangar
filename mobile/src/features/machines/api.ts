@@ -1,4 +1,4 @@
-import { comTeto, errorDetail, isLocalMachineUrl, normalizeMachineUrl, probeServerResponse, type Server } from '@hangar/core';
+import { comTeto, errorDetail, getConfigForServer, isLocalMachineUrl, normalizeMachineUrl, probeServerResponse, verifyServerIdentity, type LanInfo, type Server } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 
 export type MachineId = { identificador: string; lan_url: string };
@@ -6,7 +6,7 @@ export type Warning = { id: string; estado: string; motivo: string };
 export type Peer = { id: string; base_url: string; enabled: boolean };
 export type Check = { estado: 'ok' | 'estranho' | 'falhou' | 'recusou' | 'nao_configurado'; identificador: string; motivo: string; tempo_ms: number | null };
 export type Reach = { loopback: boolean; bind: string; enderecos: { tipo: 'nesta_maquina' | 'rede_local' | 'tailscale' | 'publico'; url: string; estado: string; tempo_ms: number | null; motivo: string }[] };
-export type Discovered = { nome: string; base_url: string };
+export type Discovered = { nome: string; base_url: string; hosts?: string[] };
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const duration = (value: unknown) => value === null || (typeof value === 'number' && Number.isFinite(value) && value >= 0);
 export const validIdentifier = (value: string) => value === '' || /^[a-z0-9][a-z0-9_-]{0,31}$/.test(value);
@@ -46,6 +46,22 @@ export async function readIdentifier(server: Server, signal: AbortSignal): Promi
   const value = await request(server, '/api/peers/identificador', signal);
   if (!object(value) || typeof value.identificador !== 'string' || !validIdentifier(value.identificador) || typeof value.lan_url !== 'string') throw invalid();
   return { identificador: value.identificador, lan_url: value.lan_url };
+}
+
+export async function confirmMachineRoute(server: Server, address: string, signal: AbortSignal): Promise<LanInfo> {
+  const url = normalizeUrl(address);
+  const id = server.lan?.id || server.remote?.id || (await readIdentifier(server, signal)).identificador;
+  ensureActive(signal);
+  if (!id) throw new Error(m.mobile_machines_known_identifier_required());
+  const target = { url, id };
+  if (!await verifyServerIdentity(server, target, comTeto(signal, 15_000))) throw new Error(m.mobile_machines_identity_unconfirmed());
+  ensureActive(signal);
+  // A sonda usa uma chave própria para atingir o endereço escolhido, sem reutilizar a rota antiga.
+  const candidate = { id: `machine-probe:${url}`, label: server.label, baseUrl: url, token: server.token };
+  const config = await getConfigForServer(candidate, 15_000);
+  ensureActive(signal);
+  if (!config || !config.campos || typeof config.campos !== 'object') throw invalid();
+  return target;
 }
 
 export async function saveIdentifier(server: Server, identificador: string, signal: AbortSignal): Promise<{ identificador: string; avisos: Warning[] }> {
@@ -93,8 +109,9 @@ export async function readReach(s: Server, signal: AbortSignal): Promise<Reach> 
 }
 export async function discover(s: Server, signal: AbortSignal): Promise<Discovered[]> {
   const value = await request(s, '/api/peers/descobrir', signal, 'GET', undefined, 30_000);
-  if (!Array.isArray(value) || !value.every((d) => object(d) && typeof d.nome === 'string' && typeof d.base_url === 'string')) throw invalid();
-  return value.map((d) => ({ nome: d.nome, base_url: normalizeUrl(d.base_url) }));
+  if (!Array.isArray(value) || !value.every((d) => object(d) && typeof d.nome === 'string' && typeof d.base_url === 'string'
+    && (d.hosts === undefined || Array.isArray(d.hosts) && d.hosts.every((host: unknown) => typeof host === 'string')))) throw invalid();
+  return value.map((d) => ({ nome: d.nome, base_url: normalizeUrl(d.base_url), ...(d.hosts ? { hosts: d.hosts } : {}) }));
 }
 export async function ownerAddress(s: Server, signal: AbortSignal): Promise<string> {
   const base = normalizeUrl(s.baseUrl);

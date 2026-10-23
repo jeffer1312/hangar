@@ -25,10 +25,15 @@ let root: Root;
 let el: HTMLDivElement;
 const writes = () => mocks.fetch.mock.calls.filter(([, init]) => init?.method && init.method !== 'GET');
 async function click(label: string) {
-  const button = [...el.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === label);
+  let button = [...el.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === label);
+  if (!button && [m.mobile_machines_check(), m.mobile_machines_peer_disable(), m.lista_remover()].some((value) => value === label)) {
+    await click(peer.id);
+    button = [...el.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === label);
+  }
   expect(button, label).toBeTruthy(); await act(async () => button!.click());
 }
 async function type(label: string, value: string) {
+  if (!el.querySelector(`input[aria-label="${label}"]`)) await click(m.mobile_machines_add_peer());
   const input = el.querySelector(`input[aria-label="${label}"]`) as HTMLInputElement;
   expect(input, label).toBeTruthy();
   await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); });
@@ -54,9 +59,9 @@ describe('registro de outros servidores', () => {
   it('não usa a máscara da listagem e só registra com token explicitamente informado', async () => {
     await render();
     await type(m.mobile_machines_peer_id(), 'remote'); await type(m.mobile_machines_peer_url(), remote.baseUrl);
-    await click(m.mobile_machines_add_peer());
+    await click(m.mobile_machines_save());
     expect(writes()).toHaveLength(0); expect(el.textContent).toContain(m.mobile_machines_token_required());
-    await type(m.mobile_machines_token(), 'explicit-secret'); await click(m.mobile_machines_add_peer());
+    await type(m.mobile_machines_token(), 'explicit-secret'); await click(m.mobile_machines_save());
     expect(writes()).toHaveLength(1);
     expect(JSON.parse(writes()[0][1].body)).toEqual({ id: 'remote', base_url: remote.baseUrl, token: 'explicit-secret' });
   });
@@ -65,7 +70,7 @@ describe('registro de outros servidores', () => {
     await act(async () => { useServers.getState().add(remote); });
     await render();
     await type(m.mobile_machines_peer_id(), 'other-machine'); await type(m.mobile_machines_peer_url(), remote.baseUrl);
-    await click(m.mobile_machines_add_peer());
+    await click(m.mobile_machines_save());
     expect(el.textContent).toContain(m.mobile_machines_token_required());
     expect(writes()).toHaveLength(0);
     expect(JSON.stringify(mocks.fetch.mock.calls)).not.toContain(remote.token);
@@ -74,7 +79,7 @@ describe('registro de outros servidores', () => {
   it('recusa endereços locais que apontariam para o próprio servidor', async () => {
     await render(); await type(m.mobile_machines_peer_id(), 'remote'); await type(m.mobile_machines_token(), 'explicit-secret');
     for (const url of ['http://localhost:8765', 'http://127.2.3.4:8765', 'http://0.0.0.0:8765', 'http://[::1]:8765', 'http://[::]:8765']) {
-      await type(m.mobile_machines_peer_url(), url); await click(m.mobile_machines_add_peer());
+      await type(m.mobile_machines_peer_url(), url); await click(m.mobile_machines_save());
       expect(writes(), url).toHaveLength(0);
     }
   });
@@ -118,7 +123,7 @@ describe('registro de outros servidores', () => {
     await render(); await click(m.mobile_machines_check());
     expect(el.textContent).toContain('fixture-old-measurement');
     await type(m.mobile_machines_peer_id(), peer.id); await type(m.mobile_machines_peer_url(), nextUrl); await type(m.mobile_machines_token(), 'replacement-secret');
-    await click(m.mobile_machines_add_peer());
+    await click(m.mobile_machines_save());
     expect(el.textContent).toContain(nextUrl);
     expect(el.textContent).not.toContain('fixture-old-measurement');
   });
@@ -136,11 +141,12 @@ describe('registro de outros servidores', () => {
     await type(m.mobile_machines_peer_id(), 'added'); await type(m.mobile_machines_peer_url(), 'https://added.test'); await type(m.mobile_machines_token(), 'added-secret');
     await click(m.mobile_machines_retry());
     try {
-      await click(m.mobile_machines_add_peer());
+      await click(m.mobile_machines_save());
       expect(writes()).toHaveLength(0);
     } finally { await act(async () => finishRead(json([]))); }
-    await click(m.mobile_machines_add_peer());
+    await click(m.mobile_machines_save());
     expect(writes()).toHaveLength(1);
+    await click('added');
     expect(el.textContent).toContain('https://added.test');
   });
 });

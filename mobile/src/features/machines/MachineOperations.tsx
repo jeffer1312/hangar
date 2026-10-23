@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, View } from 'react-native';
 import { getAtualizacaoEm, iniciarAtualizacaoEm, reiniciarServidorEm, matchesRestartResult, type AtualizacaoEstado, type Server } from '@hangar/core';
-import { SectionCard } from '../config/SectionCard';
-import { Pill } from '../config/PageHeader';
+import { MachineGroup, MachineRow } from './MachineRows';
 import { ensureActive, reason } from './api';
 import { Notice, styles, useMachineAction } from './parts';
 import * as m from '../../paraglide/messages';
@@ -105,12 +104,12 @@ function OperationControls({ server }: { server: Server }) {
     ], { cancelable: true, onDismiss: cancel });
   };
   const busy = asking || action.busy;
-  return <SectionCard icon="Power" title={m.mobile_machines_server()}>
+  return <>
+    <MachineGroup>
+      <MachineRow title={m.mobile_machines_update()} action onPress={() => request('update')} disabled={busy} />
+      <MachineRow title={m.mobile_machines_restart()} onPress={() => request('restart')} disabled={busy} />
+    </MachineGroup>
     <View style={styles.content}>
-      <View style={styles.actions}>
-        <Pill label={m.mobile_machines_restart()} onPress={() => request('restart')} disabled={busy} />
-        <Pill label={m.mobile_machines_update()} onPress={() => request('update')} disabled={busy} />
-      </View>
       {busy ? <Notice text={m.mobile_machines_busy()} /> : null}
       {result?.fase === 'rodando' ? <Notice text={m.mobile_machines_progress({ step: String(result.passo ?? 0), total: String(result.total ?? 0), text: result.texto ?? '' })} /> : null}
       <Notice text={action.error} error />
@@ -119,5 +118,5 @@ function OperationControls({ server }: { server: Server }) {
       {Array.isArray(result?.avisos) ? result.avisos.filter((warning): warning is string => typeof warning === 'string').map((warning, index) => <Notice key={index} text={m.mobile_machines_warning({ reason: warning })} />) : null}
       {Array.isArray(result?.passos_invalidos) && result.passos_invalidos.length ? <Notice text={m.mobile_machines_warning({ reason: result.passos_invalidos.join(', ') })} /> : null}
     </View>
-  </SectionCard>;
+  </>;
 }

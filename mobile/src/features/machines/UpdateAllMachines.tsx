@@ -7,6 +7,7 @@ import { SectionCard } from '../config/SectionCard';
 import { SettingsRow } from '../config/SettingsRow';
 import { useSettingsColors } from '../config/colors';
 import { MachineSheet, Notice } from './parts';
+import { MachineRow } from './MachineRows';
 import { haptic } from '../../ui/haptics';
 import * as m from '../../paraglide/messages';
 
@@ -41,7 +42,7 @@ const listeners = new Set<() => void>();
 const setRound = (patch: Partial<Round>) => { round = { ...round, ...patch }; listeners.forEach((listener) => listener()); };
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 
-export function UpdateAllMachines({ servers }: { servers: readonly Server[] }) {
+export function UpdateAllMachines({ servers, compact = false }: { servers: readonly Server[]; compact?: boolean }) {
   const c = useSettingsColors();
   const candidates = ownUpdatableServers(servers);
   const [open, setOpen] = useState(false);
@@ -74,7 +75,7 @@ export function UpdateAllMachines({ servers }: { servers: readonly Server[] }) {
   if (candidates.length < 2 && !busy && !open) return null;
   const buttonLabel = m.update_all_button({ n: String(busy ? count : candidates.length) });
   return <>
-    {candidates.length >= 2 || busy ? <Pressable accessibilityRole="button" accessibilityLabel={buttonLabel}
+    {candidates.length >= 2 || busy ? compact ? <MachineRow title={buttonLabel} onPress={() => void start()} /> : <Pressable accessibilityRole="button" accessibilityLabel={buttonLabel}
       onPress={() => void start()} style={({ pressed }) => [styles.button, { borderColor: c.borderStrong }, pressed && { backgroundColor: c.hover }]}>
       <Text style={[styles.label, { color: c.text }]}>{buttonLabel}</Text>
     </Pressable> : null}
