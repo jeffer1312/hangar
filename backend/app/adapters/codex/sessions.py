@@ -225,18 +225,6 @@ def delete_if(name: str, antes=None, **vida) -> bool:
         return True
 
 
-def rename(old: str, new: str) -> None:
-    """Move o sidecar junto com a sessao tmux, preservando a identidade da thread."""
-    src, dst = _path(old), _path(new)
-    with _locked(old, new):
-        if not src.exists():
-            return
-        atomico.substituir(src, dst)
-        meta = load(new)
-        if meta is not None:
-            _write(new, {**meta, "name": new})
-
-
 def list_all(*, include_incomplete: bool = False) -> list[dict]:
     """Sidecars publicados; o registry inclui preparações para mostrar a origem em recuperação."""
     out: list[dict] = []

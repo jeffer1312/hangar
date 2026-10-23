@@ -428,21 +428,6 @@ def list_incomplete() -> list[TransferRecord]:
     return [record for record in records if record is not None and record.phase not in _TERMINAL]
 
 
-def rename_transfer(old: str, new: str) -> None:
-    """Move somente a associação ativa; a fonte e a associação histórica não mudam."""
-    for transfer_id in reversed(_index_ids("session", old)):
-        record = load_transfer(transfer_id)
-        if record and record.name == old and transfer_for_session(new, meta=None) is None:
-            # O registry já moveu o sidecar; sua identidade confirma qual registro acompanha.
-            from app.adapters.codex import sessions as cx_sessions
-            from app.adapters.claude_headless import sessions as hl_sessions
-            meta = cx_sessions.load(new) or hl_sessions.load(new)
-            life = session_life(new)
-            if _belongs(record, life, meta):
-                save_transfer(replace(record, name=new))
-                return
-
-
 _operation_locks: dict[str, threading.Lock] = {}
 _ingress_counts: dict[str, int] = {}
 # Ingressos que a requisição atual já segura: uma rota guardada que sobe para a troca exclusiva

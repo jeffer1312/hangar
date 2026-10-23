@@ -363,8 +363,7 @@ def test_troca_thread_preserva_modelo_e_recusa_escritor_atrasado(chat):
     assert (meta["thread_id"], meta["rollout_path"], meta["model"], meta["effort"]) == ("new", "/new.jsonl", "novo-modelo", "low")
 
 
-@pytest.mark.parametrize("operation", ["rename", "delete"])
-def test_troca_thread_serializa_com_rename_e_delete(chat, monkeypatch, operation):
+def test_troca_thread_serializa_com_delete(chat, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from contextlib import contextmanager
     from threading import Event, local
@@ -391,10 +390,7 @@ def test_troca_thread_serializa_com_rename_e_delete(chat, monkeypatch, operation
 
     def mutate():
         role.operation = True
-        if operation == "rename":
-            sessions.rename("sess", "renamed")
-        else:
-            sessions.delete("sess")
+        sessions.delete("sess")
 
     monkeypatch.setattr(sessions, "_write", paused_write)
     monkeypatch.setattr(sessions, "_locked", observed_lock)
@@ -407,8 +403,6 @@ def test_troca_thread_serializa_com_rename_e_delete(chat, monkeypatch, operation
         assert switched.result(timeout=5)
         changed.result(timeout=5)
     assert sessions.load("sess") is None
-    assert sessions.load("renamed") == ({**before, "name": "renamed", "thread_id": "new",
-                                        "rollout_path": "/new.jsonl"} if operation == "rename" else None)
 
 
 async def test_falha_orientacao_restaura_fila(chat, monkeypatch, tmp_path):

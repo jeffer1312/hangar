@@ -94,10 +94,6 @@ class StreamBuffer:
     async def flush(self) -> None:
         await self._emit(self._generation)
 
-    def rebind(self) -> None:
-        self.invalidate(self.value)
-        self._schedule()
-
     def invalidate(self, value: str = "") -> None:
         # Chamada só no event loop: uma geração encerrada nunca publica no bloco seguinte.
         self._generation += 1

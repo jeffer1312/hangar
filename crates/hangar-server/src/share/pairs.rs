@@ -73,12 +73,13 @@ impl PairStore {
 
     pub fn rename_local(&self, old: &str, new: &str) -> io::Result<()> {
         let mut state = self.lock();
-        let mut changed = false;
-        for r in state.iter_mut().filter(|r| r.local_session == old) {
-            r.local_session = new.to_owned();
-            changed = true;
-        }
-        if changed { self.save(&state) } else { Ok(()) }
+        let moved: Vec<usize> = state.iter().enumerate().filter(|(_, r)| r.local_session == old).map(|(i, _)| i).collect();
+        if moved.is_empty() { return Ok(()); }
+        for &i in &moved { state[i].local_session = new.to_owned(); }
+        // Gravação que falha desfaz, como no `add`.
+        let saved = self.save(&state);
+        if saved.is_err() { for &i in &moved { state[i].local_session = old.to_owned(); } }
+        saved
     }
 
     pub fn all(&self) -> Vec<ExternalPair> { self.lock().clone() }

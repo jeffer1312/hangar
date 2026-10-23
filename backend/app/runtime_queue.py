@@ -646,12 +646,6 @@ def apply_action(state, action, clock, call_id):
         if barrier is not None:
             state["runtime_state"]["terminal_write_barrier"] = barrier
         return None
-    if kind == "rename":
-        if not action["name"]:
-            raise ValueError("nome vazio na fila")
-        state["runtime_state"]["_queue_previous_name"] = state["name"]
-        state["name"] = action["name"]
-        return None
     if kind == "clear":
         state["rows"] = []
         return None
@@ -716,7 +710,7 @@ def route_queue(queue, method: str, args: dict):
                 return False, None
             kind = {"append_saida_local": "append_local", "claim_undelivered": "claim", "desistir": "abandon",
                     "prune_before": "prune", "reconcile_delivered": "reconcile", "confirm_delivered": "confirm",
-                    "rename": "rename", "_write_atomic": "replace_rows"}.get(method, method)
+                    "_write_atomic": "replace_rows"}.get(method, method)
             payload = dict(args)
             if kind in {"append", "append_local"}:
                 payload["entry_id"] = uuid.uuid4().hex
@@ -726,8 +720,6 @@ def route_queue(queue, method: str, args: dict):
                 rows = _coordinator.queue_rpc(route, uuid.uuid4().hex, _clock(), {"kind": "load"})
                 predicate = payload.pop("apenas", None)
                 payload["entry_ids"] = [r["id"] for r in rows if predicate is None or predicate(r)]
-            if kind == "rename":
-                payload["name"] = payload.pop("new_name")
             for key in ("committed", "na_fila_tui"):
                 if key in payload:
                     payload[key] = sorted(payload[key])

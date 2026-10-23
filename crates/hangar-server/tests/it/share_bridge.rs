@@ -167,18 +167,6 @@ async fn mode_change_end_keeps_the_transfer_still_incomplete() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn rename_moves_invites_and_external_pairs() {
-    let dir = tempfile::tempdir().unwrap();
-    let srv = server(dir.path(), true).await;
-    let (s, _) = srv.share.store.create("velho", Some("k:A".into()), Kind::Pair, false).unwrap();
-    srv.share.pairs.add(pair_record(&s.id, "velho")).unwrap();
-    result(&srv, "rename", json!({"old": "velho", "new": "novo"})).await;
-    assert_eq!(srv.share.store.list_for("novo").len(), 0, "list_for mostra só convite comum");
-    assert!(srv.share.store.all().iter().all(|s| s.session == "novo"));
-    assert_eq!(srv.share.pairs.all()[0].local_session, "novo");
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn session_died_removes_the_external_pair_and_its_invite() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), true).await;

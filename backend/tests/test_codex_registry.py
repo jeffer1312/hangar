@@ -206,27 +206,11 @@ def test_kill_codex_closes_client_and_removes_sidecar(tmp_path):
     assert kill_tmux.call_count == 2
 
 
-def test_rename_codex_moves_sidecar_and_live_adapter(tmp_path):
-    codex_sessions.save("old", "tid-1", "/rollout-a.jsonl", "/tmp/a")
-    reg = SessionRegistry(projects_dir=tmp_path)
-    adapter = CodexAdapter()
-    fake = _FakeClient()
-    adapter.attach("old", fake, "tid-1")
-    with patch("app.adapters.get_adapter", return_value=adapter):
-        reg.rename("old", "new")
-    assert codex_sessions.load("old") is None
-    assert codex_sessions.load("new")["name"] == "new"
-    assert "old" not in adapter._sessions
-    assert adapter._sessions["new"]["client"] is fake
-
-
-def test_sidecar_preserva_codex_home_em_update_e_rename(tmp_path):
+def test_sidecar_preserva_codex_home_em_update(tmp_path):
     codex_sessions.save("one", "thread-a", "/tmp/rollout-a.jsonl", "/tmp/project",
                         codex_home="/tmp/codex-work")
     codex_sessions.update_model("one", "model-a", "high")
     assert codex_sessions.load("one")["codex_home"] == "/tmp/codex-work"
-    codex_sessions.rename("one", "two")
-    assert codex_sessions.load("two")["codex_home"] == "/tmp/codex-work"
 
 
 def test_list_codex_preserva_conta_do_sidecar_sem_ler_cota(tmp_path, monkeypatch):
@@ -605,21 +589,17 @@ def test_sidecar_save_keeps_transfer_budget_and_key_on_same_thread(tmp_path, hea
     assert meta["transfer_id"] == "transfer-1"
     assert meta["tool_output_token_limit"] == 144000
     assert meta["codex_home"] == str(tmp_path / "account")
-    codex_sessions.rename("s", "renamed")
-    assert codex_sessions.load("renamed")["transfer_id"] == "transfer-1"
 
 
 @pytest.mark.parametrize("tier", ["priority", "default"])
 @pytest.mark.parametrize("headless", [False, True])
-def test_service_tier_survives_same_thread_save_and_rename(tier, headless):
+def test_service_tier_survives_same_thread_save(tier, headless):
     codex_sessions.save("s", "t", "/rollout", "/project", service_tier=tier, headless=headless)
     codex_sessions.update_model("s", "model", "high")
     codex_sessions.save("s", "t", "/rollout", "/project", headless=headless)
     assert codex_sessions.load("s")["service_tier"] == tier
-    codex_sessions.rename("s", "renamed")
-    assert codex_sessions.load("renamed")["service_tier"] == tier
-    codex_sessions.save("renamed", "new", "/new-rollout", "/project")
-    assert codex_sessions.load("renamed").get("service_tier") is None
+    codex_sessions.save("s", "new", "/new-rollout", "/project")
+    assert codex_sessions.load("s").get("service_tier") is None
 
 
 def test_service_tier_old_thread_cannot_update_new_sidecar():

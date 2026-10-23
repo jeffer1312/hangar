@@ -13,6 +13,9 @@ use std::time::{Duration,SystemTime,UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 use tokio::sync::{broadcast,Mutex};
 
+mod rename;
+pub(crate) use rename::Detached;
+
 /// `Headless`: ator sem terminal (cano). `Terminal`: entrada terminal do Claude. `CodexTerminal`: o mesmo
 /// ator do Codex, sobre o WebSocket do app-server adotado, com a TUI no pane.
 #[derive(Clone)]

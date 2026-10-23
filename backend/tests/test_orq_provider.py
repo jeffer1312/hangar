@@ -155,10 +155,9 @@ def test_history_turns_each_timeline_line_into_a_notice(tmp_path, monkeypatch):
 @pytest.mark.parametrize("method,path,body", [
     ("post", "/api/sessions/g1-orq/input", {"text": "oi"}),
     ("delete", "/api/sessions/g1-orq", None),
-    ("post", "/api/sessions/g1-orq/rename", {"new": "outro"}),
     ("post", "/api/sessions/g1-orq/interrupt", None),
 ])
-def test_orq_row_refuses_input_kill_rename_interrupt(root, monkeypatch, method, path, body):
+def test_orq_row_refuses_input_kill_interrupt(root, monkeypatch, method, path, body):
     _run(root, "2026-09-28-g1", "g1")
     monkeypatch.setattr(settings, "auth_token", "secret")
     from app.api import app

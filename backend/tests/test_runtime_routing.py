@@ -396,24 +396,6 @@ def _opened(birth, **view):
     return birth.build(transport), transport, pid
 
 
-def test_rename_keeps_session_in_rust_without_python_client(birth):
-    import json
-    owner, transport, _ = _opened(birth)
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        await owner.ensure_open("s1")
-        async def rename():
-            await asyncio.to_thread(birth.sessions.rename, "s1", "s2")
-        await owner.change("s1", rename, new_name="s2", advance=False)
-    asyncio.run(scenario())
-    assert transport.kinds() == ["open", "snapshot", "close", "open"]
-    assert transport.ops[3][1]["name"] == "s2" and transport.ops[3][1]["generation"] == 1
-    slot = owner.slot("s2")
-    assert slot.phase == runtime_coordinator.Phase.Rust and slot.lease is None and slot.store is None
-    assert not owner.managed_queue("s1")
-    assert json.loads(slot.binding.state_path.read_bytes())["name"] == "s2"
-
-
 def test_kill_closes_in_rust_and_stops_cano(birth):
     owner, transport, pid = _opened(birth)
     async def scenario():

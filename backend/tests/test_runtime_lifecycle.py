@@ -25,38 +25,6 @@ def owner(tmp_path, monkeypatch):
     return coordinator, slot, target
 
 
-def test_rename_while_command_waits(tmp_path, monkeypatch):
-    coordinator, slot, target = owner(tmp_path, monkeypatch)
-    async def scenario():
-        entered, finish = asyncio.Event(), asyncio.Event()
-        async def pending():
-            with coordinator.queue_gate("session"):
-                entered.set()
-                await finish.wait()
-        task = asyncio.create_task(pending())
-        await entered.wait()
-        async def rename():
-            assert task.done()
-            assert slot.frozen
-            target.name = "renamed"
-        lifecycle = asyncio.create_task(coordinator.change("session", rename, new_name="renamed", advance=False))
-        while not slot.frozen:
-            await asyncio.sleep(0)
-        assert slot.frozen
-        with pytest.raises(RuntimeError):
-            with coordinator.queue_gate("session"):
-                pass
-        finish.set()
-        await lifecycle
-        assert coordinator.slot("renamed") is slot
-        assert slot.binding.key == "key" and slot.binding.generation == 1
-        assert slot.store.state["name"] == "renamed"
-    try:
-        asyncio.run(scenario())
-    finally:
-        coordinator.close_python_leases()
-
-
 def test_clear_changes_conversation(tmp_path, monkeypatch):
     coordinator, slot, target = owner(tmp_path, monkeypatch)
     async def change():
@@ -203,25 +171,6 @@ def test_dead_runtime_does_not_re_adopt(tmp_path, monkeypatch):
         await supervisor.hand_to_python()
         assert await coordinator.prepare_session("session", "claude")
         assert slot.phase == Phase.Python and not slot.lease.closed
-    try:
-        asyncio.run(scenario())
-    finally:
-        coordinator.close_python_leases()
-
-
-def test_terminal_rename_persists_new_name_without_new_generation(tmp_path, monkeypatch):
-    coordinator, slot, target = owner(tmp_path, monkeypatch)
-    async def terminal():
-        target.headless = False
-    async def rename():
-        target.name = "renamed"
-    async def scenario():
-        await coordinator.change("session", terminal)
-        generation = slot.binding.generation
-        await coordinator.change("session", rename, new_name="renamed", advance=False)
-        assert slot.binding.generation == generation
-        assert slot.store.state["runtime_state"]["_binding"]["name"] == "renamed"
-        assert slot.store.state["name"] == "renamed"
     try:
         asyncio.run(scenario())
     finally:

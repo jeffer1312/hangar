@@ -382,18 +382,6 @@ def close_all(owner: str) -> None:
             _log.debug("shortcut: %r nao saiu ao fechar %r", row["tmux"], owner)
 
 
-def rename_owner(old: str, new: str) -> None:
-    # O dono e a opcao, nao o nome tmux: basta reapontar a opcao pra lista seguir a conversa.
-    try:
-        rows = _rows()
-    except MuxUnavailable:
-        _log.warning("shortcut: multiplexador sem resposta; terminais de %r nao seguiram o rename", old)
-        return
-    for row in rows:
-        if row["owner"] == old:
-            tmux._run(["tmux", "set-option", "-t", f"={row['tmux']}:", _OWNER, new])
-
-
 def start_hangar(key: str, cwd: str, command: str, label: str, env: dict[str, str],
                  origin: str, ask: bool) -> tuple[dict | None, bool]:
     """Copia unica do atalho `key` no servidor. (terminal, reaproveitou). A copia morta sai e

@@ -40,11 +40,3 @@ class ThenLink:
         # Idempotente: chamado tanto no clear explicito (usuario) quanto no one-shot pos-disparo.
         self.path.unlink(missing_ok=True)
         self.path.with_suffix(".json.tmp").unlink(missing_ok=True)
-
-    def rename(self, new_name: str) -> None:
-        # Espelha PromptQueue.rename: a sessao renomeada nao pode perder o vinculo (nome velho vira
-        # orfao). Vinculos de OUTRAS sessoes que apontem pro nome velho como alvo NAO sao migrados
-        # (edge case raro; usuario reconfigura o alvo se precisar).
-        self.path.with_suffix(".json.tmp").unlink(missing_ok=True)
-        if self.path.exists():
-            atomico.substituir(self.path, _chain_dir() / f"{_sanitize(new_name)}.json")

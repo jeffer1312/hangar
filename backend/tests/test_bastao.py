@@ -638,23 +638,6 @@ def test_post_recusa_nome_ja_em_uso_sem_tocar_no_dossie_dela(bastao_post, monkey
     assert ja.read_text(encoding="utf-8") == "# dossiê da sessão viva\n"
 
 
-def test_rename_leva_o_dossie_junto(api_client_bastao, monkeypatch):
-    """Renomear a sucessora deixava o dossiê órfão: o kick-off dela aponta pro caminho antigo e o
-    `prune` apaga o arquivo em 7 dias. Mesmo argumento que fez a fila ser migrada no rename."""
-    from unittest.mock import patch
-    import app.api as api_mod
-
-    velho = bastao.gravar("cc", "# dossiê\n")
-    with patch("app.tmux.has_session", side_effect=lambda n: n == "cc"), \
-         patch("app.tmux.rename_session", return_value=True), \
-         patch.object(api_mod.registry, "rename", lambda a, b: None):
-        r = api_client_bastao.post("/api/sessions/cc/rename", json={"new": "cx"},
-                                   headers={"Authorization": "Bearer secret"})
-    assert r.status_code == 200, r.text
-    assert not velho.exists()
-    assert bastao.caminho("cx").read_text(encoding="utf-8") == "# dossiê\n"
-
-
 def test_post_404_sem_transcript(api_client_bastao):
     from unittest.mock import patch
     from app.models import SessionInfo

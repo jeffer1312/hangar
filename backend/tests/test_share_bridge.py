@@ -130,36 +130,6 @@ def test_kill_session_without_rust_leaves_the_invite_to_its_sweep(monkeypatch, c
     assert ("convites.ponte", "aviso", {"operacao_rust": "revoke_session", "motivo": "share_bridge_off"}) in events
 
 
-def _rename_stubs(monkeypatch):
-    monkeypatch.setattr(api, "_recusa_orq", lambda n: None)
-    monkeypatch.setattr(api, "_headless", lambda n: False)
-    monkeypatch.setattr(api, "_codex_sem_terminal", lambda n: False)
-    monkeypatch.setattr(api, "_rename_group_first", lambda old, new: False)
-    monkeypatch.setattr(api.headless_sessions, "exists", lambda n: False)
-    monkeypatch.setattr("app.tmux.has_session", lambda n: n == "a")
-    monkeypatch.setattr("app.tmux.rename_session", lambda a, b: True)
-    monkeypatch.setattr(api.registry, "rename", lambda a, b: None)
-    monkeypatch.setattr(api, "_rename_guest_claim", lambda a, b: None)
-    monkeypatch.setattr("app.pqueue.PromptQueue.rename", lambda self, new: None)
-
-
-def test_rename_asks_rust_to_move_invites_and_external_pairs(monkeypatch, client, bridge):
-    _rename_stubs(monkeypatch)
-    r = client.post("/api/sessions/a/rename", headers=H, json={"new": "b"})
-    assert r.status_code == 200, r.text
-    assert r.json() == {"ok": True, "name": "b"}
-    assert bridge.calls == [("rename", {"old": "a", "new": "b"})]
-
-
-def test_rename_with_rust_down_still_renames_and_warns(monkeypatch, client, bridge):
-    _rename_stubs(monkeypatch)
-    bridge.replies["rename"] = share_bridge.ShareBridgeError("share_bridge_off")
-    r = client.post("/api/sessions/a/rename", headers=H, json={"new": "b"})
-    assert r.status_code == 200, r.text
-    assert r.json()["name"] == "b"
-    assert r.json()["warning"]["code"] == "erro_convite_nao_acompanhou"
-
-
 def test_mode_change_holds_the_invite_and_moves_its_life(monkeypatch, bridge):
     monkeypatch.setattr(share_bridge, "changing_mode", set())
     monkeypatch.setattr(api, "session_life", lambda name: "k:novo")

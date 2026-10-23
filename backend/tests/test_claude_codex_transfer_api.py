@@ -411,8 +411,7 @@ async def test_ingress_and_controls_are_temporarily_unavailable(scenario, monkey
     assert not api.plugin_bridge.entregar("s", "guardar")
     assert pqueue.PromptQueue("s").load() == []
     client = TestClient(api.app)
-    for method, path, body in [("post", "/api/sessions/s/rename", {"name": "new"}),
-                               ("delete", "/api/sessions/s", None),
+    for method, path, body in [("delete", "/api/sessions/s", None),
                                ("post", "/api/sessions/s/keys", {"key": "enter"})]:
         response = client.request(method, path, json=body, headers={"Authorization": "Bearer test-secret"})
         assert response.status_code == 409

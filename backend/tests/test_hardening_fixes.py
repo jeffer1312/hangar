@@ -6,7 +6,6 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from app.api import _BodySizeLimitMiddleware
-from app.registry import SessionRegistry
 
 
 def _app(limit: int) -> FastAPI:
@@ -38,19 +37,6 @@ def test_body_limit_chunked_sem_content_length():
             yield b"x"
 
     assert c.post("/echo", content=gen()).status_code == 413
-
-
-def test_registry_rename_migra_cache():
-    reg = SessionRegistry()
-    SessionRegistry._jsonl_cache.clear()
-    SessionRegistry._jsonl_cache["old"] = "/p/abc.jsonl"
-    reg.rename("old", "new")
-    assert "old" not in SessionRegistry._jsonl_cache       # nome velho esquecido
-    assert SessionRegistry._jsonl_cache["new"] == "/p/abc.jsonl"  # jsonl migrado pro novo
-    # rename de nome SEM cache nao deve criar entrada None
-    reg.rename("ghost", "new2")
-    assert "new2" not in SessionRegistry._jsonl_cache
-    SessionRegistry._jsonl_cache.clear()
 
 
 def test_read_from_nao_consome_linha_parcial(tmp_path):

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app import api, groups_bridge, pair, registry, runtime_coordinator
+from app import api, groups_bridge, pair, runtime_coordinator
 from app.config import settings
 
 H = {"Authorization": "Bearer secret"}
@@ -396,52 +396,6 @@ def test_orq_grupo_in_python_mode_refuses(monkeypatch, client, mode):
     assert sorted(p.name for p in pair._pair_dir().iterdir()) == before
 
 
-def test_rename_in_rust_mode_asks_rust_before_tmux(monkeypatch, client):
-    order = []
-    _rust(monkeypatch, reply=lambda op, a: order.append((op, a)) or {})
-    monkeypatch.setattr(api, "_recusa_orq", lambda n: None)
-    monkeypatch.setattr(api, "_headless", lambda n: False)
-    monkeypatch.setattr(api, "_codex_sem_terminal", lambda n: False)
-    monkeypatch.setattr(api.headless_sessions, "exists", lambda n: False)
-    monkeypatch.setattr("app.tmux.has_session", lambda n: n == "a")
-    monkeypatch.setattr("app.tmux.rename_session", lambda a, b: order.append(("tmux", a, b)) or False)
-    r = client.post("/api/sessions/a/rename", headers=H, json={"new": "b"})
-    assert r.status_code == 500
-    # O grupo foi renomeado antes do tmux e desfeito quando o tmux falhou.
-    assert order == [("group.rename", {"old": "a", "new": "b"}), ("tmux", "a", "b"),
-                     ("group.rename", {"old": "b", "new": "a"})]
-
-
-def test_rename_in_rust_mode_aborts_when_rust_fails(monkeypatch, client):
-    _rust(monkeypatch, error="groups_store_failed")
-    monkeypatch.setattr(api, "_recusa_orq", lambda n: None)
-    monkeypatch.setattr(api, "_headless", lambda n: False)
-    monkeypatch.setattr(api, "_codex_sem_terminal", lambda n: False)
-    monkeypatch.setattr(api.headless_sessions, "exists", lambda n: False)
-    monkeypatch.setattr("app.tmux.has_session", lambda n: n == "a")
-    monkeypatch.setattr("app.tmux.rename_session", lambda a, b: pytest.fail("tmux não pode ser tocado"))
-    r = client.post("/api/sessions/a/rename", headers=H, json={"new": "b"})
-    assert r.status_code == 503
-    assert r.json()["detail"]["code"] == "erro_grupo_indisponivel"
-
-
-def test_registry_rename_does_not_write_groups(monkeypatch):
-    _sidecar("a", ["b"])
-    monkeypatch.setattr("app.conversation_transfer.require_available", lambda n: None)
-    for mod in (registry.headless_sessions, registry.codex_sessions):
-        monkeypatch.setattr(mod, "exists", lambda name: False)
-    reg = registry.SessionRegistry()
-    monkeypatch.setattr(reg, "_rename_rust", lambda *a: None)
-    monkeypatch.setattr(registry, "PromptQueue", lambda n: SimpleNamespace(rename=lambda new: None))
-    monkeypatch.setattr(registry, "ThenLink", lambda n: SimpleNamespace(rename=lambda new: None))
-    monkeypatch.setattr(registry.shortcut_terminals, "rename_owner", lambda *a: None)
-    monkeypatch.setattr("app.conversation_transfer.rename_transfer", lambda *a: None)
-    monkeypatch.setattr(registry.tmux, "is_hidden", lambda *a, **k: False, raising=False)
-    # Quem renomeia o grupo é o Rust, pela rota: o registry não toca no arquivo de grupo.
-    reg.rename("a", "c")
-    assert pair.PairLink("a").get()["peers"] == ["b"] and pair.PairLink("c").get() is None
-
-
 def test_child_gets_group_env(monkeypatch, tmp_path):
     from app import list_bridge, peers, rust_server
     monkeypatch.setattr(list_bridge, "dirs_env", lambda: "{}")
@@ -455,33 +409,7 @@ def test_child_gets_group_env(monkeypatch, tmp_path):
     assert env["HANGAR_SERVER_ID"] == "casa"
     assert env["HANGAR_PEERS_FILE"] == str(peers._PEERS_FILE)
     assert env["HANGAR_PAIR_ARCHIVE"] == str(pair._arquivo_dir())
-    assert rust_server.RUST_SERVER_PROTOCOL == 87
-
-
-def _tmux_rename(monkeypatch, renamed):
-    monkeypatch.setattr(api, "_recusa_orq", lambda n: None)
-    monkeypatch.setattr(api, "_headless", lambda n: False)
-    monkeypatch.setattr(api, "_codex_sem_terminal", lambda n: False)
-    monkeypatch.setattr(api.headless_sessions, "exists", lambda n: False)
-    monkeypatch.setattr("app.tmux.has_session", lambda n: n in ("a", "c"))
-    monkeypatch.setattr("app.tmux.rename_session", lambda a, b: renamed.append((a, b)) or False)
-
-
-@pytest.mark.parametrize("mode", ["python", None])
-def test_python_mode_rename_of_a_grouped_session_refuses(monkeypatch, client, mode):
-    """Sem o Rust ninguém renomeia o grupo: renomear só a sessão deixaria o sidecar com o nome velho."""
-    monkeypatch.setattr(runtime_coordinator, "_current", mode and SimpleNamespace(mode=mode, legacy=None))
-    monkeypatch.setattr(groups_bridge, "call", lambda *a, **k: pytest.fail("sem Rust não há ponte"))
-    _sidecar("a", ["b"])
-    renamed = []
-    _tmux_rename(monkeypatch, renamed)
-    r = client.post("/api/sessions/a/rename", headers=H, json={"new": "z"})
-    assert r.status_code == 503, r.text
-    assert r.json()["detail"]["code"] == "groups_need_rust_server"
-    assert renamed == []
-    # Fora de grupo o rename segue (o tmux falso falha: 500 dele, não recusa de grupo).
-    r = client.post("/api/sessions/c/rename", headers=H, json={"new": "z"})
-    assert r.status_code == 500 and renamed == [("c", "z")]
+    assert rust_server.RUST_SERVER_PROTOCOL == 88
 
 
 @pytest.mark.parametrize("mode", ["python", None])

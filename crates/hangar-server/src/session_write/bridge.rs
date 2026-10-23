@@ -59,6 +59,11 @@ pub async fn claude(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         if !as_owner(&mut req, &name, &rest) { return not_ours(); }
         return super::relaunch::reload(State(st), ConnectInfo(peer), req).await;
     }
+    // Trocar o nome pelo que entrou no Python (Connect, convidado com conta): a rota inteira é do Rust.
+    if rest == "rename" && req.method() == Method::POST {
+        if !as_owner(&mut req, &name, &rest) { return not_ours(); }
+        return crate::session_rename::route(State(st), ConnectInfo(peer), req).await;
+    }
     // Pergunta lateral (`POST`/`GET btw`): a própria rota decide sessão, provedor e modo, inclusive o
     // Claude sem terminal parado, que ainda não tem entrada.
     if rest == "btw" && matches!(*req.method(), Method::POST | Method::GET) {
