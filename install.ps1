@@ -2397,16 +2397,36 @@ if (-not $bash) {
     # o que o PowerShell acha o shell do atalho nao acha. Medido: caiu no `python` e pegou o stub
     # da Microsoft Store ("Python nao foi encontrado"), que e o que ha no PATH de um Windows tipico.
     $pyExe = $null
+    $atalhos = @()
     foreach ($cand in 'py', 'python') {
         $c = Get-Command $cand -CommandType Application -ErrorAction SilentlyContinue |
              Select-Object -First 1
-        # WindowsApps = atalho da Store, que nao executa nada. Pular explicitamente.
-        if ($c -and $c.Source -notlike '*WindowsApps*') { $pyExe = $c.Source; break }
+        if (-not $c) { continue }
+        if ($c.Source -notlike '*WindowsApps*') { $pyExe = $c.Source; break }
+        $atalhos += $c.Source
+    }
+    if (-not $pyExe) {
+        # Em WindowsApps mora tanto o atalho falso da Store quanto o do Python Install Manager, que
+        # e como o winget instala o Python 3.14 e executa de verdade. O bash nao roda alias de app,
+        # entao o atalho so serve pra perguntar onde esta o interpretador real. %LOCALAPPDATA%\Python\bin
+        # e o diretorio de atalhos do Install Manager, que ele nem sempre poe no PATH.
+        $candidatos = @()
+        if ($env:LOCALAPPDATA) { $candidatos += Join-Path $env:LOCALAPPDATA 'Python\bin\python.exe' }
+        $candidatos += $atalhos
+        foreach ($cand in $candidatos) {
+            if (-not (Test-Path $cand)) { continue }
+            $real = & { $ErrorActionPreference = 'Continue'; & $cand -c 'import sys; print(sys.executable)' 2>$null } |
+                    Select-Object -Last 1
+            # Pela saida, nao pelo codigo: o atalho da Store devolve texto de erro e nenhum caminho.
+            if ($real -and (Test-Path -LiteralPath $real.Trim()) -and $real -notlike '*WindowsApps*') {
+                $pyExe = $real.Trim(); break
+            }
+        }
     }
     if (-not $pyExe) {
         Falta 'nenhum Python real encontrado (so o atalho da Store) - hangar-send ficaria sem JSON'
         $sendOk = $false
-        Nota 'instale com:  winget install --id Python.Python.3.13'
+        Nota 'instale com:  winget install --id Python.Python.3.14'
     } else {
         # C:\Windows\py.exe -> /c/Windows/py.exe, que e a forma que o bash do MSYS executa.
         $pyMsys = ($pyExe -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
@@ -2417,6 +2437,13 @@ if (-not $bash) {
                      "exec '$pyMsys'$arg `"`$@`"`n"
         if (Escrever-Lancador $shim $corpoShim 'sh') { Ok "atalho python3 -> $pyExe$arg" }
         else { Ok 'atalho python3 ja atualizado' }
+        # Gemeo .cmd do atalho: os lancadores poem este bin na frente do PATH, e ai o PowerShell e o
+        # cmd resolvem `python3` para o arquivo sem extensao, que o Windows so sabe ABRIR (dialogo
+        # "como deseja abrir"). Com o .cmd na mesma pasta, os dois escolhem ele; o bash segue no sh.
+        $shimCmd = Join-Path $binUsuario 'python3.cmd'
+        $corpoShimCmd = "@echo off`r`n`"$pyExe`"$arg %*`r`n"
+        if (Escrever-Lancador $shimCmd $corpoShimCmd 'cmd') { Ok "atalho python3.cmd -> $pyExe$arg" }
+        else { Ok 'atalho python3.cmd ja atualizado' }
     }
 
     # (2) lancador pro PowerShell: o script nao tem extensao, entao o Windows nao o executa
