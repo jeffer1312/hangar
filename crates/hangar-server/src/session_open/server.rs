@@ -137,8 +137,9 @@ pub fn guest_by_id(claude_base: &Path, id: &str) -> Option<LoginGuest> {
 }
 
 /// A fila que a sessão morta deixou no nome (a projeção `.hangar-queue/<nome>.jsonl`, que o Rust lê
-/// no histórico) e o vínculo `then` dela (`.hangar-chain/<nome>.json`): a nova não os herda.
+/// no histórico), o vínculo `then` dela (`.hangar-chain/<nome>.json`) e o loop: a nova não os herda.
 pub fn forget_queue(claude_base: &Path, name: &str) -> std::io::Result<()> {
+    crate::loops::store::Store::new(claude_base).forget(name)?;
     let projection = crate::locate::queue_path(claude_base, name);
     let chain = claude_base.join(".hangar-chain").join(projection.file_name().unwrap_or_default()).with_extension("json");
     for path in [projection.with_extension("jsonl.tmp"), projection, chain.with_extension("json.tmp"), chain] {
