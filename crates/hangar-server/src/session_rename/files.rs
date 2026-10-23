@@ -53,12 +53,14 @@ pub fn move_file(src: &Path, dst: &Path) -> io::Result<bool> {
     if src == dst || !exists(src)? { return Ok(false); }
     if exists(dst)? { return Err(Error::new(ErrorKind::AlreadyExists, "o arquivo do nome novo já existe")); }
     if let Some(dir) = dst.parent() { std::fs::create_dir_all(dir)?; }
-    replace(src, dst)?;
+    // Antes de mover: falhar aqui não deixa o arquivo no nome novo sem registro para desfazer.
     let tmp = src.with_extension(format!("{}.tmp", src.extension().and_then(|e| e.to_str()).unwrap_or_default()));
     match std::fs::remove_file(tmp) {
-        Err(error) if error.kind() != ErrorKind::NotFound => Err(error),
-        _ => Ok(true),
+        Err(error) if error.kind() != ErrorKind::NotFound => return Err(error),
+        _ => {},
     }
+    replace(src, dst)?;
+    Ok(true)
 }
 
 /// `pqueue._sanitize`: o nome dos arquivos da fila, do `then` e do bastão.
@@ -79,6 +81,8 @@ pub fn move_guest(claude_base: &Path, old: &str, new: &str) -> io::Result<bool> 
     let mut state: Value = serde_json::from_slice(&read_replaced(&path)?).ok().filter(Value::is_object)
         .ok_or_else(|| Error::new(ErrorKind::InvalidData, "guests.json ilegível"))?;
     let Some(sessions) = state.get_mut("sessions").and_then(Value::as_object_mut) else { return Ok(false) };
+    // Dono órfão no nome novo só barra quando há o que mover.
+    if !sessions.contains_key(old) { return Ok(false); }
     if sessions.contains_key(new) { return Err(Error::new(ErrorKind::AlreadyExists, "o nome novo já tem dono convidado")); }
     let Some(entry) = sessions.remove(old) else { return Ok(false) };
     sessions.insert(new.into(), entry);
@@ -266,6 +270,7 @@ mod tests {
         let state: Value = serde_json::from_slice(&std::fs::read(dir.path().join("guests.json")).unwrap()).unwrap();
         assert_eq!(state["sessions"], json!({"b": {"guest": "g1", "life": "k:1"}}));
         assert!(!move_guest(dir.path(), "zz", "y").unwrap());
+        assert!(!move_guest(dir.path(), "sem-dono", "b").unwrap(), "dono no nome novo sem nada a mover não recusa");
     }
 
     #[test]

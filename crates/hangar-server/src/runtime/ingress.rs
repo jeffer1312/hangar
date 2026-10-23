@@ -10,8 +10,8 @@ use tokio::sync::watch;
 pub struct IngressGates { inner: Arc<Mutex<HashMap<String, Gate>>> }
 
 // Fechamentos em curso (contador, não flag: dois `close` não desfazem um ao outro), quantos deles são
-// retidos e escritas em curso.
-struct Gate { closes: watch::Sender<usize>, holds: usize, passes: watch::Sender<usize> }
+// retidos, quantos são exclusivos (rename) e escritas em curso.
+struct Gate { closes: watch::Sender<usize>, holds: usize, exclusive: usize, passes: watch::Sender<usize> }
 
 #[derive(Debug)]
 pub struct GateClosed;
@@ -22,21 +22,21 @@ pub enum CloseRefused { Busy, Held }
 pub struct IngressPass { gates: IngressGates, name: String }
 
 /// Desfaz o fechamento de um `close` que desistiu ou foi cancelado no meio da espera.
-struct CloseGuard<'a> { gates: &'a IngressGates, name: &'a str, held: bool, armed: bool }
+struct CloseGuard<'a> { gates: &'a IngressGates, name: &'a str, held: bool, exclusive: bool, armed: bool }
 impl Drop for CloseGuard<'_> {
-    fn drop(&mut self) { if self.armed { self.gates.reopen(self.name, self.held); } }
+    fn drop(&mut self) { if self.armed { self.gates.reopen(self.name, self.held, self.exclusive); } }
 }
 
 impl Gate {
     fn idle(&self) -> bool {
-        *self.closes.borrow() == 0 && self.holds == 0 && *self.passes.borrow() == 0 && self.closes.receiver_count() == 0 && self.passes.receiver_count() == 0
+        *self.closes.borrow() == 0 && self.holds == 0 && self.exclusive == 0 && *self.passes.borrow() == 0 && self.closes.receiver_count() == 0 && self.passes.receiver_count() == 0
     }
 }
 
 impl IngressGates {
     fn with_gate<T>(&self, name: &str, f: impl FnOnce(&mut Gate) -> T) -> T {
         let mut map = self.inner.lock().unwrap();
-        f(map.entry(name.into()).or_insert_with(|| Gate { closes: watch::channel(0).0, holds: 0, passes: watch::channel(0).0 }))
+        f(map.entry(name.into()).or_insert_with(|| Gate { closes: watch::channel(0).0, holds: 0, exclusive: 0, passes: watch::channel(0).0 }))
     }
     pub async fn enter(&self, name: &str, wait: Duration) -> Result<IngressPass, GateClosed> {
         let deadline = tokio::time::Instant::now() + wait;
@@ -55,34 +55,42 @@ impl IngressGates {
             tokio::time::timeout_at(deadline, closes.changed()).await.map_err(|_| GateClosed)?.map_err(|_| GateClosed)?;
         }
     }
-    pub async fn close(&self, name: &str, wait: Duration) -> Result<(), IngressBusy> { self.close_as(name, wait, false, false).await.map_err(|_| IngressBusy) }
+    pub async fn close(&self, name: &str, wait: Duration) -> Result<(), IngressBusy> { self.close_as(name, wait, false, false, false).await.map_err(|_| IngressBusy) }
     /// Fechamento que não passa por cima de um retido: com a troca de conversa em curso, `Held` na hora.
-    pub async fn close_unless_held(&self, name: &str, wait: Duration) -> Result<(), CloseRefused> { self.close_as(name, wait, false, true).await }
+    pub async fn close_unless_held(&self, name: &str, wait: Duration) -> Result<(), CloseRefused> { self.close_as(name, wait, false, true, false).await }
+    /// Como `close_unless_held`, e enquanto durar a retenção (`hold`) recusa: a troca de conversa não
+    /// começa sobre um rename em curso. Desfeito por `open_exclusive`.
+    pub async fn close_exclusive(&self, name: &str, wait: Duration) -> Result<(), CloseRefused> { self.close_as(name, wait, false, true, true).await }
     /// Fechamento retido: enquanto durar, `enter` recusa sem esperar. Desfeito por `release`.
-    pub async fn hold(&self, name: &str, wait: Duration) -> Result<(), IngressBusy> { self.close_as(name, wait, true, false).await.map_err(|_| IngressBusy) }
-    async fn close_as(&self, name: &str, wait: Duration, held: bool, refuse_held: bool) -> Result<(), CloseRefused> {
+    pub async fn hold(&self, name: &str, wait: Duration) -> Result<(), IngressBusy> { self.close_as(name, wait, true, false, false).await.map_err(|_| IngressBusy) }
+    async fn close_as(&self, name: &str, wait: Duration, held: bool, refuse_held: bool, exclusive: bool) -> Result<(), CloseRefused> {
         // Declarado antes de `passes`: o receptor cai primeiro e a porta desistida pode sair do mapa.
-        let mut guard = CloseGuard { gates: self, name, held, armed: false };
+        let mut guard = CloseGuard { gates: self, name, held, exclusive, armed: false };
         // Conferido sob a mesma trava que conta o fechamento: uma retenção não passa entre os dois.
-        let Some(mut passes) = self.with_gate(name, |g| {
-            if refuse_held && g.holds > 0 { return None; }
+        let mut passes = self.with_gate(name, |g| {
+            if refuse_held && g.holds > 0 { return Err(CloseRefused::Held); }
+            if held && g.exclusive > 0 { return Err(CloseRefused::Busy); }
             g.closes.send_modify(|n| *n += 1);
             if held { g.holds += 1; }
-            Some(g.passes.subscribe())
-        }) else { return Err(CloseRefused::Held) };
+            if exclusive { g.exclusive += 1; }
+            Ok(g.passes.subscribe())
+        })?;
         guard.armed = true;
         if tokio::time::timeout(wait, passes.wait_for(|n| *n == 0)).await.is_err() { return Err(CloseRefused::Busy); }
         guard.armed = false;
         Ok(())
     }
     /// Desfaz um fechamento (o contador não passa de zero).
-    pub fn open(&self, name: &str) { self.reopen(name, false) }
+    pub fn open(&self, name: &str) { self.reopen(name, false, false) }
+    /// Desfaz um `close_exclusive`.
+    pub fn open_exclusive(&self, name: &str) { self.reopen(name, false, true) }
     /// Desfaz um fechamento retido.
-    pub fn release(&self, name: &str) { self.reopen(name, true) }
-    fn reopen(&self, name: &str, held: bool) {
+    pub fn release(&self, name: &str) { self.reopen(name, true, false) }
+    fn reopen(&self, name: &str, held: bool, exclusive: bool) {
         let mut map = self.inner.lock().unwrap();
         let Some(g) = map.get_mut(name) else { return };
         if held { g.holds = g.holds.saturating_sub(1); }
+        if exclusive { g.exclusive = g.exclusive.saturating_sub(1); }
         g.closes.send_modify(|n| *n = n.saturating_sub(1));
         // Aberta e sem escrita em curso é igual a não existir: o mapa não cresce com nomes antigos.
         if g.idle() { map.remove(name); }
@@ -101,6 +109,18 @@ impl Drop for IngressPass {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn rename_and_conversation_transfer_refuse_each_other() {
+        let gates = IngressGates::default();
+        gates.close_exclusive("k", Duration::from_millis(10)).await.unwrap();
+        assert!(gates.hold("k", Duration::from_secs(5)).await.is_err());
+        gates.open_exclusive("k");
+        gates.hold("k", Duration::from_millis(10)).await.unwrap();
+        assert!(matches!(gates.close_exclusive("k", Duration::from_secs(5)).await, Err(CloseRefused::Held)));
+        gates.release("k");
+        assert!(gates.inner.lock().unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn close_waits_for_passes_and_blocks_new_ones() {

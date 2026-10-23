@@ -62,8 +62,15 @@ impl RuntimeRegistry {
                 }
                 next.name=name.into();next.binding.name=name.into();
                 let barrier=self.barrier(&key).await;let _guard=barrier.lock().await;
-                self.open_terminal_locked(next.clone()).await?;
-                self.rebind_claude_hub(&next)?;
+                let opened=match self.open_terminal_locked(next.clone()).await {
+                    Ok(_)=>self.rebind_claude_hub(&next),
+                    Err(error)=>Err(error),
+                };
+                if let Err(error)=opened {
+                    // A entrada nasce antes do fim da abertura: sem fechar, o desfazer a reaproveitaria com o nome novo.
+                    let _=self.close_locked(&key,generation,false).await;
+                    return Err(error);
+                }
             },
             Kind::ClaudeHeadless=>self.open_claude_headless(name,false).await.ok_or_else(missing)??,
             Kind::CodexHeadless=>self.watcher.get().cloned().ok_or_else(missing)?.open_parked(self,name).await.ok_or_else(missing)??,
@@ -97,9 +104,14 @@ async fn rename_queue(state_path:&std::path::Path,projection_dir:&std::path::Pat
         let _lease=lease;
         let mut store=Store::open(&state_path,&projection_dir,QueueState::new(&key,generation,&name,vec![])).map_err(|_|failure("queue_io"))?;
         if store.state().owner_key!=key || store.state().generation!=generation {return Err(failure("runtime_generation"));}
+        let previous=store.state().name.clone();
         let epoch_s=SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
-        store.exec(generation,&format!("rename:{key}:{generation}:{name}:{epoch_s}"),ClockSample {monotonic_s:0.0,epoch_s},Action::Rename {name}).map_err(|_|failure("queue_io"))?;
-        store.ensure_projection().map_err(|_|failure("queue_io"))?;
-        Ok(())
+        let clock=ClockSample {monotonic_s:0.0,epoch_s};
+        store.exec(generation,&format!("rename:{key}:{generation}:{name}:{epoch_s}"),clock,Action::Rename {name}).map_err(|_|failure("queue_io"))?;
+        if store.ensure_projection().is_ok() {return Ok(());}
+        // Erro aqui quer dizer "a fila não trocou de nome": o estado já gravado volta ao nome anterior.
+        store.exec(generation,&format!("rename:{key}:{generation}:{previous}:{epoch_s}:undo"),clock,Action::Rename {name:previous}).map_err(|_|failure("queue_undo"))?;
+        let _=store.ensure_projection();
+        Err(failure("queue_io"))
     }).await.map_err(|_|failure("queue_job"))?
 }

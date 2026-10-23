@@ -107,11 +107,12 @@ impl Ctx {
         let gates = self.runtime.ingress();
         let mut closed = Vec::new();
         for name in &names {
-            closed.push(crate::runtime::lifecycle::ClosedIngress::acquire(gates, name).await
-                .map_err(|_| no(StatusCode::CONFLICT, "ingress_busy", "a sessão está ocupada com outra escrita; tente de novo"))?);
+            // Exclusiva: a troca de agente (porta retida) recusa os dois lados enquanto o rename durar.
+            closed.push(crate::runtime::lifecycle::ClosedIngress::acquire_exclusive(gates, name).await
+                .map_err(|e| if e.code == "session_transfer_busy" { Refusal(StatusCode::CONFLICT, busy_body()) }
+                    else { no(StatusCode::CONFLICT, "ingress_busy", "a sessão está ocupada com outra escrita; tente de novo") })?);
         }
-        // De novo, já com as portas fechadas e o nome reservado: a troca de agente do Python não
-        // passa por elas.
+        // De novo, já com as portas fechadas e o nome reservado: a troca que começou antes delas.
         self.transfer_free(old).await?;
         self.transfer_free(&new).await?;
         self.check_free(&new).await?;
@@ -180,10 +181,13 @@ impl Ctx {
             if blocking(move || files::move_sidecar(&d, &o, &n)).await.map_err(|e| ("sidecar", io_code(&e)))? { done.push(Done::Sidecar(dir)); }
         }
         if detached.is_none() {
-            match self.parked_queue_key(new).await {
-                Some(key) => {
-                    if self.runtime.rename_parked_queue(&key, new).await.map_err(|e| ("queue", e.code))? { done.push(Done::ParkedQueue(key)); }
-                },
+            let parked = match self.parked_queue_key(new).await {
+                Some(key) => self.runtime.rename_parked_queue(&key, new).await.map_err(|e| ("queue", e.code))?.then_some(key),
+                None => None,
+            };
+            match parked {
+                Some(key) => done.push(Done::ParkedQueue(key)),
+                // Sem estado indexado, a fila é só a projeção no nome.
                 None => self.move_file(files::queue_file(&self.claude, old), files::queue_file(&self.claude, new), done).await.map_err(|c| ("queue", c))?,
             }
         }
@@ -197,10 +201,11 @@ impl Ctx {
         let (home, o, n) = (self.home.clone(), old.to_owned(), new.to_owned());
         if blocking(move || files::move_transfer(&home, &o, &n, life.as_deref(), meta.as_ref())).await.map_err(|e| ("transfer", io_code(&e)))? { done.push(Done::Transfer); }
         if let Some(share) = self.st.share.clone() {
-            share.store.rename(old, new).map_err(|e| ("share", io_code(&e)))?;
+            // Registrado antes de conferir: a falha deixa a memória no nome novo e o desfazer regrava.
             done.push(Done::Share);
-            share.pairs.rename_local(old, new).map_err(|e| ("share_pairs", io_code(&e)))?;
+            share.store.rename(old, new).map_err(|e| ("share", io_code(&e)))?;
             done.push(Done::Pairs);
+            share.pairs.rename_local(old, new).map_err(|e| ("share_pairs", io_code(&e)))?;
         }
         let owned = self.shortcuts(old, new).await.map_err(|(owned, code)| { done.push(Done::Shortcuts(owned)); ("shortcuts", code) })?;
         done.push(Done::Shortcuts(owned));
@@ -266,12 +271,17 @@ impl Ctx {
     async fn shortcuts(&self, old: &str, new: &str) -> Result<Vec<String>, (Vec<String>, String)> {
         let out = self.mux.run(&["list-sessions", "-F", "#{session_name}\t#{@cp_shortcut_owner}"]).await.map_err(|_| (Vec::new(), "mux_unavailable".to_owned()))?;
         let mut owned = Vec::new();
-        if !out.status.success() { return Ok(owned); }
+        if !out.status.success() {
+            // Sem servidor do multiplexador não há atalho; outra recusa é não saber quais trocar.
+            if crate::list::mux::is_absence(&String::from_utf8_lossy(&out.stderr)) { return Ok(owned); }
+            return Err((owned, "mux_unavailable".into()));
+        }
         for line in String::from_utf8_lossy(&out.stdout).lines() {
             let Some((session, owner)) = line.split_once('\t') else { continue };
             if owner != old { continue; }
-            if !self.set_owner(session, new).await { return Err((owned, "shortcut_owner_unchanged".into())); }
+            // Antes de trocar: com o prazo estourado a troca pode ter acontecido, e o desfazer tenta voltar.
             owned.push(session.to_owned());
+            if !self.set_owner(session, new).await { return Err((owned, "shortcut_owner_unchanged".into())); }
         }
         Ok(owned)
     }

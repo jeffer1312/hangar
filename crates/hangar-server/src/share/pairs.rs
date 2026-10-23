@@ -76,10 +76,9 @@ impl PairStore {
         let moved: Vec<usize> = state.iter().enumerate().filter(|(_, r)| r.local_session == old).map(|(i, _)| i).collect();
         if moved.is_empty() { return Ok(()); }
         for &i in &moved { state[i].local_session = new.to_owned(); }
-        // Gravação que falha desfaz, como no `add`.
-        let saved = self.save(&state);
-        if saved.is_err() { for &i in &moved { state[i].local_session = old.to_owned(); } }
-        saved
+        // Falha fica com o nome novo na memória: a gravação pode ter chegado ao disco, e quem chama
+        // desfaz com o rename de volta, que regrava os dois.
+        self.save(&state)
     }
 
     pub fn all(&self) -> Vec<ExternalPair> { self.lock().clone() }

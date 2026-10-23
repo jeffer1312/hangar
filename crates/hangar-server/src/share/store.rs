@@ -437,19 +437,15 @@ impl ShareStore {
 
     pub fn rename(&self, old: &str, new: &str) -> io::Result<()> {
         let mut state = self.lock();
-        let mut moved = Vec::new();
+        let mut moved = false;
         for x in state.values_mut().filter(|x| x.session == old) {
             x.session = new.into();
-            moved.push(x.id.clone());
+            moved = true;
         }
-        if moved.is_empty() { return Ok(()); }
-        let saved = self.persist(state);
-        // Gravação que falha desfaz: a memória não pode dizer o nome novo com o disco no velho.
-        if saved.is_err() {
-            let mut state = self.lock();
-            for x in state.values_mut().filter(|x| moved.contains(&x.id)) { x.session = old.into(); }
-        }
-        saved
+        if !moved { return Ok(()); }
+        // Falha fica com o nome novo na memória: a gravação pode ter chegado ao disco, e quem chama
+        // desfaz com o rename de volta, que regrava os dois.
+        self.persist(state)
     }
 
     pub fn set_life(&self, session: &str, life: Option<String>) -> io::Result<()> {
