@@ -31,7 +31,7 @@ async fn scene_with(groups: bool) -> Scene {
     let (w0, w1) = (root.join("w0"), root.join("w1"));
     let script = root.join("tmux");
     crate::write_executable(&script, format!(
-        "#!/bin/sh\n[ \"$1\" = list-panes ] || {{ printf 'ok\\n'; exit 0; }}\nprintf 's0\\t1\\t\\t{}\\t%%0\\t\\t\\t\\t0\\t0\\ns1\\t1\\t\\t{}\\t%%1\\t\\t\\t\\t0\\t0\\nbeta\\t1\\t\\t{}\\t%%1\\t\\t\\t\\t0\\t0\\nbeta\\t1\\t\\t{}\\t%%7\\t\\t\\t\\t0\\t1\\n'\n",
+        "#!/bin/sh\n[ \"$1\" = show-environment ] && [ \"${{3#=}}\" = s1 ] && {{ printf 'CP_SESSION_KEY=fedcba9876543210fedcba9876543210\\n'; exit 0; }}\n[ \"$1\" = list-panes ] || {{ printf 'ok\\n'; exit 0; }}\nprintf 's0\\t1\\t\\t{}\\t%%0\\t\\t\\t\\t0\\t0\\ns1\\t1\\t\\t{}\\t%%1\\t\\t\\t\\t0\\t0\\nbeta\\t1\\t\\t{}\\t%%1\\t\\t\\t\\t0\\t0\\nbeta\\t1\\t\\t{}\\t%%7\\t\\t\\t\\t0\\t1\\n'\n",
         w0.display(), w1.display(), w1.display(), w1.display()));
     let home = root.join("home");
     write_json(&home.join(".hangar/claude-headless/sem-term.json"), json!({"name": "sem-term", "key": "k123", "session_id": "s"}));
@@ -205,6 +205,11 @@ async fn identity_follows_quem_chama() {
     assert!(caller(&s, &[("x-hangar-key", key), ("x-hangar-pane", "%7")]).await.is_err());
     write_json(&s.home.join(format!(".hangar/session-specs/{key}.json")), json!({}));
     assert_eq!(caller(&s, &[("x-hangar-key", key), ("x-hangar-pane", "%7")]).await, ok("beta", "pane"));
+    // psmux repete o id do pane entre sessões (%1 em s1 e beta) e o rename envelhece CP_SESSION_NAME:
+    // a chave no ambiente da sessão diz quem ela é agora.
+    let renamed = "fedcba9876543210fedcba9876543210";
+    write_json(&s.home.join(format!(".hangar/session-specs/{renamed}.json")), json!({}));
+    assert_eq!(caller(&s, &[("x-hangar-key", renamed), ("x-hangar-pane", "%1"), ("x-hangar-session", "velho")]).await, ok("s1", "chave"));
     assert_eq!(caller(&s, &[("x-hangar-pane", "%7"), ("x-hangar-session", "s0")]).await, ok("beta", "pane"));
     assert_eq!(caller(&s, &[("x-hangar-pane", "%1"), ("x-hangar-session", "s0")]).await, ok("s0", "nome"), "pane repetido não resolve");
     assert_eq!(caller(&s, &[("x-hangar-session", "sem-term")]).await, ok("sem-term", "nome"));

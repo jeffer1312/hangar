@@ -2,7 +2,8 @@
 //!
 //! - `X-Hangar-Voice`: a assistente de voz, que não é sessão. Só com a assinatura que este servidor
 //!   faz a cada chamada (`<nonce>.<hmac>`); presente e inválida é erro, sem cair nos outros.
-//! - `X-Hangar-Key`: sessão sem terminal. Não muda no rename nem no `/clear`. Presente, vence o pane:
+//! - `X-Hangar-Key`: sidecar da sessão sem terminal ou `CP_SESSION_KEY` no ambiente da sessão com
+//!   terminal. Não muda no rename nem no `/clear`. Presente, vence o pane:
 //!   o filho pode ter herdado o `TMUX_PANE` de outra sessão.
 //! - `X-Hangar-Pane`: dono da sessão com terminal (o rename não troca o pane id). Id que aparece em
 //!   mais de uma sessão (o psmux numera por sessão) não resolve: nome errado é pior que nenhum.
@@ -43,18 +44,30 @@ pub async fn resolve(headers: &HeaderMap, local: &Local<'_>, secret: &str) -> Re
         return Err("assinatura da voz inválida (o hangar-server reiniciou ou não é a voz)".into());
     }
     let text = |name| header(headers, name).map(|v| String::from_utf8_lossy(v).into_owned());
+    let mut terminal_key = None;
     if let Some(key) = text("x-hangar-key") {
         let found = { let (home, key) = (local.home.to_path_buf(), key.clone()); tokio::task::spawn_blocking(move || by_key(&home, &key)).await.ok().flatten() };
         if let Some(name) = found { return Ok((name, Origin::Key)); }
         // Sessão com terminal aberta pelo Rust: a chave mora no registro dela, sem sidecar, e quem
-        // diz o nome atual é o pane.
+        // diz o nome atual é o ambiente da sessão ou o pane.
         if !record_exists(local.home, &key) {
             return Err("chave de sessão sem terminal não corresponde a nenhum sidecar".into());
         }
+        terminal_key = Some(key);
     }
     let (pane, name) = (text("x-hangar-pane"), text("x-hangar-session"));
     // ponytail: multiplexador que não responde vale como "nenhum pane", como o `list_panes_all`.
-    let panes = if pane.is_some() || name.is_some() { local.mux.list_panes().await.unwrap_or_default() } else { Vec::new() };
+    let panes = if pane.is_some() || name.is_some() || terminal_key.is_some() { local.mux.list_panes().await.unwrap_or_default() } else { Vec::new() };
+    if let Some(key) = terminal_key {
+        // O psmux repete o id do pane entre sessões e o rename envelhece CP_SESSION_NAME; a chave no
+        // ambiente não muda. Com pane, só as sessões que o têm são perguntadas.
+        let candidates: BTreeSet<&str> = panes.iter().filter(|p| pane.as_ref().is_none_or(|id| &p.pane_id == id)).map(|p| p.session.as_str()).collect();
+        for session in candidates {
+            if local.mux.session_env(session, "CP_SESSION_KEY").await.as_deref() == Some(key.as_str()) {
+                return Ok((session.to_owned(), Origin::Key));
+            }
+        }
+    }
     if let Some(pane) = pane {
         let owners: BTreeSet<&str> = panes.iter().filter(|p| p.pane_id == pane).map(|p| p.session.as_str()).collect();
         if let [owner] = owners.into_iter().collect::<Vec<_>>()[..] { return Ok((owner.to_owned(), Origin::Pane)); }
