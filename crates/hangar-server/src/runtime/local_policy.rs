@@ -10,6 +10,9 @@ use std::sync::LazyLock;
 
 /// Teto da API por imagem; acima disso fica só o path (o `Read` do agente abre).
 const IMAGE_CAP: u64 = 5 * 1024 * 1024;
+/// A API reduz a imagem a este lado de qualquer jeito; mandar maior só enche o cano do Claude.
+const IMAGE_EDGE: u32 = 1568;
+const SHRINK_FROM: usize = 256 * 1024;
 const FAMILIES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
 
 static NATIVE_PREFIX: LazyLock<regex::Regex> =
@@ -65,11 +68,14 @@ fn text(value: &Value) -> Option<&str> { value.as_str().filter(|text| !text.is_e
 
 // ---- prepare_prompt ----
 
-fn prepare_prompt(payload: &Value, provider: &str) -> Result<Value, RuntimeError> {
+fn prepare_prompt(payload: &Value, provider: &str) -> Result<Value, RuntimeError> { prepare_with(payload, provider, true) }
+
+/// `shrink = false` no lote do terminal: a TUI anexa o arquivo original e o recibo compara esses bytes.
+fn prepare_with(payload: &Value, provider: &str, shrink: bool) -> Result<Value, RuntimeError> {
     let text = payload["text"].as_str().ok_or_else(|| error("policy_input"))?;
     match provider {
         "claude" => {
-            let (content, notices) = prompt_blocks(text);
+            let (content, notices) = prompt_blocks(text, shrink);
             Ok(json!({"content": content, "notices": notices, "native_candidate": NATIVE_PREFIX.is_match(text)}))
         }
         "codex" => {
@@ -87,7 +93,7 @@ pub(super) fn batch_validator(provider:String,mut template:Value) -> super::queu
         let Some(row)=rows.as_array_mut().and_then(|rows|rows.first_mut()).filter(|row|row["batch_entries"].is_array()) else {return Ok(());};
         let terminal=provider=="claude-terminal";
         let prepared=if row["batch_prompt"].is_object() {row["batch_prompt"].clone()} else {
-            prepare_prompt(&json!({"text":row["text"]}),if terminal {"claude"}else{&provider}).map_err(|_|std::io::Error::other("preparo do lote indisponível"))?
+            prepare_with(&json!({"text":row["text"]}),if terminal {"claude"}else{&provider},!terminal).map_err(|_|std::io::Error::other("preparo do lote indisponível"))?
         };
         if provider=="claude" || terminal {
             let mut visible=row["text"].as_str().unwrap_or("").to_owned();
@@ -144,13 +150,34 @@ mod batch_tests {
         assert_eq!(rows,original,"uma tentativa já selada conserva os bytes preparados e a prova original");
     }
 
+    #[test]
+    fn large_image_is_shrunk_for_headless_and_kept_for_the_terminal() {
+        use base64::Engine;
+        let dir=tempfile::tempdir().unwrap();let path=dir.path().join("shot.png");
+        let mut seed=1u32;
+        // Uma faixa de ruído põe o PNG entre o limiar de redução e o teto da API.
+        image::RgbImage::from_fn(3000,2000,|x,y| if y<120 {
+            seed=seed.wrapping_mul(1664525).wrapping_add(1013904223);image::Rgb((seed>>8).to_le_bytes()[..3].try_into().unwrap())
+        } else {image::Rgb([(x/12) as u8,(y/8) as u8,90])}).save(&path).unwrap();
+        let original=std::fs::read(&path).unwrap();
+        assert!(original.len()>SHRINK_FROM && (original.len() as u64)<IMAGE_CAP);
+        let text=format!("\u{1f4ce} imagem: {}",path.display());
+        let (blocks,_)=prompt_blocks(&text,true);
+        assert_eq!(blocks[1]["source"]["media_type"],"image/jpeg");
+        let sent=base64::engine::general_purpose::STANDARD.decode(blocks[1]["source"]["data"].as_str().unwrap()).unwrap();
+        let decoded=image::load_from_memory(&sent).unwrap();
+        assert_eq!((decoded.width(),decoded.height()),(1568,1045));
+        let (kept,_)=prompt_blocks(&text,false);
+        assert_eq!(kept[1]["source"]["data"],base64::engine::general_purpose::STANDARD.encode(&original));
+    }
+
     #[cfg(unix)]
     #[test]
     fn queued_batch_runtime_special_image_files_do_not_block_the_queue() {
         let dir=tempfile::tempdir().unwrap();let path=dir.path().join("pipe.png");
         assert!(std::process::Command::new("mkfifo").arg(&path).status().unwrap().success());
         let (send,receive)=std::sync::mpsc::channel();let image=path.clone();
-        let worker=std::thread::spawn(move|| {let result=prompt_blocks(&format!("\u{1f4ce} imagem: {}",image.display()));send.send(result).unwrap();});
+        let worker=std::thread::spawn(move|| {let result=prompt_blocks(&format!("\u{1f4ce} imagem: {}",image.display()),true);send.send(result).unwrap();});
         let result=receive.recv_timeout(std::time::Duration::from_millis(500));
         if result.is_err() {drop(std::fs::OpenOptions::new().write(true).open(path).unwrap());}
         worker.join().unwrap();
@@ -283,7 +310,7 @@ fn strerror(error: &std::io::Error) -> String {
     text.split(" (os error ").next().unwrap_or(&text).to_owned()
 }
 
-fn prompt_blocks(text: &str) -> (Vec<Value>, Vec<String>) {
+fn prompt_blocks(text: &str, shrink: bool) -> (Vec<Value>, Vec<String>) {
     use base64::Engine;
     let mut blocks = vec![json!({"type": "text", "text": text})];
     let mut notices = Vec::new();
@@ -308,11 +335,29 @@ fn prompt_blocks(text: &str) -> (Vec<Value>, Vec<String>) {
             Err(error) => notices.push(format!("⚠️ Imagem não anexada (não abre: {}); só o path foi: {name}", strerror(&error))),
             Ok(size) if data.len() as u64 > IMAGE_CAP => notices.push(format!(
                 "⚠️ Imagem não anexada ({} MB, teto 5 MB); só o path foi: {name}", size.max(data.len() as u64) / (1024 * 1024))),
-            Ok(_) => blocks.push(json!({"type": "image", "source": {"type": "base64", "media_type": mime,
-                "data": base64::engine::general_purpose::STANDARD.encode(&data)}})),
+            Ok(_) => {
+                let (data, mime) = if shrink { shrunk(data, mime) } else { (data, mime) };
+                blocks.push(json!({"type": "image", "source": {"type": "base64", "media_type": mime,
+                    "data": base64::engine::general_purpose::STANDARD.encode(&data)}}))
+            }
         }
     }
     (blocks, notices)
+}
+
+/// Lado maior até `IMAGE_EDGE`; fica o original quando não decodifica, é GIF ou não diminui.
+fn shrunk(data: Vec<u8>, mime: &'static str) -> (Vec<u8>, &'static str) {
+    if data.len() <= SHRINK_FROM || mime == "image/gif" { return (data, mime); }
+    let Ok(image) = image::load_from_memory(&data) else { return (data, mime) };
+    if image.width().max(image.height()) <= IMAGE_EDGE { return (data, mime); }
+    let image = image.resize(IMAGE_EDGE, IMAGE_EDGE, image::imageops::FilterType::Triangle);
+    let mut out = Vec::new();
+    let (encoded, out_mime) = if image.color().has_alpha() {
+        (image.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).is_ok(), "image/png")
+    } else {
+        (image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&image.to_rgb8()).is_ok(), "image/jpeg")
+    };
+    if encoded && out.len() < data.len() { (out, out_mime) } else { (data, mime) }
 }
 
 // ---- format_status ----
