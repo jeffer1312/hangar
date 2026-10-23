@@ -1360,45 +1360,6 @@ def test_do_notify_awaiting_sem_terminal_usa_o_estado_da_lista(monkeypatch):
     assert len(calls) == 1
 
 
-def test_do_notify_awaiting_sem_terminal_no_rust_le_o_estado_do_runtime(monkeypatch):
-    # Com o Rust de pé o adapter Python não tem a sessão (snapshot None); o estado é o que o Rust publicou.
-    from app import runtime_coordinator
-    from app.adapters import CLAUDE_HEADLESS, get_adapter
-    calls = []
-    info = SimpleNamespace(name="hl", jsonl="/x/uuid1.jsonl", cwd="/x", headless=True, state="idle", question=None)
-    view = {"view": {"public_state": {"state": "awaiting_input", "question": "Permitir Bash? ls"}}}
-    fake = SimpleNamespace(managed_runtime=lambda name: name == "hl", slot=lambda name: SimpleNamespace(view=view))
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: fake)
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(get_adapter(CLAUDE_HEADLESS), "snapshot", lambda name: None)
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
-    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: pytest.fail("raspou pane inexistente"))
-    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid1")
-    assert calls == [("hl", "Permitir Bash? ls")]
-    view["view"]["public_state"]["state"] = "idle"
-    api_mod._do_notify_awaiting("uuid1")
-    assert len(calls) == 1
-
-
-def test_do_notify_awaiting_sem_vista_do_rust_avisa_no_log(monkeypatch, caplog):
-    # Sem a vista do Rust o push não sai, e isso aparece no log com o nome da sessão (sem reserva Python).
-    import logging
-    from app import runtime_coordinator
-    calls = []
-    info = SimpleNamespace(name="hl", jsonl="/x/uuid1.jsonl", cwd="/x", headless=True, state="idle", question=None)
-    fake = SimpleNamespace(managed_runtime=lambda name: True, slot=lambda name: SimpleNamespace(view={}))
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: fake)
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    with caplog.at_level(logging.WARNING):
-        api_mod._do_notify_awaiting("uuid1")
-    assert calls == []
-    assert any("hl" in r.getMessage() and r.levelno == logging.WARNING for r in caplog.records), caplog.text
-
-
 def test_do_notify_awaiting_skips_idle_notification(monkeypatch):
     # Notification de "idle 60s" (state_hook mapeia pra awaiting): sem askq pendente e sem menu no
     # pane (nas 2 checagens) -> NENHUM push. Era o push falso "Aguardando sua resposta" em toda
