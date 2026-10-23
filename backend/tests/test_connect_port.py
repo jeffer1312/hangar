@@ -2,7 +2,7 @@ import pytest
 from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 
-from app import auth, main
+from app import auth
 from app.config import settings
 from app.connect_port import CONNECT_PEER, CONNECT_PORT, ConnectPortGate
 
@@ -78,8 +78,3 @@ def test_erros_pelo_connect_bloqueiam():
     for _ in range(8):
         assert c.get("/local", headers={"Authorization": "Bearer errado"}).status_code == 401
     assert c.get("/local", headers={"Authorization": "Bearer secret"}).status_code == 429
-
-
-def test_sem_socket_quando_a_porta_principal_e_a_do_connect(monkeypatch):
-    monkeypatch.setattr(settings, "port", CONNECT_PORT)
-    assert main._connect_socket() is None

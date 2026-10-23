@@ -346,19 +346,12 @@ async def _lifespan(app: FastAPI):
     )
     app.state.omp_plugin_sync = omp_sync
     await omp_sync.start()
-    # Em tarefa: o download dos binários na primeira vez não pode segurar a subida. Criada colada no
-    # `try`: falha no meio da subida não pode deixar o frpc e o Caddy sem quem os pare.
-    from app import connect as connect_mod
-    connect_task = asyncio.create_task(connect_mod.start(), name="connect-start")
     try:
         yield
     finally:
         diag.registrar("backend.encerrando")
         await runtime.shutdown()
         await runtime.close_events()
-        connect_task.cancel()
-        await asyncio.gather(connect_task, return_exceptions=True)
-        await connect_mod.stop()
         costs_sources.cancelar_aquecimento()
         # Claude sem terminal fica vivo no cano: só fecha a conexão; o próximo backend religa.
         if _transfer_recovery is not None:
@@ -4197,16 +4190,12 @@ def _url_pagina_propria(name: str, u: str) -> str:
 
 
 @app.post("/api/sessions/{name}/nav", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def abrir_nav_sessao(name: str, body: NavBody, request: Request):
+async def abrir_nav_sessao(name: str, body: NavBody):
     """O AGENTE abre o navegador embutido da própria sessão (CLI `hangar-preview open <url>`).
 
     O backend não cria view — quem cria é o shell desktop, avisado pelo evento 'nav' que sai no
     SSE da sessão E no da lista (este o desktop mantém aberto o tempo todo, então funciona com a
-    sessão fora da tela). O marcador fica até o desktop confirmar (DELETE) ou vencer o prazo.
-    Com o Rust de pé o pedido é dele (`nav_requests.rs`): o Connect só autentica e repassa."""
-    from app import account_bridge
-    if account_bridge.owner_mode() != "python":
-        return await account_bridge.forward_public(request, "/__hangar_server/forwarded")
+    sessão fora da tela). O marcador fica até o desktop confirmar (DELETE) ou vencer o prazo."""
     if not await _send_thread(_session_exists, name):
         raise HTTPException(404, "sessão não encontrada")
     u = body.url.strip()
@@ -4219,12 +4208,9 @@ async def abrir_nav_sessao(name: str, body: NavBody, request: Request):
 
 
 @app.delete("/api/sessions/{name}/nav", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def confirmar_nav_sessao(name: str, request: Request):
+async def confirmar_nav_sessao(name: str):
     """O shell desktop criou o view da sessão: o marcador 'nav' sai, e nenhuma outra conexão o
     recebe de novo."""
-    from app import account_bridge
-    if account_bridge.owner_mode() != "python":
-        return await account_bridge.forward_public(request, "/__hangar_server/forwarded")
     await asyncio.to_thread(nav_confirmar, name)
     return {"ok": True}
 
@@ -7508,7 +7494,6 @@ async def connect_put(body: ConnectBody):
         connect.save(body.code)
     except connect.ConnectError as e:
         raise HTTPException(e.status, detail=erro(e.code, e.msg)) from None
-    await connect.start()
     return connect.status()
 
 

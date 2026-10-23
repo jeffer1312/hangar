@@ -675,9 +675,7 @@ async def list_events(ping_secs: float = 8.0, only=None, viewer=None):
             _log.exception("sse: nav_pump da lista morreu")
 
     tasks = [asyncio.create_task(reader()), asyncio.create_task(ping_loop())]
-    from app import account_bridge
-    # Com o Rust de pé o pedido de navegador é dele (`nav_requests.rs`).
-    if only is None and viewer is None and account_bridge.owner_mode() == "python":
+    if only is None and viewer is None:
         tasks.append(asyncio.create_task(nav_pump()))
     try:
         while True:
