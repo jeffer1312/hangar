@@ -1714,7 +1714,7 @@ impl RuntimeRegistry {
                 let procs=crate::list::procs::SystemProcs::default();
                 let before=super::lifecycle::pane(&crate::terminal_input::ProcessIo::default(),&target.binding).await?;
                 use crate::list::procs::ProcessView;
-                if before.dead || procs.recipe(i64::from(target.metadata.agent_pid)).map_err(|_|failure("lifecycle_process_read"))?.birth!=target.metadata.agent_birth {return Err(failure("lifecycle_process_changed"));}
+                if before.dead || !crate::terminal_facts::same_birth(procs.recipe(i64::from(target.metadata.agent_pid)).map_err(|_|failure("lifecycle_process_read"))?.birth,target.metadata.agent_birth) {return Err(failure("lifecycle_process_changed"));}
                 handle.stop().await?;
                 // Como o Python, antes de matar: a pergunta aberta desta vida não reabre o stepper numa
                 // sessão futura com a mesma conversa. Sem conseguir apagar, só o diário: o fechamento segue.
@@ -1929,7 +1929,7 @@ impl RuntimeRegistry {
         if reported.is_some() {
             // O plugin é o do processo da sessão: basta ele seguir vivo, com o mesmo nascimento.
             use crate::list::procs::ProcessView;
-            if procs.recipe(i64::from(target.metadata.agent_pid)).map_err(|_|failure("lifecycle_process_read"))?.birth!=target.metadata.agent_birth {return Err(failure("lifecycle_process_changed"));}
+            if !crate::terminal_facts::same_birth(procs.recipe(i64::from(target.metadata.agent_pid)).map_err(|_|failure("lifecycle_process_read"))?.birth,target.metadata.agent_birth) {return Err(failure("lifecycle_process_changed"));}
         } else {
             let confirmed=super::lifecycle::native_conversation(&target.metadata.config_dir,i64::from(target.metadata.agent_pid),target.metadata.agent_birth,&procs)?;
             if confirmed!=sid {return Err(failure("lifecycle_native_changed"));}

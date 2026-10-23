@@ -93,7 +93,7 @@ pub async fn pane(io:&dyn TerminalIo,binding:&TerminalBinding)->Result<Pane,Runt
 }
 pub fn process_absent(procs:&dyn ProcessView,pid:i64,birth:f64)->Result<bool,RuntimeError> {
     match procs.recipe(pid) {
-        Ok(recipe)=>Ok(recipe.birth!=birth),
+        Ok(recipe)=>Ok(!crate::terminal_facts::same_birth(recipe.birth,birth)),
         Err(error) if crate::list::procs::exited(&error)=>Ok(true),
         Err(error) if error.kind()==std::io::ErrorKind::NotFound=> {
             let children=procs.children(Duration::ZERO).map_err(|_|failure("lifecycle_process_read"))?;
@@ -117,7 +117,7 @@ pub async fn kill_terminal(io:&dyn TerminalIo,procs:&dyn ProcessView,binding:&Te
     let before=pane(io,binding).await?;
     if before.copy {return Err(failure("lifecycle_panel"));}
     let recipe=procs.recipe(agent_pid).map_err(|_|failure("lifecycle_process_read"))?;
-    if recipe.birth!=birth {return Err(failure("lifecycle_process_changed"));}
+    if !crate::terminal_facts::same_birth(recipe.birth,birth) {return Err(failure("lifecycle_process_changed"));}
     let children=procs.children(Duration::ZERO).map_err(|_|failure("lifecycle_process_read"))?;
     let mut pending=vec![before.pid];let mut found=false;let mut seen=std::collections::HashSet::new();
     while let Some(pid)=pending.pop() {
@@ -187,7 +187,7 @@ pub fn read_native_conversation(config:&std::path::Path,pid:i64)->Result<String,
 }
 pub fn native_conversation(config:&std::path::Path,pid:i64,birth:f64,procs:&dyn ProcessView)->Result<String,RuntimeError> {
     let before=procs.recipe(pid).map_err(|_|failure("lifecycle_process_read"))?;
-    if before.birth!=birth {return Err(failure("lifecycle_process_changed"));}
+    if !crate::terminal_facts::same_birth(before.birth,birth) {return Err(failure("lifecycle_process_changed"));}
     let sid=read_native_conversation(config,pid)?;
     if procs.recipe(pid).map_err(|_|failure("lifecycle_process_read"))?!=before {return Err(failure("lifecycle_native_binding"));}
     Ok(sid)
