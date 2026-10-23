@@ -8,6 +8,18 @@ pub(super) struct TabGroup {
     pub(super) members: Vec<Target>,
     /// O primeiro membro abriu os outros (filhas ligadas) ou é o líder `orq`: o grupo vira uma aba só, a dele.
     pub(super) mother: bool,
+    /// Chave do grupo no modelo global (`GlobalGroup::key`); aba solta não tem.
+    pub(super) key: Option<String>,
+}
+
+/// O que cada grupo diz de quem deve ficar na frente, juntado das linhas dele.
+#[derive(Default)]
+struct Hints {
+    /// (filha, quem a abriu); o vínculo é só local, então quem abriu está na máquina da filha.
+    openers: Vec<(Target, Target)>,
+    /// Quem formou o grupo, pelo `pair_lead` da primeira linha que o traz.
+    formed_by: Option<Target>,
+    orq: bool,
 }
 
 pub(super) fn reveal_offset(current: f32, viewport: (f32, f32), tab: (f32, f32)) -> f32 {
@@ -85,8 +97,9 @@ impl TabGroup {
     }
 }
 
-/// Uma faixa por grupo do modelo global: membros de máquinas diferentes do mesmo grupo dividem a faixa.
-pub(super) fn groups(entries: Vec<(Target, &SessionInfo)>, ids: &HashMap<String, String>) -> Vec<TabGroup> {
+/// Uma faixa por grupo do modelo global: membros de máquinas diferentes do mesmo grupo dividem a faixa. `chosen` é a
+/// principal escolhida à mão por chave de grupo.
+pub(super) fn groups(entries: Vec<(Target, &SessionInfo)>, ids: &HashMap<String, String>, chosen: &HashMap<String, Target>) -> Vec<TabGroup> {
     let rows: Vec<Row> = entries.iter().map(|(t, s)| Row { server: &t.server, session: s, invite: false }).collect();
     let mut keys: HashMap<Target, String> = HashMap::new();
     for g in global_groups(&rows, ids) {
@@ -96,42 +109,52 @@ pub(super) fn groups(entries: Vec<(Target, &SessionInfo)>, ids: &HashMap<String,
     }
     let mut out: Vec<TabGroup> = Vec::new();
     let mut indexes = HashMap::new();
-    // (filha, quem a abriu) por grupo; o vínculo é só local, então quem abriu está na máquina da filha.
-    let mut openers: Vec<Vec<(Target, Target)>> = Vec::new();
+    let mut hints: Vec<Hints> = Vec::new();
     for (target, session) in entries {
         let Some(key) = keys.get(&target).cloned() else {
-            out.push(TabGroup { label: None, members: vec![target], mother: false });
-            openers.push(Vec::new());
+            out.push(TabGroup { label: None, members: vec![target], mother: false, key: None });
+            hints.push(Hints::default());
             continue;
         };
-        let index = *indexes.entry(key).or_insert_with(|| {
-            out.push(TabGroup { label: Some(String::new()), members: Vec::new(), mother: false });
-            openers.push(Vec::new());
+        let index = *indexes.entry(key.clone()).or_insert_with(|| {
+            out.push(TabGroup { label: Some(String::new()), members: Vec::new(), mother: false, key: Some(key) });
+            hints.push(Hints::default());
             out.len() - 1
         });
         let group = &mut out[index];
         if group.label.as_ref().is_some_and(|s| s.is_empty()) {
             group.label = Some(session.pair_task.as_deref().unwrap_or("").trim().to_owned());
         }
-        if let Some(parent) = session.linked_by.as_deref() { openers[index].push((target.clone(), Target::new(&target.server, parent))); }
+        let hint = &mut hints[index];
+        if let Some(parent) = session.linked_by.as_deref() { hint.openers.push((target.clone(), Target::new(&target.server, parent))); }
+        if let Some(lead) = session.pair_lead.as_deref() { hint.formed_by.get_or_insert_with(|| Target::new(&target.server, lead)); }
         if session.orq() {
+            hint.orq = true;
             group.mother = true;
             group.members.insert(0, target);
         } else { group.members.push(target); }
     }
-    for (group, openers) in out.iter_mut().zip(openers) {
+    for (group, hint) in out.iter_mut().zip(hints) {
         if group.label.as_ref().is_some_and(|s| s.is_empty()) {
             group.label = Some(group.members.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "));
         }
         if group.members.len() < 2 { group.mother = false; continue; }
+        let openers = &hint.openers;
+        let at = |t: &Target| group.members.iter().position(|m| m == t);
         // Numa cadeia (A abriu B, B abriu C) a mãe é a do topo: quem abriu e não foi aberta por ninguém do grupo.
         let opened = |t: &Target| openers.iter().any(|(child, parent)| child == t && group.members.contains(parent));
         let opener = |t: &Target| openers.iter().any(|(_, parent)| parent == t);
-        if let Some(at) = group.members.iter().position(|t| opener(t) && !opened(t)).or_else(|| group.members.iter().position(|t| opener(t))) {
-            let mother = group.members.remove(at);
+        // A escolhida à mão vence; depois o líder `orq` (já na frente), quem formou o grupo e o topo da cadeia.
+        let front = group.key.as_ref().and_then(|k| chosen.get(k)).and_then(at)
+            .or(hint.orq.then_some(0))
+            .or_else(|| hint.formed_by.as_ref().and_then(at))
+            .or_else(|| group.members.iter().position(|t| opener(t) && !opened(t)))
+            .or_else(|| group.members.iter().position(|t| opener(t)));
+        if let Some(front) = front {
+            let mother = group.members.remove(front);
             group.members.insert(0, mother);
         }
-        // Todo grupo é uma aba só. Sem quem abriu as outras, a principal é a primeira da lista: a sessão não diz quando
+        // Todo grupo é uma aba só. Sem nenhuma dessas, a principal é a primeira da lista: a sessão não diz quando
         // nasceu.
         group.mother = true;
     }
@@ -142,7 +165,7 @@ pub(super) fn groups(entries: Vec<(Target, &SessionInfo)>, ids: &HashMap<String,
 
 impl Hangar {
     /// Recalculado só quando muda o que `groups` lê: as abas, os campos de grupo delas e os identificadores.
-    fn tab_groups(&self) -> std::rc::Rc<Vec<TabGroup>> {
+    pub(super) fn tab_groups(&self) -> std::rc::Rc<Vec<TabGroup>> {
         use std::hash::{DefaultHasher, Hash, Hasher};
         let entries: Vec<(Target, &SessionInfo)> = self.ungrouped_tab_targets().into_iter()
             .filter_map(|target| self.target_session(&target).map(|session| (target, session))).collect();
@@ -153,8 +176,11 @@ impl Hangar {
         let mut hasher = DefaultHasher::new();
         self.hash_identities(&mut hasher);
         (split, recent_first).hash(&mut hasher);
+        let mut chosen: Vec<_> = self.sidebar.group_leads.iter().collect();
+        chosen.sort_by(|a, b| a.0.cmp(b.0));
+        chosen.hash(&mut hasher);
         for (t, s) in &entries {
-            (t, &s.pair_gid, &s.pair_owner, s.peers(), &s.pair_task, s.orq(), &s.linked_by).hash(&mut hasher);
+            (t, &s.pair_gid, &s.pair_owner, s.peers(), &s.pair_task, s.orq(), &s.linked_by, &s.pair_lead).hash(&mut hasher);
             let busy = super::sidebar::working(s);
             if split { (busy, waits(s)).hash(&mut hasher); }
             // A data de quem trabalha não entra: resposta nova no meio do turno não mexe na barra.
@@ -164,7 +190,7 @@ impl Hangar {
             let busy: std::collections::HashSet<Target> = entries.iter().filter(|(_, s)| super::sidebar::working(s)).map(|(t, _)| t.clone()).collect();
             let waiting: std::collections::HashSet<Target> = entries.iter().filter(|(_, s)| waits(s)).map(|(t, _)| t.clone()).collect();
             let at: HashMap<Target, f64> = entries.iter().map(|(t, s)| (t.clone(), s.last_reply_at.unwrap_or(0.))).collect();
-            let mut out = groups(entries, &self.identities());
+            let mut out = groups(entries, &self.identities(), &self.sidebar.group_leads);
             if split {
                 // Como a lista lateral: grupos, as que esperam a pessoa, as que trabalham, depois as paradas; sem a ordem
                 // por data, cada parte fica como estava.
@@ -580,7 +606,7 @@ mod tests {
     #[test]
     fn groups_come_before_loose_tabs() {
         let (solo, a, b) = (session("solo", None, None), session("a", Some("g"), Some("Par")), session("b", Some("g"), None));
-        let grouped = groups(vec![(Target::new("s", "solo"), &solo), (Target::new("s", "a"), &a), (Target::new("s", "b"), &b)], &HashMap::new());
+        let grouped = groups(vec![(Target::new("s", "solo"), &solo), (Target::new("s", "a"), &a), (Target::new("s", "b"), &b)], &HashMap::new(), &HashMap::new());
         assert_eq!(grouped[0].members, vec![Target::new("s", "a"), Target::new("s", "b")]);
         assert_eq!(grouped[1].members, vec![Target::new("s", "solo")]);
     }
@@ -591,7 +617,7 @@ mod tests {
         let other = session("outra", None, None);
         let worker = session("serviço", Some("g"), None);
         let grouped = groups(vec![(Target::new("a", &lead.name), &lead), (Target::new("a", &other.name), &other),
-            (Target::new("a", &worker.name), &worker)], &HashMap::new());
+            (Target::new("a", &worker.name), &worker)], &HashMap::new(), &HashMap::new());
         assert_eq!(grouped.len(), 2);
         assert_eq!(grouped[0].label.as_deref(), Some("DEMO-42 · Painéis"));
         assert_eq!(grouped[0].members, vec![Target::new("a", "coordenadora"), Target::new("a", "serviço")]);
@@ -605,7 +631,7 @@ mod tests {
         lead.provider = "orq".into();
         let remote = session("executor", Some("g"), Some("Outro trabalho"));
         let grouped = groups(vec![(Target::new("a", "executor"), &worker), (Target::new("b", "executor"), &remote),
-            (Target::new("a", "principal"), &lead)], &HashMap::new());
+            (Target::new("a", "principal"), &lead)], &HashMap::new(), &HashMap::new());
         assert_eq!(grouped.len(), 2);
         assert_eq!(grouped[0].members, vec![Target::new("a", "principal"), Target::new("a", "executor")]);
         assert_eq!(grouped[0].label.as_deref(), Some("Plano"));
@@ -617,7 +643,7 @@ mod tests {
         let owned = |name: &str| SessionInfo { pair_owner: Some("casa".into()), ..session(name, Some("g"), Some("ABC-1")) };
         let (x, y, solo) = (owned("x"), owned("y"), session("z", Some("g"), None));
         let ids = HashMap::from([("a".to_owned(), "casa".to_owned()), ("b".to_owned(), "lab".to_owned())]);
-        let grouped = groups(vec![(Target::new("a", "x"), &x), (Target::new("b", "z"), &solo), (Target::new("b", "y"), &y)], &ids);
+        let grouped = groups(vec![(Target::new("a", "x"), &x), (Target::new("b", "z"), &solo), (Target::new("b", "y"), &y)], &ids, &HashMap::new());
         assert_eq!(grouped.len(), 2);
         assert_eq!(grouped[0].members, vec![Target::new("a", "x"), Target::new("b", "y")], "mesma dona e gid: uma faixa");
         assert_eq!(grouped[1].members, vec![Target::new("b", "z")], "gid igual sem dona é outro grupo, da máquina dele");
@@ -629,7 +655,7 @@ mod tests {
         let kid = |name: &str| SessionInfo { linked_by: Some("ABC-42-Lead".into()), ..session(name, Some("g"), None) };
         let (web, api, solo) = (kid("ABC-42-web"), kid("ABC-42-api"), session("outra", None, None));
         let grouped = groups(vec![(Target::new("a", &web.name), &web), (Target::new("a", "outra"), &solo),
-            (Target::new("a", &lead.name), &lead), (Target::new("a", &api.name), &api)], &HashMap::new());
+            (Target::new("a", &lead.name), &lead), (Target::new("a", &api.name), &api)], &HashMap::new(), &HashMap::new());
         assert!(grouped[0].mother, "quem abriu as filhas é a aba do grupo");
         assert_eq!(grouped[0].members[0], Target::new("a", "ABC-42-Lead"));
         assert_eq!(grouped[0].members.len(), 3);
@@ -637,13 +663,28 @@ mod tests {
         // Cadeia: a abriu b, b abriu c; a mãe é a do topo, mesmo listada depois.
         let link = |name: &str, by: &str| SessionInfo { linked_by: Some(by.into()), ..session(name, Some("k"), None) };
         let (b, c, a) = (link("b", "a"), link("c", "b"), session("a", Some("k"), Some("Cadeia")));
-        let chain = groups(vec![(Target::new("a", "b"), &b), (Target::new("a", "c"), &c), (Target::new("a", "a"), &a)], &HashMap::new());
+        let chain = groups(vec![(Target::new("a", "b"), &b), (Target::new("a", "c"), &c), (Target::new("a", "a"), &a)], &HashMap::new(), &HashMap::new());
         assert_eq!(chain[0].members[0], Target::new("a", "a"));
         // Pareamento de iguais, sem quem abriu: também uma aba só, a da primeira da lista.
         let (x, y) = (session("x", Some("h"), Some("Par")), session("y", Some("h"), None));
-        let pair = groups(vec![(Target::new("a", "x"), &x), (Target::new("a", "y"), &y)], &HashMap::new());
+        let pair = groups(vec![(Target::new("a", "x"), &x), (Target::new("a", "y"), &y)], &HashMap::new(), &HashMap::new());
         assert!(pair[0].mother);
         assert_eq!(pair[0].members[0], Target::new("a", "x"));
+    }
+
+    #[test]
+    fn who_formed_the_group_leads_and_a_manual_choice_wins() {
+        let formed = |name: &str| SessionInfo { pair_lead: Some("Coord".into()), ..session(name, Some("g"), Some("PM-1")) };
+        let (kid, coord) = (formed("Filha"), formed("Coord"));
+        let entries = || vec![(Target::new("a", "Filha"), &kid), (Target::new("a", "Coord"), &coord)];
+        let auto = groups(entries(), &HashMap::new(), &HashMap::new());
+        assert_eq!(auto[0].members[0], Target::new("a", "Coord"), "quem formou o grupo pelo --pair fica na frente");
+        let key = auto[0].key.clone().unwrap();
+        let chosen = HashMap::from([(key.clone(), Target::new("a", "Filha"))]);
+        assert_eq!(groups(entries(), &HashMap::new(), &chosen)[0].members[0], Target::new("a", "Filha"));
+        // Escolhida que saiu do grupo não vale: volta a automática.
+        let gone = HashMap::from([(key, Target::new("a", "Outra"))]);
+        assert_eq!(groups(entries(), &HashMap::new(), &gone)[0].members[0], Target::new("a", "Coord"));
     }
 
     #[test]

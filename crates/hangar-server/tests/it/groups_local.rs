@@ -216,6 +216,28 @@ fn link_marks_only_the_child_and_survives_merge_join_and_rename() {
 }
 
 #[test]
+fn lead_is_who_formed_the_group_and_survives_join_merge_and_rename() {
+    let (d, h) = (Disk::new(), none());
+    let p = plan_join(&d.read(), &input("coord", &["a".into(), "b".into()], "", &h), &gid("g1")).ok().unwrap();
+    d.apply(&p.writes, &[]);
+    assert!(["coord", "a", "b"].iter().all(|m| d.read()(m).unwrap().lead.as_deref() == Some("coord")));
+    // Quem entra depois (mesmo chamando o pareamento) não vira a principal.
+    let p = plan_join(&d.read(), &input("c", &["a".into()], "", &h), &gid("g2")).ok().unwrap();
+    d.apply(&p.writes, &[]);
+    assert_eq!(d.read()("c").unwrap().lead.as_deref(), Some("coord"));
+    // Fusão: vale a principal do grupo sobrevivente.
+    let p = plan_join(&d.read(), &input("x", &["y".into()], "", &h), &gid("g3")).ok().unwrap();
+    d.apply(&p.writes, &[]);
+    let p = plan_join(&d.read(), &input("b", &["x".into()], "", &h), &gid("g4")).ok().unwrap();
+    assert_eq!(p.gid, "g1");
+    d.apply(&p.writes, &[]);
+    assert_eq!(d.read()("y").unwrap().lead.as_deref(), Some("coord"));
+    let (clears, writes) = plan_rename(&d.read(), "coord", "coord2");
+    d.apply(&writes, &clears);
+    assert!(["coord2", "a", "b", "c", "x", "y"].iter().all(|m| d.read()(m).unwrap().lead.as_deref() == Some("coord2")));
+}
+
+#[test]
 fn parent_leaving_clears_the_link_so_rejoin_does_not_revive_it() {
     let (d, h) = (Disk::new(), none());
     let kids = ["f1".to_owned(), "f2".to_owned()];
@@ -280,7 +302,7 @@ fn external_link_refuses_orq_and_own_machine_groups() {
 #[test]
 fn lone_orq_arbiter_refuses_an_external_pair() {
     let d = Disk::new();
-    let arbiter = Sidecar { peers: vec![], task: Some("t".into()), gid: "o1".into(), harness: none(), orq: true, fed: None, linked_by: None };
+    let arbiter = Sidecar { peers: vec![], task: Some("t".into()), gid: "o1".into(), harness: none(), orq: true, fed: None, linked_by: None, lead: None };
     d.apply(&[("arb".to_owned(), arbiter.clone())], &[]);
     assert!(matches!(plan_external_link(&d.read(), "arb", "fulano::x", &none(), &outside, &gid("e1")), Err(JoinRefusal::Orq)));
     assert_eq!(d.read()("arb"), Some(arbiter));

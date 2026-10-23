@@ -139,6 +139,10 @@ pub struct SessionRow {
     /// Sessão que abriu esta como filha ligada; só vale se ela ainda está no grupo (`pair_peers`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_by: Option<String>,
+    /// Sessão que formou o grupo (`lead` do sidecar), a principal da aba no app; só vale se é esta
+    /// ou se ainda está em `pair_peers`. Só existe no Rust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pair_lead: Option<String>,
     /// Servidores MCP criados por plugin (`$.tool.register`): o Claude Code mostra as chamadas deles
     /// sozinhas, e a pele Terminal copia. Só existe no Rust; vazio não vai ao JSON, como no Python.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

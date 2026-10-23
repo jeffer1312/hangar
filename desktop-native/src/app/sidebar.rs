@@ -20,7 +20,7 @@ pub(super) fn row_server_visible(conversations: bool, by_machine: bool, under_ow
 }
 
 /// Sessão de uma linha: a máquina (endereço normalizado, `servers::norm`) e o nome, que sozinho se repete entre máquinas.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(super) struct Target { pub(super) server: String, pub(super) name: String }
 
 /// O que a segunda linha da sessão diz: a última resposta, a pergunta em aberto ou o que o agente está fazendo.
@@ -124,7 +124,8 @@ pub(super) enum SidebarReply {
     /// Resultado de uma gravação de git: nível e texto da notificação daquela sessão.
     Note(Target, NotificationType, String),
     Chained(Target, u64, String, Result<Value, Failure>),
-    NotSaved(String),
+    /// Arquivo local que não gravou: a chave do aviso e o erro.
+    NotSaved(&'static str, String),
     /// Resposta de agrupar, sair do grupo ou sugerir a tarefa, amarrada ao número do pedido.
     Group(u64, super::grouping::GroupReply),
     /// Resposta de um pedido do painel do grupo.
@@ -236,6 +237,11 @@ struct Pending { sent: Option<u64>, error: Option<String> }
 pub(super) struct Sidebar {
     pub(super) filter: Entity<InputState>,
     collapsed: HashSet<String>,
+    /// Principal do grupo escolhida à mão, pela chave do modelo global (`GlobalGroup::key`): dona + gid entre máquinas,
+    /// máquina + gid no grupo de uma só. As duas sobrevivem a reiniciar o app, e a de entre máquinas é a mesma vista de
+    /// qualquer uma delas.
+    pub(super) group_leads: HashMap<String, Target>,
+    leads_gen: u64,
     /// Fechadas agora: somem da lista na hora e voltam se o servidor recusar.
     deleting: HashSet<Target>,
     pub(super) editing: Option<Edit>,
@@ -285,7 +291,7 @@ impl Sidebar {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Hangar>) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(tr("sidebar_filter")).clean_on_escape());
         cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        Self { filter, collapsed: load_collapsed(), deleting: HashSet::new(), editing: None, renaming: HashSet::new(), follow: None, lost: None, moving: HashMap::new(),
+        Self { filter, collapsed: load_json(collapsed_path()), group_leads: load_json(group_leads_path()), leads_gen: 0, deleting: HashSet::new(), editing: None, renaming: HashSet::new(), follow: None, lost: None, moving: HashMap::new(),
             menu: None, menu_seq: 0, rename_seq: 0, chain: None, chain_seq: 0, focus_tab: None, remote_focus: HashMap::new(), collapse_gen: 0, button_menu: None, hover: None, last_sub: Default::default(), press_seq: 0,
             long_pressed: false, rail_anim: None, resize: None, grouping: Default::default(), flip: Default::default(), tab_flip: Default::default(), tab_follow: Default::default(), still_avatar: Default::default() }
     }
@@ -484,21 +490,28 @@ fn collapsed_path() -> Option<PathBuf> {
     Some(crate::appearance::dir()?.join("sidebar-collapsed.json"))
 }
 
-/// Arquivo ausente é a primeira abertura; ilegível vai ao log em vez de reabrir os grupos sem explicação.
-fn load_collapsed() -> HashSet<String> {
-    let Some(path) = collapsed_path() else { return HashSet::new() };
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return HashSet::new(),
-        Err(e) => { eprintln!("grupos recolhidos ilegíveis em {}: {e}", path.display()); return HashSet::new(); }
-    };
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| { eprintln!("grupos recolhidos inválidos em {}: {e}", path.display()); HashSet::new() })
+fn group_leads_path() -> Option<PathBuf> {
+    Some(crate::appearance::dir()?.join("group-leads.json"))
 }
 
-/// Bloqueante. Só a geração mais nova grava, trocando o arquivo inteiro (tmp + rename), como `appearance::save`.
-fn save_collapsed(path: Option<PathBuf>, generation: u64, saved: &HashSet<String>) -> std::io::Result<()> {
-    static WRITTEN: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
-    let mut written = WRITTEN.lock().unwrap_or_else(|e| e.into_inner());
+/// Arquivo ausente é a primeira abertura; ilegível vai ao log em vez de voltar ao padrão sem explicação.
+fn load_json<T: serde::de::DeserializeOwned + Default>(path: Option<PathBuf>) -> T {
+    let Some(path) = path else { return T::default() };
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return T::default(),
+        Err(e) => { eprintln!("arquivo ilegível em {}: {e}", path.display()); return T::default(); }
+    };
+    serde_json::from_slice(&bytes).unwrap_or_else(|e| { eprintln!("arquivo inválido em {}: {e}", path.display()); T::default() })
+}
+
+static COLLAPSED_WRITTEN: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+static LEADS_WRITTEN: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+
+/// Bloqueante. Só a geração mais nova de cada arquivo grava, trocando o arquivo inteiro (tmp + rename), como
+/// `appearance::save`.
+fn save_json<T: serde::Serialize>(path: Option<PathBuf>, generation: u64, written: &std::sync::Mutex<u64>, saved: &T) -> std::io::Result<()> {
+    let mut written = written.lock().unwrap_or_else(|e| e.into_inner());
     if generation <= *written { return Ok(()); }
     let path = path.ok_or_else(|| std::io::Error::other("sem pasta de configuração"))?;
     std::fs::create_dir_all(path.parent().expect("arquivo dentro de hangar-native"))?;
@@ -656,14 +669,27 @@ impl Hangar {
     pub(super) fn toggle_group(&mut self, key: String, cx: &mut Context<Self>) {
         if !self.sidebar.collapsed.remove(&key) { self.sidebar.collapsed.insert(key); }
         self.sidebar.collapse_gen += 1;
-        let (generation, saved, tell) = (self.sidebar.collapse_gen, self.sidebar.collapsed.clone(), self.sidebar_tell());
-        // Disco fora da thread da janela; a falha aparece (na próxima abertura o grupo voltaria aberto sem explicação).
-        self.runtime.spawn(async move {
-            let result = tokio::task::spawn_blocking(move || save_collapsed(collapsed_path(), generation, &saved))
-                .await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string()));
-            if let Err(error) = result { tell.send(SidebarReply::NotSaved(error)).await; }
-        });
+        self.persist(collapsed_path(), self.sidebar.collapse_gen, &COLLAPSED_WRITTEN, self.sidebar.collapsed.clone(), "sidebar_collapse_not_saved");
         cx.notify();
+    }
+
+    /// `Some` torna `lead` a principal do grupo `key`; `None` volta à escolha automática.
+    pub(super) fn set_group_lead(&mut self, key: String, lead: Option<Target>, cx: &mut Context<Self>) {
+        match lead { Some(lead) => { self.sidebar.group_leads.insert(key, lead); } None => { self.sidebar.group_leads.remove(&key); } }
+        self.sidebar.leads_gen += 1;
+        self.persist(group_leads_path(), self.sidebar.leads_gen, &LEADS_WRITTEN, self.sidebar.group_leads.clone(), "sidebar_group_lead_not_saved");
+        cx.notify();
+    }
+
+    /// Disco fora da thread da janela; a falha aparece (na próxima abertura a escolha voltaria sem explicação).
+    fn persist<T: serde::Serialize + Send + 'static>(&self, path: Option<PathBuf>, generation: u64, written: &'static std::sync::Mutex<u64>, saved: T,
+        failure: &'static str) {
+        let tell = self.sidebar_tell();
+        self.runtime.spawn(async move {
+            let result = tokio::task::spawn_blocking(move || save_json(path, generation, written, &saved))
+                .await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string()));
+            if let Err(error) = result { tell.send(SidebarReply::NotSaved(failure, error)).await; }
+        });
     }
 
     /// Uma lista nova chegou (a ativa ou a de outra máquina): fechadas que saíram dela deixam de ser escondidas; renomeada
@@ -1128,9 +1154,9 @@ impl Hangar {
 
     pub(super) fn receive_sidebar(&mut self, reply: SidebarReply, window: &mut Window, cx: &mut Context<Self>) {
         match reply {
-            SidebarReply::NotSaved(error) => {
-                eprintln!("grupos recolhidos não gravaram: {error}");
-                window.push_notification(Notification::warning(tr("sidebar_collapse_not_saved").replace("{n}", &error)), cx);
+            SidebarReply::NotSaved(key, error) => {
+                eprintln!("{key}: {error}");
+                window.push_notification(Notification::warning(tr(key).replace("{n}", &error)), cx);
             }
             SidebarReply::MuteRead(seq, result) => {
                 let Some(menu) = self.sidebar.menu.as_mut().filter(|m| m.seq == seq) else { return };
@@ -1366,12 +1392,25 @@ pub(super) fn session_menu(hangar: WeakEntity<Hangar>, server: String, session: 
         let list = others(entity.read(cx), &target);
         let group = entity.read(cx).group_candidates(&target, cx);
         let active = entity.read(cx).is_active_key(&target.server);
-        fill_menu(menu, &hangar, &target, &session, Access { invite, active }, view, list, group, window, cx)
+        let lead = entity.read(cx).lead_choice(&target);
+        fill_menu(menu, &hangar, &target, &session, Access { invite, active }, view, list, group, lead, window, cx)
     }
 }
 
 /// O que o menu de uma linha pode oferecer: convite só o que é da própria sessão; `active` diz se a máquina é a ativa.
 struct Access { invite: bool, active: bool }
+
+/// A aba de grupo (2+ membros) onde a sessão está: a chave dele, se ela já é a principal e se há escolha à mão.
+struct LeadChoice { key: String, front: bool, chosen: bool }
+
+impl Hangar {
+    fn lead_choice(&self, target: &Target) -> Option<LeadChoice> {
+        let groups = self.tab_groups();
+        let group = groups.iter().find(|g| g.members.len() > 1 && g.members.contains(target))?;
+        let key = group.key.clone()?;
+        Some(LeadChoice { front: group.members[0] == *target, chosen: self.sidebar.group_leads.contains_key(&key), key })
+    }
+}
 
 fn mute_item(hangar: &WeakEntity<Hangar>, target: &Target, mute: Option<Mute>) -> PopupMenuItem {
     match mute {
@@ -1421,7 +1460,7 @@ fn release_items(hangar: &WeakEntity<Hangar>, target: &Target, pairs: &[api::dto
 
 #[allow(clippy::too_many_arguments)]
 fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, session: &SessionInfo, access: Access, mute: Option<Mute>,
-    others: Vec<String>, group: Vec<(Target, String)>, window: &mut Window, cx: &mut Context<PopupMenu>) -> PopupMenu {
+    others: Vec<String>, group: Vec<(Target, String)>, lead: Option<LeadChoice>, window: &mut Window, cx: &mut Context<PopupMenu>) -> PopupMenu {
     let item = |label: String, act: fn(&mut Hangar, Target, &mut Window, &mut Context<Hangar>)| {
         let (hangar, target) = (hangar.clone(), target.clone());
         PopupMenuItem::new(label).on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| act(this, target.clone(), window, cx)); })
@@ -1499,6 +1538,15 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
             // Mesmo diálogo do arrastar, para quem não arrasta (e o teclado).
             .submenu(tr("group_with"), window, cx, move |menu, _, _| super::grouping::fill_group(menu, &group_weak, &group_origin, &group))
             .when(leave, |menu| menu.item(item(tr("group_leave"), |this, target, window, cx| this.request_leave(target, window, cx))))
+            .when_some(lead, |menu, LeadChoice { key, front, chosen }| {
+                let (weak, again, auto, auto_key) = (hangar.clone(), target.clone(), hangar.clone(), key.clone());
+                menu.when(!front, |menu| menu.item(PopupMenuItem::new(tr("group_make_lead")).on_click(move |_, _, cx| {
+                        let _ = weak.update(cx, |this, cx| this.set_group_lead(key.clone(), Some(again.clone()), cx));
+                    })))
+                    .when(chosen, |menu| menu.item(PopupMenuItem::new(tr("group_auto_lead")).on_click(move |_, _, cx| {
+                        let _ = auto.update(cx, |this, cx| this.set_group_lead(auto_key.clone(), None, cx));
+                    })))
+            })
             .map(|menu| release_items(hangar, target, &pairs).into_iter().fold(menu, |menu, item| menu.item(item)))
             // Com vários pares, o desfazer vira submenu, um por dono.
             .map(|menu| if pairs.len() > 1 {
@@ -1852,7 +1900,7 @@ impl Hangar {
 #[cfg(test)]
 mod tests {
     // Sem glob: o `test` do gpui_kit, que o `super::*` traz, esconderia o `#[test]` da linguagem.
-    use super::{BranchList, HashSet, SessionInfo, first_line, has_git, layout, machine_split, rail_label, row_server_visible, save_collapsed};
+    use super::{BranchList, HashSet, SessionInfo, first_line, has_git, layout, machine_split, rail_label, row_server_visible, save_json};
 
     #[test]
     fn outside_session_menu_leaves_the_pair_and_never_closes() {
@@ -2074,8 +2122,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hangar-collapsed-{}", std::process::id()));
         let path = dir.join("sidebar-collapsed.json");
         let (both, one): (HashSet<String>, HashSet<String>) = (["/a".to_owned(), "/b".to_owned()].into(), ["/a".to_owned()].into());
-        save_collapsed(Some(path.clone()), 2, &both).unwrap();
-        save_collapsed(Some(path.clone()), 1, &one).unwrap();
+        let written = std::sync::Mutex::new(0);
+        save_json(Some(path.clone()), 2, &written, &both).unwrap();
+        save_json(Some(path.clone()), 1, &written, &one).unwrap();
         let read: HashSet<String> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(read, both, "a gravação do 1º clique terminou por último e não voltou o arquivo");
         assert!(!path.with_extension("tmp").exists());
