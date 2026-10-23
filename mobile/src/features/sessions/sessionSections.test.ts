@@ -51,12 +51,12 @@ describe('grupo entre máquinas na lista', () => {
     const asking = rows.map((r) => r.name === 'ABC-1-app' ? { ...r, state: 'awaiting_input' } as AggSession : r);
     const groups = groupGlobal(asking, ids);
     const open = buildSessionSections(asking, 'server', '', new Set(), undefined, groups);
-    const head = open.flatMap((s) => [...s.heads.values()])[0];
+    const head = [...open[0].heads.values()][0];
     const closed = buildSessionSections(asking, 'server', '', new Set([head.id]), undefined, groups);
     const flat = closed.flatMap((s) => s.data.map(key));
     expect(flat.filter((k) => /ABC-1|abc2/.test(k))).toHaveLength(1);
     expect(flat).toEqual(expect.arrayContaining(['nb::solta', 'vm::outra']));
-    expect(closed.flatMap((s) => [...s.heads.values()])).toMatchObject([{ id: head.id, collapsed: true, size: 4, awaiting: 1 }]);
+    expect([...closed[0].heads.values()]).toMatchObject([{ id: head.id, collapsed: true, size: 4, awaiting: 1 }]);
   });
 
   it('a busca que acha um membro traz o bloco inteiro', () => {
