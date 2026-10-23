@@ -298,14 +298,19 @@ impl ListBridge {
         }
     }
 
-    /// Rebaixamentos da rodada valem no cache Rust da lista e do Monitor, e vão ao mapa de marcadores do
-    /// Python, que o push e as rotas dele ainda leem e que ele grava no arquivo de estado.
+    /// Rebaixamentos da rodada valem no cache Rust da lista e do Monitor, e no marcador em disco.
     fn demote(&self, effects: Vec<Effect>) {
         let sids: Vec<String> = effects.into_iter().map(|Effect::DemoteAwaiting { sid, ts }| {
             self.demoted.demote(&sid, ts);
             sid
         }).collect();
-        if !sids.is_empty() { self.facts.demote(sids); }
+        if sids.is_empty() { return; }
+        let Ok(dirs) = self.dirs() else { return };
+        let caches = self.caches.clone();
+        tokio::task::spawn_blocking(move || {
+            let config_dirs = caches.config_dirs(&dirs);
+            for sid in &sids { facts_files::demote_marker(&config_dirs, sid); }
+        });
     }
 
     /// Uma vez, na montagem do estado com `HANGAR_SHARES_FILE`.

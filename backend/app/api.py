@@ -1185,17 +1185,24 @@ async def _cached_info(name: str) -> SessionInfo | None:
     return await asyncio.to_thread(_cached_info_sync, name)
 
 
+def _rust_conduz(info) -> bool:
+    """Sessão que o Rust de pé conduz (Claude e Codex): fila, loop, `then` e avisos dela são dele."""
+    from app import runtime_coordinator
+    c = runtime_coordinator.current()
+    return c is not None and c.mode in {"pending", "rust"} and c.rust_owns(info.provider, bool(getattr(info, "headless", False)))
+
+
 def _notify_async(session_id: str, send_fn) -> None:
     """Resolve uuid->nome e manda o push escolhido, TUDO numa thread: registry.list() mexe no tmux
     e o webpush e rede — nada disso pode bloquear o loop do watch."""
     def _work() -> None:
         try:
-            name = next(
-                (s.name for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id),
+            info = next(
+                (s for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id),
                 None,
             )
-            if name:
-                send_fn(name)
+            if info and not _rust_conduz(info):
+                send_fn(info.name)
         except Exception:
             _log.warning("push falhou (%s)", session_id, exc_info=True)
     threading.Thread(target=_work, daemon=True).start()
@@ -1248,7 +1255,7 @@ def _do_notify_awaiting(session_id: str) -> None:
     toda sessao parada >60s empurrava push falso "Aguardando sua resposta". Push so sai com awaiting
     REAL: askq pendente no sidecar OU menu/overlay no pane (retry curto cobre o frame de render)."""
     info = next((s for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id), None)
-    if info is None:
+    if info is None or _rust_conduz(info):
         return
     def _real() -> bool:
         if getattr(info, "headless", False):
@@ -1729,7 +1736,7 @@ def _on_hook_transition(session_id: str, state: str) -> None:
             try:
                 info = next((s for s in registry.list()
                              if s.jsonl and session_key(s.jsonl) == session_id), None)
-                if info:
+                if info and not _rust_conduz(info):
                     with loop_mod._lock:
                         link = loop_mod.LoopLink(info.name)
                         d = link.get()
@@ -1752,6 +1759,8 @@ def _on_hook_transition(session_id: str, state: str) -> None:
         try:
             info = next((s for s in registry.list()
                          if s.jsonl and session_key(s.jsonl) == session_id), None)
+            if info and _rust_conduz(info):
+                return
             # Sessao nao encontrada (morreu, ou nao esta no tmux): o push de "terminou" continua
             # saindo pelo caminho de sempre. Nao ha como desconfiar do idle sem o transcript.
             if state == "idle" and not (info and info.jsonl):

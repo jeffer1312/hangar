@@ -175,26 +175,6 @@ async def list_facts(request: Request) -> dict:
         raise HTTPException(400) from None
 
 
-@router.post("/list/demote")
-async def list_demote(request: Request) -> dict:
-    """`hooks.demote_awaiting`: o pane que a lista do Rust capturou contradisse o marcador."""
-    from app import hook_state
-    raw = await request.body()
-    try:
-        body = json.loads(raw) if len(raw) <= 64 * 1024 else None
-        if (not isinstance(body, dict) or set(body) != {"sids"} or not isinstance(body["sids"], list)
-                or not all(isinstance(s, str) and 0 < len(s) <= 256 for s in body["sids"])):
-            raise ValueError("rebaixamento inválido")
-    except (ValueError, RecursionError):
-        raise HTTPException(400) from None
-    # No laço, como o rebaixamento de hoje: o mapa e o registro são mexidos sem trava pelo vigia.
-    # O mapa de marcadores e o registro nativo em memória são do Python (a prévia e as transições leem
-    # deles), então o Rust pede aqui em vez de regravar o sidecar.
-    for sid in body["sids"]:
-        hook_state.hook_state.demote_awaiting(sid)
-    return {"ok": True}
-
-
 @router.get("/workspace/context")
 async def workspace_context(name: str | None = None) -> dict:
     """Só metadados; o consumidor privado não consulta novamente este registro."""

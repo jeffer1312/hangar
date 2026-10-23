@@ -230,11 +230,19 @@ async fn claude_only_round_never_asks_python_for_facts_and_demotes() {
     assert_eq!(p.rows[0].problema, None);
     assert_eq!(python.list_facts_calls.load(std::sync::atomic::Ordering::SeqCst), 0, "nenhuma pergunta de fatos");
     let sid = "00000000-0000-0000-0000-000000000000";
-    let marker: Value = serde_json::from_slice(&std::fs::read(dir.path().join(format!("home/.claude/.hangar-state/{sid}.json"))).unwrap()).unwrap();
+    let path = dir.path().join(format!("home/.claude/.hangar-state/{sid}.json"));
+    let marker: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert!(bridge.demoted.applies(sid, marker["ts"].as_f64().unwrap()), "o rebaixamento vale já no Rust, para a lista e o `Monitor`");
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while python.hits_to("/internal/list/demote") == 0 { tokio::time::sleep(Duration::from_millis(20)).await; }
-    }).await.expect("o rebaixamento sai");
+    // O Rust regrava o marcador (o boot e o Python releem do disco), com o `ts` original, sem perguntar ao Python.
+    let rewritten = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let m: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            if m["state"] == "idle" { return m; }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }).await.expect("o marcador é regravado idle");
+    assert_eq!(rewritten["ts"], marker["ts"]);
+    assert_eq!(python.hits_to("/internal/list/demote"), 0, "o Python não grava o rebaixamento");
 }
 
 /// Com linha Pi o Python é perguntado só por ela; sem resposta, só ela leva o aviso (diagnóstico,
