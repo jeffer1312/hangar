@@ -60,13 +60,12 @@ pub async fn resolve(headers: &HeaderMap, local: &Local<'_>, secret: &str) -> Re
     let panes = if pane.is_some() || name.is_some() || terminal_key.is_some() { local.mux.list_panes().await.unwrap_or_default() } else { Vec::new() };
     if let Some(key) = terminal_key {
         // O psmux repete o id do pane entre sessões e o rename envelhece CP_SESSION_NAME; a chave no
-        // ambiente não muda. Com pane, só as sessões que o têm são perguntadas.
+        // ambiente não muda. Com pane, só as sessões que o têm são perguntadas; chave em mais de uma
+        // sessão (ambiente herdado) não resolve, como o pane repetido.
         let candidates: BTreeSet<&str> = panes.iter().filter(|p| pane.as_ref().is_none_or(|id| &p.pane_id == id)).map(|p| p.session.as_str()).collect();
-        for session in candidates {
-            if local.mux.session_env(session, "CP_SESSION_KEY").await.as_deref() == Some(key.as_str()) {
-                return Ok((session.to_owned(), Origin::Key));
-            }
-        }
+        let keys = futures_util::future::join_all(candidates.iter().map(|s| local.mux.session_env(s, "CP_SESSION_KEY"))).await;
+        let owners: Vec<&str> = candidates.into_iter().zip(keys).filter(|(_, k)| k.as_deref() == Some(key.as_str())).map(|(s, _)| s).collect();
+        if let [owner] = owners[..] { return Ok((owner.to_owned(), Origin::Key)); }
     }
     if let Some(pane) = pane {
         let owners: BTreeSet<&str> = panes.iter().filter(|p| p.pane_id == pane).map(|p| p.session.as_str()).collect();
