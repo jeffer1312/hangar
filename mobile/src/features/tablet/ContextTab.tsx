@@ -75,6 +75,14 @@ export function ContextTab({ serverId, name, onPick }: { serverId: string; name:
   );
 }
 
+const GROUP_VISIBLE_ROWS = 4;
+
+function groupRank(session: AggSession): number {
+  if (session.state === 'awaiting_input') return 0;
+  if (isWorking(session)) return 1;
+  return session.state === 'idle' ? 2 : 3;
+}
+
 function GroupCard({ session, onPick }: { session: AggSession; onPick?: (session: AggSession) => void }) {
   const { serverId, name } = session;
   const rows = useSessions(s => s.rows);
@@ -90,6 +98,8 @@ function GroupCard({ session, onPick }: { session: AggSession; onPick?: (session
       ? rows.find(s => s.serverId === member.server && s.name === member.name) ?? [] : []);
     members.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : a.serverId < b.serverId ? -1 : a.serverId > b.serverId ? 1 : 0);
     const others = members.filter(s => s.serverId !== serverId || s.name !== name);
+    // Com rolagem, quem pede resposta e quem trabalha vem primeiro; o nome desempata (sort estável).
+    if (others.length > GROUP_VISIBLE_ROWS) others.sort((a, b) => groupRank(a) - groupRank(b));
     const away = found.members.flatMap(member => member.kind === 'missing' ? [`${member.server_id}::${member.name}`]
       : member.kind === 'outside' ? [`${member.alias}::${member.session}`] : []);
     return { total: found.members.length, members, others, away, working: others.filter(isWorking).length,

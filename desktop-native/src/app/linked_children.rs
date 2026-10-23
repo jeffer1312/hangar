@@ -8,11 +8,16 @@ use super::grouping::{Member, Row, global_groups};
 use super::sidebar::Target;
 
 /// Cerca de quatro membros à vista; o resto rola, para o cartão não empurrar a conversa.
-const LIST_MAX: f32 = 4. * 46. + 8.;
+const LIST_ROWS: usize = 4;
+const LIST_MAX: f32 = LIST_ROWS as f32 * 46. + 8.;
 
 /// O que não é pergunta, pronto nem encerrado conta como trabalhando (carregando, sem estado).
 fn tone(state: &str) -> &'static str {
     match state { "awaiting_input" => "awaiting_input", "idle" => "idle", "dead" => "dead", _ => "working" }
+}
+
+fn rank(tone: &str) -> u8 {
+    match tone { "awaiting_input" => 0, "working" => 1, "idle" => 2, _ => 3 }
 }
 
 /// As palavras do `rotuloEstado` do web, pelo tom.
@@ -73,7 +78,9 @@ impl Hangar {
         };
         let relations: Vec<String> = members.iter().map(|(t, s)| relation(t, s)).collect();
         // A conversa aberta já está na tela: o painel mostra só os outros membros.
-        let others: Vec<usize> = (0..members.len()).filter(|&i| members[i].0 != current).collect();
+        let mut others: Vec<usize> = (0..members.len()).filter(|&i| members[i].0 != current).collect();
+        // Com rolagem, quem pede resposta e quem trabalha vem primeiro; o nome desempata.
+        if others.len() > LIST_ROWS { others.sort_by_key(|&i| rank(tone(&members[i].1.state))); }
         let expanded = self.linked_children_open.contains(&current);
         let total = (members.len() + away.len()).to_string();
         let title = tr_shared("native_group_panel_title", &[("count", &total)]);
