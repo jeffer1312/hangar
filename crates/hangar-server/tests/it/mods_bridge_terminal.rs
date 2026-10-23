@@ -51,8 +51,7 @@ async fn ui_is_mirrored_and_the_screen_decides_the_shown_pane() {
     assert_eq!(status, 200);
     let ui = last_ui(&mods, "t");
     assert_eq!((ui["shown_id"].as_str(), ui["columns"].as_u64(), ui["source"].as_str()), (Some("b"), Some(82), Some("terminal")));
-    // A cópia para a prévia e o `/pull` do Python, no formato de hoje (o `BandBody` dele).
-    assert_eq!(python.hits_to("/api/plugin/ui"), 1, "a cópia da faixa vai ao Python");
+    assert_eq!(python.hits_to("/api/plugin/ui"), 0, "a faixa da sessão do Rust não vai ao Python");
     // A leitura da tela vem ao fim da janela; sob carga, depois dela. Espera o efeito, não o relógio.
     fake::wait_until(|| last_ui(&mods, "t")["shown_id"] == "a").await;
     assert_eq!(probe.reads.load(SeqCst), 1, "a linha de abas da tela vence o último desenho");
@@ -70,10 +69,56 @@ async fn a_renamed_session_is_found_by_the_key_its_process_was_launched_with() {
     let (status, _) = post(server, "ui", body).await;
     assert_eq!(status, 200);
     assert_eq!(last_ui(&mods, "novo")["source"], "terminal");
-    // O cache do Python é pelo nome de agora: a cópia leva o nome atual e o token dele.
-    let copy = python.plugin_ui_bodies();
-    assert_eq!(copy.len(), 1, "a cópia da faixa vai ao Python");
-    assert_eq!((copy[0]["sessao"].as_str(), copy[0]["token"].as_str()), (Some("novo"), Some(mint(OWNER, "novo").as_str())));
+    assert!(python.plugin_ui_bodies().is_empty(), "a faixa da sessão do Rust não vai ao Python");
+}
+
+/// O `/ui` e o `/toast` da sessão Claude sem entrada no Rust (aberta à mão), passo a passo como o Python
+/// os tratava (`plugin_band/cases.json`, gerado rodando o Python): mesmo status e o mesmo evento, agora
+/// guardados no Rust e nada ao Python.
+#[tokio::test]
+async fn a_hand_opened_session_band_and_toasts_match_python() {
+    let (python, server, mods, _probe) = setup().await;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/plugin_band/cases.json");
+    let golden: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let name = golden["session"].as_str().unwrap();
+    assert!(!mods.band_present(name), "sem `/ui` nesta vida o plugin precisa reenviar a faixa");
+    let (mut ui, mut toasts) = (None::<Value>, 0usize);
+    for step in golden["steps"].as_array().unwrap() {
+        let route = step["route"].as_str().unwrap();
+        let mut body = json!({"sessao": name, "token": if step["token_ok"] == true { mint(OWNER, name) } else { "x".into() }});
+        body.as_object_mut().unwrap().extend(step["body"].as_object().unwrap().clone());
+        let (status, _) = post(server, route, body).await;
+        assert_eq!(status, step["status"].as_u64().unwrap() as u16, "{}", step["title"]);
+        let frames = mods.replay(name);
+        if route == "ui" {
+            if !step["emits"].is_null() { ui = Some(step["emits"].clone()); }
+            let got = frames.iter().find(|(event, _)| *event == "plugin_ui").map(|(_, data)| serde_json::from_str::<Value>(data).unwrap());
+            assert_eq!(got, ui, "{}", step["title"]);
+        } else {
+            let live: Vec<Value> = frames.iter().filter(|(event, _)| *event == "plugin_toast").map(|(_, data)| serde_json::from_str(data).unwrap()).collect();
+            if let Some(expected) = step["emits"].as_array() {
+                toasts += expected.len();
+                let got = live.last().unwrap();
+                assert_eq!((&got["text"], &got["plugin"]), (&expected[0]["text"], &expected[0]["plugin"]), "{}", step["title"]);
+                let (want, left) = (expected[0]["timeoutMs"].as_u64().unwrap(), got["timeoutMs"].as_u64().unwrap());
+                assert!(left <= want && left + 1000 > want, "{}: prazo {left} de {want}", step["title"]);
+            }
+            assert_eq!(live.len(), toasts, "{}", step["title"]);
+        }
+    }
+    assert!(mods.band_present(name));
+    assert_eq!(python.hits_to("/api/plugin/ui") + python.hits_to("/api/plugin/toast"), 0, "nada vai ao Python");
+}
+
+/// Quando a sessão aberta à mão entra no Rust, a faixa guardada sem dono sai: a do processo dela vem do
+/// primeiro desenho, e a guardada não volta no retrato de quem abre depois.
+#[tokio::test]
+async fn attaching_the_session_drops_the_band_kept_without_an_owner() {
+    let (_python, server, mods, _probe) = setup().await;
+    assert_eq!(post(server, "ui", signed("solta", json!({"above": {"type": "Box"}, "panes": []}))).await.0, 200);
+    assert!(!mods.replay("solta").is_empty());
+    mods.attach_terminal("solta", "proc-solta", 7, Arc::new(Probe::default()));
+    assert!(mods.replay("solta").iter().all(|(event, _)| *event != "plugin_ui"));
 }
 
 #[tokio::test]
@@ -116,8 +161,8 @@ async fn a_long_toast_is_cut_not_refused() {
 #[tokio::test]
 async fn other_sessions_bad_tokens_and_bad_bodies() {
     let (python, server, _mods, _probe) = setup().await;
-    assert_eq!(post(server, "ui", signed("com-python", json!({"above": null, "panes": []}))).await.1, "from-python");
-    assert_eq!(python.hits_to("/api/plugin/ui"), 1);
+    assert_eq!(post(server, "ui", signed("aberta-a-mao", json!({"above": null, "panes": []}))).await.1, json!({"ok": true}));
+    assert_eq!(python.hits_to("/api/plugin/ui"), 0, "a faixa de sessão sem entrada no Rust fica no Rust");
     let mut wrong = signed("t", json!({"requestId": "a", "element": "k"}));
     wrong["token"] = json!("x");
     assert_eq!(post(server, "pressed", wrong).await.0, 403);

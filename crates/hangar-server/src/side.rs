@@ -699,11 +699,11 @@ impl Hub {
     pub(crate) fn plugin_rates(&self) -> Arc<crate::plugin::sources::RateStore> { self.ctx.hubs.plugin_rates() }
 
     /// Assina o canal e copia o retrato dos eventos do estado (canal privado).
-    fn subscribe_state(&self) -> Option<(broadcast::Receiver<Out>, Vec<Bytes>, &'static [&'static str])> {
+    fn subscribe_state(&self, guest: bool) -> Option<(broadcast::Receiver<Out>, Vec<Bytes>, &'static [&'static str])> {
         self.bound.lock().unwrap().as_ref()?;
         let events = self.state_events();
         let rx = self.tx.subscribe();
-        let cached = self.cache.lock().unwrap().replay().into_iter().filter(|f| private_frame(f, events)).collect();
+        let cached = self.cache.lock().unwrap().replay().into_iter().filter(|f| private_frame(f, events, guest)).collect();
         Some((rx, cached, events))
     }
 
@@ -1198,12 +1198,9 @@ async fn side_once(hub: &Arc<Hub>, attempt: &mut u32) -> SideEnd {
                     tracing::warn!(session = %hub.name, code = "stats_python_leak", "faixa: o Python mandou `stats` de conversa do Rust; descartado");
                 }
             }
+            // Faixa e avisos de mod são do `Mods` (também da sessão aberta à mão): um do Python é velho.
+            "plugin_ui" | "plugin_toast" => {}
             event => {
-                // Sessão sem terminal atendida pelo Rust: faixa e avisos vêm dele (dono único). Um
-                // `plugin_ui` velho do Python (sessão que mudou de modo) não pode sobrescrevê-los.
-                if matches!(event, "plugin_ui" | "plugin_toast") && hub.ctx.mods.owns(&hub.name) {
-                    continue;
-                }
                 on_side_event(hub, event, &ev.data);
             }
         }
@@ -1225,9 +1222,10 @@ fn on_side_event(hub: &Arc<Hub>, event: &str, data: &str) -> bool {
 }
 
 /// Quadro que o canal privado leva ao Python: o estado, a faixa dos mods, o painel da fila e as bolhas dela,
-/// que o convidado também vê.
-fn private_frame(frame: &[u8], events: &[&str]) -> bool {
+/// que o convidado também vê; ao dono pelo Connect, também os avisos de mod, que o Python não guarda mais.
+fn private_frame(frame: &[u8], events: &[&str], guest: bool) -> bool {
     state_frame(frame, events) || state_frame(frame, &[LATEST[PLUGIN_UI], crate::queue_panel::EVENT, "message", "queue_confirmed"])
+        || (!guest && state_frame(frame, &["plugin_toast"]))
 }
 
 /// Quadro que só o dono recebe: aviso de mod (texto dele) e pedido de navegador (url com o token).
@@ -1330,7 +1328,7 @@ pub async fn private_events(
 const PRIVATE_PING: Duration = Duration::from_secs(10);
 
 async fn private_loop(lease: Lease, out: tokio::sync::mpsc::Sender<Bytes>) {
-    let hub = lease.hub.clone();
+    let (hub, guest) = (lease.hub.clone(), lease.guest);
     let send = |f: Bytes| {
         let out = out.clone();
         async move { matches!(tokio::time::timeout(Duration::from_secs(30), out.send(f)).await, Ok(Ok(()))) }
@@ -1340,7 +1338,7 @@ async fn private_loop(lease: Lease, out: tokio::sync::mpsc::Sender<Bytes>) {
     }
     let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + PRIVATE_PING, PRIVATE_PING);
     loop {
-        let Some((mut rx, cached, events)) = hub.subscribe_state() else { return };
+        let Some((mut rx, cached, events)) = hub.subscribe_state(guest) else { return };
         for f in cached {
             if !send(f).await {
                 return;
@@ -1351,7 +1349,7 @@ async fn private_loop(lease: Lease, out: tokio::sync::mpsc::Sender<Bytes>) {
                 _ = out.closed() => return,
                 _ = ping.tick() => if !send(tail::ping_frame()).await { return },
                 msg = rx.recv() => match msg {
-                    Ok(Out::Side(f)) if private_frame(&f, events) => if !send(f).await { return },
+                    Ok(Out::Side(f)) if private_frame(&f, events, guest) => if !send(f).await { return },
                     // O `/events` do Python repassa a vista inteira ao convidado: sem diferença aqui.
                     Ok(Out::Ui(version)) => if let Some(f) = hub.resolve(Queued::Ui(version), &mut None, false) {
                         if !send(f).await { return }
@@ -2158,7 +2156,7 @@ mod tests {
         let binding = Binding { provider: Provider::Claude, jsonl: dir.path().join("a.jsonl"), key: "a".into(), headless: false, life: None };
         let ctx = idle_ctx();
         let lease = ctx.hubs.acquire("s", binding, &ctx);
-        let late = |hub: &Hub| hub.subscribe_state().unwrap().1.iter().any(|f| f.starts_with(b"event: ask_question"));
+        let late = |hub: &Hub| hub.subscribe_state(true).unwrap().1.iter().any(|f| f.starts_with(b"event: ask_question"));
         assert!(lease.hub.publish_own("state", r#"{"state":"awaiting_input"}"#));
         assert!(lease.hub.publish_own("ask_question", r#"{"questions":[]}"#));
         assert!(late(&lease.hub), "chegou durante a pergunta: recebe");
@@ -2193,8 +2191,17 @@ mod tests {
         for (event, pass) in [("state", true), ("preview", true), ("ask_question", true), ("suggest", true), ("plugin_ui", true),
                               ("queue", true), ("message", true), ("queue_confirmed", true),
                               ("stats", false), ("plugin_toast", false), ("nav", false)] {
-            assert_eq!(private_frame(&sse_frame(event, "{}", None), &STATE_EVENTS), pass, "{event}");
+            assert_eq!(private_frame(&sse_frame(event, "{}", None), &STATE_EVENTS, true), pass, "{event}");
         }
+    }
+
+    /// O dono que entra pela porta do Connect recebe os avisos de mod pelo canal privado: o Python não os
+    /// guarda mais. O convidado continua sem eles.
+    #[test]
+    fn private_channel_carries_mod_toasts_only_to_the_owner() {
+        let toast = sse_frame("plugin_toast", r#"{"id":"rs-1","text":"x","timeoutMs":4000}"#, None);
+        assert!(private_frame(&toast, &STATE_EVENTS, false), "dono pelo Connect");
+        assert!(!private_frame(&toast, &STATE_EVENTS, true), "convidado");
     }
 
     #[test]
@@ -2203,7 +2210,7 @@ mod tests {
         let frame = sse_frame("queue", r#"{"entries":[],"actions":true}"#, None);
         c.record("queue", r#"{"entries":[],"actions":true}"#, &frame, false);
         assert!(c.replay().iter().any(|f| f.starts_with(b"event: queue\r\n")));
-        assert!(private_frame(&frame, &STATE_EVENTS), "o canal privado leva a fila a quem entrou pelo Python");
+        assert!(private_frame(&frame, &STATE_EVENTS, true), "o canal privado leva a fila a quem entrou pelo Python");
     }
 
     #[tokio::test]

@@ -183,13 +183,15 @@ async def test_guest_channel_failure_closes_the_stream(rust):
     assert exc.value.code == "state_channel_off"
 
 
-async def test_side_events_keeps_nav_ping_toast_and_leaves_the_queue_to_the_hub(rust):
+async def test_side_events_keeps_nav_ping_and_leaves_mods_and_queue_to_the_hub(rust):
     adapter, jsonl = rust
     pqueue.PromptQueue("s").append("manda isso depois", delivered=False)
     sse.nav_pendente("s", "http://localhost:5173")
     plugin_bridge._store_toast("s", "Jenkins configurado.", 9000, "demo")
+    plugin_bridge._guardar_faixa("s", {"type": "Box"}, 80, [])
     vistos = await _por(sse.merged_events("s", str(jsonl), side=True), 1.5)
-    assert {"nav", "ping", "plugin_toast"} <= set(_nomes(vistos))
+    assert {"nav", "ping"} <= set(_nomes(vistos))
+    assert not {"plugin_ui", "plugin_toast"} & set(_nomes(vistos)), "faixa e avisos de mod são do Rust"
     assert "info" not in _nomes(vistos), "a conversa é escolhida pelo Rust"
     assert not {"message", "queue_confirmed"} & set(_nomes(vistos)), "a fila sai do hub"
     assert not {"state", "preview", "ask_question", "suggest"} & set(_nomes(vistos))
