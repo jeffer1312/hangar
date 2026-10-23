@@ -510,10 +510,6 @@ def _worker() -> None:
     birth.__annotations__ = {"request": HttpRequest}
     app.post("/api/sessions")(birth)
 
-    @app.post("/api/sessions/{name}/rename")
-    async def rename(name: str, body: dict):
-        return await api.rename_session(name, api.RenameBody.model_validate(body))
-
     @app.post("/__contract__/launcher-options")
     def options(body: dict):
         if body.get("live_claude"):
@@ -539,10 +535,6 @@ def _worker() -> None:
         if arguments[1] == "list-sessions" and "@cp_shortcut_owner" in arguments[-1]:
             return subprocess.CompletedProcess(arguments, 0, "", "")
         raise AssertionError(f"comando do multiplexador não previsto: {arguments}")
-
-    def rename_mux(old, new):
-        mux[new] = mux.pop(old)
-        return True
 
     @app.post("/__contract__/barrier/{name}")
     def block(name: str):
@@ -693,9 +685,7 @@ def _worker() -> None:
             patch.object(codex_contas_sync, "_prepare_account_guarded", side_effect=prepare_at_barrier), \
             patch.object(api.tmux, "has_session", side_effect=lambda name: name in mux and any(child.poll() is None for child in children)), \
             patch.object(api.tmux, "_run", side_effect=mux_command), \
-            patch.object(api.tmux, "rename_session", side_effect=rename_mux), \
             patch.object(api.tmux, "is_hidden", return_value=False), \
-            patch.object(api.registry, "_rename_rust"), \
             patch.object(account_bridge, "terminal_instances", side_effect=lambda: dict(mux) if any(
                 child.poll() is None for child in children) else {}), \
             patch.object(account_bridge, "request_process_uses", side_effect=lambda key, pid: pid in launcher_pids(key)), \

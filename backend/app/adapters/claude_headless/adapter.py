@@ -1815,49 +1815,6 @@ class ClaudeHeadlessAdapter:
         else:
             loop.call_soon_threadsafe(_retirar)
 
-    def rename(self, old: str, new: str) -> None:
-        current = self._sessions.get(old)
-
-        def rename_on_loop() -> None:
-            sess = self._sessions.get(old)
-            if sess is not None:
-                for buffer in (sess.preview_buffer, sess.thinking_buffer, sess.tool_buffer):
-                    buffer.rebind()
-                for key in (old, f"{old}#pensamento", f"{old}#ferramenta"):
-                    source = PushPreviewSource._sources.get(key)
-                    if source is not None:
-                        source.reset()
-                self._sessions.pop(old, None)
-                sess.name = new
-                sess.meta["name"] = new
-                self._sessions[new] = sess
-            lock = self._delivery_locks.pop(old, None)
-            if lock is not None:
-                self._delivery_locks[new] = lock
-
-        loop = current.loop if current is not None else None
-        try:
-            same_loop = loop is not None and asyncio.get_running_loop() is loop
-        except RuntimeError:
-            same_loop = False
-        if loop is None or not loop.is_running() or same_loop:
-            rename_on_loop()
-            return
-        done = threading.Event()
-        errors: list[BaseException] = []
-        def apply() -> None:
-            try:
-                rename_on_loop()
-            except BaseException as error:
-                errors.append(error)
-            finally:
-                done.set()
-        loop.call_soon_threadsafe(apply)
-        if not done.wait(5):
-            raise RuntimeError("timeout ao renomear buffer da sessão Claude")
-        if errors:
-            raise errors[0]
-
 # Anexo de imagem do composer ("legenda — 📎 imagem: <path>"). No terminal a TUI reconhece o path
 # e anexa a imagem de verdade; aqui é o adapter que anexa, como bloco `image` ao lado do texto.
 # O texto vai inteiro (com o path): é o que o .jsonl grava e o que a fila usa pra confirmar.

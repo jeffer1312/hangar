@@ -15,7 +15,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Literal, Optional
@@ -2590,131 +2590,12 @@ def _engine_fast_selection(name: str) -> tuple[str | None, str]:
     return model, procinfo._env_var_of(agent, "CP_ENGINE_SERVICE_TIER") or "default"
 
 
-class RenameBody(_StrictBody):
-    new: str
-
-
-@app.post("/api/sessions/{name}/rename", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def rename_session(name: str, body: RenameBody):
-    # Claim, envio e compensação precisam terminar antes de mover a fila e cancelar a bomba.
-    from app import runtime_coordinator
-    coordinator = runtime_coordinator.current()
-    if coordinator is not None and coordinator.legacy is not None:
-        await coordinator.prepare_session(name, _provider_of(name))
-        if coordinator.managed_queue(name) and coordinator.slot(name).binding.meta.get("terminal"):
-            async def action():
-                return await asyncio.to_thread(_rename_session, name, body)
-            return await coordinator.change(name, action, new_name=sanitize_session_name(body.new), advance=False)
-    async with AsyncExitStack() as stack:
-        adapter = get_adapter("codex")
-        for key in sorted({name, sanitize_session_name(body.new)}):
-            await stack.enter_async_context(adapter.delivery_lock(key))
-        task = asyncio.create_task(asyncio.to_thread(_rename_session, name, body))
-        try:
-            return await asyncio.shield(task)
-        except asyncio.CancelledError:
-            await task
-            raise
-
-
-def _rename_guest_claim(name: str, new: str) -> None:
-    # A sessão já foi renomeada; falhar aqui não pode pular a migração da fila e do bastão.
-    try:
-        guest_users.rename_session(name, new)
-    except Exception:
-        _log.exception("[guests] dono de %s nao acompanhou o rename para %s", name, new)
-
-
-def _rename_group_first(old: str, new: str) -> bool:
-    """Modo Rust: o grupo muda de nome antes do tmux e do sidecar sem terminal; se o Rust falha, o
-    rename nem começa. True = renomeado lá (quem falhar depois desfaz)."""
-    if not groups_bridge.rust_owns_groups():
-        # Sem o Rust ninguém renomeia o grupo: a sessão agrupada não muda de nome.
-        if PairLink(old).get():
-            _require_rust_groups()
-        return False
-    try:
-        groups_bridge.call("group.rename", old=old, new=new)
-    except groups_bridge.GroupsBridgeError as e:
-        raise _group_unavailable(e.code) from None
-    return True
-
-
-def _undo_group_rename(grouped: bool, old: str, new: str) -> None:
-    if not grouped:
-        return
-    try:
-        groups_bridge.call("group.rename", old=new, new=old)
-    except groups_bridge.GroupsBridgeError as e:
-        # O grupo fica com o nome novo de uma sessão que manteve o velho: a varredura do Rust o tira.
-        _log.warning("rename %s -> %s falhou e o grupo não voltou ao nome antigo (%s)", old, new, e.code)
-        diag.registrar("grupos.rename_nao_desfeito", "erro", sessao=old, codigo=e.code)
-
-
-def _rename_session(name: str, body: RenameBody):
-    from app import tmux
-    _recusa_orq(name)
-    # tmux nao aceita espaco/./: no nome -> sanitiza. O transcript NAO depende do nome (resolve por
-    # /proc), entao renomear nao quebra o historico. Migra so o sidecar da fila (keyed por nome).
-    new = sanitize_session_name(body.new)
-    if not new:
-        raise HTTPException(400, detail=erro("erro_nome_invalido", "nome invalido"))
-    if _headless(name) or _codex_sem_terminal(name):
-        # Sem pane: é só o sidecar (e o que é keyed por nome) que muda.
-        if new == name:
-            return {"ok": True, "name": name}
-        if _session_exists(new):
-            raise HTTPException(409, detail=erro("erro_nome_em_uso", "ja existe uma sessao com esse nome"))
-        grouped = _rename_group_first(name, new)
-        try:
-            registry.rename(name, new)
-        except ValueError as e:
-            _undo_group_rename(grouped, name, new)
-            raise HTTPException(409, detail=erro("erro_nome_em_uso", str(e)))
-        except BaseException:
-            _undo_group_rename(grouped, name, new)
-            raise
-        od, nd = bastao_mod.caminho(name), bastao_mod.caminho(new)
-        if od.exists():
-            atomico.substituir(od, nd)
-        _invalidate_lists()
-        forget_frame(name)
-        share_failed = share_bridge.rename(name, new)
-        _rename_guest_claim(name, new)
-        return {"ok": True, "name": new, **({"warning": share_failed} if share_failed else {})}
-    if not tmux.has_session(name):
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    if new == name:
-        return {"ok": True, "name": name}
-    if tmux.has_session(new) or headless_sessions.exists(new):
-        raise HTTPException(409, detail=erro("erro_nome_em_uso", "ja existe uma sessao com esse nome"))
-    grouped = _rename_group_first(name, new)
-    try:
-        renamed = tmux.rename_session(name, new)
-    except Exception:
-        _undo_group_rename(grouped, name, new)
-        raise
-    if not renamed:
-        _undo_group_rename(grouped, name, new)
-        raise HTTPException(500, detail=erro("sessao_falha_renomear", "falha ao renomear"))
-    registry.rename(name, new)  # migra o cache name->jsonl (senao serve transcript errado pos-rename)
-    # O Rust move convites e pares externos; fora do ar, o rename segue e o aviso volta na resposta.
-    share_failed = share_bridge.rename(name, new)
-    _rename_guest_claim(name, new)
-    from app.pqueue import PromptQueue
-    try:
-        PromptQueue(name).rename(new)
-        # O dossiê da passagem de bastão é keyed por nome do MESMO jeito que a fila: sem migrar
-        # junto, a sucessora renomeada fica com um kick-off apontando pro caminho antigo e o
-        # `prune` apaga o arquivo em 7 dias por não achar sessão viva com aquele nome.
-        od, nd = bastao_mod.caminho(name), bastao_mod.caminho(new)
-        if od.exists():
-            atomico.substituir(od, nd)
-    except OSError as e:
-        # Não derruba o rename (que já aconteceu no tmux), mas APARECE: sidecar que não migrou é
-        # fila perdida ou dossiê órfão, e nenhum dos dois pode sumir calado.
-        _log.warning("rename %s -> %s: sidecar nao migrou: %s", name, new, e)
-    return {"ok": True, "name": new, **({"warning": share_failed} if share_failed else {})}
+@app.post("/api/sessions/{name}/rename")
+async def rename_session(name: str, request: Request):
+    """Trocar o nome é do Rust; aqui chega só quem entrou por uma porta do Python (Connect, convidado
+    com conta), e segue pela ponte."""
+    return await _repasse_ao_rust(request, erro("rename_needs_rust_server", "trocar o nome da sessão precisa do servidor Rust"),
+                                  f"/__hangar_server/claude/{urllib.parse.quote(name, safe='')}/rename")
 
 
 class ThenLinkBody(_StrictBody):

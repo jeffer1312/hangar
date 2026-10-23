@@ -1045,31 +1045,6 @@ def test_create_claude_needs_rust(api_client, headless, named):
     assert r.json()["detail"]["code"] == "session_open_needs_rust_server"
 
 
-def test_rename_falha_usa_a_mesma_chave_da_sidebar(api_client):
-    # B2 do parecer task 11: a rota de rename nao pode ter chave propria duplicando a traducao
-    # que a Sidebar ja usa no fallback dela — o code e o contrato, os dois apontam pra mesma frase.
-    with patch("app.tmux.has_session", side_effect=lambda n: n == "cc"), \
-         patch("app.tmux.rename_session", return_value=False):
-        r = api_client.post("/api/sessions/cc/rename", headers=_h(), json={"new": "cx"})
-    assert r.status_code == 500
-    assert r.json()["detail"]["code"] == "sessao_falha_renomear"
-
-
-def test_rename_codex_sem_terminal_nao_exige_tmux(api_client):
-    with patch("app.api._codex_sem_terminal", side_effect=lambda n: n == "cc"), \
-         patch("app.api._session_exists", return_value=False) as occupied, \
-         patch("app.api.registry.rename") as rename, \
-         patch("app.tmux.has_session") as has_tmux:
-        r = api_client.post("/api/sessions/cc/rename", headers=_h(), json={"new": "cx"})
-    assert r.status_code == 200
-    assert r.json()["name"] == "cx"
-    occupied.assert_called_once_with("cx")
-    rename.assert_called_once_with("cc", "cx")
-    has_tmux.assert_not_called()
-
-
-
-
 # ---------------------------------------------------------------------------
 # Task 6: /events e /history descobrem o provider da sessao (via registry.list()) e repassam pro
 # merged_events / merged_history -- sem isto TODA sessao caia no default "claude" desses helpers

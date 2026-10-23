@@ -58,6 +58,17 @@ impl MuxProcess {
         self.has_session(name).await.map(|alive| !alive)
     }
 
+    /// `rename-session` com alvo exato (`=` vale no psmux também). `Some(true)` = renomeou; `None` = o
+    /// multiplexador não respondeu, e o rename pode ou não ter acontecido. O psmux SOBRESCREVE uma
+    /// sessão viva com o nome novo em vez de recusar: lá o destino ocupado é conferido antes.
+    pub async fn rename_session(&self, old: &str, new: &str) -> Option<bool> {
+        if cfg!(windows) && self.has_session(new).await? { return Some(false); }
+        self.output(&["rename-session", "-t", &format!("={old}"), new]).await.ok().map(|out| out.status.success())
+    }
+
+    /// Comando avulso; `Err` = o multiplexador não respondeu.
+    pub async fn run(&self, args: &[&str]) -> Result<std::process::Output, &'static str> { self.output(args).await }
+
     /// Sessão marcada `@cp_hidden`: o shell `term-<nome>` que o app abriu.
     pub async fn is_hidden(&self, name: &str) -> bool {
         self.output(&["show-options", "-v", "-t", &format!("={name}:"), "@cp_hidden"]).await

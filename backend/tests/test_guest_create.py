@@ -33,23 +33,6 @@ def test_guest_scans_inside_his_folder(ana):
     assert fs.scan_dir(g.root) is not None
 
 
-def test_rename_moves_guest_ownership(ana, monkeypatch):
-    from app import api
-    g, _ = ana
-    monkeypatch.setattr(guest_users, "session_life", lambda n: "t:1")
-    guest_users.claim("velho", g.id)
-    monkeypatch.setattr(api, "_recusa_orq", lambda n: None)
-    monkeypatch.setattr(api, "_headless", lambda n: True)
-    monkeypatch.setattr(api, "_session_exists", lambda n: False)
-    monkeypatch.setattr(api.registry, "rename", lambda a, b: None)
-    monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
-    monkeypatch.setattr(api.share_bridge, "rename", lambda a, b: None)
-    monkeypatch.setattr(api.bastao_mod, "caminho", lambda n: ana[1] / f"bastao-{n}")
-    assert api._rename_session("velho", api.RenameBody(new="novo")) == {"ok": True, "name": "novo"}
-    assert guest_users.owner_of("novo").id == g.id
-    assert guest_users.owner_of("velho") is None
-
-
 @pytest.fixture
 def guest_shortcut(ana, monkeypatch):
     from fastapi.testclient import TestClient
@@ -84,30 +67,6 @@ def test_guest_user_shortcut_folder_must_be_inside_his_root(guest_shortcut):
     assert r.status_code == 403
     assert r.json()["detail"]["code"] == "erro_fora_da_pasta"
     assert started == []
-
-
-def test_rename_survives_guest_claim_failure(ana, monkeypatch):
-    from app import api, pqueue, tmux
-    _, tmp = ana
-
-    def boom(a, b):
-        raise OSError("disco cheio")
-    monkeypatch.setattr(guest_users, "rename_session", boom)
-    monkeypatch.setattr(api, "_recusa_orq", lambda n: None)
-    monkeypatch.setattr(api, "_headless", lambda n: False)
-    monkeypatch.setattr(api, "_codex_sem_terminal", lambda n: False)
-    monkeypatch.setattr(tmux, "has_session", lambda n: n == "velho")
-    monkeypatch.setattr(api.headless_sessions, "exists", lambda n: False)
-    monkeypatch.setattr(tmux, "rename_session", lambda a, b: True)
-    monkeypatch.setattr(api.registry, "rename", lambda a, b: None)
-    monkeypatch.setattr(api.share_bridge, "rename", lambda a, b: None)
-    monkeypatch.setattr(api.bastao_mod, "caminho", lambda n: tmp / f"bastao-{n}")
-    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp)
-    (tmp / "velho.jsonl").write_text("q")
-    (tmp / "bastao-velho").write_text("b")
-    assert api._rename_session("velho", api.RenameBody(new="novo")) == {"ok": True, "name": "novo"}
-    assert (tmp / "novo.jsonl").read_text() == "q"
-    assert (tmp / "bastao-novo").read_text() == "b"
 
 
 def test_transfer_result_survives_guest_life_failure(ana, monkeypatch):

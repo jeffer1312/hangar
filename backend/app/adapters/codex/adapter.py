@@ -14,7 +14,6 @@ import logging
 import os
 import shlex
 import signal
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -1091,60 +1090,6 @@ class CodexAdapter:
 
     def delivery_lock(self, name: str) -> asyncio.Lock:
         return self._delivery_locks.setdefault(name, asyncio.Lock())
-
-    def rename(self, old: str, new: str) -> None:
-        def rearmar() -> None:
-            for task in (self._tmux_watchers.pop(old, None), self._subscribers.pop(old, None)):
-                if task is not None:
-                    task.cancel()
-            PushPreviewSource._sources.pop(old, None)
-            sess = self._sessions.pop(old, None)
-            self._invalidate_preview(sess)
-            lock = self._locks.pop(old, None)
-            if lock is not None:
-                self._locks[new] = lock
-            if old in self._problemas:
-                self._problemas[new] = self._problemas.pop(old)
-            if sess is None:
-                return
-            bomba = sess.pop("bomba", None)
-            if bomba is not None:
-                bomba.cancel()
-            for fila in sess.get("ouvintes", []):
-                fila.put_nowait(None)
-            sess["ouvintes"] = []
-            self._sessions[new] = sess
-            if not sess.get("headless"):
-                self._start_tmux_watcher(new)
-            self._start_bomba(new, sess)
-            if not sess.get("subscribed"):
-                meta = codex_sessions.load(new) or {}
-                self.start_subscription(new, meta.get("cwd") or ".")
-
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            if self._loop is not None and self._loop.is_running():
-                done = threading.Event()
-                errors: list[BaseException] = []
-
-                def run() -> None:
-                    try:
-                        rearmar()
-                    except BaseException as exc:
-                        errors.append(exc)
-                    finally:
-                        done.set()
-
-                self._loop.call_soon_threadsafe(run)
-                if not done.wait(5):
-                    raise RuntimeError("timeout ao rearmar sessão Codex renomeada")
-                if errors:
-                    raise errors[0]
-            else:
-                rearmar()
-        else:
-            rearmar()
 
     def transcript_stream(self, path: str, start_offset: int | None = None) -> AsyncIterator[ChatEvent]:
         # Mesma mecanica de tail (backfill do tail + watch de append) do Claude, so trocando o

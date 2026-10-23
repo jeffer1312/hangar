@@ -115,10 +115,6 @@ def revoke_session(name: str) -> dict | None:
     return None
 
 
-def rename(old: str, new: str) -> dict | None:
-    return _asked("rename", old=old, new=new)
-
-
 def set_life(name: str, life: str | None) -> dict | None:
     warning = _asked("set_life", name=name, life=life)
     if warning is None:

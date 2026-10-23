@@ -956,18 +956,6 @@ def test_ensure_running_nao_sobe_dois_processos(sidecar, monkeypatch):
     _run(fluxo())
 
 
-def test_registry_renomeia_sem_tmux(tmp_path, monkeypatch):
-    from app import registry as R
-    monkeypatch.setattr(S, "_dir", lambda: tmp_path / "hl")
-    monkeypatch.setattr(R.tmux, "has_session", lambda n: False)
-    monkeypatch.setattr(R.tmux, "list_panes_all", lambda: {})
-    reg = R.SessionRegistry(str(tmp_path / "projects"))
-    S.save("hl", str(tmp_path), "22222222-2222-2222-2222-222222222222")   # quem cria é o Rust
-    reg.rename("hl", "hl2")
-    assert not S.exists("hl") and S.load("hl2")["name"] == "hl2"
-    reg.kill("hl2")
-
-
 def test_espera_grava_marcador_do_state_hook_e_desfaz_ao_resolver(adapter, tmp_path):
     # Sem pane não há hook Notification: é o adapter que põe o awaiting_input na esteira de
     # push/loop, e tira quando a permissão é respondida.
@@ -1524,25 +1512,6 @@ def test_preview_validation_error_never_logs_input_value(adapter, monkeypatch, c
     _run(run())
 
 
-def test_rename_on_owner_loop_cancels_old_partial_channels(adapter):
-    from app.adapters.preview_push import fonte_pensamento
-    sess = adapter._sessions["s1"]
-
-    async def run():
-        sess.loop = asyncio.get_running_loop()
-        await adapter._on_stream(sess, {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "old"}})
-        await adapter._on_stream(sess, {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "tail"}})
-        await asyncio.to_thread(adapter.rename, "s1", "renamed")
-        assert adapter._sessions["renamed"] is sess
-        assert fonte_pensamento("s1").text == ""
-        await adapter._on_stream(sess, {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "new"}})
-        await asyncio.sleep(0.18)
-        assert fonte_pensamento("renamed").text == "oldtailnew"
-        assert fonte_pensamento("s1").text == ""
-        await sess.thinking_buffer.discard()
-    _run(run())
-
-
 def test_old_eof_cannot_clear_replacement_partial_channels(adapter):
     from app.adapters.preview_push import fonte_ferramenta, fonte_pensamento
     old = adapter._sessions["s1"]
@@ -1575,28 +1544,4 @@ def test_old_eof_cannot_clear_replacement_partial_channels(adapter):
         await new.preview_buffer.discard()
         await new.thinking_buffer.discard()
         await new.tool_buffer.discard()
-    _run(run())
-
-
-def test_rename_preserves_pending_tool_input_and_label(adapter):
-    from app.adapters.preview_push import fonte_ferramenta
-    sess = adapter._sessions["s1"]
-
-    async def run():
-        sess.loop = asyncio.get_running_loop()
-        sess.tool_buffer._interval = 60
-        await adapter._on_stream(sess, {"type": "content_block_start", "content_block": {"type": "tool_use", "name": "Write"}})
-        for part in ('{"file_path":"/tmp/ação",', '"content":"first'):
-            await adapter._on_stream(sess, {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": part}})
-        await asyncio.to_thread(adapter.rename, "s1", "renamed")
-        async with asyncio.timeout(1):
-            while not fonte_ferramenta("renamed").text:
-                await asyncio.sleep(0)
-        assert json.loads(fonte_ferramenta("renamed").text)["input"]["file_path"] == "/tmp/ação"
-        await adapter._on_stream(sess, {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": 'tail"}'}})
-        await adapter._on_stream(sess, {"type": "content_block_stop"})
-        assert json.loads(fonte_ferramenta("renamed").text) == {
-            "nome": "Write", "input": {"file_path": "/tmp/ação", "content": "firsttail"}}
-        assert sess.label == "Write: ação"
-        assert fonte_ferramenta("s1").text == ""
     _run(run())

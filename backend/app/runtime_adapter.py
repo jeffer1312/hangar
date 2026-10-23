@@ -555,7 +555,7 @@ def registry_method(original):
     @functools.wraps(original)
     def wrapper(self, *args, **kwargs):
         arguments = signature.bind(self, *args, **kwargs).arguments
-        name = arguments.get("name", arguments.get("old"))
+        name = arguments.get("name")
         coordinator = runtime_coordinator.current()
         if (coordinator is None or not coordinator.managed_queue(name)
                 or coordinator.in_lifecycle(coordinator.slot(name))):
@@ -563,7 +563,6 @@ def registry_method(original):
         async def action():
             return await asyncio.to_thread(original, self, *args, **kwargs)
         return run_sync(lambda: coordinator.change(name, action,
-            new_name=arguments.get("new"), advance=original.__name__ != "rename",
             remove=original.__name__ == "kill"), coordinator.loop)
     return wrapper
 
@@ -1007,7 +1006,7 @@ _ASYNC = {"ensure_running", "send_prompt", "deliverable", "drain", "steer", "ste
     "answer_questions", "set_model", "set_service_tier", "set_permission_mode", "list_models", "read_settings", "read_rate_limits", "set_mode",
     "compact", "list_skills", "skip_question", "parar", "recarregar", "set_permission_mode_sem_terminal"}
 _CODEX_OPENS_IN_RUST = {"set_permission_mode_sem_terminal"}
-_SYNC = {"snapshot", "escolhas", "problema_de", "current_model", "aprovacao_pendente", "permission_modes_sem_terminal", "rename", "close_sync"}
+_SYNC = {"snapshot", "escolhas", "problema_de", "current_model", "aprovacao_pendente", "permission_modes_sem_terminal", "close_sync"}
 
 
 async def reserve_call(coordinator, original, adapter, method, name, arguments, args, kwargs):
@@ -1055,17 +1054,17 @@ def install_adapter(cls, provider):
             def wrapper(self, *args, _original=original, _signature=signature, _method=method, _facade=facade, **kwargs):
                 bound = _signature.bind(self, *args, **kwargs)
                 bound.apply_defaults()
-                name = bound.arguments.get("name", bound.arguments.get("old"))
+                name = bound.arguments.get("name")
                 try:
                     slot = native_slot(name)
                 except runtime_coordinator.TransferInProgress:
-                    if _method in {"rename", "close_sync"}:
+                    if _method == "close_sync":
                         raise
                     # Leitura na passagem (lista, monitor): vale a vista do Python, sem a sessão
                     # viva nele, até o novo dono confirmar. Recusar dava 500 na lista inteira.
                     slot = None
                 if slot is not None:
-                    if _method in {"rename", "close_sync"}:
+                    if _method == "close_sync":
                         return _facade.sync_lifecycle(_method, name, bound.arguments)
                     rest = {key:value for key,value in bound.arguments.items() if key not in {"self", "name"}}
                     return getattr(_facade, _method)(name, **rest)

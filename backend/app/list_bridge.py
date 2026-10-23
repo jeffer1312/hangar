@@ -174,10 +174,6 @@ def forget(name: str) -> None:
     _request("list.forget", {"name": name})
 
 
-def rename(old: str, new: str) -> None:
-    _request("list.rename", {"old": old, "new": new})
-
-
 def endpoint() -> tuple[str, str] | None:
     """Endereço e segredo da porta privada do Rust, ou None com a ponte desligada."""
     return _config

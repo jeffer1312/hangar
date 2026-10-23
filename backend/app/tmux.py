@@ -700,7 +700,7 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
     # (aconteceu 2x seguidas, sem ninguem pedir). Ancorar em `$TMUX_PANE` NAO resolve no Windows: o
     # psmux numera pane id por sessao, entao `%1` existe nas duas e o alvo fica ambiguo (o tmux real
     # numera por servidor, e por isso o bug nao aparece no Linux). O env herdado do pane e imune as
-    # duas coisas. Fica obsoleto se a sessao for renomeada (rename_session abaixo) -> quem le valida
+    # duas coisas. Fica obsoleto se a sessao for renomeada -> quem le valida
     # contra o list-sessions e cai no fallback.
     args = _scope_prefix() + [
         "tmux", "new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50",
@@ -883,42 +883,6 @@ def kill_session(name: str) -> bool:
         from app.agentpane import invalidate
         invalidate(name)
     return saiu
-
-
-def rename_session(old: str, new: str) -> bool:
-    """Renomeia. False = NAO renomeou — inclusive quando o nome novo ja esta ocupado.
-
-    Esse "inclusive" e contrato de quem chama: `registry.rename` conta com a recusa pra saber que
-    `term-<novo>` ja existe e cair no fallback de matar o shell velho. No tmux a recusa vem de
-    graca (rename-session pra nome ocupado sai != 0). No psmux, NAO: medido em 22/08/2026, com
-    duas sessoes vivas,
-
-        $ tmux rename-session -t zzR1 zzR2        # zzR2 JA EXISTE
-        rc=0
-        $ tmux list-sessions | grep zzR
-        zzR2: 1 windows ...                       # UMA linha so
-
-    e — o pior — os processos das DUAS continuam vivos e escrevendo. A sessao que estava ali nao
-    morre: ela fica INALCANCAVEL, com o nome apontando pra outra. Do lado do app isso e a sessao de
-    alguem sumindo da lista com o trabalho ainda rodando, e todo `send-keys -t <nome>` seguinte
-    virando destino ambiguo — a mesma familia do `%N` que o `alvo_de_pane` documenta.
-
-    Por isso o guard vai ANTES, e so onde e preciso: no POSIX o caminho segue byte-identico ao que
-    sempre foi (o tmux ja recusa, e uma chamada a mais por rename nao compra nada).
-    """
-    if os.name != "posix" and has_session(new):
-        _log.info("rename-session recusado: %r ja existe (neste multiplexador o rename "
-                  "SOBRESCREVE em vez de falhar)", new)
-        return False
-    ok = _run(["tmux", "rename-session", "-t", old, new]).returncode == 0
-    if ok:
-        # `old` nao existe mais sob esse nome; `new` pode ja ter um cache velho de uma vida anterior
-        # (mesmo nome, sessao diferente) — os dois precisam sumir. Mesma razao do kill_session/
-        # new_session acima. Import tardio: agentpane importa este modulo.
-        from app.agentpane import invalidate
-        invalidate(old)
-        invalidate(new)
-    return ok
 
 
 # No Windows a TUI do Claude Code entra em "modo paste" quando UM `send-keys -l` entrega mais que

@@ -1652,8 +1652,7 @@ class RuntimeCoordinator:
             yield
         finally:
             # Cada reabertura na sua tentativa: uma falha não deixa as outras portas fechadas. Não
-            # levanta: o bloco já fez o trabalho (um /rename concluído não pode responder erro), e a
-            # porta presa vai ao diário com o código.
+            # levanta: o bloco já fez o trabalho, e a porta presa vai ao diário com o código.
             for name in closed:
                 try:
                     await self.ingress(name, False)
@@ -1680,11 +1679,11 @@ class RuntimeCoordinator:
             raise
 
     @asynccontextmanager
-    async def freeze(self, name, *, also=()):
+    async def freeze(self, name):
         slot = self.slot(name)
         async with self._barrier(slot):
             # Regra: quem congela uma sessão fecha antes a porta do Rust.
-            async with self._ingress_closed(name, *also):
+            async with self._ingress_closed(name):
                 with slot.guard:
                     slot.frozen = True
                 try:
@@ -1714,7 +1713,7 @@ class RuntimeCoordinator:
             if key is not None and self.slots[key].awaiting_identity:
                 self.names.pop(name, None)
 
-    async def change(self, name, action, *, new_name=None, advance=True, remove=False, reopen=True, stopped=False, kill=False):
+    async def change(self, name, action, *, advance=True, remove=False, reopen=True, stopped=False, kill=False):
         """Administração da sessão. Do Rust: barreira → `close` (a trava e a fila voltam ao Python,
         sem cliente no cano) → ação → nova vida gravada na fila → `open` no Rust, salvo `stopped`
         ou sem processo para abrir. `reopen` só vale para o caminho Python."""
@@ -1732,7 +1731,7 @@ class RuntimeCoordinator:
             return await action()
 
         async def perform():
-            async with self.freeze(name, also=(new_name,) if new_name and new_name != name else ()):
+            async with self.freeze(name):
                 if self.slots.get(self.names.get(name, "")) is not slot:
                     # Outro caminho trocou o registro enquanto esta esperava a barreira.
                     raise RuntimeError("registro da sessão mudou durante a espera; tente de novo")
@@ -1746,7 +1745,7 @@ class RuntimeCoordinator:
                     try:
                         from app.runtime_terminal import terminal_life
                         life = None if remove else await asyncio.to_thread(terminal_life, slot.binding)
-                        slot.change = {"target":new_name or name, "advance":advance, "life":life, "from_rust":from_rust, "relaunch":False,
+                        slot.change = {"advance":advance, "life":life, "from_rust":from_rust, "relaunch":False,
                                        "killed":bool(closed and closed.get("killed") is True)}
                         if remove and slot.binding.meta.get("terminal") and slot.binding.meta.get("claude_settings") and self.legacy is not None:
                             current = await asyncio.to_thread(self.legacy.binding, name, slot.binding.provider)
@@ -1817,17 +1816,17 @@ class RuntimeCoordinator:
         registro que segue: o mesmo, ou um novo quando o pane renascido roda outra conversa."""
         from app.runtime_terminal import reborn_binding, pending_binding
         change = slot.change
-        target_name, advance, life = change["target"], change["advance"], change["life"]
-        binding = await asyncio.to_thread(self.legacy.binding, target_name, slot.binding.provider)
+        advance, life = change["advance"], change["life"]
+        binding = await asyncio.to_thread(self.legacy.binding, name, slot.binding.provider)
         if life is not None and (binding is None or binding.key != slot.binding.key):
             # Vida de terminal nascida com a sessão congelada é obra da ação: herda a chave.
-            binding = await asyncio.to_thread(reborn_binding, target_name, slot.binding, life) or binding
+            binding = await asyncio.to_thread(reborn_binding, name, slot.binding, life) or binding
         if binding is None:
-            binding = (await asyncio.to_thread(pending_binding, target_name, slot.binding)
+            binding = (await asyncio.to_thread(pending_binding, name, slot.binding)
                 if slot.binding.provider == "claude" and slot.binding.headless else None)
             if binding is None:
                 binding = copy.deepcopy(slot.binding)
-                binding.name, binding.headless = target_name, False
+                binding.name, binding.headless = name, False
                 binding.meta = {**binding.meta, "headless":False, "cano":None}
         if binding.key != slot.binding.key:
             if not (binding.meta.get("terminal") and binding.meta.get("session_id") != slot.binding.meta.get("session_id")):
@@ -1848,8 +1847,6 @@ class RuntimeCoordinator:
         def commit():
             # Grava com fsync: fora do laço de eventos.
             with slot.guard:
-                if slot.store.state["name"] != target_name:
-                    slot.store.exec(slot.binding.generation, "rename:" + uuid.uuid4().hex, _clock(), {"kind":"rename", "name":target_name})
                 # Só conversa nova esvazia a fila: a conta nova muda o caminho do transcript, não a conversa.
                 if slot.binding.meta.get("terminal") and binding.meta.get("session_id") != slot.binding.meta.get("session_id"):
                     slot.store.exec(slot.binding.generation, "clear:" + uuid.uuid4().hex, _clock(), {"kind":"clear"})
@@ -2008,7 +2005,7 @@ class RuntimeCoordinator:
         adapter = self.legacy.adapters[self.slot(name).binding.provider]
         import inspect
         original = inspect.unwrap(getattr(adapter, method))
-        params = {key:value for key,value in arguments.items() if key not in {"self", "name", "old"}}
+        params = {key:value for key,value in arguments.items() if key not in {"self", "name"}}
         async def action():
             if inspect.iscoroutinefunction(original):
                 return await original(adapter, name, **params)
@@ -2023,5 +2020,4 @@ class RuntimeCoordinator:
                 if (self.slot(name).change or {}).get("killed"):
                     return adapter.forget_memory(name, preserve_preview=params.get("preserve_preview", False))
                 return await asyncio.to_thread(original, adapter, name, **params)
-        return await self.change(name, action, new_name=params.get("new") if method == "rename" else None,
-            advance=method != "rename", remove=False, reopen=not stopped, stopped=stopped, kill=kill)
+        return await self.change(name, action, remove=False, reopen=not stopped, stopped=stopped, kill=kill)

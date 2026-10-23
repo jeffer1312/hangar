@@ -710,6 +710,11 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   pelo Python: texto que nasce nele (broadcast) acorda Claude/Codex sem terminal pedindo
   ao Rust, e a transferência Claude→Codex. Decisões e medições em
   [plataforma.md](docs/decisoes/plataforma.md#abertura-de-sessão-única-no-rust).
+- **Trocar o nome da sessão é do Rust (`session_rename/`), com desfazer.** Tudo que recusa vem antes
+  do primeiro efeito; a troca segura a reserva do nome novo e as portas dos dois nomes; a sessão viva
+  fecha sem matar e reabre no nome novo na mesma geração; falha no meio desfaz e diz o que não voltou.
+  O Python só repassa (Connect, convidado com conta). Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#trocar-o-nome-da-sessão-é-do-rust-23102026).
 - **Nova conversa do Claude sem terminal usa uma reserva pré-aquecida** (`crates/hangar-server/src/prewarm/`):
   com a tela aberta o cliente pede `PUT /api/sessions/prewarm` e o create leva `prewarm`. A reserva
   nasce pelo mesmo lançador, sem sidecar até a adoção, com chave, id e nome definitivos; adota só

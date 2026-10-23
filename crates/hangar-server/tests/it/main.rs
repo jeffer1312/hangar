@@ -234,6 +234,7 @@ mod session_write_control;
 mod session_write_input;
 mod session_write_model_effort;
 mod session_write_routes;
+mod session_rename;
 mod share_reach;
 mod share_store;
 mod share_pairs;

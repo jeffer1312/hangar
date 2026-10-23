@@ -435,14 +435,18 @@ impl ShareStore {
         Ok(count)
     }
 
-    pub fn rename(&self, old: &str, new: &str) -> io::Result<()> {
+    /// `Ok(false)`: nenhum registro no nome velho.
+    pub fn rename(&self, old: &str, new: &str) -> io::Result<bool> {
         let mut state = self.lock();
-        let mut changed = false;
+        let mut moved = false;
         for x in state.values_mut().filter(|x| x.session == old) {
             x.session = new.into();
-            changed = true;
+            moved = true;
         }
-        if changed { self.persist(state) } else { Ok(()) }
+        if !moved { return Ok(false); }
+        // Falha fica com o nome novo na memória: a gravação pode ter chegado ao disco, e quem chama
+        // desfaz com o rename de volta, que regrava os dois.
+        self.persist(state).map(|()| true)
     }
 
     pub fn set_life(&self, session: &str, life: Option<String>) -> io::Result<()> {

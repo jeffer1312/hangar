@@ -1106,8 +1106,6 @@ enum Operation {
     Seed { name: String, jsonl: String },
     #[serde(rename = "list.forget")]
     Forget { name: String },
-    #[serde(rename = "list.rename")]
-    Rename { old: String, new: String },
     #[serde(rename = "state.facts")]
     StateFacts { name: String, facts: crate::state::facts::StateFacts },
     /// Painel de terminal real aberto na sessão: o 409 de quem conta linha do pane.
@@ -1142,7 +1140,6 @@ async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListE
         }
         Operation::Seed { name, jsonl } => cache(Box::new(move |b| b.seed(&name, &jsonl))).await,
         Operation::Forget { name } => cache(Box::new(move |b| b.forget(&name))).await,
-        Operation::Rename { old, new } => cache(Box::new(move |b| b.rename(&old, &new))).await,
         // Respondido pelo `private`, que tem os painéis.
         Operation::TermActive { .. } => Err(fail("list_bridge_invalid_request", "term.active fora do private")),
         Operation::StateFacts { name, facts } => {

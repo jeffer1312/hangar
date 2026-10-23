@@ -3182,3 +3182,37 @@ o recibo. O Arquivo e o relatório de uso ignoram conversa sem mensagem do usuá
 qualquer sessão: `session-env/<id>/`, `.caveman-sessions/<id>.mode` e o servidor de fundo do MCP
 `codegraph`, que roda em sessão própria por pasta e é reaproveitado. Cada reserva descartada
 repete os hooks de SessionStart da conta.
+
+## Trocar o nome da sessão é do Rust (23/10/2026)
+
+**Regra.** `POST /api/sessions/{name}/rename` é atendido inteiro pelo `hangar-server`
+(`session_rename/`). O Python só autentica e repassa o que chega pelas portas dele (Connect,
+convidado com conta) a `/__hangar_server/claude/<nome>/rename`; no modo `python` responde 503
+`rename_needs_rust_server`. As pontes `group.rename`, `list.rename` e o `rename` de convites saíram.
+
+**Por quê.** O rename ia do Rust ao Python e voltava ao Rust por quatro pontes (grupo, convite,
+lista e fechar/reabrir no runtime). Num Claude com terminal adotado pelo Rust, o `open` que o Python
+mandava era recusado (`runtime_generation`) e o rename respondia 500: seis vezes entre 22 e 23/10,
+em duas sessões, nenhum rename bem-sucedido no diário.
+
+**Como.**
+- Tudo que pode recusar vem antes do primeiro efeito: `orq`, troca de agente nos dois nomes, corpo,
+  nome vazio ou com mais de 64 caracteres (o teto da criação), sessão inexistente, nome novo ocupado
+  por sessão do multiplexador, sidecar Claude ou sidecar Codex. A reserva do nome novo (`NameClaim`)
+  e as portas de entrada dos dois nomes ficam fechadas durante a troca, e a conferência de ocupado
+  se repete com elas fechadas.
+- A sessão viva no runtime fecha sem matar o processo, a fila recebe `Action::Rename` na MESMA
+  geração e a sessão reabre pelo nome novo (`runtime/gateway/rename.rs`): pergunta aberta,
+  entregas incertas e a trava do `/clear` continuam valendo.
+- Falha no meio desfaz em ordem inversa e responde com `etapa`, `codigo` e `nao_desfeito`; o que não
+  voltou vai ao diário (`sessao.rename_falhou`). Antes, depois do multiplexador nada era desfeito, e
+  falha de convite virava só `warning`.
+- `rename-session -t =<velho>`: o `=` vale no psmux também e recusa prefixo (medido na DELPHI-02,
+  psmux 3.3.8). Prazo estourado relê o nome real antes de decidir.
+- Arquivo do nome novo que já existe (fila, `then`, bastão, sidecar) recusa em vez de ser
+  sobrescrito. O shell escondido `term-<velho>` segue a sessão em todo modo; com `term-<novo>`
+  ocupado, o velho só morre depois de tudo dar certo.
+
+**Limite conhecido.** Status, rótulo e limite de Pi/omp/Kimi guardados por nome no Python não são
+movidos: o nome novo os recalcula no próximo ciclo, e um nome velho reusado em até 20 s mostra o
+status antigo. Nada novo no Python para isso.
