@@ -194,10 +194,16 @@ async fn settings_reply(st: &Arc<AppState>, req: Request, home: PathBuf, claude_
                 return refuse(StatusCode::BAD_REQUEST, "invalid_voice");
             }
             if !st.voice.account_ids(&st.accounts).await.unwrap_or_default().contains(&dto.codex_account) { return refuse(StatusCode::BAD_REQUEST, "unknown_account"); }
-            let chosen: VoiceSettings = dto.into();
-            let saved = tokio::task::spawn_blocking({ let chosen = chosen.clone(); move || settings::write_settings(&home, &chosen) }).await;
+            let keep_style = dto.style.is_none();
+            let mut chosen: VoiceSettings = dto.into();
+            let saved = tokio::task::spawn_blocking({ let mut chosen = chosen.clone(); move || {
+                // Cliente que não conhece o estilo não pode apagar o escolhido em outro.
+                if keep_style { chosen.style = settings::read_settings(&home).style; }
+                settings::write_settings(&home, &chosen).map(|()| chosen.style)
+            } }).await;
+            if let Ok(Ok(style)) = &saved { chosen.style = *style; }
             if let Ok(Err(e)) = &saved { super::log(format!("voice settings write failed kind={:?}", e.kind())); }
-            if !matches!(saved, Ok(Ok(()))) { return refuse(StatusCode::INTERNAL_SERVER_ERROR, "settings_write_failed"); }
+            if !matches!(saved, Ok(Ok(_))) { return refuse(StatusCode::INTERNAL_SERVER_ERROR, "settings_write_failed"); }
             st.voice.apply_settings(&chosen);
             json_response(StatusCode::OK, json!({"settings": SettingsDto::from(&chosen)}))
         }

@@ -383,7 +383,12 @@ export function LiveVoiceSheet({ open, view, levels, servers, serverId, onSelect
             <MenuField title={m.live_voice_voice()} value={reply.settings.voice} disabled={disabled}
               choices={[{ value: null, label: m.live_voice_default() }, ...reply.voices.map(value => ({ value, label: value }))]}
               onChange={voice => save({ ...reply.settings, voice })} />
+            {reply.settings.style ? <MenuField title={m.live_voice_style()} value={reply.settings.style} disabled={disabled}
+              choices={[{ value: 'conversational', label: m.live_voice_style_conversational() }, { value: 'direct', label: m.live_voice_style_direct() }]}
+              onChange={style => save({ ...reply.settings, style: style === 'direct' ? 'direct' : 'conversational' })} /> : null}
           </View>
+          {reply.settings.style ? <Text style={styles.detail}>{reply.settings.style === 'direct' ? m.live_voice_style_direct_hint()
+            : m.live_voice_style_conversational_hint()} {m.live_voice_style_next_call()}</Text> : null}
           {!settings.loading && !settings.accounts.some(c => c.tipo === 'codex') ? <Text style={styles.detail}>{m.native_live_voice_accounts_empty()}</Text> : null}
           {settings.modelsError ? <>
             <Text style={styles.danger} accessibilityRole="alert">{m.comum_falha_carregar_modelos()}</Text>

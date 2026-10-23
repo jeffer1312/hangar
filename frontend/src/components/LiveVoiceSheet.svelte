@@ -325,6 +325,17 @@
             {#each reply.voices as v (v)}<option value={v}>{v}</option>{/each}
           </select>
         </label>
+        {#if reply.settings.style}
+          <label class="lv-field">
+            <span>{m.live_voice_style()}</span>
+            <select class="field-input" disabled={saving} value={reply.settings.style}
+              onchange={e => { const v = pick(e) === 'direct' ? 'direct' : 'conversational'; void save(s => ({ ...s, style: v })); }}>
+              <option value="conversational">{m.live_voice_style_conversational()}</option>
+              <option value="direct">{m.live_voice_style_direct()}</option>
+            </select>
+          </label>
+          <p class="lv-detail">{reply.settings.style === 'direct' ? m.live_voice_style_direct_hint() : m.live_voice_style_conversational_hint()} {m.live_voice_style_next_call()}</p>
+        {/if}
         {#if modelsError}<p class="lv-detail">{m.comum_falha_carregar_modelos()}</p>{/if}
         {#each MODES as mode (mode)}
           {@const pair = reply.settings.organizer[mode]}

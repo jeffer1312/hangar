@@ -155,7 +155,7 @@ async fn launch_full(caps: &[&str], peers: Option<Value>, audio_grace: Duration,
     let options = CallOptions { voice: None, context: "ctx".into(), cwd: None, target: "hangar".into(), organizer: ModeModels::default(),
         tools: tools_for(&caps), handoff_same_thread: true, voice_dir: dir.path().join("voz"), audio_grace,
         hangar_mcp: Some(json!({"enabled": true, "url": format!("http://{addr}/mcp/"), "http_headers": {"X-Hangar-Voice": "n.sig"}})),
-        command_limit: crate::voice::call::COMMAND_LIMIT, result_silence: crate::voice::organizer::RESULT_SILENCE };
+        command_limit: crate::voice::call::COMMAND_LIMIT, result_silence: crate::voice::organizer::RESULT_SILENCE, style: Default::default() };
     let voice = Voice::start(options, spawn, tx);
     let (link, device) = DeviceLink::channel(caps, Some(Screen { server: String::new(), name: "hangar".into() }));
     let diag = DiagClient::new("127.0.0.1:9".parse().unwrap(), "x".into());
@@ -448,6 +448,28 @@ async fn followed_session_reply_is_spoken_when_it_goes_idle() {
         api.sessions = json!([{"name": "hangar", "provider": "claude", "state": "idle"}, {"name": "web", "provider": "codex", "state": "idle"}]);
     }
     rig.wait("resultado da web", summary_of("web")).await;
+}
+
+/// Parar de acompanhar vale sobre a tela: a hangar está na tela e mesmo assim não é falada.
+#[tokio::test]
+async fn unfollowed_session_is_not_spoken_even_on_screen() {
+    let mut rig = rig(&[], None).await;
+    push_tool(&rig.push, "u1", "unfollow_session", json!({"name": "hangar"}), "turn-1");
+    assert_eq!(rig.reply("u1").await["success"], true);
+    push_tool(&rig.push, "f1", "follow_session", json!({"name": "web"}), "turn-1");
+    assert_eq!(rig.reply("f1").await["success"], true);
+    rig.api.lock().unwrap().sessions = json!([{"name": "hangar", "provider": "claude", "state": "working"}, {"name": "web", "provider": "codex", "state": "working"}]);
+    tokio::time::sleep(Duration::from_millis(1600)).await;
+    {
+        let mut api = rig.api.lock().unwrap();
+        api.history.insert("hangar".into(), json!([{"id": "8", "kind": "assistant_msg", "text": "feito na hangar"}]));
+        api.history.insert("web".into(), json!([{"id": "9", "kind": "assistant_msg", "text": "pronto"}]));
+        api.sessions = json!([{"name": "hangar", "provider": "claude", "state": "idle"}, {"name": "web", "provider": "codex", "state": "idle"}]);
+    }
+    rig.wait("resultado da web", summary_of("web")).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    rig.drain();
+    assert!(!rig.log.iter().any(summary_of("hangar")), "a hangar foi silenciada");
 }
 
 #[tokio::test]
@@ -901,6 +923,20 @@ async fn repeated_speech_turn_never_sends_again() {
     assert_eq!(text(&again), "Fala repetida; já tratada.");
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(rig.api.lock().unwrap().inputs, vec![("web".to_owned(), "revisar o login da tela".to_owned())], "a original foi uma vez só");
+}
+
+/// A original acabou só falando ("vou mandar") sem agir: ele repetir é insistência, e a repetição age.
+#[tokio::test]
+async fn asking_again_after_nothing_happened_acts() {
+    let mut rig = rig(&[], None).await;
+    push_speech(&rig.push, "turn-1", "manda pra web revisar o login da tela");
+    rig.push.send(json!({"method": "turn/completed", "params": {"threadId": "t1", "turn": {"id": "turn-1", "status": "completed"}}})).unwrap();
+    push_speech(&rig.push, "turn-2", "manda pra web revisar o login da tela");
+    push_tool(&rig.push, "s2", "send_to_session", json!({"request": "revisar o login da tela", "session": "web"}), "turn-2");
+    let reply = rig.reply("s2").await;
+    assert_eq!(reply["success"], true, "{reply}");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(rig.api.lock().unwrap().inputs, vec![("web".to_owned(), "revisar o login da tela".to_owned())]);
 }
 
 /// A sessão da última tela foi fechada no app (não pela voz): com a tela vazia, a conversa deixa de ser sobre ela.

@@ -18,6 +18,8 @@ export interface LiveVoiceSettings {
   voice: string | null;
   codex_account: string;
   organizer: { direct: ModePair; plan: ModePair };
+  /** Ausente em servidor anterior ao estilo: vale conversa. */
+  style?: 'conversational' | 'direct';
 }
 /** `GET /api/voice/settings`: `enabled` = Codex instalado e conta Codex no servidor; e as escolhas gravadas. */
 export interface LiveVoiceSettingsReply {

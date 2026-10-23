@@ -8,10 +8,14 @@ export type LiveVoicePhase = 'connecting' | 'live' | 'closed';
 export type LiveVoiceActivity = 'idle' | 'thinking' | 'searching' | 'working';
 export type LiveVoiceRateWindow = { used_percent: number; resets_at: number | null } | null;
 export interface LiveVoiceModel { model: string | null; effort: string; tier: string | null }
+export type LiveVoiceStyle = 'conversational' | 'direct';
+export const LIVE_VOICE_STYLES: readonly LiveVoiceStyle[] = ['conversational', 'direct'];
 export interface LiveVoiceSettings {
   voice: string | null;
   codex_account: string;
   organizer: { direct: LiveVoiceModel; plan: LiveVoiceModel };
+  /** Ausente: servidor anterior ao estilo, que o ignoraria; a tela esconde a escolha. */
+  style?: LiveVoiceStyle;
 }
 export interface LiveVoiceSettingsReply {
   enabled: boolean;
@@ -86,7 +90,8 @@ function model(value: unknown): value is LiveVoiceModel {
 }
 function settings(value: unknown): value is LiveVoiceSettings {
   return object(value) && nullableString(value.voice) && typeof value.codex_account === 'string' && !!value.codex_account
-    && object(value.organizer) && model(value.organizer.direct) && model(value.organizer.plan);
+    && object(value.organizer) && model(value.organizer.direct) && model(value.organizer.plan)
+    && (value.style === undefined || LIVE_VOICE_STYLES.includes(value.style as LiveVoiceStyle));
 }
 function settingsReply(value: unknown): value is LiveVoiceSettingsReply {
   return object(value) && typeof value.enabled === 'boolean' && typeof value.codex === 'boolean' && typeof value.jev === 'boolean'

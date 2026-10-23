@@ -1,8 +1,8 @@
 //! A chamada de voz: o organizador e a conversa falada rodam aqui; o WebRTC é do aparelho, que manda a oferta e o nível do
 //! microfone e recebe a resposta SDP.
 use super::{log, observe, organizer, usage};
-use super::organizer::{Effective, FinishStep, MIC_VOICE_LEVEL, Mode, ModeModel, ModeModels, Planner, REPEAT_NOTE, REPEAT_WINDOW, Results, SpeechHold,
-    ConfirmGate, SendGate, SpokenTurns, ToolCall, finish_request, parse_tool, repeated_handoff, send_allowed, settings_update, spoken_input, tool_reply,
+use super::organizer::{Effective, FinishStep, MIC_VOICE_LEVEL, Mode, ModeModel, ModeModels, Planner, REPEAT_NOTE, Results, SpeechHold,
+    ConfirmGate, SendGate, SpokenTurns, ToolCall, finish_request, parse_tool, send_allowed, settings_update, spoken_input, tool_reply,
     organizer_start};
 use super::rpc::{Incoming, Rpc, RpcError, handshake};
 use serde_json::{Value, json};
@@ -87,7 +87,8 @@ pub struct CallOptions { pub voice: Option<String>, pub context: String, pub cwd
     /// Entrada do MCP `hangar` com a identidade desta chamada; `None` deixa o MCP desligado.
     pub hangar_mcp: Option<Value>,
     /// Silêncio contínuo que encerra a fala dele para os resultados das sessões (`RESULT_SILENCE` em produção).
-    pub result_silence: Duration }
+    pub result_silence: Duration,
+    pub style: super::settings::Style }
 
 /// Sobe o app-server: o filho de verdade em produção, um falso nos testes.
 pub type Spawn = Box<dyn FnOnce() -> futures_util::future::BoxFuture<'static, Result<(Rpc, async_channel::Receiver<Incoming>), RpcError>> + Send>;
@@ -255,7 +256,9 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
         }
         None => { log("memory unreadable"); (organizer::memory_note("", true), false, String::new()) }
     };
-    log(format!("memory onboarding={onboarding}"));
+    log(format!("memory onboarding={onboarding} style={:?}", options.style));
+    // O estilo vem antes da memória: uma preferência guardada por ele vale sobre o estilo escolhido no cartão.
+    let note = format!("{}\n\n{note}", organizer::organizer_style(options.style));
     let start = organizer_start(&config, &own, options.cwd.as_deref(), &options.context, &applied, options.tools.clone(), &note,
         options.hangar_mcp.as_ref());
     log(format!("organizer model={} effort={} tier={}", if applied.model.is_some() { "chosen" } else { "config" }, applied.effort,
@@ -299,7 +302,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
             None => return Err(failed("device offer")(VoiceFailure::Closed)),
         }
     };
-    let mut realtime = json!({"threadId": thread, "version": "v3", "outputModality": "audio", "prompt": organizer::voice_prompt(onboarding, &options.tools, options.hangar_mcp.is_some(), &voice_prefs),
+    let mut realtime = json!({"threadId": thread, "version": "v3", "outputModality": "audio", "prompt": organizer::voice_prompt(onboarding, &options.tools, options.hangar_mcp.is_some(), &voice_prefs, options.style),
         // Sem aviso de espera a cada delegação ('um segundo'): ele pediu silêncio. O Codex não repassa a resposta do organizador
         // à voz: repassada na hora, ela saía por cima da fala dele e cortada em ~1.000 tokens; quem fala é o `SpeechHold`.
         "includeStartupContext": false, "delegationAckFiller": false, "backendReasoningStatus": false, "clientManagedHandoffs": true,
@@ -379,7 +382,11 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
     // Comando destrutivo do organizador recusado à espera do sim falado.
     let mut command_gate: ConfirmGate<String> = ConfirmGate::default();
     // Última fala repassada (para reconhecer a repetida) e os itens de fala já tratados.
-    let mut last_input: Option<(String, Instant)> = None;
+    let mut last_input: Option<(String, Instant, Option<String>)> = None;
+    // Por turno, quantas ferramentas que agem saíram dele sem voltar falha; e o turno de cada uma à espera da resposta.
+    // Conta na saída porque parte delas responde na hora, sem passar pela resposta assíncrona.
+    let mut acted: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut acting_calls: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut seen_items: std::collections::HashSet<String> = std::collections::HashSet::new();
     // Turno da última fala encaminhada e o que o usuário falou depois dela sem nova delegação: o envio desse turno não sai
     // sem essa continuação.
@@ -388,7 +395,8 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
     // A continuação passou do teto e perdeu o começo: o envio volta pedindo confirmação, não sai com o pedido cortado.
     let mut continuation_cut = false;
     // Turnos abertos por uma fala repetida: ela já foi tratada no turno original, então nada que age sai deles.
-    let mut repeated: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Valor: o turno original, quando conhecido.
+    let mut repeated: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
     // Turno cuja fala seguiu em transcrição depois da delegação, e desde quando: o envio dele espera a final.
     let mut speaking: Option<(String, Instant)> = None;
     let mut out = Speech::default();
@@ -528,7 +536,12 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                         break Err(VoiceFailure::Realtime(String::new()));
                     }
                 }
-                Some(Command::Reply(id, reply)) => { log(format!("tool reply success={}", reply["success"])); let _ = rpc.respond(id, reply).await; }
+                Some(Command::Reply(id, reply)) => {
+                    log(format!("tool reply success={}", reply["success"]));
+                    if let Some(turn) = acting_calls.remove(&id.to_string()) && reply["success"] != true
+                        && let Some(count) = acted.get_mut(&turn) { *count = count.saturating_sub(1); }
+                    let _ = rpc.respond(id, reply).await;
+                }
                 Some(Command::SetMode(Mode::Plan)) if target.is_empty() => {
                     log("mode plan refused: no target");
                     let _ = rpc.request("thread/realtime/appendSpeech", json!({"threadId": thread, "text": "Abra uma sessão primeiro."})).await;
@@ -607,7 +620,13 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                 Ok(Incoming::Request { id, method, params }) if method == "item/tool/call" => {
                     let tool = params["tool"].as_str().unwrap_or("?").to_owned();
                     let _ = events.send(VoiceEvent::Action(Some(organizer::OrganizerAction::Tool(tool.clone())))).await;
-                    let outcome = match parse_tool(&params) {
+                    let parsed = parse_tool(&params);
+                    // Turno de fala repetida só não age se a original agiu: a original que acabou sem fazer nada deixaria o
+                    // pedido perdido (o modelo ouvia "já tratada" e desistia).
+                    let repeat_blocked = params["turnId"].as_str().and_then(|t| repeated.get(t))
+                        .is_some_and(|original| original.as_ref().is_none_or(|o| acted.get(o).is_some_and(|n| *n > 0)));
+                    let acting = parsed.acts().then(|| (id.to_string(), params["turnId"].as_str().map(str::to_owned)));
+                    let outcome = match parsed {
                         ToolCall::ReadSession { session, user_turns } => {
                             let _ = events.send(VoiceEvent::ReadSession { call: CallId(id), session, user_turns }).await;
                             "read"
@@ -628,7 +647,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             let _ = rpc.respond(id, tool_reply("Só a pedido falado do usuário.", false)).await;
                             "refused-not-spoken"
                         }
-                        ToolCall::Assist(assist) if assist.acts() && params["turnId"].as_str().is_some_and(|t| repeated.contains(t)) => {
+                        ToolCall::Assist(assist) if assist.acts() && repeat_blocked => {
                             let _ = rpc.respond(id, tool_reply("Fala repetida; já tratada.", false)).await;
                             "refused-repeated"
                         }
@@ -636,7 +655,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             | ToolCall::OpenSession(_) | ToolCall::CloseSession { .. } | ToolCall::PairSessions(..) | ToolCall::UnpairSession(_)
                             | ToolCall::HangarAction { .. } | ToolCall::Computer(_) | ToolCall::ClickScreen { .. }
                             | ToolCall::Remember { .. } | ToolCall::Forget(_)
-                            if params["turnId"].as_str().is_some_and(|t| repeated.contains(t)) => {
+                            if repeat_blocked => {
                             let _ = rpc.respond(id, tool_reply("Fala repetida; já tratada.", false)).await;
                             "refused-repeated"
                         }
@@ -869,9 +888,22 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             let _ = rpc.respond(id, tool_reply("Rascunho descartado.", true)).await;
                             "discarded"
                         }
-                        ToolCall::Unknown(name) => { let _ = rpc.respond(id, tool_reply(format!("Ferramenta inexistente: {name}"), false)).await; "unknown" }
+                        ToolCall::Unknown(name) => {
+                            // Ferramenta do catálogo com argumento faltando não é "inexistente": o modelo deixaria de tentar.
+                            let known = organizer::tools().as_array().is_some_and(|t| t.iter().any(|t| t["name"] == name.as_str()));
+                            let text = if known { format!("Argumento faltando ou inválido em {name}; corrija e chame de novo.") }
+                                else { format!("Ferramenta inexistente: {name}") };
+                            let _ = rpc.respond(id, tool_reply(text, false)).await;
+                            "unknown"
+                        }
                     };
                     log(format!("tool call {tool} outcome={outcome}"));
+                    if let Some((call, Some(turn))) = acting && !outcome.starts_with("refused") && outcome != "unknown" {
+                        if acting_calls.len() >= 64 { acting_calls.clear(); }
+                        if acted.len() >= 64 { acted.clear(); }
+                        *acted.entry(turn.clone()).or_default() += 1;
+                        acting_calls.insert(call, turn);
+                    }
                 }
                 // Perguntas do organizador não têm tela: a resposta é pela voz.
                 Ok(Incoming::Request { id, method, .. }) if method == "item/tool/requestUserInput" => {
@@ -884,7 +916,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                     let destructive = command.is_none_or(organizer::destructive);
                     // Só fala certamente deste turno confirma: a final velha que abre o trecho seguinte não é um sim, e o turno
                     // de uma fala repetida não tem fala nova.
-                    let said = spoken.sure_text(&params).filter(|_| !params["turnId"].as_str().is_some_and(|t| repeated.contains(t)));
+                    let said = spoken.sure_text(&params).filter(|_| !params["turnId"].as_str().is_some_and(|t| repeated.contains_key(t)));
                     let ok = organizer::approval_decision(command, said.as_deref(), &mut command_gate,
                         params["turnId"].as_str().unwrap_or_default(), Instant::now());
                     // Só o desfecho: o texto do comando é conversa e não vai ao diário.
@@ -903,7 +935,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                 // Os pedidos antigos do Codex também têm resposta na hora: nenhum fica esperando um clique que não existe.
                 Ok(Incoming::Request { id, method, params }) if method == "execCommandApproval" => {
                     let command = params["command"].as_array().and_then(|parts| argv_line(parts));
-                    let said = spoken.sure_text(&params).filter(|_| !params["turnId"].as_str().is_some_and(|t| repeated.contains(t)));
+                    let said = spoken.sure_text(&params).filter(|_| !params["turnId"].as_str().is_some_and(|t| repeated.contains_key(t)));
                     let ok = organizer::approval_decision(command.as_deref(), said.as_deref(), &mut command_gate,
                         params["turnId"].as_str().unwrap_or_default(), Instant::now());
                     log(format!("legacy command approval accepted={ok}"));
@@ -918,7 +950,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                 // tem quem preencha.
                 Ok(Incoming::Request { id, method, params }) if method == "mcpServer/elicitation/request" => {
                     let accept = params["serverName"] == "hangar" && params["mode"] != "url" && spoken.allows(&params)
-                        && !params["turnId"].as_str().is_some_and(|t| repeated.contains(t));
+                        && !params["turnId"].as_str().is_some_and(|t| repeated.contains_key(t));
                     log(format!("mcp elicitation hangar={} accepted={accept}", params["serverName"] == "hangar"));
                     let reply = if accept { json!({"action": "accept", "content": {}, "_meta": null}) }
                         else { json!({"action": "decline", "content": null, "_meta": null}) };
@@ -955,13 +987,17 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                         let _ = events.send(VoiceEvent::Backstage(backstage_input(&text))).await;
                         let input = spoken_input(&text).to_owned();
                         // A voz encaminha a mesma fala de novo quando a transcrição final fecha: não é o usuário continuando.
-                        let repeat = last_input.as_ref().is_some_and(|(prev, at)| now.saturating_duration_since(*at) < REPEAT_WINDOW && repeated_handoff(prev, &input));
+                        let repeat = last_input.as_ref().is_some_and(|(prev, at, turn)| {
+                            let running = turn.as_ref().is_none_or(|t| delegated.as_ref().is_some_and(|(d, _)| d == t));
+                            let did = turn.as_ref().is_some_and(|t| acted.get(t).is_some_and(|n| *n > 0));
+                            organizer::treat_as_repeat(prev, &input, now.saturating_duration_since(*at), running, did)
+                        });
                         log(format!("handoff repeat={repeat}"));
                         if repeat {
-                            // No mesmo turno da original não há o que marcar; noutro, nada que age sai dele.
+                            // No mesmo turno da original não há o que marcar; noutro, nada que age sai dele se a original agiu.
                             if let Some(turn) = params["turnId"].as_str() && delegated.as_ref().is_none_or(|(d, _)| d != turn) {
                                 if repeated.len() >= 64 { repeated.clear(); }
-                                repeated.insert(turn.to_owned());
+                                repeated.insert(turn.to_owned(), last_input.as_ref().and_then(|(_, _, t)| t.clone()));
                             }
                             let steer =json!({"threadId": thread, "expectedTurnId": params["turnId"], "input": [{"type": "text", "text": REPEAT_NOTE}]});
                             let steered = rpc.request("turn/steer", steer).await;
@@ -980,7 +1016,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                                 let recent = organizer::transcript_delta(&text).to_owned();
                                 let _ = events.send(VoiceEvent::Heard { turn: turn.to_owned(), speech, recent }).await;
                             }
-                            last_input = Some((input, now));
+                            last_input = Some((input, now, params["turnId"].as_str().map(str::to_owned)));
                             // Sim curto ao aviso: o primeiro resultado entra já neste turno, sem esperar o organizador chamar quiet,
                             // fechar a resposta dele e abrir outro turno para o resumo.
                             if offer_note.is_some() && results.running_summary().is_none()
@@ -1341,7 +1377,8 @@ mod tests {
         // Nunca o HOME real: a chamada cria a pasta própria e os planos aqui.
         let voice_dir = std::env::temp_dir().join(format!("hangar-voice-call-{}", std::process::id()));
         CallOptions { voice: None, context: "ctx".into(), cwd: None, target: "hangar".into(), organizer: ModeModels::default(), tools, handoff_same_thread: true, voice_dir,
-            audio_grace: Duration::from_secs(600), hangar_mcp: None, command_limit: COMMAND_LIMIT, result_silence: Duration::from_millis(600) }
+            audio_grace: Duration::from_secs(600), hangar_mcp: None, command_limit: COMMAND_LIMIT, result_silence: Duration::from_millis(600),
+            style: Default::default() }
     }
 
     async fn next_answer(events: &async_channel::Receiver<VoiceEvent>) -> (u64, String) {

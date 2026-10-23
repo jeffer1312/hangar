@@ -728,6 +728,19 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Voz: turno de fala repetida nunca age.** A fala que a voz encaminha de novo num turno novo marca o
   turno: envio, plano, pergunta, trocar, abrir, reabrir, fechar, interromper, agrupar, atalho, ação de
   tela, `computer`, memória e o sim a destrutivo voltam "Fala repetida; já tratada." A repetição dentro do turno original não marca.
+  Só é repetida enquanto o turno original corre ou depois que uma ação dele saiu sem voltar falha
+  (`treat_as_repeat`); e o turno marcado só é barrado se a original agiu (`repeat_blocked`). Original que
+  acabou sem agir faz da repetição a pessoa insistindo, e ela age. A `REPEAT_NOTE` manda fazer o que
+  ainda não foi feito, nunca "termine sem escrever nada". Ver "Voz para quem não conhece o app (22/10/2026)".
+- **Voz: parar de acompanhar silencia a sessão até ele pedir de volta.** `unfollow_session` põe a sessão em
+  `Controller::muted`, que vence a tela, o pedido pendente (`watched`), a pergunta aberta e o acompanhar
+  automático do envio; os resultados dela já guardados saem da fila. Só `follow_session` desfaz.
+- **Voz: abrir sessão não pede pasta e não falha pela tela.** `open_session` sem `folder` abre em `~` da
+  máquina, com nome `conversa`. Sessão criada que o aparelho não mostrou é sucesso com aviso, nunca
+  "máquina desconectada". Ferramenta do catálogo com argumento ruim volta "Argumento faltando ou
+  inválido", nunca "Ferramenta inexistente".
+- **Voz: estilo `conversational` (padrão) ou `direct`, escolhido no cartão.** Vai em `settings.style`;
+  `PUT` sem `style` mantém o gravado. O texto do estilo entra antes das preferências guardadas, que vencem.
 - **Voz: silêncio pedido vale até ele voltar.** `quiet` (só de turno com fala do usuário) guarda os
   resultados das sessões sem resumo nem fala; nada é descartado e o trabalho segue. Nunca acaba pelo
   tempo: `quiet` com `on: false`, na volta pedida por ele, solta os guardados para o resumo, um por vez.
@@ -904,6 +917,26 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   disco, sem rede nem token, e responde com o servidor parado. Grupo com par de fora traz as duas
   partes. Só o Claude tem esse gancho: Codex, Pi, omp e Kimi perdem o protocolo ao compactar
   (limite registrado). Ver [grupos: o Rust grava](plataforma.md#grupos-o-rust-grava).
+
+## Voz para quem não conhece o app (22/10/2026)
+
+Uso real de uma pessoa sem experiência com IA: a voz nunca sugeriu abrir sessão, prometeu abrir e não
+abriu, e continuou avisando de sessão que ela mandou parar de acompanhar. Causas no código:
+
+- O prompt do organizador proibia oferecer ("Não ofereça mandar trabalho…") e só abria sessão com pasta dita.
+- `open_session` exigia `folder`: sem ele o parse dava `Unknown` e o modelo ouvia "Ferramenta inexistente:
+  open_session"; "qualquer lugar" voltava "Não achei pasta com esse nome. Peça o nome exato ou o caminho."
+- A trava de fala repetida (30 s) recusava a insistência mesmo quando a original não tinha feito nada.
+- Transcrição da chamada da Lhais (máquina Windows dela): quase toda fala chegava duas vezes e, depois da
+  segunda, a nota "A última entrada repete uma fala que você já tratou… termine sem escrever nada". O
+  organizador encerrava vazio sem ter aberto a sessão; abriu só na quinta insistência, e o envio do pedido
+  do iPad só saiu depois de ela mandar "usa a ferramenta". A própria voz admitiu: "tratei as falas
+  repetidas como motivo para ficar em silêncio".
+- Na chamada de 20/10 (`hangar-server.log`, 15:11:17–19) a sessão foi criada, o aparelho recusou a troca
+  (`tool result ok=false`) e a abertura inteira virou falha (`rust.voice_failed codigo=open_session`); a voz
+  disse "a máquina está desconectada", o que era falso.
+- `unfollow_session` só tirava a sessão de `followed`; a vigia (`watch.rs`) falava também a da tela, a com
+  pedido pendente e a com pergunta, e todo envio voltava a acompanhar.
 
 ## Religação ao mesmo cano vivo e avisos fora da tela (20/10/2026)
 

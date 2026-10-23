@@ -27,11 +27,18 @@ fn default_account() -> String { "default".to_owned() }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OrganizerDto { pub direct: PairDto, pub plan: PairDto }
 
+/// Jeito de falar escolhido no cartão da voz. Conversa é o padrão: quem não conhece o app precisa de mais explicação.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Style { #[default] Conversational, Direct }
+
+/// `style` ausente no `PUT` (cliente antigo) mantém o gravado; no `GET` vem sempre.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SettingsDto { #[serde(default)] pub voice: Option<String>, #[serde(default = "default_account")] pub codex_account: String, pub organizer: OrganizerDto }
+pub struct SettingsDto { #[serde(default)] pub voice: Option<String>, #[serde(default = "default_account")] pub codex_account: String, pub organizer: OrganizerDto,
+    #[serde(default)] pub style: Option<Style> }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct VoiceSettings { pub voice: Option<String>, pub codex_account: String, pub organizer: ModeModels }
+pub struct VoiceSettings { pub voice: Option<String>, pub codex_account: String, pub organizer: ModeModels, pub style: Style }
 
 /// Escolhas de quem nunca gravou o `config.json`; quem já gravou fica com as suas.
 pub const FIRST_VOICE: &str = "sol";
@@ -41,21 +48,23 @@ impl Default for VoiceSettings {
     fn default() -> Self {
         let pair = |effort: &str| ModeModel { model: Some(FIRST_MODEL.to_owned()), effort: effort.to_owned(), tier: None };
         Self { voice: Some(FIRST_VOICE.to_owned()), codex_account: default_account(),
-            organizer: ModeModels { direct: pair("medium"), plan: pair("high") } }
+            organizer: ModeModels { direct: pair("medium"), plan: pair("high") }, style: Style::default() }
     }
 }
 
 impl From<SettingsDto> for VoiceSettings {
     fn from(d: SettingsDto) -> Self {
         let pair = |p: PairDto| ModeModel { model: p.model, effort: p.effort, tier: p.tier };
-        Self { voice: d.voice, codex_account: d.codex_account, organizer: ModeModels { direct: pair(d.organizer.direct), plan: pair(d.organizer.plan) } }
+        Self { voice: d.voice, codex_account: d.codex_account, organizer: ModeModels { direct: pair(d.organizer.direct), plan: pair(d.organizer.plan) },
+            style: d.style.unwrap_or_default() }
     }
 }
 
 impl From<&VoiceSettings> for SettingsDto {
     fn from(s: &VoiceSettings) -> Self {
         let pair = |p: &ModeModel| PairDto { model: p.model.clone(), effort: p.effort.clone(), tier: p.tier.clone() };
-        Self { voice: s.voice.clone(), codex_account: s.codex_account.clone(), organizer: OrganizerDto { direct: pair(&s.organizer.direct), plan: pair(&s.organizer.plan) } }
+        Self { voice: s.voice.clone(), codex_account: s.codex_account.clone(), organizer: OrganizerDto { direct: pair(&s.organizer.direct), plan: pair(&s.organizer.plan) },
+            style: Some(s.style) }
     }
 }
 
@@ -101,7 +110,7 @@ pub fn read_settings(home: &Path) -> VoiceSettings {
     // Arquivo que existe mas não serve não é "primeira vez": cai no neutro (modelo da conta), não nos padrões novos.
     serde_json::from_value::<SettingsDto>(read_json(&path)).map(Into::into).unwrap_or_else(|e| {
         super::log(format!("voice config.json unusable, using account defaults kind={:?}", e.classify()));
-        VoiceSettings { voice: None, codex_account: default_account(), organizer: ModeModels::default() }
+        VoiceSettings { voice: None, codex_account: default_account(), organizer: ModeModels::default(), style: Style::default() }
     })
 }
 
@@ -144,6 +153,23 @@ mod tests {
         assert_eq!(s.voice, None);
         assert_eq!((s.organizer.direct.model.as_deref(), s.organizer.direct.effort.as_str()), (None, "low"));
         assert_eq!((s.organizer.plan.model.as_deref(), s.organizer.plan.effort.as_str()), (Some("gpt-x"), "xhigh"));
+    }
+
+    #[test]
+    fn style_defaults_to_conversation_and_round_trips() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(read_settings(home.path()).style, Style::Conversational, "primeira vez");
+        std::fs::create_dir_all(voice_dir(home.path())).unwrap();
+        std::fs::write(settings_path(home.path()), r#"{"voice": "sol", "codex_account": "default",
+            "organizer": {"direct": {"model": null, "effort": "low"}, "plan": {"model": null, "effort": "high"}}}"#).unwrap();
+        assert_eq!(read_settings(home.path()).style, Style::Conversational, "config gravada antes do estilo");
+        let mut s = read_settings(home.path());
+        s.style = Style::Direct;
+        write_settings(home.path(), &s).unwrap();
+        assert_eq!(read_settings(home.path()).style, Style::Direct);
+        let dto: SettingsDto = serde_json::from_value(serde_json::json!({"organizer": {"direct": {}, "plan": {}}})).unwrap();
+        assert_eq!(dto.style, None, "cliente antigo não manda estilo: o PUT mantém o gravado");
+        assert_eq!(serde_json::to_value(SettingsDto::from(&s)).unwrap()["style"], "direct");
     }
 
     #[test]

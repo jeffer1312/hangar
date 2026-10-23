@@ -49,7 +49,7 @@ vi.mock('react-native-enriched-markdown', () => ({
 
 const settingsReply = (): LiveVoiceSettingsReply => ({
   enabled: true, codex: true, jev: true, voices: ['voice-a', 'voice-b'], call: { active: false, client: null },
-  settings: { codex_account: 'account-a', voice: 'voice-a', organizer: {
+  settings: { codex_account: 'account-a', voice: 'voice-a', style: 'conversational', organizer: {
     direct: { model: 'model-a', effort: 'medium', tier: null },
     plan: { model: 'model-b', effort: 'high', tier: 'priority' },
   } },

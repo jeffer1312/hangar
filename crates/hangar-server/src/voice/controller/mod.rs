@@ -149,6 +149,8 @@ pub struct Controller {
     /// A última lista lida (vigia ou busca): o Jev e a pasta da sessão na tela leem daqui, sem esperar rede.
     rows: Vec<(String, SessionRow)>,
     followed: HashSet<Key>,
+    /// Ele pediu para parar de acompanhar: nada delas é falado (tela, pedido pendente, pergunta) até pedir para voltar.
+    muted: HashSet<Key>,
     /// Sessões que receberam pedido da voz: o fim do turno delas é falado.
     watched: HashSet<Key>,
     talked: HashMap<Key, Instant>,
@@ -198,7 +200,7 @@ impl Controller {
         let (done, done_rx) = mpsc::unbounded_channel();
         let target = device.screen();
         Self { voice, machines, jev, device, diag, done, done_rx: Some(done_rx), backoff: Arc::default(), client: String::new(),
-            actions: Vec::new(), rows: Vec::new(), followed: HashSet::new(), watched: HashSet::new(), talked: HashMap::new(), jev_switched: None,
+            actions: Vec::new(), rows: Vec::new(), followed: HashSet::new(), muted: HashSet::new(), watched: HashSet::new(), talked: HashMap::new(), jev_switched: None,
             close_gate: ConfirmGate::default(), interrupt_gate: ConfirmGate::default(), shortcut_gate: Arc::default(), api_gate: ConfirmGate::default(), closing: false, last_screen: target.clone(), sent_turn: None, pending_question: None,
             spoken: HashSet::new(), heard_recent: String::new(), session_names: Vec::new(), target, plan_key: None, computer: None,
             computer_runner: Arc::new(|objective, on_step| Box::pin(super::computer::run(objective, on_step))), computer_run: 0, detached: false, last_failure: None, forwarded: HashMap::new(),
@@ -380,6 +382,8 @@ impl Controller {
                         log("close_session closed");
                         self.voice.reply(call, tool_reply(format!("Sessão {} fechada.", key.1), true));
                         self.followed.remove(&key);
+                        // Outra sessão pode nascer com o mesmo nome e não herda o silêncio desta.
+                        self.muted.remove(&key);
                         // A conversa não pode continuar sobre a sessão que acabou: com a tela vazia, a chamada fica sem alvo.
                         if self.last_screen.as_ref().is_some_and(|s| s.server == key.0 && s.name == key.1) {
                             self.last_screen = None;
@@ -567,6 +571,7 @@ impl Controller {
 
     /// Quem mandou trabalho para uma sessão quer saber de cada resposta dela, mesmo olhando outra.
     fn follow_sent(&mut self, key: Key) {
+        if self.muted.contains(&key) { self.watched.remove(&key); return; }
         if self.followed.insert(key) {
             log(format!("follow on=true by=send count={}", self.followed.len()));
             self.dirty = true;

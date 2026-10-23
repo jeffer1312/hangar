@@ -256,12 +256,15 @@ impl Controller {
         let entry = (rows[i].0.clone(), rows[i].1.name.clone());
         let name = entry.1.clone();
         let text = if on {
+            self.muted.remove(&entry);
             self.followed.insert(entry);
             format!("Acompanhando a sessão {name}: cada resposta dela chega para você falar.")
-        } else if self.followed.remove(&entry) {
-            format!("Parei de acompanhar a sessão {name}.")
         } else {
-            format!("A sessão {name} não estava sendo acompanhada.")
+            // Parar vale sobre tudo que faria a sessão falar: a tela, pedido pendente, pergunta e envios futuros.
+            self.followed.remove(&entry);
+            self.watched.remove(&entry);
+            self.muted.insert(entry);
+            format!("Parei de acompanhar a sessão {name}: nada dela será falado, nem com ela na tela, até ele pedir para acompanhar de novo.")
         };
         self.voice.listen(name, on);
         log(format!("follow on={on} count={}", self.followed.len()));
@@ -330,8 +333,10 @@ impl Controller {
 
     fn send_plan_to(&mut self, key: Key, text: String) {
         // Quem manda trabalho acompanha as respostas, como no envio direto.
-        if self.followed.insert(key.clone()) { self.dirty = true; }
-        self.watched.insert(key.clone());
+        if !self.muted.contains(&key) {
+            if self.followed.insert(key.clone()) { self.dirty = true; }
+            self.watched.insert(key.clone());
+        }
         let ctx = self.ctx();
         tokio::spawn(async move {
             match ctx.machines.send(&key.0, &key.1, &text).await {
@@ -705,7 +710,8 @@ pub(super) async fn create(machines: &Machines, machine: &str, request: &OpenReq
         None => {
             let list = machines.call(machine, reqwest::Method::GET, "/api/sessions", None).await?;
             let taken: HashSet<String> = list.as_array().into_iter().flatten().filter_map(|s| s["name"].as_str().map(str::to_owned)).collect();
-            unique_name(folder_name(&cwd), &taken)
+            let base = match folder_name(&cwd) { "~" | "" => "conversa", folder => folder };
+            unique_name(base, &taken)
         }
     };
     let mut body = json!({"name": name, "cwd": cwd, "provider": request.provider, "model": request.model, "effort": request.effort});

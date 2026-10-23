@@ -8,7 +8,7 @@ import {
 
 const server = { id: 'voice-a', label: 'A', baseUrl: 'https://voice-a.test', token: 'token-a' };
 const settings: LiveVoiceSettings = {
-  voice: 'sol', codex_account: 'default',
+  voice: 'sol', codex_account: 'default', style: 'conversational',
   organizer: { direct: { model: null, effort: 'medium', tier: null }, plan: { model: 'gpt-6.1-sol', effort: 'high', tier: 'fast' } },
 };
 const reply = { enabled: true, codex: true, jev: false, voices: ['sol'], settings, call: { active: false, client: null } };

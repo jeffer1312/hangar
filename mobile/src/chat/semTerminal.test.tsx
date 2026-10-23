@@ -1046,7 +1046,7 @@ describe('linha de botões do Composer', () => {
     useLiveVoice.setState({ settingsByServer: {} });
     vi.mocked(loadLiveVoiceSettings).mockResolvedValueOnce({
       enabled: true, codex: true, jev: true, voices: ['sol'],
-      settings: { voice: 'sol', codex_account: 'default', organizer: {
+      settings: { voice: 'sol', codex_account: 'default', style: 'conversational', organizer: {
         direct: { model: null, effort: 'medium', tier: null }, plan: { model: null, effort: 'high', tier: null },
       } }, call: { active: false, client: null },
     });

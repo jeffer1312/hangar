@@ -1,5 +1,6 @@
 //! O organizador: uma thread efêmera do Codex que decide o que da fala vira pedido para a sessão.
 use super::plan::{PlanFile, new_plan};
+use super::settings::Style;
 use serde_json::{Value, json};
 use std::{collections::{HashMap, HashSet, VecDeque}, path::{Path, PathBuf}, time::{Duration, Instant}};
 
@@ -21,8 +22,11 @@ Intenção e ferramenta, as suas primeiro:
 Pergunta sobre o que você consegue ou se tem acesso a algo: responda pelas ferramentas que você tem, em palavras do usuário.
 Nunca diga que não tem acesso quando há ferramenta para isso; se algo de fato falta, diga exatamente o quê.
 Converse, analise, explique e ajude a planejar. Mandar trabalho para uma sessão é uma ação à parte, só quando ele quer isso.
+Entenda a intenção, não só as palavras: quem fala pode não conhecer o Hangar nem IA e pedir do jeito dele ('abre um negócio pra
+eu pesquisar', 'guarda isso pra mim'). Nunca use com ele termos internos (organizador, ferramenta, thread, nome de ferramenta).
 A entrada realtime_delegation traz a fala mais recente em input e a conversa em transcript_delta. A mesma fala pode chegar
-duas vezes (a segunda com a transcrição final): se ela só repete o que você já tratou, não repita a ação nem a resposta.
+duas vezes (a segunda com a transcrição final): se você já fez o que ela pede, não repita a ação nem a resposta; se ainda
+não fez, faça. Repetição nunca é motivo para ficar calado com o pedido por fazer.
 O que você consegue fazer, em qualquer modo: ler a conversa de qualquer sessão com read_session (o que o usuário pediu, o que
 ela fez, está fazendo, falou ou respondeu); usar todo o Hangar pela API com hangar_api; usar esta máquina pelo shell com acesso completo: ler e editar arquivos (do projeto ou de fora dele,
 pelo caminho completo), rodar comandos e ver os processos; ler a tela do Hangar com read_screen; pesquisar na internet;
@@ -44,7 +48,8 @@ pedido no app.
 De quem é o pedido, antes de qualquer ação:
 - Conversa com você: perguntas, opiniões, 'o que você acha', 'me explica', 'analisa', 'lê você', 'me ajuda a entender',
   pensar em voz alta, ideias pela metade. Responda você mesmo, lendo a sessão, o código ou a internet. Nada vai à sessão.
-  Não ofereça mandar trabalho nem pergunte 'pode ser?': ler e entender não é pedido de envio nem de acompanhamento.
+  Ao ler ou explicar uma sessão, não ofereça mandar trabalho a ela nem pergunte 'pode ser?': ler e entender não é pedido de
+  envio nem de acompanhamento. Oferecer uma sessão NOVA segue a regra 'Sugerir sessão' abaixo.
 - Planejar junto ('vamos planejar', 'me ajuda a planejar', 'planeja comigo'): chame set_mode planejar e siga as regras dele.
 - Pedido para a sessão: ele quer que a sessão faça um trabalho ('manda a sessão corrigir', 'pede pra ela', 'fala pra
   sessão'). Chame send_to_session com o pedido inteiro: objetivo, restrições e correções da conversa, escrito como ele escreveria.
@@ -56,6 +61,12 @@ De quem é o pedido, antes de qualquer ação:
   de falar daquela sessão), chame send_to_session na hora com o pedido inteiro e a session, sem pedir confirmação nem o nome.
 - Na dúvida, pergunte numa frase: 'faço isso com você aqui ou mando para a sessão?', ou para qual sessão vai. Pergunte só
   quando não estiver claro; nunca mande trabalho sem essa intenção.
+Sugerir sessão: uma sessão rende mais que você para trabalho de verdade: fica salva no app para ele rever depois, trabalha sozinha
+enquanto ele faz outra coisa e vai mais fundo em pesquisa, arquivos e código. Quando a conversa com você virar pesquisa, estudo,
+comparação, um texto para escrever, trabalho de várias etapas ou algo que ele vai querer guardar, ofereça UMA vez, numa frase,
+abrir uma sessão para isso, dizendo o ganho ('Quer que eu abra uma sessão pra isso? Assim fica salvo e ela pesquisa mais a
+fundo.'). Aceitou: open_session na hora, com request = o assunto e o que já foi conversado. Recusou: siga ajudando aqui e não
+ofereça de novo nesta conversa. Pergunta rápida, de uma resposta só, não pede sessão.
 Use read_session antes de enviar só quando o pedido depende do que a sessão está fazendo.
 Para explicar o trabalho de uma sessão ('o que ela fez', 'onde parou', 'explica o que a X está fazendo'), parta do pedido do
 usuário a ela: read_session (com session quando não é a da tela) traz a partir do último pedido dele; se a conversa se refere
@@ -82,7 +93,9 @@ recente: diga que é o anterior ou o que ficou pela metade.
 Resultados guardados: se uma [NOTA DO HANGAR] disser que a voz avisou de resultados guardados e ele quiser ouvir ('quero',
 'pode falar', 'fala'), chame quiet com on false; se ele não quiser agora, não chame nada: eles continuam guardados.
 Acompanhar: quando ele pedir para acompanhar uma sessão ('acompanha a hangar', 'me avisa quando a X responder'), chame
-follow_session; as respostas dela chegam sozinhas como [RESULTADO DA SESSÃO], mesmo fora da tela. unfollow_session para de acompanhar.
+follow_session; as respostas dela chegam sozinhas como [RESULTADO DA SESSÃO], mesmo fora da tela. 'Para de acompanhar a X',
+'não me avisa mais da X': unfollow_session, que silencia a sessão de vez (nem com ela na tela nem pedido mandado depois é
+falado) até ele pedir follow_session de novo; ao mandar pedido a uma sessão silenciada, diga que a resposta não será avisada.
 Silêncio: quando ele pedir para não avisar nada das sessões até ele voltar ('vou sair dez minutos, não me fala nada até eu
 voltar'), chame quiet com on true. Esse pedido temporário vale sobre o padrão de anunciar os resultados: enquanto durar, eles
 ficam guardados, nada é falado e o trabalho das sessões continua. O silêncio nunca acaba sozinho pelo tempo: quando ele voltar
@@ -115,7 +128,9 @@ só um pedaço ('abre a grupos' é a sessão grupos-rust-plano), ou o que a conv
 uma oferta sua). Não peça para ele repetir o nome nem a frase; pergunte só se houver mais de uma sessão possível. Na dúvida
 sobre os nomes, chame list_sessions antes.
 Só diga que trocou, abriu ou que está numa sessão depois de a ferramenta confirmar; a sessão na tela é a da última nota do
-Hangar. Se ele pedir para ir a uma sessão que não é a da nota, chame switch_session, mesmo que ache que já está nela.
+Hangar. Nunca diga que vai fazer algo ('vou abrir', 'já mando', 'deixa comigo') e encerre o turno: chame a ferramenta no mesmo
+turno e só então diga o que aconteceu. Se a ferramenta falhar ou você não puder agir, diga o motivo em palavras simples. Ele
+repetir um pedido que você respondeu sem agir é sinal de que nada aconteceu: faça agora. Se ele pedir para ir a uma sessão que não é a da nota, chame switch_session, mesmo que ache que já está nela.
 O Hangar se controla pelas suas ferramentas, primeiro e na hora: aja quando a intenção e o alvo estão claros e pergunte só se
 houver mais de um alvo possível.
 - Sessões: list_sessions (nome, máquina, estado, pasta), switch_session(name), open_session(folder; e, se ele disser, name,
@@ -139,8 +154,9 @@ nunca use computer para ler o Hangar. click_screen é o último recurso: só qua
 cobrem a intenção e read_screen mostrou o botão; nunca para buscar, reabrir ou criar conversa, nem para atalho.
 computer é SÓ para programas que não são o Hangar ('abre o Bloco de Notas e digita…'); nunca use computer para clicar
 no Hangar. Diga ao usuário que vai demorar e fale o resultado (concluído ou parou com o motivo).
-open_session só quando ele pedir sessão NOVA ou falar em pasta ('abre uma sessão nova na pasta hangar'); sessão que ele
-fechou volta por reopen_conversation, nunca por open_session.
+open_session quando ele pedir sessão NOVA ('abre uma sessão', 'abre em qualquer lugar', 'cria uma conversa nova'), falar em
+pasta ('abre uma sessão nova na pasta hangar') ou aceitar a sua oferta de sessão. Pasta que ele não disse ou não importa: chame
+sem folder, na hora, sem perguntar a pasta. Sessão que ele fechou volta por reopen_conversation, nunca por open_session.
 Abrir sessão e descrever o trabalho dela (na mesma fala ou na seguinte) é UMA intenção: chame open_session com request = o trabalho
 inteiro como o usuário ditou (objetivo, restrições, detalhes; não resuma tirando detalhes). Nunca encerre o turno só abrindo quando
 houve trabalho ditado. Se o trabalho chegar numa fala logo depois de abrir, mande com send_to_session à sessão nova sem esperar ele pedir de novo. Nome ambíguo volta com as opções: pergunte qual, nunca escolha por conta própria.
@@ -161,8 +177,8 @@ pub const ANSWER_PREFIX: &str = "[RESPOSTA DA SESSÃO À PERGUNTA]";
 const MAX_QUESTION: usize = 500;
 
 pub const VOICE_PROMPT: &str = "Você é a assistente de voz do Hangar, o app onde o usuário acompanha e comanda sessões de trabalho (Claude ou
-Codex) em vários projetos. Fale português brasileiro, com calma e direta. Suas falas próprias são curtas; o que o organizador
-manda falar vai inteiro (veja Resultados).
+Codex) em vários projetos. Fale português brasileiro, com calma. Suas falas próprias seguem o estilo escolhido (abaixo); o que
+o organizador manda falar vai inteiro (veja Resultados).
 Você não tem ferramentas: quem age é o organizador (Codex), por trás de você. O que ele consegue está na lista do fim.
 
 Escuta
@@ -175,7 +191,8 @@ Escuta
 Quando encaminhar ao organizador
 - Tudo que depende de sessão, conversa, tela, código, internet, plano ou ação no Hangar.
 - Pedido completo, longo ou demorado: diga numa frase curta o que entendeu e aguarde. Uma por pedido, nunca a cada
-  pedaço de fala nem narrando passos ('vou ver'); não é frase de espera.
+  pedaço de fala nem narrando passos ('vou ver'); não é frase de espera. Dizer o que entendeu nunca substitui encaminhar:
+  encaminhe na mesma resposta.
 - 'O que a sessão está falando, fazendo ou respondeu' é a conversa da sessão: encaminhe. Nunca diga que não consegue ler a tela.
 - Pedido de análise, opinião ou planejamento ('o que você acha', 'me ajuda a planejar', 'lê você o código') também vai ao
   organizador: é conversa com o assistente, não trabalho para a sessão.
@@ -186,6 +203,7 @@ Quando encaminhar ao organizador
   você mesma 'não consigo' ou 'não tenho acesso'.
 - Em todo encaminhamento, comece o input com as palavras exatas do usuário, entre aspas, e depois o seu resumo curto.
 - Pedido de silêncio até ele voltar ('não me avisa nada até eu voltar') e a volta ('voltei', 'me dá o resumo'): encaminhe.
+- Parar ou voltar a acompanhar uma sessão, e pedido que ele repete (o anterior não aconteceu): encaminhe.
 - Encaminhe cada fala uma vez só.
 
 Quando responder sozinha
@@ -194,7 +212,7 @@ Quando responder sozinha
 
 Resultados
 - Enquanto espera, não adivinhe o resultado. Nunca diga que enviou, trocou, abriu ou terminou antes de o organizador
-  confirmar. Enviado não significa terminado.
+  confirmar. Enviado não significa terminado. Nunca prometa 'vou abrir', 'já faço': quem faz é o organizador.
 - Textos que você recebe para falar são resultados reais: fale-os em fala natural, com outras palavras se quiser, mas sem
   encurtar nem trocar o sentido: achados, erros, pendências, ressalvas e decisões ficam. Opções (A, B…): fale todas, com a
   consequência de cada uma e a recomendação, sem escolher por ele. Não transforme afirmação em pergunta nem acrescente pergunta,
@@ -242,7 +260,8 @@ pub fn tools() -> Value {
         tool("switch_session", "Troca a sessão aberta no Hangar para a sessão com esse nome; use quando o usuário pedir para trocar, ir ou abrir outra sessão.",
             json!({"name": {"type": "string"}})),
         tool("list_sessions", "Lista as sessões de todas as máquinas: nome, máquina, provider, estado, pasta e qual está na tela.", json!({})),
-        tool_with("open_session", "Cria uma sessão nova na pasta falada (nome ou caminho) e a abre na tela. Pasta ambígua volta com as opções. \
+        tool_with("open_session", "Cria uma sessão nova na pasta falada (nome ou caminho) e a abre na tela. Sem folder (ele não disse a \
+            pasta, disse 'qualquer lugar' ou o assunto não é de um projeto), abre na pasta pessoal. Pasta ambígua volta com as opções. \
             Com request, o trabalho ditado para ela é enviado assim que ela abre. O resto só quando o usuário disser: model, effort, \
             account (caminho do config dir para claude/pi/omp, id da conta para codex), engine (motor do Claude), permission (modo do \
             Claude; sem ele, o da conta) e headless (sem terminal, claude ou codex).",
@@ -251,7 +270,7 @@ pub fn tools() -> Value {
                 "server": {"type": "string"}, "request": {"type": "string"}, "model": {"type": "string"}, "effort": {"type": "string"},
                 "account": {"type": "string"}, "engine": {"type": "string"},
                 "permission": {"type": "string", "enum": ["bypassPermissions", "acceptEdits", "auto", "manual", "dontAsk", "plan"]},
-                "headless": {"type": "boolean"}}), &["folder"]),
+                "headless": {"type": "boolean"}}), &[]),
         tool_with("close_session", "Fecha uma sessão. Sem confirmed só prepara; depois do sim explícito do usuário, chame de novo com confirmed true.",
             json!({"name": {"type": "string"}, "confirmed": {"type": "boolean"}}), &["name"]),
         tool_with("interrupt_session", "Interrompe o que a sessão está fazendo agora (como o botão parar). Sem confirmed só prepara; depois \
@@ -346,7 +365,7 @@ pub fn greeting(onboarding: bool) -> &'static str { if onboarding { ONBOARDING_G
 /// Cada linha do que o organizador consegue, com as ferramentas do catálogo que a dão: a linha sai quando ao menos uma
 /// delas está no catálogo entregue. Ferramenta nova sem linha aqui reprova o teste.
 const CAPABILITIES: &[(&[&str], &str)] = &[
-    (&["open_session"], "abrir sessão nova numa pasta, já com o trabalho que você ditar"),
+    (&["open_session"], "abrir sessão nova (numa pasta, ou na pessoal se você não disser), já com o trabalho que você ditar"),
     (&["reopen_conversation", "recent_conversations"], "reabrir uma conversa fechada pelo nome, ou achá-la pelo assunto"),
     (&["read_session"], "ler a conversa de qualquer sessão a partir do seu último pedido a ela (ou dos últimos N)"),
     (&["send_to_session", "hold_request", "discard_request"], "mandar pedido a uma sessão, ou segurá-lo até você liberar"),
@@ -380,11 +399,31 @@ fn capability_list(tools: &Value, mcp: bool) -> String {
 }
 
 /// `prefs`: as preferências guardadas (`memory::prompt_block` só das `preferencia`); o resto da memória fica com o organizador.
-pub fn voice_prompt(onboarding: bool, tools: &Value, mcp: bool, prefs: &str) -> String {
+pub fn voice_prompt(onboarding: bool, tools: &Value, mcp: bool, prefs: &str, style: Style) -> String {
     let prefs = if prefs.trim().is_empty() { String::new() } else {
-        format!("\n\nPreferências que o usuário pediu para guardar, sobre como você fala; valem sobre o padrão acima:\n{prefs}")
+        format!("\n\nPreferências que o usuário pediu para guardar, sobre como você fala; valem sobre o padrão acima e o estilo:\n{prefs}")
     };
-    format!("{VOICE_PROMPT}{}{prefs}\n\n{}", if onboarding { VOICE_ONBOARDING } else { "" }, capability_list(tools, mcp))
+    format!("{VOICE_PROMPT}\n\n{}{}{prefs}\n\n{}", voice_style(style), if onboarding { VOICE_ONBOARDING } else { "" }, capability_list(tools, mcp))
+}
+
+fn voice_style(style: Style) -> &'static str {
+    match style {
+        Style::Direct => "Estilo escolhido pelo usuário: direto. Fale o mínimo, sem cumprimento nem 'entendi'; resultados inteiros, enxutos.",
+        Style::Conversational => "Estilo escolhido pelo usuário: conversa. Tom caloroso e natural, frases completas. Ele pode não conhecer o \
+            app nem IA: termo técnico só explicado em palavras simples. Sem monólogo.",
+    }
+}
+
+/// O estilo para quem age: vai antes da memória no `developerInstructions`, e a preferência guardada vence.
+pub fn organizer_style(style: Style) -> &'static str {
+    match style {
+        Style::Direct => "Estilo escolhido pelo usuário: direto. Respostas de uma ou duas frases, só o essencial: o resultado, sem \
+            cumprimento, sem repetir o pedido e sem explicar o óbvio. Oferta (como abrir uma sessão) numa frase curta.",
+        Style::Conversational => "Estilo escolhido pelo usuário: conversa. Responda como uma pessoa atenciosa, em frases naturais, até umas \
+            quatro por resposta (vale sobre o 'texto curto'). Ele pode não conhecer o Hangar nem IA: explique em palavras simples o que é \
+            preciso (uma sessão é uma conversa de trabalho que fica salva no app e continua sozinha), confirme o que entendeu quando o \
+            pedido for vago e sugira o próximo passo útil.",
+    }
 }
 
 /// Abre a preferência gravada durante a chamada quando ela entra no contexto da voz.
@@ -607,6 +646,19 @@ impl Assist {
     }
 }
 
+impl ToolCall {
+    /// Muda algo no Hangar ou numa sessão: o que a fala repetida não pode refazer.
+    pub fn acts(&self) -> bool {
+        match self {
+            Self::Send { .. } | Self::FinishPlan { .. } | Self::AskSession(_) | Self::SwitchSession(_) | Self::OpenSession(_)
+                | Self::CloseSession { .. } | Self::PairSessions(..) | Self::UnpairSession(_) | Self::HangarAction { .. } | Self::Computer(_)
+                | Self::ClickScreen { .. } | Self::Remember { .. } | Self::Forget(_) => true,
+            Self::Assist(assist) => assist.acts(),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Default)]
 pub struct OpenRequest { pub folder: String, pub name: Option<String>, pub provider: &'static str, pub server: Option<String>,
     /// Trabalho ditado junto com o pedido de abrir: vai à sessão nova no mesmo passo.
@@ -614,6 +666,9 @@ pub struct OpenRequest { pub folder: String, pub name: Option<String>, pub provi
     /// `None` = o padrão do servidor, como a tela de criação sem toque.
     pub model: Option<String>, pub effort: Option<String>, pub account: Option<String>, pub engine: Option<String>,
     pub permission: Option<String>, pub headless: Option<bool> }
+
+/// Pasta da sessão aberta sem pasta dita: a pessoal da máquina que a abre.
+pub const DEFAULT_FOLDER: &str = "~";
 
 pub fn parse_tool(params: &Value) -> ToolCall {
     let name = params["tool"].as_str().unwrap_or_default();
@@ -640,9 +695,10 @@ pub fn parse_tool(params: &Value) -> ToolCall {
                 None | Some("claude") => "claude", Some("codex") => "codex", Some("pi") => "pi", Some("omp") => "omp", Some("kimi") => "kimi",
                 Some(_) => return unknown(),
             };
-            arg("folder").map_or_else(unknown, |folder| ToolCall::OpenSession(OpenRequest { folder, name: arg("name"), provider, server: arg("server"),
-                request: arg("request"), model: arg("model"), effort: arg("effort"), account: arg("account"), engine: arg("engine"),
-                permission: arg("permission"), headless: params["arguments"]["headless"].as_bool() }))
+            // Quem não sabe ou não liga para a pasta ("abre em qualquer lugar") não pode travar a abertura.
+            ToolCall::OpenSession(OpenRequest { folder: arg("folder").unwrap_or_else(|| DEFAULT_FOLDER.to_owned()), name: arg("name"), provider,
+                server: arg("server"), request: arg("request"), model: arg("model"), effort: arg("effort"), account: arg("account"),
+                engine: arg("engine"), permission: arg("permission"), headless: params["arguments"]["headless"].as_bool() })
         }
         "close_session" => arg("name").map_or_else(unknown, |name| ToolCall::CloseSession { name, confirmed: params["arguments"]["confirmed"] == true }),
         "interrupt_session" => arg("name").map_or_else(unknown, |name|
@@ -870,11 +926,19 @@ pub fn repeated_handoff(previous: &str, new: &str) -> bool {
 /// Quanto tempo depois uma fala igual ainda conta como repetida.
 pub const REPEAT_WINDOW: Duration = Duration::from_secs(30);
 
+/// Repetida só enquanto a original corre ou depois que ela agiu: pedir de novo o que não aconteceu é a pessoa insistindo,
+/// não a transcrição final chegando outra vez.
+pub fn treat_as_repeat(previous: &str, new: &str, elapsed: Duration, original_running: bool, original_acted: bool) -> bool {
+    elapsed < REPEAT_WINDOW && repeated_handoff(previous, new) && (original_running || original_acted)
+}
+
 /// Marca do que o Hangar põe no turno do organizador: contexto e avisos, nunca fala do usuário.
 pub const NOTE_PREFIX: &str = "[NOTA DO HANGAR]";
 
-pub const REPEAT_NOTE: &str = "[NOTA DO HANGAR] A última entrada repete uma fala que você já tratou. Não repita a resposta nem a ação; \
-    se não houver nada novo, termine sem escrever nada.";
+/// Chega também no turno original ainda sem ação: "já tratou, termine" fazia o modelo desistir do pedido.
+pub const REPEAT_NOTE: &str = "[NOTA DO HANGAR] A última entrada é a mesma fala de antes chegando de novo (transcrição final), não um \
+    pedido novo: trate a fala uma vez só. Se você ainda não fez o que ela pede, faça agora; se já fez e já respondeu, não repita a \
+    ação nem a resposta.";
 
 pub fn mode_note(mode: Mode, plan_path: Option<&Path>) -> String {
     match (mode, plan_path) {
@@ -1704,8 +1768,19 @@ impl Results {
         }
     }
     /// Acompanhar uma sessão é pedir os resultados dela: conta como aceite, com o mesmo prazo; parar de acompanhar encerra.
+    /// Parar de ouvir descarta também o que dela já estava guardado: ele pediu para não ouvir mais aquela sessão.
     pub fn listen(&mut self, session: &str, on: bool) {
-        if on { self.listening.insert(session.to_owned(), Instant::now()); } else { self.listening.remove(session); }
+        if on { self.listening.insert(session.to_owned(), Instant::now()); return; }
+        self.listening.remove(session);
+        self.queue.retain(|(s, _)| s != session);
+        self.cut.retain(|(s, _)| s != session);
+        let count = self.queue.iter().filter(|(s, _)| !s.is_empty() && !self.listening_to(s)).count();
+        self.offered = self.offered.min(count);
+        if count == 0 { (self.offer, self.held_in_talk) = (None, false); }
+        else if self.offer.is_some() {
+            let sessions: Vec<String> = self.held_sessions().into_iter().filter(|s| !self.listening_to(s)).collect();
+            self.offer = Some(offer_text(count, &sessions));
+        }
     }
     fn listening_to(&self, session: &str) -> bool { self.listening.get(session).is_some_and(|at| at.elapsed() < LISTEN_IDLE) }
     /// Sessão na tela: o resumo de outra sessão diz que não é ela, para a voz não encaixar um assunto no outro.
@@ -1861,27 +1936,27 @@ mod tests {
         assert!(greeting(true).contains("deixa eu me apresentar") && greeting(true).contains("perguntar o que eu consigo fazer"),
             "a primeira conversa apresenta o que a voz faz antes das perguntas");
         assert_eq!(greeting(false), "Conectado. Pode falar.");
-        let with = voice_prompt(true, &tools(), false, "");
+        let with = voice_prompt(true, &tools(), false, "", Style::default());
         assert!(with.starts_with(VOICE_PROMPT) && with.contains("Primeira conversa"));
-        assert!(!voice_prompt(false, &tools(), false, "").contains("Primeira conversa"));
+        assert!(!voice_prompt(false, &tools(), false, "", Style::default()).contains("Primeira conversa"));
     }
 
     #[test]
     fn voice_prompt_lists_what_the_organizer_really_has() {
-        let full = voice_prompt(false, &tools(), false, "");
+        let full = voice_prompt(false, &tools(), false, "", Style::default());
         for line in ["reabrir uma conversa fechada pelo nome", "a partir do seu último pedido a ela (ou dos últimos N)",
-            "abrir sessão nova numa pasta", "ler e clicar na tela do Hangar", "trocar a sessão da tela", "pela API"] {
+            "abrir sessão nova (numa pasta", "ler e clicar na tela do Hangar", "trocar a sessão da tela", "pela API"] {
             assert!(full.contains(line), "{line}");
         }
         assert!(full.contains("Pergunta sobre o que você consegue fazer, se tem acesso a algo") && full.contains("encaminhe"));
         assert!(full.contains("palavras exatas do usuário, entre aspas"));
         assert!(!full.contains("MCP"), "sem a entrada, a voz não promete o MCP");
-        assert!(voice_prompt(false, &tools(), true, "").contains("pela API e pelo MCP hangar"));
-        let pwa = voice_prompt(false, &tools_for(&["switch_session".into()]), false, "");
+        assert!(voice_prompt(false, &tools(), true, "", Style::default()).contains("pela API e pelo MCP hangar"));
+        let pwa = voice_prompt(false, &tools_for(&["switch_session".into()]), false, "", Style::default());
         assert!(!pwa.contains("tela do Hangar") && pwa.contains("trocar a sessão da tela"), "aparelho sem ferramentas de tela");
         // Nada do perfil nem da memória vai à voz; e ela continua curta.
         assert!(!full.contains("Fatos lembrados") && !full.contains("[m"));
-        assert!(full.chars().count() < 5_200, "{}", full.chars().count());
+        assert!(full.chars().count() < 5_600, "{}", full.chars().count());
     }
 
     #[test]
@@ -1937,7 +2012,7 @@ mod tests {
         let action = tools.as_array().unwrap().iter().find(|t| t["name"] == "hangar_action").unwrap();
         assert_eq!(action["inputSchema"]["required"], json!(["id"]), "arg é opcional");
         let open = tools.as_array().unwrap().iter().find(|t| t["name"] == "open_session").unwrap();
-        assert_eq!(open["inputSchema"]["required"], json!(["folder"]), "nome, provider e máquina são opcionais");
+        assert_eq!(open["inputSchema"]["required"], json!([]), "pasta, nome, provider e máquina são opcionais");
     }
 
     #[test]
@@ -1958,6 +2033,8 @@ mod tests {
             ToolCall::OpenSession(r) if r.provider == "codex" && r.name.as_deref() == Some("x2") && r.server.as_deref() == Some("casa")));
         assert!(matches!(call("open_session", json!({"folder": "x", "provider": "pi"})), ToolCall::OpenSession(r) if r.provider == "pi"));
         assert!(matches!(call("open_session", json!({"folder": "x", "provider": "gemini"})), ToolCall::Unknown(_)));
+        assert!(matches!(call("open_session", json!({})), ToolCall::OpenSession(r) if r.folder == "~"), "sem pasta abre na pessoal");
+        assert!(matches!(call("open_session", json!({"folder": " "})), ToolCall::OpenSession(r) if r.folder == "~"));
         assert!(matches!(call("interrupt_session", json!({"name": "web"})),
             ToolCall::Assist(Assist::InterruptSession { confirmed: false, .. })));
         assert!(matches!(call("recent_conversations", json!({})), ToolCall::Assist(Assist::RecentConversations { query: None, server: None })));
@@ -1975,7 +2052,6 @@ mod tests {
         assert!(matches!(call("hangar_api", json!({"method": "POST", "path": "/api/x", "body": {"a": 1}, "confirmed": true})),
             ToolCall::Assist(a @ Assist::HangarApi { body: Some(_), confirmed: true, .. }) if a.acts()), "o resto só com fala");
         assert!(matches!(call("hangar_api", json!({"path": "/api/x"})), ToolCall::Unknown(_)));
-        assert!(matches!(call("open_session", json!({"folder": " "})), ToolCall::Unknown(_)));
         assert!(matches!(call("close_session", json!({"name": "a"})), ToolCall::CloseSession { confirmed: false, .. }));
         assert!(matches!(call("close_session", json!({"name": "a", "confirmed": true})), ToolCall::CloseSession { confirmed: true, .. }));
         assert!(matches!(call("close_session", json!({"name": "a", "confirmed": "true"})), ToolCall::CloseSession { confirmed: false, .. }));
@@ -2342,7 +2418,7 @@ mod tests {
     #[test]
     fn voice_prompt_delegates_session_actions_and_waits_for_confirmation() {
         assert!(VOICE_PROMPT.contains("Trocar, abrir, reabrir, fechar e parear sessão e rodar atalhos sempre vão ao organizador"));
-        let prompt = voice_prompt(false, &tools(), false, "");
+        let prompt = voice_prompt(false, &tools(), false, "", Style::default());
         assert!(prompt.contains("reabrir uma conversa fechada") && prompt.contains("atalhos (como a VM)"));
         assert!(VOICE_PROMPT.contains("Nunca diga que enviou, trocou, abriu ou terminou antes de o organizador\n  confirmar"));
         assert!(VOICE_PROMPT.contains("Não anuncie em que sessão está"));
@@ -2665,6 +2741,24 @@ mod tests {
     }
 
     #[test]
+    fn chosen_style_reaches_both_prompts_and_saved_preferences_still_win() {
+        let direct = voice_prompt(false, &tools(), false, "- [m1] preferência Fale devagar.", Style::Direct);
+        assert!(direct.contains("Estilo escolhido pelo usuário: direto"));
+        assert!(direct.find("Estilo escolhido").unwrap() < direct.find("Fale devagar").unwrap(), "a preferência vem depois e vence");
+        assert!(voice_prompt(false, &tools(), false, "", Style::Conversational).contains("Estilo escolhido pelo usuário: conversa"));
+        assert_ne!(organizer_style(Style::Direct), organizer_style(Style::Conversational));
+    }
+
+    #[test]
+    fn asking_again_for_what_did_not_happen_is_not_a_repeat() {
+        let (said, secs) = ("abre uma sessão em qualquer lugar", Duration::from_secs(8));
+        assert!(treat_as_repeat(said, said, secs, true, false), "transcrição final com a original ainda rodando");
+        assert!(treat_as_repeat(said, said, secs, false, true), "a original já abriu: não abre outra");
+        assert!(!treat_as_repeat(said, said, secs, false, false), "a original acabou sem agir: é ele insistindo");
+        assert!(!treat_as_repeat(said, said, Duration::from_secs(31), true, true), "fora da janela");
+    }
+
+    #[test]
     fn repeated_handoff_is_the_same_speech_not_a_continuation() {
         assert!(repeated_handoff("Me ajuda a planejar a migração.", "me ajuda a planejar a migracao"));
         assert!(repeated_handoff("me ajuda a planejar a migração", "planejar a migração"));
@@ -2921,6 +3015,16 @@ mod tests {
         assert!(results.set_user_talking(false).is_some() && results.take_offer().is_none(), "ele pediu para acompanhar");
         results.listen("hangar", false);
         assert!(asks_again_for_deploy_named(results, "hangar"), "parou de acompanhar: volta a perguntar");
+    }
+
+    #[test]
+    fn stopping_to_follow_drops_what_was_held_from_that_session() {
+        let mut results = Results::default();
+        results.set_quiet(true);
+        results.push("hangar".into(), "Build passou.".into());
+        results.push("deploy".into(), "Subiu.".into());
+        results.listen("hangar", false);
+        assert_eq!(results.held_sessions(), vec!["deploy".to_owned()], "o guardado da hangar sai; o da deploy fica");
     }
 
     #[test]
@@ -3243,7 +3347,7 @@ mod tests {
         assert!(VOICE_PROMPT.contains("fale todas, com a"), "opções A/B chegam inteiras à fala");
         assert!(ORGANIZER_PROMPT.contains("diga cada uma com a consequência"), "e saem inteiras do organizador");
         assert!(!VOICE_PROMPT.contains("uma ou duas frases por vez"), "o teto de frases cortava o conteúdo da sessão");
-        let prompt = voice_prompt(false, &tools(), false, "- [m5] preferência Sem frases de espera.");
+        let prompt = voice_prompt(false, &tools(), false, "- [m5] preferência Sem frases de espera.", Style::default());
         assert!(prompt.contains("Sem frases de espera") && prompt.contains("valem sobre o padrão"), "{prompt}");
         assert!(!VOICE_PROMPT.contains("diga\n  só algo curto") && !VOICE_PROMPT.contains("diga só algo curto"), "sem frase de espera mandada");
     }

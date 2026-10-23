@@ -253,24 +253,26 @@ pub fn send_reply(session: &str, result: &Result<Delivery, String>) -> Value {
 }
 
 /// Resposta do `open_session`: `shown` = abriu na tela; `sent` = entrega do pedido ditado junto. `Err` vira falha visível.
+/// A sessão criada é o que foi pedido: não conseguir mostrá-la na tela é aviso, não falha (nem motivo para abrir outra).
 pub fn opened_reply(name: &str, shown: bool, sent: Option<&Result<Delivery, String>>) -> Result<String, String> {
     let failed = |result: &Result<Delivery, String>| match result {
         Ok(d) if d.ok => None,
         Ok(_) => Some("a sessão recusou o pedido".to_owned()),
         Err(error) => Some(error.clone()),
     };
+    let not_shown = "não consegui mostrá-la na tela deste aparelho; diga isso ao usuário, sem falar em máquina desconectada, e não crie outra";
     match (shown, sent) {
         (true, None) => Ok(format!("Sessão {name} criada e aberta na tela; a troca já foi anunciada, não repita.")),
-        (false, None) => Err(format!("A sessão {name} foi criada, mas a máquina dela não está conectada para abri-la.")),
+        (false, None) => Ok(format!("Sessão {name} criada, mas {not_shown}.")),
         (true, Some(result)) => match (failed(result), result) {
             (None, Ok(d)) if d.delivered => Ok(format!("Sessão {name} aberta e pedido enviado. A troca já foi anunciada, não repita; aguarde o resultado real.")),
             (None, _) => Ok(format!("Sessão {name} aberta e pedido enviado; ele entrou na fila da sessão. A troca já foi anunciada, não repita.")),
             (Some(why), _) => Err(format!("Sessão {name} aberta, mas o pedido não chegou a ela: {why}. Não reenvie; peça para o usuário conferir o chat.")),
         },
-        (false, Some(result)) => Err(match failed(result) {
-            None => format!("Sessão {name} criada e pedido enviado, mas a máquina dela não está conectada para abri-la na tela."),
-            Some(why) => format!("Sessão {name} criada, mas não abriu na tela e o pedido não chegou a ela: {why}."),
-        }),
+        (false, Some(result)) => match failed(result) {
+            None => Ok(format!("Sessão {name} criada e pedido enviado, mas {not_shown}; aguarde o resultado real.")),
+            Some(why) => Err(format!("Sessão {name} criada, mas não abriu na tela e o pedido não chegou a ela: {why}.")),
+        },
     }
 }
 
@@ -365,13 +367,15 @@ mod tests {
         let queued = Ok(Delivery { ok: true, delivered: false });
         let failed: Result<Delivery, String> = Err("x".into());
         assert!(opened_reply("s", true, None).unwrap().contains("criada e aberta"), "sem request, como antes");
-        assert!(opened_reply("s", false, None).is_err());
+        let hidden = opened_reply("s", false, None).expect("criada sem tela ainda é sessão aberta");
+        assert!(hidden.contains("não crie outra") && !hidden.contains("não está conectada"), "não inventa máquina desconectada");
+        assert!(opened_reply("s", false, Some(&failed)).is_err(), "pedido que não chegou continua falha");
         assert!(opened_reply("s", true, Some(&delivered)).unwrap().starts_with("Sessão s aberta e pedido enviado"));
         assert!(opened_reply("s", true, Some(&queued)).unwrap().contains("fila"));
         let both = opened_reply("s", true, Some(&failed)).unwrap_err();
         assert!(both.contains("aberta") && both.contains("não chegou"), "diz as duas coisas");
         assert!(opened_reply("s", true, Some(&Ok(Delivery { ok: false, delivered: false }))).is_err());
-        assert!(opened_reply("s", false, Some(&delivered)).unwrap_err().contains("pedido enviado"));
+        assert!(opened_reply("s", false, Some(&delivered)).unwrap().contains("pedido enviado"));
     }
 
     #[test]

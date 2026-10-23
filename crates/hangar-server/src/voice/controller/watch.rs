@@ -100,6 +100,7 @@ impl Controller {
         for (key, row) in fired {
             let asked = self.watched.remove(&key);
             let question = self.pending_question.as_ref().is_some_and(|(k, _)| *k == key);
+            if self.muted.contains(&key) && !question { continue; }
             if !(asked || question || self.followed.contains(&key) || screen.as_ref() == Some(&key)) { continue; }
             log(format!("watch turn ended state={} asked={asked} question={question}", row.state));
             let ctx = self.ctx();
@@ -111,23 +112,26 @@ impl Controller {
     }
 
     pub(super) fn on_history(&mut self, key: Key, row: SessionRow, result: Result<Vec<ChatEvent>, String>) {
+        // Silenciada (inclusive a leitura que já estava a caminho quando ele pediu para parar): nada é falado, mas a
+        // resposta a uma pergunta do organizador (`ask_intercept`) ainda volta a ele.
+        let muted = self.muted.contains(&key);
         let events = match result {
             Ok(events) => triples(&events),
             Err(_) => {
                 log("history read failed");
                 // Sem este aviso o resultado da sessão se perderia calado.
-                self.voice.session_result(key.1.clone(), format!("Não consegui ler a resposta da sessão {}.", key.1));
+                if !muted { self.voice.session_result(key.1.clone(), format!("Não consegui ler a resposta da sessão {}.", key.1)); }
                 return;
             }
         };
         if row.state == "awaiting_input" {
             let questions: Vec<&str> = row.question.as_deref().into_iter().collect();
             let text = waiting_text(&questions, row.last_reply.as_deref());
-            if self.ask_intercept(&key, &events, Some(text.clone())) { return; }
+            if self.ask_intercept(&key, &events, Some(text.clone())) || muted { return; }
             self.voice.session_result(key.1, text);
             return;
         }
-        if self.ask_intercept(&key, &events, None) { return; }
+        if self.ask_intercept(&key, &events, None) || muted { return; }
         let Some((id, text)) = last_reply(&events) else { return };
         if !self.spoken.insert(id) { return; }
         self.talked.insert(key.clone(), Instant::now());

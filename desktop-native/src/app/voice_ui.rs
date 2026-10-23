@@ -116,7 +116,13 @@ pub(super) struct VoiceSettings {
     #[serde(default)] voice: Option<String>,
     #[serde(default = "default_account")] codex_account: String,
     #[serde(default)] organizer: Organizer,
+    /// Servidor anterior ao estilo não o manda: o cartão esconde a escolha, que ele ignoraria.
+    #[serde(default, skip_serializing_if = "Option::is_none")] style: Option<VoiceStyle>,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum VoiceStyle { #[default] Conversational, Direct }
 
 /// Posição do modo nos seletores do cartão.
 fn slot(mode: Mode) -> usize { match mode { Mode::Direct => 0, Mode::Plan => 1 } }
@@ -1556,6 +1562,26 @@ impl Hangar {
             body = body.child(div().flex().items_center().justify_between().gap(px(12.))
                 .child(div().text_xs().text_color(theme::muted()).child(tr("voice_account")))
                 .child(div().w(px(200.)).child(Select::new(picker).id("voice-select-account").small().disabled(live).accessibility_label(tr("voice_account")))));
+        }
+        if let Some(current) = self.voice.settings.as_ref().and_then(|s| s.style) {
+            let choices = [(VoiceStyle::Conversational, "live_voice_style_conversational"), (VoiceStyle::Direct, "live_voice_style_direct")];
+            body = body.child(div().flex().items_center().justify_between().gap(px(12.))
+                .child(div().text_xs().text_color(theme::muted()).child(tr_shared("live_voice_style", &[])))
+                .child(div().id("voice-style").role(Role::Group).aria_label(tr_shared("live_voice_style", &[])).w(px(200.)).flex().gap(px(2.))
+                    .children(choices.into_iter().map(|(style, key)| {
+                        let on = current == style;
+                        Button::new(SharedString::from(format!("voice-style-{key}"))).ghost().xsmall().flex_1().min_w_0()
+                            .selected(on).label(tr_shared(key, &[]))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if on { return; }
+                                let Some(settings) = this.voice.settings.as_mut() else { return };
+                                settings.style = Some(style);
+                                this.save_voice_settings(cx);
+                            }))
+                    }))));
+            let hint = if current == VoiceStyle::Direct { "live_voice_style_direct_hint" } else { "live_voice_style_conversational_hint" };
+            body = body.child(div().text_xs().text_color(theme::muted())
+                .child(format!("{} {}", tr_shared(hint, &[]), tr_shared("live_voice_style_next_call", &[]))));
         }
         // Abertos também na chamada: o par do modo atual troca já no próximo turno.
         for (mode, title) in [(Mode::Direct, "voice_mode_direct"), (Mode::Plan, "voice_mode_plan")] {

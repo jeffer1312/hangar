@@ -75,7 +75,7 @@ const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 const a: Server = { id: 'saved-a', label: 'machine-a', baseUrl: 'https://same.example/a', token: 'owner-a', lan: { url: 'http://192.168.1.2:8765', id: 'machine-a' } };
 const b: Server = { id: 'saved-b', label: 'machine-b', baseUrl: 'https://same.example/b', token: 'owner-b', lan: { url: 'http://192.168.1.2:8766', id: 'machine-b' } };
 const reply = (account = 'account-a'): LiveVoiceSettingsReply => ({ enabled: true, codex: true, jev: true, voices: ['sol'], call: { active: false, client: null },
-  settings: { voice: 'sol', codex_account: account, organizer: { direct: { model: 'direct-model', effort: 'medium', tier: null }, plan: { model: 'plan-model', effort: 'high', tier: null } } } });
+  settings: { voice: 'sol', codex_account: account, style: 'conversational', organizer: { direct: { model: 'direct-model', effort: 'medium', tier: null }, plan: { model: 'plan-model', effort: 'high', tier: null } } } });
 const memory: VoiceMemory = { id: 'one', kind: 'preferencia', text: 'text', learned: '2026-10-15', confirmed: '2026-10-15' };
 const state = (count = 0): LiveVoiceState => ({ phase: 'live', mode: 'direct', activity: 'idle', draft: null, error: null, plan: null, effective: null, context: null,
   limits: { five_hour: null, seven_day: null }, backstage: [], thought: '', action: null, followed: [], server: 'machine-a', client: 'mobile', memory: count });
