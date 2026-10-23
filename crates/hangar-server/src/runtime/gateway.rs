@@ -2594,7 +2594,7 @@ fn refuse(status:StatusCode,key:Option<&str>,check:&'static str) -> Response {
 fn same_terminal_life(old:&super::terminal::TerminalTarget,new:&super::terminal::TerminalTarget) -> bool {
     old.key==new.key && old.name==new.name && old.binding.pane==new.binding.pane && old.binding.created==new.binding.created
         && old.binding.conversation==new.binding.conversation && old.binding.generation==new.binding.generation
-        && old.metadata.agent_pid==new.metadata.agent_pid && old.metadata.agent_birth==new.metadata.agent_birth
+        && old.metadata.agent_pid==new.metadata.agent_pid && crate::terminal_facts::same_birth(old.metadata.agent_birth,new.metadata.agent_birth)
         && old.transcript==new.transcript && old.state_path==new.state_path && old.projection_dir==new.projection_dir && old.lease_path==new.lease_path
 }
 
@@ -3101,6 +3101,26 @@ pub(crate) mod tests {
         fn socket<'a>(&'a self,_:&'a crate::terminal_input::NativeMessage,_:Vec<u8>)->crate::terminal_input::IoFuture<'a,crate::terminal_input::WriteOutcome> {
             Box::pin(async {panic!("callback antigo não escreve no processo")})
         }
+    }
+    #[tokio::test]
+    async fn open_of_adopted_terminal_accepts_the_python_birth_of_the_same_agent() {
+        use crate::terminal_input::TerminalBinding;
+        let dir=tempfile::tempdir().unwrap();
+        let registry=RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into());
+        // Mesmo claude.exe medido na DELPHI-02: GetProcessTimes em f64 no Rust × psutil no Python.
+        let target=|birth:f64|super::super::terminal::TerminalTarget {key:"K".into(),generation:1,name:"hangar".into(),
+            binding:TerminalBinding {name:"hangar".into(),pane:"=hangar:0.0".into(),conversation:"sid".into(),generation:1,created:1,mux_argv:vec!["fixture-mux".into()],windows:true,clipboard_lock_path:None},
+            metadata:crate::terminal_facts::TerminalMetadata {config_dir:dir.path().into(),agent_pid:9652,agent_birth:birth,legacy_import_after:None,fingerprint:"fixture".into(),origin:"uds:fixture".into()},
+            state_path:dir.path().join("K.json"),lease_path:dir.path().join("K.lock"),projection_dir:dir.path().into(),transcript:dir.path().join("sid.jsonl"),created:1.0,plugin_key:None};
+        let adopted=target(1792762169.8483868);
+        let lease=acquire_lease(&adopted.lease_path).unwrap();
+        let store=Store::open(&adopted.state_path,&adopted.projection_dir,QueueState::new("K",1,"hangar",vec![])).unwrap();
+        let options=super::super::terminal::TerminalOptions {io:Arc::new(NoExternalIo),tick:Duration::from_secs(3600),..Default::default()};
+        let handle=super::super::terminal::TerminalActor::spawn(adopted.clone(),QueueActor::start(store,lease),registry.policy.clone(),options,registry.events.clone(),Arc::new(AtomicU64::new(0)));
+        registry.entries.lock().await.insert("K".into(),Entry {generation:1,handle:EntryHandle::Terminal {target:adopted.clone(),handle},lease_path:adopted.lease_path.clone(),name:"hangar".into(),mods_life:0,provider:"claude".into(),account_key:None,relaunch:None,settings_owner:None,
+            mode_source:crate::terminal_facts::ModeSource {binding:crate::terminal_facts::LocalTerminalFacts::binding(&adopted),transcript:adopted.transcript.clone(),confirmed:None},live:registry.live_sender("hangar"),runtime_target:None,cano_birth:None,auto_respawn:None,respawn_inflight:false});
+        assert_eq!(registry.open_terminal(target(1792762169.8483875)).await.unwrap()["opened"],true);
+        assert_eq!(registry.open_terminal(target(1792762170.8483868)).await.unwrap_err().code,"runtime_generation","outro processo no mesmo pid");
     }
     #[tokio::test]
     async fn dead_callback_a_keeps_b_actor_queue_and_interactions() {
