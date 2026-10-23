@@ -2081,12 +2081,13 @@ import { cachePrazo } from '../lib/cachePrazo';
       try {
         // Sobe todos os anexos e junta os paths numa UNICA linha (o backend rejeita '\n' no
         // send-keys). Cada path nao tem espaco (nome gerado). Marca imagem x arquivo pelo tipo.
-        const parts: string[] = [];
+        const porAnexo = new Map<Anexo, string[]>();
+        const lista = [...attachments];
         // Percorre uma CÓPIA e escreve no objeto, nunca em `attachments[i]`: quem já subiu e quem
         // ainda espera continuam com o ✕ à mostra, então dá pra remover um anexo no meio do envio —
         // e aí o índice de todo mundo depois dele anda, e o anel ia parar no tile errado (pior: um
         // anexo que nunca subiu ganhava 100%). A referência do objeto sobrevive ao filter.
-        for (const a of [...attachments]) {
+        for (const a of lista) {
           // Removido durante o envio: fica fora da mensagem e não sobe de novo.
           if (!attachments.includes(a)) continue;
           // Reusa o upload começado ao anexar (nunca sobe o mesmo arquivo duas vezes). Se ele
@@ -2097,6 +2098,7 @@ import { cachePrazo } from '../lib/cachePrazo';
           try {
             r = await subida;
           } catch (e) {
+            if (!attachments.includes(a)) continue;
             if (nova) throw e;
             r = a.subida === subida ? await subir(a) : null;
           }
@@ -2106,6 +2108,8 @@ import { cachePrazo } from '../lib/cachePrazo';
             throw new Error(m.composer_falha_envio());
           }
           const { path, frames, transcript } = r;
+          const parts: string[] = [];
+          porAnexo.set(a, parts);
           parts.push((a.isImage ? `📎 ${m.board_imagem()}: ` : `📎 ${m.board_arquivo()}: `) + path);
           // Video: o backend extraiu quadros ao longo da duracao e transcreveu a fala. Os quadros
           // entram como imagens (o Read abre; a lista tambem vira miniatura no chat) e a fala vai
@@ -2113,8 +2117,11 @@ import { cachePrazo } from '../lib/cachePrazo';
           for (const q of frames ?? []) parts.push(`📎 ${m.board_imagem()}: ` + q);
           if (transcript) parts.push(m.composer_fala_video({ texto: transcript }));
         }
-        const attachPart = parts.join(' ');
-        const msg = (message ? message + ' — ' : '') + attachPart;
+        // Monta só agora: anexo que subiu e foi removido enquanto o envio esperava outro sai daqui.
+        const attachPart = lista.filter((a) => attachments.includes(a)).flatMap((a) => porAnexo.get(a) ?? []).join(' ');
+        const msg = [message, attachPart].filter(Boolean).join(' — ');
+        // Sem texto e com todos os anexos removidos no meio: não há o que enviar.
+        if (!msg) return false;
         await onSend(msg, steer);
         inputText = '';
         if (textareaEl) textareaEl.style.height = 'auto';
@@ -2428,9 +2435,8 @@ import { cachePrazo } from '../lib/cachePrazo';
             {/if}
             {#if a.pct != null && a.pct < 100}
               <span class="tile-pct" role="status">{a.pct}%</span>
-            {:else}
-              <button class="tile-x" onclick={() => removeAttachment(idx)} aria-label={m.board_remover_anexo()}>×</button>
             {/if}
+            <button class="tile-x" onclick={() => removeAttachment(idx)} aria-label={m.board_remover_anexo()}>×</button>
           </div>
         {/each}
       </div>
@@ -3681,7 +3687,7 @@ import { cachePrazo } from '../lib/cachePrazo';
     transition: stroke-dashoffset 200ms linear;
   }
 
-  /* % e ✕ ocupam o MESMO canto: um sai quando o outro entra, e é o que faz o tile "terminar". */
+  /* % embaixo e ✕ em cima: remover continua possível enquanto o upload anda. */
   .tile-pct,
   .tile-x {
     position: absolute;

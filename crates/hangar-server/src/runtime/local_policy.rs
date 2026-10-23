@@ -13,6 +13,8 @@ const IMAGE_CAP: u64 = 5 * 1024 * 1024;
 /// A API reduz a imagem a este lado de qualquer jeito; mandar maior só enche o cano do Claude.
 const IMAGE_EDGE: u32 = 1568;
 const SHRINK_FROM: usize = 256 * 1024;
+const MAX_DECODE_EDGE: u32 = 12_000;
+const MAX_DECODE_ALLOC: u64 = 192 * 1024 * 1024;
 const FAMILIES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
 
 static NATIVE_PREFIX: LazyLock<regex::Regex> =
@@ -169,6 +171,36 @@ mod batch_tests {
         assert_eq!((decoded.width(),decoded.height()),(1568,1045));
         let (kept,_)=prompt_blocks(&text,false);
         assert_eq!(kept[1]["source"]["data"],base64::engine::general_purpose::STANDARD.encode(&original));
+    }
+
+    fn noisy_jpeg(width:u32,height:u32,exif:Vec<u8>) -> Vec<u8> {
+        use image::ImageEncoder;
+        let mut seed=7u32;
+        let image=image::RgbImage::from_fn(width,height,|_,_| {seed=seed.wrapping_mul(1664525).wrapping_add(1013904223);image::Rgb((seed>>8).to_le_bytes()[..3].try_into().unwrap())});
+        let mut out=Vec::new();let mut encoder=image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out,60);
+        encoder.set_exif_metadata(exif).unwrap();
+        encoder.write_image(&image,width,height,image::ExtendedColorType::Rgb8).unwrap();
+        out
+    }
+
+    #[test]
+    fn shrunk_photo_keeps_the_exif_rotation() {
+        // TIFF mínimo com Orientation=6 (girar 90° no sentido horário).
+        let exif=vec![0x49,0x49,42,0,8,0,0,0,1,0,0x12,0x01,3,0,1,0,0,0,6,0,0,0,0,0,0,0];
+        let data=noisy_jpeg(2000,1000,exif);
+        assert!(data.len()>SHRINK_FROM && (data.len() as u64)<IMAGE_CAP);
+        let (out,mime)=shrunk(data,"image/jpeg");
+        assert_eq!(mime,"image/jpeg");
+        let decoded=image::load_from_memory(&out).unwrap();
+        assert_eq!((decoded.width(),decoded.height()),(784,1568));
+    }
+
+    #[test]
+    fn image_beyond_the_decode_limit_is_sent_as_it_came() {
+        let data=noisy_jpeg(MAX_DECODE_EDGE+8,64,Vec::new());
+        assert!(data.len()>SHRINK_FROM);
+        let (out,mime)=shrunk(data.clone(),"image/jpeg");
+        assert_eq!((out,mime),(data,"image/jpeg"));
     }
 
     #[cfg(unix)]
@@ -345,10 +377,10 @@ fn prompt_blocks(text: &str, shrink: bool) -> (Vec<Value>, Vec<String>) {
     (blocks, notices)
 }
 
-/// Lado maior até `IMAGE_EDGE`; fica o original quando não decodifica, é GIF ou não diminui.
+/// Lado maior até `IMAGE_EDGE`; fica o original quando não decodifica, passa dos limites, é GIF ou não diminui.
 fn shrunk(data: Vec<u8>, mime: &'static str) -> (Vec<u8>, &'static str) {
     if data.len() <= SHRINK_FROM || mime == "image/gif" { return (data, mime); }
-    let Ok(image) = image::load_from_memory(&data) else { return (data, mime) };
+    let Some(image) = decode_upright(&data) else { return (data, mime) };
     if image.width().max(image.height()) <= IMAGE_EDGE { return (data, mime); }
     let image = image.resize(IMAGE_EDGE, IMAGE_EDGE, image::imageops::FilterType::Triangle);
     let mut out = Vec::new();
@@ -358,6 +390,25 @@ fn shrunk(data: Vec<u8>, mime: &'static str) -> (Vec<u8>, &'static str) {
         (image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&image.to_rgb8()).is_ok(), "image/jpeg")
     };
     if encoded && out.len() < data.len() { (out, out_mime) } else { (data, mime) }
+}
+
+/// A recodificação descarta o EXIF, então a rotação vai para os pixels; os limites barram o PNG
+/// pequeno no disco e enorme na memória.
+fn decode_upright(data: &[u8]) -> Option<image::DynamicImage> {
+    use image::ImageDecoder;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_DECODE_EDGE);
+    limits.max_image_height = Some(MAX_DECODE_EDGE);
+    limits.max_alloc = Some(MAX_DECODE_ALLOC);
+    reader.limits(limits);
+    let mut decoder = reader.into_decoder().ok()?;
+    // Só o decodificador de PNG respeita `max_alloc`; JPEG e WebP precisam da conta aqui.
+    if decoder.total_bytes() > MAX_DECODE_ALLOC { return None; }
+    let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut image = image::DynamicImage::from_decoder(decoder).ok()?;
+    image.apply_orientation(orientation);
+    Some(image)
 }
 
 // ---- format_status ----

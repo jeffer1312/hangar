@@ -1554,6 +1554,30 @@ test('recusa devolve texto e áudios ao campo vazio; com texto novo conserva o n
     submission: { text: 'outro', status: 'rejected' } });
 });
 
+test('recusa com texto novo devolve os áudios enviados sem duplicar os novos', async () => {
+  const sent = { id: 'voice-1', serverPath: '/uploaded/voice.m4a' };
+  const added = { id: 'voice-2', serverPath: '/uploaded/new.m4a' };
+  writeDraft('srv1', 'sess', { version: 1, text: 'ditado', revision: 7, transcript: '/first',
+    recordings: [sent], attachments: [], submission: null });
+  const requests = fetchManual();
+  const sending = expect(chatStore('srv1', 'sess').send('ditado', 7)).rejects.toMatchObject({ status: 400 });
+  writeDraft('srv1', 'sess', { ...readDraft('srv1', 'sess')!, text: 'novo', revision: 9, recordings: [added] });
+  requests[0].responder(null, { status: 400 });
+  await sending;
+  expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'novo', recordings: [sent, added] });
+});
+
+test('recusa não devolve o texto ao campo que foi editado e apagado durante o envio', async () => {
+  writeDraft('srv1', 'sess', { version: 1, text: 'antigo', revision: 7, transcript: '/first', attachments: [], submission: null });
+  const requests = fetchManual();
+  const sending = expect(chatStore('srv1', 'sess').send('antigo', 7)).rejects.toMatchObject({ status: 400 });
+  writeDraft('srv1', 'sess', { ...readDraft('srv1', 'sess')!, text: '', revision: 10 });
+  requests[0].responder(null, { status: 400 });
+  await sending;
+  expect(readDraft('srv1', 'sess')).toMatchObject({ text: '', revision: 10,
+    submission: { text: 'antigo', status: 'rejected' } });
+});
+
 test('envio retira já os chips de áudio enviados e conserva os ditados depois', async () => {
   const recording = { id: 'voice-1', serverPath: '/uploaded/voice.m4a' };
   writeDraft('srv1', 'sess', { version: 1, text: 'ditado', revision: 7, transcript: '/first',
