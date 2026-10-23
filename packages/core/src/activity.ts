@@ -177,6 +177,8 @@ export function createActivityFolder(): ActivityFolder {
       return;
     }
     if (e.kind === 'user_msg' && e.text && e.text.includes('<task-notification>')) {
+      // Subagente que só parou para esperar o próprio trabalho de fundo: segue vivo.
+      if (/is waiting on its own background work|background work of its own still running/.test(e.text)) return;
       const match = e.text.match(/<task-id>([^<]+)<\/task-id>/);
       if (match) completeAgent(match[1].trim());
       return;
@@ -194,7 +196,8 @@ export function createActivityFolder(): ActivityFolder {
         if (msg && typeof msg === 'object' && String(msg.type ?? '').startsWith('shutdown')) break;
         const para = String(input.to ?? input.recipient ?? '');
         for (const [alvo, tuid] of bgAgent) {
-          if (alvo !== `teammate:${para}` && !(para === '*' && alvo.startsWith('teammate:'))) continue;
+          // Agente de fundo comum é retomado pelo SendMessage endereçado ao agentId dele.
+          if (alvo !== para && alvo !== `teammate:${para}` && !(para === '*' && alvo.startsWith('teammate:'))) continue;
           resulted.delete(tuid);
           if (typeof e.ts === 'number') acordado.set(alvo, e.ts);
         }

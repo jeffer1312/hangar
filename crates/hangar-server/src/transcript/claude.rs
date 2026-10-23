@@ -163,6 +163,12 @@ fn text_event(kind: ChatKind, id: String, text: String) -> ChatEvent {
     ChatEvent { text: Some(text), ..event(kind, id) }
 }
 
+/// Aviso de um subagente que só parou para esperar o próprio trabalho de fundo: vem com status
+/// `completed`, mas ele segue vivo e o fim de verdade chega noutro aviso com o mesmo task-id.
+fn interim_notification(text: &str) -> bool {
+    text.contains("is waiting on its own background work") || text.contains("background work of its own still running")
+}
+
 fn task_result(id: String, task: &str) -> ChatEvent {
     ChatEvent {
         tool_use_id: Some(format!("task:{task}")),
@@ -375,6 +381,7 @@ fn queue_operation(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatE
         return stopped;
     }
     if lstrip(q).starts_with("<task-notification>") {
+        if interim_notification(q) { return Vec::new(); }
         return match TASK_NOTIF.captures(q) {
             Some(m) => {
                 let tid = strip(&m[1]);
@@ -496,6 +503,7 @@ fn user(obj: &Map<String, Value>, uid: &str, content: Option<&Value>, resolve: P
 
 fn user_text(uid: &str, s: &str) -> Vec<ChatEvent> {
     if lstrip(s).starts_with("<task-notification>") {
+        if interim_notification(s) { return Vec::new(); }
         return match TASK_NOTIF.captures(s) {
             Some(m) => vec![task_result(uid.into(), strip(&m[1]))],
             None => Vec::new(),
@@ -777,6 +785,20 @@ mod tests {
         assert_eq!(first, again);
         assert_eq!(resumed[0].1.as_deref(), Some("task:a45"));
         assert_ne!(first[0].0, resumed[0].0);
+    }
+
+    #[test]
+    fn interim_notice_of_a_waiting_subagent_does_not_end_it() {
+        let notice = |summary: &str| format!("<task-notification>\n<task-id>a45</task-id>\n<status>completed</status>\n\
+            <summary>Agent \"R1\" {summary}</summary>\n<result>x</result>\n</task-notification>");
+        let parse = |line: Value| LineParser::new(Provider::Claude).feed(line.to_string().as_bytes(), 0)
+            .into_iter().map(|e| e.tool_use_id).collect::<Vec<_>>();
+        let waiting = notice("is waiting on its own background work");
+        assert!(parse(json!({"type": "queue-operation", "operation": "enqueue", "content": waiting})).is_empty());
+        assert!(parse(json!({"type": "user", "uuid": "u-w", "message": {"role": "user", "content": waiting}})).is_empty());
+        let done = notice("completed");
+        assert_eq!(parse(json!({"type": "user", "uuid": "u-d", "message": {"role": "user", "content": done}})),
+            vec![Some("task:a45".to_string())]);
     }
 
     #[test]

@@ -388,6 +388,8 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
             "user_msg" => {
                 let text = event.text.as_deref().unwrap_or("");
                 if !text.contains("<task-notification>") { continue; }
+                // Subagente que só parou para esperar o próprio trabalho de fundo: segue vivo.
+                if text.contains("is waiting on its own background work") || text.contains("background work of its own still running") { continue; }
                 let Some(task) = text.split_once("<task-id>").and_then(|(_, rest)| rest.split_once("</task-id>")).map(|(id, _)| id.trim()) else { continue };
                 finish(task.to_owned(), event.ts, &background, &mut resulted, &mut finished_early);
             }
