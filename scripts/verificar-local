@@ -359,8 +359,10 @@ passo_front_rapido() {
     fi
     while IFS= read -r f; do [[ -n "$f" && -f "$f" ]] && rel+=("$PWD/$f"); done <<< "$web"
     (( msgs )) && rel+=("$PWD/frontend/src/lib/i18nGuard.test.ts")
-    (( ${#rel[@]} )) || return 0
-    (cd packages/core && npx vitest related --run --passWithNoTests "${rel[@]}") || return 1
+    # Diff só com arquivo apagado do core deixa `rel` vazio e ainda escolhe testes do front abaixo.
+    if (( ${#rel[@]} )); then
+        (cd packages/core && npx vitest related --run --passWithNoTests "${rel[@]}") || return 1
+    fi
     # O core é reexportado inteiro pelo index: "relacionado" a um arquivo dele é quase todo teste do
     # front (mais de 40 min). Do front entram os arquivos que importam um nome que o diff do core
     # mudou (direto ou por quem o usa dentro do core), e o vitest acha os testes deles.
@@ -444,6 +446,7 @@ vigiar_disco() {   # $1 = pid do passo, $2 = log
 executar() {   # $1 = so, $2 = sha, $3 = bundle ("-" = sem bundle), resto = passos
     SO="$1"; local sha="$2" bundle="$3"; shift 3
     PROCESSOS="${HANGAR_VERIFICAR_PROCESSOS:-1}"; PLANO="$*"; ARQUIVOS="${HANGAR_VERIFICAR_ARQUIVOS:-}"
+    HANGAR_VERIFICAR_BASE="${HANGAR_VERIFICAR_BASE:-}"
     preparar_arvore "$sha" "$bundle" || return $?
     if [[ "$SO" == windows ]]; then rodar_passos "$sha" "$@"; return; fi
     NODE_DIR="$(node_da_arvore)"
@@ -579,7 +582,7 @@ rodar_passos() {   # $1 = sha, resto = passos; cwd = árvore preparada
         echo ">> $SO: $p…" >&3
         ini=$SECONDS
         # setsid no Linux: o passo vira grupo próprio e o vigia mata a árvore inteira.
-        "${LIMPO[@]}" SO="$SO" $SETSID bash -c "$(declare -f); $(declare -p RUNTIME_TESTS PROCESSOS PLANO ARQUIVOS); passo_$p" >"$log" 2>&1 &
+        "${LIMPO[@]}" SO="$SO" $SETSID bash -c "$(declare -f); $(declare -p RUNTIME_TESTS PROCESSOS PLANO ARQUIVOS HANGAR_VERIFICAR_BASE); passo_$p" >"$log" 2>&1 &
         local spid=$! vigia rc
         vigiar_disco "$spid" "$log" &
         vigia=$!
