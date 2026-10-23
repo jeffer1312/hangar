@@ -88,6 +88,13 @@ _PASTED_RE = re.compile(r'<pasted_content id="([^"]*)">\n?(.*?)\n?</pasted_conte
 # tool_result SINTETICO com tool_use_id="task:<id>" (o front nunca renderiza tool_result orfao;
 # so o fold de atividade consome).
 _TASK_NOTIF_RE = re.compile(r"<task-id>([^<]+)</task-id>")
+# Subagente que só parou para esperar o próprio trabalho de fundo: segue vivo. Só o <summary>,
+# porque o <result> do fim de verdade pode citar a frase.
+_AVISO_PARCIAL_RE = re.compile(r"<summary>[^<]*is waiting on its own background work[^<]*</summary>")
+
+
+def _aviso_parcial(texto: str) -> bool:
+    return _AVISO_PARCIAL_RE.search(texto) is not None
 
 # Relatório de subagente entregue pelo harness como msg "user" embrulhada, com `from` = agentId do
 # launch. É conversa entre agentes, não do usuário: o hand-back final fecha o Agent como a
@@ -537,6 +544,8 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
                 str(queued).encode("utf-8", "replace")).hexdigest()[:8])) is not None:
             return parados
         if isinstance(queued, str) and queued.lstrip().startswith("<task-notification>"):
+            if _aviso_parcial(queued):
+                return []
             m = _TASK_NOTIF_RE.search(queued)
             if m:
                 tid = m.group(1).strip()
@@ -640,6 +649,8 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
             return colega
         if isinstance(content, str):
             if content.lstrip().startswith("<task-notification>"):
+                if _aviso_parcial(content):
+                    return []
                 m = _TASK_NOTIF_RE.search(content)
                 if m:
                     return [ChatEvent(kind="tool_result", id=uid,

@@ -41,6 +41,13 @@ impl Item {
 
 const GROUP_MIN: usize = 3;
 
+/// Aviso de subagente que só parou para esperar o próprio trabalho de fundo: ele segue vivo. Só o
+/// `<summary>`: o `<result>` do fim de verdade pode citar a frase.
+fn interim_notification(text: &str) -> bool {
+    text.split_once("<summary>").and_then(|(_, rest)| rest.split_once("</summary>"))
+        .is_some_and(|(summary, _)| summary.contains("is waiting on its own background work"))
+}
+
 fn hidden_message(event: &ChatEvent) -> bool {
     let text = event.text.as_deref().or(event.result.as_deref()).unwrap_or("");
     match event.kind.as_str() {
@@ -388,8 +395,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
             "user_msg" => {
                 let text = event.text.as_deref().unwrap_or("");
                 if !text.contains("<task-notification>") { continue; }
-                // Subagente que só parou para esperar o próprio trabalho de fundo: segue vivo.
-                if text.contains("is waiting on its own background work") || text.contains("background work of its own still running") { continue; }
+                if interim_notification(text) { continue; }
                 let Some(task) = text.split_once("<task-id>").and_then(|(_, rest)| rest.split_once("</task-id>")).map(|(id, _)| id.trim()) else { continue };
                 finish(task.to_owned(), event.ts, &background, &mut resulted, &mut finished_early);
             }

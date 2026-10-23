@@ -64,13 +64,22 @@ describe('activity — pareamento de agente background', () => {
       + '<status>completed</status>\n<summary>Agent "R1" is waiting on its own background work</summary>\n</task-notification>' };
     expect(run([launch('tu1'), launched('tu1', 'aa0777'), esperando]).runningAgents).toBe(1);
     expect(run([launch('tu1'), launched('tu1', 'aa0777'), esperando, done('aa0777')]).runningAgents).toBe(0);
+    // O fim de verdade que cita a frase no resultado continua sendo fim.
+    const citando: ChatEvent = { kind: 'user_msg', id: `e${seq++}`, text: '<task-notification>\n<task-id>aa0777</task-id>\n'
+      + '<status>completed</status>\n<summary>Agent "R1" completed</summary>\n'
+      + '<result>o aviso "is waiting on its own background work" virava fim</result>\n</task-notification>' };
+    expect(run([launch('tu1'), launched('tu1', 'aa0777'), citando]).runningAgents).toBe(0);
   });
 
   it('agente de fundo comum retomado por SendMessage ao agentId volta a rodar', () => {
     const fim = (ts: number): ChatEvent => ({ kind: 'tool_result', id: `e${seq++}`, tool_use_id: 'task:aa0777', result: 'task-notification', ts });
     const retoma: ChatEvent = { kind: 'tool_use', id: `e${seq++}`, tool_use_id: 'tu2', tool_name: 'SendMessage', tool_input: { to: 'aa0777', message: 'continua' }, ts: 10 };
-    expect(run([launch('tu1'), launched('tu1', 'aa0777'), fim(5), retoma]).runningAgents).toBe(1);
-    expect(run([launch('tu1'), launched('tu1', 'aa0777'), fim(5), retoma, fim(20)]).runningAgents).toBe(0);
+    const aceito: ChatEvent = { kind: 'tool_result', id: `e${seq++}`, tool_use_id: 'tu2', result: '{"success":true}', ts: 11 };
+    const recusado: ChatEvent = { ...aceito, id: `e${seq++}`, is_error: true };
+    const base = [launch('tu1'), launched('tu1', 'aa0777'), fim(5), retoma];
+    expect(run([...base, aceito]).runningAgents).toBe(1);
+    expect(run([...base, recusado]).runningAgents).toBe(0);
+    expect(run([...base, aceito, fim(20)]).runningAgents).toBe(0);
   });
 
   it('segue rodando enquanto nao chega o evento de fim', () => {

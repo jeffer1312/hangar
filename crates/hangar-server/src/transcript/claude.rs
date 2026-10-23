@@ -165,8 +165,10 @@ fn text_event(kind: ChatKind, id: String, text: String) -> ChatEvent {
 
 /// Aviso de um subagente que só parou para esperar o próprio trabalho de fundo: vem com status
 /// `completed`, mas ele segue vivo e o fim de verdade chega noutro aviso com o mesmo task-id.
+/// Só o `<summary>`: o `<result>` do fim de verdade pode citar a frase.
 fn interim_notification(text: &str) -> bool {
-    text.contains("is waiting on its own background work") || text.contains("background work of its own still running")
+    text.split_once("<summary>").and_then(|(_, rest)| rest.split_once("</summary>"))
+        .is_some_and(|(summary, _)| summary.contains("is waiting on its own background work"))
 }
 
 fn task_result(id: String, task: &str) -> ChatEvent {
@@ -796,9 +798,9 @@ mod tests {
         let waiting = notice("is waiting on its own background work");
         assert!(parse(json!({"type": "queue-operation", "operation": "enqueue", "content": waiting})).is_empty());
         assert!(parse(json!({"type": "user", "uuid": "u-w", "message": {"role": "user", "content": waiting}})).is_empty());
-        let done = notice("completed");
+        let done = notice("completed").replace("<result>x</result>", "<result>is waiting on its own background work</result>");
         assert_eq!(parse(json!({"type": "user", "uuid": "u-d", "message": {"role": "user", "content": done}})),
-            vec![Some("task:a45".to_string())]);
+            vec![Some("task:a45".to_string())], "o fim que cita a frase no resultado continua sendo fim");
     }
 
     #[test]
