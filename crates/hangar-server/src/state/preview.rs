@@ -406,6 +406,7 @@ mod tests {
         fn runtime_problem(&self) -> Option<(String, String)> { None }
         async fn ask_payload(&self) -> Result<Option<hangar_api::ask::AskQuestion>, String> { Ok(None) }
         fn deliverable(&self) {}
+        fn trust_dialog(&self) {}
     }
 
     #[tokio::test(start_paused = true)]

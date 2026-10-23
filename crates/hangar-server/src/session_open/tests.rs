@@ -1383,6 +1383,47 @@ fn the_kimi_folder_is_pretrusted_once() {
     assert_eq!(written, json!({"root": "/w/proj", "trustedAt": 1000}));
 }
 
+/// A confiança espera a trava do Claude Code (`<arquivo>.lock`): quem a segura regrava o arquivo
+/// inteiro, e a confiança gravada no meio sumiria.
+#[test]
+fn pretrust_waits_for_the_claude_code_config_lock() {
+    let home = tempfile::tempdir().unwrap();
+    let file = home.path().join(".claude.json");
+    std::fs::write(&file, r#"{"projects": {}}"#).unwrap();
+    let lock = home.path().join(".claude.json.lock");
+    std::fs::create_dir(&lock).unwrap();
+    // Uma sessão viva que leu o arquivo antes regrava a cópia dela e só então solta a trava.
+    let holder = {
+        let (file, lock) = (file.clone(), lock.clone());
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            std::fs::write(&file, r#"{"projects": {"/outra": {"lastCost": 1}}}"#).unwrap();
+            std::fs::remove_dir(&lock).unwrap();
+        })
+    };
+    claude::pretrust(&file, "/x", false).unwrap();
+    holder.join().unwrap();
+    let data: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(data["projects"]["/x"]["hasTrustDialogAccepted"], true, "a confiança sobrevive à regravação da sessão viva");
+    assert_eq!(data["projects"]["/outra"]["lastCost"], 1, "e não apaga o que a sessão viva gravou");
+    assert!(!lock.exists(), "a trava da confiança sai com ela");
+}
+
+/// Trava que não solta (sessão travada no meio da gravação): a confiança grava sem ela, como o
+/// próprio Claude Code faz, e não mexe na trava alheia.
+#[test]
+fn pretrust_writes_without_a_lock_that_never_frees() {
+    let home = tempfile::tempdir().unwrap();
+    let file = home.path().join(".claude.json");
+    std::fs::write(&file, r#"{"projects": {}}"#).unwrap();
+    let lock = home.path().join(".claude.json.lock");
+    std::fs::create_dir(&lock).unwrap();
+    claude::pretrust(&file, "/x", false).unwrap();
+    let data: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(data["projects"]["/x"]["hasTrustDialogAccepted"], true);
+    assert!(lock.is_dir(), "a trava de outro processo fica onde estava");
+}
+
 /// `_pretrust_cwd` e `default_model.drop_foreign` (test_registry, test_default_model): a pasta
 /// confiada no arquivo, já confiada sem reescrever; modelo de motor fora dos dois `settings.json`.
 #[test]

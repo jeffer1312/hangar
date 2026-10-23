@@ -218,10 +218,52 @@ pub fn prep_result(account: &str, code: Option<i32>, stderr: &str) -> Result<Vec
 
 static PRETRUST: Mutex<()> = Mutex::new(());
 
+/// Quanto a confiança espera a trava do Claude Code antes de gravar sem ela (como ele mesmo faz).
+const CONFIG_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+/// Trava mais velha que isto foi largada por um processo morto (o `stale` padrão do `proper-lockfile`).
+const CONFIG_LOCK_STALE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A trava que o Claude Code usa no `.claude.json` (`proper-lockfile`: a pasta `<arquivo real>.lock`).
+/// Sem ela, uma sessão viva da conta que já tinha lido o arquivo regrava a cópia dela por cima da confiança.
+struct ConfigLock(PathBuf);
+
+impl Drop for ConfigLock {
+    fn drop(&mut self) { let _ = std::fs::remove_dir(&self.0); }
+}
+
+fn lock_config(file: &Path) -> Result<ConfigLock, String> {
+    let mut lock = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_owned()).into_os_string();
+    lock.push(".lock");
+    let lock = PathBuf::from(lock);
+    let deadline = std::time::Instant::now() + CONFIG_LOCK_WAIT;
+    loop {
+        match std::fs::create_dir(&lock) {
+            Ok(()) => return Ok(ConfigLock(lock)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let stale = std::fs::metadata(&lock).and_then(|m| m.modified()).ok()
+                    .and_then(|t| t.elapsed().ok()).is_some_and(|age| age > CONFIG_LOCK_STALE);
+                if stale {
+                    match std::fs::remove_dir(&lock) {
+                        Ok(()) => continue,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(e) => return Err(format!("trava largada não saiu: {e}")),
+                    }
+                }
+                if std::time::Instant::now() >= deadline { return Err("trava ocupada".into()); }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
 /// `_pretrust_cwd`: a pasta nasce confiada no `.claude.json` que a sessão lê (senão ela nasce presa
 /// no "trust this folder?", invisível para o app). Já confiada não reescreve; a falha volta a quem chamou.
 pub fn pretrust(file: &Path, cwd: &str, windows: bool) -> Result<(), String> {
     let _guard = PRETRUST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _lock = lock_config(file).inspect_err(|error| {
+        tracing::warn!(file = %file.display(), error, "trava do .claude.json indisponível; a confiança grava sem ela");
+    }).ok();
     let result = (|| -> Result<(), String> {
         let mut data: Value = match std::fs::read(file) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
@@ -240,6 +282,28 @@ pub fn pretrust(file: &Path, cwd: &str, windows: bool) -> Result<(), String> {
     })();
     if let Err(error) = &result { tracing::warn!(file = %file.display(), error, "pré-confiar a pasta falhou; o diálogo aparece na sessão"); }
     result
+}
+
+/// O que o `.claude.json` diz da pasta quando o "trust this folder?" aparece mesmo assim: o código vai ao
+/// diário, e o detalhe (marca, chaves da entrada, idade do arquivo, trava) ao log.
+pub fn trust_evidence(file: &Path, cwd: &str, windows: bool) -> (&'static str, String) {
+    let key = if windows { cwd.replace('\\', "/") } else { cwd.to_owned() };
+    let mut lock = file.as_os_str().to_owned();
+    lock.push(".lock");
+    let locked = Path::new(&lock).is_dir();
+    let age = std::fs::metadata(file).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).map(|d| d.as_secs());
+    let data: Value = match std::fs::read(file).map(|bytes| serde_json::from_slice(&bytes)) {
+        Ok(Ok(data)) => data,
+        Ok(Err(e)) => return ("trust_config_unreadable", format!("file={} json={e}", file.display())),
+        Err(e) => return ("trust_config_unreadable", format!("file={} io={e}", file.display())),
+    };
+    let entry = data.get("projects").and_then(|p| p.get(&key));
+    let keys: Vec<&str> = entry.and_then(Value::as_object).map(|o| o.keys().map(String::as_str).collect()).unwrap_or_default();
+    let code = match entry.and_then(|e| e.get("hasTrustDialogAccepted")) {
+        Some(Value::Bool(true)) => "trust_flag_present",
+        _ => "trust_flag_absent",
+    };
+    (code, format!("file={} key={key} entry_keys={keys:?} file_age_s={age:?} lock={locked}", file.display()))
 }
 
 /// Ids que a API da Anthropic aceita (`default_model._ANTHROPIC`).
