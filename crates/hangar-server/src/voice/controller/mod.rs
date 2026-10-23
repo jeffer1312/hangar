@@ -524,10 +524,14 @@ impl Controller {
                 "Conversa reaberta como sessão {name} e aberta na tela; a troca já foi anunciada, não repita. {}{notice}", super::rules::after_switch(&name)), true)),
             Forwarded::Opened { call, name, reopened: true, notice, .. } =>
                 self.fail(call, "reopen_conversation", format!("A conversa voltou como sessão {name}, mas não abriu na tela; não reabra de novo.{notice}")),
-            Forwarded::Opened { call, name, sent, notice, .. } => match super::rules::opened_reply(&name, ok, sent.as_ref()) {
-                Ok(reply) => self.voice.reply(call, tool_reply(reply + &notice, true)),
-                Err(reply) => self.fail(call, "open_session", reply + &notice),
-            },
+            Forwarded::Opened { call, name, sent, notice, .. } => {
+                // Não mostrar na tela virou sucesso com aviso: o motivo da recusa do aparelho fica no log, para diagnóstico.
+                if !ok { log(format!("open_session not shown reason={}", text.chars().take(120).collect::<String>())); }
+                match super::rules::opened_reply(&name, ok, sent.as_ref()) {
+                    Ok(reply) => self.voice.reply(call, tool_reply(reply + &notice, true)),
+                    Err(reply) => self.fail(call, "open_session", reply + &notice),
+                }
+            }
             Forwarded::JevSwitch { turn, key, machine } => self.jev_switched(turn, key, machine, ok),
             Forwarded::JevAction { turn, label } => self.jev_acted(turn, label, ok, text),
         }

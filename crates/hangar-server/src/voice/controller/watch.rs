@@ -120,7 +120,8 @@ impl Controller {
             Err(_) => {
                 log("history read failed");
                 // Sem este aviso o resultado da sessão se perderia calado.
-                if !muted { self.voice.session_result(key.1.clone(), format!("Não consegui ler a resposta da sessão {}.", key.1)); }
+                let asked = self.pending_question.as_ref().is_some_and(|(k, _)| *k == key);
+                if !muted || asked { self.voice.session_result(key.1.clone(), format!("Não consegui ler a resposta da sessão {}.", key.1)); }
                 return;
             }
         };

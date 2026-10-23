@@ -898,7 +898,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                         }
                     };
                     log(format!("tool call {tool} outcome={outcome}"));
-                    if let Some((call, Some(turn))) = acting && !outcome.starts_with("refused") && outcome != "unknown" {
+                    if let Some((call, Some(turn))) = acting && !failed_outcome(outcome) {
                         if acting_calls.len() >= 64 { acting_calls.clear(); }
                         if acted.len() >= 64 { acted.clear(); }
                         *acted.entry(turn.clone()).or_default() += 1;
@@ -1259,6 +1259,12 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
 }
 
 /// argv do pedido antigo de aprovação → linha que `destructive` lê: argumento com espaço ou aspas vai entre aspas, senão
+/// Rótulo de ferramenta que já voltou falha na hora: não conta como "agiu" para a fala repetida.
+fn failed_outcome(outcome: &str) -> bool {
+    outcome.starts_with("refused") || outcome.starts_with("memory-")
+        || matches!(outcome, "unknown" | "forget-unknown" | "held-continuation" | "plan-failed" | "plan-read-failed")
+}
+
 /// `bash -lc "git push"` vira palavras soltas. Com os dois tipos de aspas não há como citar sem escape: sem linha, o comando
 /// conta como destrutivo.
 fn argv_line(parts: &[Value]) -> Option<String> {
