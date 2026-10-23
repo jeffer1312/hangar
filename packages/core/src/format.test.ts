@@ -37,6 +37,11 @@ it('recado de par externo tem escopo próprio', () => {
   expect(parsePeerMessage('[de: api] oi')?.scope).toBe('peer');
 });
 
+it('mensagem de plugin do Claude Code vira aviso automático', () => {
+  expect(parsePeerMessage('The acme plugin sent a message: [acme] Aviso automático do mod'))
+    .toEqual({ from: 'plugin acme', text: '[acme] Aviso automático do mod', scope: 'panel' });
+});
+
 describe('abbrevNum', () => {
   it('abbreviates millions', () => {
     expect(abbrevNum(3_668_662)).toBe('3.7M');

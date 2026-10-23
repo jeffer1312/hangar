@@ -22,6 +22,9 @@ pub struct Sidecar {
     pub fed: Option<Fed>,
     /// A sessão que criou esta e a ligou ao grupo. Só vale enquanto estiver em `peers`.
     pub linked_by: Option<String>,
+    /// A sessão que formou o grupo (`--pair`/`--link`): a principal da aba no app. Só vale enquanto
+    /// for o próprio dono do sidecar ou estiver em `peers`.
+    pub lead: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -85,7 +88,8 @@ impl Sidecar {
         // `fed` torto = ausente; quem lê pelo `PairDir` registra no diário.
         let fed = data.get("fed").and_then(|f| serde_json::from_value::<Fed>(f.clone()).ok());
         let linked_by = data.get("linked_by").and_then(Value::as_str).filter(|p| !p.is_empty()).map(str::to_owned);
-        Some(Sidecar { peers, task, gid, harness, orq, fed, linked_by })
+        let lead = data.get("lead").and_then(Value::as_str).filter(|p| !p.is_empty()).map(str::to_owned);
+        Some(Sidecar { peers, task, gid, harness, orq, fed, linked_by, lead })
     }
 
     /// Mesmo corpo que o `PairLink.set` grava (pair.py:96-108).
@@ -98,6 +102,7 @@ impl Sidecar {
         if self.orq { body["orq"] = json!(true); }
         if let Some(fed) = &self.fed { body["fed"] = serde_json::to_value(fed).expect("Fed serializa"); }
         if let Some(parent) = &self.linked_by { body["linked_by"] = json!(parent); }
+        if let Some(lead) = &self.lead { body["lead"] = json!(lead); }
         body
     }
 
@@ -107,6 +112,11 @@ impl Sidecar {
     /// O pai só vale enquanto estiver em `peers`: sair do grupo desfaz o vínculo sem apagar o campo.
     pub fn linked_parent(&self) -> Option<&str> {
         self.linked_by.as_deref().filter(|p| self.peers.iter().any(|m| m == p))
+    }
+
+    /// Quem formou o grupo, visto do sidecar de `me`; saiu do grupo = sem principal declarada.
+    pub fn group_lead(&self, me: &str) -> Option<&str> {
+        self.lead.as_deref().filter(|p| *p == me || self.peers.iter().any(|m| m == p))
     }
 }
 

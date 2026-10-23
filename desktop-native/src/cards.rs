@@ -101,6 +101,11 @@ pub struct PeerMessage {
 }
 
 pub fn peer_message(text: &str) -> Option<PeerMessage> {
+    // O Claude Code embrulha o `$.message.send` de um plugin assim; é aviso automático, como o `[painel: …]`.
+    if let Some((name, body)) = text.strip_prefix("The ").and_then(|rest| rest.split_once(" plugin sent a message:"))
+        .filter(|(name, _)| !name.is_empty() && !name.contains(char::is_whitespace)) {
+        return peer_message(&format!("[painel: plugin {name}] {}", body.trim_start()));
+    }
     let rest = text.strip_prefix('[')?;
     let (scope, rest) = [("de:", PeerScope::Peer), ("de fora:", PeerScope::External), ("grupo:", PeerScope::Group), ("painel:", PeerScope::Panel)].into_iter()
         .find_map(|(mark, scope)| rest.strip_prefix(mark).map(|rest| (scope, rest)))?;
@@ -205,6 +210,9 @@ mod tests {
         assert_eq!((peer.from.as_str(), peer.scope, peer.canal.as_deref(), peer.body.as_str()), ("orq-arbitro", PeerScope::Peer, Some("vigia"), "**Oi**"));
         assert_eq!(peer_message("[grupo: x] aviso").unwrap().scope, PeerScope::Group);
         assert_eq!(peer_message("[painel: Orquestração] ok").unwrap().scope, PeerScope::Panel);
+        let plugin = peer_message("The acme plugin sent a message: [acme] Aviso automático do mod").unwrap();
+        assert_eq!((plugin.from.as_str(), plugin.scope, plugin.canal.as_deref(), plugin.body.as_str()),
+            ("plugin acme", PeerScope::Panel, Some("acme"), "Aviso automático do mod"));
         let outside = peer_message("[de fora: pc-ana::api] faz o deploy").unwrap();
         assert_eq!((outside.from.as_str(), outside.scope, outside.body.as_str()), ("pc-ana::api", PeerScope::External, "faz o deploy"));
         let link = peer_message("[de: x] [log](https://a) e mais").unwrap();

@@ -208,8 +208,8 @@ impl Launcher for ServerLauncher {
             }
             let (guard, warnings) = crate::session_open::open::prepare_account(host, spec, None).await?;
             for warning in warnings { tracing::warn!(code = "prewarm_aviso", "{warning}"); }
-            if let Err(error) = claude::pretrust(&claude::claude_json(host.terminal(), host.home(), spec.account.config_dir()), &spec.cwd,
-                host.terminal().windows) {
+            if let Err(error) = claude::pretrust_async(claude::claude_json(host.terminal(), host.home(), spec.account.config_dir()), spec.cwd.clone(),
+                host.terminal().windows).await {
                 tracing::warn!(code = "prewarm_confiar_pasta", "{error}");
             }
             let (dir, config_dir) = (sidecar_dir.to_owned(), spec.account.config_dir().map(str::to_owned));

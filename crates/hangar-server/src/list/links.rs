@@ -197,12 +197,13 @@ pub fn fill_links(row: &mut SessionRow, dirs: &Dirs, problems: &mut Problems) {
             row.pair_external = outside.first().map(legacy_pair_external);
             row.pair_externals = (!outside.is_empty()).then_some(outside);
             row.linked_by = pair.linked_parent().map(str::to_owned);
+            row.pair_lead = pair.group_lead(&row.name).map(str::to_owned);
             row.pair_peers = Some(pair.peers);
             row.pair_gid = Some(pair.gid);
             row.pair_owner = pair.fed.map(|f| f.owner);
             row.pair_task = pair.task;
         }
-        None => (row.pair_external, row.pair_externals, row.pair_peers, row.pair_gid, row.pair_task, row.linked_by, row.pair_owner) = (None, None, None, None, None, None, None),
+        None => (row.pair_external, row.pair_externals, row.pair_peers, row.pair_gid, row.pair_task, row.linked_by, row.pair_owner, row.pair_lead) = (None, None, None, None, None, None, None, None),
     }
 }
 
@@ -882,6 +883,28 @@ mod tests {
         row.linked_by = Some("pai".into());
         fill_links(&mut row, &dirs, &mut Problems::default());
         assert_eq!(row.linked_by, None);
+    }
+
+    #[test]
+    fn pair_lead_only_while_it_is_me_or_in_the_group() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = dirs_at(tmp.path());
+        let pair = dirs.claude.join(".hangar-pair");
+        std::fs::create_dir_all(&pair).unwrap();
+        let lead = |name: &str, body: &str| {
+            std::fs::write(pair.join(format!("{name}.json")), body).unwrap();
+            let mut row = blank_row(name);
+            fill_links(&mut row, &dirs, &mut Problems::default());
+            row.pair_lead
+        };
+        assert_eq!(lead("filha", r#"{"peers": ["coord"], "lead": "coord"}"#).as_deref(), Some("coord"));
+        assert_eq!(lead("coord", r#"{"peers": ["filha"], "lead": "coord"}"#).as_deref(), Some("coord"));
+        assert_eq!(lead("filha", r#"{"peers": ["outra"], "lead": "coord"}"#), None);
+        std::fs::remove_file(pair.join("filha.json")).unwrap();
+        let mut row = blank_row("filha");
+        row.pair_lead = Some("coord".into());
+        fill_links(&mut row, &dirs, &mut Problems::default());
+        assert_eq!(row.pair_lead, None);
     }
 
     #[test]

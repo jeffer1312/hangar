@@ -121,7 +121,7 @@ impl Between for MoveConversation {
                 server_config_dir:self.env.base.get("CLAUDE_CONFIG_DIR").filter(|v|!v.is_empty()).cloned(),
                 default_config_dir:self.env.home.join(".claude"),birth:std::time::Duration::ZERO };
             let file=crate::session_open::claude::claude_json(&terminal,&self.env.home,to.account.config_dir());
-            crate::session_open::claude::pretrust(&file,&to.cwd,self.windows)
+            crate::session_open::claude::pretrust_async(file,to.cwd.clone(),self.windows).await
                 .map_err(|e|RuntimeError::new("reopen_pretrust_failed",&format!("a pasta não pôde ser confiada na conta nova ({e}); nada foi reaberto")))
         })
     }
