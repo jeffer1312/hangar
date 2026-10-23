@@ -1,0 +1,793 @@
+{
+ "origin_commit": "c7b65b3a440c86289c7adbb89a831e296b63afb9",
+ "command": "uv run python tests/fixtures/contract/gen_nav.py",
+ "port": 8765,
+ "urls": [
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "http://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "https://x/a?b=1",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "https://x/a?b=1"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "HTTP://X",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "HTTP://X"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "HtTpS://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "HtTpS://x"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "x.com",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x.com"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "localhost:5173/#/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://localhost:5173/#/a"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "  http://x  ",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "\u001chttp://x\u001f",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "ftp://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://ftp://x"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "//x",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "   ",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "/api/sessions/s/pages/abc_DEF-1",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://127.0.0.1:8765/api/sessions/s/pages/abc_DEF-1?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s t",
+   "bind": "0.0.0.0",
+   "input": "/api/sessions/s%20t/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://127.0.0.1:8765/api/sessions/s%20t/pages/a?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "/api/sessions/s/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://127.0.0.1:8765/api/sessions/s/pages/a?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "/api/sessions/outra/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "/api/sessions/s/pages/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "/api/sessions/s/pages/a b",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "/x",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "0.0.0.0",
+   "input": "/api/sessions/s/pages/a?x=1",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "http://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "https://x/a?b=1",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "https://x/a?b=1"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "HTTP://X",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "HTTP://X"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "HtTpS://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "HtTpS://x"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "x.com",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x.com"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "localhost:5173/#/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://localhost:5173/#/a"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "  http://x  ",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "\u001chttp://x\u001f",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "ftp://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://ftp://x"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "//x",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "   ",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "/api/sessions/s/pages/abc_DEF-1",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://127.0.0.1:8765/api/sessions/s/pages/abc_DEF-1?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s t",
+   "bind": "::",
+   "input": "/api/sessions/s%20t/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://127.0.0.1:8765/api/sessions/s%20t/pages/a?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "/api/sessions/s/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://127.0.0.1:8765/api/sessions/s/pages/a?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "/api/sessions/outra/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "/api/sessions/s/pages/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "/api/sessions/s/pages/a b",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "/x",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "::",
+   "input": "/api/sessions/s/pages/a?x=1",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "http://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "https://x/a?b=1",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "https://x/a?b=1"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "HTTP://X",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "HTTP://X"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "HtTpS://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "HtTpS://x"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "x.com",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x.com"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "localhost:5173/#/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://localhost:5173/#/a"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "  http://x  ",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "\u001chttp://x\u001f",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "ftp://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://ftp://x"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "//x",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "   ",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "/api/sessions/s/pages/abc_DEF-1",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://192.168.1.5:8765/api/sessions/s/pages/abc_DEF-1?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s t",
+   "bind": "192.168.1.5",
+   "input": "/api/sessions/s%20t/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://192.168.1.5:8765/api/sessions/s%20t/pages/a?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "/api/sessions/s/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://192.168.1.5:8765/api/sessions/s/pages/a?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "/api/sessions/outra/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "/api/sessions/s/pages/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "/api/sessions/s/pages/a b",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "/x",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "192.168.1.5",
+   "input": "/api/sessions/s/pages/a?x=1",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "http://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "https://x/a?b=1",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "https://x/a?b=1"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "HTTP://X",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "HTTP://X"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "HtTpS://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "HtTpS://x"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "x.com",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x.com"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "localhost:5173/#/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://localhost:5173/#/a"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "  http://x  ",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "\u001chttp://x\u001f",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "ftp://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://ftp://x"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "//x",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "   ",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "/api/sessions/s/pages/abc_DEF-1",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://127.0.0.1:8765/api/sessions/s/pages/abc_DEF-1?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s t",
+   "bind": "127.0.0.1",
+   "input": "/api/sessions/s%20t/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://127.0.0.1:8765/api/sessions/s%20t/pages/a?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "/api/sessions/s/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://127.0.0.1:8765/api/sessions/s/pages/a?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "/api/sessions/outra/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "/api/sessions/s/pages/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "/api/sessions/s/pages/a b",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "/x",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "127.0.0.1",
+   "input": "/api/sessions/s/pages/a?x=1",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "http://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "https://x/a?b=1",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "https://x/a?b=1"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "HTTP://X",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "HTTP://X"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "HtTpS://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "HtTpS://x"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "x.com",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x.com"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "localhost:5173/#/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://localhost:5173/#/a"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "  http://x  ",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "\u001chttp://x\u001f",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://x"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "ftp://x",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://ftp://x"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "//x",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "   ",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "/api/sessions/s/pages/abc_DEF-1",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://[fe80::1]:8765/api/sessions/s/pages/abc_DEF-1?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s t",
+   "bind": "fe80::1",
+   "input": "/api/sessions/s%20t/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://[fe80::1]:8765/api/sessions/s%20t/pages/a?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "/api/sessions/s/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 200,
+   "out": "http://[fe80::1]:8765/api/sessions/s/pages/a?token=tok%2Fen%2B%C3%A7~_.-"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "/api/sessions/outra/pages/a",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "/api/sessions/s/pages/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "/api/sessions/s/pages/a b",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "/x",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  },
+  {
+   "name": "s",
+   "bind": "fe80::1",
+   "input": "/api/sessions/s/pages/a?x=1",
+   "token": "tok/en+ç~_.-",
+   "status": 400,
+   "detail": "caminho relativo só vale para página desta sessão"
+  }
+ ],
+ "files": [
+  {
+   "raw": "{\"a\": {\"url\": \"u\", \"ts\": 4000000000.0}, \"b\": {\"url\": 1, \"ts\": 4000000000.0}, \"c\": {\"url\": \"u\"}, \"d\": {\"url\": \"u\", \"ts\": \"1\"}, \"e\": \"x\", \"f\": {\"url\": \"u\", \"ts\": 1.0}}",
+   "live": [
+    "a"
+   ]
+  },
+  {
+   "raw": "[1]",
+   "live": []
+  },
+  {
+   "raw": "nao json",
+   "live": []
+  },
+  {
+   "raw": "{}",
+   "live": []
+  },
+  {
+   "raw": "{\"g\": {\"url\": \"u\", \"ts\": 4000000000.0, \"extra\": true}}",
+   "live": [
+    "g"
+   ]
+  }
+ ]
+}

@@ -608,17 +608,17 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   - Chat Claude/Codex: `/history`, `/events`, mensagens, estado, prévia e fila são do Rust. Cada
     conversa aberta mantém a conexão interna `side-events` (`side.rs` `side_once` →
     `internal_api.py` → `sse.merged_events(side=True)`), da qual sai só `stats` (custo e tokens,
-    `stats.py` relendo o transcript a cada 1 s), `nav` e a faixa de plugin que o `mods` do Rust não
-    atende.
+    `stats.py` relendo o transcript a cada 1 s) e a faixa de plugin que o `mods` do Rust não
+    atende. O pedido de navegador (`nav`) é do Rust (`nav_requests.rs`).
   - Lista do dono: montada pelo Rust, mas todo tique com lista aberta pede `POST
     /internal/list/facts` (`list/facts.rs` → `list_facts.py`), mesmo sem Pi/omp/Kimi: estado e
     passos do Codex, problema das sessões Claude, transferências, orquestrações, donos de
-    convidado, navegador, atalhos e `owner_apps`.
+    convidado, atalhos e `owner_apps`.
   - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (cada abertura),
     `workspace/context`, `worktrees/context`, `orq/*`, `transcription/config`, `costs/scopes`,
     `diag`, `ping`, `list/demote`, e a cópia do `/api/plugin/ui` (`mods/bridge.rs`).
   - Partes inteiras ainda no Python: Pi, omp e Kimi; Arquivo; orquestração (lista, timeline,
-    lançamento); transferência Claude→Codex; navegador (`/nav`, `navegador`); peers; loops,
+    lançamento); transferência Claude→Codex; navegador (`navegador`, `nav-remoto`); peers; loops,
     workflows e runners; atualização; porta 8768 do Connect e login de convidado.
   - Tarefas próprias do Python em modo `rust`: `hook_state.watch` (push e drain), `watch_sessions`
     do Codex a cada 2 s, `stall_watch`, índice do Arquivo, `git fetch`, atualização automática.

@@ -444,7 +444,7 @@ async fn shot_comes_back_as_an_image() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn browser_open_asks_the_nav_route_and_waits_for_the_page() {
+async fn browser_open_records_the_request_in_rust_and_waits_for_the_page() {
     let s = scene().await;
     let seen = desktop(&s.home, |verb| if verb == "url" { "ok: \"http://x/\"".into() } else { "ativo".into() }).await;
     let later = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 + 60_000;
@@ -452,8 +452,12 @@ async fn browser_open_asks_the_nav_route_and_waits_for_the_page() {
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
     let result = mcp.call("browser_open", json!({"url": "http://x"})).await;
     assert_eq!(result["structuredContent"], json!({"ok": true, "url": "http://x/"}), "{result}");
-    assert_eq!(s.python.hits_to("/api/sessions/beta/nav"), 1);
-    assert_eq!(serde_json::from_slice::<Value>(&s.python.last_body()).unwrap(), json!({"url": "http://x"}));
+    // O pedido é do Rust: nada vai ao Python, e o arquivo dos pendentes leva a url.
+    assert_eq!(s.python.hits_to("/api/sessions/beta/nav"), 0);
+    let file = s.home.join(".hangar/nav/_pendentes.json");
+    fake::wait_until(move || std::fs::read(&file).ok()
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+        .is_some_and(|v| v["beta"]["url"] == "http://x")).await;
     let verbs: Vec<_> = seen.lock().unwrap().iter().map(|b| b["verbo"].clone()).collect();
     assert_eq!(verbs, [json!("estado"), json!("url")]);
 }

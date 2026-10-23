@@ -4197,12 +4197,16 @@ def _url_pagina_propria(name: str, u: str) -> str:
 
 
 @app.post("/api/sessions/{name}/nav", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def abrir_nav_sessao(name: str, body: NavBody):
+async def abrir_nav_sessao(name: str, body: NavBody, request: Request):
     """O AGENTE abre o navegador embutido da própria sessão (CLI `hangar-preview open <url>`).
 
     O backend não cria view — quem cria é o shell desktop, avisado pelo evento 'nav' que sai no
     SSE da sessão E no da lista (este o desktop mantém aberto o tempo todo, então funciona com a
-    sessão fora da tela). O marcador fica até o desktop confirmar (DELETE) ou vencer o prazo."""
+    sessão fora da tela). O marcador fica até o desktop confirmar (DELETE) ou vencer o prazo.
+    Com o Rust de pé o pedido é dele (`nav_requests.rs`): o Connect só autentica e repassa."""
+    from app import account_bridge
+    if account_bridge.owner_mode() != "python":
+        return await account_bridge.forward_public(request, "/__hangar_server/forwarded")
     if not await _send_thread(_session_exists, name):
         raise HTTPException(404, "sessão não encontrada")
     u = body.url.strip()
@@ -4215,9 +4219,12 @@ async def abrir_nav_sessao(name: str, body: NavBody):
 
 
 @app.delete("/api/sessions/{name}/nav", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def confirmar_nav_sessao(name: str):
+async def confirmar_nav_sessao(name: str, request: Request):
     """O shell desktop criou o view da sessão: o marcador 'nav' sai, e nenhuma outra conexão o
     recebe de novo."""
+    from app import account_bridge
+    if account_bridge.owner_mode() != "python":
+        return await account_bridge.forward_public(request, "/__hangar_server/forwarded")
     await asyncio.to_thread(nav_confirmar, name)
     return {"ok": True}
 

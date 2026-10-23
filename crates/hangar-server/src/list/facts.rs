@@ -83,8 +83,6 @@ pub struct ListFacts {
     // A pergunta que o plugin segura não vem mais daqui: a lista a lê do `plugin::Store` do Rust
     // (`ListBridge::plugin_facts`); um `held` que o Python ainda mande é ignorado.
     pub stall_seconds: f64,
-    /// Pedidos de navegador vivos, `{nome: {url, ts}}`, já vencidos pelo Python.
-    pub nav: Value,
     /// JSON dos terminais de atalho, a última leitura boa; `None` antes da primeira.
     pub shortcuts: Option<String>,
     /// Só no pedido da sombra: a assinatura de cada linha da lista que o Python serviu, por nome.
@@ -103,7 +101,7 @@ impl Default for ListFacts {
     fn default() -> Self {
         Self { states: HashMap::new(), overrides: Vec::new(), frozen: HashSet::new(), orq: Vec::new(),
             orq_error: None, owners: HashMap::new(), hidden: HashSet::new(), problems: BTreeMap::new(),
-            stall_seconds: 300.0, nav: Value::Null, shortcuts: None, shadow: None, owner_apps: 0, unknown: true }
+            stall_seconds: 300.0, shortcuts: None, shadow: None, owner_apps: 0, unknown: true }
     }
 }
 
@@ -444,7 +442,7 @@ mod tests {
 
     fn facts_json(orq: Value, orq_error: Value) -> String {
         json!({"states": {}, "overrides": [], "frozen": [], "orq": orq, "orq_error": orq_error, "shared": [], "owners": {},
-            "hidden": [], "problems": {}, "held": {}, "stall_seconds": 300.0, "nav": null, "shortcuts": null, "shadow": null}).to_string()
+            "hidden": [], "problems": {}, "held": {}, "stall_seconds": 300.0, "shortcuts": null, "shadow": null}).to_string()
     }
 
     #[tokio::test]

@@ -199,9 +199,9 @@ _log = logging.getLogger("hangar.sse")
 # reiniciar o backend perdia o pedido.
 _NAV_TTL_S = 600.0
 _NAV_MARCADORES: dict[str, dict] = {}
-# Disco é lido UMA vez por processo (na primeira consulta). "Dict vazio" é o estado normal —
-# marcador é evento raro — e reler a cada poll de cada SSE seria I/O síncrono no loop.
-_nav_carregado = False
+# Com o Rust de pé ele é o dono e grava o arquivo; o Python só o lê para o que ainda serve (8768,
+# modo `python`). Relê quando a data do arquivo muda: um `stat` por consulta, sem ler o conteúdo.
+_nav_mtime: int | None = None
 # Monitores de estado compartilhados entre as conexoes de um mesmo chat (ver _monitor_de).
 _ESTADOS = Difusor()
 
@@ -213,15 +213,20 @@ def _nav_arquivo() -> Path:
 
 
 def _nav_carregar() -> None:
-    global _nav_carregado
-    if _nav_carregado:
+    global _nav_mtime
+    try:
+        mtime = _nav_arquivo().stat().st_mtime_ns
+    except OSError:
         return
-    _nav_carregado = True
+    if mtime == _nav_mtime:
+        return
+    _nav_mtime = mtime
     try:
         d = json.loads(_nav_arquivo().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
     if isinstance(d, dict):
+        _NAV_MARCADORES.clear()
         _NAV_MARCADORES.update({k: v for k, v in d.items()
                                 if isinstance(v, dict) and isinstance(v.get("url"), str) and isinstance(v.get("ts"), (int, float))})
 
@@ -253,15 +258,11 @@ def nav_confirmar(name: str) -> None:
 
 
 def nav_vivos() -> dict[str, dict]:
-    """Marcadores dentro do prazo; os vencidos saem no caminho."""
+    """Marcadores dentro do prazo. Vencer só filtra: a leitura nunca grava, senão o Python
+    regravaria por cima do arquivo que o Rust é dono."""
     _nav_carregar()
     agora = time.time()
-    vencidos = [n for n, m in _NAV_MARCADORES.items() if agora - float(m.get("ts", 0)) > _NAV_TTL_S]
-    for n in vencidos:
-        _NAV_MARCADORES.pop(n, None)
-    if vencidos:
-        _nav_gravar()
-    return _NAV_MARCADORES
+    return {n: m for n, m in list(_NAV_MARCADORES.items()) if agora - float(m.get("ts", 0)) <= _NAV_TTL_S}
 
 
 def nav_novos(vistos: dict[str, float], name: str | None = None) -> list[tuple[str, dict]]:
@@ -1217,7 +1218,9 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     # também não: a url da página de rascunho leva o token do dono.
     if count_app:
         tasks.append(asyncio.create_task(toast_pump()))
-        tasks.append(asyncio.create_task(nav_pump()))
+        # Na conexão interna o pedido de navegador é do Rust, que o entrega no hub.
+        if not side:
+            tasks.append(asyncio.create_task(nav_pump()))
     # NUCLEO (conexao): instrumentacao do CICLO DE VIDA do stream. O sintoma relatado é "a conversa
     # para e só volta fechando/abrindo o app", e o log de acesso do uvicorn só mostra a conexão
     # FECHANDO — sem duração, sem motivo, sem quanto foi entregue. Sem isso a causa (queda de rede
