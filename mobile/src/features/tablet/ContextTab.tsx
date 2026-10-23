@@ -77,10 +77,14 @@ export function ContextTab({ serverId, name, onPick }: { serverId: string; name:
 
 const GROUP_VISIBLE_ROWS = 4;
 
+// Mesma ordem do nativo (`linked_children::rank`): o que não é pergunta, pronto nem encerrado conta como trabalhando.
 function groupRank(session: AggSession): number {
-  if (session.state === 'awaiting_input') return 0;
-  if (isWorking(session)) return 1;
-  return session.state === 'idle' ? 2 : 3;
+  switch (session.state) {
+    case 'awaiting_input': return 0;
+    case 'idle': return 2;
+    case 'dead': return 3;
+    default: return 1;
+  }
 }
 
 function GroupCard({ session, onPick }: { session: AggSession; onPick?: (session: AggSession) => void }) {

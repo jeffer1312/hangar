@@ -1392,17 +1392,12 @@ fn pretrust_waits_for_the_claude_code_config_lock() {
     std::fs::write(&file, r#"{"projects": {}}"#).unwrap();
     let lock = home.path().join(".claude.json.lock");
     std::fs::create_dir(&lock).unwrap();
-    // Uma sessão viva que leu o arquivo antes regrava a cópia dela e só então solta a trava.
-    let holder = {
-        let (file, lock) = (file.clone(), lock.clone());
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            std::fs::write(&file, r#"{"projects": {"/outra": {"lastCost": 1}}}"#).unwrap();
-            std::fs::remove_dir(&lock).unwrap();
-        })
-    };
-    claude::pretrust(&file, "/x", false).unwrap();
-    holder.join().unwrap();
+    // Uma sessão viva que leu o arquivo antes regrava a cópia dela e só então solta a trava. A
+    // confiança roda ao lado e só grava depois de pegar a trava, em qualquer ordem que as duas andem.
+    let trust = { let file = file.clone(); std::thread::spawn(move || claude::pretrust(&file, "/x", false)) };
+    std::fs::write(&file, r#"{"projects": {"/outra": {"lastCost": 1}}}"#).unwrap();
+    std::fs::remove_dir(&lock).unwrap();
+    trust.join().unwrap().unwrap();
     let data: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
     assert_eq!(data["projects"]["/x"]["hasTrustDialogAccepted"], true, "a confiança sobrevive à regravação da sessão viva");
     assert_eq!(data["projects"]["/outra"]["lastCost"], 1, "e não apaga o que a sessão viva gravou");
@@ -1422,6 +1417,24 @@ fn pretrust_writes_without_a_lock_that_never_frees() {
     let data: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
     assert_eq!(data["projects"]["/x"]["hasTrustDialogAccepted"], true);
     assert!(lock.is_dir(), "a trava de outro processo fica onde estava");
+}
+
+/// Trava vencida (processo morto): a confiança grava sem ela e não a apaga; apagar pelo caminho
+/// levaria junto a trava nova de quem a recuperou no meio.
+#[cfg(unix)]
+#[test]
+fn pretrust_leaves_a_stale_lock_alone() {
+    let home = tempfile::tempdir().unwrap();
+    let file = home.path().join(".claude.json");
+    std::fs::write(&file, r#"{"projects": {}}"#).unwrap();
+    let lock = home.path().join(".claude.json.lock");
+    std::fs::create_dir(&lock).unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+    std::fs::File::open(&lock).unwrap().set_modified(old).unwrap();
+    claude::pretrust(&file, "/x", false).unwrap();
+    let data: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(data["projects"]["/x"]["hasTrustDialogAccepted"], true);
+    assert_eq!(std::fs::metadata(&lock).unwrap().modified().unwrap(), old, "a trava vencida fica como estava");
 }
 
 /// `_pretrust_cwd` e `default_model.drop_foreign` (test_registry, test_default_model): a pasta

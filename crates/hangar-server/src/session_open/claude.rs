@@ -225,10 +225,13 @@ const CONFIG_LOCK_STALE: std::time::Duration = std::time::Duration::from_secs(10
 
 /// A trava que o Claude Code usa no `.claude.json` (`proper-lockfile`: a pasta `<arquivo real>.lock`).
 /// Sem ela, uma sessão viva da conta que já tinha lido o arquivo regrava a cópia dela por cima da confiança.
-struct ConfigLock(PathBuf);
+struct ConfigLock(PathBuf, Option<std::time::SystemTime>);
 
 impl Drop for ConfigLock {
     fn drop(&mut self) {
+        // Outro processo que a julgou vencida e pegou a dele tem outra data: essa não é nossa para apagar.
+        let current = std::fs::metadata(&self.0).and_then(|m| m.modified()).ok();
+        if self.1.is_some() && current != self.1 { return; }
         // Trava que fica para trás segura o Claude Code da conta até ela vencer.
         if let Err(e) = std::fs::remove_dir(&self.0) && e.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!(lock = %self.0.display(), error = %e, "trava do .claude.json não saiu; o Claude Code espera ela vencer");
@@ -247,17 +250,16 @@ fn lock_config(file: &Path) -> Result<ConfigLock, String> {
     let deadline = std::time::Instant::now() + CONFIG_LOCK_WAIT;
     loop {
         match std::fs::create_dir(&lock) {
-            Ok(()) => return Ok(ConfigLock(lock)),
+            Ok(()) => {
+                let created = std::fs::metadata(&lock).and_then(|m| m.modified()).ok();
+                return Ok(ConfigLock(lock, created));
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Vencida não tem dono vivo para disputar. Apagá-la pelo caminho é que arrisca: entre ler a
+                // data e apagar, outro processo pode trocá-la pela dele. O Claude Code a recupera sozinho.
                 let stale = std::fs::metadata(&lock).and_then(|m| m.modified()).ok()
                     .and_then(|t| t.elapsed().ok()).is_some_and(|age| age > CONFIG_LOCK_STALE);
-                if stale {
-                    match std::fs::remove_dir(&lock) {
-                        Ok(()) => continue,
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                        Err(e) => return Err(format!("trava largada não saiu: {e}")),
-                    }
-                }
+                if stale { return Err("trava largada".into()); }
                 if std::time::Instant::now() >= deadline { return Err("trava ocupada".into()); }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }

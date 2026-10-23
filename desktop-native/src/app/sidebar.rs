@@ -1243,6 +1243,12 @@ impl Hangar {
                     (Write::Rename(new, _), Ok(value)) => {
                         self.sidebar.renaming.remove(&target);
                         let new = Target::new(&target.server, value.get("name").and_then(Value::as_str).unwrap_or(new));
+                        // A principal escolhida à mão segue o nome novo; o servidor já trocou o `lead` do grupo.
+                        if self.sidebar.group_leads.values().any(|lead| *lead == target) {
+                            for lead in self.sidebar.group_leads.values_mut().filter(|lead| **lead == target) { *lead = new.clone(); }
+                            self.sidebar.leads_gen += 1;
+                            self.persist(group_leads_path(), self.sidebar.leads_gen, &LEADS_WRITTEN, self.sidebar.group_leads.clone(), "sidebar_group_lead_not_saved");
+                        }
                         if in_dialog {
                             self.sidebar.editing = None;
                             window.close_dialog(cx);
