@@ -747,12 +747,6 @@ def app_entrou() -> None:
         _apps_abertos += 1
 
 
-def apps_abertos() -> int:
-    """Aparelhos do dono que este processo atende (lista e chat, inclusive pelo Connect; sem convidado)."""
-    with _lock:
-        return _apps_abertos
-
-
 def app_saiu() -> None:
     global _apps_abertos
     with _lock:

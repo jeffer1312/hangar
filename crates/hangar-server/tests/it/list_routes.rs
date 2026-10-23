@@ -30,7 +30,7 @@ async fn one_producer_for_many_clients() {
     tokio::time::sleep(Duration::from_millis(3200)).await;
     let scans = calls(dir.path(), "list-panes");
     assert!((1..=5).contains(&scans), "uma varredura por tique, não por cliente: {scans}");
-    assert!(srv.python.list_facts_last.lock().unwrap()["owner_clients"] == 5, "o Python sabe quantas listas do dono estão abertas");
+    assert_eq!(srv.python.list_facts_calls.load(std::sync::atomic::Ordering::SeqCst), 0, "lista só de Claude não pergunta fatos ao Python");
     drop(streams);
     tokio::time::sleep(Duration::from_millis(3500)).await;
     let after = calls(dir.path(), "list-panes");
@@ -111,12 +111,14 @@ async fn mux_unavailable_is_503() {
     fake::wait_until(move || python.diag().iter().any(|d| d["evento"] == "rust.list_route_failed" && d["codigo"] == "mux_unavailable")).await;
 }
 
-/// Sem nenhuma resposta dos fatos, acesso e escondidas são desconhecidos: nem `GET` nem SSE servem.
+/// Transferências nunca lidas: a linha que só elas mostram é desconhecida, nem `GET` nem SSE servem.
 #[tokio::test(flavor = "multi_thread")]
 async fn unknown_facts_are_never_served() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), 1).await;
-    *srv.python.list_facts.lock().unwrap() = (json!({"quebrado": true}), Duration::ZERO);
+    let store = dir.path().join("home/.hangar/conversation-transfers");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(store.join("11111111-1111-4111-8111-111111111111.json"), "{").unwrap();
     let (status, body) = get(srv.addr, OWNER).await;
     assert_eq!((status, &body["detail"]["code"], &body["detail"]["params"]["detalhe"]),
         (503, &json!("erro_lista_indisponivel"), &json!("list_facts_unknown")));
@@ -141,7 +143,8 @@ async fn guest_token_goes_to_python() {
 async fn hidden_from_owner_not_listed() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), 2).await;
-    set_facts(&srv.python, "hidden", json!(["s1"]));
+    std::fs::write(dir.path().join("home/.claude/guests.json"), json!({"guests": [{"id": "g", "name": "ana", "token_hash": "h",
+        "root": "/", "owner_sees": false}], "sessions": {"s1": {"guest": "g", "life": null}}}).to_string()).unwrap();
     let (_, body) = get(srv.addr, OWNER).await;
     assert_eq!(names(&body), ["s0"]);
     let mut es = open(srv.addr).await;
@@ -149,26 +152,19 @@ async fn hidden_from_owner_not_listed() {
     assert_eq!(names(&serde_json::from_str(&ev.data).unwrap()), ["s0"]);
 }
 
-/// Fatos que caem depois de uma resposta boa marcam as linhas; a lista continua servida.
+/// Python dos fatos fora do ar não toca a lista de Claude: servida, sem aviso, sem pergunta.
 #[tokio::test(flavor = "multi_thread")]
 async fn facts_down_keeps_the_list_without_a_row_warning() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), 1).await;
+    *srv.python.list_facts.lock().unwrap() = (json!({"quebrado": true}), Duration::ZERO);
     let mut es = open(srv.addr).await;
     let ok: Value = serde_json::from_str(&next_named(&mut es, "sessions").await.data).unwrap();
     assert_eq!(ok[0]["problema"], Value::Null);
-    *srv.python.list_facts.lock().unwrap() = (json!({"quebrado": true}), Duration::ZERO);
-    // Passada a carência (três falhas seguidas), a rodada produz com os fatos velhos: a linha seria marcada
-    // `list_facts_unavailable`, que é diagnóstico e fica no diário.
-    let before = srv.python.list_facts_calls.load(std::sync::atomic::Ordering::SeqCst);
-    tokio::time::timeout(Duration::from_secs(30), async {
-        while srv.python.list_facts_calls.load(std::sync::atomic::Ordering::SeqCst) < before + 4 { tokio::time::sleep(Duration::from_millis(50)).await; }
-    }).await.expect("o produtor parou de pedir os fatos");
-    assert!(srv.python.diag().iter().any(|d| d["evento"] == "rust.list_facts_unavailable"), "a falha dos fatos vai ao diário");
     let (status, body) = get(srv.addr, OWNER).await;
-    assert_eq!(status, 200);
-    assert_eq!(names(&body), ["s0"], "a lista continua servida");
-    assert_eq!(body[0]["problema"], Value::Null, "sem aviso de diagnóstico na linha");
+    assert_eq!((status, names(&body)), (200, vec!["s0"]));
+    assert_eq!(body[0]["problema"], Value::Null, "sem aviso na linha");
+    assert_eq!(srv.python.list_facts_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
 struct Runtime(BTreeMap<String, Value>);

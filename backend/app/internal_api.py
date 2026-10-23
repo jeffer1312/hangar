@@ -149,25 +149,22 @@ async def rust_diag(request: Request) -> dict:
 
 @router.post("/list/facts")
 async def list_facts(request: Request) -> dict:
-    """Fatos da lista para o Rust (`list/facts.rs`): ele manda as linhas que descobriu, a contagem
-    de listas do dono abertas nele, o pid do pane das linhas Pi/omp e se o pedido é da sombra
-    (`CP_LIST_SHADOW=1`), que recebe a assinatura da lista que o Python serviu."""
+    """Estado das linhas Pi/omp/Kimi para o Rust (`list/facts.rs`), com o pid do pane das Pi/omp."""
     global _list_facts_invalid_at
     import pydantic
     from app import list_facts as service
     raw = await request.body()
     try:
         body = json.loads(raw) if len(raw) <= _LIST_FACTS_MAX else None
-        if (not isinstance(body, dict) or set(body) != {"rows", "owner_clients", "pane_pids", "shadow"}
+        if (not isinstance(body, dict) or set(body) != {"rows", "pane_pids"}
                 or not isinstance(body["rows"], list) or not all(isinstance(r, dict) for r in body["rows"])
-                or type(body["owner_clients"]) is not int or body["owner_clients"] < 0
-                or not isinstance(body["pane_pids"], dict) or type(body["shadow"]) is not bool
+                or not isinstance(body["pane_pids"], dict)
                 or not all(isinstance(k, str) and type(v) is int for k, v in body["pane_pids"].items())):
             raise ValueError("fatos inválidos")
     except (ValueError, RecursionError):
         raise HTTPException(400) from None
     try:
-        return await service.compute(body["rows"], body["owner_clients"], body["pane_pids"], body["shadow"])
+        return await service.compute(body["rows"], body["pane_pids"])
     except (pydantic.ValidationError, TypeError) as e:
         # Só o campo: a mensagem do pydantic repete a linha, e ela carrega a última resposta.
         loc = e.errors()[0]["loc"] if isinstance(e, pydantic.ValidationError) else ()

@@ -325,6 +325,11 @@ fn status_line(lines: &[&str]) -> Option<String> {
     if chrome.is_empty() { None } else { Some(chrome.join("\n")) }
 }
 
+/// `state.menu_codex`: (pergunta, opções) do seletor do Codex num pane capturado.
+pub fn codex_menu_of(pane: &str) -> Option<(Option<String>, Vec<String>)> {
+    codex_menu(&lines(pane)).map(|q| (q.question, q.options))
+}
+
 // A TUI mais nova encurtou o rodapé para "enter continue · esc skip"; as duas formas valem.
 const CODEX_FOOTERS: [&str; 4] = ["enter to confirm", "enter to continue", "enter confirm", "enter continue"];
 fn codex_menu(lines: &[&str]) -> Option<TerminalQuestion> {

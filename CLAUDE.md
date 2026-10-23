@@ -612,10 +612,9 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
     vida); o `stats.py` só serve o `/events` do próprio Python (convidado pelo Python, modo
     `python`) e o consumo da orquestração. Faixa e avisos de mod são do `mods` do Rust, e o pedido
     de navegador (`nav`) é do Rust (`nav_requests.rs`).
-  - Lista do dono: montada pelo Rust, mas todo tique com lista aberta pede `POST
-    /internal/list/facts` (`list/facts.rs` → `list_facts.py`), mesmo sem Pi/omp/Kimi: estado e
-    passos do Codex, problema das sessões Claude, transferências, orquestrações, donos de
-    convidado, atalhos e `owner_apps`.
+  - Lista do dono: montada pelo Rust; só com linha Pi/omp/Kimi o tique pede `POST
+    /internal/list/facts` (`list/facts.rs` → `list_facts.py`), levando só essas linhas: estado,
+    conta e última resposta delas.
   - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (cada abertura),
     `workspace/context`, `worktrees/context`, `orq/*`, `transcription/config`, `costs/scopes`,
     `diag`, `ping`, `list/demote`, e a cópia do `/api/plugin/ui` (`mods/bridge.rs`).
@@ -731,9 +730,10 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   ligado enquanto houver lista aberta, tique de 1,5 s, JSON só quando a assinatura muda; cada
   conexão só lê o publicado. Escrita nas pastas de estado das contas (marcador, registro nativo,
   pergunta aberta) reclassifica só a sessão afetada sobre a última rodada boa, juntada em 150 ms;
-  observador que falha vai ao diário e o tique continua valendo. Estado de Pi/omp/Kimi, contagem e
-  conta do Codex, transferências, `orq`, acesso, navegador e atalhos vêm de
-  `POST /internal/list/facts`; sessão sem terminal e Codex com terminal adotado, do
+  observador que falha vai ao diário e o tique continua valendo. Só estado, conta e resposta de
+  Pi/omp/Kimi vêm de `POST /internal/list/facts`, e só com linha deles; transferências, `orq`,
+  acesso de convidado, atalhos e problema do Claude sem terminal a ponte lê do disco
+  (`list/local_*.rs`); sessão sem terminal e Codex com terminal adotado, do
   `RuntimeRegistry`; pergunta segurada e presença do app no Claude, do `plugin::Store`. Falha
   nunca vira lista vazia nem a do Python: 503 com código no `GET`, `list_error` com código no SSE,
   `problema` interno na linha quando só os fatos caíram (a saída o tira e o registra no diário).

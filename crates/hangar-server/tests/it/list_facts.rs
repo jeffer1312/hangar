@@ -1,12 +1,13 @@
-//! Fatos da lista pelo Python: o último valor fica quando ele não responde no prazo, com a linha
-//! marcada, e a linha em transferência ou de orquestração não passa pela classificação.
+//! Estado de Pi/omp/Kimi pelo Python: o último valor fica quando ele não responde no prazo, e a linha
+//! em transferência ou de orquestração não passa pela classificação.
 use crate::fake;
 
 use fake::{SECRET, spawn_fake};
 use hangar_api::session::SessionRow;
 use hangar_server::list::facts::{self, FactsClient, ListFacts};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::atomic::Ordering::SeqCst;
 use std::time::{Duration, Instant};
 
@@ -20,48 +21,36 @@ fn state(s: &str) -> Value {
            "stalled": false})
 }
 
-/// Resposta completa do Python, com `extra` por cima.
-fn full(extra: Value) -> Value {
-    let mut v = json!({"states": {}, "overrides": [], "frozen": [], "orq": [], "owners": {},
-        "hidden": [], "problems": {}, "held": {}, "stall_seconds": 300.0, "nav": {}, "shortcuts": null, "shadow": null});
-    for (k, x) in extra.as_object().unwrap() { v[k] = x.clone(); }
-    v
-}
+fn known(states: facts::States) -> ListFacts { ListFacts { states, unknown: false, ..Default::default() } }
 
 #[tokio::test]
 async fn timeout_after_good_answer_keeps_last_without_marking() {
     let (fake, addr) = spawn_fake().await;
-    *fake.list_facts.lock().unwrap() = (full(json!({"states": {"cx": state("working")}, "stall_seconds": 60.0})), Duration::ZERO);
+    *fake.list_facts.lock().unwrap() = (json!({"states": {"pp": state("working")}}), Duration::ZERO);
     let client = FactsClient::new(addr, SECRET.into());
-    let rows = vec![row("cx", "codex"), row("cc", "claude")];
-    let first = client.fetch(&rows, 1, &BTreeMap::new(), false).await;
+    let rows = vec![row("pp", "pi")];
+    let first = client.fetch(&rows, &BTreeMap::new()).await;
     assert!(first.ok);
-    assert_eq!(first.facts.stall_seconds, 60.0);
     // Mesma entrada dentro do prazo: o Python não é perguntado de novo.
-    let again = client.fetch(&rows, 1, &BTreeMap::new(), false).await;
+    let again = client.fetch(&rows, &BTreeMap::new()).await;
     assert!(again.ok);
     assert_eq!(fake.list_facts_calls.load(SeqCst), 1);
-    assert_eq!(fake.list_facts_last.lock().unwrap()["owner_clients"], 1);
 
-    *fake.list_facts.lock().unwrap() = (full(json!({"states": {"cx": state("idle")}})), Duration::from_secs(3));
+    *fake.list_facts.lock().unwrap() = (json!({"states": {"pp": state("idle")}}), Duration::from_secs(3));
     let started = Instant::now();
-    // Entrada nova (mais um cliente): pergunta, e o Python não responde em 1 s.
-    let late = client.fetch(&rows, 2, &BTreeMap::new(), false).await;
+    // Entrada nova (outro pid): pergunta, e o Python não responde em 1 s.
+    let late = client.fetch(&rows, &BTreeMap::from([("pp".into(), 7)])).await;
     assert!(started.elapsed() < Duration::from_millis(1800), "esperou além do prazo: {:?}", started.elapsed());
     // Uma falha logo depois de resposta boa fica na carência: os últimos fatos, sem marcar a lista.
     // O fim da carência (3 falhas ou 5 s) está nos testes de `list::facts`.
     assert!(late.ok && !late.fresh);
-    let (work, aside) = facts::apply(rows.clone(), &late.facts, late.ok);
+    let (work, aside) = facts::apply(rows.clone(), &known(late.states), late.ok);
     assert!(aside.is_empty());
-    let cx = work.iter().find(|r| r.name == "cx").unwrap();
-    assert_eq!(cx.state, "working", "fica o último valor bom");
-    assert_eq!(cx.problema, None);
-    // A Claude é do Rust: a falha dos fatos não a marca.
-    assert_eq!(work.iter().find(|r| r.name == "cc").unwrap().problema, None);
+    assert_eq!((work[0].state.as_str(), work[0].problema.as_deref()), ("working", None), "fica o último valor bom");
     // Python travado não custa 1 s a cada tique: dentro do prazo, fica a falha sem perguntar.
     let asked = fake.list_facts_calls.load(SeqCst);
     let quick = Instant::now();
-    let cached = client.fetch(&rows, 3, &BTreeMap::new(), false).await;
+    let cached = client.fetch(&rows, &BTreeMap::from([("pp".into(), 8)])).await;
     assert!(cached.ok && !cached.fresh, "ainda na carência, sem perguntar de novo");
     assert!(quick.elapsed() < Duration::from_millis(100));
     assert_eq!(fake.list_facts_calls.load(SeqCst), asked);
@@ -76,10 +65,8 @@ fn transfer_rows_not_classified() {
     fim.transfer_phase = Some("complete".into());
     let mut orq = row("o1", "orq");
     orq.state = "working".into();
-    let facts: ListFacts = serde_json::from_value(full(json!({
-        "overrides": [troca, fim], "frozen": ["troca"], "orq": [orq],
-        "owners": {"a": "ana"}
-    }))).unwrap();
+    let facts = ListFacts { overrides: vec![troca, fim], frozen: HashSet::from(["troca".into()]), orq: vec![orq],
+        owners: HashMap::from([("a".into(), "ana".into())]), unknown: false, ..Default::default() };
     let (work, aside) = facts::apply(vec![row("troca", "codex"), row("a", "claude"), row("fim", "codex")], &facts, true);
     let names = |v: &[SessionRow]| v.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
     // Só as linhas fora de troca e de orquestração vão à classificação e à decoração.
@@ -87,33 +74,29 @@ fn transfer_rows_not_classified() {
     assert_eq!(names(&aside), ["troca", "o1"]);
     assert_eq!(aside[0].provider, "claude", "a linha da troca substitui a descoberta pelo nome");
     assert_eq!(work[1].transfer_phase.as_deref(), Some("complete"));
-    // `shared` não vem mais do Python: sai da loja de convites do Rust (`share_bridge.rs`).
+    // `shared` não vem dos fatos: sai da loja de convites do Rust (`share_bridge.rs`).
     assert!(!work[0].shared && work[0].owner.as_deref() == Some("ana"));
 }
 
+/// Codex não é mais linha do Python: o estado dos fatos não chega a ela.
 #[test]
-fn codex_service_tier_comes_from_the_live_state() {
-    let mut cx = row("cx", "codex");
-    cx.codex_service_tier = Some("default".into());
-    let mut st = state("working");
-    st["codex_service_tier"] = json!("priority");
-    let mut pp = state("idle");
-    pp["codex_service_tier"] = json!("priority");
-    let facts: ListFacts = serde_json::from_value(full(json!({"states": {"cx": st, "pp": pp}}))).unwrap();
-    let (work, _) = facts::apply(vec![cx, row("pp", "pi")], &facts, true);
-    assert_eq!(work[0].codex_service_tier.as_deref(), Some("priority"), "o snapshot do Codex vence o sidecar");
-    assert_eq!(work[1].codex_service_tier, None, "só linha Codex tem nível de serviço");
+fn python_state_reaches_only_pi_omp_and_kimi() {
+    let st: facts::RowState = serde_json::from_value(state("working")).unwrap();
+    let facts = known(Arc::new(HashMap::from([("cx".into(), st)])));
+    let (work, _) = facts::apply(vec![row("cx", "codex")], &facts, true);
+    assert_eq!((work[0].status_line.as_deref(), work[0].last_activity), (None, None));
 }
 
 #[tokio::test]
-async fn no_answer_yet_marks_every_row_and_partial_answer_is_refused() {
+async fn no_answer_yet_marks_pi_rows_and_partial_answer_is_refused() {
     let (fake, addr) = spawn_fake().await;
-    // Chave faltando é contrato quebrado: não vira `hidden` vazio.
-    *fake.list_facts.lock().unwrap() = (json!({"states": {}}), Duration::ZERO);
+    // Chave faltando é contrato quebrado: não vira estado vazio.
+    *fake.list_facts.lock().unwrap() = (json!({"estados": {}}), Duration::ZERO);
     let client = FactsClient::new(addr, SECRET.into());
-    let rows = vec![row("cc", "claude"), row("cx", "codex")];
-    let got = client.fetch(&rows, 0, &BTreeMap::new(), false).await;
-    assert!(!got.ok && got.facts.unknown);
-    let (work, _) = facts::apply(rows, &got.facts, got.ok);
-    assert!(work.iter().all(|r| r.problema.as_deref() == Some("list_facts_unavailable")));
+    let rows = vec![row("cc", "claude"), row("pp", "pi")];
+    let got = client.fetch(&rows[1..], &BTreeMap::new()).await;
+    assert!(!got.ok);
+    let (work, _) = facts::apply(rows, &known(got.states), got.ok);
+    let marked: Vec<_> = work.iter().map(|r| r.problema.as_deref()).collect();
+    assert_eq!(marked, [None, Some("list_facts_unavailable")]);
 }
