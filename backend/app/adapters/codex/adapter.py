@@ -1009,6 +1009,8 @@ class CodexAdapter:
         coordinator = runtime_coordinator.current()
         # O modo que o Rust de pé ou esperado anuncia é dele: o Python não liga cliente nem sobe processo.
         rust = coordinator is not None and coordinator.mode in {"pending", "rust"}
+        # Com todo Codex no Rust não há sidecar para este laço: não lê o disco à toa.
+        if rust and all(coordinator.rust_owns("codex", h) for h in (True, False)): return
         for meta in await asyncio.to_thread(codex_sessions.list_all):
             name = meta.get("name")
             if not name or rust and coordinator.rust_owns("codex", bool(meta.get("headless"))):
