@@ -756,7 +756,7 @@ impl RuntimeRegistry {
                 terminal.program=watcher.mux_program();
                 // A pasta não confiada prende o terminal novo no "trust this folder?", e a reabertura sairia
                 // pela confirmação, com a causa errada.
-                crate::session_open::claude::pretrust(&crate::session_open::claude::claude_json(&terminal,&env.home,next.account.config_dir()),&next.cwd,terminal.windows)
+                crate::session_open::claude::pretrust_async(crate::session_open::claude::claude_json(&terminal,&env.home,next.account.config_dir()),next.cwd.clone(),terminal.windows).await
                     .map_err(|e|refused("reopen_pretrust_failed",&format!("a pasta não pôde ser confiada na conta ({e}); nada foi reaberto")))?;
                 let runtime=super::codex_launch::runtime_config(&env);
                 let roots=crate::session_open::claude::plugin_roots(&env.home);

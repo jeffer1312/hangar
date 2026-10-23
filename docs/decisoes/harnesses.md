@@ -920,9 +920,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 - **A pasta da sessão Claude nasce confiada, gravada sob a trava do próprio Claude Code.** O
   `claude::pretrust` marca `hasTrustDialogAccepted` no `.claude.json` da conta segurando a pasta
-  `<arquivo real>.lock` (a do `proper-lockfile` que o CLI usa); espera até 1 s e, trava ocupada ou
-  largada há mais de 10 s, faz como o CLI: grava sem ela. Se o "trust this folder?" aparecer mesmo
-  assim, o `Monitor` avisa uma vez (`rust.trust_dialog_shown`, código `trust_flag_present` ou
+  `<arquivo real>.lock` (a do `proper-lockfile` que o CLI usa), só quando precisa gravar e fora das
+  threads do runtime (`pretrust_async`). Espera até 1 s; trava largada há mais de 10 s sai; ocupada,
+  faz como o CLI: grava sem ela. Se o "trust this folder?" aparecer mesmo assim, o `Monitor` avisa
+  uma vez por aparição (`rust.trust_dialog_shown`, código `trust_flag_present` ou
   `trust_flag_absent`) e o log guarda a entrada, a idade do arquivo e a trava. Ver
   [diálogo de confiança com a pasta confiada](#diálogo-de-confiança-com-a-pasta-já-confiada-23102026).
 

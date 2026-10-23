@@ -1396,7 +1396,7 @@ fn pretrust_waits_for_the_claude_code_config_lock() {
     let holder = {
         let (file, lock) = (file.clone(), lock.clone());
         std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            std::thread::sleep(std::time::Duration::from_millis(100));
             std::fs::write(&file, r#"{"projects": {"/outra": {"lastCost": 1}}}"#).unwrap();
             std::fs::remove_dir(&lock).unwrap();
         })

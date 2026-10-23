@@ -503,7 +503,7 @@ impl Sources for LiveSources {
         let (name, diag) = (self.name.clone(), self.env.diag.clone());
         tokio::spawn(async move {
             let read = { let name = name.clone(); tokio::task::spawn_blocking(move || {
-                let home = std::env::home_dir().unwrap_or_default();
+                let Some(home) = std::env::home_dir() else { return ("trust_home_unknown", String::new()) };
                 let spec = match crate::session_open::record::live(&home, &name) {
                     Ok(Some(spec)) => spec,
                     Ok(None) => return ("trust_spec_missing", String::new()),
@@ -514,7 +514,7 @@ impl Sources for LiveSources {
                 let (code, detail) = crate::session_open::claude::trust_evidence(&file, &spec.cwd, terminal.windows);
                 (code, format!("cwd={} {detail}", spec.cwd))
             }) };
-            let (code, detail) = read.await.unwrap_or(("trust_evidence_panic", String::new()));
+            let (code, detail) = read.await.unwrap_or_else(|e| ("trust_evidence_panic", e.to_string()));
             tracing::warn!(session = name.as_str(), code, detail, "o Claude pediu para confiar na pasta");
             diag.report("rust.trust_dialog_shown", &name, code, "o Claude pediu para confiar na pasta");
         });

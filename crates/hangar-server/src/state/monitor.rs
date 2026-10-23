@@ -173,7 +173,7 @@ struct Memory {
     switch_misses: u8,
     /// Última linha de status sem métrica de contexto já registrada.
     ctx_warned: Option<String>,
-    /// O "trust this folder?" já foi avisado nesta vida do `Monitor`.
+    /// O "trust this folder?" na tela já foi avisado.
     trust_reported: bool,
 }
 
@@ -333,10 +333,10 @@ impl<S: Sources> Monitor<S> {
             tracing::info!(session = self.src.name(), statusline = line, "estado: sem métrica de contexto");
             self.mem.ctx_warned = Some(line.to_owned());
         }
-        if !self.mem.trust_reported && event.status_line.as_deref().is_some_and(|line| line.contains(TRUST_DIALOG)) {
-            self.mem.trust_reported = true;
-            self.src.trust_dialog();
-        }
+        // Uma vez por aparição: o diálogo que volta depois de sumir é outra ocorrência.
+        let trust = event.status_line.as_deref().is_some_and(|line| line.contains(TRUST_DIALOG));
+        if trust && !self.mem.trust_reported { self.src.trust_dialog(); }
+        self.mem.trust_reported = trust;
         // Como o Python, a borda vale com problema na linha; só o estado que não foi observado não decide.
         if event.problema.as_deref() != Some(OBSERVATION_FAILED) && self.edges.deliverable(&event) {
             self.src.deliverable();
@@ -929,12 +929,12 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn trust_dialog_is_reported_once_per_monitor() {
+    async fn trust_dialog_is_reported_once_per_appearance() {
         const TRUST: &str = "────────────\n Accessing workspace:\n /w/x\n Quick safety check: Is this a project you created or one you trust?\n ❯ No, continue without these permissions\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel";
         let fake = Fake::new(vec![Ok(IDLE), Ok(TRUST), Ok(TRUST), Ok(IDLE), Ok(TRUST), Ok(IDLE)]);
         let task = tokio::spawn(Monitor::new(fake.clone()).run());
         tokio::time::sleep(POLL * 6).await;
-        assert_eq!(*fake.trust_dialogs.lock().unwrap(), 1, "{:?}", fake.states());
+        assert_eq!(*fake.trust_dialogs.lock().unwrap(), 2, "duas aparições, cada uma avisada uma vez: {:?}", fake.states());
         task.abort();
     }
 
