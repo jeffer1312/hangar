@@ -871,6 +871,36 @@ fn local_facts_read_transfers_and_real_paths() {
     assert_eq!(open(&home.join("guest/fora/proj"), &guest), Some((403, Some("erro_fora_da_pasta"))));
 }
 
+#[test]
+fn fast_recognizes_cliproxy_client_keys_in_both_config_formats() {
+    let runtime = test_runtime();
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    for dir in ["work", ".claude", ".cli-proxy-api"] { std::fs::create_dir_all(home.join(dir)).unwrap(); }
+    std::fs::write(home.join(".claude/engines.json"),
+        json!({"gpt": {"base_url": "http://127.0.0.1:8317/v1", "api_key": "k", "model": "gpt-6.1-sol"}}).to_string()).unwrap();
+    let body = json!({"name": "s1", "cwd": home.join("work"), "provider": "claude", "headless": false,
+        "engine": "gpt", "model": "gpt-6.1-sol", "service_tier": "priority"});
+    let request = SessionOpenRequest::parse(body.to_string().as_bytes()).unwrap();
+    let facts = local_facts(&home, &runtime);
+    for (config, accepted) in [
+        ("access:\n  api-keys:\n    - k\n", true),
+        ("access:\n  api-keys:\n    - k\napi-keys:\n  codex: []\n", true),
+        ("api-keys:\n  - k\n", true),
+        ("access:\n  api-keys: []\napi-keys:\n  - k\n", true),
+        ("access:\n  api-keys:\n    - ' '\n", false),
+    ] {
+        std::fs::write(home.join(".cli-proxy-api/config.yaml"), config).unwrap();
+        let resolved = resolve::resolve_open(&request, &OWNER, &facts);
+        if accepted {
+            let spec = resolved.unwrap_or_else(|e| panic!("{config}: {e}")).spec;
+            assert_eq!(spec.service_tier, Some(ServiceTier::Priority), "{config}");
+        } else {
+            assert_eq!(resolved.err().map(|e| (e.status, e.code)), Some((400, Some("erro_criacao_sessao"))), "{config}");
+        }
+    }
+}
+
 /// `model: ""` com Fast cai no modelo do motor como o `or` do Python: o Fast passa, e quem recusa é
 /// a regra do modelo, com o código e o texto de lá.
 #[test]

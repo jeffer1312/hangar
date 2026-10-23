@@ -315,7 +315,8 @@ pub(crate) fn local_engine(env: &AccountEnvironment, engine: &str) -> bool {
 fn cliproxy_base(home: &Path) -> Option<String> {
     let text = std::fs::read_to_string(home.join(".cli-proxy-api").join("config.yaml")).ok()?;
     let config: Value = serde_saphyr::from_str(&text).ok()?;
-    let keys = config["api-keys"].as_array()?;
+    let keys = config["access"]["api-keys"].as_array().filter(|keys| !keys.is_empty())
+        .or_else(|| config["api-keys"].as_array())?;
     keys.iter().filter_map(Value::as_str).any(|k| !k.trim().is_empty()).then_some(())?;
     let mut host = config["host"].as_str().unwrap_or("").trim().to_owned();
     if matches!(host.as_str(), "" | "0.0.0.0" | "::") { host = "127.0.0.1".into(); }
