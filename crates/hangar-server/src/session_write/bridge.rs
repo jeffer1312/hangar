@@ -264,6 +264,10 @@ async fn after_close(st: &Arc<AppState>, name: &str) {
             Err(error) => tracing::error!(session = %name, code = "share_store_failed", "convites da sessão encerrada não revogados: {error}"),
         }
     }
+    // O loop é da vida que acabou: nada de acordar na próxima sessão com o nome.
+    if let Err(error) = crate::loops::store(st).forget(name) {
+        tracing::error!(session = %name, code = "loop_forget_failed", kind = ?error.kind(), "loop da sessão encerrada não saiu");
+    }
     st.list.forget(name);
     st.list.invalidate();
 }

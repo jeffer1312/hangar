@@ -855,6 +855,10 @@ impl ListBridge {
     /// Não espera, como `seed`.
     pub fn rename(&self, old: &str, new: &str) {
         self.nav.rename(old, new);
+        // O loop e o `then` vão com o nome, e quem encadeava para o velho passa a apontar o novo.
+        if let Ok(dirs) = self.dirs() && let Err(error) = crate::loops::store::Store::new(&dirs.claude).rename(old, new) {
+            self.facts.diag.report("loop.rename_failed", new, &format!("{:?}", error.kind()), "loop ou then não acompanhou a troca de nome");
+        }
         let mut projected = lock(&self.plugin_projection);
         projected.remove(old); projected.remove(new);
         drop(projected);

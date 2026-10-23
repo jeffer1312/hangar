@@ -277,6 +277,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _federation = crate::groups::federation::spawn(state.clone()).map(crate::AbortOnDrop);
     // O aviso no celular é decidido aqui, com ou sem lista aberta.
     let _push_watch: Vec<crate::AbortOnDrop> = crate::push::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
+    // Assina as transições depois do vigia de avisos, que as publica.
+    let _loop_watch: Vec<crate::AbortOnDrop> = crate::loops::watch::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
     let _limit_switch = crate::session_write::limit_switch::spawn(state.clone()).map(crate::AbortOnDrop);
     // Sem a fotografia do Python a varredura não revoga nada (ver `life::sweep`); o túnel religa já.
     let _share_sweep = state.share.clone().map(|share| crate::AbortOnDrop(tokio::spawn(
@@ -547,6 +549,11 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/sessions/prewarm/{id}", axum::routing::delete(crate::prewarm::http::delete).fallback(pass_any))
         // Pedido de navegador do agente: só o dono; o Connect chega pela ponte (`forwarded`).
         .route("/api/sessions/{name}/nav", axum::routing::post(crate::nav_requests::open).delete(crate::nav_requests::confirm).fallback(pass_any))
+        // Loop e `then` do dono; o convidado segue ao Python.
+        .route("/api/sessions/{name}/then", axum::routing::put(crate::loops::http::route).delete(crate::loops::http::route).fallback(pass_any))
+        .route("/api/sessions/{name}/loop", get(crate::loops::http::route).post(crate::loops::http::route).delete(crate::loops::http::route).fallback(pass_any))
+        .route("/api/sessions/{name}/loop/refine", axum::routing::post(crate::loops::http::route).fallback(pass_any))
+        .route("/api/sessions/{name}/loop/resolve", axum::routing::post(crate::loops::http::route).fallback(pass_any))
         // Bastão do dono: o Python prepara o dossiê e a sucessora Claude com terminal nasce aqui.
         .route("/api/sessions/{name}/bastao", axum::routing::post(crate::session_open::server::bastao).fallback(pass_any))
         // Retomar do Arquivo e o `/resume` ao vivo: a abertura e a reabertura do Rust, com a conversa que já existe.

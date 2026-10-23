@@ -1,0 +1,4503 @@
+{
+ "origin_commit": "4810f78f1d08544debc29306d807ca793e9467da",
+ "command": "uv run python tests/fixtures/contract/gen_loop.py",
+ "now": 1000.0,
+ "prompt": "Você reescreve OBJETIVOS pra um loop autônomo de código. Boas práticas:\n- Objetivo é UMA coisa só e VERIFICÁVEL: descreve o RESULTADO final, não os passos.\n- Pequeno e concreto (ex: \"migre utils/date.ts pra date-fns mantendo o check verde\"), nunca amplo (\"refatore o projeto\").\n- Peça EVIDÊNCIA, não promessa: inclua \"rode o comando de verificação e mostre a saída\".\n- Deixe explícito: não editar arquivos de teste nem o comando de verificação; corrigir o código.\nA saída é SEMPRE um objetivo reescrito — NUNCA uma pergunta, recusa ou comentário. Se faltar contexto, PRESERVE a intenção e marque a lacuna inline entre <colchetes> (ex: \"Melhore o haiku em <arquivo> até <critério de qualidade>, rode o check e mostre a saída\").\nResponda SÓ com o objetivo reescrito em pt-BR, texto puro, sem preâmbulo, sem aspas, sem markdown.\n\nObjetivo do usuário:\ng\n\nComando de verificação (check): make test",
+ "ticks": [
+  {
+   "label": "check_pass_is_done",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "check": [
+     0,
+     "ok"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "done",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": 1000.0,
+     "ended_reason": "check passou"
+    },
+    "returned": true,
+    "pushed": [
+     [
+      "s",
+      "loop concluído: check passou"
+     ]
+    ],
+    "sent": []
+   }
+  },
+  {
+   "label": "check_fail_reprompts",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "check": [
+     1,
+     "AssertionError: boom"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 1,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [
+      {
+       "n": 1,
+       "ts": 1000.0,
+       "check_exit": 1,
+       "tail": "AssertionError: boom"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": true,
+    "pushed": [],
+    "sent": [
+     "[loop 1/10] Objetivo: g\nO comando de verificação falhou (exit 1). Saída (cauda):\nAssertionError: boom\nNão edite arquivos de teste nem o comando de verificação; corrija o código."
+    ]
+   }
+  },
+  {
+   "label": "anchor_blocks_before_delivery",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": null,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "entry_delivered": false
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": null,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": false,
+    "pushed": [],
+    "sent": []
+   }
+  },
+  {
+   "label": "anchor_sets_ts_when_delivered",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": null,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "entry_delivered": true,
+    "check": [
+     1,
+     "e"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 1,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1000.0,
+     "history": [
+      {
+       "n": 1,
+       "ts": 1000.0,
+       "check_exit": 1,
+       "tail": "e"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": true,
+    "pushed": [],
+    "sent": [
+     "[loop 1/10] Objetivo: g\nO comando de verificação falhou (exit 1). Saída (cauda):\ne\nNão edite arquivos de teste nem o comando de verificação; corrija o código."
+    ]
+   }
+  },
+  {
+   "label": "anchor_missing_entry_proceeds",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": null,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "entry_delivered": null,
+    "check": [
+     1,
+     "e"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 1,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1000.0,
+     "history": [
+      {
+       "n": 1,
+       "ts": 1000.0,
+       "check_exit": 1,
+       "tail": "e"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": true,
+    "pushed": [],
+    "sent": [
+     "[loop 1/10] Objetivo: g\nO comando de verificação falhou (exit 1). Saída (cauda):\ne\nNão edite arquivos de teste nem o comando de verificação; corrija o código."
+    ]
+   }
+  },
+  {
+   "label": "anchor_without_entry_id",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": null,
+    "goal_delivered_ts": null,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "entry_delivered": null,
+    "check": [
+     1,
+     "e"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 1,
+     "goal_entry_id": null,
+     "goal_delivered_ts": 1000.0,
+     "history": [
+      {
+       "n": 1,
+       "ts": 1000.0,
+       "check_exit": 1,
+       "tail": "e"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": true,
+    "pushed": [],
+    "sent": [
+     "[loop 1/10] Objetivo: g\nO comando de verificação falhou (exit 1). Saída (cauda):\ne\nNão edite arquivos de teste nem o comando de verificação; corrija o código."
+    ]
+   }
+  },
+  {
+   "label": "stagnation",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 1,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [
+     {
+      "n": 1,
+      "ts": 1.0,
+      "check_exit": 1,
+      "tail": "mesmo erro"
+     }
+    ],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "check": [
+     1,
+     "mesmo erro"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "stopped",
+     "iter": 1,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [
+      {
+       "n": 1,
+       "ts": 1.0,
+       "check_exit": 1,
+       "tail": "mesmo erro"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": 1000.0,
+     "ended_reason": "estagnado — mesmo erro 2x"
+    },
+    "returned": true,
+    "pushed": [
+     [
+      "s",
+      "loop parado: estagnado — mesmo erro 2x"
+     ]
+    ],
+    "sent": []
+   }
+  },
+  {
+   "label": "exhausted",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 1,
+    "require_branch": true,
+    "status": "running",
+    "iter": 1,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "check": [
+     1,
+     "e2"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 1,
+     "require_branch": true,
+     "status": "exhausted",
+     "iter": 1,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": 1000.0,
+     "ended_reason": "esgotou 1 iterações"
+    },
+    "returned": true,
+    "pushed": [
+     [
+      "s",
+      "loop esgotou as iterações: esgotou 1 iterações"
+     ]
+    ],
+    "sent": []
+   }
+  },
+  {
+   "label": "automations_off",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "automations": false
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "stopped",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": 1000.0,
+     "ended_reason": "automations_disabled"
+    },
+    "returned": true,
+    "pushed": [
+     [
+      "s",
+      "loop parado: automations_disabled"
+     ]
+    ],
+    "sent": []
+   }
+  },
+  {
+   "label": "branch_main",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "branch": "main"
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "stopped",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": 1000.0,
+     "ended_reason": "branch main"
+    },
+    "returned": true,
+    "pushed": [
+     [
+      "s",
+      "loop parado: branch main"
+     ]
+    ],
+    "sent": []
+   }
+  },
+  {
+   "label": "branch_master",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "branch": "master"
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "stopped",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": 1000.0,
+     "ended_reason": "branch master"
+    },
+    "returned": true,
+    "pushed": [
+     [
+      "s",
+      "loop parado: branch master"
+     ]
+    ],
+    "sent": []
+   }
+  },
+  {
+   "label": "branch_main_not_required",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": false,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "branch": "main",
+    "check": [
+     1,
+     "e"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": false,
+     "status": "running",
+     "iter": 1,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [
+      {
+       "n": 1,
+       "ts": 1000.0,
+       "check_exit": 1,
+       "tail": "e"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": true,
+    "pushed": [],
+    "sent": [
+     "[loop 1/10] Objetivo: g\nO comando de verificação falhou (exit 1). Saída (cauda):\ne\nNão edite arquivos de teste nem o comando de verificação; corrija o código."
+    ]
+   }
+  },
+  {
+   "label": "branch_none_allowed",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "branch": null,
+    "check": [
+     1,
+     "e"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 1,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [
+      {
+       "n": 1,
+       "ts": 1000.0,
+       "check_exit": 1,
+       "tail": "e"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": true,
+    "pushed": [],
+    "sent": [
+     "[loop 1/10] Objetivo: g\nO comando de verificação falhou (exit 1). Saída (cauda):\ne\nNão edite arquivos de teste nem o comando de verificação; corrija o código."
+    ]
+   }
+  },
+  {
+   "label": "no_check_done_claimed",
+   "loop": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "last": "feito. LOOP_DONE"
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": null,
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "done_claimed",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": "declarou pronto — confirmar?"
+    },
+    "returned": true,
+    "pushed": [
+     [
+      "s",
+      "Claude declarou pronto — confirmar?"
+     ]
+    ],
+    "sent": []
+   }
+  },
+  {
+   "label": "no_check_reprompts",
+   "loop": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "last": "ainda trabalhando"
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": null,
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 1,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [
+      {
+       "n": 1,
+       "ts": 1000.0,
+       "check_exit": null,
+       "tail": "(sem check — iteração de continuação)"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": true,
+    "pushed": [],
+    "sent": [
+     "[loop 1/10] Objetivo: g\nA tarefa ainda não foi confirmada como concluída. Continue.\nNão edite arquivos de teste nem o comando de verificação; corrija o código."
+    ]
+   }
+  },
+  {
+   "label": "no_check_no_text",
+   "loop": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "last": null
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": null,
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 1,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [
+      {
+       "n": 1,
+       "ts": 1000.0,
+       "check_exit": null,
+       "tail": "(sem check — iteração de continuação)"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": true,
+    "pushed": [],
+    "sent": [
+     "[loop 1/10] Objetivo: g\nA tarefa ainda não foi confirmada como concluída. Continue.\nNão edite arquivos de teste nem o comando de verificação; corrija o código."
+    ]
+   }
+  },
+  {
+   "label": "no_check_exhausted",
+   "loop": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 3,
+    "require_branch": true,
+    "status": "running",
+    "iter": 3,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "last": "x"
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": null,
+     "max_iters": 3,
+     "require_branch": true,
+     "status": "exhausted",
+     "iter": 3,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": 1000.0,
+     "ended_reason": "esgotou 3 iterações"
+    },
+    "returned": true,
+    "pushed": [
+     [
+      "s",
+      "loop esgotou as iterações: esgotou 3 iterações"
+     ]
+    ],
+    "sent": []
+   }
+  },
+  {
+   "label": "empty_check_is_no_check",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "last": "LOOP_DONE"
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "done_claimed",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": "declarou pronto — confirmar?"
+    },
+    "returned": true,
+    "pushed": [
+     [
+      "s",
+      "Claude declarou pronto — confirmar?"
+     ]
+    ],
+    "sent": []
+   }
+  },
+  {
+   "label": "check_not_executable_fails",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "check": [
+     -404,
+     "No closing quotation"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "failed",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": 1000.0,
+     "ended_reason": "check_cmd não executável: No closing quotation"
+    },
+    "returned": true,
+    "pushed": [
+     [
+      "s",
+      "loop falhou: check_cmd não executável: No closing quotation"
+     ]
+    ],
+    "sent": []
+   }
+  },
+  {
+   "label": "check_timeout_reprompts",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "check": [
+     124,
+     "timeout 600s"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 1,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [
+      {
+       "n": 1,
+       "ts": 1000.0,
+       "check_exit": 124,
+       "tail": "timeout 600s"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": true,
+    "pushed": [],
+    "sent": [
+     "[loop 1/10] Objetivo: g\nO comando de verificação falhou (exit 124). Saída (cauda):\ntimeout 600s\nNão edite arquivos de teste nem o comando de verificação; corrija o código."
+    ]
+   }
+  },
+  {
+   "label": "history_capped_20",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 99,
+    "require_branch": true,
+    "status": "running",
+    "iter": 20,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [
+     {
+      "n": 1,
+      "ts": 1.0,
+      "check_exit": 1,
+      "tail": "e1"
+     },
+     {
+      "n": 2,
+      "ts": 2.0,
+      "check_exit": 1,
+      "tail": "e2"
+     },
+     {
+      "n": 3,
+      "ts": 3.0,
+      "check_exit": 1,
+      "tail": "e3"
+     },
+     {
+      "n": 4,
+      "ts": 4.0,
+      "check_exit": 1,
+      "tail": "e4"
+     },
+     {
+      "n": 5,
+      "ts": 5.0,
+      "check_exit": 1,
+      "tail": "e5"
+     },
+     {
+      "n": 6,
+      "ts": 6.0,
+      "check_exit": 1,
+      "tail": "e6"
+     },
+     {
+      "n": 7,
+      "ts": 7.0,
+      "check_exit": 1,
+      "tail": "e7"
+     },
+     {
+      "n": 8,
+      "ts": 8.0,
+      "check_exit": 1,
+      "tail": "e8"
+     },
+     {
+      "n": 9,
+      "ts": 9.0,
+      "check_exit": 1,
+      "tail": "e9"
+     },
+     {
+      "n": 10,
+      "ts": 10.0,
+      "check_exit": 1,
+      "tail": "e10"
+     },
+     {
+      "n": 11,
+      "ts": 11.0,
+      "check_exit": 1,
+      "tail": "e11"
+     },
+     {
+      "n": 12,
+      "ts": 12.0,
+      "check_exit": 1,
+      "tail": "e12"
+     },
+     {
+      "n": 13,
+      "ts": 13.0,
+      "check_exit": 1,
+      "tail": "e13"
+     },
+     {
+      "n": 14,
+      "ts": 14.0,
+      "check_exit": 1,
+      "tail": "e14"
+     },
+     {
+      "n": 15,
+      "ts": 15.0,
+      "check_exit": 1,
+      "tail": "e15"
+     },
+     {
+      "n": 16,
+      "ts": 16.0,
+      "check_exit": 1,
+      "tail": "e16"
+     },
+     {
+      "n": 17,
+      "ts": 17.0,
+      "check_exit": 1,
+      "tail": "e17"
+     },
+     {
+      "n": 18,
+      "ts": 18.0,
+      "check_exit": 1,
+      "tail": "e18"
+     },
+     {
+      "n": 19,
+      "ts": 19.0,
+      "check_exit": 1,
+      "tail": "e19"
+     },
+     {
+      "n": 20,
+      "ts": 20.0,
+      "check_exit": 1,
+      "tail": "e20"
+     }
+    ],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "check": [
+     1,
+     "novo erro"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 99,
+     "require_branch": true,
+     "status": "running",
+     "iter": 21,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [
+      {
+       "n": 2,
+       "ts": 2.0,
+       "check_exit": 1,
+       "tail": "e2"
+      },
+      {
+       "n": 3,
+       "ts": 3.0,
+       "check_exit": 1,
+       "tail": "e3"
+      },
+      {
+       "n": 4,
+       "ts": 4.0,
+       "check_exit": 1,
+       "tail": "e4"
+      },
+      {
+       "n": 5,
+       "ts": 5.0,
+       "check_exit": 1,
+       "tail": "e5"
+      },
+      {
+       "n": 6,
+       "ts": 6.0,
+       "check_exit": 1,
+       "tail": "e6"
+      },
+      {
+       "n": 7,
+       "ts": 7.0,
+       "check_exit": 1,
+       "tail": "e7"
+      },
+      {
+       "n": 8,
+       "ts": 8.0,
+       "check_exit": 1,
+       "tail": "e8"
+      },
+      {
+       "n": 9,
+       "ts": 9.0,
+       "check_exit": 1,
+       "tail": "e9"
+      },
+      {
+       "n": 10,
+       "ts": 10.0,
+       "check_exit": 1,
+       "tail": "e10"
+      },
+      {
+       "n": 11,
+       "ts": 11.0,
+       "check_exit": 1,
+       "tail": "e11"
+      },
+      {
+       "n": 12,
+       "ts": 12.0,
+       "check_exit": 1,
+       "tail": "e12"
+      },
+      {
+       "n": 13,
+       "ts": 13.0,
+       "check_exit": 1,
+       "tail": "e13"
+      },
+      {
+       "n": 14,
+       "ts": 14.0,
+       "check_exit": 1,
+       "tail": "e14"
+      },
+      {
+       "n": 15,
+       "ts": 15.0,
+       "check_exit": 1,
+       "tail": "e15"
+      },
+      {
+       "n": 16,
+       "ts": 16.0,
+       "check_exit": 1,
+       "tail": "e16"
+      },
+      {
+       "n": 17,
+       "ts": 17.0,
+       "check_exit": 1,
+       "tail": "e17"
+      },
+      {
+       "n": 18,
+       "ts": 18.0,
+       "check_exit": 1,
+       "tail": "e18"
+      },
+      {
+       "n": 19,
+       "ts": 19.0,
+       "check_exit": 1,
+       "tail": "e19"
+      },
+      {
+       "n": 20,
+       "ts": 20.0,
+       "check_exit": 1,
+       "tail": "e20"
+      },
+      {
+       "n": 21,
+       "ts": 1000.0,
+       "check_exit": 1,
+       "tail": "novo erro"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": true,
+    "pushed": [],
+    "sent": [
+     "[loop 21/99] Objetivo: g\nO comando de verificação falhou (exit 1). Saída (cauda):\nnovo erro\nNão edite arquivos de teste nem o comando de verificação; corrija o código."
+    ]
+   }
+  },
+  {
+   "label": "paused_resumes",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "paused_awaiting",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "check": [
+     1,
+     "e"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 1,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [
+      {
+       "n": 1,
+       "ts": 1000.0,
+       "check_exit": 1,
+       "tail": "e"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": true,
+    "pushed": [],
+    "sent": [
+     "[loop 1/10] Objetivo: g\nO comando de verificação falhou (exit 1). Saída (cauda):\ne\nNão edite arquivos de teste nem o comando de verificação; corrija o código."
+    ]
+   }
+  },
+  {
+   "label": "paused_then_done",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "paused_awaiting",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "check": [
+     0,
+     ""
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "done",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": 1000.0,
+     "ended_reason": "check passou"
+    },
+    "returned": true,
+    "pushed": [
+     [
+      "s",
+      "loop concluído: check passou"
+     ]
+    ],
+    "sent": []
+   }
+  },
+  {
+   "label": "done_is_noop",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "done",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "check": [
+     0,
+     ""
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "done",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": false,
+    "pushed": [],
+    "sent": []
+   }
+  },
+  {
+   "label": "done_claimed_is_noop",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "done_claimed",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "check": [
+     0,
+     ""
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "done_claimed",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": false,
+    "pushed": [],
+    "sent": []
+   }
+  },
+  {
+   "label": "stagnation_only_against_last",
+   "loop": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 2,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [
+     {
+      "n": 1,
+      "ts": 1.0,
+      "check_exit": 1,
+      "tail": "x"
+     },
+     {
+      "n": 2,
+      "ts": 2.0,
+      "check_exit": 1,
+      "tail": "y"
+     }
+    ],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "check": [
+     1,
+     "x"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 3,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [
+      {
+       "n": 1,
+       "ts": 1.0,
+       "check_exit": 1,
+       "tail": "x"
+      },
+      {
+       "n": 2,
+       "ts": 2.0,
+       "check_exit": 1,
+       "tail": "y"
+      },
+      {
+       "n": 3,
+       "ts": 1000.0,
+       "check_exit": 1,
+       "tail": "x"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": true,
+    "pushed": [],
+    "sent": [
+     "[loop 3/10] Objetivo: g\nO comando de verificação falhou (exit 1). Saída (cauda):\nx\nNão edite arquivos de teste nem o comando de verificação; corrija o código."
+    ]
+   }
+  },
+  {
+   "label": "unicode_goal",
+   "loop": {
+    "goal": "corrigir ação — ✓",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "ctx": {
+    "check": [
+     2,
+     "falhou ç"
+    ]
+   },
+   "out": {
+    "loop": {
+     "goal": "corrigir ação — ✓",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 1,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [
+      {
+       "n": 1,
+       "ts": 1000.0,
+       "check_exit": 2,
+       "tail": "falhou ç"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "returned": true,
+    "pushed": [],
+    "sent": [
+     "[loop 1/10] Objetivo: corrigir ação — ✓\nO comando de verificação falhou (exit 2). Saída (cauda):\nfalhou ç\nNão edite arquivos de teste nem o comando de verificação; corrija o código."
+    ]
+   }
+  }
+ ],
+ "checks": [
+  {
+   "cmd": "true",
+   "exit": 0,
+   "tail": ""
+  },
+  {
+   "cmd": "false",
+   "exit": 1,
+   "tail": ""
+  },
+  {
+   "cmd": "sh -c 'echo out; echo err >&2; exit 3'",
+   "exit": 3,
+   "tail": "out\n\nerr"
+  },
+  {
+   "cmd": "sh -c 'printf \"a\\r\\nb\\rc\"'",
+   "exit": 0,
+   "tail": "a\nb\nc"
+  },
+  {
+   "cmd": "sh -c 'head -c 9000 /dev/zero | tr \"\\000\" x; echo; echo fim'",
+   "exit": 0,
+   "tail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfim"
+  },
+  {
+   "cmd": "echo \"sem fechar",
+   "exit": -404,
+   "tail": "No closing quotation"
+  },
+  {
+   "cmd": "echo a\\",
+   "exit": -404,
+   "tail": "No escaped character"
+  },
+  {
+   "cmd": "programa-que-nao-existe-xyz arg",
+   "exit": -404,
+   "tail": "[Errno 2] No such file or directory: 'programa-que-nao-existe-xyz'"
+  },
+  {
+   "cmd": "sh -c \"printf '%s|' \\\"a b\\\" c\\\\ d 'e\\\\f'\"",
+   "exit": 0,
+   "tail": "a b|c d|e\\f|"
+  },
+  {
+   "cmd": "printf '\\377\\376ok'",
+   "exit": 0,
+   "tail": "��ok"
+  },
+  {
+   "cmd": "sh -c 'kill -TERM $$'",
+   "exit": -15,
+   "tail": ""
+  },
+  {
+   "cmd": "./noexec.sh",
+   "exit": -404,
+   "tail": "[Errno 13] Permission denied: './noexec.sh'"
+  },
+  {
+   "cmd": "pwd",
+   "exit": 0,
+   "tail": "<cwd>"
+  },
+  {
+   "cmd": "sh -c 'printf \"  \\t pad \\n\\n\"'",
+   "exit": 0,
+   "tail": "pad"
+  },
+  {
+   "cmd": "echo '#nao é comentário' # nem isto",
+   "exit": 0,
+   "tail": "#nao é comentário # nem isto"
+  },
+  {
+   "cmd": "   ",
+   "raises": "IndexError"
+  },
+  {
+   "cmd": "",
+   "raises": "IndexError"
+  }
+ ],
+ "splits": [
+  {
+   "in": "npm run check",
+   "argv": [
+    "npm",
+    "run",
+    "check"
+   ]
+  },
+  {
+   "in": "  a   b  ",
+   "argv": [
+    "a",
+    "b"
+   ]
+  },
+  {
+   "in": "a\tb\nc",
+   "argv": [
+    "a",
+    "b",
+    "c"
+   ]
+  },
+  {
+   "in": "'a b' c",
+   "argv": [
+    "a b",
+    "c"
+   ]
+  },
+  {
+   "in": "\"a b\" c",
+   "argv": [
+    "a b",
+    "c"
+   ]
+  },
+  {
+   "in": "a\\ b",
+   "argv": [
+    "a b"
+   ]
+  },
+  {
+   "in": "\"a\\\"b\"",
+   "argv": [
+    "a\"b"
+   ]
+  },
+  {
+   "in": "'a\\b'",
+   "argv": [
+    "a\\b"
+   ]
+  },
+  {
+   "in": "\"a\\b\"",
+   "argv": [
+    "a\\b"
+   ]
+  },
+  {
+   "in": "\"a\\\\b\"",
+   "argv": [
+    "a\\b"
+   ]
+  },
+  {
+   "in": "a\"b c\"d",
+   "argv": [
+    "ab cd"
+   ]
+  },
+  {
+   "in": "''",
+   "argv": [
+    ""
+   ]
+  },
+  {
+   "in": "\"\"",
+   "argv": [
+    ""
+   ]
+  },
+  {
+   "in": "a '' b",
+   "argv": [
+    "a",
+    "",
+    "b"
+   ]
+  },
+  {
+   "in": "C:\\Users\\x\\npm.cmd run",
+   "argv": [
+    "C:Usersxnpm.cmd",
+    "run"
+   ]
+  },
+  {
+   "in": "#x y",
+   "argv": [
+    "#x",
+    "y"
+   ]
+  },
+  {
+   "in": "a#b",
+   "argv": [
+    "a#b"
+   ]
+  },
+  {
+   "in": "\"sem fechar",
+   "error": "No closing quotation"
+  },
+  {
+   "in": "'sem fechar",
+   "error": "No closing quotation"
+  },
+  {
+   "in": "fim\\",
+   "error": "No escaped character"
+  },
+  {
+   "in": "ç ã",
+   "argv": [
+    "ç",
+    "ã"
+   ]
+  },
+  {
+   "in": "a\\\nb",
+   "argv": [
+    "a\nb"
+   ]
+  },
+  {
+   "in": "\"$HOME\"",
+   "argv": [
+    "$HOME"
+   ]
+  },
+  {
+   "in": "\"a`b\"",
+   "argv": [
+    "a`b"
+   ]
+  }
+ ],
+ "suggestions": [
+  {
+   "files": {
+    "package.json": "{\"scripts\": {\"check\": \"x\", \"test\": \"y\", \"lint\": \"z\", \"build\": \"b\"}}"
+   },
+   "suggestions": [
+    "npm run check",
+    "npm run test",
+    "npm run lint"
+   ]
+  },
+  {
+   "files": {
+    "package.json": "{\"scripts\": {\"test\": \"y\"}}",
+    "pyproject.toml": "",
+    "Cargo.toml": "",
+    "go.mod": ""
+   },
+   "suggestions": [
+    "npm run test",
+    "uv run pytest -x -q",
+    "cargo test",
+    "go test ./..."
+   ]
+  },
+  {
+   "files": {
+    "package.json": "{\"scripts\": {\"check\": \"x\", \"test\": \"y\", \"lint\": \"z\"}}",
+    "pytest.ini": "",
+    "Cargo.toml": ""
+   },
+   "suggestions": [
+    "npm run check",
+    "npm run test",
+    "npm run lint",
+    "uv run pytest -x -q"
+   ]
+  },
+  {
+   "files": {
+    "package.json": "{quebrado",
+    "Cargo.toml": ""
+   },
+   "suggestions": []
+  },
+  {
+   "files": {
+    "package.json": "{\"name\": \"sem scripts\"}",
+    "go.mod": ""
+   },
+   "suggestions": [
+    "go test ./..."
+   ]
+  },
+  {
+   "files": {
+    "package.json": "{\"scripts\": [\"check\"]}"
+   },
+   "suggestions": [
+    "npm run check"
+   ]
+  },
+  {
+   "files": {
+    "package.json": "[1]"
+   },
+   "suggestions": {
+    "raises": "AttributeError"
+   }
+  },
+  {
+   "files": {},
+   "suggestions": []
+  }
+ ],
+ "bodies": [
+  {
+   "status": "done",
+   "reason": "check passou",
+   "body": "loop concluído: check passou"
+  },
+  {
+   "status": "done",
+   "reason": null,
+   "body": "loop concluído: None"
+  },
+  {
+   "status": "done_claimed",
+   "reason": "check passou",
+   "body": "Claude declarou pronto — confirmar?"
+  },
+  {
+   "status": "done_claimed",
+   "reason": null,
+   "body": "Claude declarou pronto — confirmar?"
+  },
+  {
+   "status": "stopped",
+   "reason": "check passou",
+   "body": "loop parado: check passou"
+  },
+  {
+   "status": "stopped",
+   "reason": null,
+   "body": "loop parado: None"
+  },
+  {
+   "status": "exhausted",
+   "reason": "check passou",
+   "body": "loop esgotou as iterações: check passou"
+  },
+  {
+   "status": "exhausted",
+   "reason": null,
+   "body": "loop esgotou as iterações: None"
+  },
+  {
+   "status": "failed",
+   "reason": "check passou",
+   "body": "loop falhou: check passou"
+  },
+  {
+   "status": "failed",
+   "reason": null,
+   "body": "loop falhou: None"
+  },
+  {
+   "status": "running",
+   "reason": "check passou",
+   "body": "check passou"
+  },
+  {
+   "status": "running",
+   "reason": null,
+   "body": "running"
+  },
+  {
+   "status": "outro",
+   "reason": "check passou",
+   "body": "check passou"
+  },
+  {
+   "status": "outro",
+   "reason": null,
+   "body": "outro"
+  }
+ ],
+ "push_bodies": [
+  {
+   "status": "done",
+   "reason": "check passou",
+   "pt": "loop concluído: check passou",
+   "en": "loop finished: check passou"
+  },
+  {
+   "status": "done_claimed",
+   "reason": "declarou pronto — confirmar?",
+   "pt": "Claude declarou pronto — confirmar?",
+   "en": "Claude declared done — confirm?"
+  },
+  {
+   "status": "stopped",
+   "reason": "branch main",
+   "pt": "loop parado: branch main",
+   "en": "loop stopped: branch main"
+  },
+  {
+   "status": "exhausted",
+   "reason": "esgotou 3 iterações",
+   "pt": "loop esgotou as iterações: esgotou 3 iterações",
+   "en": "loop exhausted its iterations: esgotou 3 iterações"
+  },
+  {
+   "status": "failed",
+   "reason": "check_cmd não executável: x: y",
+   "pt": "loop falhou: check_cmd não executável: x: y",
+   "en": "loop failed: check_cmd não executável: x: y"
+  }
+ ],
+ "routes": [
+  {
+   "label": "then_ok",
+   "method": "PUT",
+   "path": "/api/sessions/cc/then",
+   "body": {
+    "target": "b",
+    "text": "roda os testes"
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "ok": true
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": {
+    "target": "b",
+    "text": "roda os testes"
+   }
+  },
+  {
+   "label": "then_self",
+   "method": "PUT",
+   "path": "/api/sessions/cc/then",
+   "body": {
+    "target": "cc",
+    "text": "x"
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 400,
+   "response": {
+    "detail": {
+     "code": "erro_encadeamento_proprio",
+     "params": {},
+     "msg": "sessao nao pode encadear pra si mesma"
+    }
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "then_missing_target",
+   "method": "PUT",
+   "path": "/api/sessions/cc/then",
+   "body": {
+    "target": "ghost",
+    "text": "x"
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 404,
+   "response": {
+    "detail": {
+     "code": "erro_sessao_inexistente",
+     "params": {},
+     "msg": "sessao alvo nao encontrada"
+    }
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "then_empty_text",
+   "method": "PUT",
+   "path": "/api/sessions/cc/then",
+   "body": {
+    "target": "b",
+    "text": ""
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 422,
+   "response": {
+    "detail": [
+     {
+      "type": "string_too_short",
+      "loc": [
+       "body",
+       "text"
+      ],
+      "msg": "String should have at least 1 character",
+      "input": "",
+      "ctx": {
+       "min_length": 1
+      }
+     }
+    ]
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "then_extra_field",
+   "method": "PUT",
+   "path": "/api/sessions/cc/then",
+   "body": {
+    "target": "b",
+    "text": "x",
+    "y": 1
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 422,
+   "response": {
+    "detail": [
+     {
+      "type": "extra_forbidden",
+      "loc": [
+       "body",
+       "y"
+      ],
+      "msg": "Extra inputs are not permitted",
+      "input": 1
+     }
+    ]
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "then_delete",
+   "method": "DELETE",
+   "path": "/api/sessions/cc/then",
+   "body": null,
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "ok": true
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "create_ok",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop",
+   "body": {
+    "goal": "criar ok.txt",
+    "check_cmd": "test -f ok.txt"
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "loop": {
+     "goal": "criar ok.txt",
+     "check_cmd": "test -f ok.txt",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 0,
+     "goal_entry_id": "q-cc-0",
+     "goal_delivered_ts": null,
+     "history": [],
+     "started_ts": 1000.0,
+     "ended_ts": null,
+     "ended_reason": null
+    }
+   },
+   "pushed": [],
+   "queued": {
+    "cc": [
+     {
+      "id": "q-cc-0",
+      "text": "criar ok.txt",
+      "delivered": false
+     }
+    ]
+   },
+   "loop_after": {
+    "goal": "criar ok.txt",
+    "check_cmd": "test -f ok.txt",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "q-cc-0",
+    "goal_delivered_ts": null,
+    "history": [],
+    "started_ts": 1000.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "chain_after": null
+  },
+  {
+   "label": "create_defaults",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop",
+   "body": {
+    "goal": "g"
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": null,
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 0,
+     "goal_entry_id": "q-cc-0",
+     "goal_delivered_ts": null,
+     "history": [],
+     "started_ts": 1000.0,
+     "ended_ts": null,
+     "ended_reason": null
+    }
+   },
+   "pushed": [],
+   "queued": {
+    "cc": [
+     {
+      "id": "q-cc-0",
+      "text": "g",
+      "delivered": false
+     }
+    ]
+   },
+   "loop_after": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "q-cc-0",
+    "goal_delivered_ts": null,
+    "history": [],
+    "started_ts": 1000.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "chain_after": null
+  },
+  {
+   "label": "create_missing",
+   "method": "POST",
+   "path": "/api/sessions/ghost/loop",
+   "body": {
+    "goal": "g"
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 404,
+   "response": {
+    "detail": {
+     "code": "erro_sessao_inexistente",
+     "params": {},
+     "msg": "sessão não encontrada"
+    }
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "create_codex",
+   "method": "POST",
+   "path": "/api/sessions/cx/loop",
+   "body": {
+    "goal": "g"
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 409,
+   "response": {
+    "detail": {
+     "code": "erro_loop_provider_invalido",
+     "params": {},
+     "msg": "loop runner só suporta sessões claude"
+    }
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "create_automations_off",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop",
+   "body": {
+    "goal": "g"
+   },
+   "initial": null,
+   "automations": false,
+   "branch": "TICKET-1",
+   "status": 409,
+   "response": {
+    "detail": {
+     "code": "erro_automacoes_desligadas",
+     "params": {},
+     "msg": "automações desligadas (kill-switch)"
+    }
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "create_already_active",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop",
+   "body": {
+    "goal": "g"
+   },
+   "initial": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 409,
+   "response": {
+    "detail": {
+     "code": "erro_loop_ja_ativo",
+     "params": {},
+     "msg": "já existe um loop ativo nesta sessão"
+    }
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "chain_after": null
+  },
+  {
+   "label": "create_after_stopped",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop",
+   "body": {
+    "goal": "g",
+    "max_iters": 3
+   },
+   "initial": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "stopped",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": 5.0,
+    "ended_reason": "x"
+   },
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": null,
+     "max_iters": 3,
+     "require_branch": true,
+     "status": "running",
+     "iter": 0,
+     "goal_entry_id": "q-cc-0",
+     "goal_delivered_ts": null,
+     "history": [],
+     "started_ts": 1000.0,
+     "ended_ts": null,
+     "ended_reason": null
+    }
+   },
+   "pushed": [],
+   "queued": {
+    "cc": [
+     {
+      "id": "q-cc-0",
+      "text": "g",
+      "delivered": false
+     }
+    ]
+   },
+   "loop_after": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 3,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "q-cc-0",
+    "goal_delivered_ts": null,
+    "history": [],
+    "started_ts": 1000.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "chain_after": null
+  },
+  {
+   "label": "create_main_branch",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop",
+   "body": {
+    "goal": "g"
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "main",
+   "status": 409,
+   "response": {
+    "detail": {
+     "code": "erro_loop_branch_invalida",
+     "params": {
+      "br": "main"
+     },
+     "msg": "sessão está na branch main — crie uma branch ou desligue 'exigir branch'"
+    }
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "create_main_not_required",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop",
+   "body": {
+    "goal": "g",
+    "require_branch": false
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "main",
+   "status": 200,
+   "response": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": null,
+     "max_iters": 10,
+     "require_branch": false,
+     "status": "running",
+     "iter": 0,
+     "goal_entry_id": "q-cc-0",
+     "goal_delivered_ts": null,
+     "history": [],
+     "started_ts": 1000.0,
+     "ended_ts": null,
+     "ended_reason": null
+    }
+   },
+   "pushed": [],
+   "queued": {
+    "cc": [
+     {
+      "id": "q-cc-0",
+      "text": "g",
+      "delivered": false
+     }
+    ]
+   },
+   "loop_after": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": false,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "q-cc-0",
+    "goal_delivered_ts": null,
+    "history": [],
+    "started_ts": 1000.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "chain_after": null
+  },
+  {
+   "label": "create_max_too_high",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop",
+   "body": {
+    "goal": "g",
+    "max_iters": 500
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 422,
+   "response": {
+    "detail": [
+     {
+      "type": "less_than_equal",
+      "loc": [
+       "body",
+       "max_iters"
+      ],
+      "msg": "Input should be less than or equal to 100",
+      "input": 500,
+      "ctx": {
+       "le": 100
+      }
+     }
+    ]
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "create_max_zero",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop",
+   "body": {
+    "goal": "g",
+    "max_iters": 0
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 422,
+   "response": {
+    "detail": [
+     {
+      "type": "greater_than_equal",
+      "loc": [
+       "body",
+       "max_iters"
+      ],
+      "msg": "Input should be greater than or equal to 1",
+      "input": 0,
+      "ctx": {
+       "ge": 1
+      }
+     }
+    ]
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "create_empty_goal",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop",
+   "body": {
+    "goal": ""
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 422,
+   "response": {
+    "detail": [
+     {
+      "type": "string_too_short",
+      "loc": [
+       "body",
+       "goal"
+      ],
+      "msg": "String should have at least 1 character",
+      "input": "",
+      "ctx": {
+       "min_length": 1
+      }
+     }
+    ]
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "create_null_check",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop",
+   "body": {
+    "goal": "g",
+    "check_cmd": null
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": null,
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 0,
+     "goal_entry_id": "q-cc-0",
+     "goal_delivered_ts": null,
+     "history": [],
+     "started_ts": 1000.0,
+     "ended_ts": null,
+     "ended_reason": null
+    }
+   },
+   "pushed": [],
+   "queued": {
+    "cc": [
+     {
+      "id": "q-cc-0",
+      "text": "g",
+      "delivered": false
+     }
+    ]
+   },
+   "loop_after": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "q-cc-0",
+    "goal_delivered_ts": null,
+    "history": [],
+    "started_ts": 1000.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "chain_after": null
+  },
+  {
+   "label": "get_none",
+   "method": "GET",
+   "path": "/api/sessions/cc/loop",
+   "body": null,
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "loop": null,
+    "suggestions": []
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "get_running",
+   "method": "GET",
+   "path": "/api/sessions/cc/loop",
+   "body": null,
+   "initial": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": null,
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    },
+    "suggestions": []
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "chain_after": null
+  },
+  {
+   "label": "get_missing_session",
+   "method": "GET",
+   "path": "/api/sessions/ghost/loop",
+   "body": null,
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "loop": null,
+    "suggestions": []
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "stop_missing",
+   "method": "DELETE",
+   "path": "/api/sessions/cc/loop",
+   "body": null,
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 404,
+   "response": {
+    "detail": {
+     "code": "erro_loop_inexistente",
+     "params": {},
+     "msg": "nenhum loop nesta sessão"
+    }
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "stop_running",
+   "method": "DELETE",
+   "path": "/api/sessions/cc/loop",
+   "body": null,
+   "initial": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": null,
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "stopped",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": 1000.0,
+     "ended_reason": "parado pelo usuário"
+    }
+   },
+   "pushed": [
+    [
+     "cc",
+     "loop parado: parado pelo usuário"
+    ]
+   ],
+   "queued": {},
+   "loop_after": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "stopped",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": 1000.0,
+    "ended_reason": "parado pelo usuário"
+   },
+   "chain_after": null
+  },
+  {
+   "label": "stop_already_stopped",
+   "method": "DELETE",
+   "path": "/api/sessions/cc/loop",
+   "body": null,
+   "initial": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "stopped",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": 5.0,
+    "ended_reason": "x"
+   },
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": "false",
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "stopped",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": 1000.0,
+     "ended_reason": "parado pelo usuário"
+    }
+   },
+   "pushed": [
+    [
+     "cc",
+     "loop parado: parado pelo usuário"
+    ]
+   ],
+   "queued": {},
+   "loop_after": {
+    "goal": "g",
+    "check_cmd": "false",
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "stopped",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": 1000.0,
+    "ended_reason": "parado pelo usuário"
+   },
+   "chain_after": null
+  },
+  {
+   "label": "resolve_wrong_state",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop/resolve",
+   "body": {
+    "accept": true
+   },
+   "initial": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 409,
+   "response": {
+    "detail": {
+     "code": "erro_loop_estado_errado",
+     "params": {},
+     "msg": "loop não está aguardando confirmação"
+    }
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "chain_after": null
+  },
+  {
+   "label": "resolve_no_loop",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop/resolve",
+   "body": {
+    "accept": true
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 409,
+   "response": {
+    "detail": {
+     "code": "erro_loop_estado_errado",
+     "params": {},
+     "msg": "loop não está aguardando confirmação"
+    }
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "resolve_accept",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop/resolve",
+   "body": {
+    "accept": true
+   },
+   "initial": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "done_claimed",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": null,
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "done",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": 1000.0,
+     "ended_reason": "confirmado pronto"
+    }
+   },
+   "pushed": [
+    [
+     "cc",
+     "loop concluído: confirmado pronto"
+    ]
+   ],
+   "queued": {},
+   "loop_after": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "done",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": 1000.0,
+    "ended_reason": "confirmado pronto"
+   },
+   "chain_after": null
+  },
+  {
+   "label": "resolve_reject",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop/resolve",
+   "body": {
+    "accept": false
+   },
+   "initial": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "done_claimed",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": null,
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "running",
+     "iter": 1,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [
+      {
+       "n": 1,
+       "ts": 1000.0,
+       "check_exit": null,
+       "tail": "conclusão rejeitada pelo usuário"
+      }
+     ],
+     "started_ts": 1.0,
+     "ended_ts": null,
+     "ended_reason": null
+    }
+   },
+   "pushed": [],
+   "queued": {
+    "cc": [
+     {
+      "id": "q-cc-0",
+      "text": "[loop 1/10] Objetivo: g\nA tarefa ainda não foi confirmada como concluída. Continue.\nNão edite arquivos de teste nem o comando de verificação; corrija o código.",
+      "delivered": false
+     }
+    ]
+   },
+   "loop_after": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "running",
+    "iter": 1,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [
+     {
+      "n": 1,
+      "ts": 1000.0,
+      "check_exit": null,
+      "tail": "conclusão rejeitada pelo usuário"
+     }
+    ],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "chain_after": null
+  },
+  {
+   "label": "resolve_reject_exhausted",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop/resolve",
+   "body": {
+    "accept": false
+   },
+   "initial": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "done_claimed",
+    "iter": 10,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": null,
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "exhausted",
+     "iter": 10,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": 1000.0,
+     "ended_reason": "esgotou 10 iterações"
+    }
+   },
+   "pushed": [
+    [
+     "cc",
+     "loop esgotou as iterações: esgotou 10 iterações"
+    ]
+   ],
+   "queued": {},
+   "loop_after": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "exhausted",
+    "iter": 10,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": 1000.0,
+    "ended_reason": "esgotou 10 iterações"
+   },
+   "chain_after": null
+  },
+  {
+   "label": "resolve_reject_dead_session",
+   "method": "POST",
+   "path": "/api/sessions/ghost/loop/resolve",
+   "body": {
+    "accept": false
+   },
+   "initial": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "done_claimed",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": null,
+    "ended_reason": null
+   },
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 200,
+   "response": {
+    "loop": {
+     "goal": "g",
+     "check_cmd": null,
+     "max_iters": 10,
+     "require_branch": true,
+     "status": "failed",
+     "iter": 0,
+     "goal_entry_id": "e1",
+     "goal_delivered_ts": 1.0,
+     "history": [],
+     "started_ts": 1.0,
+     "ended_ts": 1000.0,
+     "ended_reason": "sessão morta"
+    }
+   },
+   "pushed": [
+    [
+     "ghost",
+     "loop falhou: sessão morta"
+    ]
+   ],
+   "queued": {},
+   "loop_after": {
+    "goal": "g",
+    "check_cmd": null,
+    "max_iters": 10,
+    "require_branch": true,
+    "status": "failed",
+    "iter": 0,
+    "goal_entry_id": "e1",
+    "goal_delivered_ts": 1.0,
+    "history": [],
+    "started_ts": 1.0,
+    "ended_ts": 1000.0,
+    "ended_reason": "sessão morta"
+   },
+   "chain_after": null
+  },
+  {
+   "label": "refine_automations_off",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop/refine",
+   "body": {
+    "goal": "g"
+   },
+   "initial": null,
+   "automations": false,
+   "branch": "TICKET-1",
+   "status": 409,
+   "response": {
+    "detail": {
+     "code": "erro_automacoes_desligadas",
+     "params": {},
+     "msg": "automações desligadas (kill-switch)"
+    }
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  },
+  {
+   "label": "refine_too_long",
+   "method": "POST",
+   "path": "/api/sessions/cc/loop/refine",
+   "body": {
+    "goal": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   "initial": null,
+   "automations": true,
+   "branch": "TICKET-1",
+   "status": 422,
+   "response": {
+    "detail": [
+     {
+      "type": "string_too_long",
+      "loc": [
+       "body",
+       "goal"
+      ],
+      "msg": "String should have at most 2000 characters",
+      "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "ctx": {
+       "max_length": 2000
+      }
+     }
+    ]
+   },
+   "pushed": [],
+   "queued": {},
+   "loop_after": null,
+   "chain_after": null
+  }
+ ],
+ "orders": [
+  {
+   "rows": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 50.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 5.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "order": [
+    null,
+    "/c",
+    "/b"
+   ]
+  },
+  {
+   "rows": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 100.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "order": [
+    "/b"
+   ]
+  },
+  {
+   "rows": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 100.0,
+       "por_modelo": true
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "order": [
+    null,
+    "/b"
+   ]
+  },
+  {
+   "rows": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 100.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "order": [
+    null
+   ]
+  },
+  {
+   "rows": [
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "expirada",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/d",
+     "label": "/d",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 100.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "order": [
+    null
+   ]
+  },
+  {
+   "rows": [
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 3.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 1.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "order": [
+    null,
+    "/b",
+    "/c"
+   ]
+  },
+  {
+   "rows": [],
+   "order": [
+    null
+   ]
+  }
+ ],
+ "limits": [
+  {
+   "exit": 1,
+   "stdout": "You've hit your weekly limit · resets 3pm",
+   "stderr": "",
+   "limited": true
+  },
+  {
+   "exit": 1,
+   "stdout": "",
+   "stderr": "Rate limit exceeded",
+   "limited": true
+  },
+  {
+   "exit": 1,
+   "stdout": "erro qualquer",
+   "stderr": "",
+   "limited": false
+  },
+  {
+   "exit": 0,
+   "stdout": "You've hit your weekly limit · resets 3pm",
+   "stderr": "",
+   "limited": true
+  },
+  {
+   "exit": 0,
+   "stdout": "  usage limit reached",
+   "stderr": "",
+   "limited": true
+  },
+  {
+   "exit": 0,
+   "stdout": "Claude AI usage limit reached|1700000000",
+   "stderr": "",
+   "limited": true
+  },
+  {
+   "exit": 0,
+   "stdout": "A resposta cita usage limit no meio",
+   "stderr": "",
+   "limited": false
+  },
+  {
+   "exit": 0,
+   "stdout": "You've hit your limitxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "stderr": "",
+   "limited": false
+  },
+  {
+   "exit": 2,
+   "stdout": "HIT YOUR monthly LIMIT",
+   "stderr": "",
+   "limited": true
+  },
+  {
+   "exit": 1,
+   "stdout": "hit your\nlimit",
+   "stderr": "",
+   "limited": false
+  }
+ ],
+ "flows": [
+  {
+   "label": "ok_default",
+   "lidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 50.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 5.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "relidas": null,
+   "answers": [
+    [
+     0,
+     "  objetivo reescrito \n",
+     ""
+    ]
+   ],
+   "calls": [
+    null
+   ],
+   "goal": "objetivo reescrito"
+  },
+  {
+   "label": "limit_switches_once",
+   "lidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 50.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 5.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "relidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 50.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 5.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "answers": [
+    [
+     1,
+     "You've hit your weekly limit",
+     ""
+    ],
+    [
+     0,
+     "outro",
+     ""
+    ]
+   ],
+   "calls": [
+    null,
+    "/c"
+   ],
+   "goal": "outro"
+  },
+  {
+   "label": "limit_second_fails",
+   "lidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 50.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 5.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "relidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 50.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 5.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "answers": [
+    [
+     1,
+     "You've hit your weekly limit",
+     ""
+    ],
+    [
+     1,
+     "",
+     "boom"
+    ]
+   ],
+   "calls": [
+    null,
+    "/c"
+   ],
+   "error": "claude -p: conta padrão bateu o limite: You've hit your weekly limit; segunda tentativa na conta /c falhou (exit 1): boom"
+  },
+  {
+   "label": "limit_second_limited",
+   "lidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 50.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 5.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "relidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 50.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 5.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "answers": [
+    [
+     1,
+     "usage limit",
+     ""
+    ],
+    [
+     0,
+     "usage limit reached",
+     ""
+    ]
+   ],
+   "calls": [
+    null,
+    "/c"
+   ],
+   "error": "claude -p: conta padrão bateu o limite: usage limit; segunda tentativa na conta /c falhou (exit 0): usage limit reached"
+  },
+  {
+   "label": "limit_no_other",
+   "lidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "relidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "answers": [
+    [
+     1,
+     "rate limit",
+     ""
+    ]
+   ],
+   "calls": [
+    null
+   ],
+   "error": "claude -p: conta padrão bateu o limite: rate limit"
+  },
+  {
+   "label": "exit_nonzero",
+   "lidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 50.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 5.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "relidas": null,
+   "answers": [
+    [
+     3,
+     "x",
+     "falhou feio"
+    ]
+   ],
+   "calls": [
+    null
+   ],
+   "error": "claude -p falhou (exit 3): falhou feio"
+  },
+  {
+   "label": "empty_output",
+   "lidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 50.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 5.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "relidas": null,
+   "answers": [
+    [
+     0,
+     "   ",
+     ""
+    ]
+   ],
+   "calls": [
+    null
+   ],
+   "error": "claude -p devolveu saída vazia"
+  },
+  {
+   "label": "default_exhausted_starts_on_other",
+   "lidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 100.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "relidas": null,
+   "answers": [
+    [
+     0,
+     "ok",
+     ""
+    ]
+   ],
+   "calls": [
+    "/b"
+   ],
+   "goal": "ok"
+  },
+  {
+   "label": "refused_question",
+   "lidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 50.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 5.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "relidas": null,
+   "answers": [
+    [
+     0,
+     "Qual arquivo?",
+     ""
+    ]
+   ],
+   "calls": [
+    null
+   ],
+   "error": "refine falhou, tente detalhar o objetivo"
+  },
+  {
+   "label": "refused_prefix",
+   "lidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 50.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 5.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "relidas": null,
+   "answers": [
+    [
+     0,
+     "Desculpe, não dá",
+     ""
+    ]
+   ],
+   "calls": [
+    null
+   ],
+   "error": "refine falhou, tente detalhar o objetivo"
+  },
+  {
+   "label": "truncated",
+   "lidas": [
+    {
+     "id": "claude:/a",
+     "label": "/a",
+     "provedor": "claude",
+     "ativa": true,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "5h",
+       "pct": 10.0,
+       "por_modelo": false
+      },
+      {
+       "rotulo": "7d",
+       "pct": 20.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/b",
+     "label": "/b",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 50.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    },
+    {
+     "id": "claude:/c",
+     "label": "/c",
+     "provedor": "claude",
+     "ativa": false,
+     "estado": "lida",
+     "janelas": [
+      {
+       "rotulo": "7d",
+       "pct": 5.0,
+       "por_modelo": false
+      }
+     ],
+     "ts": 1000.0
+    }
+   ],
+   "relidas": null,
+   "answers": [
+    [
+     0,
+     "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+     ""
+    ]
+   ],
+   "calls": [
+    null
+   ],
+   "goal": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+  }
+ ]
+}

@@ -21,6 +21,7 @@ pub mod groups;
 pub mod interactions;
 pub mod list;
 pub mod locate;
+pub mod loops;
 pub mod mcp;
 pub mod mermaid;
 pub mod migration_status;

@@ -102,6 +102,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if crate::orq_conductor::matches(method, path) { return true; }
     if crate::prewarm::http::matches(method, path) { return true; }
     if crate::nav_requests::matches(method, path) { return true; }
+    if crate::loops::http::matches(method, path) { return true; }
     if crate::push::http::matches(method, path) { return true; }
     if crate::session_media::is_media(method, path) { return true; }
     if crate::accounts::http::matches(method, path) { return true; }

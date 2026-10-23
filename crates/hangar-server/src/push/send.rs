@@ -24,12 +24,19 @@ pub fn msg(locale: &str, key: &str) -> &'static str {
         "limite" => if en { "Usage limit reached" } else { "Limite de uso atingido" },
         "volta" => if en { "resets {reset}" } else { "volta {reset}" },
         "sessoes" => if en { "{n} sessions waiting" } else { "{n} sessões aguardando" },
+        "loop_done" => if en { "loop finished: {reason}" } else { "loop concluído: {reason}" },
+        "loop_done_claimed" => if en { "Claude declared done — confirm?" } else { "Claude declarou pronto — confirmar?" },
+        "loop_stopped" => if en { "loop stopped: {reason}" } else { "loop parado: {reason}" },
+        "loop_exhausted" => if en { "loop exhausted its iterations: {reason}" } else { "loop esgotou as iterações: {reason}" },
+        "loop_failed" => if en { "loop failed: {reason}" } else { "loop falhou: {reason}" },
         _ => "",
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Notice { Awaiting(Option<String>), Finished(Option<String>), Dead, Stalled, Limited(Option<String>) }
+pub enum Notice { Awaiting(Option<String>), Finished(Option<String>), Dead, Stalled, Limited(Option<String>),
+    /// Desfecho do loop: a frase fixa no idioma da inscrição, o motivo como veio.
+    Loop { status: String, reason: String } }
 
 impl Notice {
     pub fn body(&self, locale: &str) -> String {
@@ -42,6 +49,10 @@ impl Notice {
             Self::Stalled => msg(locale, "travada").to_owned(),
             Self::Limited(Some(reset)) => format!("{} · {}", msg(locale, "limite"), msg(locale, "volta").replace("{reset}", reset)),
             Self::Limited(None) => msg(locale, "limite").to_owned(),
+            Self::Loop { status, reason } => match msg(locale, &format!("loop_{status}")) {
+                "" => reason.clone(),
+                text => text.replace("{reason}", reason),
+            },
         }
     }
 }
