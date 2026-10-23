@@ -104,6 +104,18 @@ impl Mux {
         Self { program: program.into(), timeout }
     }
 
+    /// Valor de uma variável no ambiente da sessão (`show-environment`); ausente ou erro = `None`.
+    pub async fn session_env(&self, session: &str, var: &str) -> Option<String> {
+        // O psmux não aceita o `=` de casamento exato nesse comando.
+        let target = if cfg!(windows) { session.to_owned() } else { format!("={session}") };
+        let mut command = crate::terminal_input::child_command(&self.program);
+        command.args(["show-environment", "-t", &target, var]).stdin(std::process::Stdio::null()).kill_on_drop(true);
+        let out = tokio::time::timeout(self.timeout, command.output()).await.ok()?.ok()?;
+        if !out.status.success() { return None; }
+        let prefix = format!("{var}=");
+        String::from_utf8_lossy(&out.stdout).lines().find_map(|line| line.trim().strip_prefix(prefix.as_str()).map(str::to_owned))
+    }
+
     pub async fn list_panes(&self) -> Result<Vec<Pane>, MuxUnavailable> {
         self.list_panes_checked().await.map(|(panes, _)| panes)
     }
