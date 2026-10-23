@@ -172,6 +172,19 @@ fn leave_keeps_remaining_group() {
 }
 
 #[test]
+fn lead_that_leaves_does_not_come_back_as_lead() {
+    let (d, h) = (Disk::new(), none());
+    let p = plan_join(&d.read(), &input("coord", &["a".into(), "b".into()], "", &h), &gid("g1")).ok().unwrap();
+    d.apply(&p.writes, &[]);
+    let l = plan_leave(&d.read(), "coord", false).unwrap();
+    d.apply(&l.writes, &l.clears);
+    assert_eq!(d.read()("a").unwrap().lead, None);
+    let back = plan_join(&d.read(), &input("a", &["coord".into()], "", &h), &gid("g2")).ok().unwrap();
+    d.apply(&back.writes, &[]);
+    assert_eq!(d.read()("coord").unwrap().lead, None, "quem volta entra como membro, não como principal");
+}
+
+#[test]
 fn live_orq_group_keeps_last_member() {
     let (d, h) = (Disk::new(), none());
     let p = plan_join(&d.read(), &JoinInput { name: "arb", others: &["exec".into()], task: "", replace_task: false, harness: &h, orq: true, outside: &mine, linked: false }, &gid("o1")).ok().unwrap();

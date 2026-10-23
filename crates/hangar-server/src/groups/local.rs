@@ -117,7 +117,9 @@ pub fn plan_join(read: &dyn Fn(&str) -> Option<Sidecar>, input: &JoinInput, fres
     // Quem forma o grupo é a principal; juntar a um grupo existente mantém a dele (a do sobrevivente).
     let lead = if new_gid { Some(input.name.to_owned()) } else {
         let olds = || before.values().flatten();
-        olds().filter(|s| s.gid == gid).find_map(|s| s.lead.clone()).or_else(|| olds().find_map(|s| s.lead.clone()))
+        // Só uma principal que ainda é membro: a que saiu não volta a mandar ao reentrar.
+        let valid = |s: &Sidecar| s.lead.clone().filter(|l| members.iter().any(|m| m == l));
+        olds().filter(|s| s.gid == gid).find_map(valid).or_else(|| olds().find_map(valid))
     };
     let writes = members.iter().filter(|m| !is_remote(m)).map(|m| {
         let peers = members.iter().filter(|p| *p != m).cloned().collect();
@@ -147,6 +149,7 @@ pub fn plan_leave(read: &dyn Fn(&str) -> Option<Sidecar>, name: &str, orq_alive:
                 st.peers.retain(|x| x != name);
                 // Vínculo velho reviveria se o pai voltasse ao grupo ou outra sessão herdasse o nome.
                 if st.linked_by.as_deref() == Some(name) { st.linked_by = None; }
+                if st.lead.as_deref() == Some(name) { st.lead = None; }
                 writes.push((peer.clone(), st));
             }
         }
