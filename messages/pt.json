@@ -7519,7 +7519,6 @@
   "composer_draft_recover": "Recuperar",
   "composer_draft_discard": "Descartar",
   "composer_draft_read_again": "Ler de novo",
-  "composer_submission_sending": "Aguardando confirmação do envio. O texto continua guardado.",
   "composer_submission_rejected": "O envio foi recusado. Você pode recuperar o texto sem apagar a nova edição.",
   "composer_submission_recover_first": "Recupere o envio recusado antes de enviar outro texto.",
   "composer_submission_check": "Conferir conversa",

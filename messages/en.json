@@ -7519,7 +7519,6 @@
   "composer_draft_recover": "Recover",
   "composer_draft_discard": "Discard",
   "composer_draft_read_again": "Read again",
-  "composer_submission_sending": "Waiting for send confirmation. Your text is still saved.",
   "composer_submission_rejected": "The message was rejected. You can recover it without removing your new edits.",
   "composer_submission_recover_first": "Recover the rejected message before sending different text.",
   "composer_submission_check": "Check conversation",

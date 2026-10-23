@@ -240,7 +240,7 @@ impl ActivityFold {
             }
             "user_msg" => {
                 let text = event.text.as_deref().unwrap_or("");
-                if !text.contains("<task-notification>") { return false; }
+                if !text.contains("<task-notification>") || super::interim_notification(text) { return false; }
                 let Some(task) = text.split_once("<task-id>").and_then(|(_, rest)| rest.split_once("</task-id>")).map(|(id, _)| id.trim()) else { return false };
                 self.finish(task, event.ts)
             }

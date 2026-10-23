@@ -168,7 +168,7 @@ vi.mock('../paraglide/messages', async (importOriginal) => ({
     .concat(' orq_tab_title orq_row_badge orq_talk_to_arbiter')
     .concat(' cite_action cite_too_long_aria selection_copy selection_copy_markdown selection_copy_image_url selection_copy_image_urls')
     .concat(' permissao_pedido comum_cancelar msg_aria_mensagens chat_plan_proposto composer_falha_envio nova_conversa_envio_incerto nova_conversa_resultado_salvar_erro nova_conversa_salvar_erro')
-    .concat(' askq_enviando board_falha_envio board_falha_upload chat_chegou_mas chat_envio_incerto chat_nao_chegou_em chat_servidor_removido codex_orientar_recebido codex_orientar_sem_envio composer_ditado_anterior composer_ditado_aplicado composer_ditado_indisponivel composer_ditado_interrompido composer_ditado_recuperavel composer_draft_read_again composer_draft_recover_attach_busy composer_falha_gravacao composer_falha_transcricao composer_fila_erro composer_sem_acesso_fotos composer_sem_acesso_mic composer_submission_check composer_submission_rejected composer_submission_sending composer_transcrever_de_novo composer_transcricao_vazia composer_aguarde_transcricao')
+    .concat(' askq_enviando board_falha_envio board_falha_upload chat_chegou_mas chat_envio_incerto chat_nao_chegou_em chat_servidor_removido codex_orientar_recebido codex_orientar_sem_envio composer_ditado_anterior composer_ditado_aplicado composer_ditado_indisponivel composer_ditado_interrompido composer_ditado_recuperavel composer_draft_read_again composer_draft_recover_attach_busy composer_falha_gravacao composer_falha_transcricao composer_fila_erro composer_sem_acesso_fotos composer_sem_acesso_mic composer_submission_check composer_submission_rejected composer_transcrever_de_novo composer_transcricao_vazia composer_aguarde_transcricao')
     .concat(' draft_read_error draft_invalid draft_write_error draft_clear_error composer_draft_previous composer_draft_recover composer_draft_discard composer_draft_read_again')
     .concat(' composer_ditado_cru composer_ditado_versao composer_ditado_trocando native_dictation_draft_changed composer_voice_send_cancelled composer_voice_starting native_queue_discard_message')
     .concat(' sessao_nova nova_conversa_placeholder nova_conversa_sem_destino nova_conversa_opcoes nova_conversa_opcoes_fechar nova_conversa_destino_hint nova_conversa_config_hint nova_conversa_enviar criar_criando')
@@ -1360,10 +1360,13 @@ describe('rascunho guardado no Composer', () => {
     act(() => reopened.root.unmount());
   });
 
-  it('colar vários anexa todos; remover tira só aquele; Enviar sobe os que faltam e junta os caminhos numa linha', async () => {
+  it('colar vários anexa e sobe todos na hora; remover tira só aquele, mesmo com o upload dele no ar; Enviar junta os caminhos numa linha', async () => {
     composerChat.send.mockClear();
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => new Blob(['x']) } as Response);
-    realFirstInput.upload.mockReset().mockResolvedValueOnce({ path: '/up/a.png' }).mockResolvedValueOnce({ path: '/up/c.txt' });
+    let finishB!: (v: { path: string }) => void;
+    realFirstInput.upload.mockReset().mockResolvedValueOnce({ path: '/up/a.png' })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishB = resolve; }))
+      .mockResolvedValueOnce({ path: '/up/c.txt' });
     const { container, root } = await render(createElement(Composer, props));
     await act(async () => pasteInput.onPaste!([
       { uri: 'file:///a.png', fileName: 'a.png', type: 'image/png', fileSize: 2048 },
@@ -1378,11 +1381,39 @@ describe('rascunho guardado no Composer', () => {
     expect(uris()).toEqual(['file:///a.png', 'file:///c.txt']);
     type(container, 'legenda');
     await act(async () => button(container, 'composer_enviar_mensagem')!.click());
-    expect(realFirstInput.upload).toHaveBeenCalledTimes(2);
+    // Os três subiram ao colar; o Enviar não sobe nada de novo.
+    expect(realFirstInput.upload).toHaveBeenCalledTimes(3);
     expect(composerChat.send).toHaveBeenCalledExactlyOnceWith(
       'legenda — 📎 board_imagem: /up/a.png 📎 board_arquivo: /up/c.txt', expect.any(Number));
     expect(removers()).toHaveLength(0);
     expect(uris()).toEqual([]);
+    // O upload do removido termina depois e não o devolve ao campo.
+    await act(async () => finishB({ path: '/up/b.txt' }));
+    expect(removers()).toHaveLength(0);
+    expect(uris()).toEqual([]);
+    fetchSpy.mockRestore();
+    act(() => root.unmount());
+  });
+
+  it('anexo enviado sai do campo na hora e volta com o caminho do upload se o envio falhar', async () => {
+    composerChat.send.mockClear();
+    let fail!: (error: Error) => void;
+    composerChat.send.mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => new Blob(['x']) } as Response);
+    realFirstInput.upload.mockReset().mockResolvedValueOnce({ path: '/up/a.png' });
+    storage.memory.set('draft.v1:s1::sess', JSON.stringify({ version: 1, text: 'legenda', revision: 1, transcript: null, submission: null,
+      attachments: [{ uri: 'file:///a.png', name: 'a.png', mime: 'image/png', kind: 'image' }] }));
+    const { container, root } = await render(createElement(Composer, props));
+    const removers = () => container.querySelectorAll('[aria-label="board_remover_anexo"]');
+    const stored = () => (JSON.parse(storage.memory.get('draft.v1:s1::sess')!) as { attachments: unknown[] }).attachments;
+    await act(async () => { void button(container, 'composer_enviar_mensagem')!.click(); });
+    expect(composerChat.send).toHaveBeenCalledOnce();
+    expect(removers()).toHaveLength(0);
+    expect(stored()).toEqual([]);
+    await act(async () => fail(Object.assign(new Error('recusado'), { status: 422 })));
+    expect(removers()).toHaveLength(1);
+    expect(stored()).toMatchObject([{ uri: 'file:///a.png', uploadedPath: '/up/a.png' }]);
+    expect(container.textContent).toContain('recusado');
     fetchSpy.mockRestore();
     act(() => root.unmount());
   });
@@ -1406,11 +1437,11 @@ describe('rascunho guardado no Composer', () => {
     act(() => root.unmount());
   });
 
-  it('falha no segundo upload guarda o caminho do primeiro e o reenvio não o sobe de novo', async () => {
+  it('upload em segundo plano que falhou é tentado uma vez pelo Enviar; falhando de novo, o erro aparece e o primeiro guarda o caminho', async () => {
     composerChat.send.mockClear();
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => new Blob(['x']) } as Response);
-    realFirstInput.upload.mockReset().mockResolvedValueOnce({ path: '/up/a.png' }).mockRejectedValueOnce(new Error('grande demais'))
-      .mockResolvedValueOnce({ path: '/up/b.txt' });
+    realFirstInput.upload.mockReset().mockResolvedValueOnce({ path: '/up/a.png' }).mockRejectedValueOnce(new Error('caiu'))
+      .mockRejectedValueOnce(new Error('grande demais')).mockResolvedValueOnce({ path: '/up/b.txt' });
     storage.memory.set('draft.v1:s1::sess', JSON.stringify({ version: 1, text: '', revision: 1, transcript: null, submission: null, attachments: [
       { uri: 'file:///a.png', name: 'a.png', mime: 'image/png', kind: 'image' },
       { uri: 'file:///b.txt', name: 'b.txt', mime: 'text/plain', kind: 'file' },
@@ -1418,9 +1449,12 @@ describe('rascunho guardado no Composer', () => {
     const { container, root } = await render(createElement(Composer, props));
     await act(async () => button(container, 'composer_enviar_mensagem')!.click());
     expect(composerChat.send).not.toHaveBeenCalled();
-    expect(container.textContent).toContain('grande demais');
-    await act(async () => button(container, 'composer_enviar_mensagem')!.click());
     expect(realFirstInput.upload).toHaveBeenCalledTimes(3);
+    expect(container.textContent).toContain('grande demais');
+    expect(JSON.parse(storage.memory.get('draft.v1:s1::sess')!).attachments).toMatchObject([
+      { uri: 'file:///a.png', uploadedPath: '/up/a.png' }, { uri: 'file:///b.txt' }]);
+    await act(async () => button(container, 'composer_enviar_mensagem')!.click());
+    expect(realFirstInput.upload).toHaveBeenCalledTimes(4);
     expect(composerChat.send).toHaveBeenCalledExactlyOnceWith('📎 board_imagem: /up/a.png 📎 board_arquivo: /up/b.txt', expect.any(Number));
     fetchSpy.mockRestore();
     act(() => root.unmount());
@@ -1612,7 +1646,7 @@ describe('Orientar texto do composer com os stores reais', () => {
   });
 
   it.each([['codex', false], ['codex', true], ['claude', true]] as const)(
-    '%s sem terminal=%s: texto literal vai para A com B ativo, eco único e limpeza só após ACK', async (sessionProvider, headless) => {
+    '%s sem terminal=%s: texto literal vai para A com B ativo, eco único e campo vazio já no envio', async (sessionProvider, headless) => {
       let done!: (result: { ok: boolean }) => void;
       realFirstInput.steer.mockImplementationOnce(() => new Promise((resolve) => { done = resolve; }));
       const chat = chatStore('s1', 'sess');
@@ -1631,8 +1665,11 @@ describe('Orientar texto do composer com os stores reais', () => {
       expect(realFirstInput.send).not.toHaveBeenCalled();
       expect(orient.disabled).toBe(true);
       expect(send(container).disabled).toBe(true);
-      expect(container.querySelector('textarea')!.value).toBe(literal);
-      expect(readDraft('s1', 'sess')).toMatchObject({ text: literal, submission: { text: literal } });
+      expect(container.querySelector('textarea')!.value).toBe('');
+      expect(readDraft('s1', 'sess')).toMatchObject({ text: '', submission: { text: literal } });
+      // Em voo a mensagem está no painel da fila: o campo não repete aviso nem Recuperar.
+      expect(button(container, 'composer_draft_recover')).toBeFalsy();
+      expect(container.textContent).not.toContain('chat_envio_incerto');
       expect(chat.use.getState().pending).toEqual([{ id: expect.any(String), text: literal, solid: false }]);
       // O resultado de texto não promove nem apaga as mensagens que já estavam na fila.
       await act(async () => done({ ok: true, promoted: true } as { ok: boolean }));
@@ -1664,12 +1701,18 @@ describe('Orientar texto do composer com os stores reais', () => {
     const { container, root } = await render(createElement(Composer, props));
     type(container, 'não perder');
     act(() => steer(container)!.click());
+    expect(container.querySelector('textarea')!.value).toBe('');
     if (edited) type(container, 'edição durante pedido');
     await act(async () => fail(Object.assign(new Error('texto recusado'), { status: 422 })));
     const expected = edited ? 'edição durante pedido' : 'não perder';
     expect(container.textContent).toContain('texto recusado');
+    expect(container.textContent).toContain('composer_submission_rejected');
     expect(container.querySelector('textarea')!.value).toBe(expected);
     expect(readDraft('s1', 'sess')).toMatchObject({ text: expected, submission: { status: 'rejected', text: 'não perder' } });
+    if (edited) {
+      act(() => button(container, 'composer_draft_recover')!.click());
+      expect(container.querySelector('textarea')!.value).toBe('edição durante pedido\nnão perder');
+    }
     expect(chatStore('s1', 'sess').use.getState().pending).toEqual([]);
     expect(realFirstInput.send).not.toHaveBeenCalled();
     act(() => root.unmount());
@@ -1696,6 +1739,9 @@ describe('Orientar texto do composer com os stores reais', () => {
     act(() => { send(container).click(); steer(container)!.click(); });
     expect(realFirstInput.send).toHaveBeenCalledTimes(1);
     expect(realFirstInput.steer).not.toHaveBeenCalled();
+    // O campo já esvaziou: Orientar some ou fica desligado até terminar.
+    expect(steer(container)?.disabled ?? true).toBe(true);
+    type(container, 'outra');
     expect(steer(container)!.disabled).toBe(true);
     await act(async () => done());
     act(() => root.unmount());

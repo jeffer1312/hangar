@@ -10,14 +10,19 @@ description: |
 
 # Migrar do Python para o Rust
 
-O que o Python aprendeu fica, sem exceção, inclusive o problema que cada mecanismo dele resolve;
-só o jeito Python de fazer pode mudar, e o novo resolve o mesmo problema. Nenhuma
-linha de Rust antes do inventário e dos contratos aprovados pelo usuário. Cada fase grava um
+O que o Python aprendeu fica, inclusive o problema que cada mecanismo dele resolve; só o jeito
+de fazer muda. Nenhuma linha de Rust antes do inventário e dos contratos aprovados pelo usuário. Cada fase grava um
 arquivo em `.superpowers/sdd/<data>-<assunto>/`: `escopo.md`, `inventario-<area>.md`,
 `decisoes.md`, `conferencia.md`, `medicao.md`.
 
 Toda diferença entre Python e Rust é classificada pelo usuário (aceitável, bug do Python, fora de
 escopo), nunca pelo agente: registre e pergunte, uma pergunta por vez, opções letradas.
+
+**Nada nasce no Python.** O objetivo é tirar o Python do projeto: sem pedido do usuário, no Python
+só se apaga código. Toda linha acrescentada lá (lógica, releitura, cache, ponte, rota, repasse,
+condição de modo) é perguntada antes de escrever, dizendo o que é, por que o Rust sozinho não
+basta e o que se perde sem ela. Subagente para e pergunta pela sessão; linha nova no Python sem a
+autorização registrada no `decisoes.md` é defeito na revisão.
 
 ## 1. Delimitar o caminho inteiro → `escopo.md`
 
@@ -26,14 +31,12 @@ escopo), nunca pelo agente: registre e pergunte, uma pergunta por vez, opções 
    `to_thread`/pool que esperam o Rust, chamadas do Rust ao Python, clientes (`packages/core`,
    `desktop-native/`, `mobile/`), `scripts/`, hooks e plugins. Busca sem filtro de pasta; com
    busca parcial, nunca afirme "ninguém mais chama". Cada chamador vira um item do plano.
-   Leia antes uma migração já feita no repo (a da lista do dono ou a de custos, em
-   `docs/decisoes/plataforma.md`) como molde de rota, ponte e repasse.
 3. Marque toda volta Rust → Python → Rust e Python → Rust → Python: todas somem.
 4. Estado que o Rust passa a guardar onde o Python relia a fonte viva: todo fim da vida dele
    entra no escopo e é do Rust — fechar pelo Hangar, processo sair sozinho,
    morrer por fora, recriar com o mesmo nome, reiniciar o Rust com a vida de pé.
-5. O caminho Python sai no mesmo trabalho. Nas portas 8766 e 8768 fica só o repasse ao Rust, num
-   sentido. No modo `python` do Supervisor a rota responde um código de erro próprio, sem reserva.
+5. O caminho Python sai no mesmo trabalho. O repasse ao Rust nas portas 8766 e 8768 também é linha
+   nova: só com a autorização acima. No modo `python` a rota responde um código de erro, sem reserva.
 6. Divida em rotas e marque de qual rota cada uma depende (lê, chama ou estende o que a outra
    cria); sem dependência, a rota é independente. Cada rota migra inteira e entra atrás do
    Supervisor uma por vez, nunca tudo junto.

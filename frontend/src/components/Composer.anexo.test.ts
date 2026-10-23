@@ -56,6 +56,37 @@ it('envio com anexo que termina com a conversa fechada não volta ao reabrir', a
   unmount(de_novo as never);
 });
 
+it('anexo já subido e removido enquanto o envio espera outro fica fora da mensagem', async () => {
+  let terminarB!: (r: { path: string }) => void;
+  vi.mocked(uploadFile).mockImplementation(((_: string, f: File) => f.name === 'a.txt'
+    ? Promise.resolve({ path: '/up/s/a.txt' })
+    : new Promise((r) => { terminarB = r; })) as never);
+  const onSend = vi.fn(async () => {});
+  const target = document.createElement('div');
+  document.body.appendChild(target);
+  const comp = mount(Composer, { target, props: { sessionName: 's', sessionState: 'idle', status: null, inputText: 'veja',
+    onSend, onCommand: vi.fn(), onInterrupt: vi.fn(), onOpenGit: vi.fn(), onOpenPreview: vi.fn() } });
+  await flush();
+  const ev = new Event('paste', { bubbles: true, cancelable: true });
+  const arquivos = ['a.txt', 'b.txt'].map((n) => new File(['oi'], n, { type: 'text/plain' }));
+  Object.defineProperty(ev, 'clipboardData', { value: { items: arquivos.map((f) => ({ kind: 'file', type: 'text/plain', getAsFile: () => f })) } });
+  target.querySelector('textarea')!.dispatchEvent(ev);
+  await flush();
+  target.querySelector<HTMLButtonElement>('.send-btn')!.click();
+  await flush();
+  // B ainda sobe e o ✕ dele continua lá.
+  expect(target.querySelectorAll('.tile-x')).toHaveLength(2);
+  target.querySelector<HTMLButtonElement>('.tile-x')!.click();
+  await flush();
+  terminarB({ path: '/up/s/b.txt' });
+  await flush();
+  expect(onSend).toHaveBeenCalledTimes(1);
+  const [msg] = onSend.mock.calls[0] as unknown as [string];
+  expect(msg).toContain('/up/s/b.txt');
+  expect(msg).not.toContain('/up/s/a.txt');
+  unmount(comp as never);
+});
+
 it('áudio da galeria transcreve pelo nome, sem subir bytes, e a barra toca do servidor', async () => {
   const target = document.createElement('div');
   document.body.appendChild(target);

@@ -10,6 +10,11 @@ use std::sync::LazyLock;
 
 /// Teto da API por imagem; acima disso fica só o path (o `Read` do agente abre).
 const IMAGE_CAP: u64 = 5 * 1024 * 1024;
+/// A API reduz a imagem a este lado de qualquer jeito; mandar maior só enche o cano do Claude.
+const IMAGE_EDGE: u32 = 1568;
+const SHRINK_FROM: usize = 256 * 1024;
+const MAX_DECODE_EDGE: u32 = 12_000;
+const MAX_DECODE_ALLOC: u64 = 192 * 1024 * 1024;
 const FAMILIES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
 
 static NATIVE_PREFIX: LazyLock<regex::Regex> =
@@ -65,11 +70,14 @@ fn text(value: &Value) -> Option<&str> { value.as_str().filter(|text| !text.is_e
 
 // ---- prepare_prompt ----
 
-fn prepare_prompt(payload: &Value, provider: &str) -> Result<Value, RuntimeError> {
+fn prepare_prompt(payload: &Value, provider: &str) -> Result<Value, RuntimeError> { prepare_with(payload, provider, true) }
+
+/// `shrink = false` no lote do terminal: a TUI anexa o arquivo original e o recibo compara esses bytes.
+fn prepare_with(payload: &Value, provider: &str, shrink: bool) -> Result<Value, RuntimeError> {
     let text = payload["text"].as_str().ok_or_else(|| error("policy_input"))?;
     match provider {
         "claude" => {
-            let (content, notices) = prompt_blocks(text);
+            let (content, notices) = prompt_blocks(text, shrink);
             Ok(json!({"content": content, "notices": notices, "native_candidate": NATIVE_PREFIX.is_match(text)}))
         }
         "codex" => {
@@ -87,7 +95,7 @@ pub(super) fn batch_validator(provider:String,mut template:Value) -> super::queu
         let Some(row)=rows.as_array_mut().and_then(|rows|rows.first_mut()).filter(|row|row["batch_entries"].is_array()) else {return Ok(());};
         let terminal=provider=="claude-terminal";
         let prepared=if row["batch_prompt"].is_object() {row["batch_prompt"].clone()} else {
-            prepare_prompt(&json!({"text":row["text"]}),if terminal {"claude"}else{&provider}).map_err(|_|std::io::Error::other("preparo do lote indisponível"))?
+            prepare_with(&json!({"text":row["text"]}),if terminal {"claude"}else{&provider},!terminal).map_err(|_|std::io::Error::other("preparo do lote indisponível"))?
         };
         if provider=="claude" || terminal {
             let mut visible=row["text"].as_str().unwrap_or("").to_owned();
@@ -144,13 +152,64 @@ mod batch_tests {
         assert_eq!(rows,original,"uma tentativa já selada conserva os bytes preparados e a prova original");
     }
 
+    #[test]
+    fn large_image_is_shrunk_for_headless_and_kept_for_the_terminal() {
+        use base64::Engine;
+        let dir=tempfile::tempdir().unwrap();let path=dir.path().join("shot.png");
+        let mut seed=1u32;
+        // Uma faixa de ruído põe o PNG entre o limiar de redução e o teto da API.
+        image::RgbImage::from_fn(3000,2000,|x,y| if y<120 {
+            seed=seed.wrapping_mul(1664525).wrapping_add(1013904223);image::Rgb((seed>>8).to_le_bytes()[..3].try_into().unwrap())
+        } else {image::Rgb([(x/12) as u8,(y/8) as u8,90])}).save(&path).unwrap();
+        let original=std::fs::read(&path).unwrap();
+        assert!(original.len()>SHRINK_FROM && (original.len() as u64)<IMAGE_CAP);
+        let text=format!("\u{1f4ce} imagem: {}",path.display());
+        let (blocks,_)=prompt_blocks(&text,true);
+        assert_eq!(blocks[1]["source"]["media_type"],"image/jpeg");
+        let sent=base64::engine::general_purpose::STANDARD.decode(blocks[1]["source"]["data"].as_str().unwrap()).unwrap();
+        let decoded=image::load_from_memory(&sent).unwrap();
+        assert_eq!((decoded.width(),decoded.height()),(1568,1045));
+        let (kept,_)=prompt_blocks(&text,false);
+        assert_eq!(kept[1]["source"]["data"],base64::engine::general_purpose::STANDARD.encode(&original));
+    }
+
+    fn noisy_jpeg(width:u32,height:u32,exif:Vec<u8>) -> Vec<u8> {
+        use image::ImageEncoder;
+        let mut seed=7u32;
+        let image=image::RgbImage::from_fn(width,height,|_,_| {seed=seed.wrapping_mul(1664525).wrapping_add(1013904223);image::Rgb((seed>>8).to_le_bytes()[..3].try_into().unwrap())});
+        let mut out=Vec::new();let mut encoder=image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out,60);
+        encoder.set_exif_metadata(exif).unwrap();
+        encoder.write_image(&image,width,height,image::ExtendedColorType::Rgb8).unwrap();
+        out
+    }
+
+    #[test]
+    fn shrunk_photo_keeps_the_exif_rotation() {
+        // TIFF mínimo com Orientation=6 (girar 90° no sentido horário).
+        let exif=vec![0x49,0x49,42,0,8,0,0,0,1,0,0x12,0x01,3,0,1,0,0,0,6,0,0,0,0,0,0,0];
+        let data=noisy_jpeg(2000,1000,exif);
+        assert!(data.len()>SHRINK_FROM && (data.len() as u64)<IMAGE_CAP);
+        let (out,mime)=shrunk(data,"image/jpeg");
+        assert_eq!(mime,"image/jpeg");
+        let decoded=image::load_from_memory(&out).unwrap();
+        assert_eq!((decoded.width(),decoded.height()),(784,1568));
+    }
+
+    #[test]
+    fn image_beyond_the_decode_limit_is_sent_as_it_came() {
+        let data=noisy_jpeg(MAX_DECODE_EDGE+8,64,Vec::new());
+        assert!(data.len()>SHRINK_FROM);
+        let (out,mime)=shrunk(data.clone(),"image/jpeg");
+        assert_eq!((out,mime),(data,"image/jpeg"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn queued_batch_runtime_special_image_files_do_not_block_the_queue() {
         let dir=tempfile::tempdir().unwrap();let path=dir.path().join("pipe.png");
         assert!(std::process::Command::new("mkfifo").arg(&path).status().unwrap().success());
         let (send,receive)=std::sync::mpsc::channel();let image=path.clone();
-        let worker=std::thread::spawn(move|| {let result=prompt_blocks(&format!("\u{1f4ce} imagem: {}",image.display()));send.send(result).unwrap();});
+        let worker=std::thread::spawn(move|| {let result=prompt_blocks(&format!("\u{1f4ce} imagem: {}",image.display()),true);send.send(result).unwrap();});
         let result=receive.recv_timeout(std::time::Duration::from_millis(500));
         if result.is_err() {drop(std::fs::OpenOptions::new().write(true).open(path).unwrap());}
         worker.join().unwrap();
@@ -283,7 +342,7 @@ fn strerror(error: &std::io::Error) -> String {
     text.split(" (os error ").next().unwrap_or(&text).to_owned()
 }
 
-fn prompt_blocks(text: &str) -> (Vec<Value>, Vec<String>) {
+fn prompt_blocks(text: &str, shrink: bool) -> (Vec<Value>, Vec<String>) {
     use base64::Engine;
     let mut blocks = vec![json!({"type": "text", "text": text})];
     let mut notices = Vec::new();
@@ -308,11 +367,48 @@ fn prompt_blocks(text: &str) -> (Vec<Value>, Vec<String>) {
             Err(error) => notices.push(format!("⚠️ Imagem não anexada (não abre: {}); só o path foi: {name}", strerror(&error))),
             Ok(size) if data.len() as u64 > IMAGE_CAP => notices.push(format!(
                 "⚠️ Imagem não anexada ({} MB, teto 5 MB); só o path foi: {name}", size.max(data.len() as u64) / (1024 * 1024))),
-            Ok(_) => blocks.push(json!({"type": "image", "source": {"type": "base64", "media_type": mime,
-                "data": base64::engine::general_purpose::STANDARD.encode(&data)}})),
+            Ok(_) => {
+                let (data, mime) = if shrink { shrunk(data, mime) } else { (data, mime) };
+                blocks.push(json!({"type": "image", "source": {"type": "base64", "media_type": mime,
+                    "data": base64::engine::general_purpose::STANDARD.encode(&data)}}))
+            }
         }
     }
     (blocks, notices)
+}
+
+/// Lado maior até `IMAGE_EDGE`; fica o original quando não decodifica, passa dos limites, é GIF ou não diminui.
+fn shrunk(data: Vec<u8>, mime: &'static str) -> (Vec<u8>, &'static str) {
+    if data.len() <= SHRINK_FROM || mime == "image/gif" { return (data, mime); }
+    let Some(image) = decode_upright(&data) else { return (data, mime) };
+    if image.width().max(image.height()) <= IMAGE_EDGE { return (data, mime); }
+    let image = image.resize(IMAGE_EDGE, IMAGE_EDGE, image::imageops::FilterType::Triangle);
+    let mut out = Vec::new();
+    let (encoded, out_mime) = if image.color().has_alpha() {
+        (image.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).is_ok(), "image/png")
+    } else {
+        (image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&image.to_rgb8()).is_ok(), "image/jpeg")
+    };
+    if encoded && out.len() < data.len() { (out, out_mime) } else { (data, mime) }
+}
+
+/// A recodificação descarta o EXIF, então a rotação vai para os pixels; os limites barram o PNG
+/// pequeno no disco e enorme na memória.
+fn decode_upright(data: &[u8]) -> Option<image::DynamicImage> {
+    use image::ImageDecoder;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_DECODE_EDGE);
+    limits.max_image_height = Some(MAX_DECODE_EDGE);
+    limits.max_alloc = Some(MAX_DECODE_ALLOC);
+    reader.limits(limits);
+    let mut decoder = reader.into_decoder().ok()?;
+    // Só o decodificador de PNG respeita `max_alloc`; JPEG e WebP precisam da conta aqui.
+    if decoder.total_bytes() > MAX_DECODE_ALLOC { return None; }
+    let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut image = image::DynamicImage::from_decoder(decoder).ok()?;
+    image.apply_orientation(orientation);
+    Some(image)
 }
 
 // ---- format_status ----

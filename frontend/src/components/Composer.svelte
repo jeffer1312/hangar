@@ -285,11 +285,55 @@ import { cachePrazo } from '../lib/cachePrazo';
   // Restaura do cache em memoria da sessao atual (mesma ideia do draft de texto em Chat.svelte).
   // svelte-ignore state_referenced_locally
   // `pct`: null = parado (ainda não é a vez dele ou nem começou), 0..100 = subindo agora, 100 =
-  // pronto. Fica FORA do cache entre sessões — progresso de um envio que já acabou não significa
-  // nada quando a pessoa volta pro chat.
-  let attachments = $state<{ file: File; url: string; isImage: boolean; tipo?: TipoAnexo; pct?: number | null }[]>(
+  // pronto. `subida` é o upload começado ao anexar, e `subidaChave` diz de qual sessão ele é.
+  let attachments = $state<{ file: File; url: string; isImage: boolean; tipo?: TipoAnexo; pct?: number | null;
+    subida?: Promise<ResultadoSubida | null>; subidaChave?: string }[]>(
     attachmentCache.get(sessionName) ?? [],
   );
+  type Anexo = (typeof attachments)[number];
+  type ResultadoSubida = Awaited<ReturnType<typeof uploadFile>>;
+  // O upload mora na pasta da sessão no servidor: o de outra sessão não serve pra esta.
+  const chaveSubida = () => `${sessionServer()?.id ?? ''}\n${sessionName}`;
+  // Um por vez, na ordem em que foram anexados: o anel mostra a fila como antes.
+  let filaSubida: Promise<unknown> = Promise.resolve();
+  // Guarda a PROMESSA no anexo, não um objeto: o proxy do $state copiaria o objeto e a comparação
+  // por identidade abaixo nunca bateria. Removido ou trocado (`a.subida` outro), resolve null e
+  // não escreve mais no anel.
+  function subir(a: Anexo, vez: Promise<unknown> = Promise.resolve()): Promise<ResultadoSubida | null> {
+    const name = sessionName;
+    const server = sessionServer();
+    const chave = chaveSubida();
+    const subida: Promise<ResultadoSubida | null> = vez.then(async () => {
+      if (a.subida !== subida) return null;
+      // Encolhe foto/converte HEIC antes de subir. Falhou? prepareImage devolve o original.
+      const arquivo = a.isImage ? await prepareImage(a.file) : a.file;
+      if (a.subida !== subida) return null;
+      // O anel começa em 0 ANTES do primeiro byte: sem isso, arquivo pequeno ia de "esperando"
+      // direto pra "pronto" e a fila não aparecia.
+      a.pct = 0;
+      try {
+        const r = await uploadFile(name, arquivo, (pct) => { if (a.subida === subida) a.pct = pct; }, server);
+        if (a.subida !== subida) return null;
+        a.pct = 100;
+        return r;
+      } catch (e) {
+        if (a.subida === subida) a.pct = null;
+        throw e;
+      }
+    });
+    a.subida = subida;
+    a.subidaChave = chave;
+    return subida;
+  }
+  // Composer reaproveitado em outra sessão: o upload da anterior não vale, o envio sobe de novo.
+  $effect(() => {
+    const chave = chaveSubida();
+    untrack(() => {
+      for (const a of attachments) {
+        if (a.subida && a.subidaChave !== chave) { a.subida = undefined; a.pct = null; }
+      }
+    });
+  });
   // Mantem o cache em sincronia a cada mudanca (add/remove/clear); some da sessao ao esvaziar.
   $effect(() => {
     if (attachments.length) attachmentCache.set(sessionName, attachments);
@@ -1367,6 +1411,9 @@ import { cachePrazo } from '../lib/cachePrazo';
       // url = miniatura do tile. Imagem tem a sua na hora; vídeo ganha o primeiro quadro logo
       // depois (assíncrono, e o tile mostra o ícone enquanto isso); o resto fica no ícone do tipo.
       attachments = [...attachments, { file: f, url: isImage ? URL.createObjectURL(f) : '', isImage, tipo }];
+      // Começa a subir já: no envio só falta esperar o que ainda não terminou. `catch` aqui só
+      // segura a fila; a falha é retentada (e mostrada) no envio.
+      filaSubida = subir(attachments[attachments.length - 1], filaSubida).catch(() => null);
       if (tipo === 'video') {
         void quadroDeVideo(f).then((thumb) => {
           if (!thumb) return;
@@ -1945,6 +1992,9 @@ import { cachePrazo } from '../lib/cachePrazo';
   function removeAttachment(idx: number) {
     const a = attachments[idx];
     if (a?.url) URL.revokeObjectURL(a.url);
+    // Solta o upload: o resultado que chegar depois não volta a lugar nenhum. Sem rota de apagar
+    // no servidor; a retenção dos uploads limpa o arquivo.
+    if (a) a.subida = undefined;
     attachments = attachments.filter((_, i) => i !== idx);
     attachError = '';
     if (fileInput) fileInput.value = '';
@@ -1952,7 +2002,10 @@ import { cachePrazo } from '../lib/cachePrazo';
 
   // Limpa todos os anexos (apos envio com sucesso).
   function clearAttachments() {
-    for (const a of attachments) if (a.url) URL.revokeObjectURL(a.url);
+    for (const a of attachments) {
+      if (a.url) URL.revokeObjectURL(a.url);
+      a.subida = undefined;
+    }
     attachments = [];
     if (fileInput) fileInput.value = '';
   }
@@ -2028,20 +2081,35 @@ import { cachePrazo } from '../lib/cachePrazo';
       try {
         // Sobe todos os anexos e junta os paths numa UNICA linha (o backend rejeita '\n' no
         // send-keys). Cada path nao tem espaco (nome gerado). Marca imagem x arquivo pelo tipo.
-        const parts: string[] = [];
+        const porAnexo = new Map<Anexo, string[]>();
+        const lista = [...attachments];
         // Percorre uma CÓPIA e escreve no objeto, nunca em `attachments[i]`: quem já subiu e quem
         // ainda espera continuam com o ✕ à mostra, então dá pra remover um anexo no meio do envio —
         // e aí o índice de todo mundo depois dele anda, e o anel ia parar no tile errado (pior: um
         // anexo que nunca subiu ganhava 100%). A referência do objeto sobrevive ao filter.
-        for (const a of [...attachments]) {
-          // Encolhe foto/converte HEIC antes de subir. Falhou? prepareImage devolve o original.
-          const arquivo = a.isImage ? await prepareImage(a.file) : a.file;
-          // O anel começa em 0 ANTES do primeiro byte: sem isso, arquivo pequeno ia de "esperando"
-          // direto pra "pronto" e a fila não aparecia.
-          a.pct = 0;
-          const { path, frames, transcript } = await uploadFile(
-            sessionName, arquivo, (pct) => { a.pct = pct; }, sessionServer());
-          a.pct = 100;
+        for (const a of lista) {
+          // Removido durante o envio: fica fora da mensagem e não sobe de novo.
+          if (!attachments.includes(a)) continue;
+          // Reusa o upload começado ao anexar (nunca sobe o mesmo arquivo duas vezes). Se ele
+          // falhou, tenta mais uma vez aqui; falhou de novo, cai no catch de sempre.
+          const nova = !a.subida || a.subidaChave !== chaveSubida();
+          const subida = nova ? subir(a) : a.subida!;
+          let r: ResultadoSubida | null;
+          try {
+            r = await subida;
+          } catch (e) {
+            if (!attachments.includes(a)) continue;
+            if (nova) throw e;
+            r = a.subida === subida ? await subir(a) : null;
+          }
+          // null com o anexo ainda na lista = a sessão trocou no meio: falha visível, rascunho fica.
+          if (!r) {
+            if (!attachments.includes(a)) continue;
+            throw new Error(m.composer_falha_envio());
+          }
+          const { path, frames, transcript } = r;
+          const parts: string[] = [];
+          porAnexo.set(a, parts);
           parts.push((a.isImage ? `📎 ${m.board_imagem()}: ` : `📎 ${m.board_arquivo()}: `) + path);
           // Video: o backend extraiu quadros ao longo da duracao e transcreveu a fala. Os quadros
           // entram como imagens (o Read abre; a lista tambem vira miniatura no chat) e a fala vai
@@ -2049,8 +2117,11 @@ import { cachePrazo } from '../lib/cachePrazo';
           for (const q of frames ?? []) parts.push(`📎 ${m.board_imagem()}: ` + q);
           if (transcript) parts.push(m.composer_fala_video({ texto: transcript }));
         }
-        const attachPart = parts.join(' ');
-        const msg = (message ? message + ' — ' : '') + attachPart;
+        // Monta só agora: anexo que subiu e foi removido enquanto o envio esperava outro sai daqui.
+        const attachPart = lista.filter((a) => attachments.includes(a)).flatMap((a) => porAnexo.get(a) ?? []).join(' ');
+        const msg = [message, attachPart].filter(Boolean).join(' — ');
+        // Sem texto e com todos os anexos removidos no meio: não há o que enviar.
+        if (!msg) return false;
         await onSend(msg, steer);
         inputText = '';
         if (textareaEl) textareaEl.style.height = 'auto';
@@ -2314,8 +2385,8 @@ import { cachePrazo } from '../lib/cachePrazo';
     {/if}
     {#if attachments.length}
       <!-- Tiles quadrados com o anel do envio em volta (referência: BoardUI Composer Attachments).
-           O upload acontece no ENVIO, não ao anexar — então o anel só cresce a partir do toque em
-           enviar, e os que ainda não começaram ficam apagados esperando a vez. -->
+           O upload começa ao anexar, um por vez; no envio, os que ainda não começaram ficam
+           apagados esperando a vez. -->
       <div class="attach-row">
         {#each attachments as a, idx (a.file)}
           <div class="attach-tile" class:esperando={uploading && a.pct == null} in:scale={{ duration: 180, start: 0.85, easing: cubicOut }}>
@@ -2364,9 +2435,8 @@ import { cachePrazo } from '../lib/cachePrazo';
             {/if}
             {#if a.pct != null && a.pct < 100}
               <span class="tile-pct" role="status">{a.pct}%</span>
-            {:else}
-              <button class="tile-x" onclick={() => removeAttachment(idx)} aria-label={m.board_remover_anexo()}>×</button>
             {/if}
+            <button class="tile-x" onclick={() => removeAttachment(idx)} aria-label={m.board_remover_anexo()}>×</button>
           </div>
         {/each}
       </div>
@@ -3617,7 +3687,7 @@ import { cachePrazo } from '../lib/cachePrazo';
     transition: stroke-dashoffset 200ms linear;
   }
 
-  /* % e ✕ ocupam o MESMO canto: um sai quando o outro entra, e é o que faz o tile "terminar". */
+  /* % embaixo e ✕ em cima: remover continua possível enquanto o upload anda. */
   .tile-pct,
   .tile-x {
     position: absolute;

@@ -1011,7 +1011,7 @@ function isInputRejected(error: unknown): boolean {
   return typeof status === 'number' && status >= 400 && status < 500 && status !== 408;
 }
 
-// O snapshot precede qualquer POST; só o ACK desta revisão pode limpar o campo.
+// O snapshot precede qualquer POST e já esvazia o campo enviado; só a falha devolve o texto.
 export async function submitConversationDraft(serverId: string, name: string, text: string, deliver: () => Promise<void>, draftRevision?: number): Promise<void> {
   const key = `${serverId}::${name}`;
   if (submitting.has(key)) throw new Error(m.chat_envio_incerto());
@@ -1026,20 +1026,26 @@ export async function submitConversationDraft(serverId: string, name: string, te
     };
     if (current.submission && current.submission.text.trim() !== text.trim()) throw new Error(m.composer_submission_recover_first());
     const submission = { text, draftRevision: draftRevision ?? current.revision, status: 'sending' as const };
-    // Primeiro input pode já ter outra edição no campo: aquela revisão não é a enviada.
+    // O campo pode já ter outra edição (primeiro input, pedido de plano): essa fica onde está.
+    const fromField = draftRevision === undefined ? current.text.trim() === text.trim() : current.revision === draftRevision;
+    // A fila já mostra a mensagem: texto e áudios enviados saem do campo antes da resposta.
     writeDraft(serverId, name, { ...current, submission,
-      revision: draftRevision !== undefined || current.text.trim() === text.trim() ? current.revision : current.revision + 1 });
+      ...(fromField ? { text: '', revision: current.revision + 1, ...(current.recordings ? { recordings: [] } : {}) } : {}) });
     notify();
     const settle = (status: 'unknown' | 'rejected' | null) => {
       const latest = readDraft(serverId, name);
       if (!latest || (current.transcript !== null && latest.transcript !== current.transcript)
         || latest.submission?.draftRevision !== submission.draftRevision || latest.submission.text !== text) return;
+      const failed = status !== null && fromField;
+      // O texto volta só ao campo que ninguém tocou depois da limpeza; o que a pessoa digitou fica, e o Recuperar traz o outro.
+      // Os áudios enviados voltam sempre: o Recuperar só traz o texto.
+      const restore = failed && latest.revision === current.revision + 1 && !latest.text.trim();
+      const sentRecordings = failed ? current.recordings ?? [] : [];
       writeDraft(serverId, name, { ...latest,
-        text: status === null && latest.revision === submission.draftRevision ? '' : latest.text,
-        // Só saem os áudios do rascunho enviado; ditado gravado durante o envio continua.
-        ...(status === null && latest.recordings
-          ? { recordings: latest.recordings.filter((recording) => !current.recordings?.some((sent) => sent.id === recording.id)) } : {}),
-        revision: status === null && latest.revision === submission.draftRevision ? latest.revision + 1 : latest.revision,
+        ...(restore ? { text: current.text } : {}),
+        ...(restore || sentRecordings.length ? { revision: latest.revision + 1 } : {}),
+        ...(sentRecordings.length ? { recordings: [...sentRecordings,
+          ...(latest.recordings ?? []).filter((recording) => !sentRecordings.some((sent) => sent.id === recording.id))] } : {}),
         submission: status === null ? null : { ...submission, status },
       });
     };
