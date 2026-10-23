@@ -210,6 +210,7 @@ async fn identity_follows_quem_chama() {
     let renamed = "fedcba9876543210fedcba9876543210";
     write_json(&s.home.join(format!(".hangar/session-specs/{renamed}.json")), json!({}));
     assert_eq!(caller(&s, &[("x-hangar-key", renamed), ("x-hangar-pane", "%1"), ("x-hangar-session", "velho")]).await, ok("s1", "chave"));
+    assert_eq!(caller(&s, &[("x-hangar-key", renamed), ("x-hangar-pane", "%7")]).await, ok("s1", "chave"), "pane herdado de beta: a chave acha s1");
     let inherited = "dddddddddddddddddddddddddddddddd";
     write_json(&s.home.join(format!(".hangar/session-specs/{inherited}.json")), json!({}));
     assert!(caller(&s, &[("x-hangar-key", inherited)]).await.is_err(), "chave em duas sessões não resolve");

@@ -60,11 +60,17 @@ pub async fn resolve(headers: &HeaderMap, local: &Local<'_>, secret: &str) -> Re
     let panes = if pane.is_some() || name.is_some() || terminal_key.is_some() { local.mux.list_panes().await.unwrap_or_default() } else { Vec::new() };
     if let Some(key) = terminal_key {
         // O psmux repete o id do pane entre sessões e o rename envelhece CP_SESSION_NAME; a chave no
-        // ambiente não muda. Com pane, só as sessões que o têm são perguntadas; chave em mais de uma
-        // sessão (ambiente herdado) não resolve, como o pane repetido.
-        let candidates: BTreeSet<&str> = panes.iter().filter(|p| pane.as_ref().is_none_or(|id| &p.pane_id == id)).map(|p| p.session.as_str()).collect();
-        let keys = futures_util::future::join_all(candidates.iter().map(|s| local.mux.session_env(s, "CP_SESSION_KEY"))).await;
-        let owners: Vec<&str> = candidates.into_iter().zip(keys).filter(|(_, k)| k.as_deref() == Some(key.as_str())).map(|(s, _)| s).collect();
+        // ambiente não muda. As sessões do pane são perguntadas primeiro; sem dona entre elas (pane
+        // herdado de outra sessão), as demais. Chave em mais de uma sessão (ambiente herdado) não
+        // resolve, como o pane repetido.
+        let (near, far): (BTreeSet<&str>, BTreeSet<&str>) = {
+            let all: BTreeSet<&str> = panes.iter().map(|p| p.session.as_str()).collect();
+            let near: BTreeSet<&str> = panes.iter().filter(|p| pane.as_ref().is_none_or(|id| &p.pane_id == id)).map(|p| p.session.as_str()).collect();
+            let far = all.difference(&near).copied().collect();
+            (near, far)
+        };
+        let mut owners = owners_of(local.mux, near, &key).await;
+        if owners.is_empty() { owners = owners_of(local.mux, far, &key).await; }
         if let [owner] = owners[..] { return Ok((owner.to_owned(), Origin::Key)); }
     }
     if let Some(pane) = pane {
@@ -75,6 +81,11 @@ pub async fn resolve(headers: &HeaderMap, local: &Local<'_>, secret: &str) -> Re
         return Ok((name, Origin::Name));
     }
     Err(HINT.into())
+}
+
+async fn owners_of<'a>(mux: &Mux, sessions: BTreeSet<&'a str>, key: &str) -> Vec<&'a str> {
+    let keys = futures_util::future::join_all(sessions.iter().map(|s| mux.session_env(s, "CP_SESSION_KEY"))).await;
+    sessions.into_iter().zip(keys).filter(|(_, k)| k.as_deref() == Some(key)).map(|(s, _)| s).collect()
 }
 
 /// A sessão existe nesta máquina (`quem_chama._por_nome`): pane no multiplexador ou sidecar.

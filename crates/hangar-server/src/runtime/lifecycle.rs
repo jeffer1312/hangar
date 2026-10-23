@@ -352,6 +352,22 @@ mod tests {
         let procs=Procs {calls:Default::default()};
         assert_eq!(kill_terminal(&io,&procs,&binding(),11,7.0).await.map_err(|e|e.code),Ok(()));
     }
+    #[test]
+    fn the_python_birth_of_the_same_agent_is_not_another_process() {
+        struct Procs(f64);
+        impl ProcessView for Procs {
+            fn children(&self,_:Duration)->std::io::Result<std::sync::Arc<crate::list::procs::ChildrenMap>> {Ok(Default::default())}
+            fn cwd(&self,_:i64)->Option<std::path::PathBuf> {None}
+            fn env_var(&self,_:i64,_:&str)->std::io::Result<Option<std::ffi::OsString>> {Ok(None)}
+            fn start_time(&self,_:i64)->Option<f64> {None}
+            fn recipe(&self,pid:i64)->std::io::Result<crate::list::procs::ProcessRecipe> {
+                Ok(crate::list::procs::ProcessRecipe {pid,birth:self.0,executable:"claude".into(),cwd:"/".into(),argv:vec![],environ:vec![],cgroup:None})
+            }
+        }
+        // Rust lê o nascimento em f64; o psutil do Python, em inteiro: sub-microssegundo de diferença.
+        assert_eq!(process_absent(&Procs(1792762169.8483868),11,1792762169.8483875).map_err(|e|e.code),Ok(false));
+        assert_eq!(process_absent(&Procs(1792762170.8483868),11,1792762169.8483875).map_err(|e|e.code),Ok(true),"outro processo no mesmo pid");
+    }
     #[tokio::test]
     async fn missing_capture_is_not_definitive_death() {
         let io=Io {lines:std::sync::Mutex::new([CommandOutput {success:false,stdout:vec![]}].into())};

@@ -3107,7 +3107,7 @@ pub(crate) mod tests {
         use crate::terminal_input::TerminalBinding;
         let dir=tempfile::tempdir().unwrap();
         let registry=RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into());
-        // Mesmo claude.exe medido na DELPHI-02: GetProcessTimes em f64 no Rust × psutil no Python.
+        // O mesmo agente: nascimento lido pelo Rust em f64 e pelo psutil do Python em inteiro.
         let target=|birth:f64|super::super::terminal::TerminalTarget {key:"K".into(),generation:1,name:"hangar".into(),
             binding:TerminalBinding {name:"hangar".into(),pane:"=hangar:0.0".into(),conversation:"sid".into(),generation:1,created:1,mux_argv:vec!["fixture-mux".into()],windows:true,clipboard_lock_path:None},
             metadata:crate::terminal_facts::TerminalMetadata {config_dir:dir.path().into(),agent_pid:9652,agent_birth:birth,legacy_import_after:None,fingerprint:"fixture".into(),origin:"uds:fixture".into()},
