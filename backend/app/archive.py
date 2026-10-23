@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -188,12 +189,15 @@ def conversation_files(proj: Path) -> list[Path]:
 _COM_USUARIO: set[str] = set()
 # O negativo vale só para o arquivo como foi lido: mudou o tamanho ou o mtime, lê de novo.
 _SEM_USUARIO: dict[str, tuple[int, int]] = {}
+_RESERVA_JANELA_S = 15 * 60
 
 
-def _tem_usuario(jsonl: Path, preview: str) -> bool:
+def _tem_usuario(jsonl: Path, preview: str, mtime: float) -> bool:
     """`preview` é a 1ª msg já lida do cabeçalho (índice ou _head_info): com ela, nenhuma leitura a
     mais. Sem ela, varre até a 1ª linha de usuário — o arquivo inteiro só quando não há nenhuma."""
-    if preview:
+    # Reserva vive no máximo 10 min e a sobra é apagada na subida: arquivo parado há mais tempo não é
+    # reserva, e abrir centenas deles a cada listagem prendia o backend.
+    if preview or time.time() - mtime > _RESERVA_JANELA_S:
         return True
     chave = str(jsonl)
     if chave in _COM_USUARIO:
@@ -318,7 +322,7 @@ def list_folders(config_dir: Optional[str] = None) -> list[ArchiveFolder]:
             continue
         for proj in projdirs:
             files = [(mt, f) for mt, f in _folder_files(proj)
-                     if _tem_usuario(f, (heads.get(str(f)) or ("", None))[0])]
+                     if _tem_usuario(f, (heads.get(str(f)) or ("", None))[0], mt)]
             if not files:
                 continue
             # cwd real do transcript mais recente (1 leitura/pasta quando o indice ainda nao tem)
@@ -397,7 +401,7 @@ def list_conversations(project: str, live_realpaths: set[str], cap: int = 100,
         if len(out) >= cap:
             break
         preview, cwd = heads.get(str(f)) or _head_info(f)
-        if not _tem_usuario(f, preview):
+        if not _tem_usuario(f, preview, mt):
             continue
         real = os.path.realpath(str(f))
         out.append(ArchiveEntry(
