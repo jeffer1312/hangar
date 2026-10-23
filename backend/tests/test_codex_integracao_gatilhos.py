@@ -108,7 +108,6 @@ async def test_lifespan_nao_reconcilia_sozinho_e_fecha_a_integracao(tmp_path, mo
     monkeypatch.setattr(api.registry, "list", lambda: [])
     monkeypatch.setattr(api.loop_mod, "_loop_dir", lambda: tmp_path)
     monkeypatch.setattr(api.hook_state, "watch", nada)
-    monkeypatch.setattr(api.stall_watch, "watch", nada)
     for nome in ("_fetch_loop", "_auto_update_loop", "_prune_loop"):
         monkeypatch.setattr(api, nome, nada)
     monkeypatch.setattr(api.pricing, "atualizar_em_background", lambda: None)

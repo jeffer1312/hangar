@@ -622,7 +622,9 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
     lançamento); transferência Claude→Codex; navegador (`navegador`, `nav-remoto`); peers; loops,
     workflows e runners; atualização; porta 8768 do Connect e login de convidado.
   - Tarefas próprias do Python em modo `rust`: `hook_state.watch` (push e drain), `watch_sessions`
-    do Codex a cada 2 s, `stall_watch`, índice do Arquivo, `git fetch`, atualização automática.
+    do Codex a cada 2 s (desligada quando todo Codex é do Rust), índice do Arquivo, `git fetch`,
+    atualização automática. Travada, limite e queda são avisados pelo Rust (`push/watch.rs`); o
+    vigia Python foi apagado e, no modo `python`, esses avisos não saem.
 - **Qual conversa é a da sessão é o Rust que decide** (`locate.rs`, a descoberta da lista), e a
   troca de transcript só vale lida duas vezes seguidas; provider, modo do Codex ou outra vida da
   sessão trocam na hora. Com o chat ao vivo aberto, o `/history` segue o transcript que o hub

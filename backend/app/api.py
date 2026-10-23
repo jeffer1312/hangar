@@ -114,7 +114,6 @@ from app.codex_contas_login import CodexContasLogin
 from app.pair import PairLink
 from app.hook_state import hook_state
 from app import push
-from app import stall_watch
 from app.omp_plugin_sync import PluginSynchronizer, PluginSyncLoop
 from app.sync import sync_admin_router, sync_router
 from app.deploy import deploy_router
@@ -238,16 +237,6 @@ async def _lifespan(app: FastAPI):
 
     task.add_done_callback(_watch_done)
 
-    stall_task = asyncio.create_task(stall_watch.watch())
-
-    def _stall_watch_done(t: asyncio.Task) -> None:
-        if not t.cancelled():
-            exc = t.exception()
-            if exc is not None:
-                _log.exception("stall_watch.watch crashed", exc_info=exc)
-
-    stall_task.add_done_callback(_stall_watch_done)
-
     loop_monitor_task = asyncio.create_task(loop_monitor.watch(), name="loop-monitor")
 
     # Poda periodica dos sidecars de sessao morta (Task G3): varre na subida e depois a cada
@@ -362,16 +351,11 @@ async def _lifespan(app: FastAPI):
         except Exception:
             _log.exception("Falha ao encerrar a integração Codex")
         task.cancel()
-        stall_task.cancel()
         loop_monitor_task.cancel()
         prune_task.cancel()
         await omp_sync.close()
         try:
             await task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await stall_task
         except asyncio.CancelledError:
             pass
         await asyncio.gather(loop_monitor_task, return_exceptions=True)
