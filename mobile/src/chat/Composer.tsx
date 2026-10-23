@@ -11,7 +11,7 @@ import * as m from '../paraglide/messages';
 import { chatStore, filaCount as filaCountOf, submitConversationDraft, isSubmitting } from '../stores/chat';
 import { abandonUnknownAttempt, attachInsert, confirmFirstInput, firstInputMessage, readFirstInput, sendFirstInput, useNewConversation, withAttach } from '../stores/newConversation';
 import { useSessions } from '../stores/sessions';
-import { clearDraft, clearRecoverableDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft } from '../stores/drafts';
+import { clearDraft, clearRecoverableDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft, type UploadTarget } from '../stores/drafts';
 import { useServers } from '../stores/servers';
 import { removeDraftAttachment, retainDraftAttachment } from './draftAttachments';
 import { useNavigation, useRouter } from 'expo-router';
@@ -75,6 +75,9 @@ function composeForSend(typed: string, refs: readonly DraftContextRef[], attachm
 const toDraftAttachments = (list: readonly PendingAttach[]): DraftAttachment[] => list.map(({ size: _size, ...a }) => a);
 const mergeAttachments = (a: readonly DraftAttachment[], b: readonly DraftAttachment[]) =>
   [...a, ...b.filter((x) => !a.some((y) => y.uri === x.uri))];
+// O caminho que o upload em segundo plano grava não é mudança da pessoa nos anexos.
+const sameAttachments = (a: readonly DraftAttachment[], b: readonly DraftAttachment[]) =>
+  JSON.stringify(a.map(withoutUpload)) === JSON.stringify(b.map(withoutUpload));
 const mergeRecordings = (a: ConversationDraft['recordings'] = [], b: ConversationDraft['recordings'] = []) =>
   [...a, ...b.filter((recording) => !a.some((existing) => existing.id === recording.id))];
 
@@ -283,7 +286,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       return false;
     }
     if (patch.attachments !== undefined && voiceSendRef.current
-      && JSON.stringify(value.attachments) !== JSON.stringify(voiceSendRef.current.draft.attachments)) cancelVoiceSend();
+      && !sameAttachments(value.attachments, voiceSendRef.current.draft.attachments)) cancelVoiceSend();
     draftRef.current = value;
     if (patch.recordings !== undefined) setRecordings(patch.recordings);
     setSubmission(value.submission);
@@ -291,6 +294,36 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     return true;
   }, [origin, chat, cancelVoiceSend]);
   const persistText = useCallback((next: string) => persistDraft({ text: next }), [persistDraft]);
+
+  // Cada anexo sobe assim que entra no campo; o Enviar só espera o que ainda está no ar. A chave é a
+  // uri: anexo removido sai do mapa e o resultado que chegar depois não volta para a lista.
+  const uploadsRef = useRef(new Map<string, Promise<string>>());
+  const recordUpload = useCallback((uri: string, path: string, target: UploadTarget): boolean => {
+    const list = attachmentsRef.current;
+    if (!list.some((a) => a.uri === uri && a.uploadedPath !== path)) return true;
+    const next = list.map((a) => (a.uri === uri ? { ...a, uploadedPath: path, uploadedFor: target } : a));
+    if (!persistDraft({ attachments: next })) return false;
+    setPendingAttachments(next);
+    return true;
+  }, [persistDraft, setPendingAttachments]);
+  const startUpload = useCallback((attach: PendingAttach): Promise<string> => {
+    const running = uploadsRef.current.get(attach.uri);
+    if (running) return running;
+    const target = { serverId: origin.serverId, name: origin.name, transcript: transcriptRef.current };
+    const upload: Promise<string> = (async () => {
+      const server = useServers.getState().servers.find((s) => s.id === origin.serverId);
+      if (!server) throw new Error(m.chat_servidor_removido());
+      const blob = await (await fetch(attach.uri)).blob();
+      const path = (await uploadFileForServer(server, origin.name, new File([blob], attach.name, { type: attach.mime }))).path;
+      // Desmontado, a lista em memória é velha: gravá-la apagaria o que outra montagem pôs no rascunho.
+      if (mountedRef.current && uploadsRef.current.get(attach.uri) === upload) recordUpload(attach.uri, path, target);
+      return path;
+    })();
+    uploadsRef.current.set(attach.uri, upload);
+    // Falhou, sai do mapa: o próximo pedido sobe de novo em vez de repetir o erro.
+    upload.catch(() => { if (uploadsRef.current.get(attach.uri) === upload) uploadsRef.current.delete(attach.uri); });
+    return upload;
+  }, [origin, recordUpload]);
 
   // ACK do primeiro input depois do handoff: some o texto entregue, nunca uma edição nova.
   useEffect(() => {
@@ -333,8 +366,8 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     if (isSubmitting(origin.serverId, origin.name) || !submission
       || (submission.status !== 'rejected' && submission.status !== 'unknown')) return;
     // Os anexos continuam no rascunho com o caminho enviado: devolver só o texto evita citá-los duas vezes.
-    // Um anexo novo, ainda sem upload, não estava no envio recusado.
-    const uploaded = pendingAttachments.filter((a) => a.uploadedPath);
+    // Um anexo novo, mesmo já enviado em segundo plano, não está no texto recusado.
+    const uploaded = pendingAttachments.filter((a) => a.uploadedPath && submission.text.includes(attachInsert(a, a.uploadedPath)));
     const insert = uploaded.length ? attachLine(uploaded) : null;
     const withoutAttachment = insert && submission.text.endsWith(insert)
       ? submission.text.slice(0, -insert.length).replace(/ — $/, '') : submission.text;
@@ -378,6 +411,8 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
         setRecordings([]);
         setSubmission(null);
         setRecoverable(kept);
+        // Upload no ar é da sessão que morreu: o anexo recuperado sobe de novo para a recriada.
+        uploadsRef.current.clear();
         setPendingAttachments([]);
         setText('');
       } else {
@@ -390,6 +425,14 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       setDraftIssue(e instanceof Error ? e.message : m.draft_read_error());
     }
   }, [transcript, origin, setPendingAttachments]);
+
+  useEffect(() => {
+    const target = { serverId: origin.serverId, name: origin.name, transcript: transcriptRef.current };
+    for (const a of pendingAttachments) {
+      // A falha fica para o Enviar, que tenta de novo e mostra o motivo.
+      if (!reusableUploadPath(a, target)) startUpload(a).catch(() => {});
+    }
+  }, [pendingAttachments, origin, startUpload]);
 
   const handleRecoverDraft = useCallback(() => {
     if (!recoverable) return;
@@ -687,15 +730,18 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
         for (const attach of sentAttachments) {
           let path = reusableUploadPath(attach, target);
           if (!path) {
-            const server = useServers.getState().servers.find((s) => s.id === origin.serverId);
-            if (!server) {
+            if (!useServers.getState().servers.some((s) => s.id === origin.serverId)) {
               setError(m.chat_servidor_removido());
               stop();
               return;
             }
+            // Reaproveita o upload no ar e, se ele falhar, tenta uma vez mais; falha anterior já saiu do mapa.
+            const inFlight = uploadsRef.current.get(attach.uri);
             try {
-              const blob = await (await fetch(attach.uri)).blob();
-              path = (await uploadFileForServer(server, origin.name, new File([blob], attach.name, { type: attach.mime }))).path;
+              path = await startUpload(attach).catch((e: unknown) => {
+                if (!inFlight) throw e;
+                return startUpload(attach);
+              });
             } catch (e) {
               // O backend diz o motivo (tamanho, formato); o texto e os anexos continuam no rascunho, e
               // os que já subiram guardam o caminho para não subir de novo.
@@ -703,13 +749,10 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
               stop();
               return;
             }
-            const uploaded = { ...attach, uploadedPath: path, uploadedFor: target };
-            const current = attachmentsRef.current.map((a) => (a.uri === attach.uri ? uploaded : a));
-            if (!persistDraft({ attachments: current })) {
+            if (!recordUpload(attach.uri, path, target)) {
               stop();
               return;
             }
-            setPendingAttachments(current);
           }
           inserts.push(attachInsert(attach, path));
         }
@@ -726,6 +769,11 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     let timing: QueueSendMode | undefined = deliveryTiming(trimmed);
     if (sentAttachments.length && typeof timing === 'object' && timing.kind === 'jev') timing = { ...timing, task: '' };
     const fallbackNotice = timing ? null : jevFallback(trimmed);
+    // Como o texto, os anexos enviados saem do campo já; só a falha os devolve, com o caminho do upload.
+    const uploadedSent = attachmentsRef.current.filter((a) => sentAttachments.some((x) => x.uri === a.uri));
+    const unsent = attachmentsRef.current.filter((a) => !uploadedSent.includes(a));
+    const attachmentsLeft = uploadedSent.length > 0 && persistDraft({ attachments: unsent });
+    if (attachmentsLeft) setPendingAttachments(unsent);
     let groupPendingId: string | null = null;
     try {
       const snapshot = firstInputId ? readFirstInput(serverId, name) : null;
@@ -756,7 +804,10 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       // Só saem os enviados: colar durante o envio acrescenta um que ainda espera a vez.
       const rest = attachmentsRef.current.filter((a) => !sentAttachments.some((x) => x.uri === a.uri));
       if (sentAttachments.length && persistDraft({ attachments: rest })) {
-        for (const a of sentAttachments) dropCopy(a.uri);
+        for (const a of sentAttachments) {
+          uploadsRef.current.delete(a.uri);
+          dropCopy(a.uri);
+        }
         setPendingAttachments(rest);
         // Outra tela desta conversa aberta durante o envio ainda mostra o anexo: o aviso vem depois da limpeza.
         chat.use.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
@@ -765,13 +816,17 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       if (groupPendingId) {
         chat.use.setState((current) => ({ pending: current.pending.filter((item) => item.id !== groupPendingId) }));
       }
+      if (attachmentsLeft) {
+        const back = mergeAttachments(uploadedSent, attachmentsRef.current);
+        if (persistDraft({ attachments: back })) setPendingAttachments(back);
+      }
       const msg = e instanceof Error ? e.message : m.composer_falha_envio();
       setError(msg);
     } finally {
       setSending(false);
       sendingRef.current = false;
     }
-  }, [text, sending, uploading, chat, sendText, limparUndo, cancelarAuto, pendingAttachments, setPendingAttachments, serverId, name, firstInputId, pairPeers, sendToPair, persistText, persistDraft, origin, submissionBlocksSend, isClaude, setBar, queueEdit, navigation, refs, refsKey, deliveryTiming, jevFallback]);
+  }, [text, sending, uploading, chat, sendText, limparUndo, cancelarAuto, pendingAttachments, setPendingAttachments, serverId, name, firstInputId, pairPeers, sendToPair, persistText, persistDraft, origin, submissionBlocksSend, isClaude, setBar, queueEdit, navigation, refs, refsKey, deliveryTiming, jevFallback, startUpload, recordUpload]);
 
   // auto-envio: contagem de 3s
   const iniciarAuto = useCallback(
@@ -1305,7 +1360,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
         || !server || server.baseUrl !== intent.server.baseUrl || server.token !== intent.server.token
         || !latest || latest.transcript !== intent.draft.transcript || transcript !== intent.draft.transcript
         || latest.revision !== intent.draft.revision + (applied ? 1 : 0)
-        || JSON.stringify(latest.attachments) !== JSON.stringify(intent.draft.attachments)
+        || !sameAttachments(latest.attachments, intent.draft.attachments)
         || (!applied && latest.text !== intent.draft.text)
         || (voice?.id === intent.dictationId && (voice.status === 'failed' || !!voice.issue))) {
         cancelVoiceSend();
@@ -1523,6 +1578,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   const handleRemoveAttach = useCallback((uri: string) => {
     const next = attachmentsRef.current.filter((a) => a.uri !== uri);
     if (next.length === attachmentsRef.current.length || !persistDraft({ attachments: next })) return;
+    uploadsRef.current.delete(uri);
     dropCopy(uri);
     setPendingAttachments(next);
   }, [persistDraft, setPendingAttachments]);
@@ -1801,17 +1857,15 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
           </View>
         ) : null}
 
-        {submission && !editing ? (
+        {/* Em voo a mensagem já aparece no painel "Na fila": aqui só o resultado que pede ação. */}
+        {submission && submission.status !== 'sending' && !sending && !isSubmitting(origin.serverId, origin.name) && !editing ? (
           <View style={styles.undoRow}>
             <Text style={[styles.hint, styles.recoverText, { color: theme.tokens.text.muted }]} accessibilityLiveRegion="polite">
-              {submission.status === 'rejected' ? m.composer_submission_rejected()
-                : submission.status === 'sending' || sending ? m.composer_submission_sending() : m.chat_envio_incerto()}
+              {submission.status === 'rejected' ? m.composer_submission_rejected() : m.chat_envio_incerto()}
             </Text>
-            {submission.status === 'rejected' || (submission.status === 'unknown' && !sending) ? (
-              <Pressable onPress={handleRecoverSubmission} style={[styles.undoBtn, { borderColor: theme.tokens.border.subtle }]} accessibilityRole="button">
-                <Text style={[styles.undoText, { color: theme.tokens.accent.base }]}>{m.composer_draft_recover()}</Text>
-              </Pressable>
-            ) : null}
+            <Pressable onPress={handleRecoverSubmission} style={[styles.undoBtn, { borderColor: theme.tokens.border.subtle }]} accessibilityRole="button">
+              <Text style={[styles.undoText, { color: theme.tokens.accent.base }]}>{m.composer_draft_recover()}</Text>
+            </Pressable>
             {submission.status === 'unknown' ? (
               <Pressable onPress={chat.retry} style={[styles.undoBtn, { borderColor: theme.tokens.border.subtle }]} accessibilityRole="button">
                 <Text style={[styles.undoText, { color: theme.tokens.accent.base }]}>{m.composer_submission_check()}</Text>

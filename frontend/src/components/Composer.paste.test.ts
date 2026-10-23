@@ -47,7 +47,8 @@ describe('colar no composer', () => {
     await flush();
     expect(ev.defaultPrevented).toBe(true);
     expect(target.querySelector('.tile-name')?.textContent).toBe('notas.txt');
-    expect(uploadFile).not.toHaveBeenCalled();
+    // O anexo começa a subir ao entrar na lista, não só no envio.
+    expect(uploadFile).toHaveBeenCalledWith('s', f, expect.any(Function), undefined);
     unmount(comp);
   });
 

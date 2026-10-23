@@ -146,7 +146,9 @@ it.each(['', 'Confira este trecho'])('limpa o campo após enviar citação com c
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="send-fixture"]')!.click());
   expect(input).toHaveBeenCalledTimes(1);
   expect(JSON.parse(input.mock.calls[0]![1]!.body as string).text).toBe(composeWithContextRefs([quote], typed));
-  expect(container.querySelector('textarea')!.value).toBe(typed);
+  // O campo esvazia no envio; a citação só sai da bandeja com a confirmação.
+  expect(container.querySelector('textarea')!.value).toBe('');
+  expect(contextRefsSnapshot('srv::sess')).toHaveLength(1);
   await act(async () => acknowledge());
   expect(container.querySelector('textarea')!.value).toBe('');
   expect(readDraft('srv', 'sess')?.text ?? '').toBe('');

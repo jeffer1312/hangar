@@ -356,7 +356,11 @@ enum Reply {
 pub struct Picked { name: String, bytes: Vec<u8> }
 
 #[derive(Clone)]
-struct Attachment { id: u64, name: String, bytes: Arc<Vec<u8>>, image: Option<Arc<Image>>, state: AttachState }
+struct Attachment { id: u64, name: String, bytes: Arc<Vec<u8>>, image: Option<Arc<Image>>, state: AttachState, upload: Option<Background> }
+
+/// O upload que começou ao anexar: o envio espera este em vez de subir o mesmo arquivo de novo.
+#[derive(Clone)]
+struct Background { task: tokio::task::AbortHandle, result: tokio::sync::watch::Receiver<Option<Result<Uploaded, Failure>>> }
 
 #[derive(Clone, PartialEq)]
 enum AttachState { Waiting, Uploading, Uploaded(Uploaded), Failed(String) }
@@ -2764,14 +2768,24 @@ impl Hangar {
         let mut jobs = Vec::new();
         for attachment in list.iter_mut() {
             if matches!(attachment.state, AttachState::Uploaded(_)) { continue; }
-            attachment.state = AttachState::Waiting;
-            jobs.push((attachment.id, attachment.name.clone(), attachment.bytes.clone()));
+            // O que ainda sobe desde o anexo é esperado; o que já falhou sobe de novo aqui, uma vez.
+            let background = attachment.upload.as_ref().filter(|_| attachment.state == AttachState::Uploading).map(|b| b.result.clone());
+            if background.is_none() { attachment.state = AttachState::Waiting; }
+            jobs.push((attachment.id, attachment.name.clone(), attachment.bytes.clone(), background));
         }
         self.uploading.insert(key.clone(), list.iter().map(|a| a.id).collect());
         let (connection, tx, uploads) = (self.connection, self.tx.clone(), self.uploads_for(&key));
         self.runtime.spawn(async move {
             let retention = match uploads { disk::Uploads::Local { .. } => disk::retention(&api).await, disk::Uploads::Remote => None };
-            for (id, name, bytes) in jobs {
+            for (id, name, bytes, background) in jobs {
+                if let Some(mut background) = background {
+                    let done = background.wait_for(Option::is_some).await.ok().and_then(|done| (*done).clone()).and_then(Result::ok);
+                    // Repete o resultado: o aviso do upload de fundo pode ter sido descartado com a conexão.
+                    if let Some(uploaded) = done {
+                        if tx.send(Envelope { connection, selection: None, payload: Payload::UploadStep(key.clone(), id, Some(Ok(uploaded))) }).await.is_err() { return; }
+                        continue;
+                    }
+                }
                 let _ = tx.send(Envelope { connection, selection: None, payload: Payload::UploadStep(key.clone(), id, None) }).await;
                 let result = uploads.upload(&api, &key.name, &name, bytes.to_vec(), retention).await;
                 let failed = result.is_err();
@@ -2819,9 +2833,29 @@ impl Hangar {
         if bytes.len() as u64 > api::MAX_BYTES { return Err(tr("attach_too_big_named").replace("{name}", &name)); }
         let image = composer::image_format(&name).map(|format| Arc::new(Image::from_bytes(format, bytes.clone())));
         self.attach_seq += 1;
-        let attachment = Attachment { id: self.attach_seq, name, bytes: Arc::new(bytes), image, state: AttachState::Waiting };
+        let bytes = Arc::new(bytes);
+        let upload = self.background_upload(key, self.attach_seq, &name, &bytes);
+        let state = if upload.is_some() { AttachState::Uploading } else { AttachState::Waiting };
+        let attachment = Attachment { id: self.attach_seq, name, bytes, image, state, upload };
         self.attachments.entry(key.clone()).or_default().push(attachment);
         Ok(())
+    }
+
+    // Na sessão que já existe o anexo sobe ao entrar; a conversa por nascer só sobe depois de criada.
+    fn background_upload(&self, key: &SessionKey, id: u64, name: &str, bytes: &Arc<Vec<u8>>) -> Option<Background> {
+        if *key == create::new_chat_key() { return None; }
+        let api = self.api_for(&key.server)?;
+        let (connection, tx, uploads) = (self.connection, self.tx.clone(), self.uploads_for(key));
+        let (key, name, bytes) = (key.clone(), name.to_owned(), bytes.clone());
+        let (done, result) = tokio::sync::watch::channel(None);
+        let task = self.runtime.spawn(async move {
+            let retention = match uploads { disk::Uploads::Local { .. } => disk::retention(&api).await, disk::Uploads::Remote => None };
+            let outcome = uploads.upload(&api, &key.name, &name, bytes.to_vec(), retention).await;
+            // A tela recebe antes do envio que espera: quando ele fecha o lote, o estado já está no anexo.
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::UploadStep(key, id, Some(outcome.clone())) }).await;
+            let _ = done.send(Some(outcome));
+        }).abort_handle();
+        Some(Background { task, result })
     }
 
     fn receive_files(&mut self, key: SessionKey, owner: Option<SessionOwner>, generation: u64, files: Vec<Result<Picked, String>>, cx: &mut Context<Self>) {
@@ -2913,9 +2947,12 @@ impl Hangar {
         let Some(key) = self.composer_key() else { return; };
         if self.uploading.contains_key(&key) { return; }
         if let Some(list) = self.attachments.get_mut(&key) {
-            let gone = list.iter().position(|a| a.id == id).and_then(|n| list.remove(n).image);
+            let gone = list.iter().position(|a| a.id == id).map(|n| list.remove(n));
             if list.is_empty() { self.attachments.remove(&key); }
-            if let Some(image) = gone { release_image(image, window, cx); }
+            if let Some(gone) = gone {
+                if let Some(upload) = gone.upload { upload.task.abort(); }
+                if let Some(image) = gone.image { release_image(image, window, cx); }
+            }
         }
         cx.notify();
     }

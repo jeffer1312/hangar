@@ -1522,47 +1522,63 @@ test('falha parcial de broadcast conserva detalhe por destino e snapshot incerto
   expect(isSubmitting('srv1', 'sess')).toBe(false);
 });
 
-test('ACK compara revisão mesmo quando a nova edição tem texto idêntico; associação inicial conserva identidade', async () => {
+test('envio esvazia o campo na hora; ACK só tira o snapshot e conserva o texto digitado de novo', async () => {
   writeDraft('srv1', 'sess', { version: 1, text: 'oi', revision: 1, transcript: null, attachments: [], submission: null });
   const requests = fetchManual();
   const sending = chatStore('srv1', 'sess').send('oi');
-  const current = readDraft('srv1', 'sess')!;
-  writeDraft('srv1', 'sess', { ...current, transcript: '/first', revision: 2 });
+  expect(readDraft('srv1', 'sess')).toMatchObject({ text: '', revision: 2, submission: { text: 'oi', draftRevision: 1 } });
+  writeDraft('srv1', 'sess', { ...readDraft('srv1', 'sess')!, text: 'oi', transcript: '/first', revision: 3 });
   requests[0].responder(null);
   await sending;
-  expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'oi', revision: 2, transcript: '/first', submission: null });
+  expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'oi', revision: 3, transcript: '/first', submission: null });
 });
 
-test('ACK retira os chips de áudio enviados e conserva os ditados depois', async () => {
+test('recusa devolve texto e áudios ao campo vazio; com texto novo conserva o novo e o snapshot', async () => {
+  const recording = { id: 'voice-1', serverPath: '/uploaded/voice.m4a' };
+  writeDraft('srv1', 'sess', { version: 1, text: 'ditado', revision: 7, transcript: '/first',
+    recordings: [recording], attachments: [], submission: null });
+  const requests = fetchManual();
+  const sending = expect(chatStore('srv1', 'sess').send('ditado', 7)).rejects.toMatchObject({ status: 400 });
+  expect(readDraft('srv1', 'sess')).toMatchObject({ text: '', recordings: [] });
+  requests[0].responder(null, { status: 400 });
+  await sending;
+  expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'ditado', recordings: [recording],
+    submission: { text: 'ditado', status: 'rejected' } });
+
+  writeDraft('srv1', 'sess', { version: 1, text: 'outro', revision: 9, transcript: '/first', attachments: [], submission: null });
+  const later = expect(chatStore('srv1', 'sess').send('outro', 9)).rejects.toMatchObject({ status: 400 });
+  writeDraft('srv1', 'sess', { ...readDraft('srv1', 'sess')!, text: 'digitado depois', revision: 11 });
+  requests[1].responder(null, { status: 400 });
+  await later;
+  expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'digitado depois', revision: 11,
+    submission: { text: 'outro', status: 'rejected' } });
+});
+
+test('envio retira já os chips de áudio enviados e conserva os ditados depois', async () => {
   const recording = { id: 'voice-1', serverPath: '/uploaded/voice.m4a' };
   writeDraft('srv1', 'sess', { version: 1, text: 'ditado', revision: 7, transcript: '/first',
     recordings: [recording], attachments: [], submission: null });
   const requests = fetchManual();
   const sending = chatStore('srv1', 'sess').send('ditado', 7);
+  expect(readDraft('srv1', 'sess')?.recordings).toEqual([]);
+  const later = { id: 'voice-2', serverPath: '/uploaded/new.m4a' };
+  writeDraft('srv1', 'sess', { ...readDraft('srv1', 'sess')!, text: 'novo', revision: 9, recordings: [later] });
   requests[0].responder(null);
   await sending;
-  expect(readDraft('srv1', 'sess')?.recordings).toEqual([]);
-  writeDraft('srv1', 'sess', { version: 1, text: 'outro', revision: 9, transcript: '/first',
-    recordings: [recording], attachments: [], submission: null });
-  const later = chatStore('srv1', 'sess').send('outro', 9);
-  writeDraft('srv1', 'sess', { ...readDraft('srv1', 'sess')!, text: 'outro novo', revision: 10,
-    recordings: [recording, { id: 'voice-2', serverPath: '/uploaded/new.m4a' }] });
-  requests[1].responder(null);
-  await later;
-  expect(readDraft('srv1', 'sess')?.recordings).toEqual([{ id: 'voice-2', serverPath: '/uploaded/new.m4a' }]);
+  expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'novo', recordings: [later], submission: null });
 });
 
 test.each([null, 400, 503])('citação sem rascunho conserva edição nova durante envio com status %s', async (status) => {
   const text = 'Mensagem com citação';
   const requests = fetchManual();
   const sending = chatStore('srv1', 'sess').send(text, 8);
-  expect(readDraft('srv1', 'sess')).toMatchObject({ text: '', revision: 8,
+  expect(readDraft('srv1', 'sess')).toMatchObject({ text: '', revision: 9,
     submission: { text, draftRevision: 8 } });
-  writeDraft('srv1', 'sess', { ...readDraft('srv1', 'sess')!, text: 'Próxima mensagem', revision: 9 });
+  writeDraft('srv1', 'sess', { ...readDraft('srv1', 'sess')!, text: 'Próxima mensagem', revision: 10 });
   const result = status === null ? sending : expect(sending).rejects.toMatchObject({ status });
   requests[0].responder(null, status === null ? undefined : { status });
   await result;
-  expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'Próxima mensagem', revision: 9,
+  expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'Próxima mensagem', revision: 10,
     submission: status === null ? null : { text, draftRevision: 8, status: status === 400 ? 'rejected' : 'unknown' } });
 });
 
