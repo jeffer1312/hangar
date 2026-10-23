@@ -71,14 +71,15 @@ impl PairStore {
         Ok(Some(rec))
     }
 
-    pub fn rename_local(&self, old: &str, new: &str) -> io::Result<()> {
+    /// `Ok(false)`: nenhum par no nome velho.
+    pub fn rename_local(&self, old: &str, new: &str) -> io::Result<bool> {
         let mut state = self.lock();
         let moved: Vec<usize> = state.iter().enumerate().filter(|(_, r)| r.local_session == old).map(|(i, _)| i).collect();
-        if moved.is_empty() { return Ok(()); }
+        if moved.is_empty() { return Ok(false); }
         for &i in &moved { state[i].local_session = new.to_owned(); }
         // Falha fica com o nome novo na memória: a gravação pode ter chegado ao disco, e quem chama
         // desfaz com o rename de volta, que regrava os dois.
-        self.save(&state)
+        self.save(&state).map(|()| true)
     }
 
     pub fn all(&self) -> Vec<ExternalPair> { self.lock().clone() }

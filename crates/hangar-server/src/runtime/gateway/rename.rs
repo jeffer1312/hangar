@@ -68,7 +68,9 @@ impl RuntimeRegistry {
                 };
                 if let Err(error)=opened {
                     // A entrada nasce antes do fim da abertura: sem fechar, o desfazer a reaproveitaria com o nome novo.
-                    let _=self.close_locked(&key,generation,false).await;
+                    if let Err(closing)=self.close_locked(&key,generation,false).await {
+                        tracing::warn!(session=%name,code=%closing.code,"a entrada meio aberta no nome novo não fechou no rename");
+                    }
                     return Err(error);
                 }
             },

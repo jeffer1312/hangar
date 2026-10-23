@@ -201,11 +201,13 @@ impl Ctx {
         let (home, o, n) = (self.home.clone(), old.to_owned(), new.to_owned());
         if blocking(move || files::move_transfer(&home, &o, &n, life.as_deref(), meta.as_ref())).await.map_err(|e| ("transfer", io_code(&e)))? { done.push(Done::Transfer); }
         if let Some(share) = self.st.share.clone() {
-            // Registrado antes de conferir: a falha deixa a memória no nome novo e o desfazer regrava.
-            done.push(Done::Share);
-            share.store.rename(old, new).map_err(|e| ("share", io_code(&e)))?;
-            done.push(Done::Pairs);
-            share.pairs.rename_local(old, new).map_err(|e| ("share_pairs", io_code(&e)))?;
+            // Falha também entra: a memória fica no nome novo e o desfazer regrava.
+            let moved = share.store.rename(old, new);
+            if !matches!(moved, Ok(false)) { done.push(Done::Share); }
+            moved.map_err(|e| ("share", io_code(&e)))?;
+            let moved = share.pairs.rename_local(old, new);
+            if !matches!(moved, Ok(false)) { done.push(Done::Pairs); }
+            moved.map_err(|e| ("share_pairs", io_code(&e)))?;
         }
         let owned = self.shortcuts(old, new).await.map_err(|(owned, code)| { done.push(Done::Shortcuts(owned)); ("shortcuts", code) })?;
         done.push(Done::Shortcuts(owned));
