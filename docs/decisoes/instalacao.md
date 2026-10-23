@@ -808,6 +808,38 @@ os passos do que mudou, e árvore que já passou não roda nada.
 - **`release.yml` saiu.** Empacotava o shell Electron em tag `v*` (última em 25/08); nada no
   instalador, no Atualizar, no app nativo nem no site lê essas releases.
 
+## Build e teste locais rápidos (23/10/2026)
+
+Regra: otimizar sem tirar verificação; cada mudança provada com o mesmo resultado. Medido nesta
+máquina (12 núcleos, 23 GB, outras sessões abertas), uma compilação ou suíte por vez, `-j 2`; pico =
+maior RSS de um processo da medição.
+
+- **Dev não acelera a troca.** `cargo build -p hangar-server`, target comum aquecido, uma linha
+  mudada: release 29 s, dev 48 s (pico ~3,2 GB nos dois). Do zero: release 1.124 s, dev 416 s. Os
+  10–13 min da troca em `~/.hangar/bin` eram de target frio, por isso o `cargo-pinned` (target comum)
+  e não o perfil dev.
+- **Target comum sem binário velho.** O cargo separa os crates do workspace por caminho do checkout;
+  o que se misturava era o executável final, que todos gravam no mesmo lugar. O `cargo-pinned`
+  copia o executável na mesma trava do build (`scripts/test-cargo-pinned.sh` prova que o build de
+  outro checkout não muda a cópia).
+- **Mensagens com carimbo.** `npm run i18n:compile` do front (core junto): 18–22 s e 670–830 MB
+  antes; 0,7 s e 72 MB sem mudança em `messages/`. Saída igual à do `paraglide-js compile` direto
+  (hash da árvore em `scripts/test-i18n-compile.mjs`).
+- **Cache de transformação do Vitest** (`experimental.fsModuleCache`). Suíte do front: 382 s sem,
+  348 s na primeira rodada com ele, 310 s com ele quente; os mesmos 2.300 testes passando, um a um.
+  Core: 32 s → 25 s, os mesmos 1.531.
+- **Seleção do front pelo core.** Arquivos do front escolhidos pelos nomes que o diff mudou: em
+  commits recentes, `format.ts` 14 arquivos (76 pelo arquivo inteiro), `activity.ts` 11,
+  `updateAll.ts` 12, contra 326 que importam o core. Antes, nenhum teste do front rodava.
+- **Memória na verificação.** `verificar-local` rápido de um commit com uma linha no
+  `hangar-server` e uma no front: as duas rodadas passaram, com 10 GB livres; a espera não disparou,
+  então o ganho sob pouca memória não foi medido.
+- **Não entrou, por mudar o resultado ou não render:** tipos das mensagens em `.d.ts` com `.js` sem
+  JSDoc (suíte do front 382 s → 242 s, mas o `svelte-check` passa de 0 a 14.257 erros nos `.js`
+  gerados, e compilar as mensagens vai de 15 s a 77 s); uma cópia só das mensagens (o runtime do
+  front tem outra estratégia de idioma, e 20 testes do app trocam o idioma no runtime dele, que o
+  core passaria a seguir); `tsc` incremental no core (7,8 s, 4,1 s, 7,7 s: ganho instável).
+
 ## Verificação local em paralelo (09/10/2026)
 
 A rodada inteira levava ~27 min no Linux, com os passos em fila: rust 176–247 s, backend 718–755 s,
