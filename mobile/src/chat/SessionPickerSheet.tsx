@@ -111,13 +111,16 @@ function PickerList({ onClose, atual, serverId }: { onClose: () => void; atual: 
       </Text> : null}
       {groups.map((group) => <View key={group.id}>
         <SessionSectionHeader section={group} onToggle={toggleGroup} />
-        {group.data.map((session, index) => <SessionSectionCard key={`${session.serverId}::${session.name}`} index={index} total={group.data.length}>
-          {group.heads.has(`${session.serverId}::${session.name}`) ? <GroupBlockHeader head={group.heads.get(`${session.serverId}::${session.name}`)!} /> : null}
-          <SessionRow session={session} compact
-            selected={session.name === atual && session.serverId === serverId}
-            mostrarServidor={!!session.outside || (multipleServers && (group.id.startsWith('state:') || session.serverId !== group.id))}
-            onPress={selectSession} />
-        </SessionSectionCard>)}
+        {group.data.map((session, index) => {
+          const head = group.heads.get(`${session.serverId}::${session.name}`);
+          return <SessionSectionCard key={`${session.serverId}::${session.name}`} index={index} total={group.data.length}>
+            {head ? <GroupBlockHeader head={head} onToggle={toggleGroup} /> : null}
+            {head?.collapsed ? null : <SessionRow session={session} compact
+              selected={session.name === atual && session.serverId === serverId}
+              mostrarServidor={!!session.outside || (multipleServers && (group.id.startsWith('state:') || session.serverId !== group.id))}
+              onPress={selectSession} />}
+          </SessionSectionCard>;
+        })}
       </View>)}
     </ScrollView>
     </KeyboardAvoidingView>

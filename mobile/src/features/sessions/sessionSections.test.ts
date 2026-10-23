@@ -34,7 +34,7 @@ describe('grupo entre máquinas na lista', () => {
       // o primeiro membro na ordem da lista é o que estava trabalhando (seção do topo)
       expect(members[0]).toBe('nb::ABC-1-proxy');
       const head = sections.find((s) => s.heads.has(members[0]))!.heads.get(members[0]);
-      expect(head).toEqual({ label: 'ABC-1 bulas', machines: 2, size: 4 });
+      expect(head).toMatchObject({ label: 'ABC-1 bulas', machines: 2, size: 4, collapsed: false });
     });
   }
 
@@ -44,7 +44,19 @@ describe('grupo entre máquinas na lista', () => {
     expect(one.every((s) => s.heads.size === 0)).toBe(true);
     const three = [...withDead, fed('ABC-1-proxy', nb, 'idle', 30)];
     const sections = buildSessionSections(three, 'none', '', new Set(), undefined, groupGlobal(three, ids));
-    expect([...sections[0].heads.values()]).toEqual([{ label: 'ABC-1 bulas', machines: 1, size: 2 }]);
+    expect([...sections[0].heads.values()]).toMatchObject([{ label: 'ABC-1 bulas', machines: 1, size: 2 }]);
+  });
+
+  it('recolhido, o bloco fica só com o cabeçalho e conta quem espera resposta', () => {
+    const asking = rows.map((r) => r.name === 'ABC-1-app' ? { ...r, state: 'awaiting_input' } as AggSession : r);
+    const groups = groupGlobal(asking, ids);
+    const open = buildSessionSections(asking, 'server', '', new Set(), undefined, groups);
+    const head = open.flatMap((s) => [...s.heads.values()])[0];
+    const closed = buildSessionSections(asking, 'server', '', new Set([head.id]), undefined, groups);
+    const flat = closed.flatMap((s) => s.data.map(key));
+    expect(flat.filter((k) => /ABC-1|abc2/.test(k))).toHaveLength(1);
+    expect(flat).toEqual(expect.arrayContaining(['nb::solta', 'vm::outra']));
+    expect(closed.flatMap((s) => [...s.heads.values()])).toMatchObject([{ id: head.id, collapsed: true, size: 4, awaiting: 1 }]);
   });
 
   it('a busca que acha um membro traz o bloco inteiro', () => {

@@ -471,10 +471,12 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
           </View>
         )}
         renderSectionHeader={({ section }) => <SessionSectionHeader section={section} onToggle={alternarGrupo} />}
-        renderItem={({ item, section, index }) => (
+        renderItem={({ item, section, index }) => {
+          const head = section.heads.get(pickKey(item.serverId, item.name));
+          return (
           <SessionSectionCard index={index} total={section.data.length}>
-            {section.heads.has(pickKey(item.serverId, item.name)) ? <GroupBlockHeader head={section.heads.get(pickKey(item.serverId, item.name))!} /> : null}
-            <SessionRow
+            {head ? <GroupBlockHeader head={head} onToggle={alternarGrupo} /> : null}
+            {head?.collapsed ? null : <SessionRow
               session={item}
               compact={home}
               // No topo as linhas vêm de máquinas diferentes, então dizem de qual são; no bloco do grupo, a de outra máquina também.
@@ -488,9 +490,10 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
               onPair={proprios.has(item.serverId) || item.outside ? fazerPar : undefined}
               crossBadgeText={crossBadges.get(pickKey(item.serverId, item.name))?.text}
               crossBadgeMachines={crossBadges.get(pickKey(item.serverId, item.name))?.machines}
-            />
+            />}
           </SessionSectionCard>
-        )}
+          );
+        }}
         ListEmptyComponent={home && machineErrors.length ? null
           : busca ? vazio(m.lista_vazia_filtro(), null, true) : vazio(m.lista_nenhuma_ativa(), null)}
         contentContainerStyle={styles.listContent}
