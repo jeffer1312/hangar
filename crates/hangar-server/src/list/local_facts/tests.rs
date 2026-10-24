@@ -142,8 +142,9 @@ fn transfers_match_python() {
         let want: Vec<BTreeMap<&str, Value>> = case["touched"].as_array().unwrap().iter()
             .map(|r| FIELDS.iter().map(|f| {
                 let v = expand(&r[*f], &home);
-                // A conta passa por `resolve()`, que no Windows devolve o separador nativo; o resto é copiado.
-                (*f, match (*f, v.as_str()) { ("conta", Some(s)) => Value::String(native(s)), _ => v })
+                // A conta passa por `resolve()`, que no Windows devolve o separador nativo e tira o `\\?\`
+                // que o `canonicalize` do HOME deste teste põe; o resto é copiado.
+                (*f, match (*f, v.as_str()) { ("conta", Some(s)) => Value::String(native(s).replacen(r"\\?\", "", 1)), _ => v })
             }).collect()).collect();
         assert_eq!(touched, want, "{}", case["case"]);
         let mut frozen: Vec<String> = frozen.into_iter().collect();
