@@ -74,6 +74,20 @@ def test_reconciliar_passa_pelo_rust_e_devolve_os_avisos(casa, hangar_server_bin
     assert _diario_do_rust(casa), "a reconciliação não passou pelo hangar-server conta"
 
 
+def test_o_diario_do_comando_entra_no_arquivo_exportado(casa, hangar_server_bin, monkeypatch):
+    """C191: o diário que o `hangar-server conta` grava (`diario/hangar-conta`) é lido pelo exportado."""
+    import importlib.util
+    from app import diag, log_paths
+    # A suíte troca o `log_paths.base` pela pasta de teste; aqui vale o de verdade, que segue o HOME.
+    spec = importlib.util.spec_from_file_location("log_paths_real", log_paths.__file__)
+    real = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(real)
+    monkeypatch.setattr(log_paths, "base", real.base)
+    _carimbada(casa, "conta2")
+    contas.reconciliar("conta2")
+    assert _diario_do_rust(casa) and set(_diario_do_rust(casa)) <= set(diag.arquivos())
+
+
 def test_falha_do_rust_vira_conta_error_com_a_frase_dele(casa, hangar_server_bin):
     with pytest.raises(contas.ContaError) as e:
         contas.reconciliar("naoexiste")

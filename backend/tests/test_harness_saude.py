@@ -33,6 +33,27 @@ def test_sem_registro_de_plugins_e_sem_plugin_ligado_o_painel_fica_ok(tmp_path, 
     assert (h._plugins_claude()["ok"], h._plugins_claude()["codigo"]) == (True, "plugins_ok")
 
 
+def test_conserto_das_contas_junta_os_avisos_de_cada_conta(tmp_path, monkeypatch, hangar_server_bin):
+    """C198/K19/K20: o conserto "Contas" reconcilia cada conta pelo `hangar-server conta` e junta os avisos
+    com o nome dela; sem aviso, a frase de tudo no lugar."""
+    from app import contas
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CP_CLAUDE_CONFIG_DIRS", raising=False)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "CLAUDE.md").write_text("# regras", encoding="utf-8")
+    (tmp_path / ".claude" / "settings.json").write_text('{"theme": "dark"}', encoding="utf-8")
+    for nome in ("b", "a"):
+        (tmp_path / f".claude-{nome}").mkdir()
+        (tmp_path / f".claude-{nome}" / contas.MARCADOR).write_text("", encoding="utf-8")
+    (tmp_path / ".claude-a" / "CLAUDE.md").write_text("# editado na a", encoding="utf-8")
+    (tmp_path / ".claude-b" / "settings.json").write_text('{"theme": "light"}', encoding="utf-8")
+    assert h.consertar("contas") == (
+        "a: 'CLAUDE.md' foi alterado dentro desta conta; a mudança subiu pro ~/.claude; "
+        "b: settings.json: o principal sobrescreveu theme na cópia desta conta")
+    assert h.consertar("contas") == "contas reconciliadas, nada fora do lugar"
+
+
 def test_extensoes_faltando_e_o_conserto_liga(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     (repo / "scripts" / "pi" / "lib").mkdir(parents=True)

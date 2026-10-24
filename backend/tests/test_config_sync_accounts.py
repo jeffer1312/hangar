@@ -139,6 +139,19 @@ async def test_forged_accounts_and_secret_keys_are_refused(pair, monkeypatch):
     assert not {"env", "apiKeyHelper", "permissions"} & set(settings)
 
 
+async def test_fixed_account_list_refuses_the_creation_with_the_rust_message(pair, monkeypatch):
+    """K22/D12: com `CP_CLAUDE_CONFIG_DIRS` a lista de contas é fixa; quem recusa a criação é o Rust, e o
+    aviso leva a frase dele."""
+    ana, bia = pair
+    bundle = _send(monkeypatch, ana, bia, ["claude_accounts"])
+    monkeypatch.setenv("CP_CLAUDE_CONFIG_DIRS", str(Path(bia.home) / ".claude"))
+    report = await _apply(bundle, ["claude_accounts"], bia)
+    failed = [w for w in report["items"]["claude_accounts"]["warnings"] if w["code"] == "config_sync_account_failed"]
+    assert [w["params"]["account"] for w in failed] == ["claude-2"], report
+    assert failed[0]["params"]["error"].startswith("CP_CLAUDE_CONFIG_DIRS está setado: a lista de contas é fixa"), failed
+    assert not (Path(bia.home) / ".claude-claude-2").exists()
+
+
 async def test_appearance_keeps_machine_choices_and_carries_the_image(pair, monkeypatch):
     ana, bia = pair
     folder = _appearance(monkeypatch, bia, {"theme": "dark", "chrome_autofill": False, "side_width": 300.0,
