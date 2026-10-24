@@ -11,6 +11,9 @@ import pytest
 from app import apelidos, config_sync, contas
 from tests.config_sync_machines import make_machine, use_machine
 
+# A conta nasce pelo `contas.criar`, que chama o `hangar-server conta` desta cópia.
+pytestmark = pytest.mark.usefixtures("hangar_server_bin")
+
 ITEMS = ["claude_accounts", "hangar_appearance"]
 SECRETS = (b"rt-ana-secreto", b"conta-ana@x", b"env-secreto", b"helper-secreto",
            b"otel-secreto", b"bypassPermissions", b"nao-pode-sair")

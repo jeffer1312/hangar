@@ -1050,6 +1050,36 @@ fn two_accounts_reconciling_together_keep_one_whole_version() {
     for list in warnings { assert!(list.iter().any(|w| w.contains("CLAUDE.md")), "{list:?}"); }
 }
 
+/// T54: o `conta --prep` segura a guarda compartilhada da conta enquanto reconcilia. Com a trava das
+/// contas presa por fora ele espera dentro da reconciliação, e a exclusão da conta (exclusiva) não passa.
+#[test]
+fn the_prep_command_holds_the_account_guard_while_reconciling() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    conta(&home, "conta2");
+    let holder = std::fs::OpenOptions::new().read(true).append(true).create(true).open(home.join(".hangar-contas.lock")).unwrap();
+    holder.lock().unwrap();
+    let mut child = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[])
+        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+    let key = AccountKey::new(Provider::Claude, &home.join(".claude-conta2")).unwrap();
+    let locks = hangar_server::accounts::AccountLocks::new(home.join(".hangar/account-locks"));
+    let exclusive = || locks.try_acquire(&key, hangar_server::accounts::GuardMode::Exclusive).is_ok();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let held = loop {
+        if !exclusive() { break true; }
+        if std::time::Instant::now() > deadline { break false; }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let still_waiting = child.try_wait().unwrap().is_none();
+    holder.unlock().unwrap();
+    let status = child.wait().unwrap();
+    assert!(held, "a guarda da conta estava livre durante a reconciliação");
+    assert!(still_waiting, "o comando terminou sem esperar a trava das contas");
+    assert!(status.success());
+    assert!(exclusive(), "a guarda ficou presa depois do comando");
+}
+
 /// A mesma conta reconciliada duas vezes ao mesmo tempo: as travas serializam (sem elas, as duas mandam
 /// a mesma pasta local para a gaveta e a segunda falha no meio) e as duas terminam sem erro.
 #[test]
@@ -1263,7 +1293,10 @@ async fn check_http(name: &str) {
                 "msg": "não foi possível preparar a conta"}})), "{name}[{i}] Python: {stderr}"),
         }
     }
-    let python = app.python_paths.lock().unwrap().clone();
+    // Só conta pedido de rota: um `GET /` solto vem de outro teste deste executável cuja porta o
+    // sistema reaproveitou para o Python falso.
+    let python: Vec<String> = app.python_paths.lock().unwrap().iter()
+        .filter(|p| p.starts_with("/internal/") || p.starts_with("/api/")).cloned().collect();
     assert!(python.is_empty(), "{name}: a criação chamou o Python: {python:?}");
     let tree = tree(&home, None);
     let (diary, _) = diary(&home, &accounts);

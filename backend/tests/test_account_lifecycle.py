@@ -89,35 +89,6 @@ def test_cancelled_wait_does_not_start_operation(tmp_path):
             acquire(key, root=tmp_path / "locks", deadline=time.monotonic())
 
 
-@pytest.mark.parametrize("worker_cycle", [False, True])
-def test_claude_preparation_keeps_own_descriptor_after_birth_returns(tmp_path, monkeypatch, rust_probe, worker_cycle):
-    from concurrent.futures import ThreadPoolExecutor
-    from app import account_lifecycle, contas
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    home = tmp_path / ".claude-work"
-    home.mkdir()
-    (home / contas.MARCADOR).write_text("")
-    (tmp_path / ".claude").mkdir()
-    entered, release = threading.Event(), threading.Event()
-    def prepare(*args):
-        entered.set()
-        assert release.wait(20)
-        return []
-    monkeypatch.setattr(contas, "_reconciliar", prepare)
-    with ThreadPoolExecutor() as pool:
-        try:
-            with contas.ciclo_conta("work") as cycle:
-                preparation = (pool.submit(cycle.reconciliar) if worker_cycle else
-                               pool.submit(contas.reconciliar, "work"))
-                assert entered.wait(10), "preparo ficou bloqueado pelo nascimento"
-            path = lock_path(tmp_path / ".hangar/account-locks", "claude", home)
-            with RustProbe(rust_probe, path) as exclusion:
-                assert exclusion.state == "busy"
-        finally:
-            release.set()
-        assert preparation.result(timeout=20) == []
-
-
 async def test_deferred_cano_launch_holds_guard_until_worker_finishes(tmp_path, monkeypatch, rust_probe):
     import asyncio
     from app import account_lifecycle
