@@ -31,6 +31,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Atualizar pelo app faz tudo sozinho, mas nada é irreversível**: resgate antes de qualquer
   passo destrutivo, com a ref conferida. Passo só entra no registro depois da prova passar, e o
   registro é do que JÁ RODOU aqui — não do intervalo de commits.
+- **A volta da atualização devolve o binário do Rust junto com o código.** Antes de gravar o
+  binário novo, a atualização guarda o anterior em `~/.hangar/bin/<nome>.prev`; a volta o
+  devolve antes de reiniciar. Sem isso, código antigo com binário novo é contrato diferente e o
+  Python atende sozinho. A cópia de outra rodada é descartada antes de instalar e ao terminar bem.
 - **O Atualizar segue a main, ou a branch de `CP_UPDATE_BRANCH`.** Só ela e a branch em que a
   própria atualização pôs o checkout (`<config>/.hangar-update/branch`) escapam da recusa de
   branch de trabalho; esvaziar o campo volta para a main com o mesmo resgate. Branch ausente no

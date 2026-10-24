@@ -60,6 +60,9 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(atualizar, "_pid_do_servidor", lambda topologia, porta: None)
     # Sem Rust o checkout vai ao topo sem ler release nenhuma; quem testa a escolha liga de volta.
     monkeypatch.setattr(atualizar.config.settings, "rust_server", False)
+    # A pasta pessoal é da máquina real: a marca do app nativo instalado faria o fluxo baixar o
+    # manifesto, e a volta mexeria nos binários de ~/.hangar/bin.
+    monkeypatch.setattr(atualizar.Path, "home", lambda: tmp_path / "home")
     return d
 
 
@@ -886,6 +889,55 @@ def test_troca_de_dono_do_lock_nunca_deixa_o_arquivo_vazio(repo, monkeypatch):
     trava = atualizar._base() / "rodando.lock"
     assert trava.read_text(encoding="utf-8").strip() == str(_os.getpid())
     assert not list(trava.parent.glob("*.tmp")), "sobrou tmp da troca de dono"
+
+
+def test_volta_devolve_o_binario_anterior_antes_de_reiniciar(repo, monkeypatch):
+    """Código antigo com o binário novo é contrato diferente: o Python atenderia sozinho."""
+    ordem = []
+
+    def _preparar_quebra(t, *a, **k):
+        ordem.append("preparar")
+        raise RuntimeError("uv sync falhou")
+
+    monkeypatch.setattr(atualizar, "_preparar", _preparar_quebra)
+    monkeypatch.setattr(atualizar.rust_release, "restore_previous", lambda: ordem.append("binario") or [])
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t, *a, **k: ordem.append("reiniciar"))
+    atualizar._voltar(atualizar._git("rev-parse", "HEAD").stdout.strip(), "o servidor caiu", "systemd", 1)
+    # O resto da volta pode falhar; o binário já voltou antes dele.
+    assert ordem == ["binario", "preparar"]
+
+
+def test_volta_que_nao_devolve_o_binario_avisa(repo, monkeypatch):
+    monkeypatch.setattr(atualizar, "_preparar", lambda t, *a, **k: None)
+    monkeypatch.setattr(atualizar.rust_release, "restore_previous", lambda: ["hangar-server: preso"])
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t, *a, **k: None)
+    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
+    final = atualizar._voltar(atualizar._git("rev-parse", "HEAD").stdout.strip(), "o servidor caiu", "systemd", 1)
+    assert "hangar-server: preso" in final["avisos"]
+
+
+def test_atualizacao_que_deu_certo_descarta_a_copia_do_binario(repo, monkeypatch):
+    descartes = []
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: None)
+    monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
+    monkeypatch.setattr(atualizar, "_preparar", lambda t, *a, **k: descartes.append("preparar"))
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t, *a, **k: None)
+    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
+    monkeypatch.setattr(atualizar, "_instalar_nativo", lambda destino, porta: None)
+    monkeypatch.setattr(atualizar.rust_release, "discard_previous", lambda: descartes.append("descarta") or [])
+    assert atualizar.executar()["ok"] is True
+    # Antes de instalar, uma cópia de outra rodada nunca é a que a volta devolve.
+    assert descartes == ["descarta", "preparar", "descarta"]
+
+
+def test_copia_velha_que_nao_sai_para_antes_de_mexer_em_algo(repo, monkeypatch):
+    antes = atualizar._git("rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: pytest.fail("nao pode puxar"))
+    monkeypatch.setattr(atualizar.rust_release, "discard_previous",
+                        lambda: ["hangar-server: a cópia anterior do binário não saiu"])
+    final = atualizar.executar()
+    assert final["ok"] is False and "não saiu" in final["erro"]
+    assert atualizar._git("rev-parse", "HEAD").stdout.strip() == antes
 
 
 def test_rollback_que_nao_sobe_nao_diz_que_esta_no_ar(repo, monkeypatch):

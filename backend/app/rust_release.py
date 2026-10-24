@@ -9,6 +9,7 @@ Uso: python -m app.rust_release [--never-fail]   (sai 0 no lugar, 1 falhou, 2 se
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import http.client
 import json
@@ -17,6 +18,7 @@ import os
 import platform
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import time
@@ -245,10 +247,82 @@ def _install_one(data: bytes, target: Path, name: str, commit: str, tag: str | N
 
 def install_held(hold: list) -> list[str]:
     """Grava o que o `fetch(hold=...)` baixou e segurou. Devolve os avisos de quem não gravou."""
-    avisos = [a for item in hold if (a := _install_one(*item))]
+    avisos = []
+    for item in hold:
+        target, name = item[1], item[2]
+        if aviso := _keep_previous(target, name):
+            avisos.append(aviso)
+        if aviso := _install_one(*item):
+            avisos.append(aviso)
+            # Nada foi trocado: a volta não tem o que devolver.
+            with contextlib.suppress(OSError):
+                _previous(target).unlink(missing_ok=True)
     for aviso in avisos:
         _log.warning(aviso)
     return avisos
+
+
+def _previous(target: Path) -> Path:
+    return target.with_name(f"{target.name}.prev")
+
+
+def _targets(dest: Path) -> list[tuple[str, Path]]:
+    ext = ".exe" if (platform_key() or "").startswith("windows") else ""
+    return [(name, dest / f"{name}{ext}") for name in NAMES]
+
+
+def _keep_previous(target: Path, name: str) -> str | None:
+    """Cópia do binário que a atualização vai trocar: a volta do código precisa dele, porque código
+    antigo com binário novo é contrato diferente e o Python atenderia sozinho. Devolve o aviso."""
+    if not target.is_file():
+        return None
+    prev = _previous(target)
+    tmp = prev.with_name(f".{prev.name}.{secrets.token_hex(4)}.tmp")
+    try:
+        shutil.copyfile(target, tmp)
+        atomico.substituir(tmp, prev)
+        return None
+    except OSError as e:
+        diag.registrar(_EVENT, "erro", etapa="guardar_anterior", detalhe=name, **diag.erro_campos(e))
+        # Uma cópia de outra rodada que ficou seria devolvida no lugar da certa.
+        with contextlib.suppress(OSError):
+            prev.unlink(missing_ok=True)
+        return f"{name}: sem cópia do binário anterior; se a atualização voltar, o Rust não volta junto ({e})"
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def restore_previous(dest: Path | None = None) -> list[str]:
+    """Devolve os binários que o `install_held` trocou. Devolve os avisos de quem não voltou."""
+    avisos = []
+    for name, target in _targets(dest or bin_dir()):
+        prev = _previous(target)
+        if not prev.is_file():
+            continue
+        try:
+            _install(prev.read_bytes(), target)
+            prev.unlink()
+        except OSError as e:
+            diag.registrar(_EVENT, "erro", etapa="restaurar", detalhe=name, **diag.erro_campos(e))
+            avisos.append(f"{name}: não consegui devolver o binário anterior ({e})")
+            continue
+        diag.registrar(_EVENT, codigo="restaurado", detalhe=name)
+    for aviso in avisos:
+        _log.warning(aviso)
+    return avisos
+
+
+def discard_previous(dest: Path | None = None) -> list[str]:
+    """Apaga as cópias de `install_held`. Devolve as que não saíram."""
+    falhas = []
+    for name, target in _targets(dest or bin_dir()):
+        try:
+            _previous(target).unlink(missing_ok=True)
+        except OSError as e:
+            falhas.append(f"{name}: a cópia anterior do binário não saiu de {target.parent} ({e})")
+    for falha in falhas:
+        _log.warning(falha)
+    return falhas
 
 
 def fetch(base_url: str | None = None, dest: Path | None = None,
