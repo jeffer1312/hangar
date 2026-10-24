@@ -367,11 +367,16 @@ me() {
     fi
     # 1b) O spec da abertura, pela chave: o rename do Rust reescreve o nome ali, e a chave não muda.
     #     Cobre o psmux, onde o pane id se repete entre sessões e o passo 1 fica ambíguo.
+    #     Só vale se a sessão com esse nome carrega a MESMA chave: spec não reescrito num rename, ou
+    #     chave herdada por um tmux new-session manual, apontariam para outra sessão viva. O psmux
+    #     ignora o nome pedido no show-environment e lista tudo, daí o grep da linha.
     if [[ -n "${CP_SESSION_KEY:-}" && -f "$HOME/.hangar/session-specs/$CP_SESSION_KEY.json" ]]; then
         local spec_nome
-        spec_nome=$(grep -o '"name": *"[^"]*"' "$HOME/.hangar/session-specs/$CP_SESSION_KEY.json" | head -1 |
-                    sed 's/.*: *"\(.*\)"/\1/') || spec_nome=""
-        if [[ -n "$spec_nome" ]] && tmux has-session -t "=$spec_nome" 2>/dev/null; then
+        spec_nome=$(grep -o '"name": *"[^"]*"' "$HOME/.hangar/session-specs/$CP_SESSION_KEY.json" 2>/dev/null |
+                    head -1 | sed 's/.*: *"\(.*\)"/\1/') || spec_nome=""
+        if [[ -n "$spec_nome" ]] &&
+           tmux show-environment -t "=$spec_nome" CP_SESSION_KEY 2>/dev/null | tr -d '\r' |
+               grep -xF "CP_SESSION_KEY=$CP_SESSION_KEY" >/dev/null; then
             echo "$spec_nome"; return
         fi
     fi
