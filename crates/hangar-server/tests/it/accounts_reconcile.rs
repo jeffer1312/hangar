@@ -1180,3 +1180,154 @@ proptest::proptest! {
         proptest::prop_assert!([0, 1, 2, 126].contains(&code), "{args:?} → {code}");
     }
 }
+
+// ── a criação pelo app: `POST /api/claude-configs` ──────────────────────────────────────────
+
+/// O handler das contas com elas no HOME dado e um Python falso que anota todo caminho pedido (a ponte
+/// `/internal/accounts/prepare` inclusive). Chamado direto, sem `serve_with_state`: as tarefas de
+/// fundo do servidor leriam o HOME real do processo de teste.
+struct App {
+    state: std::sync::Arc<hangar_server::routes::AppState>,
+    python_paths: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    python: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for App {
+    fn drop(&mut self) { self.python.abort(); }
+}
+
+async fn app(home: &Path) -> App {
+    use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
+    let python_paths = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = python_paths.clone();
+    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = upstream.local_addr().unwrap();
+    let python = tokio::spawn(async move {
+        let router = axum::Router::new().fallback(move |uri: axum::http::Uri| {
+            seen.lock().unwrap().push(uri.path().to_owned());
+            async { (axum::http::StatusCode::SERVICE_UNAVAILABLE, "handler Python bloqueado") }
+        });
+        axum::serve(upstream, router).await.unwrap();
+    });
+    let mut state = AppState::new(Config { listen: "127.0.0.1:9".parse().unwrap(), upstream: upstream_addr,
+        internal_secret: "contract-internal".into(), auth_token: "contract-only".into(), log_path: None,
+        trusted: TrustedHosts::parse("127.0.0.1") });
+    state.accounts = hangar_server::accounts::AccountService::new(env_of(home));
+    App { state: std::sync::Arc::new(state), python_paths, python }
+}
+
+/// `POST /api/claude-configs`; com `timeout` estourado, o future do handler é largado no meio (o
+/// pedido cancelado) e o resultado é `None`.
+async fn create(app: &App, name: &str, timeout: std::time::Duration) -> Option<(u16, Value)> {
+    use http_body_util::BodyExt;
+    let request = axum::http::Request::post("/api/claude-configs").header("content-type", "application/json")
+        .body(axum::body::Body::from(json!({"nome": name}).to_string())).unwrap();
+    let response = tokio::time::timeout(timeout, hangar_server::accounts::http::public(app.state.clone(), request)).await.ok()?;
+    let status = response.status().as_u16();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    Some((status, serde_json::from_slice(&bytes).unwrap_or(Value::Null)))
+}
+
+/// O modo dos arquivos criados no processo segue o umask dele; as fixtures foram gravadas com 022.
+fn umask_022() {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap();
+    let umask = status.lines().find_map(|l| l.strip_prefix("Umask:")).map(str::trim);
+    assert_eq!(umask, Some("0022"), "o modo dos arquivos novos é comparado com fixtures gravadas sob umask 022");
+}
+
+/// A criação pelo app chega ao mesmo estado final que o `contas.criar` do Python (o marcador só no fim
+/// e o modo da pasta são D8 e D16) sem chamar o Python: nenhuma ida à ponte `/internal/accounts/prepare`.
+async fn check_http(name: &str) {
+    umask_022();
+    let expected = fixture(name);
+    let scenario = scenario(name);
+    let dir = tempfile::Builder::new().prefix("conta-http-").tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    (scenario.build)(&home);
+    let app = app(&home).await;
+    let mut accounts = std::collections::BTreeSet::new();
+    for (i, (step, want)) in scenario.steps.iter().zip(expected["steps"].as_array().unwrap()).enumerate() {
+        let Step::Cli(args) = step else { panic!("{name}: cenário de criação com passo de disco") };
+        if args[0] == "--list" { continue; }
+        assert_eq!(args[0], "--new", "{name}[{i}]");
+        accounts.insert(args[1].clone());
+        let (status, body) = create(&app, &args[1], std::time::Duration::from_secs(30)).await.unwrap();
+        let stderr = want["stderr"].as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect::<Vec<_>>().join("\n");
+        let body = serde_json::from_str::<Value>(&norm(&body.to_string(), &home, None)).unwrap();
+        match (want["exit"].as_i64(), stderr.strip_prefix("hangar-conta: ")) {
+            (Some(0), _) => assert_eq!((status, body), (200, json!({"path": format!("<HOME>/.claude-{}", args[1]), "label": args[1],
+                "active": false})), "{name}[{i}]"),
+            (_, Some(detail)) if detail.starts_with("já existe ") => assert_eq!((status, body), (409, json!({"detail": detail})), "{name}[{i}]"),
+            (_, Some(detail)) if detail.starts_with("nome:") => assert_eq!(status, 422, "{name}[{i}] {body}"),
+            _ => assert_eq!((status, body), (500, json!({"detail": {"code": "account_prepare_failed", "params": {},
+                "msg": "não foi possível preparar a conta"}})), "{name}[{i}] Python: {stderr}"),
+        }
+    }
+    let python = app.python_paths.lock().unwrap().clone();
+    assert!(python.is_empty(), "{name}: a criação chamou o Python: {python:?}");
+    let tree = tree(&home, None);
+    let (diary, _) = diary(&home, &accounts);
+    unlock(&home);
+    assert_tree(name, &expected["tree"], &tree);
+    assert_eq!(expected["diary"], json!(diary), "{name}: diário");
+}
+
+macro_rules! http_scenarios {
+    ($($test:ident => $name:literal),* $(,)?) => { $( #[tokio::test(flavor = "multi_thread", worker_threads = 2)] async fn $test() { check_http($name).await } )* };
+}
+
+http_scenarios!(
+    http_new_complete => "new_complete", http_new_existing_dir => "new_existing_dir", http_new_broken_symlink => "new_broken_symlink",
+    http_new_invalid_names => "new_invalid_names", http_new_without_shared => "new_without_shared",
+    http_new_symlink_refused => "new_symlink_refused", http_new_claude_json_truncated => "new_claude_json_truncated",
+    http_new_claude_json_not_object => "new_claude_json_not_object", http_new_claude_json_unreadable => "new_claude_json_unreadable",
+    http_new_without_claude_json => "new_without_claude_json", http_new_seed_format => "new_seed_format",
+);
+
+/// O preparo da pasta pendente deixa a publicação para a criação: sem marcador e com a pendência, o
+/// `settings.json` copiado e real, sem as credenciais do principal e `projects/` real.
+#[test]
+fn the_seed_prepares_the_pending_folder_and_leaves_publication_to_the_creation() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    let account = home.join(".claude-fresh");
+    put(&account.join(".hangar-account-pending"), "");
+    assert!(claude_config::seed(&home, &account).result.is_ok());
+    let meta = |p: &str| std::fs::symlink_metadata(account.join(p));
+    assert!(meta("settings.json").unwrap().is_file());
+    assert!(meta(".credentials.json").is_err());
+    assert!(meta("projects").unwrap().is_dir());
+    assert!(meta(".hangar-conta").is_err(), "publicar o marcador é da criação");
+    assert!(meta(".hangar-account-pending").unwrap().is_file());
+}
+
+/// Pedido cancelado no meio do preparo: a criação segue até o fim com a guarda da conta presa (a
+/// exclusão espera) e solta a guarda só depois de publicar a conta.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_creation_keeps_the_guard_until_the_seed_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    let holder = std::fs::OpenOptions::new().read(true).append(true).create(true).open(home.join(".hangar-contas.lock")).unwrap();
+    holder.lock().unwrap();
+    let app = app(&home).await;
+    let cancelled = create(&app, "fresh", std::time::Duration::from_millis(500)).await;
+    assert!(cancelled.is_none(), "o pedido devia ficar preso no preparo e ser largado: {cancelled:?}");
+    let account = home.join(".claude-fresh");
+    let key = AccountKey::new(Provider::Claude, &account).unwrap();
+    let locks = hangar_server::accounts::AccountLocks::new(home.join(".hangar/account-locks"));
+    assert!(locks.try_acquire(&key, hangar_server::accounts::GuardMode::Exclusive).is_err(), "a guarda soltou com o pedido cancelado");
+    assert!(!account.join(".hangar-conta").exists());
+    holder.unlock().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !account.join(".hangar-conta").exists() {
+        assert!(std::time::Instant::now() < deadline, "a criação não terminou depois de soltar a trava");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while locks.try_acquire(&key, hangar_server::accounts::GuardMode::Exclusive).is_err() {
+        assert!(std::time::Instant::now() < deadline, "a guarda ficou presa depois de publicar");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
