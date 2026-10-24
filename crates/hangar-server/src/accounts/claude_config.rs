@@ -288,18 +288,32 @@ impl Drop for Held {
     fn drop(&mut self) { let _ = self.0.unlock(); }
 }
 
-/// Exclusiva, tentando até `wait`: o Python esperava sem fim, e a abertura matava o subprocesso aos 120 s.
-fn lock(path: &Path, create: bool, wait: Duration) -> Result<Held> {
+/// Quanto as travas esperam: cada uma até `Each` (o comando e a criação), ou as duas dentro do prazo da
+/// abertura (`Within`), que, passado, não deixa a reconciliação começar: a abertura já recusou.
+#[derive(Clone, Copy, Debug)]
+pub enum Wait { Each(Duration), Within { limit: Duration, deadline: Instant } }
+
+impl Wait {
+    pub fn within(limit: Duration) -> Self { Wait::Within { limit, deadline: Instant::now() + limit } }
+}
+
+/// A recusa da abertura cuja reconciliação passou do prazo.
+pub fn late(limit: Duration) -> String { format!("a reconciliação da conta passou do limite de {} s", limit.as_secs_f64()) }
+
+/// Exclusiva, tentando até o fim de `wait`: o Python esperava sem fim, e a abertura matava o subprocesso aos 120 s.
+fn lock(path: &Path, create: bool, wait: Wait) -> Result<Held> {
     let mut options = fs::OpenOptions::new();
     if create { options.read(true).append(true).create(true) } else { options.read(true).write(true) };
     let file = options.open(path).at(path)?;
-    let deadline = Instant::now() + wait;
+    let deadline = match wait { Wait::Each(each) => Instant::now() + each, Wait::Within { deadline, .. } => deadline };
     loop {
         match file.try_lock() {
             Ok(()) => return Ok(Held(file)),
             Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            Err(fs::TryLockError::WouldBlock) =>
-                return Err(refused(format!("a trava {} ficou presa por outro processo por mais de {} s", path.display(), wait.as_secs()))),
+            Err(fs::TryLockError::WouldBlock) => return Err(refused(match wait {
+                Wait::Each(each) => format!("a trava {} ficou presa por outro processo por mais de {} s", path.display(), each.as_secs()),
+                Wait::Within { limit, .. } => late(limit),
+            })),
             Err(fs::TryLockError::Error(error)) => return Err(ConfigError::Io(error, path.display().to_string())),
         }
     }
@@ -319,18 +333,18 @@ pub fn is_account(dir: &Path) -> bool {
 }
 
 /// `contas.reconciliar` sob a guarda que quem chama já segura: confere a conta e pega as travas.
-pub fn reconcile_account(home: &Path, name: &str, project: Option<&str>) -> Outcome {
+pub fn reconcile_account(home: &Path, name: &str, project: Option<&str>, wait: Wait) -> Outcome {
     let dir = match account_dir(home, name) {
         Ok(dir) => dir,
         Err(error) => return Outcome::failed(error),
     };
     if !is_account(&dir) { return Outcome::failed(refused(format!("{} não é uma conta criada pelo hangar", dir.display()))); }
-    reconcile_locked(home, &dir, project, CLAUDE_MARKER, LOCK_WAIT)
+    reconcile_locked(home, &dir, project, CLAUDE_MARKER, wait)
 }
 
 /// Trava compartilhada (duas contas devolvendo o mesmo arquivo ao `~/.claude`) e depois a da conta
 /// (no seed, a da pendência), sempre nessa ordem; soltas ao sair, também em erro.
-pub fn reconcile_locked(home: &Path, dir: &Path, project: Option<&str>, lock_name: &str, wait: Duration) -> Outcome {
+pub fn reconcile_locked(home: &Path, dir: &Path, project: Option<&str>, lock_name: &str, wait: Wait) -> Outcome {
     let shared = match lock(&home.join(".hangar-contas.lock"), true, wait) {
         Ok(held) => held,
         Err(error) => return Outcome::failed(error),
@@ -339,6 +353,9 @@ pub fn reconcile_locked(home: &Path, dir: &Path, project: Option<&str>, lock_nam
         Ok(held) => held,
         Err(error) => return Outcome::failed(error),
     };
+    if let Wait::Within { limit, deadline } = wait && Instant::now() >= deadline {
+        return Outcome::failed(refused(late(limit)));
+    }
     let outcome = reconcile(home, dir, project);
     drop((own, shared));
     outcome
@@ -789,7 +806,7 @@ pub fn seed(home: &Path, dir: &Path) -> Outcome {
         mkdir(&projects).at(&projects)
     })();
     match prepared {
-        Ok(()) => reconcile_locked(home, dir, None, PENDING, LOCK_WAIT),
+        Ok(()) => reconcile_locked(home, dir, None, PENDING, Wait::Each(LOCK_WAIT)),
         Err(error) => Outcome::failed(error),
     }
 }
@@ -813,7 +830,7 @@ este `hangar-server conta`, e a abertura de sessão roda a mesma reconciliação
 pub fn write_cli_diary(env: &AccountEnvironment, events: &[Value]) {
     if events.is_empty() { return; }
     let Some(dir) = crate::runtime::local_policy::log_base_in(env).map(|base| base.join("diario").join("hangar-conta")) else { return };
-    let Ok(_held) = lock(&env.home.join(".hangar-contas.lock"), true, Duration::from_secs(5)) else { return };
+    let Ok(_held) = lock(&env.home.join(".hangar-contas.lock"), true, Wait::Each(Duration::from_secs(5))) else { return };
     let _ = crate::diag::write_diary(&dir, events, chrono::Local::now());
 }
 
@@ -857,7 +874,7 @@ fn prep(env: &AccountEnvironment, name: &str, project: Option<&str>, out: &mut d
         Err(error) => return refusal(err, &error),
     };
     let outcome = match guard(&env.home, &dir) {
-        Ok(_guard) => reconcile_account(&env.home, name, project),
+        Ok(_guard) => reconcile_account(&env.home, name, project, Wait::Each(LOCK_WAIT)),
         Err(error) => return refusal(err, &error),
     };
     write_cli_diary(env, &outcome.diary);

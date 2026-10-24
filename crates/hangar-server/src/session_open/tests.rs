@@ -2350,31 +2350,78 @@ fn the_hangar_account_reconciles_in_process() {
     assert_eq!(raw["diary"][1]["conta_id"].as_str(), Some(&digest[..16]), "conta_id = sha256 do caminho, como o Python");
 }
 
-/// A reconciliação presa (aqui, a trava das contas segura por outro dono) recusa a abertura no limite,
-/// como o `hangar-conta` morto pelo prazo: sem pane, e a guarda da conta já solta enquanto a trava segue presa.
+/// A trava das contas presa por outro dono até ele soltar `released` (marcado logo antes de soltar); devolve
+/// se as guardas de conta estavam livres nesse momento.
+#[cfg(target_os = "linux")]
+fn hold_accounts_lock(root: &std::path::Path, released: std::sync::Arc<std::sync::atomic::AtomicBool>)
+    -> std::thread::JoinHandle<bool> {
+    let lock = std::fs::OpenOptions::new().read(true).append(true).create(true).open(root.join("home/.hangar-contas.lock")).unwrap();
+    lock.lock().unwrap();
+    let guards = root.join("home/.hangar/account-locks");
+    std::thread::spawn(move || {
+        // Teto generoso: a abertura recusa aos 0,3 s e a tarefa da reconciliação para no mesmo prazo.
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let free = std::fs::read_dir(&guards).into_iter().flatten().flatten()
+            .all(|e| std::fs::File::open(e.path()).unwrap().try_lock().is_ok());
+        released.store(true, std::sync::atomic::Ordering::SeqCst);
+        lock.unlock().unwrap();
+        free
+    })
+}
+
+/// Nada da reconciliação na conta nem no `~/.claude`: nem a memória do projeto ligada.
+#[cfg(target_os = "linux")]
+fn assert_not_reconciled(root: &std::path::Path) {
+    for projects in ["home/.claude-conta2/projects", "home/.claude/projects"] {
+        let left: Vec<_> = std::fs::read_dir(root.join(projects)).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert!(left.is_empty(), "a reconciliação rodou depois do prazo: {projects} {left:?}");
+    }
+}
+
+/// A reconciliação presa (aqui, a trava das contas segura por outro dono) recusa a abertura no limite, sem
+/// pane, e para no mesmo prazo: o runtime da abertura termina antes de a trava soltar, a guarda da conta
+/// já está livre, e soltar a trava depois não reconcilia nada.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_stuck_reconciliation_refuses_the_open_at_the_limit() {
+    let released = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut holder = None;
-    let (raw, _dir, _root) = run_contract_with("create_claude_terminal_hangar_account",
-        |s| s["fakes"]["reconcile_limit_ms"] = json!(300), |root| {
-        let lock = std::fs::OpenOptions::new().read(true).append(true).create(true).open(root.join("home/.hangar-contas.lock")).unwrap();
-        lock.lock().unwrap();
-        let guards = root.join("home/.hangar/account-locks");
-        holder = Some(std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(1500));
-            let free = std::fs::read_dir(&guards).unwrap().flatten()
-                .all(|e| std::fs::File::open(e.path()).unwrap().try_lock().is_ok());
-            lock.unlock().unwrap();
-            free
-        }));
-    });
+    let (raw, _dir, root) = run_contract_with("create_claude_terminal_hangar_account",
+        |s| s["fakes"]["reconcile_limit_ms"] = json!(300), |root| holder = Some(hold_accounts_lock(root, released.clone())));
+    // `run_contract_with` derruba o runtime, que espera as tarefas de bloqueio dele.
+    assert!(!released.load(std::sync::atomic::Ordering::SeqCst), "a tarefa da reconciliação seguiu esperando a trava depois do prazo");
     let body = &raw["steps"][0]["body"]["detail"];
     assert_eq!((raw["steps"][0]["status"].clone(), body["code"].clone(), body["params"].clone()),
         (json!(500), json!("erro_conta_reconciliacao_falhou"),
          json!({"nome_conta": "conta2", "erro": "a reconciliação da conta passou do limite de 0.3 s"})), "{body}");
     assert!(!raw["subprocesses"].as_array().unwrap().iter().any(|p| p["argv"][0] == "new-session"), "nenhum pane");
     assert!(holder.unwrap().join().unwrap(), "a guarda da conta seguiu presa depois da recusa");
+    assert_not_reconciled(&root);
+}
+
+/// `hangar-server open` com o servidor fora: a mesma recusa no limite, e o comando termina sem esperar a
+/// trava presa (o runtime dele espera as tarefas de bloqueio ao sair).
+#[cfg(target_os = "linux")]
+#[test]
+fn the_terminal_command_stops_a_stuck_reconciliation_at_the_limit() {
+    use open::OpenHost;
+    let (scenario, _dir, root, env) = contract_setup("create_claude_terminal_hangar_account", |_| {});
+    let released = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let holder = hold_accounts_lock(&root, released.clone());
+    let host = local::LocalHost::new(env.clone(), None).with_reconcile_limit(std::time::Duration::from_millis(300));
+    assert_eq!(host.reconcile_limit(), std::time::Duration::from_millis(300));
+    let step: Value = serde_json::from_str(&contract::place(&scenario["steps"][0]["json"].to_string(), &root)).unwrap();
+    let request = SessionOpenRequest::parse(step.to_string().as_bytes()).unwrap();
+    let opened = {
+        let runtime = test_runtime();
+        let resolved = runtime.block_on(contract::resolve_request(&scenario, &root, env, request)).unwrap();
+        runtime.block_on(open::open_session(&host, resolved, &OpenCaller::Owner))
+    };
+    assert!(!released.load(std::sync::atomic::Ordering::SeqCst), "o comando esperou a trava presa para terminar");
+    let error = opened.err().expect("a reconciliação presa devia recusar");
+    assert_eq!((error.status, error.code), (500, Some("erro_conta_reconciliacao_falhou")), "{:?}", error.body());
+    assert!(holder.join().unwrap(), "a guarda da conta seguiu presa depois da recusa");
+    assert_not_reconciled(&root);
 }
 
 /// A reconciliação que falha recusa a abertura com o motivo dela, antes de qualquer pane.

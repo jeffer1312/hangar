@@ -25,7 +25,8 @@ pub fn dotenv(text: &str) -> BTreeMap<String, String> {
     }).collect()
 }
 
-pub struct LocalHost { home: PathBuf, env: BTreeMap<String, String>, terminal: TerminalEnv, mux: ProcessMux, bridge: Option<PluginBridge> }
+pub struct LocalHost { home: PathBuf, env: BTreeMap<String, String>, terminal: TerminalEnv, mux: ProcessMux, bridge: Option<PluginBridge>,
+    reconcile_limit: Duration }
 
 impl LocalHost {
     /// `env`: o ambiente que o servidor teria; `bridge`: a porta e o token do `.env` dele, para a
@@ -33,8 +34,11 @@ impl LocalHost {
     pub fn new(env: BTreeMap<String, String>, bridge: Option<PluginBridge>) -> Self {
         let accounts = crate::accounts::environment::AccountEnvironment::from_map(env.clone());
         let terminal = TerminalEnv::local(&accounts.home, &env);
-        Self { home: accounts.home, env, terminal, mux: ProcessMux::default(), bridge }
+        Self { home: accounts.home, env, terminal, mux: ProcessMux::default(), bridge, reconcile_limit: super::open::RECONCILE_LIMIT }
     }
+
+    #[cfg(test)]
+    pub(crate) fn with_reconcile_limit(self, reconcile_limit: Duration) -> Self { Self { reconcile_limit, ..self } }
 }
 
 impl OpenHost for LocalHost {
@@ -82,7 +86,7 @@ impl OpenHost for LocalHost {
     fn account_diary(&self, events: Vec<Value>) {
         crate::accounts::claude_config::write_cli_diary(&crate::accounts::environment::AccountEnvironment::from_map(self.env.clone()), &events);
     }
-    fn reconcile_limit(&self) -> Duration { super::open::RECONCILE_LIMIT }
+    fn reconcile_limit(&self) -> Duration { self.reconcile_limit }
     fn new_session_id(&self) -> String { super::open::uuid4(&crate::mods::state::random_hex(16)) }
     fn new_bridge_key(&self) -> String { crate::mods::state::random_hex(16) }
     // O comando local só abre sessão com terminal.

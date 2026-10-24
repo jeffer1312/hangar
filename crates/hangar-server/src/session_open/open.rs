@@ -513,7 +513,7 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         return Err(OpenError { params: json!({"conta": label}),
             ..OpenError::new(409, "erro_conta_sem_login", format!("a conta {label} não está logada; faça login nela antes de abrir uma sessão")) });
     }
-    let guard = match reads_account {
+    let mut guard = match reads_account {
         true => Some(crate::accounts::claude_refresh::acquire_for_session(&locks, &key, Instant::now() + Duration::from_secs(5)).await
             .map_err(|e| match e {
                 crate::accounts::LockError::Busy => OpenError::new(409, "account_busy", "a conta está ocupada por outra operação"),
@@ -528,16 +528,22 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         let account = claude::hangar_account(Path::new(dir))
             .ok_or_else(|| OpenError::plain(404, format!("{dir} não é uma conta criada pelo hangar")))?;
         progress_step(&spec.name, "conta", json!({"conta": account}));
-        use crate::accounts::claude_config::{ConfigError, Outcome, reconcile_account};
+        use crate::accounts::claude_config::{ConfigError, Outcome, Wait, late, reconcile_account};
         let (home, name, project) = (host.home().to_owned(), account.clone(), hangar_workspace::worktrees::sanitize_cwd(&spec.cwd));
         let limit = host.reconcile_limit();
+        let wait = Wait::within(limit);
         let failed = |detail: String| Outcome { result: Err(ConfigError::Refused(detail)), diary: Vec::new() };
-        // Passado o limite a thread presa segue com as travas até a leitura soltar; a abertura seguinte
-        // recusa igual, como quando o `hangar-conta` morria pelo prazo.
-        let outcome = match tokio::time::timeout(limit, tokio::task::spawn_blocking(move || reconcile_account(&home, &name, Some(&project)))).await {
-            Ok(Ok(outcome)) => outcome,
+        // As travas esperam só até o prazo, e a guarda vai com a tarefa: a recusa no limite não deixa
+        // reconciliação rodando sem ela (a exclusão da conta esperaria) nem segurando o runtime.
+        let held = guard.take();
+        let task = tokio::task::spawn_blocking(move || (held, reconcile_account(&home, &name, Some(&project), wait)));
+        let outcome = match tokio::time::timeout(limit, task).await {
+            Ok(Ok((held, outcome))) => {
+                guard = held;
+                outcome
+            }
             Ok(Err(e)) => failed(format!("a reconciliação parou no meio: {e}")),
-            Err(_) => failed(format!("a reconciliação da conta passou do limite de {} s", limit.as_secs_f64())),
+            Err(_) => failed(late(limit)),
         };
         host.account_diary(outcome.diary);
         avisos = claude::account_result(&account, outcome.result)?;

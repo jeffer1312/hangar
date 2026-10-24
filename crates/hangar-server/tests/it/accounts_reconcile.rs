@@ -10,6 +10,8 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// A espera do comando: cada trava até 120 s.
+const EACH: claude_config::Wait = claude_config::Wait::Each(claude_config::LOCK_WAIT);
 const ORIGIN: &str = "b2832ee04";
 const COMMAND: &str = "HANGAR_FIXTURE_PY_ROOT=<checkout com scripts/hangar-conta e backend/app de b2832ee04> \
     cargo test -p hangar-server --test it accounts_reconcile::generate_fixtures -- --ignored --exact";
@@ -1073,7 +1075,7 @@ fn two_accounts_reconciling_together_keep_one_whole_version() {
     let holder = std::fs::OpenOptions::new().read(true).append(true).create(true).open(home.join(".hangar-contas.lock")).unwrap();
     holder.lock().unwrap();
     std::thread::scope(|s| {
-        let waiting = s.spawn(|| claude_config::reconcile_account(&home, "conta_b", None).result);
+        let waiting = s.spawn(|| claude_config::reconcile_account(&home, "conta_b", None, EACH).result);
         std::thread::sleep(std::time::Duration::from_millis(300));
         assert_eq!(std::fs::read_to_string(home.join(".claude/CLAUDE.md")).unwrap(), "# regras", "a conta_b subiu o arquivo sem a trava");
         assert!(!std::fs::symlink_metadata(home.join(".claude-conta_b/CLAUDE.md")).unwrap().file_type().is_symlink());
@@ -1088,7 +1090,7 @@ fn two_accounts_reconciling_together_keep_one_whole_version() {
     let warnings: Vec<Vec<String>> = std::thread::scope(|s| {
         let runs: Vec<_> = versions.iter().map(|(name, _)| s.spawn(|| {
             barrier.wait();
-            claude_config::reconcile_account(&home, name, None).result.unwrap()
+            claude_config::reconcile_account(&home, name, None, EACH).result.unwrap()
         })).collect();
         runs.into_iter().map(|r| r.join().unwrap()).collect()
     });
@@ -1147,7 +1149,7 @@ fn the_same_account_reconciling_twice_at_once_never_fails() {
         let results: Vec<_> = std::thread::scope(|s| {
             let runs: Vec<_> = (0..2).map(|_| s.spawn(|| {
                 barrier.wait();
-                claude_config::reconcile_account(&home, "conta2", Some("-p")).result
+                claude_config::reconcile_account(&home, "conta2", Some("-p"), EACH).result
             })).collect();
             runs.into_iter().map(|r| r.join().unwrap()).collect()
         });
@@ -1168,7 +1170,8 @@ fn a_held_configuration_lock_refuses_at_the_deadline() {
         let holder = std::fs::OpenOptions::new().read(true).write(true).create(create).truncate(false).open(&path).unwrap();
         holder.lock().unwrap();
         let started = std::time::Instant::now();
-        let outcome = claude_config::reconcile_locked(&home, &account, None, ".hangar-conta", std::time::Duration::from_millis(300));
+        let outcome = claude_config::reconcile_locked(&home, &account, None, ".hangar-conta",
+            claude_config::Wait::Each(std::time::Duration::from_millis(300)));
         let waited = started.elapsed();
         match outcome.result {
             Err(ConfigError::Refused(detail)) => assert_eq!(detail,
@@ -1180,6 +1183,25 @@ fn a_held_configuration_lock_refuses_at_the_deadline() {
         assert!(!account.join("skills").exists());
         holder.unlock().unwrap();
     }
+}
+
+/// Travas livres mas o prazo da abertura já passado: nada da reconciliação roda, e a recusa é a do limite.
+#[test]
+fn locks_taken_after_the_opening_deadline_reconcile_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    conta(&home, "conta2");
+    let account = home.join(".claude-conta2");
+    let limit = std::time::Duration::from_millis(300);
+    let wait = claude_config::Wait::Within { limit, deadline: std::time::Instant::now() };
+    let outcome = claude_config::reconcile_locked(&home, &account, None, ".hangar-conta", wait);
+    match outcome.result {
+        Err(ConfigError::Refused(detail)) => assert_eq!(detail, "a reconciliação da conta passou do limite de 0.3 s"),
+        other => panic!("esperava a recusa do limite: {other:?}"),
+    }
+    assert!(outcome.diary.is_empty(), "nada da reconciliação rodou");
+    assert!(std::fs::symlink_metadata(account.join("skills")).is_err(), "a conta foi religada depois do prazo");
 }
 
 fn json_value() -> impl proptest::strategy::Strategy<Value = Value> {
