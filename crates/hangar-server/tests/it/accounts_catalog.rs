@@ -63,10 +63,8 @@ async fn owner_catalog_is_not_a_python_proxy() {
         status, 200,
         "o catálogo do dono ainda depende do handler Python"
     );
-    // Qualquer processo da máquina pode sondar uma porta de loopback nova (um detector de servidor
-    // local manda `HEAD /` direto ao Python falso e ao servidor, que o repassa): só rota do app conta.
-    let reached: Vec<String> = paths.lock().unwrap().iter()
-        .filter(|p| p.starts_with("/api/") || p.starts_with("/internal/")).cloned().collect();
+    // A sonda chega direto ao Python falso e também pelo servidor, que a repassa.
+    let reached: Vec<String> = paths.lock().unwrap().iter().filter(|p| crate::app_route(p)).cloned().collect();
     assert!(reached.is_empty(), "o catálogo chegou ao Python: {reached:?}");
 }
 

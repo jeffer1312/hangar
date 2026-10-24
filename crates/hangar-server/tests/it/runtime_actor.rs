@@ -2492,6 +2492,9 @@ mod cano_reconnect {
 
     fn ms(n:u64) -> Duration { Duration::from_millis(n) }
 
+    /// O token do vínculo dos atores daqui: a primeira linha de toda conexão deles ao cano falso.
+    const CANO_TOKEN: &str = "secret-test";
+
     /// Processo que se passa pelo cano da chave `key` (argv com `--escuta` e o log `cano-key.log`); morto e
     /// colhido na limpeza, também quando o teste falha.
     struct Sleeper(std::process::Child);
@@ -2545,10 +2548,13 @@ mod cano_reconnect {
         let pendentes:Vec<String> = pendentes.iter().map(Value::to_string).collect();
         let server = tokio::spawn(async move {
             while let Ok((stream,_)) = listener.accept().await {
-                let n = { let mut seen = seen.lock().unwrap(); seen.push(Instant::now()); seen.len() };
+                let accepted = Instant::now();
                 let mut reader = BufReader::new(stream);
                 let mut raw = String::new();
-                if !next_line(&mut reader,&mut raw).await { continue; }
+                // Só a conexão do ator conta, a que abre com o token: qualquer processo da máquina pode sondar
+                // a porta (`HEAD /`).
+                if !next_line(&mut reader,&mut raw).await || raw.trim_end() != CANO_TOKEN { continue; }
+                let n = { let mut seen = seen.lock().unwrap(); seen.push(accepted); seen.len() };
                 match answer(n) {
                     Answer::Refuse => continue,
                     Answer::Hang => { raw.clear(); let _ = reader.read_line(&mut raw).await; hung.notify_one(); continue; }
@@ -2621,7 +2627,7 @@ mod cano_reconnect {
         -> (RuntimeHandle,tokio::sync::broadcast::Receiver<RuntimeEvent>) {
         let target = RuntimeTarget { key:"key".into(),generation:1,name:"session".into(),provider:"claude".into(),
             metadata:json!({"name":"session","headless":true,"session_id":"sid-1","initialized":initialized}),
-            binding:CanoBinding { pid,escuta:cano.escuta.clone(),token:"secret-test".into(),versao:2 },
+            binding:CanoBinding { pid,escuta:cano.escuta.clone(),token:CANO_TOKEN.into(),versao:2 },
             lease_path:dir.join("key.lock"),state_path:dir.join("key.queue-state.json"),projection_dir:dir.join("projection"),
             transcript:dir.join("chat.jsonl"),created:0.0 };
         let lease = acquire_lease(&target.lease_path).unwrap();
@@ -3088,7 +3094,7 @@ mod cano_reconnect {
         std::fs::write(dir.join("rollout.jsonl"),format!("{}\n",json!({"type":"session_meta","payload":{"id":"thread-1"}}))).unwrap();
         let target = RuntimeTarget { key:"key".into(),generation:1,name:"session".into(),provider:"codex".into(),
             metadata:json!({"name":"session","headless":true,"thread_id":"thread-1","initialized":true,"ready":true,"cwd":dir,"rollout_path":dir.join("rollout.jsonl")}),
-            binding:CanoBinding { pid,escuta:cano.escuta.clone(),token:"secret-test".into(),versao:2 },
+            binding:CanoBinding { pid,escuta:cano.escuta.clone(),token:CANO_TOKEN.into(),versao:2 },
             lease_path:dir.join("key.lock"),state_path:dir.join("key.queue-state.json"),projection_dir:dir.join("projection"),
             transcript:dir.join("rollout.jsonl"),created:0.0 };
         let lease = acquire_lease(&target.lease_path).unwrap();

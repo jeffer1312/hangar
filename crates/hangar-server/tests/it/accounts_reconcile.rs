@@ -1417,9 +1417,7 @@ async fn check_http(name: &str) {
                 "msg": "não foi possível preparar a conta"}})), "{name}[{i}] Python: {stderr}"),
         }
     }
-    // Só conta pedido de rota: qualquer processo da máquina pode sondar a porta nova com `HEAD /`.
-    let python: Vec<String> = app.python_paths.lock().unwrap().iter()
-        .filter(|p| p.starts_with("/internal/") || p.starts_with("/api/")).cloned().collect();
+    let python: Vec<String> = app.python_paths.lock().unwrap().iter().filter(|p| crate::app_route(p)).cloned().collect();
     assert!(python.is_empty(), "{name}: a criação chamou o Python: {python:?}");
     let tree = tree(&home, None);
     let (diary, _) = diary(&home, &accounts);
