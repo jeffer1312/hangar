@@ -380,6 +380,15 @@ fn update_warnings(state: &Value) -> Vec<String> {
         .filter(|w| !w.is_empty()).map(str::to_owned).collect()
 }
 
+/// `GET`/`PUT /api/web-ui`. Servidor anterior à rota (404/405) não oferece a escolha: `Ok(None)`, e a linha some.
+fn web_ui_value(result: Result<Value, Failure>) -> Result<Option<bool>, String> {
+    match result {
+        Err(error) if matches!(error.status, Some(404 | 405)) => Ok(None),
+        Err(error) => Err(Hangar::setting_failure(&error)),
+        Ok(value) => value.get("web_ui").and_then(Value::as_bool).map(Some).ok_or_else(|| tr("invalid_response")),
+    }
+}
+
 pub(super) enum MachinesReply {
     Reach(u64, Result<Value, Failure>),
     Id(u64, Result<Value, Failure>),
@@ -403,6 +412,8 @@ pub(super) enum MachinesReply {
     Probed(EntityId, u64, Result<Found, String>),
     Registered(EntityId, u64, Result<(Going, Going), String>),
     Paired(u64, Result<Value, Failure>),
+    WebUi(u64, Result<Value, Failure>),
+    WebUiSaved(u64, Result<Value, Failure>),
 }
 
 #[derive(Default)]
@@ -486,6 +497,11 @@ pub(in crate::app) struct Machines {
     pair: Pair,
     /// Janela estreita: o detalhe fica embaixo da lista, e escolher uma máquina rola até ele.
     stacked: bool,
+    /// Tela web deste servidor; `Ok(None)` = servidor sem a rota. A gravação não mexe no valor até o servidor confirmar.
+    web_ui: Remote<Option<bool>>,
+    web_ui_saving: bool,
+    web_ui_seq: u64,
+    web_ui_error: Option<String>,
 }
 
 impl Drop for Machines {
@@ -500,6 +516,16 @@ impl Machines {
     fn id_changed(&self, cx: &App) -> bool { self.id.ok().is_some_and(|loaded| *loaded != self.id_value(cx)) }
     /// O identificador salvo no servidor (vazio enquanto não leu).
     fn id_loaded(&self) -> &str { self.id.ok().map(String::as_str).unwrap_or_default() }
+
+    /// Falha na gravação deixa o valor de antes e mostra o motivo.
+    fn web_ui_saved(&mut self, seq: u64, result: Result<Value, Failure>) {
+        if seq != self.web_ui_seq { return; }
+        self.web_ui_saving = false;
+        match web_ui_value(result) {
+            Ok(saved) => { self.web_ui.set(Ok(saved)); self.web_ui_error = None; }
+            Err(error) => self.web_ui_error = Some(error),
+        }
+    }
 }
 
 impl Hangar {
@@ -526,6 +552,7 @@ impl Hangar {
         // Medições só em memória: cada abertura mede de novo, e a resposta de um teste de antes cai pelo `seq`.
         m.checks.clear();
         if !m.id_saving { self.load_machine_id(cx); }
+        if !self.machines.web_ui_saving { self.load_web_ui(cx); }
         self.load_reach(cx);
         self.load_saved_ids(cx);
         self.load_peers(cx);
@@ -765,6 +792,28 @@ impl Hangar {
         self.machines.id_error = None;
         let done = self.machines_send_later();
         self.runtime.spawn(async move { done(MachinesReply::Id(seq, api.server_read(&["peers", "identificador"], &[], 15).await)).await });
+        cx.notify();
+    }
+
+    fn load_web_ui(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        let seq = self.machines.web_ui.start();
+        self.machines.web_ui_error = None;
+        let done = self.machines_send_later();
+        self.runtime.spawn(async move { done(MachinesReply::WebUi(seq, api.server_read(&["web-ui"], &[], 15).await)).await });
+        cx.notify();
+    }
+
+    fn save_web_ui(&mut self, on: bool, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        let m = &mut self.machines;
+        if m.web_ui_saving || m.web_ui.loading || m.web_ui.ok().copied().flatten().is_none_or(|now| now == on) { return; }
+        m.web_ui_seq += 1;
+        (m.web_ui_saving, m.web_ui_error) = (true, None);
+        let (seq, done) = (m.web_ui_seq, self.machines_send_later());
+        self.runtime.spawn(async move {
+            done(MachinesReply::WebUiSaved(seq, api.server_send(reqwest::Method::PUT, &["web-ui"], Some(json!({"web_ui": on})), 15).await)).await
+        });
         cx.notify();
     }
 
@@ -1094,6 +1143,8 @@ impl Hangar {
                 }
             }
             MachinesReply::Paired(seq, result) => self.paired(seq, result, window),
+            MachinesReply::WebUi(seq, result) => { self.machines.web_ui.finish(seq, web_ui_value(result)); }
+            MachinesReply::WebUiSaved(seq, result) => self.machines.web_ui_saved(seq, result),
         }
         cx.notify();
     }
@@ -1849,6 +1900,29 @@ impl Hangar {
                         .accessibility_label(format!("{}. {desktop_note}", tr("machines_restart_desktop"))))
                     .child(muted(desktop_note.clone())))));
 
+        // Convidado não escolhe; servidor sem a rota (`Ok(None)`) não oferece a escolha.
+        let web_ui = (!self.active_invite() && !matches!(m.web_ui.value, Some(Ok(None)))).then(|| {
+            let on = m.web_ui.ok().copied().flatten();
+            let read_error = m.web_ui.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !m.web_ui.loading).cloned();
+            let status = match on {
+                _ if m.web_ui_saving => tr("server_saving"),
+                Some(on) => format!("{} · {}", tr(if on { "web_ui_on" } else { "web_ui_off" }), tr("web_ui_help")),
+                None if read_error.is_none() => tr("server_loading"),
+                None => tr("web_ui_help"),
+            };
+            let toggle = Switch::new("machines-web-ui").checked(on.unwrap_or(false)).accessibility_label(tr("web_ui_title"))
+                .disabled(on.is_none() || m.web_ui.loading || m.web_ui_saving)
+                .on_click(cx.listener(|this, on: &bool, _, cx| this.save_web_ui(*on, cx)));
+            let alert = |id: &'static str, text: String| div().id(id).role(Role::Alert).flex_1().text_size(px(12.5)).text_color(theme::danger())
+                .whitespace_normal().child(text);
+            settings_box().child(self.row_with(IconName::Globe, "web_ui_title", div().whitespace_normal().child(status), on.is_some(), toggle.into_any_element()))
+                .when_some(read_error, |el, error| el.child(div().flex().items_center().gap(px(10.)).px_4().pb_4()
+                    .child(alert("machines-web-ui-load-error", error))
+                    .child(Button::new("machines-web-ui-retry").outline().small().label(tr("server_retry"))
+                        .on_click(cx.listener(|this, _, _, cx| this.load_web_ui(cx))))))
+                .when_some(m.web_ui_error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert("machines-web-ui-error", error))))
+        });
+
         let this = cx.entity().downgrade();
         let advanced_open = m.advanced;
         let advanced = div().flex().flex_col().gap(px(10.))
@@ -1895,6 +1969,7 @@ impl Hangar {
             .child(addresses)
             .child(settings_box().child(section_head(IconName::RotateCw, tr("machines_service"), None, None, px(16.)))
                 .child(div().px_4().pb_4().child(service)))
+            .children(web_ui)
             .child(advanced)
             .child(remove)
     }
@@ -1934,9 +2009,38 @@ impl RenderOnce for FocusOnClick {
 #[cfg(test)]
 mod tests {
     use super::{Back, Card, Check, Kind, Light, Line, Peer, Reach, Reason, Row, ServerEntry, card_state, collapsed, host_key, join_lines, parse_going,
-        parse_peers, parse_reach, row_state, update_warnings, valid_id};
+        parse_peers, parse_reach, row_state, update_warnings, valid_id, web_ui_value, Machines};
     use std::collections::HashMap;
-    use crate::i18n::tr;
+    use crate::{api::Failure, i18n::tr};
+
+    fn refused(status: u16, detail: &str) -> Failure {
+        Failure { status: Some(status), detail: detail.into(), retry_after: None, uncertain: false, code: Some("web_ui_unavailable".into()) }
+    }
+
+    #[test]
+    fn web_ui_reads_the_choice_and_old_servers_hide_the_row() {
+        assert_eq!(web_ui_value(Ok(serde_json::json!({"web_ui": false}))), Ok(Some(false)));
+        assert_eq!(web_ui_value(Ok(serde_json::json!({"web_ui": true}))), Ok(Some(true)));
+        assert_eq!(web_ui_value(Err(refused(404, "Not Found"))), Ok(None), "servidor sem a rota");
+        assert_eq!(web_ui_value(Err(refused(405, "Method Not Allowed"))), Ok(None));
+        assert_eq!(web_ui_value(Err(refused(503, "fixture-unavailable"))), Err("fixture-unavailable".into()), "o motivo do servidor");
+        assert_eq!(web_ui_value(Ok(serde_json::json!({"web_ui": "sim"}))), Err(tr("invalid_response")));
+    }
+
+    #[test]
+    fn web_ui_failed_save_keeps_the_previous_value_and_shows_why() {
+        let mut m = Machines::default();
+        let read = m.web_ui.start();
+        m.web_ui.finish(read, Ok(Some(true)));
+        (m.web_ui_saving, m.web_ui_seq) = (true, 1);
+        m.web_ui_saved(1, Err(refused(503, "fixture-unavailable")));
+        assert_eq!((m.web_ui.ok(), m.web_ui_saving, m.web_ui_error.as_deref()), (Some(&Some(true)), false, Some("fixture-unavailable")));
+        (m.web_ui_saving, m.web_ui_seq) = (true, 2);
+        m.web_ui_saved(1, Ok(serde_json::json!({"web_ui": false})));
+        assert!(m.web_ui_saving && m.web_ui.ok() == Some(&Some(true)), "resposta de pedido velho cai");
+        m.web_ui_saved(2, Ok(serde_json::json!({"web_ui": false})));
+        assert_eq!((m.web_ui.ok(), m.web_ui_saving, m.web_ui_error.as_deref()), (Some(&Some(false)), false, None));
+    }
 
     #[test]
     fn update_warnings_are_the_state_avisos_like_the_web() {

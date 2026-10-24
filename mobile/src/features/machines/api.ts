@@ -72,6 +72,18 @@ export async function saveIdentifier(server: Server, identificador: string, sign
   return value as { identificador: string; avisos: Warning[] };
 }
 
+/** `GET`/`PUT /api/web-ui`. `null`: servidor anterior à rota (404/405), que não oferece a escolha. */
+export async function webUi(server: Server, signal: AbortSignal, on?: boolean): Promise<boolean | null> {
+  let value: unknown;
+  try { value = await request(server, '/api/web-ui', signal, on === undefined ? 'GET' : 'PUT', on === undefined ? undefined : { web_ui: on }); }
+  catch (error) {
+    if ([404, 405].includes((error as { status?: number }).status ?? 0)) return null;
+    throw error;
+  }
+  if (!object(value) || typeof value.web_ui !== 'boolean') throw invalid();
+  return value.web_ui;
+}
+
 function peers(value: unknown): Peer[] {
   if (!Array.isArray(value) || !value.every((p) => object(p) && typeof p.id === 'string' && validIdentifier(p.id) && !!p.id
     && typeof p.base_url === 'string' && (p.enabled === undefined || typeof p.enabled === 'boolean'))) throw invalid();

@@ -77,7 +77,8 @@ fn offered(remote: &str, channel: &str, current: &str, built: Option<&str>) -> b
     newer(remote, current) || (newer(remote, "0") && built.is_some_and(|built| release_tag(built) != release_tag(channel)))
 }
 
-/// Branch que o servidor segue. Sem o campo (servidor anterior ao canal, checkout ilegível), a main, como o backend.
+/// Branch que o servidor segue; no pacote, a do canal do manifesto (`latest` = main). Sem o campo (servidor anterior ao
+/// canal, checkout ilegível), a main, como o backend.
 pub(crate) fn alvo(state: &Value) -> String {
     state["pre_voo"]["alvo"].as_str().filter(|alvo| !alvo.is_empty()).unwrap_or("main").to_owned()
 }
@@ -1370,6 +1371,18 @@ mod tests {
         assert_eq!(alvo(&server(serde_json::json!({}))), "main", "o server() de teste não traz alvo");
         assert_eq!(alvo(&serde_json::json!({"pre_voo": {"pode": false, "erro": "nao_e_repo"}})), "main");
         assert_eq!(alvo(&serde_json::json!({"versoes": {}})), "main", "servidor anterior ao canal");
+    }
+
+    /// O `pre_voo` do `package_body` (crates/hangar-server/src/update/http.rs): o canal do manifesto vira a branch dele.
+    #[test]
+    fn package_channel_picks_its_release_and_old_servers_keep_the_branch() {
+        let package = |channel: &str| serde_json::json!({"modo": "pacote", "pre_voo": {"pode": true, "branch": channel, "alvo": channel,
+            "branch_de_trabalho": false, "sujo": 0, "ahead": 0}});
+        assert_eq!(release_tag(&alvo(&package("beta"))), "native-beta");
+        assert_eq!(release_tag(&alvo(&package("main"))), "native-latest", "canal latest = main");
+        let dev = serde_json::json!({"modo": "desenvolvedor", "pre_voo": {"branch": "feat-x", "alvo": "feat-x"}});
+        assert_eq!(release_tag(&alvo(&dev)), "native-feat-x", "modo desenvolvedor segue a branch do checkout");
+        assert_eq!(release_tag(&alvo(&serde_json::json!({"versoes": {}}))), "native-latest", "servidor sem o campo: a main, como antes");
     }
 
     fn server(extra: Value) -> Value {

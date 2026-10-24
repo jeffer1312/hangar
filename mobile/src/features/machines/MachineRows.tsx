@@ -9,7 +9,7 @@ export type MachineView = 'edit' | 'connection' | 'discover' | 'remote' | 'advan
 
 export const MachineGroup = ({ children }: { children: ReactNode }) => <SectionCard>{children}</SectionCard>;
 
-export function MachineRow({ title, value, description, onPress, disabled, danger, action, selected, expanded, valueTone }: {
+export function MachineRow({ title, value, description, onPress, disabled, danger, action, selected, expanded, valueTone, checked }: {
   title: string;
   value?: string;
   description?: string;
@@ -20,6 +20,8 @@ export function MachineRow({ title, value, description, onPress, disabled, dange
   selected?: boolean;
   expanded?: boolean;
   valueTone?: 'success' | 'error';
+  /** Linha que liga e desliga pelo toque: anuncia como interruptor e não leva seta. */
+  checked?: boolean;
 }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
@@ -30,12 +32,12 @@ export function MachineRow({ title, value, description, onPress, disabled, dange
     </View>
     {value ? <Text style={[rowStyles.value, { color: valueTone ? theme.tokens.status[valueTone] : c.muted }]}>{value}</Text> : null}
     {selected ? <Icon name="Check" size={18} color={c.accent} />
-      : onPress && !action ? <Icon name="ChevronRight" size={17} color={c.faint} /> : null}
+      : onPress && !action && checked === undefined ? <Icon name="ChevronRight" size={17} color={c.faint} /> : null}
   </>;
   const style = [rowStyles.row, { borderTopColor: c.border, opacity: disabled ? 0.5 : 1 }];
-  return onPress ? <Pressable accessibilityRole="button" accessibilityLabel={title}
+  return onPress ? <Pressable accessibilityRole={checked === undefined ? 'button' : 'switch'} accessibilityLabel={title}
     accessibilityValue={value ? { text: value } : undefined} accessibilityHint={description}
-    accessibilityState={{ disabled, selected, expanded }} disabled={disabled} onPress={onPress}
+    accessibilityState={{ disabled, selected, expanded, checked }} disabled={disabled} onPress={onPress}
     style={({ pressed }) => [...style, pressed && { backgroundColor: c.hover }]}>{content}</Pressable>
     : <View style={style}>{content}</View>;
 }
