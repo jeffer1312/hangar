@@ -669,7 +669,7 @@
     "{\"type\": \"user\", \"uuid\": \"u3\", \"timestamp\": \"2026-10-23T12:05:00.000Z\", \"message\": {\"role\": \"user\", \"content\": \"<task-notification>\\n<task-id>bash_7</task-id>\\n<status>completed</status>\\n<summary>Agent \\\"x\\\" is waiting on its own background work</summary>\\n</task-notification>\"}}"
    ],
    "now": 1792757400.0,
-   "open": 0,
+   "open": 1,
    "last_reply": "Pronto, **feito**."
   },
   {
