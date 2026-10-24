@@ -646,8 +646,18 @@ fn scenario(name: &str) -> Scenario {
         "settings_control_escapes" => sc(|h| {
             casa(h);
             conta(h, "conta2");
-            put(&h.join(".claude/settings.json"), "{\"ctl\": \"a\\bb\\fc\\rd\\ne\\u0000f\\u0001g\\u001bh\\u0085i\\u00a0j\", \"theme\": \"dark\"}");
+            put(&h.join(".claude/settings.json"), "{\"ctl\": \"a\\bb\\fc\\rd\\ne\\u0000f\\u0001g\\u001bh\\u0085i\\u00a0j\\u2028k\\u2029l\", \"theme\": \"dark\"}");
             put(&h.join(".claude-conta2/settings.json"), r#"{"theme": "light"}"#);
+        }, vec![cli(&PREP)]),
+        // C59: avisos de todo tipo num `--prep` só, na ordem em que o Python os dava.
+        "prep_every_warning_kind" => sc(|h| {
+            casa(h);
+            conta(h, "conta2");
+            put(&h.join(".claude/settings.json"), r#"{"theme": "dark", "enabledPlugins": {"sumido@x": true}}"#);
+            put(&h.join(".claude.json"), r#"{"mcpServers": {"tavily": {"url": "nova"}}}"#);
+            put(&h.join(".claude-conta2/CLAUDE.md"), "# editado na conta");
+            put(&h.join(".claude-conta2/settings.json"), r#"{"theme": "light"}"#);
+            put(&h.join(".claude-conta2/projects/-tmp-x/memory/MEMORY.md"), "local");
         }, vec![cli(&PREP)]),
         // C155: entradas do registro de plugins em objeto, não em lista (exceção crua do Python).
         "plugins_entries_object" => d3(sc(|h| { casa(h); conta(h, "conta2");
@@ -699,7 +709,7 @@ scenarios!(
     link_loop_drawer, never_link_names, b3_memory_shared_bucket, prep_ignores_claude_config_dir,
     drift_prunes_link_entry, prep_absent_guard_busy, prep_shared_link_and_modes, prep_shared_readonly_collision,
     settings_nested_objects_shallow, mcp_two_undone_sorted, mcp_copy_without_key, settings_control_escapes,
-    plugins_entries_object,
+    plugins_entries_object, prep_every_warning_kind,
 );
 
 // ── execução ────────────────────────────────────────────────────────────────────────────────
@@ -1252,6 +1262,100 @@ fn stale_config_lock(home: &Path) {
     let lock = account.join(".claude.json.lock");
     mkdirs(&lock);
     mtime(&lock, 1_000_000_000);
+}
+
+/// C38/H28: com a guarda da conta presa em exclusivo, o comando espera os 5 s dela antes de recusar,
+/// como o Python; vale também para a conta que não existe.
+#[test]
+fn a_busy_guard_waits_before_refusing() {
+    for (name, account) in [("prep_guard_busy", "conta2"), ("prep_absent_guard_busy", "naoexiste")] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().canonicalize().unwrap();
+        (scenario(name).build)(&home);
+        let mut held = busy(&home, account);
+        let started = std::time::Instant::now();
+        let out = command(&Side::Rust, &home, &["--prep".into(), account.into()], &[]).output().unwrap();
+        let waited = started.elapsed();
+        held.kill().unwrap();
+        held.wait().unwrap();
+        assert_eq!(out.status.code(), Some(1), "{name}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("a conta está ocupada"), "{name}");
+        assert!(waited >= std::time::Duration::from_millis(4500), "{name}: recusou em {waited:?}, sem esperar a guarda");
+    }
+}
+
+/// C40/H33: quem segura a guarda da conta em compartilhado (outra sessão abrindo) não barra o `--prep`.
+#[test]
+fn a_shared_holder_of_the_guard_does_not_block_the_prep() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    conta(&home, "conta2");
+    let key = AccountKey::new(Provider::Claude, &home.join(".claude-conta2")).unwrap();
+    let lock = hangar_server::accounts::AccountLocks::new(home.join(".hangar/account-locks")).path(&key).unwrap();
+    mkdirs(lock.parent().unwrap());
+    let mut holder = Command::new("flock").arg("-s").arg(&lock).arg("sleep").arg("60").spawn().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while Command::new("flock").arg("-n").arg("-x").arg(&lock).arg("true").status().unwrap().success() {
+        assert!(std::time::Instant::now() < deadline, "o flock compartilhado não pegou a guarda");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let out = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[]).output().unwrap();
+    holder.kill().unwrap();
+    holder.wait().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// C51/C55/H06: a trava das contas vem antes da trava da conta. Com a da conta presa por fora, o comando
+/// espera nela já segurando a das contas.
+#[test]
+fn the_accounts_lock_is_taken_before_the_account_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    conta(&home, "conta2");
+    let own = std::fs::OpenOptions::new().read(true).write(true).open(home.join(".claude-conta2/.hangar-conta")).unwrap();
+    own.lock().unwrap();
+    let mut child = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[])
+        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+    let shared = std::fs::OpenOptions::new().read(true).append(true).create(true).open(home.join(".hangar-contas.lock")).unwrap();
+    // Teto generoso: o comando pega a trava das contas logo depois de subir.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let held = loop {
+        match shared.try_lock() {
+            Err(std::fs::TryLockError::WouldBlock) => break true,
+            Ok(()) => shared.unlock().unwrap(),
+            Err(std::fs::TryLockError::Error(e)) => panic!("{e}"),
+        }
+        if std::time::Instant::now() > deadline { break false; }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    own.unlock().unwrap();
+    let status = child.wait().unwrap();
+    assert!(held, "esperando a trava da conta, o comando não segurava a das contas");
+    assert!(status.success());
+}
+
+/// C86/C131/C180/H13: o espelho troca o `settings.json` e o `.claude.json` da conta por um arquivo novo
+/// (outro inode), nunca regrava no lugar: o CLI vivo que lê no meio veria o arquivo pela metade.
+#[test]
+fn the_mirror_replaces_the_account_copies_instead_of_writing_in_place() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    conta(&home, "conta2");
+    put(&home.join(".claude-conta2/settings.json"), r#"{"theme": "light"}"#);
+    put(&home.join(".claude.json"), r#"{"mcpServers": {"tavily": {}, "novo": {}}}"#);
+    let files = ["settings.json", ".claude.json"].map(|f| home.join(".claude-conta2").join(f));
+    let before: Vec<u64> = files.iter().map(|f| std::fs::metadata(f).unwrap().ino()).collect();
+    let out = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(std::fs::read_to_string(&files[0]).unwrap().contains("\"dark\"") && std::fs::read_to_string(&files[1]).unwrap().contains("novo"),
+        "o espelho regravou as duas cópias");
+    for (file, ino) in files.iter().zip(before) {
+        assert_ne!(std::fs::metadata(file).unwrap().ino(), ino, "{} regravado no lugar", file.display());
+    }
 }
 
 /// C179/K10: um segundo `--prep` sem nada a mudar não regrava o `settings.json` nem o `.claude.json` da

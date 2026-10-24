@@ -49,7 +49,7 @@
     "<HOME>/.claude-conta2/settings.json": {
       "kind": "file",
       "mode": "0644",
-      "text": "{\n  \"theme\": \"dark\",\n  \"ctl\": \"a\\bb\\fc\\rd\\ne\\u0000f\\u0001g\\u001bhi j\"\n}\n"
+      "text": "{\n  \"theme\": \"dark\",\n  \"ctl\": \"a\\bb\\fc\\rd\\ne\\u0000f\\u0001g\\u001bhi j k l\"\n}\n"
     },
     "<HOME>/.claude-conta2/skills": {
       "kind": "symlink",
@@ -87,7 +87,7 @@
     "<HOME>/.claude/settings.json": {
       "kind": "file",
       "mode": "0644",
-      "text": "{\"ctl\": \"a\\bb\\fc\\rd\\ne\\u0000f\\u0001g\\u001bh\\u0085i\\u00a0j\", \"theme\": \"dark\"}"
+      "text": "{\"ctl\": \"a\\bb\\fc\\rd\\ne\\u0000f\\u0001g\\u001bh\\u0085i\\u00a0j\\u2028k\\u2029l\", \"theme\": \"dark\"}"
     },
     "<HOME>/.claude/skills": {
       "kind": "dir"
