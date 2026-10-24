@@ -90,7 +90,14 @@ struct Rules {
     d3: Vec<usize>,
     /// D6: avisos de memória sem ordem, e as `.drift/memory.N` comparadas pelo conteúdo.
     d6: bool,
+    /// A ajuda não diz mais que o comando roda no python3: só essa frase muda, as linhas de uso não.
+    help: bool,
 }
+
+const HELP_PYTHON: &str = "Mesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas\n\
+    direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.";
+const HELP_RUST: &str = "A regra mora num lugar SÓ, o hangar-server: o shell chega a ela pelo hangar-conta, que chama\n\
+    este `hangar-server conta`, e a abertura de sessão roda a mesma reconciliação no próprio processo.";
 
 struct Scenario { build: Build, steps: Vec<Step>, env: Vec<(&'static str, &'static str)>, rules: Rules }
 
@@ -173,9 +180,17 @@ fn scenario(name: &str) -> Scenario {
             put(&h.join(".claude-arquivo"), "");
         }, vec![cli(&["--list"])]),
         "list_empty" => sc(|_| {}, vec![cli(&["--list"])]),
-        "help_flags" => sc(|_| {}, vec![cli(&["--help"]), cli(&["-h"])]),
-        "usage_errors" => sc(|_| {}, vec![cli(&[]), cli(&["--list", "x"]), cli(&["--prep"]), cli(&["--prep", "a", "b", "c"]),
-            cli(&["--new", "a", "b"]), cli(&["--bogus"]), cli(&["--help", "x"])]),
+        "help_flags" => {
+            let mut s = sc(|_| {}, vec![cli(&["--help"]), cli(&["-h"])]);
+            s.rules.help = true;
+            s
+        }
+        "usage_errors" => {
+            let mut s = sc(|_| {}, vec![cli(&[]), cli(&["--list", "x"]), cli(&["--prep"]), cli(&["--prep", "a", "b", "c"]),
+                cli(&["--new", "a", "b"]), cli(&["--bogus"]), cli(&["--help", "x"])]);
+            s.rules.help = true;
+            s
+        }
 
         // ── reconciliação (`--prep`) ──
         "prep_fresh_idempotent" => sc(|h| { casa(h); conta(h, "conta2"); }, vec![cli(&PREP), cli(&PREP)]),
@@ -814,7 +829,8 @@ fn generate_fixtures() {
     let root = py_root();
     let python = Command::new("python3").arg("--version").output();
     assert!(python.is_ok_and(|o| o.status.success()), "python3 ausente: o gerador precisa do Python de origem");
-    let files = ["backend/app/contas.py", "backend/app/atomico.py", "backend/app/diag.py", "backend/app/log_paths.py", "scripts/hangar-conta"];
+    let files = ["backend/app/contas.py", "backend/app/account_lifecycle.py", "backend/app/atomico.py", "backend/app/diag.py",
+        "backend/app/log_paths.py", "scripts/hangar-conta"];
     let same = Command::new("git").arg("-C").arg(&root).args(["diff", "--quiet", ORIGIN, "--"]).args(files).status().unwrap();
     assert!(same.success(), "{} não está no commit de origem {ORIGIN} para {files:?}", root.display());
     std::fs::create_dir_all(fixture_dir()).unwrap();
@@ -866,6 +882,17 @@ fn d6_tree(tree: &Value) -> Value {
 }
 
 fn compare_step(name: &str, i: usize, want: &Value, got: &Value, rules: &Rules) {
+    let mut want = want.clone();
+    if rules.help {
+        let stdout = want["stdout"].as_str().unwrap().to_owned();
+        let stderr = want["stderr"].as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect::<Vec<_>>().join("\n");
+        assert!(stdout.contains(HELP_PYTHON) || stderr.contains(HELP_PYTHON), "{name}[{i}]: a fixture não tem a frase antiga da ajuda");
+        want["stdout"] = json!(stdout.replace(HELP_PYTHON, HELP_RUST));
+        if stderr.contains(HELP_PYTHON) {
+            want["stderr"] = json!(stderr.replace(HELP_PYTHON, HELP_RUST).split('\n').collect::<Vec<_>>());
+        }
+    }
+    let want = &want;
     assert_eq!(want["args"], got["args"], "{name}[{i}]");
     assert_eq!(want["exit"], got["exit"], "{name}[{i}] {}: código de saída; stderr {}", want["args"], got["stderr"]);
     assert_eq!(want["stdout"], got["stdout"], "{name}[{i}] {}: stdout", want["args"]);

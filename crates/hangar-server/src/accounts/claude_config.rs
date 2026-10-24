@@ -723,8 +723,8 @@ pub fn seed(home: &Path, dir: &Path) -> Outcome {
 
 const DOC: &str = "CLI de contas Claude, para o wrapper de shell chamar.
 
-Mesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas
-direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.
+A regra mora num lugar SÓ, o hangar-server: o shell chega a ela pelo hangar-conta, que chama
+este `hangar-server conta`, e a abertura de sessão roda a mesma reconciliação no próprio processo.
 
   hangar-conta --list                    -> um nome de conta por linha
   hangar-conta --prep <nome> [<projeto>] -> refaz os atalhos e imprime o caminho do config dir;
