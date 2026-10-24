@@ -445,11 +445,13 @@ def models_cache_em_tmp(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def hangar_server_bin(monkeypatch):
+def hangar_server_bin(monkeypatch, tmp_path):
     """O `hangar-server` desta cópia (`scripts/cargo-pinned build -p hangar-server`) para o que passa
     pelo `hangar-server conta`; nunca o `~/.hangar/bin` da casa."""
     binary = Path(__file__).resolve().parents[2] / "crates" / "target" / "debug" / (
         "hangar-server.exe" if os.name == "nt" else "hangar-server")
     assert binary.is_file(), f"compile antes: scripts/cargo-pinned build -p hangar-server ({binary})"
     monkeypatch.setenv("CP_RUST_SERVER_BIN", str(binary))
+    # No Windows o diário do subprocesso sai do LOCALAPPDATA, que o HOME de teste não troca.
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     return binary
