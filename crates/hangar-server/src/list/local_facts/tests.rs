@@ -25,6 +25,9 @@ fn expand(v: &Value, home: &str) -> Value {
     }
 }
 
+/// Caminho do golden (POSIX) como o Python o grava no Windows: separador nativo.
+fn native(path: &str) -> String { if cfg!(windows) { path.replace('/', "\\") } else { path.to_owned() } }
+
 fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() }
 
 #[test]
@@ -70,9 +73,10 @@ fn orq_rows_match_python() {
         assert_eq!(got.len(), want.len(), "{}", case["case"]);
         for (row, want) in got.iter().zip(want) {
             let want = expand(want, &home);
+            let jsonl = want["jsonl"].as_str().map(native);
             assert_eq!((row.name.as_str(), row.cwd.as_deref(), row.jsonl.as_deref(), row.pair_gid.as_deref(),
                 row.orq_arbiter.as_deref(), row.state.as_str(), row.provider.as_str(), row.tracked),
-                (want["name"].as_str().unwrap(), want["cwd"].as_str(), want["jsonl"].as_str(), want["pair_gid"].as_str(),
+                (want["name"].as_str().unwrap(), want["cwd"].as_str(), jsonl.as_deref(), want["pair_gid"].as_str(),
                 want["orq_arbiter"].as_str(), want["state"].as_str().unwrap(), "orq", true), "{}", case["case"]);
             let last = row.last_activity.map(|l| l - at);
             assert!((last.unwrap() - want["last_activity"].as_f64().unwrap()).abs() < 0.01, "{}: {last:?}", case["case"]);
@@ -83,7 +87,14 @@ fn orq_rows_match_python() {
 #[test]
 fn thread_key_matches_python() {
     for case in golden()["thread_key"].as_array().unwrap() {
-        assert_eq!(testing::thread_key(case["home"].as_str().unwrap(), case["thread"].as_str().unwrap()), case["key"].as_str().unwrap());
+        let mut want = case["key"].as_str().unwrap().to_owned();
+        // `Path.resolve()` do Python no Windows: o caminho POSIX ganha o drive atual e separador nativo.
+        if cfg!(windows) {
+            let posix = case["home"].as_str().unwrap().trim_end_matches('/');
+            let drive = std::env::current_dir().unwrap().to_string_lossy()[..2].to_owned();
+            want = want.replace(&format!("\"{posix}\""), &serde_json::to_string(&format!("{drive}{}", native(posix))).unwrap());
+        }
+        assert_eq!(testing::thread_key(case["home"].as_str().unwrap(), case["thread"].as_str().unwrap()), want);
     }
 }
 
@@ -100,8 +111,11 @@ fn transfers_match_python() {
         let dir = tempfile::tempdir().unwrap();
         let home_path = std::fs::canonicalize(dir.path()).unwrap();
         let home = home_path.to_string_lossy().into_owned();
+        // O HOME entra dentro de strings JSON: no Windows as contrabarras precisam de escape.
+        let home_json = serde_json::to_string(&home).unwrap();
+        let home_json = &home_json[1..home_json.len() - 1];
         for (rel, raw) in case["files"].as_object().unwrap() {
-            let raw = raw.as_str().unwrap().replace(HOME, &home);
+            let raw = raw.as_str().unwrap().replace(HOME, home_json);
             let mut path = home_path.join(rel);
             // O índice de thread leva o caminho do HOME no nome.
             if path.file_name().unwrap().to_string_lossy().starts_with("thread-") {
@@ -126,7 +140,11 @@ fn transfers_match_python() {
             FIELDS.iter().map(|f| (*f, v.get(*f).cloned().unwrap_or(Value::Null))).collect()
         }).collect();
         let want: Vec<BTreeMap<&str, Value>> = case["touched"].as_array().unwrap().iter()
-            .map(|r| FIELDS.iter().map(|f| (*f, expand(&r[*f], &home))).collect()).collect();
+            .map(|r| FIELDS.iter().map(|f| {
+                let v = expand(&r[*f], &home);
+                // A conta passa por `resolve()`, que no Windows devolve o separador nativo; o resto é copiado.
+                (*f, match (*f, v.as_str()) { ("conta", Some(s)) => Value::String(native(s)), _ => v })
+            }).collect()).collect();
         assert_eq!(touched, want, "{}", case["case"]);
         let mut frozen: Vec<String> = frozen.into_iter().collect();
         frozen.sort();
