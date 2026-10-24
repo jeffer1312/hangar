@@ -1056,7 +1056,6 @@
   "problema_list_runtime_unavailable": "O runtime desta sessão não respondeu",
   "problema_list_runtime_absent": "Estado sem o runtime: vem do último marcador da sessão",
   "problema_list_facts_unavailable": "Lista desatualizada: o servidor não respondeu os detalhes desta sessão",
-  "problema_list_orq_unavailable": "Não deu para ler esta orquestração; aparece a última leitura",
   "problema_interacao_indisponivel": "Não deu para identificar a pergunta aberta; abra a conversa para responder",
   "board_pareada_com_clicar": "pareada com {n} — clicar reúne o grupo aqui",
   "board_pareada_com": "pareada com {n}",

@@ -132,7 +132,7 @@ impl Drop for Watch {
 
 /// O produtor da fila de uma geração do hub: corta pelo início da conversa ligada, publica cada rodada
 /// pelo hub e acaba com a geração (troca de conversa, hub fechado). Codex sem terminal pede ao ator a
-/// confirmação da fila ao nascer e a cada `user_msg` do transcript, como fazia o `side-events`.
+/// confirmação da fila ao nascer e a cada `user_msg` do transcript.
 pub(crate) async fn run(hub: Weak<Hub>, generation: u64, binding: Binding, path: PathBuf, watchers: Watchers) {
     let Some(h) = hub.upgrade() else { return };
     let name = h.name.clone();

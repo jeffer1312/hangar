@@ -1,4 +1,4 @@
-//! Python falso para os testes do hangar-server: rotas internas (info, side-events) e o resto
+//! Python falso para os testes do hangar-server: rotas internas (info, fatos, diário) e o resto
 //! respondendo "from-python", com o que chegou anotado.
 #![allow(dead_code)]
 
@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Query, Request, State};
+use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
@@ -27,18 +27,13 @@ use hangar_server::config::Config;
 use hyper_util::rt::TokioIo;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{Notify, broadcast};
+use tokio::sync::Notify;
 
 pub const OWNER: &str = "dono-token";
 pub const SECRET: &str = "segredo-interno";
 
 pub struct Fake {
     info: Mutex<Value>,
-    side_tx: broadcast::Sender<String>,
-    side_conns: AtomicUsize,
-    side_apps: Mutex<Vec<String>>,
-    /// O `jsonl` que o Rust mandou em cada conexão interna.
-    side_jsonls: Mutex<Vec<String>>,
     info_calls: AtomicUsize,
     hits: Mutex<Vec<(String, HeaderMap)>>,
     info_status: Mutex<Option<StatusCode>>,
@@ -72,13 +67,9 @@ pub struct Fake {
 }
 
 impl Fake {
-    /// O que /internal/.../info devolve e o que a conexão interna manda como primeiro `info`.
-    /// `Value::Null` = sessão inexistente (404).
+    /// O que /internal/.../info devolve. `Value::Null` = sessão inexistente (404).
     pub fn set_info(&self, v: Value) {
         *self.info.lock().unwrap() = v;
-    }
-    pub fn push_side(&self, event: &str, data: &str) {
-        let _ = self.side_tx.send(format!("event: {event}\r\ndata: {data}\r\n\r\n"));
     }
     /// `info` responde só este status, como o Python quando a projeção falha (503).
     pub fn fail_info(&self, s: StatusCode) {
@@ -87,15 +78,6 @@ impl Fake {
     /// Corpos recebidos em `/internal/diag`.
     pub fn diag(&self) -> Vec<Value> {
         self.diag.lock().unwrap().clone()
-    }
-    pub fn side_conns(&self) -> usize {
-        self.side_conns.load(SeqCst)
-    }
-    pub fn side_apps(&self) -> Vec<String> {
-        self.side_apps.lock().unwrap().clone()
-    }
-    pub fn side_jsonls(&self) -> Vec<String> {
-        self.side_jsonls.lock().unwrap().clone()
     }
     pub fn info_calls(&self) -> usize {
         self.info_calls.load(SeqCst)
@@ -153,13 +135,8 @@ impl Fake {
 }
 
 pub async fn spawn_fake() -> (Arc<Fake>, SocketAddr) {
-    let (side_tx, _) = broadcast::channel(64);
     let fake = Arc::new(Fake {
         info: Mutex::new(Value::Null),
-        side_tx,
-        side_conns: AtomicUsize::new(0),
-        side_apps: Mutex::default(),
-        side_jsonls: Mutex::default(),
         info_calls: AtomicUsize::new(0),
         hits: Mutex::default(),
         info_status: Mutex::default(),
@@ -188,7 +165,6 @@ pub async fn spawn_fake() -> (Arc<Fake>, SocketAddr) {
     });
     let app = Router::new()
         .route("/internal/sessions/{name}/info", get(fake_info))
-        .route("/internal/sessions/{name}/side-events", get(fake_side))
         .route("/internal/diag", axum::routing::post(fake_diag))
         .route("/internal/list/facts", axum::routing::post(fake_list_facts))
         .route("/internal/sessions/{name}/plugin", get(fake_plugin_get).post(fake_plugin_post))
@@ -280,30 +256,6 @@ async fn fake_internal_json(State(f): State<Arc<Fake>>, req: Request) -> Respons
     tokio::time::sleep(delay).await;
     let Some((code, body)) = f.internal_replies.lock().unwrap().get(&path).cloned() else { return status(StatusCode::NOT_FOUND) };
     Response::builder().status(code).header("content-type", "application/json").body(Body::from(body.to_string())).unwrap()
-}
-
-async fn fake_side(
-    State(f): State<Arc<Fake>>,
-    Query(q): Query<HashMap<String, String>>,
-    headers: HeaderMap,
-) -> Response {
-    if !internal_ok(&headers) {
-        return status(StatusCode::NOT_FOUND);
-    }
-    // A conversa é a que o Rust escolheu; sem ela o Python recusa.
-    let (Some(_), Some(jsonl)) = (q.get("provider"), q.get("jsonl")) else { return status(StatusCode::BAD_REQUEST) };
-    f.side_jsonls.lock().unwrap().push(jsonl.clone());
-    let rx = f.side_tx.subscribe();
-    f.side_apps.lock().unwrap().push(q.get("app").cloned().unwrap_or_default());
-    f.side_conns.fetch_add(1, SeqCst);
-    let first = futures_util::stream::once(async { Ok::<_, Infallible>(Bytes::from_static(b"event: ping\r\ndata: {}\r\n\r\n")) });
-    let rest = futures_util::stream::unfold(rx, |mut rx| async move {
-        rx.recv().await.ok().map(|s| (Ok(Bytes::from(s)), rx))
-    });
-    Response::builder()
-        .header("content-type", "text/event-stream")
-        .body(Body::from_stream(first.chain(rest)))
-        .unwrap()
 }
 
 async fn fake_python(State(f): State<Arc<Fake>>, mut req: Request) -> Response {

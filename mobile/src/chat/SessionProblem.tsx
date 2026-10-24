@@ -51,7 +51,6 @@ const problemLabels: Record<string, () => string> = {
   list_runtime_unavailable: m.problema_list_runtime_unavailable,
   list_runtime_absent: m.problema_list_runtime_absent,
   list_facts_unavailable: m.problema_list_facts_unavailable,
-  list_orq_unavailable: m.problema_list_orq_unavailable,
   interacao_indisponivel: m.problema_interacao_indisponivel,
 };
 

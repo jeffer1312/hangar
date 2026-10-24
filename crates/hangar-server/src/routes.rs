@@ -141,9 +141,6 @@ impl AppState {
         let facts = crate::list::facts::FactsClient::new(cfg.upstream, cfg.internal_secret.clone());
         let list = Arc::new(crate::list::bridge::ListBridge::new(crate::list::bridge::ListEnv::from_env(), facts));
         let mut side = SideCtx {
-            upstream: cfg.upstream,
-            secret: cfg.internal_secret.clone(),
-            http: http.clone(),
             watchers: Watchers::default(),
             hubs: Hubs::default(),
             locate: Arc::new(crate::locate::ListLocate { list: list.clone() }),
@@ -1136,16 +1133,13 @@ mod tests {
         assert!(is_owner(&st, "127.0.0.1"));
     }
 
-    /// Aparelho ligado a um hub sem conexão interna (porta sem ninguém): só o que o teste entrega chega.
+    /// Aparelho ligado a um hub sem fontes do estado: só o que o teste entrega chega.
     async fn device(dir: &std::path::Path) -> (SideCtx, std::pin::Pin<Box<dyn futures_util::Stream<Item = Bytes> + Send>>) {
         device_with(dir, false).await
     }
 
     async fn device_with(dir: &std::path::Path, deltas: bool) -> (SideCtx, std::pin::Pin<Box<dyn futures_util::Stream<Item = Bytes> + Send>>) {
         let ctx = SideCtx {
-            upstream: "127.0.0.1:9".parse().unwrap(),
-            secret: "s".into(),
-            http: proxy::client(),
             watchers: Watchers::default(),
             hubs: Hubs::default(),
             locate: Arc::new(crate::locate::Unavailable),

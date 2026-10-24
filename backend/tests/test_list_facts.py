@@ -78,7 +78,6 @@ def test_facts_never_read_or_feed_the_python_plugin(monkeypatch):
     def refuse(*args):
         raise AssertionError("plugin do Python consultado")
     monkeypatch.setattr(plugin_bridge, "pergunta_pendente", refuse)
-    monkeypatch.setattr(plugin_bridge, "app_remoto", refuse)
 
     async def keep(infos, state_only=False):
         return infos
