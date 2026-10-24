@@ -270,6 +270,10 @@ impl OpenHost for Host {
 
     fn diary(&self, events: Vec<Value>) { self.record.lock().unwrap().diary.extend(events); }
     fn account_diary(&self, events: Vec<Value>) { self.record.lock().unwrap().diary.extend(events); }
+    /// `fakes.reconcile_limit_ms`: só os testes do Rust o pedem.
+    fn reconcile_limit(&self) -> Duration {
+        self.fakes["reconcile_limit_ms"].as_u64().map_or(super::open::RECONCILE_LIMIT, Duration::from_millis)
+    }
     fn new_session_id(&self) -> String { super::open::uuid4(&crate::mods::state::random_hex(16)) }
     fn new_bridge_key(&self) -> String { crate::mods::state::random_hex(16) }
     fn wake(&self, name: &str) {

@@ -2350,6 +2350,33 @@ fn the_hangar_account_reconciles_in_process() {
     assert_eq!(raw["diary"][1]["conta_id"].as_str(), Some(&digest[..16]), "conta_id = sha256 do caminho, como o Python");
 }
 
+/// A reconciliação presa (aqui, a trava das contas segura por outro dono) recusa a abertura no limite,
+/// como o `hangar-conta` morto pelo prazo: sem pane, e a guarda da conta já solta enquanto a trava segue presa.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_stuck_reconciliation_refuses_the_open_at_the_limit() {
+    let mut holder = None;
+    let (raw, _dir, _root) = run_contract_with("create_claude_terminal_hangar_account",
+        |s| s["fakes"]["reconcile_limit_ms"] = json!(300), |root| {
+        let lock = std::fs::OpenOptions::new().read(true).append(true).create(true).open(root.join("home/.hangar-contas.lock")).unwrap();
+        lock.lock().unwrap();
+        let guards = root.join("home/.hangar/account-locks");
+        holder = Some(std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            let free = std::fs::read_dir(&guards).unwrap().flatten()
+                .all(|e| std::fs::File::open(e.path()).unwrap().try_lock().is_ok());
+            lock.unlock().unwrap();
+            free
+        }));
+    });
+    let body = &raw["steps"][0]["body"]["detail"];
+    assert_eq!((raw["steps"][0]["status"].clone(), body["code"].clone(), body["params"].clone()),
+        (json!(500), json!("erro_conta_reconciliacao_falhou"),
+         json!({"nome_conta": "conta2", "erro": "a reconciliação da conta passou do limite de 0.3 s"})), "{body}");
+    assert!(!raw["subprocesses"].as_array().unwrap().iter().any(|p| p["argv"][0] == "new-session"), "nenhum pane");
+    assert!(holder.unwrap().join().unwrap(), "a guarda da conta seguiu presa depois da recusa");
+}
+
 /// A reconciliação que falha recusa a abertura com o motivo dela, antes de qualquer pane.
 #[cfg(target_os = "linux")]
 #[test]

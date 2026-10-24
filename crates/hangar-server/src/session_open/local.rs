@@ -82,6 +82,7 @@ impl OpenHost for LocalHost {
     fn account_diary(&self, events: Vec<Value>) {
         crate::accounts::claude_config::write_cli_diary(&crate::accounts::environment::AccountEnvironment::from_map(self.env.clone()), &events);
     }
+    fn reconcile_limit(&self) -> Duration { super::open::RECONCILE_LIMIT }
     fn new_session_id(&self) -> String { super::open::uuid4(&crate::mods::state::random_hex(16)) }
     fn new_bridge_key(&self) -> String { crate::mods::state::random_hex(16) }
     // O comando local só abre sessão com terminal.

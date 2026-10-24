@@ -52,6 +52,8 @@ pub trait OpenHost: Send + Sync {
     /// Os eventos `conta.reconciliar.*`: o servidor grava no diário dele; o comando de terminal, que não
     /// grava os da criação, no arquivo dos comandos de conta.
     fn account_diary(&self, events: Vec<Value>);
+    /// Quanto a abertura espera a reconciliação da conta (`RECONCILE_LIMIT`; os testes encurtam).
+    fn reconcile_limit(&self) -> Duration;
     /// Id da conversa (`--session-id`) e chave da ponte do plugin, novos a cada vida.
     fn new_session_id(&self) -> String;
     fn new_bridge_key(&self) -> String;
@@ -64,6 +66,10 @@ pub trait OpenHost: Send + Sync {
     /// As reservas pré-aquecidas deste servidor; `None` onde não há (comando de terminal, harness).
     fn prewarm(&self) -> Option<&crate::prewarm::Store>;
 }
+
+/// O prazo que o `hangar-conta` tinha: leitura presa (FIFO, montagem travada) ou trava que não solta
+/// recusa a abertura em vez de segurá-la para sempre.
+pub(crate) const RECONCILE_LIMIT: Duration = Duration::from_secs(120);
 
 /// UUID v4 de 16 bytes aleatórios em hexadecimal.
 pub fn uuid4(hex: &str) -> String {
@@ -522,10 +528,17 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         let account = claude::hangar_account(Path::new(dir))
             .ok_or_else(|| OpenError::plain(404, format!("{dir} não é uma conta criada pelo hangar")))?;
         progress_step(&spec.name, "conta", json!({"conta": account}));
+        use crate::accounts::claude_config::{ConfigError, Outcome, reconcile_account};
         let (home, name, project) = (host.home().to_owned(), account.clone(), hangar_workspace::worktrees::sanitize_cwd(&spec.cwd));
-        let outcome = tokio::task::spawn_blocking(move || crate::accounts::claude_config::reconcile_account(&home, &name, Some(&project))).await
-            .unwrap_or_else(|e| crate::accounts::claude_config::Outcome {
-                result: Err(crate::accounts::claude_config::ConfigError::Refused(format!("a reconciliação parou no meio: {e}"))), diary: Vec::new() });
+        let limit = host.reconcile_limit();
+        let failed = |detail: String| Outcome { result: Err(ConfigError::Refused(detail)), diary: Vec::new() };
+        // Passado o limite a thread presa segue com as travas até a leitura soltar; a abertura seguinte
+        // recusa igual, como quando o `hangar-conta` morria pelo prazo.
+        let outcome = match tokio::time::timeout(limit, tokio::task::spawn_blocking(move || reconcile_account(&home, &name, Some(&project)))).await {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(e)) => failed(format!("a reconciliação parou no meio: {e}")),
+            Err(_) => failed(format!("a reconciliação da conta passou do limite de {} s", limit.as_secs_f64())),
+        };
         host.account_diary(outcome.diary);
         avisos = claude::account_result(&account, outcome.result)?;
     }
