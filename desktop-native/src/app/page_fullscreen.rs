@@ -259,7 +259,7 @@ impl PageFullscreen {
                 super::links::open_link_later(self.host.window, url, external, true, cx);
             },
             crate::browser::Event::State(state) => running.at = state.url,
-            crate::browser::Event::UserInput | crate::browser::Event::Escape => {}
+            crate::browser::Event::UserInput | crate::browser::Event::Escape | crate::browser::Event::Popup(_) | crate::browser::Event::Closed => {}
         }
     }
 

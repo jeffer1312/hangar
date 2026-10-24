@@ -30,7 +30,7 @@ pub mod cdp {
 #[cfg(target_os = "linux")]
 mod chromium;
 #[cfg(target_os = "linux")]
-pub use chromium::{Engine, Warm, carry::take_notice as take_cookie_notice};
+pub use chromium::{Engine, POPUP_GONE, Warm, carry::take_notice as take_cookie_notice};
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod wry_engine;
@@ -52,6 +52,12 @@ pub enum Event {
     /// Esc dentro da página nativa (Windows): cancela a escolha de elemento, que a GPUI não veria.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Escape,
+    /// Popup de verdade aberto pela página (janela com `window.opener`, o login OAuth): o painel o adota pelo alvo.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Popup(String),
+    /// O alvo deste motor fechou sozinho (popup que chamou `window.close()`).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Closed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
