@@ -82,9 +82,11 @@ impl OpenHost for LocalHost {
         })
     }
     fn diary(&self, _events: Vec<Value>) {}
-    /// A reconciliação gravava no diário mesmo com o servidor fora (era o `hangar-conta`): segue gravando.
+    /// No arquivo dos comandos de conta, fora do runtime: a trava do diário pode esperar até 5 s. O runtime
+    /// espera a tarefa ao terminar, então o evento chega ao disco antes de o comando sair.
     fn account_diary(&self, events: Vec<Value>) {
-        crate::accounts::claude_config::write_cli_diary(&crate::accounts::environment::AccountEnvironment::from_map(self.env.clone()), &events);
+        let env = crate::accounts::environment::AccountEnvironment::from_map(self.env.clone());
+        tokio::task::spawn_blocking(move || crate::accounts::claude_config::write_cli_diary(&env, &events));
     }
     fn reconcile_limit(&self) -> Duration { self.reconcile_limit }
     fn new_session_id(&self) -> String { super::open::uuid4(&crate::mods::state::random_hex(16)) }

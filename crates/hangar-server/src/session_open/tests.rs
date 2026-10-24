@@ -2408,12 +2408,10 @@ fn a_stuck_reconciliation_refuses_the_open_at_the_limit() {
 #[cfg(target_os = "linux")]
 #[test]
 fn the_terminal_command_stops_a_stuck_reconciliation_at_the_limit() {
-    use open::OpenHost;
     let (scenario, _dir, root, env) = contract_setup("create_claude_terminal_hangar_account", |_| {});
     let released = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let holder = hold_accounts_lock(&root, released.clone());
     let host = local::LocalHost::new(env.clone(), None).with_reconcile_limit(std::time::Duration::from_millis(300));
-    assert_eq!(host.reconcile_limit(), std::time::Duration::from_millis(300));
     let step: Value = serde_json::from_str(&contract::place(&scenario["steps"][0]["json"].to_string(), &root)).unwrap();
     let request = SessionOpenRequest::parse(step.to_string().as_bytes()).unwrap();
     let opened = {

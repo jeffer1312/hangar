@@ -49,6 +49,16 @@ impl std::fmt::Display for ConfigError {
     }
 }
 
+impl ConfigError {
+    /// A frase que o comando imprime depois de `hangar-conta: ` e que a abertura repassa.
+    pub fn cause(&self) -> String {
+        match self {
+            Self::Refused(detail) => detail.clone(),
+            Self::Io(..) => format!("falha ao executar: {self}"),
+        }
+    }
+}
+
 type Result<T> = std::result::Result<T, ConfigError>;
 
 /// O caminho junto do erro do sistema, como a mensagem do Python trazia.
@@ -64,7 +74,7 @@ impl<T> At<T> for io::Result<T> {
     }
 }
 
-fn refused(detail: impl Into<String>) -> ConfigError { ConfigError::Refused(detail.into()) }
+pub(crate) fn refused(detail: impl Into<String>) -> ConfigError { ConfigError::Refused(detail.into()) }
 
 /// O resultado e os eventos `conta.reconciliar.*` do diário, que quem chama grava no arquivo dele.
 pub struct Outcome {
@@ -73,7 +83,7 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    fn failed(error: ConfigError) -> Self { Self { result: Err(error), diary: Vec::new() } }
+    pub(crate) fn failed(error: ConfigError) -> Self { Self { result: Err(error), diary: Vec::new() } }
 }
 
 // ── o sistema de arquivos como o Python o vê ──────────────────────────────────────────────────
@@ -214,8 +224,19 @@ fn realpath(path: &Path) -> PathBuf {
     }
 }
 
-/// O atalho já aponta para o alvo? Pelo caminho resolvido: no Windows o texto do link volta com `\\?\`.
-fn points_to(link: &Path, target: &Path) -> bool { realpath(link) == realpath(target) }
+/// `link` é atalho que já aponta para o alvo? O comum é o texto dele ser o alvo e resolver; senão, pelo
+/// caminho resolvido dos dois.
+fn points_to(link: &Path, target: &Path) -> bool {
+    let Ok(text) = fs::read_link(link) else { return false };
+    (plain(&text) == target && exists(link)) || realpath(link) == realpath(target)
+}
+
+/// O texto do link sem o prefixo `\\?\` que o Windows devolve.
+fn plain(text: &Path) -> &Path {
+    #[cfg(windows)]
+    if let Some(rest) = text.to_str().and_then(|t| t.strip_prefix(r"\\?\")) { return Path::new(rest); }
+    text
+}
 
 /// Ordem do `sorted(Path)`: ponto de código no POSIX, caminho em minúsculas no Windows.
 fn sort_names(names: &mut [OsString]) {
@@ -229,26 +250,14 @@ fn py_order(a: &str, b: &str) -> std::cmp::Ordering { a.chars().map(py::py_code)
 
 /// `json.loads(path.read_text("utf-8"))`: ausente é `None`; surrogate solto é aceito.
 fn read_json(path: &Path) -> std::result::Result<Option<Value>, String> {
-    let bytes = match fs::read(path) {
+    // A leitura que atravessa a troca tmp+rename do Windows (o CLI vivo regrava estes arquivos).
+    let bytes = match crate::runtime::queue::read_replaced(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("{}: {error}", path.display())),
     };
     let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
-    serde_json::from_str(&text).or_else(|error| {
-        if !text.contains("\\u") { return Err(error); }
-        serde_json::from_str(&pyjson::mark_lone_surrogates_using(&text, |c| py::mark(c).to_string())).map_err(|_| error)
-    }).map(Some).map_err(|e| e.to_string())
-}
-
-enum Num { Int(i128), Float(f64) }
-
-fn num(v: &Value) -> Option<Num> {
-    match v {
-        Value::Bool(b) => Some(Num::Int(i128::from(*b))),
-        Value::Number(n) => Some(n.as_i64().map(i128::from).or_else(|| n.as_u64().map(i128::from)).map_or_else(|| Num::Float(n.as_f64().unwrap_or(f64::NAN)), Num::Int)),
-        _ => None,
-    }
+    serde_json::from_str(&text).or_else(|error| pyjson::loads_lossless(&text).ok_or(error)).map(Some).map_err(|e| e.to_string())
 }
 
 /// `==` do Python: `1 == 1.0 == True`, dict sem ordem. Troca só de tipo não é mudança.
@@ -258,11 +267,10 @@ fn py_eq(a: &Value, b: &Value) -> bool {
         (Value::String(x), Value::String(y)) => x == y,
         (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| py_eq(p, q)),
         (Value::Object(x), Value::Object(y)) => py_eq_map(x, y),
-        _ => match (num(a), num(b)) {
-            (Some(Num::Int(x)), Some(Num::Int(y))) => x == y,
-            (Some(Num::Float(x)), Some(Num::Float(y))) => x == y,
-            (Some(Num::Int(i)), Some(Num::Float(f))) | (Some(Num::Float(f)), Some(Num::Int(i))) =>
-                f.fract() == 0.0 && f.abs() < 1e30 && f as i128 == i,
+        _ => match ((py::int_of(a), py::number(a)), (py::int_of(b), py::number(b))) {
+            ((Some(x), _), (Some(y), _)) => x == y,
+            ((None, Some(x)), (None, Some(y))) => x == y,
+            ((Some(i), _), (None, Some(f))) | ((None, Some(f)), (Some(i), _)) => f.fract() == 0.0 && f.abs() < 1e30 && f as i128 == i,
             _ => false,
         },
     }
@@ -297,31 +305,26 @@ impl Wait {
     pub fn within(limit: Duration) -> Self { Wait::Within { limit, deadline: Instant::now() + limit } }
 }
 
-/// A recusa da abertura cuja reconciliação passou do prazo.
-pub fn late(limit: Duration) -> String { format!("a reconciliação da conta passou do limite de {} s", limit.as_secs_f64()) }
-
 /// A recusa no limite com o fim dela no diário: sem ele, a reconciliação que não terminou não deixava rastro.
 pub fn late_outcome(limit: Duration) -> Outcome {
     let mut end = event("conta.reconciliar.fim", "erro", &crate::mods::state::random_hex(8));
     end["codigo"] = json!("limite");
     end["ms"] = json!(limit.as_millis() as u64);
-    Outcome { result: Err(refused(late(limit))), diary: vec![end] }
+    let detail = format!("a reconciliação da conta passou do limite de {} s", limit.as_secs_f64());
+    Outcome { result: Err(refused(detail)), diary: vec![end] }
 }
 
-/// Exclusiva, tentando até o fim de `wait`: o Python esperava sem fim, e a abertura matava o subprocesso aos 120 s.
-fn lock(path: &Path, create: bool, wait: Wait) -> Result<Held> {
+/// Exclusiva, tentando até `deadline`; `None` = o prazo passou com ela presa por outro processo. Esperar
+/// sem fim prenderia quem chama com a trava largada por um processo travado.
+fn lock(path: &Path, create: bool, deadline: Instant) -> Result<Option<Held>> {
     let mut options = fs::OpenOptions::new();
     if create { options.read(true).append(true).create(true) } else { options.read(true).write(true) };
     let file = options.open(path).at(path)?;
-    let deadline = match wait { Wait::Each(each) => Instant::now() + each, Wait::Within { deadline, .. } => deadline };
     loop {
         match file.try_lock() {
-            Ok(()) => return Ok(Held(file)),
+            Ok(()) => return Ok(Some(Held(file))),
             Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            Err(fs::TryLockError::WouldBlock) => return Err(refused(match wait {
-                Wait::Each(each) => format!("a trava {} ficou presa por outro processo por mais de {} s", path.display(), each.as_secs()),
-                Wait::Within { limit, .. } => late(limit),
-            })),
+            Err(fs::TryLockError::WouldBlock) => return Ok(None),
             Err(fs::TryLockError::Error(error)) => return Err(ConfigError::Io(error, path.display().to_string())),
         }
     }
@@ -353,22 +356,22 @@ pub fn reconcile_account(home: &Path, name: &str, project: Option<&str>, wait: W
 /// Trava compartilhada (duas contas devolvendo o mesmo arquivo ao `~/.claude`) e depois a da conta
 /// (no seed, a da pendência), sempre nessa ordem; soltas ao sair, também em erro.
 pub fn reconcile_locked(home: &Path, dir: &Path, project: Option<&str>, lock_name: &str, wait: Wait) -> Outcome {
-    let late_now = || match wait {
-        Wait::Within { limit, deadline } if Instant::now() >= deadline => Some(late_outcome(limit)),
-        _ => None,
+    let take = |path: &Path, create: bool| -> std::result::Result<Held, Outcome> {
+        let deadline = match wait { Wait::Each(each) => Instant::now() + each, Wait::Within { deadline, .. } => deadline };
+        match lock(path, create, deadline) {
+            Ok(Some(held)) => Ok(held),
+            Ok(None) => Err(match wait {
+                Wait::Each(each) => Outcome::failed(refused(format!("a trava {} ficou presa por outro processo por mais de {} s",
+                    path.display(), each.as_secs()))),
+                Wait::Within { limit, .. } => late_outcome(limit),
+            }),
+            Err(error) => Err(Outcome::failed(error)),
+        }
     };
-    let shared = match lock(&home.join(".hangar-contas.lock"), true, wait) {
-        Ok(held) => held,
-        Err(error) => return late_now().unwrap_or_else(|| Outcome::failed(error)),
-    };
-    let own = match lock(&dir.join(lock_name), false, wait) {
-        Ok(held) => held,
-        Err(error) => return late_now().unwrap_or_else(|| Outcome::failed(error)),
-    };
-    if let Some(late) = late_now() { return late; }
-    let outcome = reconcile(home, dir, project);
-    drop((own, shared));
-    outcome
+    let _shared = match take(&home.join(".hangar-contas.lock"), true) { Ok(held) => held, Err(outcome) => return outcome };
+    let _own = match take(&dir.join(lock_name), false) { Ok(held) => held, Err(outcome) => return outcome };
+    if let Wait::Within { limit, deadline } = wait && Instant::now() >= deadline { return late_outcome(limit); }
+    reconcile(home, dir, project)
 }
 
 /// O corpo, sem travas: quem chama já as segura.
@@ -419,11 +422,11 @@ fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut V
         let text = name.to_str().unwrap_or_default();
         if ACCOUNT_RUNTIME.contains(&text) {
             // Atalho de runtime de versão antiga: senão a conta segue gravando o runtime dela no compartilhado.
-            if is_symlink(&destination) && points_to(&destination, &target) { unlink(&destination).at(&destination)?; }
+            if points_to(&destination, &target) { unlink(&destination).at(&destination)?; }
             continue;
         }
         if NEVER_LINK.contains(&text) { continue; }
-        if is_symlink(&destination) && points_to(&destination, &target) { continue; }
+        if points_to(&destination, &target) { continue; }
         if is_symlink(&destination) || exists(&destination) {
             warnings.extend(collide(dir, &destination, &target)?);
         }
@@ -437,8 +440,9 @@ fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut V
     warnings.extend(mirror_claude_json(home, dir)?);
     // Atalho para o que sumiu do compartilhado, e qualquer outro link morto no topo.
     for entry in fs::read_dir(dir).at(dir)? {
-        let path = entry.at(dir)?.path();
-        if is_symlink(&path) && !exists(&path) { unlink(&path).at(&path)?; }
+        let entry = entry.at(dir)?;
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|t| t.is_symlink()) && !exists(&path) { unlink(&path).at(&path)?; }
     }
     stage("ligar_memoria", false);
     warnings.extend(link_memory(home, dir, project)?);
@@ -618,12 +622,10 @@ fn drawer_with(dir: &Path, destination: &Path, rename: &dyn Fn(&Path, &Path) -> 
 fn link_memory(home: &Path, dir: &Path, project: Option<&str>) -> Result<Vec<String>> {
     let root = home.join(".claude").join("projects");
     fs::create_dir_all(&root).at(&root)?;
-    let mut names = std::collections::BTreeSet::new();
-    for entry in fs::read_dir(&root).at(&root)? {
-        let entry = entry.at(&root)?;
-        if is_dir(&entry.path()) { names.insert(entry.file_name()); }
-    }
-    if let Some(project) = project.filter(|p| !p.is_empty()) {
+    // Entrada que não é pasta sai pelo `is_dir` do alvo, logo abaixo.
+    let mut names = fs::read_dir(&root).at(&root)?.map(|entry| entry.map(|e| e.file_name()))
+        .collect::<io::Result<std::collections::BTreeSet<_>>>().at(&root)?;
+    if let Some(project) = project {
         let memory = root.join(project).join("memory");
         fs::create_dir_all(&memory).at(&memory)?;
         names.insert(project.into());
@@ -633,9 +635,9 @@ fn link_memory(home: &Path, dir: &Path, project: Option<&str>) -> Result<Vec<Str
         let target = root.join(&name).join("memory");
         if !is_dir(&target) { continue; }
         let local = dir.join("projects").join(&name);
-        fs::create_dir_all(&local).at(&local)?;
         let destination = local.join("memory");
-        if is_symlink(&destination) && points_to(&destination, &target) { continue; }
+        if points_to(&destination, &target) { continue; }
+        fs::create_dir_all(&local).at(&local)?;
         if is_symlink(&destination) || exists(&destination) {
             warnings.extend(collide(dir, &destination, &target)?);
         }
@@ -677,50 +679,48 @@ fn mirror_settings(target: &Path, destination: &Path) -> Result<Option<String>> 
     let (Value::Object(principal), Value::Object(copy)) = (principal, copy) else {
         return Err(refused("settings.json não é um objeto JSON — não dá pra espelhar pra conta"));
     };
-    let mut merged = copy.clone();
-    for (key, value) in &principal {
-        if let ("enabledPlugins", Value::Object(theirs)) = (key.as_str(), value)
-            && let Some(Value::Object(ours)) = merged.get_mut(key) {
-            for (plugin, on) in theirs { ours.insert(plugin.clone(), on.clone()); }
-            continue;
-        }
-        merged.insert(key.clone(), value.clone());
+    // Plugin só acrescentado pelo principal não desfaz nada: o `enabledPlugins` conta como desfeito só
+    // quando algum plugin mudou de valor.
+    let mut theirs = principal;
+    let mut plugins_undone = None;
+    if let (Some(Value::Object(ours)), Some(Value::Object(plugins))) = (copy.get("enabledPlugins"), theirs.get("enabledPlugins")) {
+        let (merged, undone) = overlay(ours, plugins);
+        plugins_undone = Some(!undone.is_empty());
+        theirs.insert("enabledPlugins".into(), Value::Object(merged));
     }
+    let (merged, mut undone) = overlay(&copy, &theirs);
     if py_eq_map(&merged, &copy) { return Ok(None); }
-    let undone = |key: &String| -> bool {
-        let Some(old) = copy.get(key) else { return false };
-        if py_eq(old, &merged[key]) { return false; }
-        match (key.as_str(), old, &principal[key]) {
-            // Plugin só acrescentado pelo principal não desfaz nada.
-            ("enabledPlugins", Value::Object(old), Value::Object(theirs)) =>
-                theirs.iter().any(|(plugin, on)| old.get(plugin).is_some_and(|was| !py_eq(was, on))),
-            _ => true,
-        }
-    };
-    let mut undone: Vec<&String> = principal.keys().filter(|k| undone(k)).collect();
-    undone.sort_by(|a, b| py_order(a, b));
+    if plugins_undone == Some(false) { undone.retain(|k| k != "enabledPlugins"); }
     let text = pyjson::dumps_indent(&Value::Object(merged), 2, false) + "\n";
     if text.chars().any(py::is_marker) {
         return Err(refused("settings.json tem texto com surrogate solto, que não dá pra gravar em UTF-8 — não dá pra espelhar pra conta"));
     }
     write_replacing(destination, &text)?;
-    Ok((!undone.is_empty()).then(|| format!("settings.json: o principal sobrescreveu {} na cópia desta conta",
-        undone.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", "))))
+    Ok((!undone.is_empty()).then(|| format!("settings.json: o principal sobrescreveu {} na cópia desta conta", undone.join(", "))))
 }
 
-/// A cópia com os `mcpServers` do principal por cima, servidor a servidor, e os servidores desfeitos.
+/// `ours` com as chaves de `theirs` por cima (a chave que já existia fica no lugar dela) e as que
+/// `ours` tinha com outro valor, em ordem.
+fn overlay(ours: &Map<String, Value>, theirs: &Map<String, Value>) -> (Map<String, Value>, Vec<String>) {
+    let mut merged = ours.clone();
+    let mut undone = Vec::new();
+    for (key, value) in theirs {
+        if ours.get(key).is_some_and(|was| !py_eq(was, value)) { undone.push(key.clone()); }
+        merged.insert(key.clone(), value.clone());
+    }
+    undone.sort_by(|a, b| py_order(a, b));
+    (merged, undone)
+}
+
+/// Os `mcpServers` da cópia com os do principal por cima, servidor a servidor, e os desfeitos; `None`
+/// sem mudança.
 fn mcp_plan(principal: &Map<String, Value>, copy: &Map<String, Value>) -> Option<(Map<String, Value>, Vec<String>)> {
     let Some(Value::Object(theirs)) = principal.get("mcpServers") else { return None };
     if theirs.is_empty() { return None; }
-    let ours = match copy.get("mcpServers") { Some(Value::Object(m)) => m.clone(), _ => Map::new() };
-    let mut merged = ours.clone();
-    for (server, value) in theirs { merged.insert(server.clone(), value.clone()); }
-    if py_eq_map(&merged, &ours) { return None; }
-    let mut undone: Vec<String> = theirs.iter().filter(|(k, v)| ours.get(*k).is_some_and(|was| !py_eq(was, v))).map(|(k, _)| k.clone()).collect();
-    undone.sort_by(|a, b| py_order(a, b));
-    let mut copy = copy.clone();
-    copy.insert("mcpServers".into(), Value::Object(merged));
-    Some((copy, undone))
+    let none = Map::new();
+    let ours = match copy.get("mcpServers") { Some(Value::Object(m)) => m, _ => &none };
+    let (merged, undone) = overlay(ours, theirs);
+    (!py_eq_map(&merged, ours)).then_some((merged, undone))
 }
 
 /// Só os `mcpServers` do `~/.claude.json` chegam à conta: o resto do arquivo (oauthAccount, projetos)
@@ -738,12 +738,13 @@ fn mirror_claude_json(home: &Path, dir: &Path) -> Result<Option<String>> {
     let _lock = crate::session_open::claude::lock_config(&destination).inspect_err(|error| {
         tracing::warn!(file = %destination.display(), error, "trava do .claude.json indisponível; o espelho dos MCP grava sem ela");
     }).ok();
-    let copy = match read_json(&destination).map_err(failed)? {
+    let mut copy = match read_json(&destination).map_err(failed)? {
         None => return Ok(None),
         Some(Value::Object(copy)) => copy,
         Some(_) => return Err(not_object()),
     };
-    let Some((copy, undone)) = mcp_plan(&principal, &copy) else { return Ok(None) };
+    let Some((servers, undone)) = mcp_plan(&principal, &copy) else { return Ok(None) };
+    copy.insert("mcpServers".into(), Value::Object(servers));
     write_replacing(&destination, &pyjson::dumps_indent(&Value::Object(copy), 2, true))?;
     Ok((!undone.is_empty()).then(|| format!(".claude.json: o principal sobrescreveu os MCP {} na cópia desta conta", undone.join(", "))))
 }
@@ -803,25 +804,26 @@ fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
 /// `oauthAccount` (as permissões e os MCP ficam, o login não), `projects/` e a reconciliação sob a
 /// trava da pendência, o único arquivo que existe antes da publicação.
 pub fn seed(home: &Path, dir: &Path) -> Outcome {
-    let prepared = (|| -> Result<()> {
-        let shared = home.join(".claude");
-        fs::create_dir_all(&shared).at(&shared)?;
-        let mut data = match read_json(&home.join(".claude.json")) {
-            Ok(None) => Map::new(),
-            Ok(Some(Value::Object(data))) => data,
-            Ok(Some(_)) => return Err(refused("o ~/.claude.json não é um objeto JSON — não dá pra semear a conta")),
-            Err(e) => return Err(refused(format!("não consegui ler o ~/.claude.json pra semear a conta: {e}"))),
-        };
-        data.shift_remove("oauthAccount");
-        let copy = dir.join(".claude.json");
-        fs::write(&copy, pyjson::dumps_indent(&Value::Object(data), 2, true)).at(&copy)?;
-        let projects = dir.join("projects");
-        mkdir(&projects).at(&projects)
-    })();
-    match prepared {
+    match prepare_pending(home, dir) {
         Ok(()) => reconcile_locked(home, dir, None, PENDING, Wait::Each(LOCK_WAIT)),
         Err(error) => Outcome::failed(error),
     }
+}
+
+fn prepare_pending(home: &Path, dir: &Path) -> Result<()> {
+    let shared = home.join(".claude");
+    fs::create_dir_all(&shared).at(&shared)?;
+    let mut data = match read_json(&home.join(".claude.json")) {
+        Ok(None) => Map::new(),
+        Ok(Some(Value::Object(data))) => data,
+        Ok(Some(_)) => return Err(refused("o ~/.claude.json não é um objeto JSON — não dá pra semear a conta")),
+        Err(e) => return Err(refused(format!("não consegui ler o ~/.claude.json pra semear a conta: {e}"))),
+    };
+    data.shift_remove("oauthAccount");
+    let copy = dir.join(".claude.json");
+    fs::write(&copy, pyjson::dumps_indent(&Value::Object(data), 2, true)).at(&copy)?;
+    let projects = dir.join("projects");
+    mkdir(&projects).at(&projects)
 }
 
 // ── o comando `hangar-server conta` ───────────────────────────────────────────────────────────
@@ -845,7 +847,7 @@ pub fn write_cli_diary(env: &AccountEnvironment, events: &[Value]) {
     if events.is_empty() { return; }
     let Some(dir) = crate::runtime::local_policy::log_base_in(env).map(|base| base.join("diario").join("hangar-conta")) else { return };
     if fs::create_dir_all(&dir).is_err() { return; }
-    let Ok(_held) = lock(&dir.with_extension("lock"), true, Wait::Each(Duration::from_secs(5))) else { return };
+    let Ok(Some(_held)) = lock(&dir.with_extension("lock"), true, Instant::now() + Duration::from_secs(5)) else { return };
     let _ = crate::diag::write_diary(&dir, events, chrono::Local::now());
 }
 
@@ -877,10 +879,8 @@ fn guard(home: &Path, dir: &Path) -> Result<super::AccountGuard> {
 }
 
 fn refusal(err: &mut dyn Write, error: &ConfigError) -> u8 {
-    match error {
-        ConfigError::Refused(detail) => { let _ = writeln!(err, "hangar-conta: {detail}"); 1 }
-        ConfigError::Io(..) => { let _ = writeln!(err, "hangar-conta: falha ao executar: {error}"); 126 }
-    }
+    let _ = writeln!(err, "hangar-conta: {}", error.cause());
+    match error { ConfigError::Refused(_) => 1, ConfigError::Io(..) => 126 }
 }
 
 fn prep(env: &AccountEnvironment, name: &str, project: Option<&str>, out: &mut dyn Write, err: &mut dyn Write) -> u8 {

@@ -201,14 +201,12 @@ pub fn hangar_account(dir: &Path) -> Option<String> {
 /// dela, na frase que o `hangar-conta` imprimiria.
 pub fn account_result(account: &str, result: Result<Vec<String>, crate::accounts::claude_config::ConfigError>)
     -> Result<Vec<String>, super::OpenError> {
-    use crate::accounts::claude_config::ConfigError;
     let cause = match result {
         Ok(warnings) => {
             for warning in &warnings { tracing::warn!("conta {account}: {warning}"); }
             return Ok(warnings);
         }
-        Err(ConfigError::Refused(detail)) => detail,
-        Err(error @ ConfigError::Io(..)) => format!("falha ao executar: {error}"),
+        Err(error) => error.cause(),
     };
     Err(super::OpenError::new(500, "erro_conta_reconciliacao_falhou", format!("não consegui reconciliar a conta {account}: {cause}"))
         .with_params(json!({"nome_conta": account, "erro": cause})))

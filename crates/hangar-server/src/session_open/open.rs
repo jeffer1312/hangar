@@ -52,8 +52,8 @@ pub trait OpenHost: Send + Sync {
     /// Os eventos `conta.reconciliar.*`: o servidor grava no diário dele; o comando de terminal, que não
     /// grava os da criação, no arquivo dos comandos de conta.
     fn account_diary(&self, events: Vec<Value>);
-    /// Quanto a abertura espera a reconciliação da conta (`RECONCILE_LIMIT`; os testes encurtam).
-    fn reconcile_limit(&self) -> Duration;
+    /// Quanto a abertura espera a reconciliação da conta; os testes encurtam.
+    fn reconcile_limit(&self) -> Duration { RECONCILE_LIMIT }
     /// Id da conversa (`--session-id`) e chave da ponte do plugin, novos a cada vida.
     fn new_session_id(&self) -> String;
     fn new_bridge_key(&self) -> String;
@@ -67,8 +67,8 @@ pub trait OpenHost: Send + Sync {
     fn prewarm(&self) -> Option<&crate::prewarm::Store>;
 }
 
-/// O prazo que o `hangar-conta` tinha: leitura presa (FIFO, montagem travada) ou trava que não solta
-/// recusa a abertura em vez de segurá-la para sempre.
+/// Leitura presa (FIFO, montagem travada) ou trava que não solta recusa a abertura em vez de segurá-la
+/// para sempre.
 pub(crate) const RECONCILE_LIMIT: Duration = Duration::from_secs(120);
 
 /// UUID v4 de 16 bytes aleatórios em hexadecimal.
@@ -528,11 +528,10 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         let account = claude::hangar_account(Path::new(dir))
             .ok_or_else(|| OpenError::plain(404, format!("{dir} não é uma conta criada pelo hangar")))?;
         progress_step(&spec.name, "conta", json!({"conta": account}));
-        use crate::accounts::claude_config::{ConfigError, Outcome, Wait, late_outcome, reconcile_account};
+        use crate::accounts::claude_config::{Outcome, Wait, late_outcome, reconcile_account, refused};
         let (home, name, project) = (host.home().to_owned(), account.clone(), hangar_workspace::worktrees::sanitize_cwd(&spec.cwd));
         let limit = host.reconcile_limit();
         let wait = Wait::within(limit);
-        let failed = |detail: String| Outcome { result: Err(ConfigError::Refused(detail)), diary: Vec::new() };
         // As travas esperam só até o prazo, e a guarda vai com a tarefa: a recusa no limite não deixa
         // reconciliação rodando sem ela (a exclusão da conta esperaria) nem segurando o runtime.
         let held = guard.take();
@@ -542,7 +541,7 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
                 guard = held;
                 outcome
             }
-            Ok(Err(e)) => failed(format!("a reconciliação parou no meio: {e}")),
+            Ok(Err(e)) => Outcome::failed(refused(format!("a reconciliação parou no meio: {e}"))),
             Err(_) => late_outcome(limit),
         };
         host.account_diary(outcome.diary);
