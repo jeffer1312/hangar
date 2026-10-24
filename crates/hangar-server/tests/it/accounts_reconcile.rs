@@ -599,6 +599,60 @@ fn scenario(name: &str) -> Scenario {
             mkdirs(&h.join(".claude/.drift"));
         }, vec![cli(&PREP)]),
 
+        // ── lacunas da conferência ──
+        // C48/Q35: a guarda ocupada responde antes de saber que a conta não existe.
+        "prep_absent_guard_busy" => sc(casa, vec![Step::Busy(vec!["--prep".into(), "naoexiste".into()])]),
+        // C93/Q30/C113/C130: o `~/.claude/CLAUDE.md` é atalho para os dotfiles (0600); a mudança da conta vai para
+        // o arquivo deles, e o settings.json 0600 da conta é regravado pelo espelho.
+        "prep_shared_link_and_modes" => sc(|h| {
+            casa(h);
+            conta(h, "conta2");
+            rm(&h.join(".claude/CLAUDE.md"));
+            put(&h.join("dotfiles/CLAUDE.md"), "# regras");
+            chmod(&h.join("dotfiles/CLAUDE.md"), 0o600);
+            ln(&h.join(".claude/CLAUDE.md"), h.join("dotfiles/CLAUDE.md"));
+            put(&h.join(".claude-conta2/CLAUDE.md"), "# editado na conta");
+            put(&h.join(".claude-conta2/settings.json"), r#"{"theme":"light"}"#);
+            chmod(&h.join(".claude-conta2/settings.json"), 0o600);
+        }, vec![cli(&PREP)]),
+        // C95: a cópia da mudança para o compartilhado somente leitura falha.
+        "prep_shared_readonly_collision" => with_path(d2(sc(|h| {
+            casa(h);
+            conta(h, "conta2");
+            chmod(&h.join(".claude/CLAUDE.md"), 0o444);
+            put(&h.join(".claude-conta2/CLAUDE.md"), "# editado na conta");
+        }, vec![cli(&PREP)]), 0, 0, FAILED, ""), 0, 0, "<HOME>/.claude/CLAUDE.md"),
+        // C123: objetos aninhados trocados inteiros pelos do principal.
+        "settings_nested_objects_shallow" => sc(|h| {
+            casa(h);
+            conta(h, "conta2");
+            put(&h.join(".claude/settings.json"), r#"{"permissions": {"allow": ["Bash"]}, "hooks": {"Stop": [{"command": "a"}]}, "env": {"A": "1"}}"#);
+            put(&h.join(".claude-conta2/settings.json"), r#"{"permissions": {"allow": ["Bash"], "deny": ["Edit"]}, "hooks": {"Stop": [{"command": "a"}], "Start": []}, "env": {"A": "1", "B": "2"}, "model": "opus"}"#);
+        }, vec![cli(&PREP)]),
+        // C139: dois servidores desfeitos, em ordem no aviso.
+        "mcp_two_undone_sorted" => sc(|h| {
+            casa(h);
+            conta(h, "conta2");
+            put(&h.join(".claude.json"), r#"{"mcpServers": {"zeta": {"url": "z"}, "alpha": {"url": "a"}, "novo": {}}}"#);
+            put(&h.join(".claude-conta2/.claude.json"), r#"{"mcpServers": {"zeta": {"url": "velho"}, "alpha": {"url": "velho"}}, "projects": {}}"#);
+        }, vec![cli(&PREP)]),
+        // C140: a cópia sem a chave `mcpServers` a ganha no fim.
+        "mcp_copy_without_key" => sc(|h| {
+            casa(h);
+            conta(h, "conta2");
+            put(&h.join(".claude-conta2/.claude.json"), r#"{"projects": {"/tmp/x": {}}, "numStartups": 2}"#);
+        }, vec![cli(&PREP)]),
+        // Q08: escapes de controle nos valores, byte a byte.
+        "settings_control_escapes" => sc(|h| {
+            casa(h);
+            conta(h, "conta2");
+            put(&h.join(".claude/settings.json"), "{\"ctl\": \"a\\bb\\fc\\rd\\ne\\u0000f\\u0001g\\u001bh\\u0085i\\u00a0j\", \"theme\": \"dark\"}");
+            put(&h.join(".claude-conta2/settings.json"), r#"{"theme": "light"}"#);
+        }, vec![cli(&PREP)]),
+        // C155: entradas do registro de plugins em objeto, não em lista (exceção crua do Python).
+        "plugins_entries_object" => d3(sc(|h| { casa(h); conta(h, "conta2");
+            shared_plugins(h, r#"{"a@x": true}"#, Some(r#"{"plugins": {"a@x": {"installPath": "/nada"}}}"#)); }, vec![cli(&PREP)]), 0),
+
         // ── diferenças aceitas (o Rust é conferido contra o "depois" do decisoes.md) ──
         "new_fixed_dirs" => Scenario { env: vec![("CP_CLAUDE_CONFIG_DIRS", "<HOME>/.claude")], ..sc(casa, vec![cli(&NEW)]) },
         "list_pending_dead_link" => sc(|h| { conta(h, "a"); conta(h, "b"); ln(&h.join(".claude-b/.hangar-account-pending"), h.join("nada")); },
@@ -643,7 +697,9 @@ scenarios!(
     drift_slot_dead_link_file, drift_slot_dead_link_dir, drift_unicode_digit, top_order,
     fifo_goes_to_drift, memory_cases, memory_local_project_is_file, shared_pending_marker, relative_link_kept,
     link_loop_drawer, never_link_names, b3_memory_shared_bucket, prep_ignores_claude_config_dir,
-    drift_prunes_link_entry,
+    drift_prunes_link_entry, prep_absent_guard_busy, prep_shared_link_and_modes, prep_shared_readonly_collision,
+    settings_nested_objects_shallow, mcp_two_undone_sorted, mcp_copy_without_key, settings_control_escapes,
+    plugins_entries_object,
 );
 
 // ── execução ────────────────────────────────────────────────────────────────────────────────
@@ -1196,6 +1252,24 @@ fn stale_config_lock(home: &Path) {
     let lock = account.join(".claude.json.lock");
     mkdirs(&lock);
     mtime(&lock, 1_000_000_000);
+}
+
+/// C93: a mudança da conta entra no arquivo dos dotfiles no lugar (mesmo inode e modo), e o atalho do
+/// `~/.claude` continua atalho. A paridade com o Python (`prep_shared_link_and_modes`) não vê o inode.
+#[test]
+fn the_change_goes_into_the_linked_shared_file_in_place() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    (scenario("prep_shared_link_and_modes").build)(&home);
+    let dotfile = home.join("dotfiles/CLAUDE.md");
+    let before = std::fs::metadata(&dotfile).unwrap().ino();
+    let out = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let after = std::fs::metadata(&dotfile).unwrap();
+    assert_eq!((after.ino(), after.mode() & 0o777), (before, 0o600), "o arquivo dos dotfiles foi trocado, não regravado");
+    assert_eq!(std::fs::read_to_string(&dotfile).unwrap(), "# editado na conta");
+    assert!(std::fs::symlink_metadata(home.join(".claude/CLAUDE.md")).unwrap().file_type().is_symlink());
 }
 
 /// D21: sem a trava do `.claude.json` da conta o espelho dos MCP grava sem ela, e o log diz qual trava
