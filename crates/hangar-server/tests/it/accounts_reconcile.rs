@@ -608,7 +608,7 @@ fn scenario(name: &str) -> Scenario {
 }
 
 /// D12 e D13: o gerador grava o Python, e o teste confere o Rust contra o que foi aceito.
-const ACCEPTED: [&str; 3] = ["new_fixed_dirs", "list_pending_dead_link", "prep_pending_dead_link"];
+const ACCEPTED: [&str; 4] = ["new_fixed_dirs", "list_pending_dead_link", "prep_pending_dead_link", "b1_runtime_not_listed"];
 
 macro_rules! scenarios {
     ($($name:ident),* $(,)?) => {
@@ -639,7 +639,7 @@ scenarios!(
     plugins_list_falsy, plugins_seeded_not_object, shared_dead_link, user_dead_link_pruned, drift_slot_reuse,
     drift_slot_dead_link_file, drift_slot_dead_link_dir, drift_unicode_digit, drift_just_moved_pruned, top_order,
     fifo_goes_to_drift, memory_cases, memory_local_project_is_file, shared_pending_marker, relative_link_kept,
-    link_loop_drawer, never_link_names, b1_runtime_not_listed, b3_memory_shared_bucket, prep_ignores_claude_config_dir,
+    link_loop_drawer, never_link_names, b3_memory_shared_bucket, prep_ignores_claude_config_dir,
     drift_prunes_link_entry,
 );
 
@@ -996,6 +996,40 @@ fn prep_pending_dead_link() {
     assert_eq!(got.steps[0]["stderr"], json!(["hangar-conta: <HOME>/.claude-conta2 não é uma conta criada pelo hangar"]));
     assert_tree("prep_pending_dead_link", &got.initial, &got.tree);
     assert!(got.diary.is_empty());
+}
+
+/// B1 (U3): `.claude.json.lock` e `mcp-needs-auth-cache.json` são runtime da conta. O Python mandava
+/// a trava para a gaveta e subia o cache da conta para o `~/.claude`; agora os dois ficam na conta.
+#[test]
+fn b1_runtime_not_listed() {
+    let python = fixture("b1_runtime_not_listed");
+    assert_eq!(python["steps"][0]["stderr"].as_array().unwrap().len(), 2, "o Python gavetava e subia");
+    let got = run("b1_runtime_not_listed", &Side::Rust);
+    assert_eq!((got.steps[0]["exit"].clone(), got.steps[0]["stderr"].clone()), (json!(0), json!([])));
+    let tree = got.tree.as_object().unwrap();
+    assert_eq!(tree["<HOME>/.claude-conta2/.claude.json.lock"], json!({"kind": "dir"}));
+    assert_eq!(tree["<HOME>/.claude-conta2/mcp-needs-auth-cache.json"]["text"], r#"{"conta": 1}"#);
+    assert_eq!(tree["<HOME>/.claude/mcp-needs-auth-cache.json"]["text"], "{}", "o cache da conta não sobe");
+    assert!(!tree.contains_key("<HOME>/.claude-conta2/.drift"));
+}
+
+/// B1: o link antigo desses dois para o `~/.claude` é desfeito, como o dos outros arquivos de runtime.
+#[test]
+fn b1_runtime_links_into_the_shared_folder_are_undone() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    conta(&home, "conta2");
+    mkdirs(&home.join(".claude/.claude.json.lock"));
+    put(&home.join(".claude/mcp-needs-auth-cache.json"), "{}");
+    let account = home.join(".claude-conta2");
+    ln(&account.join(".claude.json.lock"), home.join(".claude/.claude.json.lock"));
+    ln(&account.join("mcp-needs-auth-cache.json"), home.join(".claude/mcp-needs-auth-cache.json"));
+    assert_eq!(claude_config::reconcile(&home, &account, None).result.unwrap(), Vec::<String>::new());
+    for name in [".claude.json.lock", "mcp-needs-auth-cache.json"] {
+        assert!(std::fs::symlink_metadata(account.join(name)).is_err(), "{name} seguiu ligado ao ~/.claude");
+    }
+    assert!(!account.join(".drift").exists());
 }
 
 // ── o núcleo pela biblioteca ────────────────────────────────────────────────────────────────

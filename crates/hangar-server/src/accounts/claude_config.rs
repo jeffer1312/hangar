@@ -16,9 +16,11 @@ use std::time::{Duration, Instant};
 
 /// Versões que a gaveta guarda por nome de origem; sem teto ela cresce para sempre.
 const DRIFT_CAP: usize = 3;
-/// Runtime que o CLI e o servidor regravam por conta com tmp+rename: ligado, cada passada acharia
-/// deriva de novo e mandaria para a gaveta.
-const ACCOUNT_RUNTIME: [&str; 6] = ["sessions", "telemetry", "feedback", "image-cache", ".last-update-result.json", ".hangar-models.json"];
+/// Runtime que o CLI e o servidor regravam por conta com tmp+rename (e a trava que o CLI cria ao
+/// gravar o `.claude.json`): ligado, cada passada acharia deriva de novo, mandaria para a gaveta ou
+/// subiria a cópia da conta para o `~/.claude`.
+const ACCOUNT_RUNTIME: [&str; 8] = ["sessions", "telemetry", "feedback", "image-cache", ".last-update-result.json", ".hangar-models.json",
+    ".claude.json.lock", "mcp-needs-auth-cache.json"];
 /// Nunca viram atalho: nossos (`.drift`, marcador), da conta (login, `projects/` pelo custo por
 /// pasta), cópia (`settings.json`, que o CLI regravava atravessando o link) e apelidos (cópia velha
 /// subia por cima dos novos).
