@@ -172,16 +172,17 @@ fn run_case(doc: &Value, case: &Value) -> usize {
             .map(|e| match e { Effect::DemoteAwaiting { sid, .. } => json!(["demote_awaiting", sid]) }).collect();
         got_effects.sort_by_key(|v| v.to_string());
         assert_eq!(Value::Array(got_effects), expected["effects"], "{ctx} effects");
-        // Quem executa o efeito é o Python (`hook_state.demote_awaiting`): sidecar idle, ts mantido.
+        // O efeito regrava o sidecar idle, ts mantido, como o `hook_state.demote_awaiting` do Python.
         for Effect::DemoteAwaiting { sid, .. } in &effects {
+            let before: Vec<Option<Value>> = dirs.iter().map(|dir| std::fs::read(dir.join(".hangar-state").join(format!("{sid}.json"))).ok()
+                .map(|raw| serde_json::from_slice::<Value>(&raw).unwrap())).collect();
+            hangar_server::list::facts_files::demote_marker(&dirs, sid);
             let mut rewritten = false;
-            for dir in &dirs {
-                let f = dir.join(".hangar-state").join(format!("{sid}.json"));
-                if let Ok(raw) = std::fs::read(&f) {
-                    let ts = serde_json::from_slice::<Value>(&raw).unwrap()["ts"].clone();
-                    std::fs::write(&f, json!({"state": "idle", "ts": ts}).to_string()).unwrap();
-                    rewritten = true;
-                }
+            for (dir, was) in dirs.iter().zip(before) {
+                let Some(was) = was else { continue };
+                let now: Value = serde_json::from_slice(&std::fs::read(dir.join(".hangar-state").join(format!("{sid}.json"))).unwrap()).unwrap();
+                assert_eq!(now, json!({"state": "idle", "ts": was["ts"]}), "{ctx}: marcador regravado ({sid})");
+                rewritten = true;
             }
             assert!(rewritten, "{ctx}: rebaixamento sem marcador para regravar ({sid})");
         }

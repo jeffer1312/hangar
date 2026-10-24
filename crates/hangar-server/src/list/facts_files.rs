@@ -224,6 +224,24 @@ fn unique(dirs: &[PathBuf], sub: &str) -> Vec<PathBuf> {
     out
 }
 
+/// Regrava `awaiting_input` como `idle` no marcador da sessão, com o `ts` original: o boot e o
+/// Python releem do disco, e sem isto o fantasma volta. Marcador que já mudou fica como está.
+pub fn demote_marker(dirs: &[PathBuf], sid: &str) {
+    for d in unique(dirs, MARKER_DIR) {
+        let path = d.join(format!("{sid}.json"));
+        let Ok(Some(m)) = read_marker(&path) else { continue };
+        if m.state != "awaiting_input" { continue; }
+        let body = serde_json::json!({"state": "idle", "ts": m.ts}).to_string();
+        if let Err(e) = crate::runtime::queue::atomic_write(&path, body.as_bytes()) {
+            let code = format!("list_demote_write:{:?}", e.kind());
+            if crate::warn_limit::allow(None, &code) {
+                tracing::warn!(code, "lista: marcador fantasma não regravado; o próximo tique tenta de novo");
+            }
+            super::facts::note("rust.list_demote_failed", "", code, "marcador fantasma não regravado");
+        }
+    }
+}
+
 /// Pastas cuja escrita muda o estado de uma sessão Claude: marcadores, registro nativo e pergunta
 /// aberta de cada conta, resolvidas e sem repetir.
 pub fn state_dirs(dirs: &[PathBuf]) -> Vec<PathBuf> {

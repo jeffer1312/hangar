@@ -229,6 +229,9 @@ pub fn scan(jsonl: &Path, now: f64) -> std::io::Result<Scan> {
     Ok(Scan { open, last_reply: reply })
 }
 
+/// "Aguardando" e "terminou" das sessões que o Rust conduz; Pi, omp e Kimi ainda saem do Python.
+fn turn_notices(provider: &str) -> bool { matches!(provider, "claude" | "codex") }
+
 fn now_epoch() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64()) }
 
 struct Watch {
@@ -264,6 +267,7 @@ impl Watch {
         for attempt in 0..2 {
             if attempt == 1 { tokio::time::sleep(AWAITING_RETRY).await; }
             let Some(row) = self.row_of(&sid, attempt == 1).await else { return };
+            if !turn_notices(&row.provider) { return; }
             let ask = if row.headless { None } else {
                 let dirs = self.st.list.state_dirs_blocking().map(|(d, _)| d.to_vec()).unwrap_or_default();
                 crate::list::facts_files::open_question(Some(&sid), &dirs).map(|q| q.question)
@@ -298,7 +302,7 @@ impl Watch {
         self.persist();
         let s = self.settings();
         let Some(row) = row else { return };
-        if !s.notify_finished || idle_ts - started < s.finish_min_seconds { return; }
+        if !s.notify_finished || !turn_notices(&row.provider) || idle_ts - started < s.finish_min_seconds { return; }
         self.sender.notify(&row.name, Notice::Finished(summary(reply.as_deref())));
     }
 

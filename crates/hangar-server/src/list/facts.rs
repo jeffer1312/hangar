@@ -188,30 +188,6 @@ impl FactsClient {
         };
         tokio::time::timeout(FACTS_TIMEOUT, work).await.map_err(|_| "list_facts_timeout".to_owned())?
     }
-
-    /// `hooks.demote_awaiting` no Python, sem segurar a produção: quem é dono do mapa de marcadores
-    /// é ele. Falhou, o próximo tique captura de novo e pede outra vez.
-    pub fn demote(&self, sids: Vec<String>) {
-        let body = serde_json::json!({"sids": sids}).to_string();
-        let (http, url, secret) = (self.http.clone(), format!("http://{}/internal/list/demote", self.upstream), self.secret.clone());
-        let diag = self.diag.clone();
-        tokio::spawn(async move {
-            let code = match axum::http::Request::post(url).header("x-hangar-internal", secret)
-                .header("content-type", "application/json").body(Body::from(body)) {
-                Err(_) => "list_demote_request".to_owned(),
-                Ok(req) => match tokio::time::timeout(Duration::from_secs(5), http.request(req)).await {
-                    Ok(Ok(r)) if r.status().is_success() => return,
-                    Ok(Ok(r)) => format!("list_demote_status:{}", r.status().as_u16()),
-                    Ok(Err(e)) => unreachable_code("list_demote", &e),
-                    Err(_) => "list_demote_timeout".to_owned(),
-                },
-            };
-            if crate::warn_limit::allow(None, &code) {
-                tracing::warn!(code, "lista: rebaixamento de awaiting não chegou ao Python");
-            }
-            diag.report("rust.list_demote_failed", "", &code, "rebaixamento de awaiting não chegou ao Python");
-        });
-    }
 }
 
 fn unreachable_code(prefix: &str, e: &hyper_util::client::legacy::Error) -> String {
@@ -419,8 +395,6 @@ mod tests {
         let got = client.fetch(&[], &BTreeMap::new()).await;
         assert!(!got.ok);
         assert_eq!(diary(&seen, "rust.list_facts_unavailable").await["codigo"], "list_facts_status:503");
-        client.demote(vec!["sid".into()]);
-        assert_eq!(diary(&seen, "rust.list_demote_failed").await["codigo"], "list_demote_status:503");
     }
 
     #[tokio::test]
