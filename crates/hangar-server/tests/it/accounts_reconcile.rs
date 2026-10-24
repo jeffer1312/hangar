@@ -1367,6 +1367,61 @@ http_scenarios!(
     http_new_without_claude_json => "new_without_claude_json", http_new_seed_format => "new_seed_format",
 );
 
+/// `conta --new` pelo comando: código de saída e as linhas do stderr.
+fn cli_new(home: &Path, name: &str) -> (i32, Vec<String>) {
+    let output = command(&Side::Rust, home, &["--new".to_owned(), name.to_owned()], &[]).output().unwrap();
+    (output.status.code().unwrap(), String::from_utf8(output.stderr).unwrap().lines().map(str::to_owned).collect())
+}
+
+/// Falha da criação da conta Claude pelo comando e pelo app: 500 com o motivo e o caminho, nunca a frase
+/// da conta Codex.
+async fn assert_create_failed(home: &Path, name: &str, path: &Path, reason: &str) {
+    let (exit, stderr) = cli_new(home, name);
+    assert_eq!(exit, 1, "{stderr:?}");
+    let line = stderr.last().map(String::as_str).unwrap_or_default();
+    assert!(line.starts_with("hangar-conta: ") && line.contains(&path.display().to_string()) && line.contains(reason)
+        && !line.contains("Codex"), "{stderr:?}");
+    let app = app(home).await;
+    let (status, body) = create(&app, name, std::time::Duration::from_secs(30)).await.unwrap();
+    assert_eq!((status, body["detail"]["code"].as_str()), (500, Some("account_prepare_failed")), "{body}");
+    let msg = body["detail"]["msg"].as_str().unwrap_or_default();
+    assert!(msg.contains(&path.display().to_string()) && msg.contains(reason) && !msg.contains("Codex"), "{body}");
+}
+
+/// U5: a pasta da conta Claude que não pôde ser criada (HOME sem escrita) diz o motivo e o caminho.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_claude_folder_that_cannot_be_created_says_why_and_where() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    mkdirs(&home.join(".hangar/account-locks"));
+    chmod(&home, 0o500);
+    assert_create_failed(&home, "nova", &home.join(".claude-nova"), "Permission denied").await;
+    unlock(&home);
+    assert!(!home.join(".claude-nova").exists());
+}
+
+/// U5: a guarda da conta Claude que falha por erro de disco é 500 com o motivo; ocupada continua 409, e
+/// a conta Codex não muda.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_guard_that_fails_on_disk_is_not_a_busy_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    put(&home.join(".hangar"), "não é pasta");
+    assert_create_failed(&home, "nova", &home.join(".claude-nova"), "Not a directory").await;
+    let codex = hangar_server::accounts::AccountService::new(env_of(&home))
+        .create(Provider::Codex, "c2", |_| Ok(())).err().map(|e| (e.status, e.code));
+    assert_eq!(codex, Some((409, "account_busy")), "a conta Codex não muda");
+    rm(&home.join(".hangar"));
+    let key = AccountKey::new(Provider::Claude, &home.join(".claude-nova")).unwrap();
+    let locks = hangar_server::accounts::AccountLocks::new(home.join(".hangar/account-locks"));
+    let _held = locks.try_acquire(&key, hangar_server::accounts::GuardMode::Exclusive).unwrap();
+    let app = app(&home).await;
+    let (status, body) = create(&app, "nova", std::time::Duration::from_secs(30)).await.unwrap();
+    assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("account_busy")), "{body}");
+}
+
 /// O preparo da pasta pendente deixa a publicação para a criação: sem marcador e com a pendência, o
 /// `settings.json` copiado e real, sem as credenciais do principal e `projects/` real.
 #[test]
