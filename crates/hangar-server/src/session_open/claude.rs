@@ -283,8 +283,9 @@ pub fn pretrust(file: &Path, cwd: &str, windows: bool) -> Result<(), String> {
     let key = if windows { cwd.replace('\\', "/") } else { cwd.to_owned() };
     let trusted = |data: &Value| data.get("projects").and_then(|p| p.get(&key)).and_then(|e| e.get("hasTrustDialogAccepted")) == Some(&Value::Bool(true));
     let result = (|| -> Result<(), String> {
-        // Pasta já confiada não disputa a trava com as sessões vivas.
-        if trusted(&read()?) { return Ok(()); }
+        // Pasta já confiada não disputa a trava com as sessões vivas. Esta leitura é sem a trava e pode
+        // pegar o arquivo no meio da gravação de outra sessão: ilegível aqui segue para a leitura travada.
+        if read().is_ok_and(|data| trusted(&data)) { return Ok(()); }
         let _lock = lock_config(file).inspect_err(|error| {
             tracing::warn!(file = %file.display(), error, "trava do .claude.json indisponível; a confiança grava sem ela");
         }).ok();
