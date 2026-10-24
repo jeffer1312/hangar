@@ -1876,7 +1876,11 @@ impl Engine {
         // Turno cortado: lido da mesma decodificação do `thread/read`, uma só por linha.
         let mut cut = false;
         match rpc.method.as_str() {
-            "initialize" => { self.initialized = true; }
+            "initialize" => {
+                self.initialized = true;
+                // Só para o diário: resposta fora do formato vira `rust.codex_decode`.
+                let _:wire::InitializeResponse = self.decode_reply(&rpc.method,&result,effects);
+            }
             "thread/resume" | "thread/start" => {
                 if let Some(parent) = self.fast_dropped(&rpc,&result) {
                     const DROPPED:&str = "O Codex não preservou a escolha Fast ao retomar";

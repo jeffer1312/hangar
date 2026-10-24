@@ -940,6 +940,15 @@ fn any_codex_version_initializes_silently() {
 }
 
 #[test]
+fn malformed_initialize_reply_goes_to_the_diary() {
+    let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":true}),1,clock(10.0));
+    let effects = engine.bootstrap(true,"boot".into()).unwrap();
+    let id = frames(&effects)[0]["id"].clone();
+    let effects = line(&mut engine,json!({"id":id,"result":{"userAgent":5}}),11.0);
+    assert_eq!(diags(&effects),vec![(DiagEvent::CodexDecode,"initialize".into())]);
+}
+
+#[test]
 fn notification_with_wrong_type_is_dropped_and_reported() {
     let mut engine = engine();
     line(&mut engine,json!({"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1"}}}),10.0);
