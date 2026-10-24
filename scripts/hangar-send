@@ -365,6 +365,16 @@ me() {
                                       END { if (n == 1) print s }')
         if [[ -n "$dono" ]]; then echo "$dono"; return; fi
     fi
+    # 1b) O spec da abertura, pela chave: o rename do Rust reescreve o nome ali, e a chave não muda.
+    #     Cobre o psmux, onde o pane id se repete entre sessões e o passo 1 fica ambíguo.
+    if [[ -n "${CP_SESSION_KEY:-}" && -f "$HOME/.hangar/session-specs/$CP_SESSION_KEY.json" ]]; then
+        local spec_nome
+        spec_nome=$(grep -o '"name": *"[^"]*"' "$HOME/.hangar/session-specs/$CP_SESSION_KEY.json" | head -1 |
+                    sed 's/.*: *"\(.*\)"/\1/') || spec_nome=""
+        if [[ -n "$spec_nome" ]] && tmux has-session -t "=$spec_nome" 2>/dev/null; then
+            echo "$spec_nome"; return
+        fi
+    fi
     # 2) O carimbo do nascimento, só se a sessão AINDA se chamar assim (Windows, ou tmux sem pane).
     if [[ -n "${CP_SESSION_NAME:-}" ]] && tmux has-session -t "=$CP_SESSION_NAME" 2>/dev/null; then
         echo "$CP_SESSION_NAME"; return
