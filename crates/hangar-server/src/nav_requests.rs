@@ -242,6 +242,14 @@ mod tests {
 
     fn listen(s: &str) -> SocketAddr { s.parse().unwrap() }
 
+    /// B10: a transferência gravada em curso (a que a lista lê do disco) recusa como a `main`.
+    #[test]
+    fn recorded_transfer_in_progress_refuses() {
+        let facts = crate::list::facts::ListFacts { frozen: ["s".to_owned()].into(), unknown: false, ..Default::default() };
+        assert!(crate::plans::routes::transfer_busy(&facts, "s"));
+        assert!(!crate::plans::routes::transfer_busy(&facts, "outra"));
+    }
+
     #[test]
     fn parse_keeps_only_url_text_and_numeric_ts() {
         let got = parse(br#"{"a":{"url":"u","ts":5},"b":{"url":1,"ts":5},"c":{"url":"u"},"d":{"url":"u","ts":true},"e":"x"}"#);
