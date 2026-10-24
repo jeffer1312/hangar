@@ -33,24 +33,34 @@ const SYMLINK_HINT: &str = "No Windows isso exige o Modo Desenvolvedor ligado (C
 pub enum ConfigError {
     /// Recusa com a frase que o comando imprime e a abertura repassa.
     Refused(String),
-    /// Falha do sistema de arquivos fora dos casos tratados: o comando sai com 126.
-    Io(io::Error),
+    /// Falha do sistema de arquivos fora dos casos tratados, com o caminho envolvido (`a -> b` quando são
+    /// dois): o comando sai com 126.
+    Io(io::Error, String),
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Refused(detail) => f.write_str(detail),
-            Self::Io(error) => write!(f, "{error}"),
+            Self::Io(error, path) => write!(f, "{path}: {error}"),
         }
     }
 }
 
-impl From<io::Error> for ConfigError {
-    fn from(error: io::Error) -> Self { Self::Io(error) }
+type Result<T> = std::result::Result<T, ConfigError>;
+
+/// O caminho junto do erro do sistema, como a mensagem do Python trazia.
+trait At<T> {
+    fn at(self, path: &Path) -> Result<T>;
+    fn between(self, from: &Path, to: &Path) -> Result<T>;
 }
 
-type Result<T> = std::result::Result<T, ConfigError>;
+impl<T> At<T> for io::Result<T> {
+    fn at(self, path: &Path) -> Result<T> { self.map_err(|e| ConfigError::Io(e, path.display().to_string())) }
+    fn between(self, from: &Path, to: &Path) -> Result<T> {
+        self.map_err(|e| ConfigError::Io(e, format!("{} -> {}", from.display(), to.display())))
+    }
+}
 
 fn refused(detail: impl Into<String>) -> ConfigError { ConfigError::Refused(detail.into()) }
 
@@ -107,15 +117,15 @@ fn make_symlink(target: &Path, link: &Path) -> io::Result<()> {
 }
 
 /// `shutil.copyfile`: os bytes, sem o modo de origem; destino que é link é seguido.
-fn copy_file(from: &Path, to: &Path) -> io::Result<()> {
-    let mut source = fs::File::open(from)?;
-    let mut target = fs::OpenOptions::new().write(true).create(true).truncate(true).open(to)?;
-    io::copy(&mut source, &mut target).map(drop)
+fn copy_file(from: &Path, to: &Path) -> Result<()> {
+    let mut source = fs::File::open(from).at(from)?;
+    let mut target = fs::OpenOptions::new().write(true).create(true).truncate(true).open(to).at(to)?;
+    io::copy(&mut source, &mut target).map(drop).between(from, to)
 }
 
-fn same_bytes(a: &Path, b: &Path) -> io::Result<bool> {
-    if fs::metadata(a)?.len() != fs::metadata(b)?.len() { return Ok(false); }
-    Ok(fs::read(a)? == fs::read(b)?)
+fn same_bytes(a: &Path, b: &Path) -> Result<bool> {
+    if fs::metadata(a).at(a)?.len() != fs::metadata(b).at(b)?.len() { return Ok(false); }
+    Ok(fs::read(a).at(a)? == fs::read(b).at(b)?)
 }
 
 /// `os.path.realpath(strict=False)`: link morto resolve até onde dá e laço devolve o próprio caminho
@@ -220,7 +230,7 @@ fn read_json(path: &Path) -> std::result::Result<Option<Value>, String> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
     };
     let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
     serde_json::from_str(&text).or_else(|error| {
@@ -261,10 +271,10 @@ fn py_eq_map(a: &Map<String, Value>, b: &Map<String, Value>) -> bool {
 }
 
 /// Grava por temporário e troca: um CLI vivo lendo o arquivo no meio receberia JSON truncado.
-fn write_replacing(path: &Path, text: &str) -> io::Result<()> {
+fn write_replacing(path: &Path, text: &str) -> Result<()> {
     let temp = sibling(path);
-    fs::write(&temp, text)?;
-    crate::runtime::queue::replace(&temp, path)
+    fs::write(&temp, text).at(&temp)?;
+    crate::runtime::queue::replace(&temp, path).between(&temp, path)
 }
 
 // ── travas ────────────────────────────────────────────────────────────────────────────────────
@@ -280,7 +290,7 @@ impl Drop for Held {
 fn lock(path: &Path, create: bool, wait: Duration) -> Result<Held> {
     let mut options = fs::OpenOptions::new();
     if create { options.read(true).append(true).create(true) } else { options.read(true).write(true) };
-    let file = options.open(path)?;
+    let file = options.open(path).at(path)?;
     let deadline = Instant::now() + wait;
     loop {
         match file.try_lock() {
@@ -288,7 +298,7 @@ fn lock(path: &Path, create: bool, wait: Duration) -> Result<Held> {
             Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
             Err(fs::TryLockError::WouldBlock) =>
                 return Err(refused(format!("a trava {} ficou presa por outro processo por mais de {} s", path.display(), wait.as_secs()))),
-            Err(fs::TryLockError::Error(error)) => return Err(error.into()),
+            Err(fs::TryLockError::Error(error)) => return Err(ConfigError::Io(error, path.display().to_string())),
         }
     }
 }
@@ -342,8 +352,8 @@ pub fn reconcile(home: &Path, dir: &Path, project: Option<&str>) -> Outcome {
     end["codigo"] = json!(if result.is_ok() { "retornou" } else { "excecao" });
     end["ms"] = json!(started.elapsed().as_millis() as u64);
     if let Err(error) = &result {
-        end["erro_tipo"] = json!(match error { ConfigError::Refused(_) => "ContaError", ConfigError::Io(_) => "OSError" });
-        if let ConfigError::Io(error) = error && let Some(code) = error.raw_os_error() { end["errno"] = json!(code); }
+        end["erro_tipo"] = json!(match error { ConfigError::Refused(_) => "ContaError", ConfigError::Io(..) => "OSError" });
+        if let ConfigError::Io(error, _) = error && let Some(code) = error.raw_os_error() { end["errno"] = json!(code); }
     }
     diary.push(end);
     Outcome { result, diary }
@@ -373,14 +383,14 @@ fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut V
     let shared = home.join(".claude");
     let mut warnings = Vec::new();
     stage("ligar_arquivos", true);
-    let mut names = fs::read_dir(&shared)?.map(|entry| entry.map(|e| e.file_name())).collect::<io::Result<Vec<_>>>()?;
+    let mut names = fs::read_dir(&shared).at(&shared)?.map(|entry| entry.map(|e| e.file_name())).collect::<io::Result<Vec<_>>>().at(&shared)?;
     sort_names(&mut names);
     for name in names {
         let (target, destination) = (shared.join(&name), dir.join(&name));
         let text = name.to_str().unwrap_or_default();
         if ACCOUNT_RUNTIME.contains(&text) {
             // Atalho de runtime de versão antiga: senão a conta segue gravando o runtime dela no compartilhado.
-            if is_symlink(&destination) && points_to(&destination, &target) { unlink(&destination)?; }
+            if is_symlink(&destination) && points_to(&destination, &target) { unlink(&destination).at(&destination)?; }
             continue;
         }
         if NEVER_LINK.contains(&text) { continue; }
@@ -397,9 +407,9 @@ fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut V
     stage("espelhar_config", false);
     warnings.extend(mirror_claude_json(home, dir)?);
     // Atalho para o que sumiu do compartilhado, e qualquer outro link morto no topo.
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
-        if is_symlink(&path) && !exists(&path) { unlink(&path)?; }
+    for entry in fs::read_dir(dir).at(dir)? {
+        let path = entry.at(dir)?.path();
+        if is_symlink(&path) && !exists(&path) { unlink(&path).at(&path)?; }
     }
     stage("ligar_memoria", false);
     warnings.extend(link_memory(home, dir, project)?);
@@ -417,10 +427,9 @@ fn link(destination: &Path, target: &Path) -> Result<()> {
         return Err(refused(format!("{} já existe — reconciliação anterior deixou lixo?", name_of(&temp))));
     }
     // Nunca cai para cópia: ela passaria a divergir do original calada.
-    make_symlink(target, &temp)
-        .map_err(|e| refused(format!("não consegui criar o atalho {}: {e}. {SYMLINK_HINT}", name_of(destination))))?;
-    crate::runtime::queue::replace(&temp, destination)?;
-    Ok(())
+    make_symlink(target, &temp).map_err(|e| refused(format!("não consegui criar o atalho {}: {} -> {}: {e}. {SYMLINK_HINT}",
+        name_of(destination), target.display(), temp.display())))?;
+    crate::runtime::queue::replace(&temp, destination).between(&temp, destination)
 }
 
 /// O caminho existe e não é o atalho esperado. Tipo incompatível vai para a gaveta; arquivo contra
@@ -431,10 +440,10 @@ fn collide(dir: &Path, destination: &Path, target: &Path) -> Result<Option<Strin
     }
     if !same_bytes(destination, target)? {
         copy_file(destination, target)?;
-        unlink(destination)?;
+        unlink(destination).at(destination)?;
         return Ok(Some(format!("'{}' foi alterado dentro desta conta; a mudança subiu pro ~/.claude", name_of(destination))));
     }
-    unlink(destination)?;
+    unlink(destination).at(destination)?;
     Ok(None)
 }
 
@@ -479,25 +488,26 @@ fn drawer(dir: &Path, destination: &Path) -> Result<String> {
         // Gaveta apontando para fora levaria as entradas, e a poda, para o diretório externo.
         return Err(refused("a gaveta .drift desta conta é um symlink ou não é uma pasta"));
     }
-    mkdir(&drift)?;
+    mkdir(&drift).at(&drift)?;
     let name = name_of(destination);
     let mut n = 1;
     while exists(&drift.join(format!("{name}.{n}"))) { n += 1; }
+    let slot = drift.join(format!("{name}.{n}"));
     // ponytail: só `rename` (o `shutil.move` copiava quando ele falhava); a gaveta mora na mesma pasta
     // da conta, então só um ponto de montagem dentro dela traria o EXDEV.
-    fs::rename(destination, drift.join(format!("{name}.{n}")))?;
+    fs::rename(destination, &slot).between(destination, &slot)?;
     // Teto por nome de origem: pela gaveta inteira, três `skills` levavam o único `hooks.1`.
     let mut siblings = Vec::new();
-    for entry in fs::read_dir(&drift)? {
-        let entry = entry?;
-        if origin(&entry.file_name().to_string_lossy()) == name {
+    for entry in fs::read_dir(&drift).at(&drift)? {
+        let path = entry.at(&drift)?.path();
+        if origin(&name_of(&path)) == name {
             // lstat: a entrada pode ser link, e o alvo quebrado não pode parar a poda.
-            siblings.push((mtime(&fs::symlink_metadata(entry.path())?), entry.path()));
+            siblings.push((mtime(&fs::symlink_metadata(&path).at(&path)?), path));
         }
     }
     siblings.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     for (_, old) in siblings.into_iter().skip(DRIFT_CAP) {
-        if is_symlink(&old) || is_file(&old) { unlink(&old)?; } else { let _ = fs::remove_dir_all(&old); }
+        if is_symlink(&old) || is_file(&old) { unlink(&old).at(&old)?; } else { let _ = fs::remove_dir_all(&old); }
     }
     Ok(format!("'{name}' era local nesta conta; movido pra .drift/{name}.{n}"))
 }
@@ -505,14 +515,15 @@ fn drawer(dir: &Path, destination: &Path) -> Result<String> {
 /// `projects/` é real por conta (custo por pasta); só o `memory/` de cada projeto é atalho.
 fn link_memory(home: &Path, dir: &Path, project: Option<&str>) -> Result<Vec<String>> {
     let root = home.join(".claude").join("projects");
-    fs::create_dir_all(&root)?;
+    fs::create_dir_all(&root).at(&root)?;
     let mut names = std::collections::BTreeSet::new();
-    for entry in fs::read_dir(&root)? {
-        let entry = entry?;
+    for entry in fs::read_dir(&root).at(&root)? {
+        let entry = entry.at(&root)?;
         if is_dir(&entry.path()) { names.insert(entry.file_name()); }
     }
     if let Some(project) = project.filter(|p| !p.is_empty()) {
-        fs::create_dir_all(root.join(project).join("memory"))?;
+        let memory = root.join(project).join("memory");
+        fs::create_dir_all(&memory).at(&memory)?;
         names.insert(project.into());
     }
     let mut warnings = Vec::new();
@@ -520,7 +531,7 @@ fn link_memory(home: &Path, dir: &Path, project: Option<&str>) -> Result<Vec<Str
         let target = root.join(&name).join("memory");
         if !is_dir(&target) { continue; }
         let local = dir.join("projects").join(&name);
-        fs::create_dir_all(&local)?;
+        fs::create_dir_all(&local).at(&local)?;
         let destination = local.join("memory");
         if is_symlink(&destination) && points_to(&destination, &target) { continue; }
         if is_symlink(&destination) || exists(&destination) {
@@ -531,9 +542,9 @@ fn link_memory(home: &Path, dir: &Path, project: Option<&str>) -> Result<Vec<Str
     // A poda do topo não alcança `projects/`: sem esta passada o link morto ficava para sempre.
     let projects = dir.join("projects");
     if is_dir(&projects) {
-        for entry in fs::read_dir(&projects)? {
-            let memory = entry?.path().join("memory");
-            if is_symlink(&memory) && !exists(&memory) { unlink(&memory)?; }
+        for entry in fs::read_dir(&projects).at(&projects)? {
+            let memory = entry.at(&projects)?.path().join("memory");
+            if is_symlink(&memory) && !exists(&memory) { unlink(&memory).at(&memory)?; }
         }
     }
     Ok(warnings)
@@ -546,7 +557,7 @@ fn seed_settings(home: &Path, dir: &Path) -> Result<Option<String>> {
     let destination = dir.join("settings.json");
     let mut warning = None;
     if is_symlink(&destination) {
-        if points_to(&destination, &target) { unlink(&destination)?; } else { warning = Some(drawer(dir, &destination)?); }
+        if points_to(&destination, &target) { unlink(&destination).at(&destination)?; } else { warning = Some(drawer(dir, &destination)?); }
     } else if exists(&destination) {
         return mirror_settings(&target, &destination);
     }
@@ -688,7 +699,8 @@ fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
 /// trava da pendência, o único arquivo que existe antes da publicação.
 pub fn seed(home: &Path, dir: &Path) -> Outcome {
     let prepared = (|| -> Result<()> {
-        fs::create_dir_all(home.join(".claude"))?;
+        let shared = home.join(".claude");
+        fs::create_dir_all(&shared).at(&shared)?;
         let mut data = match read_json(&home.join(".claude.json")) {
             Ok(None) => Map::new(),
             Ok(Some(Value::Object(data))) => data,
@@ -696,8 +708,10 @@ pub fn seed(home: &Path, dir: &Path) -> Outcome {
             Err(e) => return Err(refused(format!("não consegui ler o ~/.claude.json pra semear a conta: {e}"))),
         };
         data.shift_remove("oauthAccount");
-        fs::write(dir.join(".claude.json"), pyjson::dumps_indent(&Value::Object(data), 2, true))?;
-        Ok(mkdir(&dir.join("projects"))?)
+        let copy = dir.join(".claude.json");
+        fs::write(&copy, pyjson::dumps_indent(&Value::Object(data), 2, true)).at(&copy)?;
+        let projects = dir.join("projects");
+        mkdir(&projects).at(&projects)
     })();
     match prepared {
         Ok(()) => reconcile_locked(home, dir, None, PENDING, LOCK_WAIT),
@@ -742,14 +756,15 @@ fn list(home: &Path) -> Vec<String> {
 /// A guarda compartilhada de existência, como a do `ciclo_conta`: 5 s, depois "ocupada".
 fn guard(home: &Path, dir: &Path) -> Result<super::AccountGuard> {
     let locks = AccountLocks::new(home.join(".hangar").join("account-locks"));
-    let key = AccountKey::new(Provider::Claude, dir)?;
+    let key = AccountKey::new(Provider::Claude, dir).at(dir)?;
+    let file = locks.path(&key).at(dir)?;
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match locks.try_acquire(&key, GuardMode::Shared) {
             Ok(guard) => return Ok(guard),
             Err(LockError::Busy) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
             Err(LockError::Busy) => return Err(refused("a conta está ocupada por outra operação")),
-            Err(LockError::Io(error)) => return Err(error.into()),
+            Err(LockError::Io(error)) => return Err(ConfigError::Io(error, file.display().to_string())),
         }
     }
 }
@@ -757,7 +772,7 @@ fn guard(home: &Path, dir: &Path) -> Result<super::AccountGuard> {
 fn refusal(err: &mut dyn Write, error: &ConfigError) -> u8 {
     match error {
         ConfigError::Refused(detail) => { let _ = writeln!(err, "hangar-conta: {detail}"); 1 }
-        ConfigError::Io(error) => { let _ = writeln!(err, "hangar-conta: falha ao executar: {error}"); 126 }
+        ConfigError::Io(..) => { let _ = writeln!(err, "hangar-conta: falha ao executar: {error}"); 126 }
     }
 }
 

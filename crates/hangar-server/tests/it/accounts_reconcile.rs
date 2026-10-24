@@ -83,6 +83,9 @@ enum Step {
 struct Rules {
     /// D2: na linha `line` do stderr do passo `step` só o texto fixo em volta do erro do sistema conta.
     d2: Vec<(usize, usize, &'static str, &'static str)>,
+    /// O texto do sistema muda (D2), o caminho que a mensagem do Python trazia não: o trecho variável da
+    /// linha leva este caminho nos dois lados.
+    path: Vec<(usize, usize, &'static str)>,
     /// D3: exceção crua do Python; o Rust sai com o mesmo código e uma linha `hangar-conta:` em português.
     d3: Vec<usize>,
     /// D6: avisos de memória sem ordem, e as `.drift/memory.N` comparadas pelo conteúdo.
@@ -102,6 +105,10 @@ fn d2(mut s: Scenario, step: usize, line: usize, prefix: &'static str, suffix: &
     s
 }
 fn d3(mut s: Scenario, step: usize) -> Scenario { s.rules.d3.push(step); s }
+fn with_path(mut s: Scenario, step: usize, line: usize, path: &str) -> Scenario {
+    s.rules.path.push((step, line, Box::leak(path.to_owned().into_boxed_str())));
+    s
+}
 
 const SYMLINK_SUFFIX: &str = ". No Windows isso exige o Modo Desenvolvedor ligado (Configurações → Sistema → Para \
     desenvolvedores). Sem ele a conta ficaria com uma CÓPIA, que passa a divergir do original sem ninguém perceber.";
@@ -133,13 +140,14 @@ fn scenario(name: &str) -> Scenario {
         "new_symlink_refused" => {
             let s = sc(|h| { casa(h); put(&h.join(".claude").join(long_name()), "longo"); }, vec![cli(&NEW), cli(&["--list"])]);
             let prefix: &'static str = Box::leak(format!("hangar-conta: não consegui criar o atalho {}: ", long_name()).into_boxed_str());
-            d2(s, 0, 0, prefix, SYMLINK_SUFFIX)
+            let s = with_path(d2(s, 0, 0, prefix, SYMLINK_SUFFIX), 0, 0, &format!("<HOME>/.claude/{}", long_name()));
+            with_path(s, 0, 0, &format!("<HOME>/.claude-conta2/{}.hangar-novo.<PID>.<HEX>", long_name()))
         }
         "new_claude_json_truncated" => d2(sc(|h| { casa(h); put(&h.join(".claude.json"), r#"{"oauthAccount": {"emailA"#); },
             vec![cli(&NEW), cli(&["--list"])]), 0, 0, "hangar-conta: não consegui ler o ~/.claude.json pra semear a conta: ", ""),
         "new_claude_json_not_object" => sc(|h| { casa(h); put(&h.join(".claude.json"), "[1, 2, 3]"); }, vec![cli(&NEW)]),
-        "new_claude_json_unreadable" => d2(sc(|h| { casa(h); chmod(&h.join(".claude.json"), 0); }, vec![cli(&NEW)]),
-            0, 0, "hangar-conta: não consegui ler o ~/.claude.json pra semear a conta: ", ""),
+        "new_claude_json_unreadable" => with_path(d2(sc(|h| { casa(h); chmod(&h.join(".claude.json"), 0); }, vec![cli(&NEW)]),
+            0, 0, "hangar-conta: não consegui ler o ~/.claude.json pra semear a conta: ", ""), 0, 0, "<HOME>/.claude.json"),
         "new_apelidos" => sc(|h| { casa(h); put(&h.join(".claude/.hangar-apelidos.json"), r#"{"claude:/x": "Nome Bom"}"#); },
             vec![cli(&NEW), fs(|h| put(&h.join(".claude-conta2/.hangar-apelidos.json"), r#"{"claude:/x": "velho"}"#)), cli(&PREP)]),
         "new_without_claude_json" => sc(|h| { casa(h); rm(&h.join(".claude.json")); }, vec![cli(&NEW)]),
@@ -313,16 +321,21 @@ fn scenario(name: &str) -> Scenario {
             ln(&h.join(".claude-x/.hangar-conta"), h.join("marcador"));
             mkdirs(&h.join(".claude-y/.hangar-conta"));
         }, vec![cli(&["--prep", "x"]), cli(&["--prep", "y"])]),
-        "prep_shared_missing" => d2(sc(|h| conta(h, "conta2"), vec![cli(&PREP)]), 0, 0, FAILED, ""),
-        "prep_shared_is_file" => d2(sc(|h| { put(&h.join(".claude"), "arquivo"); conta(h, "conta2"); }, vec![cli(&PREP)]), 0, 0, FAILED, ""),
+        "prep_shared_missing" => with_path(d2(sc(|h| conta(h, "conta2"), vec![cli(&PREP)]), 0, 0, FAILED, ""), 0, 0, "<HOME>/.claude"),
+        "prep_shared_is_file" => with_path(d2(sc(|h| { put(&h.join(".claude"), "arquivo"); conta(h, "conta2"); }, vec![cli(&PREP)]),
+            0, 0, FAILED, ""), 0, 0, "<HOME>/.claude"),
         "prep_guard_busy" => sc(|h| { casa(h); conta(h, "conta2"); }, vec![Step::Busy(PREP.map(str::to_owned).into())]),
         "prep_symlink_refused" => {
             let s = sc(|h| { casa(h); conta(h, "conta2"); put(&h.join(".claude").join(long_name()), "longo"); }, vec![cli(&PREP)]);
             let prefix: &'static str = Box::leak(format!("hangar-conta: não consegui criar o atalho {}: ", long_name()).into_boxed_str());
-            d2(s, 0, 0, prefix, SYMLINK_SUFFIX)
+            let s = with_path(d2(s, 0, 0, prefix, SYMLINK_SUFFIX), 0, 0, &format!("<HOME>/.claude/{}", long_name()));
+            with_path(s, 0, 0, &format!("<HOME>/.claude-conta2/{}.hangar-novo.<PID>.<HEX>", long_name()))
         }
-        "prep_account_readonly" => d2(sc(|h| { casa(h); conta(h, "conta2"); chmod(&h.join(".claude-conta2"), 0o555); }, vec![cli(&PREP)]),
-            0, 0, "hangar-conta: não consegui criar o atalho CLAUDE.md: ", SYMLINK_SUFFIX),
+        "prep_account_readonly" => {
+            let s = d2(sc(|h| { casa(h); conta(h, "conta2"); chmod(&h.join(".claude-conta2"), 0o555); }, vec![cli(&PREP)]),
+                0, 0, "hangar-conta: não consegui criar o atalho CLAUDE.md: ", SYMLINK_SUFFIX);
+            with_path(with_path(s, 0, 0, "<HOME>/.claude/CLAUDE.md"), 0, 0, "<HOME>/.claude-conta2/CLAUDE.md.hangar-novo.<PID>.<HEX>")
+        }
 
         // ── settings.json ──
         "settings_principal_invalid" => d2(sc(|h| { casa(h); conta(h, "conta2"); put(&h.join(".claude-conta2/settings.json"), "{}");
@@ -348,11 +361,12 @@ fn scenario(name: &str) -> Scenario {
             ln(&h.join(".claude-conta2/settings.json"), h.join(".claude/settings.json")); }, vec![cli(&PREP)]),
         "settings_link_elsewhere" => sc(|h| { casa(h); conta(h, "conta2"); put(&h.join("outro.json"), r#"{"x": 1}"#);
             ln(&h.join(".claude-conta2/settings.json"), h.join("outro.json")); }, vec![cli(&PREP)]),
-        "settings_copy_is_dir" => d2(sc(|h| { casa(h); conta(h, "conta2"); mkdirs(&h.join(".claude-conta2/settings.json")); },
+        "settings_copy_is_dir" => with_path(d2(sc(|h| { casa(h); conta(h, "conta2"); mkdirs(&h.join(".claude-conta2/settings.json")); },
             vec![cli(&PREP)]), 0, 0, "hangar-conta: não consegui espelhar o settings.json pra conta: ", ""),
-        "settings_copy_unreadable" => d2(sc(|h| { casa(h); conta(h, "conta2"); put(&h.join(".claude-conta2/settings.json"), "{}");
+            0, 0, "<HOME>/.claude-conta2/settings.json"),
+        "settings_copy_unreadable" => with_path(d2(sc(|h| { casa(h); conta(h, "conta2"); put(&h.join(".claude-conta2/settings.json"), "{}");
             chmod(&h.join(".claude-conta2/settings.json"), 0); }, vec![cli(&PREP)]),
-            0, 0, "hangar-conta: não consegui espelhar o settings.json pra conta: ", ""),
+            0, 0, "hangar-conta: não consegui espelhar o settings.json pra conta: ", ""), 0, 0, "<HOME>/.claude-conta2/settings.json"),
         "settings_python_equality" => sc(|h| {
             casa(h);
             conta(h, "conta2");
@@ -412,9 +426,10 @@ fn scenario(name: &str) -> Scenario {
             0, 0, "hangar-conta: não consegui espelhar o ~/.claude.json pra conta: ", ""),
 
         // ── plugins ──
-        "plugins_registry_unreadable" => d2(sc(|h| { casa(h); conta(h, "conta2");
+        "plugins_registry_unreadable" => with_path(d2(sc(|h| { casa(h); conta(h, "conta2");
             shared_plugins(h, r#"{"a@x": true}"#, Some(r#"{"plugins": {}}"#)); chmod(&h.join(".claude/plugins/installed_plugins.json"), 0); },
             vec![cli(&PREP)]), 0, 0, "hangar-conta: plugins: não consegui ler <HOME>/.claude/plugins/installed_plugins.json: ", ""),
+            0, 0, "<HOME>/.claude/plugins/installed_plugins.json"),
         "plugins_registry_invalid" => d2(sc(|h| { casa(h); conta(h, "conta2"); shared_plugins(h, r#"{"a@x": true}"#, Some("{bad")); },
             vec![cli(&PREP)]), 0, 0, "hangar-conta: plugins: não consegui ler <HOME>/.claude/plugins/installed_plugins.json: ", ""),
         "plugins_registry_not_object" => d3(sc(|h| { casa(h); conta(h, "conta2"); shared_plugins(h, r#"{"a@x": true}"#, Some("[1]")); },
@@ -454,9 +469,9 @@ fn scenario(name: &str) -> Scenario {
             mkdirs(&h.join(".claude-conta2/skills")); }, vec![cli(&PREP)]),
         "drift_slot_dead_link_file" => sc(|h| { casa(h); conta(h, "conta2"); mkdirs(&h.join(".claude/hooks"));
             ln(&h.join(".claude-conta2/.drift/hooks.1"), h.join("nada")); put(&h.join(".claude-conta2/hooks"), "meu"); }, vec![cli(&PREP)]),
-        "drift_slot_dead_link_dir" => d2(sc(|h| { casa(h); conta(h, "conta2");
+        "drift_slot_dead_link_dir" => with_path(d2(sc(|h| { casa(h); conta(h, "conta2");
             ln(&h.join(".claude-conta2/.drift/skills.1"), h.join("nada")); put(&h.join(".claude-conta2/skills/a.md"), "meu"); },
-            vec![cli(&PREP)]), 0, 0, FAILED, ""),
+            vec![cli(&PREP)]), 0, 0, FAILED, ""), 0, 0, "<HOME>/.claude-conta2/.drift/skills.1"),
         "drift_unicode_digit" => sc(|h| {
             casa(h);
             conta(h, "conta2");
@@ -504,8 +519,8 @@ fn scenario(name: &str) -> Scenario {
             s.rules.d6 = true;
             s
         }
-        "memory_local_project_is_file" => d2(sc(|h| { casa(h); conta(h, "conta2"); put(&h.join(".claude-conta2/projects/-tmp-x"), "x"); },
-            vec![cli(&PREP)]), 0, 0, FAILED, ""),
+        "memory_local_project_is_file" => with_path(d2(sc(|h| { casa(h); conta(h, "conta2"); put(&h.join(".claude-conta2/projects/-tmp-x"), "x"); },
+            vec![cli(&PREP)]), 0, 0, FAILED, ""), 0, 0, "<HOME>/.claude-conta2/projects/-tmp-x"),
         "shared_pending_marker" => sc(|h| { casa(h); conta(h, "conta2"); put(&h.join(".claude/.hangar-account-pending"), ""); },
             vec![cli(&PREP), cli(&PREP), cli(&["--list"])]),
         "relative_link_kept" => sc(|h| { casa(h); conta(h, "conta2"); }, vec![cli(&PREP), fs(|h| {
@@ -867,6 +882,10 @@ fn compare_step(name: &str, i: usize, want: &Value, got: &Value, rules: &Rules) 
             let text = lines.get(*line).unwrap_or_else(|| panic!("{name}[{i}] D2: {side} sem a linha {line}: {lines:?}"));
             assert!(text.starts_with(prefix) && text.ends_with(suffix) && text.len() > prefix.len() + suffix.len(),
                 "{name}[{i}] D2: {side} fora do texto fixo {prefix:?}…{suffix:?}: {text:?}");
+            let detail = &text[prefix.len()..text.len() - suffix.len()];
+            for (_, _, path) in rules.path.iter().filter(|(s, l, _)| *s == i && l == line) {
+                assert!(detail.contains(path), "{name}[{i}] {side}: o erro do sistema perdeu o caminho {path:?}: {detail:?}");
+            }
             lines[*line] = format!("{prefix}<ERRO>{suffix}");
         }
     }

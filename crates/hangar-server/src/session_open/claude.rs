@@ -208,7 +208,7 @@ pub fn account_result(account: &str, result: Result<Vec<String>, crate::accounts
             return Ok(warnings);
         }
         Err(ConfigError::Refused(detail)) => detail,
-        Err(ConfigError::Io(error)) => format!("falha ao executar: {error}"),
+        Err(error @ ConfigError::Io(..)) => format!("falha ao executar: {error}"),
     };
     Err(super::OpenError::new(500, "erro_conta_reconciliacao_falhou", format!("não consegui reconciliar a conta {account}: {cause}"))
         .with_params(json!({"nome_conta": account, "erro": cause})))
