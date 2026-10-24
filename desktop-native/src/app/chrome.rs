@@ -685,8 +685,10 @@ pub fn confirm_alert_with(window: &mut Window, cx: &mut App, title: String, desc
         super::popup::dialog(dialog).w(px(360.)).close_button(false).margin_top(top)
             .title(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(title.clone()))
             .child(div().text_size(px(13.)).line_height(px(19.)).text_color(theme::muted()).whitespace_normal().child(description.clone()))
-            .when_some(check.clone(), |el, (label, value)| el.child(div().pt(px(10.)).child(
-                Checkbox::new("confirm-check").small().label(label).checked(value.get())
+            // A borda do kit some no vidro: a opção ganha caixa própria para ser vista.
+            .when_some(check.clone(), |el, (label, value)| el.child(div().mt(px(12.)).px(px(10.)).py(px(8.))
+                .rounded(px(8.)).border_1().border_color(theme::border_strong()).bg(theme::inset()).child(
+                Checkbox::new("confirm-check").label(label).checked(value.get())
                     .on_click(move |checked: &bool, window, _| { value.set(*checked); window.refresh(); }))))
             .footer(DialogFooter::new()
                 .child(OwnFocus { id: "cancel".into(), focus: Some(cancel_focus.clone()),

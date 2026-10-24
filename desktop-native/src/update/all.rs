@@ -378,7 +378,7 @@ impl Updater {
     pub(super) fn idle_visible(&self, plan: &Plan) -> bool { idle_visible(plan, self.update_all_count(), &self.survey.rows) }
 
     pub(super) fn confirm_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let all = Rc::new(Cell::new(false));
+        let all = Rc::new(Cell::new(true));
         let selected = all.clone();
         let this = cx.entity().downgrade();
         let plan = self.plan();
