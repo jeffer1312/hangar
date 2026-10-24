@@ -608,7 +608,8 @@ fn scenario(name: &str) -> Scenario {
 }
 
 /// D12 e D13: o gerador grava o Python, e o teste confere o Rust contra o que foi aceito.
-const ACCEPTED: [&str; 4] = ["new_fixed_dirs", "list_pending_dead_link", "prep_pending_dead_link", "b1_runtime_not_listed"];
+const ACCEPTED: [&str; 5] = ["new_fixed_dirs", "list_pending_dead_link", "prep_pending_dead_link", "b1_runtime_not_listed",
+    "drift_just_moved_pruned"];
 
 macro_rules! scenarios {
     ($($name:ident),* $(,)?) => {
@@ -637,7 +638,7 @@ scenarios!(
     plugins_registry_unreadable, plugins_registry_invalid, plugins_registry_not_object, plugins_entry_not_dict,
     plugins_install_path_number, plugins_install_path_shapes, plugins_enabled_shapes, plugins_list_truthy,
     plugins_list_falsy, plugins_seeded_not_object, shared_dead_link, user_dead_link_pruned, drift_slot_reuse,
-    drift_slot_dead_link_file, drift_slot_dead_link_dir, drift_unicode_digit, drift_just_moved_pruned, top_order,
+    drift_slot_dead_link_file, drift_slot_dead_link_dir, drift_unicode_digit, top_order,
     fifo_goes_to_drift, memory_cases, memory_local_project_is_file, shared_pending_marker, relative_link_kept,
     link_loop_drawer, never_link_names, b3_memory_shared_bucket, prep_ignores_claude_config_dir,
     drift_prunes_link_entry,
@@ -1011,6 +1012,21 @@ fn b1_runtime_not_listed() {
     assert_eq!(tree["<HOME>/.claude-conta2/mcp-needs-auth-cache.json"]["text"], r#"{"conta": 1}"#);
     assert_eq!(tree["<HOME>/.claude/mcp-needs-auth-cache.json"]["text"], "{}", "o cache da conta não sobe");
     assert!(!tree.contains_key("<HOME>/.claude-conta2/.drift"));
+}
+
+/// B2 (U3): a entrada que acabou de entrar na gaveta nunca é podada, mesmo mais velha que as irmãs;
+/// ficam ela e as mais novas, e o aviso "movido pra .drift/…" diz a verdade.
+#[test]
+fn drift_just_moved_pruned() {
+    let python = fixture("drift_just_moved_pruned");
+    assert!(python["tree"].get("<HOME>/.claude-conta2/.drift/hooks.4").is_none(), "o Python podava a recém-movida");
+    let got = run("drift_just_moved_pruned", &Side::Rust);
+    assert_eq!(got.steps[0]["stderr"], json!(["hangar-conta: 'hooks' era local nesta conta; movido pra .drift/hooks.4"]));
+    let tree = got.tree.as_object().unwrap();
+    assert_eq!(tree.get("<HOME>/.claude-conta2/.drift/hooks.4").map(|e| e["text"].clone()), Some(json!("velho")),
+        "a recém-movida foi podada");
+    let kept = tree.keys().filter(|k| k.starts_with("<HOME>/.claude-conta2/.drift/hooks.")).count();
+    assert_eq!(kept, 3, "teto de três por nome de origem");
 }
 
 /// B1: o link antigo desses dois para o `~/.claude` é desfeito, como o dos outros arquivos de runtime.

@@ -571,16 +571,17 @@ fn drawer_with(dir: &Path, destination: &Path, rename: &dyn Fn(&Path, &Path) -> 
     let slot = drift.join(format!("{name}.{n}"));
     move_entry(destination, &slot, rename)?;
     // Teto por nome de origem: pela gaveta inteira, três `skills` levavam o único `hooks.1`.
+    // A recém-movida fica fora da poda: podada, o aviso "movido pra .drift/…" mentiria.
     let mut siblings = Vec::new();
     for entry in fs::read_dir(&drift).at(&drift)? {
         let path = entry.at(&drift)?.path();
-        if origin(&name_of(&path)) == name {
+        if path != slot && origin(&name_of(&path)) == name {
             // lstat: a entrada pode ser link, e o alvo quebrado não pode parar a poda.
             siblings.push((mtime(&fs::symlink_metadata(&path).at(&path)?), path));
         }
     }
     siblings.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    for (_, old) in siblings.into_iter().skip(DRIFT_CAP) {
+    for (_, old) in siblings.into_iter().skip(DRIFT_CAP - 1) {
         if is_symlink(&old) || is_file(&old) { unlink(&old).at(&old)?; } else { let _ = fs::remove_dir_all(&old); }
     }
     Ok(format!("'{name}' era local nesta conta; movido pra .drift/{name}.{n}"))
@@ -974,8 +975,8 @@ mod tests {
         assert_eq!((fs::read_to_string(&slot).unwrap(), mode(&slot), mtime_secs(&slot)), ("velho".to_owned(), 0o640, 1_000));
     }
 
-    /// Com o mtime antigo preservado, a cópia é a mais velha das irmãs e a poda a leva; nascida com o
-    /// mtime de agora, a poda levaria outra.
+    /// A recém-movida fica mesmo mais velha que as irmãs; na entrada seguinte, a cópia com o mtime antigo
+    /// preservado é a mais velha das irmãs e a poda a leva (nascida com o mtime de agora, levaria outra).
     #[test]
     fn the_pruning_reads_the_preserved_mtime_of_the_copy() {
         let root = tempfile::tempdir().unwrap();
@@ -990,9 +991,14 @@ mod tests {
         fs::write(&hooks, "velho").unwrap();
         set_mtime(&hooks, 1_000);
         assert!(drawer_with(dir, &hooks, &cross_device).is_ok());
+        assert_eq!(fs::read_to_string(dir.join(".drift/hooks.4")).ok().as_deref(), Some("velho"), "a recém-movida nunca é podada");
+        fs::write(&hooks, "novo").unwrap();
+        set_mtime(&hooks, 2_000_000_000);
+        assert!(drawer(dir, &hooks).is_ok());
         let mut left: Vec<String> = fs::read_dir(dir.join(".drift")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
         left.sort();
-        assert_eq!(left, ["hooks.1", "hooks.2", "hooks.3"], "a cópia com o mtime antigo é a podada");
+        assert_eq!(left, ["hooks.1", "hooks.2", "hooks.3"], "a cópia com o mtime antigo é a podada na entrada seguinte");
+        assert_eq!(fs::read_to_string(dir.join(".drift/hooks.1")).unwrap(), "novo");
     }
 
     #[test]
