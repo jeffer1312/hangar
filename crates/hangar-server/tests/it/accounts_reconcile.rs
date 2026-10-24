@@ -973,6 +973,21 @@ fn two_accounts_reconciling_together_keep_one_whole_version() {
         conta(&home, name);
         put(&home.join(format!(".claude-{name}/CLAUDE.md")), text);
     }
+    // Com a trava das contas presa por outro dono, a conta_b espera sem tocar no `~/.claude`.
+    let holder = std::fs::OpenOptions::new().read(true).append(true).create(true).open(home.join(".hangar-contas.lock")).unwrap();
+    holder.lock().unwrap();
+    std::thread::scope(|s| {
+        let waiting = s.spawn(|| claude_config::reconcile_account(&home, "conta_b", None).result);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(std::fs::read_to_string(home.join(".claude/CLAUDE.md")).unwrap(), "# regras", "a conta_b subiu o arquivo sem a trava");
+        assert!(!std::fs::symlink_metadata(home.join(".claude-conta_b/CLAUDE.md")).unwrap().file_type().is_symlink());
+        holder.unlock().unwrap();
+        assert!(waiting.join().unwrap().is_ok());
+    });
+    put(&home.join(".claude/CLAUDE.md"), "# regras");
+    let link = home.join(".claude-conta_b/CLAUDE.md");
+    std::fs::remove_file(&link).unwrap();
+    put(&link, "# regras da b");
     let barrier = std::sync::Barrier::new(2);
     let warnings: Vec<Vec<String>> = std::thread::scope(|s| {
         let runs: Vec<_> = versions.iter().map(|(name, _)| s.spawn(|| {
@@ -989,17 +1004,19 @@ fn two_accounts_reconciling_together_keep_one_whole_version() {
     for list in warnings { assert!(list.iter().any(|w| w.contains("CLAUDE.md")), "{list:?}"); }
 }
 
-/// A mesma conta reconciliada duas vezes ao mesmo tempo: a trava da conta serializa (sem ela, a janela
-/// entre trocar e refazer o link dava FileExistsError) e as duas terminam sem erro.
+/// A mesma conta reconciliada duas vezes ao mesmo tempo: as travas serializam (sem elas, as duas mandam
+/// a mesma pasta local para a gaveta e a segunda falha no meio) e as duas terminam sem erro.
 #[test]
 fn the_same_account_reconciling_twice_at_once_never_fails() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().canonicalize().unwrap();
     casa(&home);
     conta(&home, "conta2");
-    for _ in 0..5 {
-        // Sem o link, as duas querem criá-lo ao mesmo tempo.
-        let _ = std::fs::remove_file(home.join(".claude-conta2/skills"));
+    for i in 0..30 {
+        // Uma pasta local no lugar do link: as duas querem tirá-la para a gaveta ao mesmo tempo.
+        let skills = home.join(".claude-conta2/skills");
+        if std::fs::symlink_metadata(&skills).is_ok() { rm(&skills); }
+        put(&skills.join("v.md"), i.to_string());
         let barrier = std::sync::Barrier::new(2);
         let results: Vec<_> = std::thread::scope(|s| {
             let runs: Vec<_> = (0..2).map(|_| s.spawn(|| {
@@ -1053,12 +1070,30 @@ fn json_value() -> impl proptest::strategy::Strategy<Value = Value> {
     ])
 }
 
-/// Conteúdo de um arquivo de entrada: ausente, bytes quaisquer ou JSON.
+/// Texto UTF-8 que não é JSON válido para o serde: truncado, com BOM, os literais que só o Python aceita,
+/// surrogate solto ou texto qualquer.
+fn broken_text() -> impl proptest::strategy::Strategy<Value = String> {
+    use proptest::prelude::*;
+    prop_oneof![
+        (json_value(), any::<prop::sample::Index>()).prop_map(|(v, cut)| {
+            let text = v.to_string();
+            let chars: Vec<char> = text.chars().collect();
+            chars[..cut.index(chars.len() + 1).min(chars.len())].iter().collect()
+        }),
+        json_value().prop_map(|v| format!("\u{feff}{v}")),
+        prop_oneof![Just("NaN"), Just("[Infinity]"), Just("[1e400]"), Just("{bad"), Just(""), Just(r#"{"x": "\ud800"}"#),
+            Just(r#"{"enabledPlugins": {"a@x": NaN}}"#)].prop_map(str::to_owned),
+        "\\PC{0,16}",
+    ]
+}
+
+/// Conteúdo de um arquivo de entrada: ausente, bytes quaisquer, texto quebrado ou JSON.
 fn input() -> impl proptest::strategy::Strategy<Value = Option<Vec<u8>>> {
     use proptest::prelude::*;
     prop_oneof![
         Just(None),
         proptest::collection::vec(any::<u8>(), 0..48).prop_map(Some),
+        broken_text().prop_map(|t| Some(t.into_bytes())),
         json_value().prop_map(|v| Some(v.to_string().into_bytes())),
         (json_value(), json_value()).prop_map(|(on, entries)| Some(json!({"enabledPlugins": {"a@x": on, "b@x": true}, "plugins": {"a@x": entries,
             "b@x": [{"installPath": entries}]}, "mcpServers": {"s": on}}).to_string().into_bytes())),
