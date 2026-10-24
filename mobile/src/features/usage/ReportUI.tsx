@@ -56,7 +56,7 @@ export function Metric({ label, value, primary = false, children }: { label: str
   const c = useSettingsColors();
   return <View style={{ gap: SPACE[1.5], paddingVertical: SPACE[3], minWidth: 0 }}>
     <Copy muted>{label}</Copy>
-    <Text style={{ color: c.text, fontSize: primary ? theme.base.text.xl : theme.base.text.lg, fontWeight: '600', fontVariant: ['tabular-nums'] }}>{value}</Text>
+    <Text style={{ color: c.text, fontSize: primary ? theme.base.text.xl : theme.base.text.lg, fontWeight: theme.base.weight.semibold, fontVariant: ['tabular-nums'] }}>{value}</Text>
     {children}
   </View>;
 }

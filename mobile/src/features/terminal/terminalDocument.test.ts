@@ -97,6 +97,8 @@ it('preparação i18n anterior ao tsc gera documento do zero sem Metro/Vitest', 
     symlinkSync(path.join(mobileDirectory, 'node_modules'), path.join(mobile, 'node_modules'), 'dir');
     symlinkSync(path.resolve(mobileDirectory, '../messages'), path.join(fixture, 'messages'), 'dir');
     cpSync(path.resolve(mobileDirectory, '../project.inlang'), path.join(fixture, 'project.inlang'), { recursive: true });
+    mkdirSync(path.join(fixture, 'scripts'));
+    copyFileSync(path.resolve(mobileDirectory, '../scripts/i18n-compile.mjs'), path.join(fixture, 'scripts/i18n-compile.mjs'));
     const output = path.join(terminal, 'terminalDocument.generated.json');
     expect(existsSync(output)).toBe(false);
     const result = spawnSync('npm', ['run', 'i18n:compile'], { cwd: mobile, encoding: 'utf8', timeout: 20000 });
