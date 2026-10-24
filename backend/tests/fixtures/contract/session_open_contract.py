@@ -323,7 +323,7 @@ def run_rust_side(scenario: dict) -> dict:
             if raw.get("not_ours"):
                 raise RustSideNotImplemented(f"Rust side not implemented for {route} (scenario {name}: not Claude with terminal)")
             raw["files"] = file_changes(before, snapshot(root))
-            # O `hangar-conta` (rodado de verdade) grava no arquivo do diário antes da criação.
+            # A reconciliação da conta grava no arquivo do diário antes da criação.
             raw["diary"] = read_diary(root) + raw["diary"]
             raw["_paths"] = {"root": str(root), "repo": str(REPO), "python": sys.executable}
             return raw

@@ -11,7 +11,13 @@ e é interativo, então a sessão sobe deslogada e o `/login` é rodado dentro d
 | `.claude.json` | real | Tem o `oauthAccount`. Semeado do teu, sem esse campo — herda permissões por projeto e MCP. |
 | `projects/` | real | É onde ficam os `.jsonl` que o painel de custo soma, uma vez por config dir. Compartilhar contaria o mesmo gasto uma vez por conta. |
 | `projects/<projeto>/memory/` | atalho | Memória não custa e vale igual em qualquer conta. |
-| o resto | atalho | Skills, plugins, hooks, settings, CLAUDE.md — o ambiente é um só. |
+| `settings.json` | cópia | O CLI grava nele sozinho (primeiro boot, `/config`, `/model`); pelo atalho isso apagava a config de todas as contas. A cada abertura o principal é espelhado por cima da cópia (chave de topo inteira; `enabledPlugins` por plugin; o que só a conta tem fica). |
+| o resto | atalho | Skills, plugins, hooks, CLAUDE.md — o ambiente é um só. Runtime do CLI por conta (`sessions/`, `telemetry/`, …) não vira atalho. |
+
+Quem mantém isso é a reconciliação do `hangar-server` (`crates/hangar-server/src/accounts/claude_config.rs`):
+roda em processo a cada abertura de sessão na conta e na criação dela, e pelo terminal com
+`hangar-conta --prep <conta>` (que chama `hangar-server conta`). O que diverge vai para a gaveta
+`.drift/` da conta; os `mcpServers` do `~/.claude.json` também são espelhados para a cópia da conta.
 
 ## O que isso custa
 
@@ -25,7 +31,7 @@ conta, não.
 | Sistema | Estado |
 |---|---|
 | Linux | Funciona. Medido: config dir vazio faz o CLI responder `Not logged in · Please run /login`. |
-| Windows | **Pode não funcionar.** Atalho exige o Modo Desenvolvedor ligado; sem ele a criação falha com mensagem explícita e **sem deixar conta parcial** (rollback), em vez de cair pra cópia (cópia divergiria em silêncio). A trava por conta usa `flock` (inexistente no Windows) e vira no-op; a trava compartilhada usa `msvcrt.locking` e vale. |
+| Windows | **Pode não funcionar.** Atalho exige o Modo Desenvolvedor ligado; sem ele a criação falha com mensagem explícita e **sem deixar conta parcial** (rollback), em vez de cair pra cópia (cópia divergiria em silêncio). As duas travas da reconciliação (a da conta e a compartilhada `~/.hangar-contas.lock`) valem também no Windows (trava de arquivo do sistema), com teto de 120 s. |
 | macOS | **Provavelmente não isola. Não testado.** A doc oficial escopa o comportamento a Linux e Windows: *"If you've set the `CLAUDE_CONFIG_DIR` environment variable on Linux or Windows, the `.credentials.json` file lives under that directory instead."* No macOS a credencial é do Keychain e a doc não promete separação por config dir — se o item for o mesmo pras duas contas, elas brigam por ele. Teste de um minuto num Mac: criar a conta, rodar `/login` nela e conferir se a conta anterior continua logada. |
 
 ## Atalho e descoberta de skills

@@ -3150,7 +3150,7 @@ Contrato interno 85 → 86 depois de juntar a `main`, que já estava em 85 (`RUS
 **Regra.** Enquanto a tela de nova conversa está aberta com Claude sem terminal, o cliente pede
 (`PUT /api/sessions/prewarm`) que o Rust mantenha um processo do Claude Code já subido, a
 **reserva**; no `POST /api/sessions` com `prewarm` a reserva vira a sessão. Ela passa pelo mesmo
-`resolve_open`, pelo mesmo começo do `launch` (login, trava da conta, `--prep`) e pelo corpo do
+`resolve_open`, pelo mesmo começo do `launch` (login, trava da conta, reconciliação da conta) e pelo corpo do
 `launch_if_needed`, mas não grava sidecar até a adoção: fica fora da lista. Adoção só com a mesma
 impressão (hash do argv e do ambiente sem identidade, calculado com o id de conversa da reserva),
 o mesmo nome, a conta logada, a mesma `config_marca`, a mesma pasta e sem worktree; qualquer

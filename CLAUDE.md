@@ -617,7 +617,8 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   - Lista do dono: montada pelo Rust; só com linha Pi/omp/Kimi o tique pede `POST
     /internal/list/facts` (`list/facts.rs` → `list_facts.py`), levando só essas linhas: estado,
     conta e última resposta delas.
-  - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (cada abertura),
+  - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (só contas Codex; a
+    reconciliação das contas Claude é do Rust, `accounts/claude_config.rs`),
     `accounts/claude-window`, `accounts/codex-invalidate`, `workspace/context`,
     `worktrees/context`, `orq/*` (`group-phase`, `promote`, `is-orchestrator`, `conductor-facts`),
     `transcription/config`, `costs/scopes`, `migration/status`, `diag` e `ping`.
