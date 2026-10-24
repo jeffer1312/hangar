@@ -38,8 +38,6 @@ def test_conserto_das_contas_junta_os_avisos_de_cada_conta(tmp_path, monkeypatch
     com o nome dela; sem aviso, a frase de tudo no lugar."""
     from app import contas
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    monkeypatch.delenv("CP_CLAUDE_CONFIG_DIRS", raising=False)
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "CLAUDE.md").write_text("# regras", encoding="utf-8")
     (tmp_path / ".claude" / "settings.json").write_text('{"theme": "dark"}', encoding="utf-8")

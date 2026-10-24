@@ -452,6 +452,9 @@ def hangar_server_bin(monkeypatch, tmp_path):
         "hangar-server.exe" if os.name == "nt" else "hangar-server")
     assert binary.is_file(), f"compile antes: scripts/cargo-pinned build -p hangar-server ({binary})"
     monkeypatch.setenv("CP_RUST_SERVER_BIN", str(binary))
+    # A conta e a lista fixa de quem roda a suíte não chegam ao subprocesso.
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CP_CLAUDE_CONFIG_DIRS", raising=False)
     # No Windows o diário do subprocesso sai do LOCALAPPDATA, que o HOME de teste não troca.
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     return binary

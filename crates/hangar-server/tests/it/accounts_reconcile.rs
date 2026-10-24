@@ -741,7 +741,7 @@ fn command(side: &Side, home: &Path, args: &[String], env: &[(&str, &str)]) -> C
 /// A guarda da conta presa em exclusivo por um `flock` à parte, até o comando terminar.
 fn busy(home: &Path, account: &str) -> std::process::Child {
     let key = AccountKey::new(Provider::Claude, &home.join(format!(".claude-{account}"))).unwrap();
-    let lock = home.join(".hangar/account-locks").join(format!("{}.lock", key.digest().unwrap()));
+    let lock = hangar_server::accounts::AccountLocks::new(home.join(".hangar/account-locks")).path(&key).unwrap();
     mkdirs(lock.parent().unwrap());
     let child = Command::new("flock").arg("-x").arg(&lock).arg("sleep").arg("60").spawn().unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

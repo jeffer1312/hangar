@@ -19,8 +19,6 @@ SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "hangar-conta"
 @pytest.fixture
 def casa(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    monkeypatch.delenv("CP_CLAUDE_CONFIG_DIRS", raising=False)
     (tmp_path / ".claude" / "skills").mkdir(parents=True)
     (tmp_path / ".claude" / "settings.json").write_text('{"theme":"dark"}', encoding="utf-8")
     (tmp_path / ".claude.json").write_text(json.dumps({"oauthAccount": {"x": 1}, "mcpServers": {}}), encoding="utf-8")
