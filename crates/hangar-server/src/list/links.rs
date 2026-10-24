@@ -50,7 +50,7 @@ pub fn resolve_lenient(path: &Path) -> PathBuf {
 
 /// O `canonicalize` do Windows devolve `\\?\C:\...`; o Python escreve `C:\...`, e a conta da sessão
 /// (`claude:<pasta>`) precisa bater letra a letra com o id da credencial que ele monta.
-fn without_verbatim(path: PathBuf) -> PathBuf {
+pub(crate) fn without_verbatim(path: PathBuf) -> PathBuf {
     if !cfg!(windows) { return path; }
     path.to_str().and_then(verbatim_stripped).map_or(path, PathBuf::from)
 }

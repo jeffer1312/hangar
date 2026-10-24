@@ -69,3 +69,38 @@ def test_arquivo_sem_permissao_de_execucao_nao_conta(locais):
     build.parent.mkdir(parents=True)
     build.write_text("x", encoding="utf-8")
     assert rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN") is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink de pasta no Windows pede privilégio; a junction é coberta na VM")
+def test_pacote_lanca_pelo_caminho_real_da_versao(locais):
+    """Processo longo roda do caminho real: a troca do `current` não o tira de baixo."""
+    _, baixado = locais
+    home = baixado.parents[2]
+    versao = home / ".hangar" / "versions" / "0.1.0.5"
+    _executavel(versao / "bin" / EXE)
+    (home / ".hangar" / "current").symlink_to(versao, target_is_directory=True)
+    achado = rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN")
+    assert achado == versao.resolve() / "bin" / EXE
+    assert "current" not in achado.parts
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink de pasta no Windows pede privilégio; a junction é coberta na VM")
+def test_current_no_meio_da_troca_espera_o_link_novo(locais):
+    """No Windows a troca tira o `current` do lugar por um instante (fica o `current.old`)."""
+    import threading
+    import time
+    _, baixado = locais
+    hangar = baixado.parents[1]
+    velha, nova = hangar / "versions" / "0.1.0.4", hangar / "versions" / "0.1.0.5"
+    _executavel(velha / "bin" / EXE)
+    _executavel(nova / "bin" / EXE)
+    (hangar / "current.old").symlink_to(velha, target_is_directory=True)
+    threading.Timer(0.2, lambda: (hangar / "current").symlink_to(nova, target_is_directory=True)).start()
+    assert rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN") == nova.resolve() / "bin" / EXE
+
+
+def test_sem_troca_em_andamento_nao_espera(locais):
+    import time
+    inicio = time.monotonic()
+    assert rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN") is None
+    assert time.monotonic() - inicio < 0.5

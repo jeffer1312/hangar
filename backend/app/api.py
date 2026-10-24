@@ -5552,6 +5552,9 @@ async def _fetch_loop():
     Sem isto o botão simplesmente nunca apareceria numa máquina que ninguém puxa à mão. Fail-soft
     e em `to_thread`: máquina sem rede não pode virar erro na tela nem derrubar o laço.
     """
+    # Modo pacote: sem `.git`, quem verifica a versão nova é o Rust (`update::periodic`).
+    if diag.install_manifest() is not None:
+        return
     while True:
         try:
             await asyncio.to_thread(atualizar._git, "fetch", "origin", timeout=120)
@@ -5641,6 +5644,8 @@ def _auto_update_motivo() -> Optional[str]:
 async def _auto_update_loop():
     """Checa a cada hora e dispara a atualização quando TODOS os gates abrem. Fail-soft inteiro:
     qualquer exceção vira log e o próximo tick, nunca derruba o laço nem o backend."""
+    if diag.install_manifest() is not None:   # modo pacote: o automático é o do Rust
+        return
     await asyncio.sleep(_AUTO_UPDATE_INTERVALO)   # nunca na subida: o boot já é o ponto de ruído
     while True:
         try:

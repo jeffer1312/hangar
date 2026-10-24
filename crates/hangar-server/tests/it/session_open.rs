@@ -235,6 +235,49 @@ async fn the_installed_command_finds_the_env_file_through_the_pointer() {
     assert_eq!(fake.last_hit().1["authorization"], "Bearer do-ponteiro");
 }
 
+/// Máquina migrada: o `.env` mora em `~/.hangar/config/` e vence o da `backend/`; a `backend/` da
+/// cópia continua achada pelo `app/` mesmo sem `.env` nela.
+#[tokio::test]
+async fn the_env_file_in_the_user_data_folder_wins() {
+    let (fake, up) = spawn_fake().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("home/.hangar/config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join(".env"), format!("CP_AUTH_TOKEN=do-config\nCP_PORT={}\n", up.port())).unwrap();
+    let body = r#"{"name":"s1","cwd":"/x","provider":"claude"}"#;
+    let bin = install(dir.path(), "CP_AUTH_TOKEN=da-backend\nCP_PORT=1\n");
+    let (code, _, stderr) = hangar_open(&bin, dir.path(), &["open", body], &[]).await;
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(fake.last_hit().1["authorization"], "Bearer do-config");
+    std::fs::remove_file(dir.path().join("inst/backend/.env")).unwrap();
+    std::fs::create_dir_all(dir.path().join("inst/backend/app")).unwrap();
+    // `app/main.py` é comum a qualquer projeto Python: só ele não faz da pasta a do Hangar.
+    std::fs::write(dir.path().join("inst/backend/app/main.py"), "").unwrap();
+    assert!(!hangar_server::session_open::cli::is_backend(&dir.path().join("inst/backend")));
+    std::fs::write(dir.path().join("inst/backend/app/rust_server.py"), "").unwrap();
+    assert!(hangar_server::session_open::cli::is_backend(&dir.path().join("inst/backend")));
+    assert!(!hangar_server::session_open::cli::is_backend(&dir.path().join("inst/bin")));
+    let (code, _, stderr) = hangar_open(&bin, dir.path(), &["open", body], &[]).await;
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(fake.hits_to("/api/sessions"), 2);
+}
+
+/// Instalado em `~/.hangar/bin` sem ponteiro, o comando acha o token no `~/.hangar/config/.env`.
+#[tokio::test]
+async fn the_installed_command_finds_the_env_file_in_the_user_data_folder() {
+    let (fake, up) = spawn_fake().await;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let bin = home.join(".hangar/bin/hangar-server");
+    std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+    crate::copy_executable(Path::new(env!("CARGO_BIN_EXE_hangar-server")), &bin);
+    std::fs::create_dir_all(home.join(".hangar/config")).unwrap();
+    std::fs::write(home.join(".hangar/config/.env"), format!("CP_AUTH_TOKEN=so-config\nCP_PORT={}\n", up.port())).unwrap();
+    let (code, _, stderr) = hangar_open(&bin, dir.path(), &["open", r#"{"name":"s1","cwd":"/x","provider":"claude"}"#], &[]).await;
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(fake.last_hit().1["authorization"], "Bearer so-config");
+}
+
 /// Token e porta vêm do `backend/.env`, como no `hangar-send`; sem token nada é enviado.
 #[tokio::test]
 async fn the_env_file_gives_token_and_port_and_no_token_sends_nothing() {

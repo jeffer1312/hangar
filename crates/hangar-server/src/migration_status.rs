@@ -97,7 +97,7 @@ pub fn area_of(path: &str) -> usize {
 /// O Rust atende este pedido do dono sem repassar? Mesma decisão do `routes::router`: as rotas
 /// GET registradas lá, mais os `matches` de Git/arquivos e de worktrees que o `pass_any` consulta.
 pub fn rust_route(method: &Method, path: &str) -> bool {
-    if matches!(*method, Method::GET | Method::PUT) && path == "/api/session-defaults" { return true; }
+    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/session-defaults" | "/api/web-ui") { return true; }
     if *method == Method::POST && path == "/api/push/expo/subscribe" { return true; }
     if crate::orq_conductor::matches(method, path) { return true; }
     if crate::prewarm::http::matches(method, path) { return true; }
@@ -429,6 +429,8 @@ mod tests {
         assert_eq!(AREAS[area_of("/api/sessions/a/git/commit/abc/files")], "workspace");
         assert_eq!(AREAS[area_of("/api/sessions-x")], "other", "prefixo só casa por segmento inteiro");
         assert_eq!(AREAS[area_of("/assets/index.js")], "static");
+        // A tela web repassa o que não tem na pasta: só o contador por resposta sabe quem atendeu.
+        assert!(!get("/docs") && !get("/"));
         assert_eq!(AREAS[area_of("/api/sessions/a")], "session");
     }
 

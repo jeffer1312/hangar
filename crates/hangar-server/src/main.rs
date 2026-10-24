@@ -9,6 +9,14 @@ fn main() -> std::process::ExitCode {
     if matches!(args.first().map(String::as_str), Some("open" | "resolve")) {
         return hangar_server::session_open::cli::run(&args);
     }
+    // O serviço sobe o backend por aqui: a versão real para onde o `current` aponta na largada.
+    if args.first().map(String::as_str) == Some("launch") {
+        return hangar_server::install_root::launch(&args[1..]);
+    }
+    // O executor destacado da atualização: processo e runtime próprios, fora do servidor que reinicia.
+    if args.first().map(String::as_str) == Some("update") {
+        return hangar_server::update::executor::cli(&args[1..]);
+    }
     // Hook de SessionStart: só disco, nunca sobe o servidor.
     if args.first().map(String::as_str) == Some("pair-context") {
         return hangar_server::groups::context_cmd::run(&args);
@@ -91,8 +99,8 @@ async fn run() {
             Err(_) => tracing::warn!(code = "orq_archive_prune_failed", "tarefa da poda falhou; pedido conservado"),
         }
     });
-    // O `hangar-server open` instalado em `~/.hangar/bin` acha o `.env` por aqui (o servidor roda na `backend/`).
-    if let Ok(backend) = std::env::current_dir() && backend.join(".env").is_file() {
+    // O `hangar-server open` instalado em `~/.hangar/bin` acha a `backend/` por aqui (o servidor roda nela).
+    if let Ok(backend) = std::env::current_dir() && hangar_server::session_open::cli::is_backend(&backend) {
         let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
         if let Err(error) = hangar_server::session_open::cli::publish_backend_dir(&home, &backend) {
             tracing::warn!(kind = ?error.kind(), "pasta do backend não anotada; o comando de terminal instalado não acha o .env");
@@ -129,6 +137,17 @@ async fn run() {
     });
     // Reservas pré-aquecidas que um servidor que caiu deixou (todo sistema: a varredura abaixo é só Linux
     // e não apaga transcript nem marcadores). Só aqui, pelo mesmo motivo do tmux acima.
+    // Atualização: o commit do checkout na subida (modo desenvolvedor) e a verificação periódica do
+    // pacote. Só aqui, pelo mesmo motivo do tmux acima.
+    {
+        let home = state.accounts.env.home.clone();
+        let _ = tokio::task::spawn_blocking(move || hangar_server::update::dev::note_boot(&home)).await;
+        match hangar_server::http_client().build() {
+            Ok(client) => { hangar_server::update::periodic::spawn(hangar_server::update::periodic::Live {
+                env: state.accounts.env.clone(), list: state.list.clone(), listen: state.cfg.listen, client }); }
+            Err(e) => tracing::warn!("update: verificação periódica sem cliente http: {e}"),
+        }
+    }
     let prewarm = state.prewarm.clone();
     let cleaned = prewarm.clean_receipts().await;
     if cleaned > 0 { tracing::info!(cleaned, "reservas pré-aquecidas que sobraram foram limpas"); }

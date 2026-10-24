@@ -32,8 +32,8 @@ pub struct ServerHost {
     mux: ProcessMux,
 }
 
-/// O ambiente do servidor para a abertura: o do processo e as opções `CP_*` do `backend/.env`, que o
-/// pydantic do Python lê sem exportar (`env_file=".env"`, na pasta de trabalho que o Rust herda dele).
+/// O ambiente do servidor para a abertura: o do processo e as opções `CP_*` do `.env` do servidor
+/// (`user_data::env_file`), que o pydantic do Python lê sem exportar.
 /// Como lá, a variável do processo vence a do arquivo.
 pub fn server_env(mut process: BTreeMap<String, String>, dotenv: &Path) -> BTreeMap<String, String> {
     let file = std::fs::read_to_string(dotenv).map(|text| super::local::dotenv(&text)).unwrap_or_default();
@@ -156,7 +156,8 @@ impl ServerHost {
     pub async fn new(st: Arc<AppState>) -> Self {
         // `TerminalEnv::local` pode esperar o `systemctl --user` (até 3 s): fora das threads do runtime.
         let (env, terminal) = tokio::task::spawn_blocking(|| {
-            let env = AccountEnvironment::from_map(server_env(std::env::vars().collect(), Path::new(".env")));
+            let dotenv = crate::user_data::env_file(std::env::current_dir().ok().as_deref()).unwrap_or_default();
+            let env = AccountEnvironment::from_map(server_env(std::env::vars().collect(), &dotenv));
             let terminal = TerminalEnv::local(&env.home, &env.base);
             (env, terminal)
         }).await.unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()));

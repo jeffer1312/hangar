@@ -6,8 +6,9 @@
 //!   hangar-server open [PEDIDO]     pede ao servidor; fora do ar, abre aqui só a sessão com terminal
 //!                                   (o servidor adota quando voltar); sem terminal, só resolve
 //!
-//! Token, porta e as opções `CP_*` vêm do `backend/.env` da cópia do Hangar: a de onde o binário mora
-//! (checkout) ou a que o servidor anotou ao subir (`~/.hangar/backend-dir`, para o `~/.hangar/bin`).
+//! Token, porta e as opções `CP_*` vêm do `~/.hangar/config/.env` ou, sem ele, do `backend/.env` da
+//! cópia do Hangar: a de onde o binário mora (checkout) ou a que o servidor anotou ao subir
+//! (`~/.hangar/backend-dir`, para o `~/.hangar/bin`).
 //! PEDIDO é o JSON do `POST /api/sessions`; omitido, vem da entrada padrão. Recusa sai em stderr no
 //! envelope `{"detail": …}` com código 1; uso errado, 2; sem token no `.env`, 4 (nada é enviado).
 use std::collections::BTreeMap;
@@ -57,7 +58,7 @@ pub fn run(args: &[String]) -> ExitCode {
     };
     if command == "open" {
         let Some(token) = server.get("CP_AUTH_TOKEN").filter(|t| !t.is_empty()) else {
-            let place = env_path.map_or_else(|| "nenhum backend/.env acima do comando".to_owned(), |p| p.display().to_string());
+            let place = env_path.map_or_else(|| "nem ~/.hangar/config/.env nem backend/.env acima do comando".to_owned(), |p| p.display().to_string());
             eprintln!("hangar-server: sem CP_AUTH_TOKEN no .env do servidor ({place}); nada foi enviado");
             return ExitCode::from(4);
         };
@@ -104,19 +105,20 @@ pub fn run(args: &[String]) -> ExitCode {
     if command == "open" { ExitCode::from(3) } else { ExitCode::SUCCESS }
 }
 
-/// `backend/.env` da cópia do Hangar onde o comando mora (`<cópia>/…/hangar-server`).
-fn env_file() -> Option<PathBuf> { backend_dir().map(|dir| dir.join(".env")) }
+/// O `.env` do servidor: `~/.hangar/config/.env` ou, sem ele, o da `backend/` da cópia do Hangar.
+fn env_file() -> Option<PathBuf> { crate::user_data::env_file(backend_dir().as_deref()) }
 
-/// A `backend/` da cópia do Hangar: acima do binário (checkout) ou a que o servidor anotou ao subir
-/// (o binário instalado em `~/.hangar/bin`).
+/// Pasta `backend/` de uma cópia do Hangar. O `.env` pode já estar em `~/.hangar/config/`, então um
+/// arquivo que só o Hangar tem também a identifica (`app/main.py` casaria com qualquer projeto).
+pub fn is_backend(dir: &std::path::Path) -> bool {
+    dir.join(".env").is_file() || dir.join("app").join("rust_server.py").is_file()
+}
+
+/// A `backend/` da raiz da instalação (`install_root::root`): o `~/.hangar/current` do pacote, ou a
+/// cópia acima do binário (checkout), ou a que o servidor anotou ao subir (binário em `~/.hangar/bin`).
 pub fn backend_dir() -> Option<PathBuf> {
-    let has_env = |dir: &std::path::Path| dir.join(".env").is_file();
-    let exe = std::env::current_exe().ok().and_then(|exe| exe.canonicalize().ok());
-    exe.and_then(|exe| exe.ancestors().skip(1).map(|dir| dir.join("backend")).find(|dir| has_env(dir))).or_else(|| {
-        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)?;
-        let noted = PathBuf::from(std::fs::read_to_string(pointer(&home)).ok()?.trim());
-        has_env(&noted).then_some(noted)
-    })
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)?;
+    Some(crate::install_root::root(&home)?.join("backend")).filter(|dir| is_backend(dir))
 }
 
 /// O ambiente que o servidor teria: a conta e as opções `CP_*` de quem chama não valem (uma sessão
@@ -174,7 +176,7 @@ fn usage() -> ExitCode {
 }
 
 /// Onde o servidor anota a pasta `backend/` dele, para o comando instalado longe dela achar o `.env`.
-fn pointer(home: &std::path::Path) -> PathBuf { home.join(".hangar").join("backend-dir") }
+pub(crate) fn pointer(home: &std::path::Path) -> PathBuf { home.join(".hangar").join("backend-dir") }
 
 /// O servidor anota a `backend/` de onde roda (a pasta de trabalho dele) ao subir.
 pub fn publish_backend_dir(home: &std::path::Path, backend: &std::path::Path) -> std::io::Result<()> {

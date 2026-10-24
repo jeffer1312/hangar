@@ -67,6 +67,10 @@ pub mod transcription;
 pub mod dictation;
 pub mod workspace_routes;
 pub mod uploads;
+pub mod user_data;
+pub mod install_root;
+pub mod update;
+pub mod ui;
 pub mod voice;
 pub mod plans;
 mod forwarded;
@@ -129,6 +133,8 @@ pub async fn serve_until_with_guest(
     guest: Option<std::net::SocketAddr>,
     stop: impl std::future::Future<Output = ()>,
 ) -> std::io::Result<()> {
+    // Lida na subida: no Windows o executável é aberto pela junction, que a troca de versão move.
+    let _ = update::running_package();
     let cfg = state.cfg.clone();
     let transcription = state.transcription.clone();
     let codex_logins=state.accounts.codex_logins.clone();
