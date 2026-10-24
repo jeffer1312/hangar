@@ -528,7 +528,7 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         let account = claude::hangar_account(Path::new(dir))
             .ok_or_else(|| OpenError::plain(404, format!("{dir} não é uma conta criada pelo hangar")))?;
         progress_step(&spec.name, "conta", json!({"conta": account}));
-        use crate::accounts::claude_config::{ConfigError, Outcome, Wait, late, reconcile_account};
+        use crate::accounts::claude_config::{ConfigError, Outcome, Wait, late_outcome, reconcile_account};
         let (home, name, project) = (host.home().to_owned(), account.clone(), hangar_workspace::worktrees::sanitize_cwd(&spec.cwd));
         let limit = host.reconcile_limit();
         let wait = Wait::within(limit);
@@ -543,7 +543,7 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
                 outcome
             }
             Ok(Err(e)) => failed(format!("a reconciliação parou no meio: {e}")),
-            Err(_) => failed(late(limit)),
+            Err(_) => late_outcome(limit),
         };
         host.account_diary(outcome.diary);
         avisos = claude::account_result(&account, outcome.result)?;

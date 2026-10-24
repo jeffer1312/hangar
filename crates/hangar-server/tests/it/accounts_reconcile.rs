@@ -1373,7 +1373,8 @@ fn locks_taken_after_the_opening_deadline_reconcile_nothing() {
         Err(ConfigError::Refused(detail)) => assert_eq!(detail, "a reconciliação da conta passou do limite de 0.3 s"),
         other => panic!("esperava a recusa do limite: {other:?}"),
     }
-    assert!(outcome.diary.is_empty(), "nada da reconciliação rodou");
+    let events: Vec<(Value, Value, Value)> = outcome.diary.iter().map(|e| (e["evento"].clone(), e["nivel"].clone(), e["codigo"].clone())).collect();
+    assert_eq!(events, vec![(json!("conta.reconciliar.fim"), json!("erro"), json!("limite"))], "só o fim no limite: nada da reconciliação rodou");
     assert!(std::fs::symlink_metadata(account.join("skills")).is_err(), "a conta foi religada depois do prazo");
 }
 

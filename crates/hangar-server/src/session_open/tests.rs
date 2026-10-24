@@ -2397,6 +2397,10 @@ fn a_stuck_reconciliation_refuses_the_open_at_the_limit() {
     assert!(!raw["subprocesses"].as_array().unwrap().iter().any(|p| p["argv"][0] == "new-session"), "nenhum pane");
     assert!(holder.unwrap().join().unwrap(), "a guarda da conta seguiu presa depois da recusa");
     assert_not_reconciled(&root);
+    // D23: a reconciliação que passou do limite deixa o fim dela no diário da abertura.
+    let ends: Vec<&Value> = raw["diary"].as_array().unwrap().iter().filter(|e| e["evento"] == "conta.reconciliar.fim").collect();
+    assert_eq!(ends.iter().map(|e| (e["nivel"].clone(), e["codigo"].clone())).collect::<Vec<_>>(), vec![(json!("erro"), json!("limite"))],
+        "{}", raw["diary"]);
 }
 
 /// `hangar-server open` com o servidor fora: a mesma recusa no limite, e o comando termina sem esperar a
@@ -2422,6 +2426,11 @@ fn the_terminal_command_stops_a_stuck_reconciliation_at_the_limit() {
     assert_eq!((error.status, error.code), (500, Some("erro_conta_reconciliacao_falhou")), "{:?}", error.body());
     assert!(holder.join().unwrap(), "a guarda da conta seguiu presa depois da recusa");
     assert_not_reconciled(&root);
+    // D23: o fim no limite vai ao diário do comando sem esperar a trava das contas, que é a presa.
+    let diary = root.join("home/.hangar/logs/diario/hangar-conta");
+    let lines: Vec<Value> = std::fs::read_dir(&diary).unwrap().flatten().flat_map(|e| std::fs::read_to_string(e.path()).unwrap()
+        .lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).collect::<Vec<_>>()).collect();
+    assert!(lines.iter().any(|e| e["evento"] == "conta.reconciliar.fim" && e["codigo"] == "limite"), "{lines:?}");
 }
 
 /// A reconciliação que falha recusa a abertura com o motivo dela, antes de qualquer pane.

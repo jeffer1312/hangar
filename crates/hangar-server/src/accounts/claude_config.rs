@@ -300,6 +300,14 @@ impl Wait {
 /// A recusa da abertura cuja reconciliação passou do prazo.
 pub fn late(limit: Duration) -> String { format!("a reconciliação da conta passou do limite de {} s", limit.as_secs_f64()) }
 
+/// A recusa no limite com o fim dela no diário: sem ele, a reconciliação que não terminou não deixava rastro.
+pub fn late_outcome(limit: Duration) -> Outcome {
+    let mut end = event("conta.reconciliar.fim", "erro", &crate::mods::state::random_hex(8));
+    end["codigo"] = json!("limite");
+    end["ms"] = json!(limit.as_millis() as u64);
+    Outcome { result: Err(refused(late(limit))), diary: vec![end] }
+}
+
 /// Exclusiva, tentando até o fim de `wait`: o Python esperava sem fim, e a abertura matava o subprocesso aos 120 s.
 fn lock(path: &Path, create: bool, wait: Wait) -> Result<Held> {
     let mut options = fs::OpenOptions::new();
@@ -345,17 +353,19 @@ pub fn reconcile_account(home: &Path, name: &str, project: Option<&str>, wait: W
 /// Trava compartilhada (duas contas devolvendo o mesmo arquivo ao `~/.claude`) e depois a da conta
 /// (no seed, a da pendência), sempre nessa ordem; soltas ao sair, também em erro.
 pub fn reconcile_locked(home: &Path, dir: &Path, project: Option<&str>, lock_name: &str, wait: Wait) -> Outcome {
+    let late_now = || match wait {
+        Wait::Within { limit, deadline } if Instant::now() >= deadline => Some(late_outcome(limit)),
+        _ => None,
+    };
     let shared = match lock(&home.join(".hangar-contas.lock"), true, wait) {
         Ok(held) => held,
-        Err(error) => return Outcome::failed(error),
+        Err(error) => return late_now().unwrap_or_else(|| Outcome::failed(error)),
     };
     let own = match lock(&dir.join(lock_name), false, wait) {
         Ok(held) => held,
-        Err(error) => return Outcome::failed(error),
+        Err(error) => return late_now().unwrap_or_else(|| Outcome::failed(error)),
     };
-    if let Wait::Within { limit, deadline } = wait && Instant::now() >= deadline {
-        return Outcome::failed(refused(late(limit)));
-    }
+    if let Some(late) = late_now() { return late; }
     let outcome = reconcile(home, dir, project);
     drop((own, shared));
     outcome
@@ -828,12 +838,14 @@ este `hangar-server conta`, e a abertura de sessão roda a mesma reconciliação
 ";
 
 /// Os eventos de um comando no diário exportável, num arquivo só dos comandos (`diario/hangar-conta`):
-/// no Windows dois processos anexando no mesmo arquivo se sobrescrevem, então quem grava segura a
-/// trava das contas. Falha não chega a quem chamou.
+/// no Windows dois processos anexando no mesmo arquivo se sobrescrevem, então quem grava segura uma
+/// trava só do diário. A das contas não serve: presa, ela é justamente o motivo do evento de limite.
+/// Falha não chega a quem chamou.
 pub fn write_cli_diary(env: &AccountEnvironment, events: &[Value]) {
     if events.is_empty() { return; }
     let Some(dir) = crate::runtime::local_policy::log_base_in(env).map(|base| base.join("diario").join("hangar-conta")) else { return };
-    let Ok(_held) = lock(&env.home.join(".hangar-contas.lock"), true, Wait::Each(Duration::from_secs(5))) else { return };
+    if fs::create_dir_all(&dir).is_err() { return; }
+    let Ok(_held) = lock(&dir.with_extension("lock"), true, Wait::Each(Duration::from_secs(5))) else { return };
     let _ = crate::diag::write_diary(&dir, events, chrono::Local::now());
 }
 
