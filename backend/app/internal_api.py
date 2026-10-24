@@ -10,12 +10,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
-from sse_starlette.sse import EventSourceResponse
 
 from app import diag
 from app.internal_pool import internal_thread
 from app.mensagens import erro
-from app.sse import merged_events
 
 _LOOPBACK = {"127.0.0.1", "::1"}
 
@@ -216,26 +214,6 @@ async def worktrees_context() -> dict:
 
 
 
-@router.get("/sessions/{name}/plugin")
-async def plugin_pending(name: str) -> dict:
-    """A pergunta que o plugin segura, para o Rust decidir `/select` e `/interrupt`. Some com o plugin no Rust."""
-    from app import plugin_bridge
-    return {"pending": plugin_bridge.pergunta_pendente(name)}
-
-
-class _PluginInterrupted(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    interrupted: str | None
-
-
-@router.post("/sessions/{name}/plugin")
-async def plugin_interrupted(name: str, body: _PluginInterrupted) -> dict:
-    """O Esc do app fechou a pergunta `interrupted` no terminal. Some com o plugin no Rust."""
-    from app import plugin_bridge
-    plugin_bridge.interrompeu(name, body.interrupted)
-    return {"ok": True}
-
-
 @router.get("/migration/status")
 async def migration_status() -> dict:
     from app import migration_status
@@ -312,18 +290,6 @@ async def orq_is_orchestrator(body: _OrqNames) -> dict:
 async def costs_scopes() -> dict:
     from app import costs_sources
     return await internal_thread(costs_sources.scopes_for_rust)
-
-
-@router.get("/sessions/{name}/side-events")
-async def side_events(name: str, provider: str, jsonl: str, app: int = 0):
-    """Uma conexão por sessão para o hangar-server, que reparte estado, prévia, perguntas e fila
-    entre os aparelhos. `provider` e `jsonl` são a conversa que o Rust escolheu; a troca ele faz
-    religando a conexão. `app=1`: há ao menos um aparelho do dono no chat (push fica calado)."""
-    if provider not in ("claude", "claude-headless", "codex") or not Path(jsonl).is_absolute():
-        raise HTTPException(400, detail=erro("erro_conversa_invalida", "provider ou transcript inválido"))
-    return EventSourceResponse(
-        merged_events(name, jsonl, provider=provider, count_app=bool(app), side=True),
-        send_timeout=30)
 
 
 @router.get("/orq/{exec_id}/conductor-facts")

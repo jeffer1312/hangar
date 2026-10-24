@@ -1,23 +1,18 @@
 // crates/hangar-server/src/side.rs
-//! Uma conexão interna por sessão (Python → hangar-server) e o hub que reparte, entre os
-//! aparelhos daquele chat, o que vem dela e o que o leitor do transcript produz.
+//! O hub de cada sessão: reparte, entre os aparelhos daquele chat, o que o leitor do transcript e
+//! as fontes do Rust (estado, mods, fila, faixa) produzem.
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::http::StatusCode;
 use bytes::Bytes;
-use eventsource_stream::{EventStreamError, Eventsource};
-use futures_util::StreamExt;
-use http_body_util::BodyDataStream;
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use tokio::sync::{Notify, broadcast};
 
-use crate::proxy::HttpClient;
 use crate::tail::{self, FileTail, Watchers, sse_frame};
 use crate::transcript::{InternalInfo, Provider};
 
@@ -25,7 +20,7 @@ use crate::transcript::{InternalInfo, Provider};
 pub enum Out {
     /// Quadro do leitor do transcript, marcado com a geração da ligação que o leu.
     Tail(u64, Bytes),
-    /// Quadro da conexão interna ou de uma fonte do Rust (estado, mods, fila). A fila e o estado
+    /// Quadro de uma fonte do Rust (estado, mods, fila, faixa). A fila e o estado
     /// conferem a geração ao publicar.
     Side(Bytes),
     /// O `plugin_ui` mudou para a versão dada. O quadro (a vista inteira dos mods, até ~400 KB) fica só no
@@ -137,7 +132,7 @@ fn file_name(p: &std::path::Path) -> String {
     p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
-/// Eventos cujo último valor vale para quem chega depois: o Python só os manda na mudança.
+/// Eventos cujo último valor vale para quem chega depois: as fontes só os mandam na mudança.
 /// `nav` fica de fora: repetir um pedido já atendido reabriria o navegador; quem chega depois o
 /// recebe pela lista de sessões. `plugin_ui` (faixa dos mods) sai quando muda: sem o cache, quem
 /// abre o chat depois ficava sem a faixa até o mod redesenhar. `queue` (painel da fila) sai quando muda e vale
@@ -194,9 +189,6 @@ fn ui_delta(prev: &serde_json::Value, now: &serde_json::Value) -> Option<serde_j
     Some(Value::Object(delta))
 }
 const CHANNEL: usize = 1024;
-const SIDE_CONNECT: Duration = Duration::from_secs(10);
-/// O Python manda `ping` a cada 10 s; três calados = conexão morta.
-const SIDE_IDLE: Duration = Duration::from_secs(30);
 
 /// Liga o `Monitor` de estado a um hub de Claude com terminal e devolve a tarefa dele.
 pub type SpawnMonitor = Arc<dyn Fn(&Arc<Hub>) -> tokio::task::JoinHandle<()> + Send + Sync>;
@@ -208,14 +200,11 @@ const FEED_EVENTS: [&str; 6] = ["state", "preview", "ask_question", "suggest", "
 
 #[derive(Clone)]
 pub struct SideCtx {
-    pub upstream: SocketAddr,
-    pub secret: String,
-    pub http: HttpClient,
     pub watchers: Watchers,
     pub hubs: Hubs,
     /// Qual conversa é a de cada sessão (a descoberta do Rust); o hub a relê para seguir trocas.
     pub locate: Arc<dyn crate::locate::Locate>,
-    /// `None`: sem estado no Rust (testes do hub); o Python segue produzindo os quatro eventos.
+    /// `None`: sem dono do estado (testes do hub).
     pub monitors: Option<SpawnMonitor>,
     /// Faixa e avisos que o Rust publica nas sessões sem terminal dele (interface dos mods).
     pub mods: crate::mods::state::Mods,
@@ -254,9 +243,8 @@ struct SideCache {
     /// Bolhas (`queued-<id>`) que o painel da fila deu como apagadas: saem do retrato e não voltam por um
     /// quadro que o produtor leu antes da exclusão. O id da fila não se repete, então guardar os últimos basta.
     retired: VecDeque<String>,
-    /// Avisos de mod (`plugin_toast`) ainda vivos: (id, quando vence, dado). A conexão interna é
-    /// uma só por sessão, então quem abre o chat depois não os receberia do Python; o retrato os
-    /// repõe com o tempo que resta, e o app descarta pelo id o que já mostrou.
+    /// Avisos de mod (`plugin_toast`) ainda vivos: (id, quando vence, dado). Quem abre o chat depois
+    /// não os veria sair; o retrato os repõe com o tempo que resta, e o app descarta pelo id o que já mostrou.
     toasts: Vec<(String, Instant, serde_json::Map<String, serde_json::Value>)>,
 }
 
@@ -391,16 +379,11 @@ pub struct Hub {
     committed: Mutex<Option<Arc<str>>>,
     /// Acorda o `Monitor`: `rebind` (rodada já) ou resposta gravada (prévia sai já).
     wake: Arc<Notify>,
-    /// Vezes que a troca vazou (o Python mandou um dos quatro para sessão do Rust) e foi registrada.
-    pub(crate) python_leaks: AtomicU32,
     /// O ator do Codex com terminal desta sessão é do Rust: o feed publica o estado. O pane continua no
     /// `Binding` (`headless: false`); dono é outra coisa.
     runtime_owned: std::sync::atomic::AtomicBool,
     /// Assinantes que entraram pelo convite (não contam como app do dono).
     guests: std::sync::atomic::AtomicUsize,
-    /// Aparelhos do dono no chat: a conexão interna leva `app=1` só com algum (convidado e canal
-    /// privado não calam o push do dono).
-    owners: std::sync::atomic::AtomicUsize,
     /// Produtor da fila da geração atual (`queue_feed::run`); renasce a cada troca de conversa.
     queue_feed: Mutex<Option<tokio::task::AbortHandle>>,
     /// Produtor do `stats` da geração atual (`stats::run`); renasce a cada troca de conversa.
@@ -447,7 +430,7 @@ impl From<Bytes> for Queued {
 }
 
 impl Hub {
-    fn start(name: &str, binding: Binding, ctx: SideCtx, owners: usize) -> Arc<Hub> {
+    fn start(name: &str, binding: Binding, ctx: SideCtx) -> Arc<Hub> {
         let (tx, _) = broadcast::channel(CHANNEL);
         let owned = ctx.runtime.get().is_some_and(|registry| registry.owns_codex_terminal(name));
         let seed = ctx.shown_problems.get(name);
@@ -471,10 +454,8 @@ impl Hub {
                 monitor: Mutex::new(None),
                 committed: Mutex::new(None),
                 wake: Arc::new(Notify::new()),
-                python_leaks: AtomicU32::new(0),
                 runtime_owned: std::sync::atomic::AtomicBool::new(owned),
                 guests: std::sync::atomic::AtomicUsize::new(0),
-                owners: std::sync::atomic::AtomicUsize::new(owners),
                 queue_feed: Mutex::new(None),
                 stats_feed: Mutex::new(None),
                 queue_watch: Mutex::new(None),
@@ -524,7 +505,8 @@ impl Hub {
         }
     }
 
-    /// Eventos do dono vivo; o que acabou (sessão morta, pânico) não segura mais os do Python.
+    /// Eventos do dono vivo; o que acabou (sessão morta, pânico) não conta.
+    #[cfg(test)]
     fn owned_events(&self) -> &'static [&'static str] {
         self.monitor.lock().unwrap().as_ref().filter(|(m, _, _)| !m.is_finished()).map_or(&[], |(_, _, (events, _))| *events)
     }
@@ -615,7 +597,7 @@ impl Hub {
         self.wake.notify_one();
     }
 
-    /// Evento do `Monitor`: mesmo retrato e mesma regra de repetido do que vem do Python.
+    /// Evento do `Monitor`: mesmo retrato e mesma regra de repetido das outras fontes.
     /// `false`: hub fechado, ninguém mais ouve.
     pub fn publish_own(&self, event: &str, data: &str) -> bool {
         if self.bound.lock().unwrap().is_none() {
@@ -791,7 +773,7 @@ impl Hub {
                     tracing::info!(session = %self.name, de = %file_name(&current.jsonl), para = %file_name(&next.jsonl),
                         "transcript ou provider trocou; reset nos aparelhos");
                     self.rebind(next);
-                    // Aborta esta mesma tarefa: a vigia renasce com a conexão interna da ligação nova.
+                    // Aborta esta mesma tarefa: a vigia renasce sobre a ligação nova.
                     self.restart_side();
                     return;
                 }
@@ -815,8 +797,8 @@ impl Hub {
     }
 
     /// Confere `bound` sob a trava de `side`: o `close` solta `bound` antes de pegar essa trava,
-    /// então ou a conexão nova nem nasce, ou o `close` a encontra e derruba. Fora do mapa, nenhum
-    /// `Lease` a pararia e ela seguiria aberta com app=1.
+    /// então ou a vigia nova nem nasce, ou o `close` a encontra e derruba. Fora do mapa, nenhum
+    /// `Lease` a pararia.
     fn restart_side(self: &Arc<Self>) {
         let mut side = self.side.lock().unwrap();
         if let Some(h) = side.take() {
@@ -890,7 +872,7 @@ impl Hub {
     }
 
     /// Quadro de evento para os aparelhos: entra no retrato e sai pelo canal, salvo quando é igual
-    /// ao último do mesmo tipo (o aparelho já o tem). Serve ao Python (side-events) e ao Rust (mods).
+    /// ao último do mesmo tipo (o aparelho já o tem).
     fn deliver(&self, event: &str, data: &str) {
         let pane_question = self.bound.lock().unwrap().as_ref().is_some_and(|b| b.binding.provider == Provider::Claude);
         self.deliver_bound(event, data, pane_question);
@@ -908,13 +890,13 @@ impl Hub {
         // Pergunta repetida é pergunta nova: o aparelho já fechou a anterior.
         let repeated = event != "ask_question"
             && LATEST.iter().position(|e| *e == event).is_some_and(|i| cache.latest[i].as_ref() == Some(&frame));
-        // A mesma vista de novo (o Python a reenvia a cada religação; o Rust limpa duas vezes seguidas) não
+        // A mesma vista de novo (o Rust limpa duas vezes seguidas) não
         // sobe a versão: sem marcador novo, a versão nova invalidaria o marcador que a fila de um aparelho
         // lento ainda tem, e ele ficaria com a vista anterior.
         if !(repeated && event == LATEST[PLUGIN_UI]) {
             cache.record(event, data, &frame, pane_question);
         }
-        // O envio fica sob a trava do retrato (o `send` do broadcast não bloqueia): com o Python e o Rust
+        // O envio fica sob a trava do retrato (o `send` do broadcast não bloqueia): com várias fontes
         // escrevendo no mesmo hub, fora dela dois quadros poderiam sair em ordem diferente da do retrato.
         if !repeated {
             let _ = self.tx.send(Self::out(event, frame, &cache));
@@ -1091,134 +1073,9 @@ impl Hub {
     }
 }
 
-enum SideEnd {
-    Gone,
-    Retry,
-}
-
-/// A conexão interna da ligação atual e a vigia da troca de transcript, que morrem juntas.
+/// A vigia da troca de transcript da ligação atual.
 async fn run_side(hub: Arc<Hub>) {
-    tokio::select! {
-        _ = side_loop(hub.clone()) => {}
-        _ = hub.clone().watch_binding() => {}
-    }
-}
-
-async fn side_loop(hub: Arc<Hub>) {
-    let mut attempt = 0u32;
-    loop {
-        match side_once(&hub, &mut attempt).await {
-            SideEnd::Gone => {
-                hub.close();
-                return;
-            }
-            SideEnd::Retry => {}
-        }
-        // Religa com espera crescente: 1, 2, 4… até 30 s.
-        let delay = (1u64 << attempt.min(5)).min(30);
-        attempt = attempt.saturating_add(1);
-        tokio::time::sleep(Duration::from_secs(delay)).await;
-    }
-}
-
-async fn side_once(hub: &Arc<Hub>, attempt: &mut u32) -> SideEnd {
-    // O Python segue o transcript que o Rust escolheu; a troca religa esta conexão (`restart_side`).
-    let Some(binding) = hub.bound.lock().unwrap().as_ref().map(|b| b.binding.clone()) else { return SideEnd::Gone };
-    let url = format!(
-        "http://{}/internal/sessions/{}/side-events?app={}&provider={}&jsonl={}",
-        hub.ctx.upstream,
-        utf8_percent_encode(&hub.name, NON_ALPHANUMERIC),
-        u8::from(hub.owners.load(Ordering::SeqCst) > 0),
-        binding.provider.as_str(),
-        utf8_percent_encode(&binding.jsonl.to_string_lossy(), NON_ALPHANUMERIC),
-    );
-    let req = match axum::http::Request::get(url).header("x-hangar-internal", &hub.ctx.secret).body(Body::empty()) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(session = %hub.name, "conexão interna: pedido inválido: {e}");
-            return SideEnd::Gone;
-        }
-    };
-    let resp = match tokio::time::timeout(SIDE_CONNECT, hub.ctx.http.request(req)).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => {
-            tracing::warn!(session = %hub.name, "conexão interna falhou: {e}");
-            return SideEnd::Retry;
-        }
-        Err(_) => {
-            tracing::warn!(session = %hub.name, "conexão interna sem resposta");
-            return SideEnd::Retry;
-        }
-    };
-    if resp.status() == StatusCode::NOT_FOUND {
-        // O Python dá 404 também ao segredo recusado: com o hub já ligado, vale o aviso.
-        tracing::warn!(session = %hub.name, "conexão interna: 404 (sessão sumiu ou segredo interno recusado)");
-        return SideEnd::Gone;
-    }
-    if resp.status() == StatusCode::BAD_REQUEST {
-        // Conversa recusada pelo Python: repetir o mesmo pedido não muda a resposta.
-        tracing::warn!(session = %hub.name, provider = binding.provider.as_str(), "conexão interna: 400 (conversa recusada); aparelhos voltam ao Python");
-        return SideEnd::Gone;
-    }
-    if !resp.status().is_success() {
-        tracing::warn!(session = %hub.name, status = %resp.status(), "conexão interna recusada");
-        return SideEnd::Retry;
-    }
-    let events = BodyDataStream::new(resp.into_body()).eventsource();
-    let mut events = std::pin::pin!(events);
-    let mut first = true;
-    loop {
-        let ev = match tokio::time::timeout(SIDE_IDLE, events.next()).await {
-            Ok(Some(Ok(ev))) => ev,
-            Ok(Some(Err(e))) => {
-                // Só o tipo do erro: o do parser carrega o trecho lido, que pode ser conversa.
-                let kind = match e {
-                    EventStreamError::Utf8(_) => "utf8",
-                    EventStreamError::Parser(_) => "parser",
-                    EventStreamError::Transport(_) => "transport",
-                };
-                tracing::warn!(session = %hub.name, kind, "conexão interna: leitura falhou");
-                return SideEnd::Retry;
-            }
-            Ok(None) => return SideEnd::Retry,
-            Err(_) => {
-                tracing::warn!(session = %hub.name, "conexão interna calada há 30 s; religa");
-                return SideEnd::Retry;
-            }
-        };
-        if first {
-            *attempt = 0;
-            first = false;
-        }
-        match ev.event.as_str() {
-            "ping" => {}
-            // A faixa é do produtor do hub (`stats::run`); um Python antigo que ainda a mande não a sobrescreve.
-            "stats" => {
-                if crate::warn_limit::allow(Some(&hub.name), "stats_python_leak") {
-                    tracing::warn!(session = %hub.name, code = "stats_python_leak", "faixa: o Python mandou `stats` de conversa do Rust; descartado");
-                }
-            }
-            // Faixa e avisos de mod são do `Mods` (também da sessão aberta à mão): um do Python é velho.
-            "plugin_ui" | "plugin_toast" => {}
-            event => {
-                on_side_event(hub, event, &ev.data);
-            }
-        }
-    }
-}
-
-/// Evento da conexão interna (fora `info` e `ping`). Com o dono do estado vivo, os eventos dele
-/// (`Binding::state_events`) são só dele: vindo do Python, a troca vazou; sai do canal e
-/// vai ao log uma vez por sessão. `true`: repassado aos aparelhos (ou igual ao último).
-fn on_side_event(hub: &Arc<Hub>, event: &str, data: &str) -> bool {
-    if hub.owned_events().contains(&event) {
-        if hub.python_leaks.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-            tracing::warn!(session = %hub.name, code = "state_python_leak", event, "estado: o Python mandou evento de sessão do Rust; descartado");
-        }
-        return false;
-    }
-    hub.deliver(event, data);
-    true
+    hub.watch_binding().await;
 }
 
 /// Quadro que o canal privado leva ao Python: o estado, a faixa dos mods, o painel da fila e as bolhas dela,
@@ -1309,8 +1166,7 @@ pub async fn private_events(
     };
     // O Python diz se quem entrou é convidado (`x-hangar-app: 0`); sem o cabeçalho, conta como app do dono.
     let guest = req.headers().get("x-hangar-app").is_some_and(|value| value == "0");
-    // Quem lê daqui é o Python, que conta o próprio app: o canal nunca é aparelho do dono.
-    let lease = st.side.hubs.acquire_with(&name, binding, &st.side, guest, false);
+    let lease = st.side.hubs.acquire_as(&name, binding, &st.side, guest);
     if let Some(info) = &info { lease.hub.learn_queue(info); }
     let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(64);
     tokio::spawn(private_loop(lease, tx));
@@ -1386,8 +1242,6 @@ pub struct Lease {
     pub hub: Arc<Hub>,
     /// Convidado: assina o hub, mas não é o app do dono aberto (nem segura permissão, nem cala push).
     guest: bool,
-    /// Aparelho do dono no chat (`Hub::owners`).
-    owner: bool,
 }
 
 impl Hubs {
@@ -1401,11 +1255,6 @@ impl Hubs {
 
     /// `guest`: assinante que entrou pelo convite.
     pub fn acquire_as(&self, name: &str, binding: Binding, ctx: &SideCtx, guest: bool) -> Lease {
-        self.acquire_with(name, binding, ctx, guest, !guest)
-    }
-
-    /// `owner`: aparelho do dono no chat, o que decide o `app=` da conexão interna.
-    pub fn acquire_with(&self, name: &str, binding: Binding, ctx: &SideCtx, guest: bool, owner: bool) -> Lease {
         let mut map = self.0.lock().unwrap();
         let hub = match map.get_mut(name) {
             Some((hub, n)) => {
@@ -1413,26 +1262,20 @@ impl Hubs {
                 hub.clone()
             }
             None => {
-                let hub = Hub::start(name, binding, ctx.clone(), usize::from(owner));
+                let hub = Hub::start(name, binding, ctx.clone());
                 // O convidado conta sob a mesma trava do `n`: fora dela, `app_present` veria o hub só com ele como do dono.
                 if guest { hub.guests.fetch_add(1, Ordering::AcqRel); }
                 map.insert(name.to_string(), (hub.clone(), 1));
                 drop(map);
                 // Hub novo começa sem retrato: a faixa e os avisos que o Rust já publicou entram agora.
                 hub.seed(ctx.mods.replay(name));
-                return Lease { hubs: self.clone(), hub, guest, owner };
+                return Lease { hubs: self.clone(), hub, guest };
             }
         };
         if guest { hub.guests.fetch_add(1, Ordering::AcqRel); }
-        // Contado sob a trava do mapa: o `Drop` de outro aparelho não cruza o zero no meio.
-        let first_owner = owner && hub.owners.fetch_add(1, Ordering::SeqCst) == 0;
         drop(map);
         hub.ensure_current(&binding);
-        if first_owner {
-            // O `app=` da conexão interna só muda religando; os aparelhos seguem no mesmo canal.
-            hub.restart_side();
-        }
-        Lease { hubs: self.clone(), hub, guest, owner }
+        Lease { hubs: self.clone(), hub, guest }
     }
 
     pub fn downgrade(&self) -> WeakHubs {
@@ -1469,7 +1312,7 @@ impl Hubs {
             // em todos os aparelhos. Como o Python, só o transcript novo reseta.
             if hub.bound.lock().unwrap().as_ref().is_some_and(|bound|bound.binding.same_conversation(&binding)) {return Ok(());}
             hub.rebind(binding);
-            // A conexão interna leva a conversa escolhida: renasce com a nova, como na troca da vigia.
+            // A vigia renasce sobre a conversa nova, como na troca que ela mesma detecta.
             hub.restart_side();
         }
         Ok(())
@@ -1499,27 +1342,19 @@ impl Drop for Lease {
         }
         if self.guest { self.hub.guests.fetch_sub(1, Ordering::AcqRel); }
         *n -= 1;
-        let last_owner = self.owner && self.hub.owners.fetch_sub(1, Ordering::SeqCst) == 1;
         if *n == 0 {
             let (h, _) = map.remove(&self.hub.name).expect("presente acima");
             drop(map);
-            // Último aparelho saiu: fecha a conexão interna (o Python roda app_saiu) e o leitor.
+            // Último aparelho saiu: fecha a vigia e o leitor.
             h.stop();
-        } else if last_owner {
-            drop(map);
-            // Só convidados ficaram: religa com `app=0`.
-            self.hub.restart_side();
         }
     }
 }
 
-/// Contexto de teste: porta sem ninguém (a conexão interna só tenta e espera) e sem dono do estado.
+/// Contexto de teste: sem descoberta e sem dono do estado.
 #[cfg(test)]
 pub(crate) fn test_ctx() -> SideCtx {
     SideCtx {
-        upstream: "127.0.0.1:9".parse().unwrap(),
-        secret: "s".into(),
-        http: crate::proxy::client(),
         watchers: Watchers::default(),
         hubs: Hubs::default(),
         locate: Arc::new(crate::locate::Unavailable),
@@ -1559,6 +1394,7 @@ pub(crate) fn fake_monitors(pane: &'static str) -> (SpawnMonitor, Arc<std::sync:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicU32;
 
     #[tokio::test]
     async fn stamped_publication_cannot_write_to_rebound_conversation() {
@@ -1823,68 +1659,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn python_state_for_rust_session_dropped_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let binding = Binding { provider: Provider::Claude, jsonl: dir.path().join("a.jsonl"), key: "a".into(), headless: false, life: None };
-        let (spawn, _) = fake_monitors(IDLE_PANE);
-        let ctx = SideCtx { monitors: Some(spawn), ..idle_ctx() };
-        let lease = ctx.hubs.acquire("s", binding, &ctx);
-        // Deixa o Monitor publicar o dele antes.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let mut rx = lease.hub.tx.subscribe();
-        for (event, data) in [("state", r#"{"state":"working"}"#), ("preview", r#"{"text":"x"}"#),
-                              ("ask_question", "{}"), ("suggest", r#"{"text":"y"}"#), ("state", r#"{"state":"idle"}"#)] {
-            assert!(!on_side_event(&lease.hub, event, data), "{event} do Python para sessão do Rust sai");
-        }
-        assert!(on_side_event(&lease.hub, "stats", r#"{"turns":1}"#), "o resto continua do Python");
-        assert!(on_side_event(&lease.hub, "message", r#"{"id":"queued-1"}"#));
-        assert_eq!(lease.hub.python_leaks.load(std::sync::atomic::Ordering::SeqCst), 1, "registra uma vez por sessão");
-        let got = side_events(&mut rx, Duration::from_millis(100)).await;
-        let names: Vec<_> = got.iter().map(|(e, _)| e.as_str()).collect();
-        assert_eq!(names, ["stats", "message"]);
-        let state = String::from_utf8_lossy(lease.hub.cache.lock().unwrap().latest[0].as_ref().unwrap()).into_owned();
-        assert!(!state.contains("working"), "o retrato fica com o estado do Rust");
-
-        // Codex com terminal: o Python segue dono.
-        let codex = Binding { provider: Provider::Codex, jsonl: dir.path().join("c.jsonl"), key: "c".into(), headless: false, life: None };
-        let other = ctx.hubs.acquire("c", codex, &ctx);
-        assert!(on_side_event(&other.hub, "state", r#"{"state":"idle"}"#));
-        assert!(on_side_event(&other.hub, "pensamento", r#"{"text":""}"#));
-        assert_eq!(other.hub.python_leaks.load(std::sync::atomic::Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn python_state_for_codex_headless_dropped_once() {
-        // Codex sem terminal: o feed é dono dos seis eventos; os do Python caem com um aviso só.
-        let dir = tempfile::tempdir().unwrap();
-        let (spawn, _) = fake_feeds();
-        let ctx = SideCtx { monitors: Some(spawn), ..idle_ctx() };
-        let codex = Binding { provider: Provider::Codex, jsonl: dir.path().join("c.jsonl"), key: "c".into(), headless: true, life: None };
-        let lease = ctx.hubs.acquire("c", codex, &ctx);
-        for event in ["state", "preview", "ask_question", "suggest", "pensamento", "ferramenta"] {
-            assert!(!on_side_event(&lease.hub, event, r#"{"text":""}"#), "{event} do Python para Codex sem terminal sai");
-        }
-        assert!(on_side_event(&lease.hub, "stats", "{}"), "o resto continua do Python");
-        assert_eq!(lease.hub.python_leaks.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn python_state_for_claude_headless_dropped_once() {
-        // Claude sem terminal: o feed é dono dos seis eventos, a sugestão incluída.
-        let dir = tempfile::tempdir().unwrap();
-        let (spawn, count) = fake_feeds();
-        let ctx = SideCtx { monitors: Some(spawn), ..idle_ctx() };
-        let binding = Binding { provider: Provider::ClaudeHeadless, jsonl: dir.path().join("h.jsonl"), key: "h".into(), headless: false, life: None };
-        let lease = ctx.hubs.acquire("h", binding, &ctx);
-        assert_eq!(count.load(Ordering::SeqCst), 1, "o hub liga o feed");
-        for event in ["state", "preview", "ask_question", "suggest", "pensamento", "ferramenta"] {
-            assert!(!on_side_event(&lease.hub, event, r#"{"text":""}"#), "{event} do Python para Claude sem terminal sai");
-        }
-        assert!(on_side_event(&lease.hub, "stats", "{}"));
-        assert_eq!(lease.hub.python_leaks.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
     async fn claude_mode_flip_swaps_monitor_and_feed_without_gap() {
         // `/modo-execucao` no Claude: o provider troca no `info`, o hub religa e o dono troca na hora.
         let dir = tempfile::tempdir().unwrap();
@@ -1896,12 +1670,9 @@ mod tests {
         let _again = ctx.hubs.acquire("s", binding(Provider::ClaudeHeadless), &ctx);
         assert_eq!(lease.hub.owned_events(), &FEED_EVENTS[..], "sem terminal: o feed, já no rebind");
         assert_eq!(count.load(Ordering::SeqCst), 2);
-        assert!(!on_side_event(&lease.hub, "state", r#"{"state":"idle"}"#), "nunca os dois donos");
-        assert!(!on_side_event(&lease.hub, "suggest", r#"{"text":""}"#), "a sugestão também é do feed");
         lease.hub.rebind(binding(Provider::Claude));
         assert_eq!(lease.hub.owned_events(), &STATE_EVENTS[..], "de volta ao terminal: o Monitor");
         assert_eq!(count.load(Ordering::SeqCst), 3);
-        assert!(!on_side_event(&lease.hub, "suggest", r#"{"text":"x"}"#));
     }
 
     #[tokio::test]
@@ -2002,7 +1773,6 @@ mod tests {
         assert_eq!(count.load(Ordering::SeqCst), 1);
         lease.hub.rebind(binding(false));
         assert!(!lease.hub.has_monitor(), "de volta ao terminal: o feed sai");
-        assert!(on_side_event(&lease.hub, "state", r#"{"state":"idle"}"#), "e o Python volta a ser dono");
     }
 
     #[tokio::test]
@@ -2050,24 +1820,10 @@ mod tests {
 
     #[tokio::test]
     async fn private_channel_counts_as_subscriber() {
-        use axum::routing::get;
         let dir = tempfile::tempdir().unwrap();
         let jsonl = dir.path().join("k.jsonl");
         std::fs::write(&jsonl, "").unwrap();
-        // Sem esta rota a conexão interna leva 404, que é "sessão sumiu": o hub fecharia com o canal
-        // ainda aberto, e o teste dependia de chegar antes disso.
-        let python = axum::Router::new()
-            .route("/internal/sessions/{name}/side-events", get(|| async {
-                axum::body::Body::from_stream(futures_util::stream::pending::<Result<axum::body::Bytes, std::convert::Infallible>>())
-            }));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, python).await.unwrap() });
-        let side_response = reqwest::Client::new()
-            .get(format!("http://{upstream}/internal/sessions/s1/side-events?app=1"))
-            .send().await.unwrap();
-        assert_eq!(side_response.status(), StatusCode::OK, "A fixture precisa manter a sessão viva também no canal interno");
-        let cfg = crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(), upstream, internal_secret: "s".into(),
+        let cfg = crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:9".parse().unwrap(), internal_secret: "s".into(),
             auth_token: "dono".into(), log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1") };
         let mut st = crate::routes::AppState::new(cfg);
         st.side.locate = Arc::new(crate::locate::Fixed(Some(serde_json::from_value(serde_json::json!(
@@ -2123,30 +1879,11 @@ mod tests {
             }
         }).await;
         assert!(String::from_utf8_lossy(&got).contains("event: plugin_ui\r\ndata: {\"band\":1}"), "{}", String::from_utf8_lossy(&got));
-        // Só os quatro eventos do estado passam: o Python segue dono do resto para quem entra por ele.
-        on_side_event(&st.side.hubs.0.lock().unwrap().get("s1").unwrap().0.clone(), "stats", "{}");
         drop(s);
         let gone = tokio::time::timeout(Duration::from_secs(2), async {
             while st.side.hubs.0.lock().unwrap().contains_key("s1") { tokio::time::sleep(Duration::from_millis(20)).await }
         }).await;
         assert!(gone.is_ok(), "fechou o canal, o último assinante saiu e o hub para");
-    }
-
-    #[tokio::test]
-    async fn side_events_404_closes_the_hub_with_a_subscriber() {
-        // 404 na conexão interna é "sessão sumiu": o hub fecha mesmo com assinante.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, axum::Router::new()).await.unwrap() });
-        let dir = tempfile::tempdir().unwrap();
-        let binding = Binding { provider: Provider::Claude, jsonl: dir.path().join("a.jsonl"), key: "a".into(), headless: false, life: None };
-        let ctx = SideCtx { upstream, ..test_ctx() };
-        let lease = ctx.hubs.acquire("s", binding, &ctx);
-        let gone = tokio::time::timeout(Duration::from_secs(2), async {
-            while ctx.hubs.0.lock().unwrap().contains_key("s") { tokio::time::sleep(Duration::from_millis(20)).await }
-        }).await;
-        assert!(gone.is_ok(), "o 404 tira o hub do mapa com o assinante ainda preso");
-        drop(lease);
     }
 
     #[tokio::test]
@@ -2167,7 +1904,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finished_monitor_releases_python_events_and_returns_with_next_subscriber() {
+    async fn finished_monitor_returns_with_next_subscriber() {
         let dir = tempfile::tempdir().unwrap();
         let binding = Binding { provider: Provider::Claude, jsonl: dir.path().join("a.jsonl"), key: "a".into(), headless: false, life: None };
         let count = Arc::new(AtomicU32::new(0));
@@ -2181,7 +1918,6 @@ mod tests {
         let lease = ctx.hubs.acquire("s", binding.clone(), &ctx);
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!lease.hub.has_monitor(), "acabou: não é mais dono");
-        assert!(on_side_event(&lease.hub, "state", r#"{"state":"idle"}"#), "e não descarta o que chegar");
         let _again = ctx.hubs.acquire("s", binding, &ctx);
         assert_eq!(count.load(Ordering::SeqCst), 2, "a sessão que voltou com a mesma conversa ganha outro");
     }
@@ -2433,7 +2169,7 @@ mod tests {
         let late = crate::queue_feed::QueueFrame { event: "message", id: "queued-b".into(), local_ts: None,
             data: r#"{"kind":"user_msg","id":"queued-b","text":"segunda","queued_delivered":false}"#.into() };
         assert!(lease.hub.publish_queue(generation, &late), "a geração segue valendo");
-        assert!(on_side_event(&lease.hub, "stats", r#"{"turns":1}"#));
+        assert!(lease.hub.publish_own("stats", r#"{"turns":1}"#));
         let seen = side_events(&mut open_device, Duration::from_millis(100)).await;
         assert!(seen.iter().any(|(event, _)| event == "stats"), "o canal segue entregando: {seen:?}");
         assert!(!seen.iter().any(|(_, data)| data.contains("queued-b")), "bolha fantasma no aparelho aberto: {seen:?}");
@@ -2504,14 +2240,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closed_hub_never_restarts_the_internal_connection() {
+    async fn closed_hub_never_restarts_the_watcher() {
         let dir = tempfile::tempdir().unwrap();
         let binding = |n: &str| Binding { provider: Provider::Claude, jsonl: dir.path().join(n), key: n.into(), headless: false, life: None };
         let ctx = idle_ctx();
         let lease = ctx.hubs.acquire("s", binding("a"), &ctx);
         assert!(lease.hub.side.lock().unwrap().is_some());
         lease.hub.close();
-        assert!(lease.hub.side.lock().unwrap().is_none(), "close derruba a conexão interna");
+        assert!(lease.hub.side.lock().unwrap().is_none(), "close derruba a vigia");
         // O aparelho que pegou o hub antes do close chega com outro `info`.
         lease.hub.ensure_current(&binding("b"));
         lease.hub.restart_side();
@@ -2635,8 +2371,8 @@ mod tests {
         assert!(replay.contains("queued-new"));
     }
 
-    /// Dono que entra num hub só com convidados religa a conexão interna (`app=1`), mas não o produtor
-    /// da fila: a fila não sai de novo, duplicada.
+    /// Dono que entra num hub só com convidados não religa a vigia nem o produtor da fila: a fila não
+    /// sai de novo, duplicada.
     #[tokio::test]
     async fn owner_joining_a_guest_hub_keeps_the_queue_feed() {
         let dir = tempfile::tempdir().unwrap();
@@ -2646,7 +2382,7 @@ mod tests {
         let side = |hub: &Hub| hub.side.lock().unwrap().as_ref().map(|s| s.id());
         let (feed_before, side_before) = (feed(&guest.hub).expect("o produtor nasce com o convidado"), side(&guest.hub));
         let _owner = ctx.hubs.acquire("fila", queue_binding(dir.path(), "a"), &ctx);
-        assert_ne!(side(&guest.hub), side_before, "a conexão interna religou com app=1");
+        assert_eq!(side(&guest.hub), side_before, "a vigia segue a mesma");
         assert_eq!(feed(&guest.hub), Some(feed_before), "o produtor da fila segue o mesmo");
     }
 
