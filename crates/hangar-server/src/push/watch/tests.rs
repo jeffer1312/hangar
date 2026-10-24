@@ -90,6 +90,16 @@ fn as_python(name: &str, notice: &Notice) -> Value {
 }
 
 #[test]
+fn awaiting_and_finished_only_for_claude_and_codex_but_stall_for_every_row() {
+    assert!(turn_notices("claude") && turn_notices("codex"));
+    for other in ["kimi", "pi", "omp", "orq"] { assert!(!turn_notices(other), "{other} já é avisado pelo Python"); }
+    // A varredura não olha o provedor: Kimi travada ainda sai daqui.
+    let mut m = Memory::default();
+    let notices = m.sweep(&[("kimi-1".into(), Some("k1".into()), true, None)], true);
+    assert!(matches!(notices.as_slice(), [(n, Notice::Stalled)] if n == "kimi-1"));
+}
+
+#[test]
 fn sweep_matches_python_stall_watch() {
     for c in cases()["sweep"].as_array().unwrap() {
         let mut m = Memory::default();
