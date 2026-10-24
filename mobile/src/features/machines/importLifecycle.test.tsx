@@ -46,7 +46,8 @@ vi.mock('sonner-native', () => ({ Toaster: () => null, toast: Object.assign(mock
 vi.mock('expo-router', () => ({
   useRouter: () => ({ replace: mocks.replace }), useSegments: () => mocks.segments,
   usePathname: () => `/${mocks.segments.join('/')}`, useGlobalSearchParams: () => ({}),
-  useTheme: () => ({ colors: { background: '#fff' } }),
+  DarkTheme: { dark: true, colors: { background: 'rgb(1, 1, 1)', card: 'rgb(1, 1, 1)' } },
+  DefaultTheme: { dark: false, colors: { background: 'rgb(242, 242, 242)', card: 'rgb(255, 255, 255)' } },
   ThemeProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   Stack: Object.assign(({ children }: { children: ReactNode }) => <>{children}</>, { Screen: ({ name, options }: any) => { mocks.screens[name] = options; return null; } }),
 }));
@@ -88,7 +89,7 @@ test.each(['android', 'ios'] as const)('registra Git com cabeçalho inicial e ap
     await act(async () => root.render(<Layout />));
     expect(mocks.screens['s/[server]/[name]/git']).toEqual(platform === 'android'
       ? { presentation: 'card', headerShown: true }
-      : { presentation: 'formSheet', headerShown: false, sheetAllowedDetents: [0.92], sheetGrabberVisible: true });
+      : { presentation: 'formSheet', headerShown: false, sheetAllowedDetents: [0.92], sheetGrabberVisible: true, contentStyle: { backgroundColor: '#fff' } });
   } finally { Platform.OS = previous; }
 });
 

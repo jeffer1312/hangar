@@ -16,7 +16,8 @@ const h = vi.hoisted(() => ({
 vi.mock('expo-router', () => ({
   useRouter: () => h.router, useIsFocused: () => true, useLocalSearchParams: () => h.params,
   useGlobalSearchParams: () => h.params, usePathname: () => h.pathname,
-  useTheme: () => ({ colors: { background: '#123456' } }),
+  DarkTheme: { dark: true, colors: { background: 'rgb(1, 1, 1)', card: 'rgb(1, 1, 1)' } },
+  DefaultTheme: { dark: false, colors: { background: 'rgb(242, 242, 242)', card: 'rgb(255, 255, 255)' } },
   ThemeProvider: ({ children, value }: { children: ReactNode; value: { colors: { background: string } } }) =>
     createElement('div', { 'data-navigation-background': value.colors.background }, children),
   useSegments: () => h.pathname.startsWith('/s/') ? ['s', '[server]', '[name]', ...h.pathname.split('/').slice(4)] : h.pathname.split('/').filter(Boolean),
@@ -312,13 +313,15 @@ it('só o chat no tablet deitado desliga a animação de navegação', async () 
   expect(chatOptions().animation).toBe('none');
   expect(host.querySelector('[data-navigation-background]')?.getAttribute('data-navigation-background')).toBe('transparent');
   expect(JSON.parse(host.querySelector('[data-screen="s/[server]/[name]/files"]')!.getAttribute('data-options')!).presentation).toBe('formSheet');
-  expect(JSON.parse(host.querySelector('[data-screen="s/[server]/[name]/files"]')!.getAttribute('data-options')!).contentStyle.backgroundColor).toBe('#123456');
+  // A folha usa o fundo da janela do app (bg.base do tema), nunca o cinza claro padrão da navegação.
+  expect(JSON.parse(host.querySelector('[data-screen="s/[server]/[name]/files"]')!.getAttribute('data-options')!).contentStyle.backgroundColor).toBe('#fff');
   h.size = { ...h.size, width: 820, height: 1180 };
   await act(async () => root.render(createElement(Layout)));
   expect(chatOptions().animation).toBeUndefined();
   expect(host.querySelector('nav')).toBeNull();
   expect(host.querySelector('[data-stack]')).toBe(stack);
-  expect(host.querySelector('[data-navigation-background]')?.getAttribute('data-navigation-background')).toBe('#123456');
+  expect(host.querySelector('[data-navigation-background]')?.getAttribute('data-navigation-background')).toBe('#fff');
+  expect(JSON.parse(host.querySelector('[data-screen="s/[server]/[name]/files"]')!.getAttribute('data-options')!).contentStyle.backgroundColor).toBe('#fff');
 });
 
 it('o painel real mantém a estrutura ao trocar de sessão e volta a Contexto', async () => {

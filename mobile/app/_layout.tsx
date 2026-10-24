@@ -2,7 +2,8 @@ import 'react-native-url-polyfill/auto';
 import '../src/theme/unistyles';
 import { useEffect, useMemo } from 'react';
 import { AppState, Dimensions, Platform, type AppStateStatus } from 'react-native';
-import { Stack, ThemeProvider, useGlobalSearchParams, usePathname, useRouter, useSegments, useTheme } from 'expo-router';
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider, useGlobalSearchParams, usePathname, useRouter, useSegments } from 'expo-router';
+import { useUnistyles } from 'react-native-unistyles';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 // Sem o KeyboardProvider, KeyboardStickyView/KeyboardChatScrollView lançam em runtime
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -49,15 +50,18 @@ export default function Layout() {
   const pathname = usePathname();
   const params = useGlobalSearchParams<{ server?: string | string[]; name?: string | string[] }>();
   const tablet = useTabletLandscape();
-  const navigationTheme = useTheme();
-  // Objeto estável: o Layout redesenha a cada navegação e um tema novo redesenharia a pilha inteira.
-  const windowTheme = useMemo(
-    () => tablet ? { ...navigationTheme, colors: { ...navigationTheme.colors, background: 'transparent' } } : navigationTheme,
-    [tablet, navigationTheme],
-  );
+  const { theme, rt } = useUnistyles();
+  const dark = rt.themeName === 'dark';
+  const windowColor = theme.tokens.bg.base;
+  // Sem tema próprio a navegação pinta o cinza claro padrão atrás das telas, e ele aparece nas
+  // transições. Objeto estável: o Layout redesenha a cada navegação.
+  const windowTheme = useMemo(() => {
+    const base = dark ? DarkTheme : DefaultTheme;
+    return { ...base, colors: { ...base.colors, background: tablet ? 'transparent' : windowColor, card: windowColor } };
+  }, [dark, tablet, windowColor]);
   const sheetOptions = {
     presentation: 'formSheet' as const, headerShown: false, sheetAllowedDetents: [0.92], sheetGrabberVisible: true,
-    ...(tablet ? { contentStyle: { backgroundColor: navigationTheme.colors.background } } : {}),
+    contentStyle: { backgroundColor: windowColor },
   };
   const serverId = Array.isArray(params.server) ? params.server[0] : params.server;
   const name = Array.isArray(params.name) ? params.name[0] : params.name;
