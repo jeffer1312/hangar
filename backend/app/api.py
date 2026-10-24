@@ -272,33 +272,6 @@ async def _lifespan(app: FastAPI):
 
     prune_task.add_done_callback(_prune_done)
 
-    # Boot-resume dos loops: flags em memoria (tick em voo) morrem no restart; o sidecar e a verdade.
-    # Loop ACTIVE cuja sessao existe e esta idle -> reagenda o tick; sessao sumida -> failed.
-    def _boot_resume_loops() -> None:
-        try:
-            live = {loop_mod._sanitize(i.name): i for i in registry.list()}
-            for p in loop_mod._loop_dir().glob("*.json"):
-                stem = p.stem
-                link = loop_mod.LoopLink(stem)
-                d = link.get()
-                if not d or d["status"] not in loop_mod.ACTIVE:
-                    continue
-                info = live.get(stem)
-                if info is None:
-                    loop_mod._end(link, stem, "failed", "sessão morta no boot", push.notify_loop)
-                    continue
-                m = hook_state.get_state(session_key(info.jsonl)) if info.jsonl else None
-                if m and m[0] == "idle":
-                    loop_mod.schedule_tick(info.name, lambda n=info.name: _loop_ctx(n))
-        except Exception as e:
-            # Com o Rust ainda subindo a lista levanta; os loops ativos ficam sem reagendar.
-            _log.warning("boot-resume de loops falhou", exc_info=True)
-            diag.registrar("loop.boot_resume_falhou", "erro",
-                           codigo=getattr(e, "code", None) or type(e).__name__)
-
-    # Em segundo plano: com o Rust esperado, a lista espera o desfecho dele (até 30 s), e a subida
-    # do servidor não pode ficar presa nisso.
-    app.state.boot_resume_task = asyncio.create_task(asyncio.to_thread(_boot_resume_loops))
     pricing.atualizar_em_background()  # NUNCA num request: o cliente aborta em 4s
     # Mesmo motivo, outra rede: usd_brl() tem cache de 1h e timeout de 3s, e é chamado DENTRO do
     # montar(). Sem aquecer aqui, o primeiro /api/costs depois de todo restart paga a coleta fria
