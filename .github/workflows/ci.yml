@@ -3,7 +3,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # beta: o package.yml só publica o pacote da branch com o `backend` verde num run de push do mesmo commit.
+    branches: [main, beta]
   pull_request:
 
 jobs:

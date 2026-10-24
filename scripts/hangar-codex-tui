@@ -36,8 +36,12 @@ _REPO = Path(__file__).resolve().parent.parent
 
 def _api_backend(method: str, path: str) -> dict:
     env: dict[str, str] = {}
+    # Dados do usuário: `~/.hangar/config/` quando o arquivo está lá; senão a `backend/` (não migrada).
+    env_file = Path.home() / ".hangar" / "config" / ".env"
+    if not env_file.exists():
+        env_file = _REPO / "backend" / ".env"
     try:
-        for line in (_REPO / "backend" / ".env").read_text(encoding="utf-8").splitlines():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 key, value = line.split("=", 1)
@@ -98,10 +102,17 @@ def _com_websockets() -> None:
         return
     except ImportError:
         pass
-    venv = _REPO / "backend" / ".venv" / "bin" / "python"
+    # A regra de backend/app/install_root.py: raiz = ~/.hangar/current (pacote) ou este checkout; nela o
+    # Python embutido, senao o venv do backend.
+    raiz = Path.home() / ".hangar" / "current"
+    raiz = raiz if raiz.exists() else _REPO
+    embutido, venv = ((raiz / "python" / "python.exe", raiz / "backend" / ".venv" / "Scripts" / "python.exe")
+                      if os.name == "nt" else
+                      (raiz / "python" / "bin" / "python3", raiz / "backend" / ".venv" / "bin" / "python"))
+    venv = embutido if embutido.exists() else venv
     if os.environ.get("_HANGAR_CODEX_REEXEC") or not venv.exists():
         raise SystemExit(
-            "hangar-codex-tui: falta o pacote `websockets` e o venv do backend nao esta em "
+            "hangar-codex-tui: falta o pacote `websockets` e o Python do hangar nao esta em "
             f"{venv} — rode o instalador do hangar"
         )
     os.environ["_HANGAR_CODEX_REEXEC"] = "1"

@@ -4,6 +4,7 @@ titulo: Orquestrações encerradas liberam builds e caches, preservando os relat
 comando: uv run --project backend --no-sync python -c "from pathlib import Path; p = Path.home() / '.hangar' / 'orq-prune-request-v1'; p.parent.mkdir(parents=True, exist_ok=True); p.touch()"
 prova: ~/.hangar/orq-prune-request-v1
 destrutivo: true
+tipo: maquina
 ---
 
 A atualização agenda para a próxima inicialização do servidor novo a remoção de saídas de

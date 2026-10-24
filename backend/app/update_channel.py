@@ -12,13 +12,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, StrictStr
 from dotenv.parser import parse_stream
 
-from app import atomico, atualizar, diag, git_ops, guest_users, peers
+from app import atomico, atualizar, diag, git_ops, guest_users, peers, user_data
 from app.auth import require_auth
 from app.config import settings, valid_update_branch
 from app.mensagens import erro
 from app.guest_header import guest_of
 
-ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+ENV_FILE = user_data.path(".env")
 _lock = threading.Lock()
 _log = logging.getLogger("hangar.update_channel")
 

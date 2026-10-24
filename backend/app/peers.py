@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from app import atomico, diag
+from app import atomico, diag, user_data
 
 try:
     import fcntl
@@ -32,8 +32,7 @@ except ImportError:      # Linux/macOS: só o ramo Windows da trava usa
 
 _log = logging.getLogger("hangar")
 
-# Ao lado de backend/.env e backend/peers.json (app/ -> backend/). Robusto a qual é o cwd do backend.
-_PEERS_FILE = Path(__file__).resolve().parent.parent / "peers.json"
+_PEERS_FILE = user_data.path("peers.json")
 
 
 class PeerError(Exception):

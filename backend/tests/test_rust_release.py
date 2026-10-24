@@ -452,6 +452,15 @@ def test_release_tag_follows_the_checkout_branch(monkeypatch, events, stdout, re
     assert [e[2].get("codigo") for e in events] == ([codigo] if codigo else [])
 
 
+def test_installed_package_takes_the_branch_from_the_manifest(monkeypatch, tmp_path, events):
+    (tmp_path / "manifest.json").write_text(json.dumps(
+        {"version": "0.1.0.8207", "commit": "abc", "channel": "feature/x"}), encoding="utf-8")
+    monkeypatch.setattr(diag, "_ROOT", tmp_path)
+    _branch(monkeypatch, raises=AssertionError("pacote instalado não chama git"))
+    assert rust_release.release_tag() == "server-feature-x"
+    assert events == []
+
+
 def test_branch_without_release_falls_back_to_main_and_logs_it(release, tmp_path, monkeypatch, events):
     url, pasta, pedidos = release
     (pasta / "server-latest").mkdir()

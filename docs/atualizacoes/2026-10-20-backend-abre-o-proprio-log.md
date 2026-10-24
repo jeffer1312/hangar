@@ -4,6 +4,7 @@ titulo: No Windows, um programa que uma sessão deixou aberto não impede mais o
 comando_windows: powershell -ExecutionPolicy Bypass -File install.ps1 -Update
 prova: ~/AppData/Local/hangar/hangar-backend.vbs
 destrutivo: false
+tipo: maquina
 ---
 
 No Windows, quando o backend reiniciava (numa atualização, por exemplo) e uma sessão tinha deixado

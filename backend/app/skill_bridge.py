@@ -35,7 +35,10 @@ try:
 except ImportError:  # python3 do sistema < 3.11 — só a checagem de config do kimi usa
     tomllib = None
 
-_REPO = Path(__file__).resolve().parents[2]
+# Raiz da instalação, a regra de `app/install_root.py` repetida porque este módulo roda solto, só com
+# a stdlib: o link gravado aponta para o `current`, que sobrevive à troca de versão.
+_CURRENT = Path.home() / ".hangar" / "current"
+_REPO = _CURRENT if _CURRENT.exists() else Path(__file__).resolve().parents[2]
 
 
 # Ordem = precedência; primeiro com o nome vence (mesmo desenho dos providers do omp: skills do

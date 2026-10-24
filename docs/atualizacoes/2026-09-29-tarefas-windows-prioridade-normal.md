@@ -4,6 +4,7 @@ titulo: No Windows, o Hangar e as sessões deixam de rodar com prioridade abaixo
 comando_windows: powershell -ExecutionPolicy Bypass -File install.ps1 -Update
 prova: ~/AppData/Local/hangar/hangar-backend.vbs
 destrutivo: false
+tipo: maquina
 ---
 
 Com a máquina carregada, o Hangar no Windows ficava lento a ponto de a vigia reiniciá-lo e o

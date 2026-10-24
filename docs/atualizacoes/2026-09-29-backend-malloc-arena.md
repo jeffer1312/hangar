@@ -4,6 +4,7 @@ titulo: No Linux, o backend deixa de acumular memória ao longo do dia
 comando_posix: ! test -f ~/.config/systemd/user/hangar-backend.service || ./install.sh --update
 prova: scripts/services-setup.sh
 destrutivo: true
+tipo: maquina
 ---
 
 O serviço do Hangar no Linux crescia centenas de megabytes em poucas horas e empurrava a máquina

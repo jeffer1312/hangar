@@ -1,4 +1,4 @@
-"""Gera o par VAPID do web push quando o backend/.env não tem um: `python -m app.vapid_setup`.
+"""Gera o par VAPID do web push quando o `.env` não tem um: `python -m app.vapid_setup`.
 
 Sem as chaves o push para o celular é descartado calado e o celular nem consegue se inscrever.
 Chave que já existe nunca é trocada: as inscrições dos aparelhos são assinadas por ela.
@@ -9,9 +9,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-from app import atomico
+from app import atomico, user_data
 
-ENV = Path(__file__).resolve().parent.parent / ".env"
+ENV = user_data.path(".env")
 KEYS = ("CP_VAPID_PUBLIC", "CP_VAPID_PRIVATE")
 
 
@@ -39,7 +39,7 @@ def with_keys(text: str) -> str | None:
     if len(found) == len(KEYS):
         return None
     if found:
-        raise ValueError(f"backend/.env tem só {found[0]}; apague a linha ou complete o par à mão")
+        raise ValueError(f"{ENV} tem só {found[0]}; apague a linha ou complete o par à mão")
     public, private = new_pair()
     sep = "" if not text or text.endswith("\n") else "\n"
     return f"{text}{sep}CP_VAPID_PUBLIC={public}\nCP_VAPID_PRIVATE={private}\n"
@@ -53,7 +53,7 @@ def main() -> int:
         print(f"erro: {e}", file=sys.stderr)
         return 1
     if new is None:
-        print("ok: backend/.env já tem as chaves VAPID (mantidas)")
+        print(f"ok: {ENV} já tem as chaves VAPID (mantidas)")
         return 0
     fd, tmp = tempfile.mkstemp(dir=str(ENV.parent), suffix=".tmp")
     try:
@@ -64,9 +64,9 @@ def main() -> int:
         atomico.substituir(tmp, ENV)
     except OSError as e:
         Path(tmp).unlink(missing_ok=True)
-        print(f"erro: não consegui gravar backend/.env: {e}", file=sys.stderr)
+        print(f"erro: não consegui gravar {ENV}: {e}", file=sys.stderr)
         return 1
-    print("ok: chaves VAPID geradas em backend/.env (reinicie o backend para valer)")
+    print(f"ok: chaves VAPID geradas em {ENV} (reinicie o backend para valer)")
     return 0
 
 

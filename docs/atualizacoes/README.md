@@ -31,6 +31,7 @@ mudou para ela — não sobre o que o comando faz.
 | `comando_posix` / `comando_windows` | Quando o comando precisa mudar por sistema, a variante correspondente vence `comando`. Pode declarar só uma variante; no outro sistema o passo vira apenas texto. |
 | `prova` | Os caminhos que precisam existir depois. Separados por espaço (logo, caminho **com** espaço não cabe aqui); relativos à raiz do repo, ou absolutos, ou com `~`. Não é comando — é checagem de arquivo, que vale nos dois sistemas. **Sem prova, "sucesso" quer dizer só "o comando não deu erro"** — e foi assim que um `-Update` chegou a dizer ok com o processo antigo ainda no ar. |
 | `destrutivo` | `true` quando o passo apaga ou sobrescreve algo. Passo destrutivo roda pelo botão, mas não roda sozinho na subida do backend. |
+| `tipo` | `maquina` quando o passo muda a MÁQUINA, fora da pasta da versão. Sem o campo, o passo é de conteúdo. Ver "Passo de máquina" abaixo. |
 
 ## Duas regras
 
@@ -40,6 +41,47 @@ repo. Comando que só funciona uma vez nasce com guarda — o modelo é
 
 **O passo entra no registro só depois da prova passar.** Se a prova falhar, ele fica pendente e
 tenta de novo na próxima — é o contrário de marcar como feito e deixar a máquina sem o efeito.
+
+## Passo de máquina (`tipo: maquina`)
+
+Na instalação por pacote (`~/.hangar/versions/<versao>/`), script, skill, hook e atalho chegam
+dentro da versão e deixam de ser passo. Só roda o passo que muda a máquina fora da pasta da
+versão: dependência do sistema, unit do systemd, tarefa agendada ou vigia, firewall, `PATH` ou
+perfil do shell, chave no `.env`, migração de dados, instalação ou remoção do app nativo, remoção
+do Electron, Chromium. Esse passo leva `tipo: maquina`. O que só recopia scripts, skills, o bloco
+do CLAUDE.md, os links do `hangar-send` ou o registro do MCP apontando para o repo fica sem o
+campo. Passo só de texto também.
+
+**Passo de máquina tem que ser compatível com a versão anterior, porque não volta na volta.**
+Voltar de versão troca só o apontador `current`; o que o passo mudou na máquina fica. A versão de
+antes precisa continuar funcionando com a máquina já mudada.
+
+Passos marcados:
+
+| Passo | O que muda na máquina |
+|---|---|
+| `2026-09-28-app-nativo-padrao` | instala o app nativo |
+| `2026-09-28-link-hangar-abre-o-app-nativo` | app nativo e registro do link `hangar://` |
+| `2026-09-28-tmux-fechar-sem-reabrir` | `~/.tmux.conf` |
+| `2026-09-29-backend-malloc-arena` | unit do systemd |
+| `2026-09-29-lancador-electron-renomeado` | lançador `.desktop` do Electron |
+| `2026-09-29-rede-local` | chave no `.env` |
+| `2026-09-29-tarefas-windows-prioridade-normal` | tarefas agendadas do Windows |
+| `2026-10-01-atualizar-windows-front-no-ar` | para o processo da tarefa do front no Windows |
+| `2026-10-02-chromium-navegador-nativo-linux` | Chromium |
+| `2026-10-02-electron-removido-linux` | remove o Electron |
+| `2026-10-02-electron-removido-windows` | remove o Electron |
+| `2026-10-09-python3-antes-da-loja` | ordem do `PATH` no Windows |
+| `2026-10-10-chaves-do-push-no-celular` | chaves no `.env` |
+| `2026-10-12-navegador-linux-motor-enxuto` | Chromium |
+| `2026-10-20-backend-abre-o-proprio-log` | tarefa agendada do Windows |
+| `2026-10-21-orq-durable-cleanup` | dados em `~/.hangar` |
+| `2026-10-22-python-install-manager-windows` | interpretador Python e atalhos no `PATH` do Windows |
+
+Ficam sem o campo, mesmo com comando: os que rodam `install-hangar-send.sh`,
+`install-claude-wrapper.sh`/`setup-windows-wrappers.ps1` ou `registrar-mcp.py` (conteúdo e
+atalhos), `2026-10-02-hangar-server-binarios` (o binário vem no pacote) e
+`2026-10-19-trava-do-client-api` (hook do git do checkout, só no modo desenvolvedor).
 
 ## O que o botão faz sozinho, e o que só um passo faz
 

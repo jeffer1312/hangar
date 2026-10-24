@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 import re
 import shutil
-import sys
 import tomllib
 from urllib.parse import urlsplit
 
@@ -18,10 +17,11 @@ from app.codex_arquivos import backup, editar_config
 from app.codex_compat import adaptar_hooks_plugin, normalizar_hooks
 from app.codex_contas import Account
 from app.codex_importador import CodexNativo, CodexNativoErro
+from app import install_root
 
 
 _NATIVO = CodexNativo
-_REPO = Path(__file__).resolve().parents[2]
+_REPO = install_root.root()  # vai para os hooks do plugin: o `current` com o pacote
 _BUNDLED_MARKERS = (".tmp", "bundled-marketplaces")
 _MARKETPLACE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 # Recusa do `marketplace add` quando o clone existe mas o marketplace não está listado.
@@ -443,7 +443,7 @@ async def _adapt_hooks(target: Account, item: dict, issues: list[dict]) -> bool:
             root,
             target.home,
             _private_dir(target) / "backups",
-            normalizar=lambda data: normalizar_hooks(data, sys.executable,
+            normalizar=lambda data: normalizar_hooks(data, install_root.interpreter(),
                                                       _REPO / "scripts/codex-hook-allow.py",
                                                       windows=os.name == "nt"),
             ao_alterar=lambda: changed.append(True),

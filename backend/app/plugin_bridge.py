@@ -31,7 +31,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app import atomico, state_facts
+from app import atomico, install_root, state_facts
 from app.auth import require_loopback
 from app.live_rate import live_rate
 
@@ -172,7 +172,9 @@ _TTL_CAPACIDADE_S = 600.0
 _capacidade: tuple[float, bool] | None = None
 # Mods ligados por padrão no CLI daqui em diante; a variável do acesso antecipado é ignorada.
 MODS_BY_DEFAULT = (2, 1, 287)
-PLUGINS_ROOT = Path(__file__).resolve().parents[2] / "plugins"
+# Pela raiz da instalação: o `~/.hangar/plugin-dir` e o `--plugin-dir` das sessões apontam para o
+# `current`, e a sessão aberta antes da troca de versão segue com os hooks depois da poda da antiga.
+PLUGINS_ROOT = install_root.root() / "plugins"
 PLUGIN_SRC = PLUGINS_ROOT / "hangar"
 _versao: tuple[float, tuple[int, ...] | None] | None = None
 

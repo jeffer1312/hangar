@@ -71,6 +71,9 @@ def _checkout_branch() -> str | None:
     global _branch, _branch_failed_at
     if _branch is not None or time.monotonic() - _branch_failed_at < _BRANCH_RETRY_S:
         return _branch
+    if m := diag.install_manifest():
+        _branch = m["channel"]
+        return _branch
     from app import atualizar, git_ops
     try:
         result = git_ops._run(str(atualizar.REPO), "rev-parse", "--abbrev-ref", "HEAD", timeout=5)

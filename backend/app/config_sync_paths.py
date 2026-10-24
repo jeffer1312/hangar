@@ -45,7 +45,8 @@ class Roots:
     @classmethod
     def this_machine(cls) -> "Roots":
         from app import codex_contas, contas
-        return cls(hangar=str(Path(__file__).resolve().parents[2]),
+        from app import install_root
+        return cls(hangar=str(install_root.root()),
                    claude=str(contas.compartilhado()),
                    codex=str(codex_contas.default_home()),
                    home=str(Path.home()))
@@ -58,6 +59,10 @@ class Roots:
 def canonicalize(text: str, roots: Roots) -> str:
     """Caminho desta máquina -> marcador. O valor mais longo primeiro, e só em limite de caminho:
     `/home/joao2` não pode virar `⟦HOME⟧2`."""
+    # Caminho real de uma versão do pacote (`~/.hangar/versions/<v>`) é o mesmo Hangar do `current`.
+    versions = str(Path(roots.home) / ".hangar" / "versions")
+    for form in {versions, versions.replace("\\", "/")}:
+        text = re.sub(re.escape(form) + r"[\\/][^\\/\s'\"`;|&)⟦]+" + _END, mark("HANGAR"), text)
     pairs = {(form, marker) for marker in MARKERS
              for form in (roots.value(marker), roots.value(marker).replace("\\", "/"))}
     for form, marker in sorted(pairs, key=lambda p: len(p[0]), reverse=True):

@@ -1,0 +1,20 @@
+#!/bin/sh
+# hangar-python — o Python do Hangar para os scripts e atalhos: a mesma regra de
+# backend/app/install_root.py. A raiz é ~/.hangar/current (pacote) ou, sem ela, a cópia deste script;
+# nela vale o Python embutido, senão o venv do backend. Sem nenhum dos dois, o python3 da máquina.
+root="$HOME/.hangar/current"
+[ -e "$root" ] || root="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
+for py in "$root/python/bin/python3" "$root/python/python.exe"; do
+    if [ -x "$py" ]; then
+        # Bytecode fora da pasta da versão: ela nunca muda depois de extraída.
+        if [ -z "${PYTHONPYCACHEPREFIX:-}" ]; then
+            PYTHONPYCACHEPREFIX="$HOME/.hangar/cache/pycache/$(basename "$(realpath "$root")")"
+            export PYTHONPYCACHEPREFIX
+        fi
+        exec "$py" "$@"
+    fi
+done
+for py in "$root/backend/.venv/bin/python" "$root/backend/.venv/Scripts/python.exe"; do
+    [ -x "$py" ] && exec "$py" "$@"
+done
+exec python3 "$@"

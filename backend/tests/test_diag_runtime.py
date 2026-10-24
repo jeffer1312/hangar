@@ -295,3 +295,39 @@ def test_http_exception_and_cancellation_are_distinct(failure):
     else:
         assert rows[0]["erro_tipo"] == "RuntimeError" and rows[0]["req"] == "aba-falha"
     assert "segredo" not in diag.ler_tudo()
+
+
+MANIFEST = {"version": "0.1.0.8207", "commit": "abc1234def5678", "channel": "beta",
+            "protocol": 1, "api": 1, "os": "linux-x86_64", "dist_key": None, "files": {}}
+
+
+def _sem_git(*args, **kw):
+    raise AssertionError("pacote instalado não chama git")
+
+
+def test_installed_package_takes_version_from_manifest_without_git(monkeypatch, tmp_path):
+    (tmp_path / "manifest.json").write_text(json.dumps(MANIFEST), encoding="utf-8")
+    monkeypatch.setattr(diag, "_ROOT", tmp_path)
+    monkeypatch.setattr(diag.subprocess, "run", _sem_git)
+    assert diag.versao_legivel() == "0.1.0.8207"
+    assert diag._git_describe() == "0.1.0.8207-gabc1234def56"
+    assert diag.install_manifest()["channel"] == "beta"
+
+
+def test_without_manifest_version_comes_from_git(monkeypatch, tmp_path):
+    monkeypatch.setattr(diag, "_ROOT", tmp_path)
+    monkeypatch.setattr(diag.subprocess, "run", _git_falso({"rev-list": "2533\n", "show": "0.1.0\n"}))
+    assert diag.install_manifest() is None
+    assert diag.versao_legivel() == "0.1.0.2533"
+
+
+@pytest.mark.parametrize("conteudo", ["{", "[]", json.dumps({**MANIFEST, "channel": ""}),
+                                      json.dumps({k: v for k, v in MANIFEST.items() if k != "commit"})])
+def test_malformed_manifest_falls_back_to_git_and_logs(monkeypatch, tmp_path, caplog, conteudo):
+    (tmp_path / "manifest.json").write_text(conteudo, encoding="utf-8")
+    monkeypatch.setattr(diag, "_ROOT", tmp_path)
+    monkeypatch.setattr(diag.subprocess, "run", _git_falso({"rev-list": "2533\n", "show": "0.1.0\n"}))
+    with caplog.at_level("WARNING", logger="hangar.diag"):
+        assert diag.versao_legivel() == "0.1.0.2533"
+    assert diag.install_manifest() is None
+    assert any("manifest.json" in r.getMessage() for r in caplog.records)

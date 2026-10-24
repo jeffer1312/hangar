@@ -126,10 +126,14 @@ mkdir -p "$HOME/.local/bin"
 # codigo de saida dele. Mesmo conserto que o install-hangar-send.sh ja faz, e o mesmo shim que o
 # install.ps1 escreve — as duas fontes precisam produzir a mesma coisa.
 # Interpretador PINADO: deixar o shebang decidir cai no `python3` do PATH, que no Windows e o
-# atalho da Microsoft Store. O venv do backend e o unico que tem `websockets`, que o -tui importa.
+# atalho da Microsoft Store. O Python do pacote ou o venv do backend tem `websockets`, que o -tui importa.
+# Mesma regra do backend/app/install_root.py: raiz = ~/.hangar/current (pacote) ou este checkout.
 # No Linux o `ln` linka de verdade, `test -L` e verdadeiro e nada abaixo do `if` roda.
 py_do_venv() {
-    for c in "$REPO_DIR/backend/.venv/bin/python" "$REPO_DIR/backend/.venv/Scripts/python.exe"; do
+    raiz="$HOME/.hangar/current"
+    [ -e "$raiz" ] || raiz="$REPO_DIR"
+    for c in "$raiz/python/bin/python3" "$raiz/python/python.exe" \
+             "$raiz/backend/.venv/bin/python" "$raiz/backend/.venv/Scripts/python.exe"; do
         [ -x "$c" ] && { echo "$c"; return; }
     done
     echo python3

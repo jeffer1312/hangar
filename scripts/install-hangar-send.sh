@@ -40,6 +40,8 @@ linkar_bin() {
     echo "ok: $destino (copia -> shim; o ln do Git Bash nao linka, entao chama o script do repo)"
 }
 
+# O Python do Hangar (pacote, venv ou python3) para os scripts; no Windows o install.ps1 grava o .cmd.
+linkar_bin "$REPO/scripts/hangar-python"  "$HOME/.local/bin/hangar-python"  "'$REPO/scripts/hangar-python'"
 linkar_bin "$REPO/scripts/hangar-send"    "$HOME/.local/bin/hangar-send"    "'$REPO/scripts/hangar-send'"
 linkar_bin "$REPO/scripts/hangar-preview" "$HOME/.local/bin/hangar-preview" "node '$REPO/scripts/hangar-preview'"
 linkar_bin "$REPO/scripts/hangar-doctor"  "$HOME/.local/bin/hangar-doctor"  "'$REPO/scripts/hangar-doctor'"

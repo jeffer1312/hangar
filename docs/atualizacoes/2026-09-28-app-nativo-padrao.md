@@ -5,6 +5,7 @@ comando_posix: ./scripts/install-native.sh
 comando_windows: powershell -ExecutionPolicy Bypass -File install.ps1 -Update
 prova: ~/.hangar/native/release.json
 destrutivo: false
+tipo: maquina
 ---
 
 O atalho "Hangar" agora abre o app nativo, baixado da release do GitHub no pacote certo para este

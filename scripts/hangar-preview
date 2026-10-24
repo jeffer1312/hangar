@@ -320,19 +320,20 @@ async function comando(chave, verbo, cmdArgs, aba = flags.aba) {
 // --- comandos ---
 if (cmd === 'open') {
   // Pede ao BACKEND pra entregar o evento 'nav' no SSE da sessão — o painel monta sozinho na tela
-  // (quem posiciona o view é o painel; não existe view invisível). Token do backend/.env ao lado
-  // do script, mesmo padrão do hangar-send.
+  // (quem posiciona o view é o painel; não existe view invisível). Token do `~/.hangar/config/.env`
+  // ou, sem ele, do backend/.env ao lado do script, mesmo padrão do hangar-send.
   const url = pos[1];
   if (externo) erro('open nao vale com --cdp: a pagina ja esta aberta no app de fora; navegue com goto <url>');
   if (!url) erro('open precisa de uma url: hangar-preview open localhost:3000');
   const nome = nomeSessao();
   if (!nome) erro('não deu para identificar esta sessão — use --sessao <nome>');
   const repo = join(dirname(realpathSync(process.argv[1])), '..');
+  const novo = join(homedir(), '.hangar', 'config', '.env');
   let token = '';
   try {
-    token = readFileSync(join(repo, 'backend', '.env'), 'utf8').match(/^CP_AUTH_TOKEN=(.+)$/m)?.[1]?.trim() ?? '';
+    token = readFileSync(existsSync(novo) ? novo : join(repo, 'backend', '.env'), 'utf8').match(/^CP_AUTH_TOKEN=(.+)$/m)?.[1]?.trim() ?? '';
   } catch { /* sem .env */ }
-  if (!token) erro('não achei CP_AUTH_TOKEN no backend/.env do repo');
+  if (!token) erro('não achei CP_AUTH_TOKEN no ~/.hangar/config/.env nem no backend/.env do repo');
   const desde = Date.now();
   const doNome = (s) => s.chave === nome || s.chave.endsWith(`::${nome}`);
   const antes = lerSidecars().find(doNome)?.url ?? null;

@@ -4,6 +4,7 @@ titulo: No Linux, o Hangar (Electron) sai da máquina; o app nativo assume o nav
 comando_posix: ./scripts/remover-electron.sh
 prova: ~/.hangar/native/electron-removido
 destrutivo: true
+tipo: maquina
 ---
 
 No Linux, o app nativo passa a atender o navegador do `hangar-preview` e a tela remota no celular,

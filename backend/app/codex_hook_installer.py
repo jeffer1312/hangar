@@ -11,7 +11,6 @@ como está, pois no Codex hook alterado é hook não aprovado.
 """
 import logging
 import os
-import sys
 from pathlib import Path
 
 from app.hook_installer import (
@@ -19,6 +18,7 @@ from app.hook_installer import (
     NAV_HOOK,
     STATE_HOOK,
     _NAV_COMMAND,
+    _PYTHON,
     _STATE_COMMAND,
     _load_settings,
     _refers_to,
@@ -45,22 +45,22 @@ def comando_estado(windows: bool | None = None) -> str:
     windows = os.name == "nt" if windows is None else windows
     if not windows:
         return _STATE_COMMAND
-    return f'& "{sys.executable}" "{STATE_HOOK}" ; exit 0'
+    return f'& "{_PYTHON}" "{STATE_HOOK}" ; exit 0'
 
 
 def comando_navegador(windows: bool | None = None) -> str:
     windows = os.name == "nt" if windows is None else windows
     if not windows:
         return _NAV_COMMAND
-    return f'& "{sys.executable}" "{NAV_HOOK}" ; exit 0'
+    return f'& "{_PYTHON}" "{NAV_HOOK}" ; exit 0'
 
 
 def comando_guarda(windows: bool | None = None) -> str:
     """Preserva o rc=2 com que o guard bloqueia a derrubada do servidor de sessões."""
     windows = os.name == "nt" if windows is None else windows
     if not windows:
-        return f'"{sys.executable}" "{GUARD_HOOK}"'
-    return f'& "{sys.executable}" "{GUARD_HOOK}" ; exit $LASTEXITCODE'
+        return f'"{_PYTHON}" "{GUARD_HOOK}"'
+    return f'& "{_PYTHON}" "{GUARD_HOOK}" ; exit $LASTEXITCODE'
 
 
 def _tem_hook(grupos: object, script: str = STATE_HOOK) -> bool:

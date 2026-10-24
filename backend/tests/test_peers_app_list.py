@@ -116,6 +116,6 @@ def test_hangar_send_list_ignora_a_maquina_so_do_app(tmp_path):
     }))
     # Mesmo filtro do --list do hangar-send, rodado sobre o arquivo.
     fonte = (ROOT / "scripts" / "hangar-send").read_text()
-    trecho = fonte.split("peers_tsv=$(python3 -c '", 1)[1].split("' \"$PEERS_FILE\")", 1)[0]
+    trecho = fonte.split("peers_tsv=$(\"$PY\" -c '", 1)[1].split("' \"$PEERS_FILE\")", 1)[0]
     saida = subprocess.run([sys.executable, "-c", trecho, str(arquivo)], capture_output=True, text=True, check=True)
     assert saida.stdout.splitlines() == ["mac\thttps://mac\tp"]

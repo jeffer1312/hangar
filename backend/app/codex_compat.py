@@ -7,13 +7,13 @@ from pathlib import Path, PureWindowsPath
 import re
 import shlex
 import subprocess
-import sys
 from typing import Callable
 
+from app import install_root
 from app.codex_arquivos import gravar, json_bytes, json_obj, ler, transformar
 
 
-_REPO = Path(__file__).resolve().parents[2]
+_REPO = install_root.root()  # o `current` com o pacote: a cópia do wrapper sai da versão em uso
 
 
 INICIO_INSTRUCOES = "<!-- hangar:codex-instrucoes:start -->"
@@ -267,7 +267,7 @@ def adaptar_hooks_plugin(
             result = normalizar(data)
             if security_guidance:
                 result = normalizar_security_guidance(
-                    result, sys.executable, wrapper_json, windows=os.name == "nt")
+                    result, install_root.interpreter(), wrapper_json, windows=os.name == "nt")
             return raw if data == result else json_bytes(result)
 
         if transformar(path, converter, backups):

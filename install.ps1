@@ -2446,6 +2446,29 @@ if (-not $bash) {
         else { Ok 'atalho python3.cmd ja atualizado' }
     }
 
+    # (1b) hangar-python.cmd: gemeo do atalho sem extensao que o install-hangar-send.sh grava. Mesma
+    # regra do backend/app/install_root.py: raiz = ~\.hangar\current (pacote) ou esta copia; nela o
+    # Python embutido, senao o venv; sem nenhum, o Python real achado acima.
+    # shortcut: o cache de bytecode nao leva a versao (o cmd nao le o alvo da junction); a pasta espelha
+    # o caminho do fonte e o Python confere a data, entao uma so serve a todas as versoes.
+    $pyFallback = if ($pyExe) { "`"$pyExe`"$arg %*`r`nexit /b %ERRORLEVEL%`r`n" }
+                  else { "echo hangar-python: nenhum Python encontrado 1>&2`r`nexit /b 9009`r`n" }
+    $corpoHp = "@echo off`r`nsetlocal`r`n" +
+               "set `"R=%USERPROFILE%\.hangar\current`"`r`n" +
+               "if not exist `"%R%`" set `"R=$raiz`"`r`n" +
+               "set `"HP=%R%\python\python.exe`"`r`n" +
+               "if exist `"%HP%`" goto pacote`r`n" +
+               "set `"HP=%R%\backend\.venv\Scripts\python.exe`"`r`n" +
+               "if exist `"%HP%`" goto rodar`r`n" +
+               $pyFallback +
+               ":pacote`r`n" +
+               "if not defined PYTHONPYCACHEPREFIX set `"PYTHONPYCACHEPREFIX=%USERPROFILE%\.hangar\cache\pycache`"`r`n" +
+               ":rodar`r`n" +
+               "`"%HP%`" %*`r`n" +
+               "exit /b %ERRORLEVEL%`r`n"
+    if (Escrever-Lancador (Join-Path $binUsuario 'hangar-python.cmd') $corpoHp 'cmd') { Ok "atalho hangar-python.cmd criado em $binUsuario" }
+    else { Ok 'atalho hangar-python.cmd ja atualizado' }
+
     # (2) lancador pro PowerShell: o script nao tem extensao, entao o Windows nao o executa
     # sozinho. O .cmd entrega tudo pro bash e repassa os argumentos.
     $lancador = Join-Path $binUsuario 'hangar-send.cmd'
@@ -2463,18 +2486,14 @@ if (-not $bash) {
     # falha com "hangar-conta nao e reconhecido" antes de abrir o Claude.
     # Pelo PYTHON, nao pelo bash: o hangar-conta e um script Python (`#!/usr/bin/env python3`), e
     # `bash arquivo` NAO honra shebang - le o arquivo como shell e estoura no docstring. Foi assim
-    # que este lancador nasceu quebrado (copia do hangar-send.cmd, que e bash de verdade). O mesmo
-    # $pyExe/$arg do shim acima, que ja descarta o atalho da Store.
+    # que este lancador nasceu quebrado (copia do hangar-send.cmd, que e bash de verdade). Pelo
+    # hangar-python.cmd: o Python do pacote, o venv ou o real achado acima, nunca o atalho da Store.
+    # Criado sempre junto do hangar-python.cmd: quem decide o Python (e avisa quando falta) e ele.
     $lancadorConta = Join-Path $binUsuario 'hangar-conta.cmd'
-    if (-not $pyExe) {
-        Falta 'hangar-conta.cmd nao criado - precisa de um Python real (ver acima)'
-        $sendOk = $false
-    } else {
-        $conteudoConta = "@echo off`r`n" +
-                         "`"$pyExe`"$arg `"$raiz\scripts\hangar-conta`" %*`r`n"
-        if (Escrever-Lancador $lancadorConta $conteudoConta 'cmd') { Ok "lancador hangar-conta.cmd criado em $binUsuario" }
-        else { Ok 'lancador hangar-conta.cmd ja atualizado' }
-    }
+    $conteudoConta = "@echo off`r`n" +
+                     "call `"%~dp0hangar-python.cmd`" `"$raiz\scripts\hangar-conta`" %*`r`n"
+    if (Escrever-Lancador $lancadorConta $conteudoConta 'cmd') { Ok "lancador hangar-conta.cmd criado em $binUsuario" }
+    else { Ok 'lancador hangar-conta.cmd ja atualizado' }
 
     # hangar-doctor.cmd: Python do VENV do backend (importa app.*), com cd para backend\ (o .env e lido pelo cwd).
     $pyVenv = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
@@ -2497,15 +2516,10 @@ if (-not $bash) {
     # Pelo PYTHON e nao pelo bash, mesmo motivo do hangar-conta: o hangar-engine e script Python
     # (`#!/usr/bin/env python3`) e `bash arquivo` nao honra shebang.
     $lancadorEngine = Join-Path $binUsuario 'hangar-engine.cmd'
-    if (-not $pyExe) {
-        Falta 'hangar-engine.cmd nao criado - precisa de um Python real (ver acima)'
-        $sendOk = $false
-    } else {
-        $conteudoEngine = "@echo off`r`n" +
-                          "`"$pyExe`"$arg `"$raiz\scripts\hangar-engine`" %*`r`n"
-        if (Escrever-Lancador $lancadorEngine $conteudoEngine 'cmd') { Ok "lancador hangar-engine.cmd criado em $binUsuario" }
-        else { Ok 'lancador hangar-engine.cmd ja atualizado' }
-    }
+    $conteudoEngine = "@echo off`r`n" +
+                      "call `"%~dp0hangar-python.cmd`" `"$raiz\scripts\hangar-engine`" %*`r`n"
+    if (Escrever-Lancador $lancadorEngine $conteudoEngine 'cmd') { Ok "lancador hangar-engine.cmd criado em $binUsuario" }
+    else { Ok 'lancador hangar-engine.cmd ja atualizado' }
 
     # (2d) lancador pro hangar-preview (navegador embutido da sessao). Sem ele o script fica
     # invisivel pro PowerShell e pro cmd: ele nao tem extensao, entao o PowerShell ACHA o arquivo
