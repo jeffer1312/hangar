@@ -7,8 +7,6 @@ este script só acha o binário desta cópia e repassa os argumentos, a saída e
                                             com o projeto (a pasta já saneada), liga a memória dele
   hangar-conta --new <nome>              -> cria a conta e imprime o caminho
 """
-import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -21,8 +19,6 @@ from app import rust_bins  # noqa: E402
 
 def main(argv: list[str]) -> int:
     exe = rust_bins.find_bin("hangar-server", "CP_RUST_SERVER_BIN")
-    if exe is None and not os.environ.get("CP_RUST_SERVER_BIN", "").strip():
-        exe = shutil.which("hangar-server")
     if exe is None:
         print("hangar-conta: hangar-server não encontrado; instale o Hangar ou aponte CP_RUST_SERVER_BIN para o binário",
               file=sys.stderr)
