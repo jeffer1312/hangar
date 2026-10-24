@@ -16,6 +16,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 REPO=$(pwd)
+# Dados do usuário: depois da migração para o pacote o `.env` mora em ~/.hangar/config; antes, aqui.
+# Gravar no do checkout numa máquina migrada criaria um token que o novo esconde.
+ENV_FILE=backend/.env
+if [ -f "$HOME/.hangar/config/.env" ]; then ENV_FILE="$HOME/.hangar/config/.env"; fi
 
 YES=0; CHECK=0; UPDATE=0; WRAPPER=1; SERVICES=1; CPSEND=1; PANEL=1; FRONTEND=1; AVANCADO=0; AGENTES=''
 APP=0; TAILSCALE=''; SEM_NATIVO=0
@@ -288,7 +292,7 @@ detecta_pkg() {
 PKG=$(detecta_pkg)
 
 # Cedo porque o 6/8 também precisa dela (o `tailscale serve` publica ESTA porta), não só o resumo.
-PORTA_FIM=$(grep '^CP_PORT=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+PORTA_FIM=$(grep '^CP_PORT=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
 PORTA_FIM=${PORTA_FIM:-8765}
 
 if [ "$UPDATE" = 0 ] && [ "$CHECK" = 0 ]; then
@@ -320,13 +324,13 @@ echo "  No máximo duas perguntas agora, e depois o instalador segue sozinho at�
 echo "  Ele pode pedir sua senha de administrador (pergunta antes, cada vez) para:"
 echo "  instalar o programa que mantém as sessões abertas (tmux), liberar a porta do"
 echo "  Wi-Fi e, se você quiser, o Tailscale."
-if [ -f backend/.env ] && grep -q '^CP_AUTH_TOKEN=' backend/.env; then
-  ok "backend/.env já tem CP_AUTH_TOKEN (mantido)"
+if [ -f "$ENV_FILE" ] && grep -q '^CP_AUTH_TOKEN=' "$ENV_FILE"; then
+  ok "$ENV_FILE já tem CP_AUTH_TOKEN (mantido)"
 elif [ "$APP" = 1 ]; then
   # Mesmo piso da pergunta do terminal; vazio = o app pediu a senha gerada.
   case $APP_TOKEN in *$'\n'*|*$'\r'*) fail "a senha do celular veio do app com quebra de linha" ;; esac
   if [ -z "$APP_TOKEN" ]; then
-    APP_TOKEN=$(gera_token); ok "senha aleatória gerada (o app a lê de backend/.env)"
+    APP_TOKEN=$(gera_token); ok "senha aleatória gerada (o app a lê de $ENV_FILE)"
   elif [ ${#APP_TOKEN} -lt 8 ] || [ "$APP_TOKEN" = change-me ]; then
     fail "a senha do celular veio do app com menos de 8 caracteres"
   elif token_proibido "$APP_TOKEN"; then
@@ -334,22 +338,22 @@ elif [ "$APP" = 1 ]; then
   else
     ok "senha do celular escolhida no app"
   fi
-  printf 'CP_AUTH_TOKEN=%s\n' "$APP_TOKEN" >> backend/.env
+  printf 'CP_AUTH_TOKEN=%s\n' "$APP_TOKEN" >> "$ENV_FILE"
 elif [ "$YES" = 1 ]; then
-  printf 'CP_AUTH_TOKEN=%s\n' "$(gera_token)" >> backend/.env
+  printf 'CP_AUTH_TOKEN=%s\n' "$(gera_token)" >> "$ENV_FILE"
   ok "token aleatório gerado (--yes não pergunta)"
 elif [ "$TEM_TTY" = 0 ]; then
   # Sem terminal não dá pra perguntar, mas token é a ÚNICA tranca do app: gerar um aleatório é
   # o lado seguro (o inseguro seria seguir sem token). O que não pode é fazer isso calado —
   # quem rodou precisa saber que existe um token e onde ele está.
   TOKEN=$(gera_token)
-  printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> backend/.env
+  printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> "$ENV_FILE"
   # NÃO ecoar o valor: sem tty isto roda em provisionamento automatizado (CI, Ansible, ssh
   # não-interativo) e o stdout vira log. Pior aqui do que em qualquer projeto: o próprio app lê
   # `tmux capture-pane`, então uma instalação dentro de um pane monitorado gravaria o token no
   # histórico da ferramenta que ele protege. O PowerShell já não imprimia — era assimetria.
-  falta "sem terminal para perguntar — token ALEATÓRIO gerado (valor em backend/.env)"
-  nota "está em backend/.env; é ele que você digita no celular. Pra trocar, edite o arquivo."
+  falta "sem terminal para perguntar — token ALEATÓRIO gerado (valor em $ENV_FILE)"
+  nota "está em $ENV_FILE; é ele que você digita no celular. Pra trocar, edite o arquivo."
 else
   echo "  Você vai DIGITAR este token no celular, então escolha algo que lembre."
   echo "  Enter em branco = gera um aleatório de 48 caracteres (seguro, chato de digitar)."
@@ -365,25 +369,25 @@ else
     token_proibido "$TOKEN" && { erro "$TOKEN_PROIBIDO"; continue; }
     break
   done
-  printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> backend/.env
-  ok "CP_AUTH_TOKEN gravado em backend/.env"
+  printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> "$ENV_FILE"
+  ok "CP_AUTH_TOKEN gravado em $ENV_FILE"
 fi
 # Prova = o que o backend exige: valor presente e diferente do literal 'change-me'. O piso de
 # 8 caracteres é da PERGUNTA interativa, não da prova — um .env antigo com token curto é válido
 # pro backend e não pode derrubar uma reinstalação boa.
-grep -q '^CP_AUTH_TOKEN=.\+' backend/.env 2>/dev/null \
-  && ! grep -q '^CP_AUTH_TOKEN=change-me[[:space:]]*$' backend/.env \
-  || fail "o token não foi gravado em backend/.env — sem ele o celular não entra"
+grep -q '^CP_AUTH_TOKEN=.\+' "$ENV_FILE" 2>/dev/null \
+  && ! grep -q '^CP_AUTH_TOKEN=change-me[[:space:]]*$' "$ENV_FILE" \
+  || fail "o token não foi gravado em $ENV_FILE — sem ele o celular não entra"
 nota "É esse token que você digita no celular na primeira conexão."
 
 # Sem nome a máquina não conversa com as outras (recado de volta sai sem endereço). Nome que já
 # existe fica: trocá-lo pela tela avisa as outras máquinas, trocá-lo aqui não avisaria.
-if ! grep -q '^CP_SERVER_ID=.' backend/.env; then
+if ! grep -q '^CP_SERVER_ID=.' "$ENV_FILE"; then
   NOME_MAQUINA=$(hostname | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9_-]/-/g; s/^[-_]*//' | cut -c1-32)
   if [ -n "$NOME_MAQUINA" ]; then
     # Sem a quebra no fim do arquivo, o nome grudaria na última linha (o token).
-    [ -s backend/.env ] && [ -n "$(tail -c1 backend/.env)" ] && echo >> backend/.env
-    printf 'CP_SERVER_ID=%s\n' "$NOME_MAQUINA" >> backend/.env
+    [ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ] && echo >> "$ENV_FILE"
+    printf 'CP_SERVER_ID=%s\n' "$NOME_MAQUINA" >> "$ENV_FILE"
     ok "nome desta máquina para as outras: $NOME_MAQUINA"
   else
     falta "nome desta máquina não definido: o hostname não serve; defina na tela Máquinas"
@@ -628,14 +632,14 @@ for a in $TODOS_AGENTES; do command -v "$a" >/dev/null && TEM_AGENTE=1; done
 say "3/8 Token de acesso"
 # Confere o que o passo 0 gravou, em vez de anunciar sucesso de memória: sem TTY o passo 0 não
 # pergunta nada, e um `.env` sem token deixa o celular de fora sem ninguém ver.
-if grep -q '^CP_AUTH_TOKEN=.\+' backend/.env 2>/dev/null \
-   && ! grep -q '^CP_AUTH_TOKEN=change-me[[:space:]]*$' backend/.env; then
+if grep -q '^CP_AUTH_TOKEN=.\+' "$ENV_FILE" 2>/dev/null \
+   && ! grep -q '^CP_AUTH_TOKEN=change-me[[:space:]]*$' "$ENV_FILE"; then
   ok "definido no passo 0"
   mark_item token ok "senha do celular"
 elif [ "$UPDATE" = 1 ]; then
-  anota_problema "backend/.env sem CP_AUTH_TOKEN — rode ./install.sh sem --update para definir"
+  anota_problema "$ENV_FILE sem CP_AUTH_TOKEN — rode ./install.sh sem --update para definir"
 else
-  fail "o token não foi gravado em backend/.env — sem ele o celular não entra"
+  fail "o token não foi gravado em $ENV_FILE — sem ele o celular não entra"
 fi
 
 # ── 4/8 Frontend ─────────────────────────────────────────────────────────────
@@ -682,7 +686,7 @@ if [ "$FRONTEND" = 0 ]; then
   nota "Então dá pra ter o PWA numa VPS e só o backend em cada máquina de trabalho —"
   nota "menos porta aberta e nenhum processo node de graça por aqui."
   nota "Pra ligar este backend ao front que você já usa: abra o PWA, adicione o servidor"
-  nota "com a URL que o backend imprime no QR, e cole o token de backend/.env."
+  nota "com a URL que o backend imprime no QR, e cole o token de $ENV_FILE."
 else
 # Só rebuilda se houver motivo: dist ausente, ou alguma fonte/lockfile mais novo que ele. Num
 # re-run logo após um `git pull` sem mudança de front, isso economiza o `npm ci` inteiro.
@@ -789,15 +793,15 @@ say "6/8 Acesso pelo celular"
 # Escutar em todas as interfaces é o que deixa os clientes usarem a rede local antes do Tailscale.
 # 0.0.0.0 e nunca 'auto': 'auto' tira o loopback, e o `tailscale serve` fala com localhost. Valor
 # escolhido à mão (um IP específico) fica; só o padrão só-local é trocado. Vale no --update.
-BIND_ATUAL=$(grep -E '^CP_LAN_BIND_IP=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- | cut -d'#' -f1 | tr -d " \"'" || true)
+BIND_ATUAL=$(grep -E '^CP_LAN_BIND_IP=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | cut -d'#' -f1 | tr -d " \"'" || true)
 if [ "$CHECK" = 0 ] && { [ -z "$BIND_ATUAL" ] || [ "$BIND_ATUAL" = 127.0.0.1 ] || [ "$BIND_ATUAL" = localhost ] || [ "$BIND_ATUAL" = ::1 ]; }; then
-  grep -q '^CP_LAN_BIND_IP=' backend/.env 2>/dev/null && sed -i.bak '/^CP_LAN_BIND_IP=/d' backend/.env && rm -f backend/.env.bak
-  [ -n "$(tail -c1 backend/.env 2>/dev/null)" ] && echo >> backend/.env   # .env sem quebra no fim
-  printf 'CP_LAN_BIND_IP=0.0.0.0\n' >> backend/.env
+  grep -q '^CP_LAN_BIND_IP=' "$ENV_FILE" 2>/dev/null && sed -i.bak '/^CP_LAN_BIND_IP=/d' "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+  [ -n "$(tail -c1 "$ENV_FILE" 2>/dev/null)" ] && echo >> "$ENV_FILE"   # .env sem quebra no fim
+  printf 'CP_LAN_BIND_IP=0.0.0.0\n' >> "$ENV_FILE"
   ok "CP_LAN_BIND_IP=0.0.0.0 gravado — a rede local alcança o backend (o token continua exigido)"
 fi
-grep -qE '^CP_LAN_BIND_IP=' backend/.env 2>/dev/null || [ "$CHECK" = 1 ] \
-  || fail "CP_LAN_BIND_IP não foi gravado em backend/.env"
+grep -qE '^CP_LAN_BIND_IP=' "$ENV_FILE" 2>/dev/null || [ "$CHECK" = 1 ] \
+  || fail "CP_LAN_BIND_IP não foi gravado em $ENV_FILE"
 mark_item rede-local ok "rede de casa"
 if [ "$UPDATE" = 1 ]; then
   ok "pulado no --update (firewall e Tailscale pedem senha; nada aqui muda com git pull)"
@@ -855,8 +859,8 @@ publica_tailscale() { # grava CP_PUBLIC_URL com o https do tailnet; o serve prec
   [ "$APP" = 1 ] && teto='timeout 60'
   if saida_serve=$(app_sudo "publicar o Hangar na Tailscale" $teto tailscale serve --bg "$PORTA_FIM" 2>&1) \
      && tailscale serve status --json 2>/dev/null | grep -q '"443"'; then
-    grep -q '^CP_PUBLIC_URL=' backend/.env 2>/dev/null && sed -i.bak '/^CP_PUBLIC_URL=/d' backend/.env && rm -f backend/.env.bak
-    printf 'CP_PUBLIC_URL=https://%s\n' "$nome" >> backend/.env
+    grep -q '^CP_PUBLIC_URL=' "$ENV_FILE" 2>/dev/null && sed -i.bak '/^CP_PUBLIC_URL=/d' "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+    printf 'CP_PUBLIC_URL=https://%s\n' "$nome" >> "$ENV_FILE"
     ok "publicado no Tailscale: https://$nome"
     mark_item tailscale-https ok "endereço seguro (HTTPS)"
   else
@@ -1093,11 +1097,11 @@ if [ "${ABRIR_NATIVO:-0}" = 1 ]; then
     falta "o app Hangar fechou logo ao abrir — use o Hangar pelo navegador (endereço no resumo abaixo)"
   fi
 fi
-URL_FIM=$(grep '^CP_PUBLIC_URL=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+URL_FIM=$(grep '^CP_PUBLIC_URL=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
 # O valor do token só aparece com terminal: sem TTY isto roda em provisionamento e o stdout
 # vira log — mesma regra do passo 3/8.
-TOKEN_FIM="(está em backend/.env)"
-[ "$TEM_TTY" = 1 ] && TOKEN_REAL=$(grep '^CP_AUTH_TOKEN=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+TOKEN_FIM="(está em $ENV_FILE)"
+[ "$TEM_TTY" = 1 ] && TOKEN_REAL=$(grep '^CP_AUTH_TOKEN=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
 echo
 echo "  +---------------------------------------------------------------"
 echo "   RESUMO"

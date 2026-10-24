@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 pub mod dev;
 pub mod executor;
 pub mod http;
+pub mod migrate;
 pub mod periodic;
 pub mod restart;
 pub mod state;
@@ -289,7 +290,7 @@ pub fn recover(layout: &Layout) -> std::io::Result<bool> {
 fn make_link(target: &Path, link: &Path) -> std::io::Result<()> { std::os::unix::fs::symlink(target, link) }
 
 #[cfg(unix)]
-fn remove_link(link: &Path) { let _ = std::fs::remove_file(link); }
+pub(crate) fn remove_link(link: &Path) { let _ = std::fs::remove_file(link); }
 
 /// `rename` de link por cima de link é atômico: não há instante sem `current`.
 #[cfg(unix)]
@@ -308,7 +309,7 @@ fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
 
 /// `remove_dir` numa junction tira só o link, nunca o conteúdo do alvo.
 #[cfg(windows)]
-fn remove_link(link: &Path) { let _ = std::fs::remove_dir(link); }
+pub(crate) fn remove_link(link: &Path) { let _ = std::fs::remove_dir(link); }
 
 /// No Windows não há troca atômica de junction: a velha vai para o lado, a nova entra, e a velha
 /// volta se a nova não entrar. Hooks toleram o instante sem `current`; queda nesse instante é
@@ -531,7 +532,7 @@ pub fn running_package() -> Option<&'static PackageId> {
 
 /// Prova de vida da versão nova: o Rust responde com o contrato e o commit do manifesto novo (o
 /// processo velho também responde HTTP); pid igual ao de antes do reinício também reprova.
-async fn wait_rust<H: HealthProbe>(health: &H, manifest: &Manifest, before: Option<u32>, settings: &Settings) -> Result<(), String> {
+pub(crate) async fn wait_rust<H: HealthProbe>(health: &H, manifest: &Manifest, before: Option<u32>, settings: &Settings) -> Result<(), String> {
     let (protocol, commit) = (manifest.protocol, manifest.commit.as_str());
     let deadline = Instant::now() + settings.health_deadline;
     loop {

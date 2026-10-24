@@ -13,6 +13,8 @@ pub struct Checkout {
     pub upstream: Option<String>,
     /// Arquivos rastreados com edição (não rastreado não atrapalha o fast-forward).
     pub dirty: usize,
+    /// Arquivos novos fora do `.gitignore` (`??`): a migração os trata como edição local.
+    pub untracked: usize,
     pub ahead: u64,
     pub behind: u64,
     pub head: String,
@@ -73,6 +75,7 @@ pub fn read(root: &Path, fetch: bool) -> Result<Checkout, String> {
     let status = git(root, &["status", "--porcelain=v1"])?;
     let mut checkout = Checkout {
         dirty: status.lines().filter(|l| !l.starts_with("??")).count(),
+        untracked: status.lines().filter(|l| l.starts_with("??")).count(),
         branch: git(root, &["rev-parse", "--abbrev-ref", "HEAD"])?,
         head: git(root, &["rev-parse", "--short", "HEAD"])?,
         upstream: git(root, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).ok(),

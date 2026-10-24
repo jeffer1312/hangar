@@ -1,5 +1,5 @@
 //! Entrada (spec "Entrada"): acha a pasta do Hangar pelo `WorkingDirectory` da unit `hangar-backend` (Linux) ou da ação da
-//! tarefa `hangar-backend` (Windows), sem nada tenta `~/hangar`, lê porta e token do `backend/.env` e testa se responde.
+//! tarefa `hangar-backend` (Windows), sem nada tenta `~/hangar`, lê porta e token do `.env` (`env_file`) e testa se responde.
 //! Não existe `/api/health`: `GET /api/sessions` com 401 já prova que é um Hangar.
 use std::path::{Path, PathBuf};
 use crate::api::Api;
@@ -81,8 +81,17 @@ fn service_dir() -> Option<PathBuf> {
 #[cfg(not(any(target_os = "linux", windows)))]
 fn service_dir() -> Option<PathBuf> { None }
 
-pub(crate) fn read_install(dir: &Path) -> LocalInstall {
-    let (port, token) = std::fs::read_to_string(dir.join("backend").join(".env")).map(|text| parse_env(&text)).unwrap_or((None, None));
+/// O `.env` do servidor: `~/.hangar/config/.env` quando existe (máquina migrada), senão o da `backend/`.
+/// A mesma regra do `user_data::path` do `hangar-server`, que este crate não importa.
+pub(crate) fn env_file(home: Option<&Path>, dir: &Path) -> PathBuf {
+    home.map(|home| home.join(".hangar").join("config").join(".env")).filter(|new| new.exists())
+        .unwrap_or_else(|| dir.join("backend").join(".env"))
+}
+
+pub(crate) fn read_install(dir: &Path) -> LocalInstall { read_install_in(std::env::home_dir().as_deref(), dir) }
+
+fn read_install_in(home: Option<&Path>, dir: &Path) -> LocalInstall {
+    let (port, token) = std::fs::read_to_string(env_file(home, dir)).map(|text| parse_env(&text)).unwrap_or((None, None));
     LocalInstall { dir: dir.to_owned(), port: port.unwrap_or(DEFAULT_PORT), token }
 }
 
@@ -152,12 +161,35 @@ mod tests {
 
     #[test]
     fn read_install_defaults_the_port() {
-        let dir = std::env::temp_dir().join(format!("hangar-local-env-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("hangar-local-env-{}", std::process::id()));
+        let (home, dir) = (root.join("home"), root.join("hangar"));
         std::fs::create_dir_all(dir.join("backend")).unwrap();
-        assert_eq!(read_install(&dir), LocalInstall { dir: dir.clone(), port: DEFAULT_PORT, token: None });
+        assert_eq!(read_install_in(Some(&home), &dir), LocalInstall { dir: dir.clone(), port: DEFAULT_PORT, token: None });
         std::fs::write(dir.join("backend/.env"), "CP_AUTH_TOKEN=t0k\n").unwrap();
-        assert_eq!(read_install(&dir).token.as_deref(), Some("t0k"));
-        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!(read_install_in(Some(&home), &dir).token.as_deref(), Some("t0k"));
+        assert_eq!(read_install_in(None, &dir).token.as_deref(), Some("t0k"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn read_install_prefers_the_user_data_env() {
+        let root = std::env::temp_dir().join(format!("hangar-local-userdata-{}", std::process::id()));
+        let (home, dir) = (root.join("home"), root.join("hangar"));
+        let new = home.join(".hangar/config/.env");
+        std::fs::create_dir_all(new.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(dir.join("backend")).unwrap();
+        // Só no lugar novo: máquina migrada, sem `.env` na `backend/`.
+        std::fs::write(&new, "CP_PORT=9100\nCP_AUTH_TOKEN=novo\n").unwrap();
+        assert_eq!(read_install_in(Some(&home), &dir), LocalInstall { dir: dir.clone(), port: 9100, token: Some("novo".into()) });
+        assert_eq!(env_file(Some(&home), &dir), new);
+        // Os dois: vale o novo.
+        std::fs::write(dir.join("backend/.env"), "CP_PORT=9000\nCP_AUTH_TOKEN=velho\n").unwrap();
+        assert_eq!(read_install_in(Some(&home), &dir), LocalInstall { dir: dir.clone(), port: 9100, token: Some("novo".into()) });
+        // Só o antigo: como hoje.
+        std::fs::remove_file(&new).unwrap();
+        assert_eq!(read_install_in(Some(&home), &dir), LocalInstall { dir: dir.clone(), port: 9000, token: Some("velho".into()) });
+        assert_eq!(env_file(Some(&home), &dir), dir.join("backend/.env"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

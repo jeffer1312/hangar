@@ -131,6 +131,17 @@ expect_eq "de novo: uma linha de senha só" "$(grep -c '^CP_AUTH_TOKEN=' "$R/bac
 expect_line "de novo: a senha atual é mantida" "$R/backend/.env" '^CP_AUTH_TOKEN=segredo-do-app-123$'
 expect_no "de novo: a senha nova não vaza" "$S/out2" 'outra-senha-456'
 
+# --- Caso: máquina migrada para o pacote lê e grava os dados em ~/.hangar/config ---
+new_sandbox migrada
+mkdir -p "$S/home/.hangar/config"
+printf 'CP_AUTH_TOKEN=do-pacote-123\nCP_SERVER_ID=casa\nCP_PORT=8799\n' > "$S/home/.hangar/config/.env"
+TEST_TOKEN='outra-senha-456' run_install "$S/out" "${APP_ARGS[@]}"; rc=$?
+expect_eq "migrada: sai 0" "$rc" 0
+expect_eq "migrada: nenhum token novo no backend/.env" "$(cat "$R/backend/.env" 2>/dev/null | grep -c '^CP_AUTH_TOKEN=')" 0
+expect_eq "migrada: uma linha de senha só" "$(grep -c '^CP_AUTH_TOKEN=' "$S/home/.hangar/config/.env")" 1
+expect_line "migrada: a senha do pacote fica" "$S/home/.hangar/config/.env" '^CP_AUTH_TOKEN=do-pacote-123$'
+expect_eq "migrada: nome da máquina não repete" "$(grep -c '^CP_SERVER_ID=' "$S/home/.hangar/config/.env")" 1
+
 # --- Caso: senha com espaço no meio chega ao backend igual ---
 new_sandbox especial
 TEST_TOKEN='minha senha 123' run_install "$S/out" "${APP_ARGS[@]}"

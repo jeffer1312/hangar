@@ -924,7 +924,7 @@ impl SetupWizard {
     fn connect_local(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let install = local::read_install(&self.dest);
         let Some(token) = install.token.clone() else {
-            let env = self.dest.join("backend").join(".env");
+            let env = local::env_file(std::env::home_dir().as_deref(), &self.dest);
             self.connection = Some(Err(tr("setup_connection_missing").replace("{path}", &env.display().to_string())));
             return;
         };
@@ -1311,7 +1311,7 @@ impl SetupWizard {
         if matches!(self.qr, Qr::Loading | Qr::Shown { .. }) { return; }
         let install = local::read_install(&self.dest);
         let Some(api) = install.token.as_ref().and_then(|token| crate::api::Api::new(&local::address(install.port), token).ok()) else {
-            let env = self.dest.join("backend").join(".env");
+            let env = local::env_file(std::env::home_dir().as_deref(), &self.dest);
             self.qr = Qr::Failed(tr("setup_connection_missing").replace("{path}", &env.display().to_string()));
             return cx.notify();
         };

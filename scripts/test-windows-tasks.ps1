@@ -18,6 +18,15 @@ $rows = @(
     (Row 41 1 'python.exe' 'C:\repo\backend-other\.venv\Scripts\python.exe -m app.main')
 )
 Assert (((Get-HangarTaskProcesses $rows 'hangar-backend' 'C:\repo\backend').ProcessId -join ',') -eq '10,11') 'Selecao atingiu atualizador, sessao ou outro checkout'
+# Pacote: o Python roda do caminho real da versao anterior; quem o identifica e o lancador acima dele.
+$pacote = @(
+    (Row 60 1 'hangar-launcher.exe' '"C:\Users\u\.hangar\bin\hangar-launcher.exe" launch backend --log "C:\l.log"'),
+    (Row 61 60 'python.exe' '"C:\Users\u\.hangar\versions\0.1.0.5\python\python.exe" -m app.main --log "C:\l.log"'),
+    (Row 62 1 'hangar-server.exe' '"C:\Users\u\.hangar\versions\0.1.0.5\bin\hangar-server.exe" update --run --listen 0.0.0.0:8765'),
+    (Row 63 62 'python.exe' '"C:\Users\u\.hangar\versions\0.1.0.5\python\python.exe" -m app.main')
+)
+Assert (((Get-HangarTaskProcesses $pacote 'hangar-backend' 'C:\Users\u\.hangar\versions\0.1.0.6\backend').ProcessId -join ',') -eq '61') 'Backend do lancador nao identificado (ou o atualizador entrou junto)'
+Assert (-not (Get-HangarTaskProcesses $pacote 'hangar-frontend' 'C:\repo\frontend')) 'Lancador do backend tomado pelo front'
 
 $script:events = @()
 function Reset-State {
@@ -78,6 +87,9 @@ try {
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
     Assert ('start' -in $script:events) 'Precisao de WMI recusou o mesmo processo'
     Reset-State
+    Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' -NoStart
+    Assert (($script:events -join ',') -eq 'stop:10,stop:11') "-NoStart subiu a tarefa ou nao parou: $($script:events -join ',')"
+    Reset-State
     $script:processRows = @($rows) + @(Row 12 11 'hangar-server.exe' 'C:\Users\u\.hangar\bin\hangar-server.exe')
     $filho = [pscustomobject]@{ Id = 12; StartTime = $old }
     $filho | Add-Member ScriptMethod WaitForExit { param($timeout) return $true }
@@ -107,13 +119,15 @@ try {
         Assert ('start' -notin $script:events) "Duplicou processo: $scenario"
         Assert ($script:task.Settings.RestartCount -eq 3) "Perdeu recuperacao automatica: $scenario"
     }
-    foreach ($scenario in @('healthy', 'transient', 'recent', 'updating', 'installing')) {
+    foreach ($scenario in @('healthy', 'transient', 'recent', 'updating', 'rust-updating', 'migrating', 'installing')) {
         Reset-State
         switch ($scenario) {
             healthy { $script:httpReplies.Clear(); $script:httpReplies.Enqueue($true) }
             transient { $script:httpReplies.Clear(); $script:httpReplies.Enqueue($false); $script:httpReplies.Enqueue($true) }
             recent { $script:lastRun = Get-Date }
             updating { }
+            'rust-updating' { $script:processRows = @($rows[0], $rows[1], $pacote[2]) }
+            migrating { $script:processRows = @($rows[0], $rows[1], (Row 51 1 'hangar-server.exe' 'C:\Users\u\.hangar\migrate\hangar-server.exe migrate-package')) }
             installing { $script:processRows = @($rows[0], $rows[1], (Row 50 1 'powershell.exe' 'powershell -File install.ps1 -Update')) }
         }
         Repair-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
@@ -175,6 +189,23 @@ try {
     . ([scriptblock]::Create($assignment.Extent.Text))
     Assert ($cfg.MultipleInstances -eq 'IgnoreNew' -and $cfg.RestartCount -eq 3 -and $cfg.RestartInterval.TotalMinutes -eq 1) 'Agendador perdeu protecao de instancia ou recuperacao'
     Assert ($cfg.Priority -eq 4) 'Tarefa voltou a prioridade padrao do Agendador (7, abaixo do normal)'
+    # Tarefa do backend: na maquina migrada, o lancador e o padrao que acha o Python do pacote.
+    $assignment = $ast.Find({ param($node)
+        $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$tarefas'
+    }, $true)
+    $raiz = 'C:\repo'; $portaBack = 8765
+    $lancadorPacote = 'C:\Users\u\.hangar\bin\hangar-launcher.exe'
+    . ([scriptblock]::Create($assignment.Extent.Text))
+    $b = $tarefas[0]
+    Assert ($b.Exe -eq $lancadorPacote -and $b.Args -eq 'launch backend') "Tarefa migrada fora do lancador: $($b.Exe) $($b.Args)"
+    $python = '"C:\Users\u\.hangar\versions\0.1.0.5\python\python.exe" -m app.main'
+    Assert ($python -match $b.Padrao -and 'python.exe' -match $b.ExeProc) 'Pare-Servico nao acha o Python do pacote'
+    Assert ('"C:\Users\u\.hangar\bin\hangar-launcher.exe" launch backend --log x' -match $b.Padrao -and 'hangar-launcher.exe' -match $b.ExeProc) 'Pare-Servico nao acha o lancador'
+    Assert (-not ('C:\repo\backend\.venv\Scripts\python.exe -m app.atualizar' -match $b.Padrao)) 'Padrao do pacote pegou o checkout'
+    $lancadorPacote = $null
+    . ([scriptblock]::Create($assignment.Extent.Text))
+    $b = $tarefas[0]
+    Assert ($b.Padrao -eq [regex]::Escape('C:\repo\backend') -and $b.ExeProc -eq 'uv|python') 'Maquina nao migrada mudou de padrao'
     $outerTry = $ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.TryStatementAst] } | Select-Object -First 1
     Reset-State
     # O pause/restore de verdade passa por Export-/Register-ScheduledTask e so o Agendador real

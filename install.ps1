@@ -618,7 +618,9 @@ if (-not $Update) {
 
 # As funcoes do .env vem ANTES do passo 0 porque o token e gravado la: no PowerShell uma funcao so
 # existe depois que a linha que a define executou.
-$envFile = "$raiz\backend\.env"
+# Depois da migracao para o pacote o .env mora em ~\.hangar\config (o do checkout fica como copia
+# velha): gravar no antigo criaria um token que o novo esconde.
+$envFile = if (Test-Path -LiteralPath "$HOME\.hangar\config\.env") { "$HOME\.hangar\config\.env" } else { "$raiz\backend\.env" }
 function Porta-Do-Env {
     param([string]$Chave, [int]$Default)
     if (Test-Path $envFile) {
@@ -772,12 +774,12 @@ Write-Host '  Se pedir permissao de administrador (UAC) e so pra uma coisa pontu
 # em texto puro no install.log.
 Pausa-Log
 if ($temToken) {
-    Ok 'backend\.env ja tem CP_AUTH_TOKEN (mantido)'
+    Ok "$envFile ja tem CP_AUTH_TOKEN (mantido)"
 } elseif ($App) {
     # Mesmo piso da pergunta do terminal; vazio = o app pediu a senha gerada.
     if (-not $tokenDoApp) {
         $tokenDoApp = Token-Aleatorio
-        Ok 'senha aleatoria gerada (o app a le de backend\.env)'
+        Ok "senha aleatoria gerada (o app a le de $envFile)"
     } elseif ($tokenDoApp.Length -lt 8 -or $tokenDoApp -eq 'change-me' -or $tokenDoApp -match '[\r\n]') {
         Pare 'a senha do celular veio do app invalida (minimo 8 caracteres, sem quebra de linha)' @()
     } elseif (Test-ForbiddenToken $tokenDoApp) {
@@ -817,10 +819,10 @@ if ($temToken) {
         break
     }
     Set-EnvKey -Chave 'CP_AUTH_TOKEN' -Valor $token
-    Ok 'CP_AUTH_TOKEN gravado em backend\.env'
+    Ok "CP_AUTH_TOKEN gravado em $envFile"
 }
 # Prova, não ausência de erro: o passo inteiro vale zero se o token não estiver de fato no arquivo.
-if (-not (Token-Do-Env)) { Pare 'o token nao foi gravado em backend\.env - sem ele o celular nao entra' @() }
+if (-not (Token-Do-Env)) { Pare "o token nao foi gravado em $envFile - sem ele o celular nao entra" @() }
 if ($script:temLog) { Add-Content -Path $logInstall -Value '  ok  CP_AUTH_TOKEN definido (valor omitido do log de proposito)' }
 Retoma-Log
 Nota 'E esse token que voce digita no celular na primeira conexao.'
@@ -1100,10 +1102,10 @@ if (Token-Do-Env) {
     Ok 'definido no passo 0'
     Mark-Item 'token' 'ok' 'senha do celular'
 } elseif ($Update) {
-    Falta 'backend\.env sem CP_AUTH_TOKEN - rode .\install.ps1 sem -Update para definir'
+    Falta "$envFile sem CP_AUTH_TOKEN - rode .\install.ps1 sem -Update para definir"
     $pendencias += 'token'
 } else {
-    Pare 'o token nao foi gravado em backend\.env - sem ele o celular nao entra' @()
+    Pare "o token nao foi gravado em $envFile - sem ele o celular nao entra" @()
 }
 
 # -- 4/8 Frontend ------------------------------------------------------------
@@ -2041,6 +2043,10 @@ $portaFront = 5173
 if ($temTarefaFront) { Set-EnvKey -Chave 'CP_FRONT_PORT' -Valor "$portaFront" }
 else { Remove-EnvKey -Chave 'CP_FRONT_PORT' }
 
+# Maquina migrada para o pacote (ou modo desenvolvedor): a tarefa chama o lancador estavel, que acha
+# a versao em uso pelo ~\.hangar\current. Sem isto um -Update voltaria a tarefa para o venv do checkout.
+$lancadorPacote = Join-Path $HOME '.hangar\bin\hangar-launcher.exe'
+if (-not ((Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) -and (Test-Path -LiteralPath $lancadorPacote))) { $lancadorPacote = $null }
 $tarefas = @(
     # Padrao ANCORADO no caminho deste checkout. 'app\.main' cru casava com QUALQUER processo cuja
     # linha de comando contivesse app.main - e este repo tem worktrees em .claude/worktrees/ com
@@ -2054,10 +2060,14 @@ $tarefas = @(
     # e um lock mudado por `git pull` sem rede o fazia falhar antes de o backend nascer) e punha
     # dois processos a mais na cadeia (uv.exe -> python trampolim -> python). O venv ja existe
     # aqui (passo 2/8, `uv sync`); sem ele cai no uv como antes.
-    @{ Nome = 'hangar-backend';  Exe = $(if (Test-Path "$raiz\backend\.venv\Scripts\python.exe") { "$raiz\backend\.venv\Scripts\python.exe" } else { 'uv' })
-       Args = $(if (Test-Path "$raiz\backend\.venv\Scripts\python.exe") { '-m app.main' } else { 'run python -m app.main' })
+    @{ Nome = 'hangar-backend';  Exe = $(if ($lancadorPacote) { $lancadorPacote } elseif (Test-Path "$raiz\backend\.venv\Scripts\python.exe") { "$raiz\backend\.venv\Scripts\python.exe" } else { 'uv' })
+       Args = $(if ($lancadorPacote) { 'launch backend' } elseif (Test-Path "$raiz\backend\.venv\Scripts\python.exe") { '-m app.main' } else { 'run python -m app.main' })
        Dir = "$raiz\backend"
-       Porta = $portaBack;  Padrao = [regex]::Escape("$raiz\backend"); ExeProc = 'uv|python' }
+       Porta = $portaBack
+       # No pacote o Python roda de ~\.hangar\versions\<v> sob o lancador, fora deste checkout.
+       Padrao = $(if ($lancadorPacote) { [regex]::Escape((Join-Path (Split-Path (Split-Path $lancadorPacote)) 'versions')) + '\\|' +
+                                         '(?:^|\s)launch\s+backend(?:\s|$)' } else { [regex]::Escape("$raiz\backend") })
+       ExeProc = $(if ($lancadorPacote) { 'python|hangar-launcher|hangar-server' } else { 'uv|python' }) }
 )
 if ($temTarefaFront) {
     # `run preview`, NAO `run dev`: o dist ja esta pronto e subir o dev server aqui serviria
@@ -2446,6 +2456,8 @@ if (-not $bash) {
         else { Ok 'atalho python3.cmd ja atualizado' }
     }
 
+    # Atalhos em maquina migrada vao pelo current do perfil: o caminho real da versao seria podado.
+    $raizAtalhos = if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { '%USERPROFILE%\.hangar\current' } else { $raiz }
     # (1b) hangar-python.cmd: gemeo do atalho sem extensao que o install-hangar-send.sh grava. Mesma
     # regra do backend/app/install_root.py: raiz = ~\.hangar\current (pacote) ou esta copia; nela o
     # Python embutido, senao o venv; sem nenhum, o Python real achado acima.
@@ -2491,7 +2503,7 @@ if (-not $bash) {
     # Criado sempre junto do hangar-python.cmd: quem decide o Python (e avisa quando falta) e ele.
     $lancadorConta = Join-Path $binUsuario 'hangar-conta.cmd'
     $conteudoConta = "@echo off`r`n" +
-                     "call `"%~dp0hangar-python.cmd`" `"$raiz\scripts\hangar-conta`" %*`r`n"
+                     "call `"%~dp0hangar-python.cmd`" `"$raizAtalhos\scripts\hangar-conta`" %*`r`n"
     if (Escrever-Lancador $lancadorConta $conteudoConta 'cmd') { Ok "lancador hangar-conta.cmd criado em $binUsuario" }
     else { Ok 'lancador hangar-conta.cmd ja atualizado' }
 
@@ -2517,7 +2529,7 @@ if (-not $bash) {
     # (`#!/usr/bin/env python3`) e `bash arquivo` nao honra shebang.
     $lancadorEngine = Join-Path $binUsuario 'hangar-engine.cmd'
     $conteudoEngine = "@echo off`r`n" +
-                      "call `"%~dp0hangar-python.cmd`" `"$raiz\scripts\hangar-engine`" %*`r`n"
+                      "call `"%~dp0hangar-python.cmd`" `"$raizAtalhos\scripts\hangar-engine`" %*`r`n"
     if (Escrever-Lancador $lancadorEngine $conteudoEngine 'cmd') { Ok "lancador hangar-engine.cmd criado em $binUsuario" }
     else { Ok 'lancador hangar-engine.cmd ja atualizado' }
 

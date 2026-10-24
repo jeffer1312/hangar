@@ -42,6 +42,15 @@ if [[ ! -x "$NODE_BIN/npm" ]] && command -v node >/dev/null; then
   NODE_BIN="$(dirname "$(readlink -f "$(command -v node)")")"
 fi
 UV_BIN="$(command -v uv || true)"
+# Máquina migrada para o pacote (ou modo desenvolvedor): a unit chama o lançador estável, que acha a
+# versão em uso pelo ~/.hangar/current, e os dados do usuário moram em ~/.hangar/config.
+LAUNCHER="$HOME/.hangar/bin/hangar-launcher"
+if [[ ! -e "$HOME/.hangar/current" || ! -x "$LAUNCHER" ]]; then LAUNCHER=""; fi
+ENV_FILE="$REPO/backend/.env"
+if [[ -f "$HOME/.hangar/config/.env" ]]; then ENV_FILE="$HOME/.hangar/config/.env"; fi
+BACK_DIR="$REPO/backend"
+BACK_EXEC="$UV_BIN run python -m app.main"
+if [[ -n "$LAUNCHER" ]]; then BACK_DIR="$HOME/.hangar"; BACK_EXEC="\"$LAUNCHER\" launch backend"; fi
 
 log() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
@@ -84,7 +93,7 @@ case "${1:-}" in
     exit 0 ;;
 esac
 
-[[ -n "$UV_BIN" ]] || { echo "uv not found in PATH" >&2; exit 1; }
+[[ -n "$UV_BIN" || -n "$LAUNCHER" ]] || { echo "uv not found in PATH" >&2; exit 1; }
 [[ "$BACKEND_ONLY" == 1 ]] || [[ -x "$NODE_BIN/npm" ]] || { echo "npm nao encontrado em $NODE_BIN — instale Node 20+ (ou, se usa fnm, rode: fnm default <ver>)" >&2; exit 1; }
 [[ -d "$REPO/node_modules" ]] || log "WARNING: node_modules missing — run 'npm install' at the repo root first (frontend is a workspace)"
 
@@ -130,14 +139,14 @@ Description=hangar backend (FastAPI/uvicorn)
 After=network.target
 
 [Service]
-WorkingDirectory=$REPO/backend
+WorkingDirectory=$BACK_DIR
 # Explicit PATH: the backend spawns \`claude\` (~/.local/bin) and \`tmux\` — the user manager's
 # PATH may lack ~/.local/bin on a lingering boot with no login session.
 Environment=PATH=$NODE_BIN:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
 # glibc abre uma arena de malloc por thread; com dezenas de threads a fragmentação segura a RSS
 # alta por horas. Duas arenas bastam para um processo que passa a maior parte do tempo esperando.
 Environment=MALLOC_ARENA_MAX=2
-ExecStart=$UV_BIN run python -m app.main
+ExecStart=$BACK_EXEC
 Restart=on-failure
 RestartSec=2
 
@@ -155,14 +164,14 @@ if [[ "$BACKEND_ONLY" == 1 || "$SERVE" == backend ]]; then
   # CP_FRONT_PORT aponta o QR e o painel de alcance. Deixar um 5173 escrito por uma instalacao
   # anterior faria os dois mandarem a pessoa pra uma porta que acabou de ser desligada; sem a
   # linha, o backend usa a PROPRIA porta (config.porta_do_front).
-  sed -i -E '/^[[:space:]]*CP_FRONT_PORT=/d' "$REPO/backend/.env" 2>/dev/null || true
+  sed -i -E '/^[[:space:]]*CP_FRONT_PORT=/d' "$ENV_FILE" 2>/dev/null || true
   if [[ "$BACKEND_ONLY" == 1 ]]; then log "Skipping $FRONT (--backend-only)"; else log "Skipping $FRONT (o backend serve a interface no 8765)"; fi
 else
   # Preview mantido: a interface responde no 5173, e o QR precisa dizer isso. Gravado explicito
   # porque o default do backend passou a ser "eu mesmo sirvo" — sem esta linha, quem ficou no
   # preview veria o QR apontar pro 8765 e trocaria de ORIGEM (localStorage vazio: cp_servers com
   # os tokens, tema, layout).
-  grep -qsE '^[[:space:]]*CP_FRONT_PORT=' "$REPO/backend/.env" || printf 'CP_FRONT_PORT=5173\n' >> "$REPO/backend/.env"
+  grep -qsE '^[[:space:]]*CP_FRONT_PORT=' "$ENV_FILE" || printf 'CP_FRONT_PORT=5173\n' >> "$ENV_FILE"
 # O bind do preview vem da MESMA variavel do backend (backend/.env). systemd nao le .env sozinho,
 # entao a unit precisa RECEBER a variavel — senao o vite cai no padrao 127.0.0.1 e, num servidor
 # atras de reverse proxy, o front fica inalcancavel com a unit `active` (medido na VPS: o traefik
@@ -174,7 +183,7 @@ else
 # O `cut -d'#'` tira comentario inline: `CP_LAN_BIND_IP=0.0.0.0 # todas as interfaces` e valido pro
 # backend (python-dotenv trata), e sem isso virava um host colado com o comentario -> vite em
 # crash-loop com a unit parecendo boa.
-BIND_RAW="$(grep -sE '^[[:space:]]*CP_LAN_BIND_IP=' "$REPO/backend/.env" | tail -1 || true)"
+BIND_RAW="$(grep -sE '^[[:space:]]*CP_LAN_BIND_IP=' "$ENV_FILE" | tail -1 || true)"
 BIND_IP="$(printf '%s' "${BIND_RAW#*=}" | cut -d'#' -f1 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^["'"'"']//' -e 's/["'"'"']$//')"
 # 'auto' e valor de primeira classe do CP_LAN_BIND_IP: o backend o resolve pro IP de LAN detectado
 # (backend/app/config.py:199 -> detect_lan_ip). Repassar a string crua pro vite daria um host

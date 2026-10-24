@@ -13,6 +13,10 @@ fn main() -> std::process::ExitCode {
     if args.first().map(String::as_str) == Some("launch") {
         return hangar_server::install_root::launch(&args[1..]);
     }
+    // A migração única do motor `git` para o pacote (ou para o modo desenvolvedor), com volta.
+    if args.first().map(String::as_str) == Some("migrate-package") {
+        return hangar_server::update::migrate::cli(&args[1..]);
+    }
     // O executor destacado da atualização: processo e runtime próprios, fora do servidor que reinicia.
     if args.first().map(String::as_str) == Some("update") {
         return hangar_server::update::executor::cli(&args[1..]);

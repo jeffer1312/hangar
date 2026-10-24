@@ -20,6 +20,9 @@ function Get-HangarTaskProcesses($rows, [string]$name, [string]$directory) {
     foreach ($row in $rows) { $byId[[int]$row.ProcessId] = $row }
     $pathPattern = [regex]::Escape($directory.TrimEnd('\', '/')) + '(?:[\\/]|["\s]|$)'
     $launcherPattern = [regex]::Escape((Join-Path $env:LOCALAPPDATA "hangar\$name.vbs"))
+    # No pacote o Python roda do caminho real da versao, que nao e o diretorio pedido: quem o
+    # identifica e o lancador `hangar-server launch backend` acima dele.
+    $packagePattern = '(?:^|\s)launch\s+backend(?:\s|$)'
     foreach ($row in $rows) {
         if ($name -eq 'hangar-backend') {
             if ($row.Name -notmatch '^(python(?:\d+(?:\.\d+)*)?|uv)\.exe$' -or
@@ -29,7 +32,9 @@ function Get-HangarTaskProcesses($rows, [string]$name, [string]$directory) {
         $seen = New-Object 'System.Collections.Generic.HashSet[int]'
         while ($current -and $seen.Add([int]$current.ProcessId)) {
             if ($current.CommandLine -match $pathPattern -or
-                ($current.Name -eq 'wscript.exe' -and $current.CommandLine -match $launcherPattern)) {
+                ($current.Name -eq 'wscript.exe' -and $current.CommandLine -match $launcherPattern) -or
+                ($name -eq 'hangar-backend' -and $current.Name -match '^hangar-(?:server|launcher)\.exe$' -and
+                 $current.CommandLine -match $packagePattern)) {
                 $row
                 break
             }
@@ -57,7 +62,8 @@ function Test-HangarHttp([int]$port) {
     } finally { if ($response) { $response.Close() } }
 }
 
-function Restart-HangarTask([string]$name, [int]$port, [string]$directory) {
+# -NoStart: so para (a migracao para o pacote troca o lancador entre parar e subir).
+function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [switch]$NoStart) {
     $mutex = New-Object Threading.Mutex($false, "Local\HangarRestart-$name")
     $locked = $false
     try {
@@ -120,7 +126,7 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory) {
         if (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue) {
             throw "Porta $port ainda ocupada; nova instancia nao sera iniciada"
         }
-        Start-ScheduledTask -TaskName $name -ErrorAction Stop
+        if (-not $NoStart) { Start-ScheduledTask -TaskName $name -ErrorAction Stop }
     } finally {
         if ($locked) { $mutex.ReleaseMutex() }
         $mutex.Dispose()
@@ -190,6 +196,7 @@ function Repair-HangarTask([string]$name, [int]$port, [string]$directory) {
     # Instalacao e atualizacao controlam a propria parada, inclusive quando a API nao responde.
     if ($rows | Where-Object {
         ($_.Name -match '^python.*\.exe$' -and $_.CommandLine -match '(?:^|\s)-m\s+app\.atualizar(?:\s|$)') -or
+        ($_.Name -eq 'hangar-server.exe' -and $_.CommandLine -match '(?:^|\s)(?:update|migrate-package)(?:\s|$)') -or
         ($_.Name -match '^(powershell|pwsh)\.exe$' -and $_.CommandLine -match '(?:^|[\s\\/])install\.ps1(?:["\s]|$)')
     }) { return }
     $candidates = @(Get-HangarTaskProcesses $rows $name $directory)

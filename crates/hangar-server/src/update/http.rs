@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn update_dev_body_has_the_python_shape_with_the_checkout_values() {
-        let checkout = Checkout { branch: "main".into(), upstream: Some("origin/main".into()), dirty: 2, ahead: 0, behind: 3,
+        let checkout = Checkout { branch: "main".into(), upstream: Some("origin/main".into()), dirty: 2, untracked: 0, ahead: 0, behind: 3,
             head: "aaa1111".into(), upstream_head: Some("bbb2222".into()), changes: vec![("bbb2222".into(), "fix: x".into())] };
         let body = dev_body(Ok(&checkout), Some("aaa1111"), "systemd", Map::new());
         assert_client_shape(&body);
