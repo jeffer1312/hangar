@@ -1,0 +1,54 @@
+{
+  "origin_commit": "b2832ee04",
+  "command": "HANGAR_FIXTURE_PY_ROOT=<checkout com scripts/hangar-conta e backend/app de b2832ee04> cargo test -p hangar-server --test it accounts_reconcile::generate_fixtures -- --ignored --exact",
+  "scenario": "list_pending_dead_link",
+  "steps": [
+    {
+      "args": [
+        "--list"
+      ],
+      "exit": 0,
+      "stdout": "a\nb\n",
+      "stderr": []
+    }
+  ],
+  "tree": {
+    "<HOME>/.claude-a": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-a/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude-a/.hangar-conta": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    },
+    "<HOME>/.claude-a/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-b": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-b/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude-b/.hangar-account-pending": {
+      "kind": "symlink",
+      "target": "<HOME>/nada"
+    },
+    "<HOME>/.claude-b/.hangar-conta": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    },
+    "<HOME>/.claude-b/projects": {
+      "kind": "dir"
+    }
+  },
+  "diary": []
+}

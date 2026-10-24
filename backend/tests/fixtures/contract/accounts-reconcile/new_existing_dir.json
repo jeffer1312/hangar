@@ -1,0 +1,72 @@
+{
+  "origin_commit": "b2832ee04",
+  "command": "HANGAR_FIXTURE_PY_ROOT=<checkout com scripts/hangar-conta e backend/app de b2832ee04> cargo test -p hangar-server --test it accounts_reconcile::generate_fixtures -- --ignored --exact",
+  "scenario": "new_existing_dir",
+  "steps": [
+    {
+      "args": [
+        "--new",
+        "conta2"
+      ],
+      "exit": 1,
+      "stdout": "",
+      "stderr": [
+        "hangar-conta: já existe <HOME>/.claude-conta2"
+      ]
+    }
+  ],
+  "tree": {
+    "<HOME>/.claude": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-conta2": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"oauthAccount\": {\"emailAddress\": \"um@exemplo.com\"}, \"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude/.credentials.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"claudeAiOauth\":{}}"
+    },
+    "<HOME>/.claude/CLAUDE.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "# regras"
+    },
+    "<HOME>/.claude/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x/memory": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x/memory/MEMORY.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "m"
+    },
+    "<HOME>/.claude/settings.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"theme\":\"dark\"}"
+    },
+    "<HOME>/.claude/skills": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/skills/falar": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/skills/falar/SKILL.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "oi"
+    }
+  },
+  "diary": []
+}
