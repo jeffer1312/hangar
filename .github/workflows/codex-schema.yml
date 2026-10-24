@@ -1,0 +1,48 @@
+# Confere o Codex mais novo publicado contra os campos que o Hangar usa (`crates/hangar-codex`).
+# Versão nova sem mudança nesses campos passa calada; campo usado que sumiu ou mudou de nome falha o
+# run, e o GitHub avisa por e-mail. Não grava nada: atualizar o recorte guardado é
+# `scripts/conferir-codex-schema`, à mão.
+name: Codex schema
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conferir:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Instalar o Codex mais novo
+        run: |
+          npm install --global @openai/codex@latest
+          codex --version
+      # Só lê o cache dos testes do server.yml; quem grava é a main de lá.
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/target/debug
+          key: server-v3-${{ runner.os }}-dev-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: server-v3-${{ runner.os }}-dev-
+      - name: Conferir os campos usados
+        run: |
+          schema="$(mktemp -d)"
+          codex app-server generate-json-schema --experimental --out "$schema" >/dev/null
+          CODEX_SCHEMA_DIR="$schema" cargo test --locked -p hangar-codex --lib -- --ignored --exact \
+            schema_check::fields_used_exist_in_installed_codex 2>&1 | tee saida.txt
+          grep -qE 'test result: ok\. 1 passed' saida.txt

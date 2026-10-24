@@ -1289,9 +1289,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     SurfaceEffect::Reply { token,result } => { if let Some(waiter) = mods_waiters.remove(&token) { let _ = waiter.send(result); } }
                 },
                 Effect::Diag { event,code } => {
-                    // Versão é do servidor, não da sessão: sem nome, o limite de 1/min vale para todos.
-                    let session = if event == DiagEvent::CodexVersion { "" } else { target.name.as_str() };
-                    if let Some(policy) = &engine.policy { policy.diag.report(event.event(),session,&code,event.reason()); }
+                    if let Some(policy) = &engine.policy { policy.diag.report(event.event(),&target.name,&code,event.reason()); }
                 }
                 Effect::Stop { .. } => { closed.store(true,Ordering::Release); },
                 Effect::UsageLimit { limit } => {

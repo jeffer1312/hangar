@@ -285,9 +285,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   existe no recorte do schema da versão conferida (`schema/<versão>.json`, teste
   `schema_check`); campo novo é ignorado; formato inesperado num método conhecido: a
   notificação é ignorada, a resposta segue com o padrão, e as duas vão ao diário
-  (`rust.codex_decode`); item ruim do histórico vira desconhecido sem derrubar o turno; outra
-  major.minor no `initialize` vira
-  `codex_versao_nao_conferida`. Atualizar a versão conferida: `scripts/conferir-codex-schema`.
+  (`rust.codex_decode`); item ruim do histórico vira desconhecido sem derrubar o turno. A versão
+  do Codex instalado não é comparada com a do recorte: o workflow semanal `codex-schema` instala
+  o Codex mais novo e falha só se um campo usado sumiu. Atualizar o recorte guardado:
+  `scripts/conferir-codex-schema`.
 - **A rota do terminal Claude só recebe sessão Claude.** `route_sync`, `run_admin` e
   `answer_sync` abrem `prepare_session(name, "claude")`, que suspende a escrita sem vínculo
   Claude nem pane. Rota que atende outros provedores filtra pelo provedor antes (`/answer`,

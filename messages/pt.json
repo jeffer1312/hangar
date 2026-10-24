@@ -1021,7 +1021,6 @@
   "problema_headless_nao_subiu": "O processo do Claude não subiu — confira se o `claude` está instalado e a pasta existe",
   "problema_codex_headless_nao_subiu": "O app-server do Codex não subiu — confira se o `codex` está instalado e logado; encerre a sessão e crie de novo",
   "problema_codex_sem_conexao": "O Codex não consegue falar com o provedor do modelo e segue tentando — se ele não voltar, reinicie a sessão",
-  "problema_codex_versao_nao_conferida": "Este Codex é de uma versão que o Hangar ainda não conferiu; se faltar alguma informação na tela, é por isso",
   "problema_codex_limite_uso": "A cota do Codex desta conta acabou — espere a liberação ou use outra conta",
   "problema_limit_switch_no_room": "O limite de uso desta conta acabou e nenhuma outra conta Claude tem folga; a sessão fica parada até a cota voltar",
   "problema_limit_switch_failed": "O limite de uso desta conta acabou e a troca automática de conta falhou; troque a conta da sessão",

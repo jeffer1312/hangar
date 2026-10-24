@@ -155,12 +155,12 @@ impl UsageLimit {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DiagEvent { CodexVersion, CodexDecode, CodexBootstrap, CodexConnectionClosed, ClaudeSidecarAbsent, CanoProtocolInvalid, CanoReconnectStopped, CanoOutputLost }
+pub enum DiagEvent { CodexDecode, CodexBootstrap, CodexConnectionClosed, ClaudeSidecarAbsent, CanoProtocolInvalid, CanoReconnectStopped, CanoOutputLost }
 
 impl DiagEvent {
     pub fn event(self) -> &'static str {
         match self {
-            Self::CodexVersion => "rust.codex_version", Self::CodexDecode => "rust.codex_decode", Self::CodexBootstrap => "rust.codex_bootstrap",
+            Self::CodexDecode => "rust.codex_decode", Self::CodexBootstrap => "rust.codex_bootstrap",
             Self::CodexConnectionClosed => "rust.codex_connection_closed", Self::ClaudeSidecarAbsent => "rust.claude_sidecar_absent",
             Self::CanoProtocolInvalid => "rust.cano_protocol_invalid", Self::CanoReconnectStopped => "rust.cano_reconnect_stopped",
             Self::CanoOutputLost => "rust.cano_output_lost",
@@ -168,7 +168,6 @@ impl DiagEvent {
     }
     pub fn reason(self) -> &'static str {
         match self {
-            Self::CodexVersion => "versão do Codex diferente da conferida ou ilegível; campo renomeado pode faltar",
             Self::CodexDecode => "formato inesperado do Codex: notificação ignorada (ciclo de vida lido cru), resposta com o padrão, pedido mostrado pela linha crua",
             Self::CodexBootstrap => "o Codex recusou abrir a conversa na subida; a sessão não fica pronta e mostra o problema",
             Self::CodexConnectionClosed => "a conexão de controle com o app-server do Codex com terminal caiu; o ator reconecta ao mesmo processo",

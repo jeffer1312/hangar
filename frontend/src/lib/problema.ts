@@ -10,7 +10,6 @@ export function textoProblema(codigo: string | null | undefined): string | null 
     case 'headless_nao_subiu': return m.problema_headless_nao_subiu();
     case 'codex_headless_nao_subiu': return m.problema_codex_headless_nao_subiu();
     case 'codex_sem_conexao': return m.problema_codex_sem_conexao();
-    case 'codex_versao_nao_conferida': return m.problema_codex_versao_nao_conferida();
     case 'codex_limite_uso': return m.problema_codex_limite_uso();
     case 'limit_switch_no_room': return m.problema_limit_switch_no_room();
     case 'limit_switch_failed': return m.problema_limit_switch_failed();
