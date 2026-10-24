@@ -1,9 +1,9 @@
 //! O que acorda o loop e o `then`: as transições de turno do vigia de avisos. Pergunta aberta pausa
 //! o loop; fim de turno confirmado (a sessão segue parada e a fila não acabou de digitar nada) dá a
 //! volta do loop ou, sem loop ativo, dispara o vínculo `then`. Na subida, os loops ativos voltam:
-//! sessão sumida falha, sessão parada ganha a volta. Kimi segue no Python (o fim de turno dele
-//! pode ser o marcador velho).
-use super::store::{is_active, status, Store, LOCK};
+//! sessão sumida falha, sessão parada ganha a volta. Kimi, Pi e omp seguem no Python: o `then`
+//! deles sai de lá, e dois leitores do vínculo o mandariam duas vezes.
+use super::store::{is_active, lock as loop_lock, status, Store};
 use crate::push::TurnEvent;
 use crate::routes::AppState;
 use futures_util::future::BoxFuture;
@@ -98,7 +98,7 @@ impl<H: Host> Watcher<H> {
     async fn pause(&self, sid: &str) {
         let Some(row) = self.host.row_by_sid(sid).await else { return };
         let store = self.host.store();
-        let _one = LOCK.lock().await;
+        let _one = loop_lock(&row.name).await;
         if !store.get(&row.name).is_some_and(|d| status(&d) == "running") { return; }
         let mut fields = serde_json::Map::new();
         fields.insert("status".into(), json!("paused_awaiting"));
@@ -109,7 +109,7 @@ impl<H: Host> Watcher<H> {
 
     async fn idle(&self, ev: TurnEvent) {
         let Some(row) = self.host.row_by_sid(&ev.sid).await else { return };
-        if row.provider == "kimi" { return; }
+        if !crate::push::watch::turn_notices(&row.provider) { return; }
         let active = self.host.store().get(&row.name).is_some_and(|d| is_active(&d));
         if !active {
             fire_chain(&*self.host, &row.name).await;
@@ -144,7 +144,7 @@ impl<H: Host> Watcher<H> {
         let store = self.host.store();
         for stem in store.stems() {
             let row = {
-                let _one = LOCK.lock().await;
+                let _one = loop_lock(&stem).await;
                 if !store.get(&stem).is_some_and(|d| is_active(&d)) { continue; }
                 let Some(row) = live.get(&stem) else {
                     let env = HostEnv { host: &*self.host, name: &stem };
@@ -184,7 +184,13 @@ impl Host for Live {
     fn row_by_sid<'a>(&'a self, sid: &'a str) -> BoxFuture<'a, Option<SessionRow>> {
         Box::pin(async move {
             for fresh in [false, true] {
-                let produced = if fresh { self.st.list.refresh().await } else { self.st.list.snapshot().await }.ok()?;
+                let produced = match if fresh { self.st.list.refresh().await } else { self.st.list.snapshot().await } {
+                    Ok(produced) => produced,
+                    Err(e) => {
+                        self.diag("loop.turno_sem_lista", sid, e.code, "lista indisponível; fim de turno do loop e do then perdido");
+                        return None;
+                    }
+                };
                 if let Some(row) = produced.rows.iter().find(|r| key_of(r).as_deref() == Some(sid)) { return Some(row.clone()); }
             }
             None

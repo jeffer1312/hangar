@@ -13,9 +13,15 @@ pub const ACTIVE: [&str; 3] = ["running", "paused_awaiting", "done_claimed"];
 pub const NOTIFY: [&str; 5] = ["done", "done_claimed", "stopped", "exhausted", "failed"];
 pub const HISTORY_MAX: usize = 20;
 
-/// Um read-modify-write por vez em qualquer sidecar de loop (tique, rotas, vigia); o comando de
-/// conferência roda fora dela.
-pub static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Um read-modify-write por vez no sidecar de loop de cada sessão (tique, rotas, vigia); o comando
+/// de conferência roda fora dela. É por sessão: a entrega na fila (adoção, drain) acontece sob a
+/// trava, e o ator travado de uma sessão não pode segurar o loop das outras.
+pub async fn lock(name: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    static LOCKS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
+        std::sync::LazyLock::new(Default::default);
+    let one = LOCKS.lock().unwrap_or_else(|e| e.into_inner()).entry(file_stem(name)).or_default().clone();
+    one.lock_owned().await
+}
 
 pub fn status(d: &Loop) -> &str { d.get("status").and_then(Value::as_str).unwrap_or("") }
 

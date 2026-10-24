@@ -1,6 +1,6 @@
 //! Uma volta do loop no fim de turno: âncora do objetivo, chave mestra, trava de branch, comando de
 //! conferência (fora da trava) e o desfecho — pronto, falha, estagnado, esgotado ou re-prompt.
-use super::store::{int, status, truthy, Loop, Store, HISTORY_MAX, LOCK, NOTIFY};
+use super::store::{int, lock, status, truthy, Loop, Store, HISTORY_MAX, NOTIFY};
 use futures_util::future::BoxFuture;
 use serde_json::{json, Value};
 use std::io;
@@ -82,7 +82,7 @@ fn ticking(d: &Loop) -> bool { matches!(status(d), "running" | "paused_awaiting"
 /// `Some` com o sidecar depois da volta; `None` quando não havia o que fazer.
 pub async fn run_tick(store: &Store, name: &str, env: &dyn Env) -> io::Result<Option<Loop>> {
     let check_cmd = {
-        let _one = LOCK.lock().await;
+        let _one = lock(name).await;
         let Some(mut d) = store.get(name).filter(ticking) else { return Ok(None) };
         // A pausa da pergunta acaba no fim de turno, calada.
         if status(&d) == "paused_awaiting" {
@@ -106,7 +106,7 @@ pub async fn run_tick(store: &Store, name: &str, env: &dyn Env) -> io::Result<Op
         Some(cmd) => (Some(env.run_check(cmd.clone()).await), None),
         None => (None, env.last_assistant().await),
     };
-    let _one = LOCK.lock().await;
+    let _one = lock(name).await;
     // Parado ou resolvido durante a conferência: não sobrescreve.
     let Some(d) = store.get(name).filter(ticking) else { return Ok(None) };
     if let Some((code, tail)) = outcome {

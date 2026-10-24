@@ -135,14 +135,28 @@ async fn failed_or_switched_off_chain_keeps_the_link() {
     assert!(off.store().chain("s").is_none());
 }
 
+/// O `then` de Kimi, Pi e omp ainda sai do Python: dois leitores do vínculo o mandariam duas vezes.
 #[tokio::test]
-async fn kimi_stays_with_the_python() {
-    let dir = tempfile::tempdir().unwrap();
-    let w = Watcher::new(Arc::new(host(&dir, vec![row("k", "kimi", false, "idle")])), Duration::from_millis(20));
-    w.host.store().set_chain("k", "t", "x").unwrap();
-    w.on_event(idle("k"));
-    settle().await;
-    assert!(lock(&w.host.delivered).is_empty());
+async fn kimi_pi_and_omp_stay_with_the_python() {
+    for provider in ["kimi", "pi", "omp"] {
+        let dir = tempfile::tempdir().unwrap();
+        let w = Watcher::new(Arc::new(host(&dir, vec![row("k", provider, false, "idle")])), Duration::from_millis(20));
+        w.host.store().set_chain("k", "t", "x").unwrap();
+        w.on_event(idle("k"));
+        settle().await;
+        assert!(lock(&w.host.delivered).is_empty(), "{provider}");
+        assert!(w.host.store().chain("k").is_some(), "{provider}");
+    }
+}
+
+#[tokio::test]
+async fn one_session_holding_its_loop_lock_does_not_block_another() {
+    let _a = crate::loops::store::lock("lock-a").await;
+    let b = tokio::time::timeout(Duration::from_secs(2), crate::loops::store::lock("lock-b")).await;
+    assert!(b.is_ok(), "a trava do loop é por sessão");
+    drop(b);
+    let again = tokio::time::timeout(Duration::from_millis(100), crate::loops::store::lock("lock-a")).await;
+    assert!(again.is_err(), "a mesma sessão segue em fila");
 }
 
 #[tokio::test]

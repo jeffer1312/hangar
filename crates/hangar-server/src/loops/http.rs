@@ -1,7 +1,7 @@
 //! Rotas do loop e do `then` do dono, com os corpos do Python: `PUT`/`DELETE /then`,
 //! `POST`/`GET`/`DELETE /loop`, `POST /loop/refine` e `POST /loop/resolve`. O convidado segue ao
 //! Python, como antes.
-use super::store::{self, is_active, status, Loop, Store, LOCK};
+use super::store::{self, is_active, status, Loop, Store};
 use super::tick;
 use axum::body::to_bytes;
 use axum::extract::{ConnectInfo, Request, State};
@@ -187,7 +187,7 @@ async fn create(b: &dyn Backend, name: &str, body: &[u8]) -> Result<Reply, Reply
     }
     let store = b.store();
     {
-        let _one = LOCK.lock().await;
+        let _one = store::lock(name).await;
         if store.get(name).is_some_and(|d| is_active(&d)) {
             return Err(refused(StatusCode::CONFLICT, "erro_loop_ja_ativo", "já existe um loop ativo nesta sessão", json!({})));
         }
@@ -206,7 +206,7 @@ async fn create(b: &dyn Backend, name: &str, body: &[u8]) -> Result<Reply, Reply
 
 async fn stop(b: &dyn Backend, name: &str) -> Result<Reply, Reply> {
     let store = b.store();
-    let _one = LOCK.lock().await;
+    let _one = store::lock(name).await;
     if store.get(name).is_none() {
         return Err(refused(StatusCode::NOT_FOUND, "erro_loop_inexistente", "nenhum loop nesta sessão", json!({})));
     }
@@ -218,7 +218,7 @@ async fn resolve(b: &dyn Backend, name: &str, body: &[u8]) -> Result<Reply, Repl
     let m = object(body, &["accept"])?;
     let accept = boolean(&m, "accept", None)?;
     let (store, env) = (b.store(), RouteEnv { b, name });
-    let _one = LOCK.lock().await;
+    let _one = store::lock(name).await;
     let Some(mut d) = store.get(name).filter(|d| status(d) == "done_claimed") else {
         return Err(refused(StatusCode::CONFLICT, "erro_loop_estado_errado", "loop não está aguardando confirmação", json!({})));
     };
