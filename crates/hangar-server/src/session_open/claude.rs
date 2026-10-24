@@ -225,7 +225,7 @@ const CONFIG_LOCK_STALE: std::time::Duration = std::time::Duration::from_secs(10
 
 /// A trava que o Claude Code usa no `.claude.json` (`proper-lockfile`: a pasta `<arquivo real>.lock`).
 /// Sem ela, uma sessão viva da conta que já tinha lido o arquivo regrava a cópia dela por cima da confiança.
-struct ConfigLock(PathBuf, Option<std::time::SystemTime>);
+pub(crate) struct ConfigLock(PathBuf, Option<std::time::SystemTime>);
 
 impl Drop for ConfigLock {
     fn drop(&mut self) {
@@ -245,7 +245,7 @@ fn config_lock_path(file: &Path) -> PathBuf {
     PathBuf::from(lock)
 }
 
-fn lock_config(file: &Path) -> Result<ConfigLock, String> {
+pub(crate) fn lock_config(file: &Path) -> Result<ConfigLock, String> {
     let lock = config_lock_path(file);
     let deadline = std::time::Instant::now() + CONFIG_LOCK_WAIT;
     loop {

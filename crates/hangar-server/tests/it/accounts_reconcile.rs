@@ -900,3 +900,127 @@ fn prep_pending_dead_link() {
     assert_tree("prep_pending_dead_link", &got.initial, &got.tree);
     assert!(got.diary.is_empty());
 }
+
+// ── o núcleo pela biblioteca ────────────────────────────────────────────────────────────────
+
+use hangar_server::accounts::claude_config::{self, ConfigError};
+use hangar_server::accounts::environment::AccountEnvironment;
+
+fn env_of(home: &Path) -> AccountEnvironment {
+    AccountEnvironment::from_map([("HOME".to_owned(), home.to_string_lossy().into_owned())].into())
+}
+
+/// T33: duas contas com versões diferentes do mesmo arquivo ao mesmo tempo. A trava compartilhada
+/// serializa: o `~/.claude` fica com uma das versões inteira, as duas religadas e as duas avisam.
+#[test]
+fn two_accounts_reconciling_together_keep_one_whole_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    let versions = [("conta_a", "# regras da a"), ("conta_b", "# regras da b")];
+    for (name, text) in versions {
+        conta(&home, name);
+        put(&home.join(format!(".claude-{name}/CLAUDE.md")), text);
+    }
+    let barrier = std::sync::Barrier::new(2);
+    let warnings: Vec<Vec<String>> = std::thread::scope(|s| {
+        let runs: Vec<_> = versions.iter().map(|(name, _)| s.spawn(|| {
+            barrier.wait();
+            claude_config::reconcile_account(&home, name, None).result.unwrap()
+        })).collect();
+        runs.into_iter().map(|r| r.join().unwrap()).collect()
+    });
+    let shared = std::fs::read_to_string(home.join(".claude/CLAUDE.md")).unwrap();
+    assert!(versions.iter().any(|(_, text)| *text == shared), "{shared:?}");
+    for (name, _) in versions {
+        assert!(std::fs::symlink_metadata(home.join(format!(".claude-{name}/CLAUDE.md"))).unwrap().file_type().is_symlink());
+    }
+    for list in warnings { assert!(list.iter().any(|w| w.contains("CLAUDE.md")), "{list:?}"); }
+}
+
+/// M3: trava presa por outro dono recusa no teto, com o caminho dela, sem entrar na reconciliação.
+#[test]
+fn a_held_configuration_lock_refuses_at_the_deadline() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    conta(&home, "conta2");
+    let account = home.join(".claude-conta2");
+    for (path, create) in [(home.join(".hangar-contas.lock"), true), (account.join(".hangar-conta"), false)] {
+        let holder = std::fs::OpenOptions::new().read(true).write(true).create(create).truncate(false).open(&path).unwrap();
+        holder.lock().unwrap();
+        let started = std::time::Instant::now();
+        let outcome = claude_config::reconcile_locked(&home, &account, None, ".hangar-conta", std::time::Duration::from_millis(300));
+        let waited = started.elapsed();
+        match outcome.result {
+            Err(ConfigError::Refused(detail)) => assert_eq!(detail,
+                format!("a trava {} ficou presa por outro processo por mais de 0 s", path.display())),
+            other => panic!("{}: esperava a recusa no teto: {other:?}", path.display()),
+        }
+        assert!(waited >= std::time::Duration::from_millis(300), "desistiu antes do teto: {waited:?}");
+        assert!(outcome.diary.is_empty(), "nada da reconciliação rodou");
+        assert!(!account.join("skills").exists());
+        holder.unlock().unwrap();
+    }
+}
+
+fn json_value() -> impl proptest::strategy::Strategy<Value = Value> {
+    use proptest::prelude::*;
+    let leaf = prop_oneof![
+        Just(Value::Null), any::<bool>().prop_map(Value::from), any::<i64>().prop_map(Value::from), any::<u64>().prop_map(Value::from),
+        any::<f64>().prop_filter("finito", |f| f.is_finite()).prop_map(Value::from),
+        "[a-z@./é\\\\\"\u{0}-\u{1f}\u{7f}\u{2028}]{0,6}".prop_map(Value::from),
+    ];
+    leaf.prop_recursive(3, 24, 4, |inner| prop_oneof![
+        proptest::collection::vec(inner.clone(), 0..4).prop_map(Value::from),
+        proptest::collection::btree_map("[a-z@_]{0,4}|enabledPlugins|mcpServers|plugins|installPath|a@x", inner, 0..4)
+            .prop_map(|m| Value::Object(m.into_iter().collect())),
+    ])
+}
+
+/// Conteúdo de um arquivo de entrada: ausente, bytes quaisquer ou JSON.
+fn input() -> impl proptest::strategy::Strategy<Value = Option<Vec<u8>>> {
+    use proptest::prelude::*;
+    prop_oneof![
+        Just(None),
+        proptest::collection::vec(any::<u8>(), 0..48).prop_map(Some),
+        json_value().prop_map(|v| Some(v.to_string().into_bytes())),
+        (json_value(), json_value()).prop_map(|(on, entries)| Some(json!({"enabledPlugins": {"a@x": on, "b@x": true}, "plugins": {"a@x": entries,
+            "b@x": [{"installPath": entries}]}, "mcpServers": {"s": on}}).to_string().into_bytes())),
+    ]
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(96))]
+
+    /// `settings.json` dos dois lados, os dois `.claude.json` e o registro de plugins: qualquer
+    /// conteúdo vira aviso, erro ou sucesso, nunca pânico.
+    #[test]
+    fn external_files_never_panic(files in proptest::collection::vec(input(), 5)) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().canonicalize().unwrap();
+        casa(&home);
+        conta(&home, "conta2");
+        let account = home.join(".claude-conta2");
+        let targets = [home.join(".claude/settings.json"), account.join("settings.json"), home.join(".claude.json"),
+            account.join(".claude.json"), home.join(".claude/plugins/installed_plugins.json")];
+        for (path, bytes) in targets.iter().zip(&files) {
+            let _ = std::fs::remove_file(path);
+            if let Some(bytes) = bytes { put(path, bytes); }
+        }
+        let _ = claude_config::reconcile(&home, &account, Some("-p"));
+        let _ = claude_config::reconcile(&home, &account, None);
+    }
+
+    /// Qualquer argumento sai com um dos códigos do contrato.
+    #[test]
+    fn any_arguments_end_with_a_contract_code(args in proptest::collection::vec("--prep|--new|--list|--help|-h|conta2|[a-z0-9_/.\\- \n]{0,6}", 0..4)) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().canonicalize().unwrap();
+        casa(&home);
+        conta(&home, "conta2");
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = claude_config::run(&args, &env_of(&home), &mut out, &mut err);
+        proptest::prop_assert!([0, 1, 2, 126].contains(&code), "{args:?} → {code}");
+    }
+}

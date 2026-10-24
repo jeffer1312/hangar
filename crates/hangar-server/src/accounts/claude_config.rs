@@ -1,0 +1,821 @@
+//! A conta Claude do Hangar (`~/.claude-<nome>`) alinhada ao `~/.claude`: atalho de cada arquivo
+//! compartilhado, cópia espelhada do `settings.json`, espelho dos `mcpServers` do `~/.claude.json`,
+//! atalho da memória de cada projeto, conferência dos plugins e a gaveta `.drift` para o que diverge.
+//! Relê o disco a cada chamada; as travas são por chamada. O comando `hangar-server conta` é a borda
+//! que os wrappers de shell (`hangar-conta`, `claude-conta`) chamam.
+use super::environment::AccountEnvironment;
+use super::storage::{self, CLAUDE_MARKER, PENDING};
+use super::{AccountKey, AccountLocks, AccountService, GuardMode, LockError, Provider};
+use crate::transcript::{py, pyjson};
+use serde_json::{Map, Value, json};
+use std::ffi::OsString;
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+/// Versões que a gaveta guarda por nome de origem; sem teto ela cresce para sempre.
+const DRIFT_CAP: usize = 3;
+/// Runtime que o CLI e o servidor regravam por conta com tmp+rename: ligado, cada passada acharia
+/// deriva de novo e mandaria para a gaveta.
+const ACCOUNT_RUNTIME: [&str; 6] = ["sessions", "telemetry", "feedback", "image-cache", ".last-update-result.json", ".hangar-models.json"];
+/// Nunca viram atalho: nossos (`.drift`, marcador), da conta (login, `projects/` pelo custo por
+/// pasta), cópia (`settings.json`, que o CLI regravava atravessando o link) e apelidos (cópia velha
+/// subia por cima dos novos).
+const NEVER_LINK: [&str; 7] = [CLAUDE_MARKER, ".drift", ".claude.json", ".credentials.json", "projects", "settings.json", ".hangar-apelidos.json"];
+/// Quanto cada trava de configuração espera outro processo.
+pub const LOCK_WAIT: Duration = Duration::from_secs(120);
+const NAME_REFUSED: &str = "nome: use minúsculas, números, '-' ou '_' (até 32 caracteres)";
+const SYMLINK_HINT: &str = "No Windows isso exige o Modo Desenvolvedor ligado (Configurações → Sistema → Para \
+    desenvolvedores). Sem ele a conta ficaria com uma CÓPIA, que passa a divergir do original sem ninguém perceber.";
+
+#[derive(Debug)]
+pub enum ConfigError {
+    /// Recusa com a frase que o comando imprime e a abertura repassa.
+    Refused(String),
+    /// Falha do sistema de arquivos fora dos casos tratados: o comando sai com 126.
+    Io(io::Error),
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused(detail) => f.write_str(detail),
+            Self::Io(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl From<io::Error> for ConfigError {
+    fn from(error: io::Error) -> Self { Self::Io(error) }
+}
+
+type Result<T> = std::result::Result<T, ConfigError>;
+
+fn refused(detail: impl Into<String>) -> ConfigError { ConfigError::Refused(detail.into()) }
+
+/// O resultado e os eventos `conta.reconciliar.*` do diário, que quem chama grava no arquivo dele.
+pub struct Outcome {
+    pub result: Result<Vec<String>>,
+    pub diary: Vec<Value>,
+}
+
+impl Outcome {
+    fn failed(error: ConfigError) -> Self { Self { result: Err(error), diary: Vec::new() } }
+}
+
+// ── o sistema de arquivos como o Python o vê ──────────────────────────────────────────────────
+
+fn is_symlink(path: &Path) -> bool { fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) }
+fn exists(path: &Path) -> bool { fs::metadata(path).is_ok() }
+fn is_dir(path: &Path) -> bool { fs::metadata(path).is_ok_and(|m| m.is_dir()) }
+fn is_file(path: &Path) -> bool { fs::metadata(path).is_ok_and(|m| m.is_file()) }
+
+fn unlink(path: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink_dir()) { return fs::remove_dir(path); }
+    }
+    fs::remove_file(path)
+}
+
+/// `mkdir(exist_ok=True)` sem criar a pasta-mãe.
+fn mkdir(path: &Path) -> io::Result<()> {
+    match fs::create_dir(path) {
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists && is_dir(path) => Ok(()),
+        other => other,
+    }
+}
+
+fn name_of(path: &Path) -> String { path.file_name().unwrap_or_default().to_string_lossy().into_owned() }
+
+/// Irmão com pid e aleatório no nome: nome fixo apagaria um arquivo legítimo do usuário.
+fn sibling(path: &Path) -> PathBuf {
+    let mut name: OsString = path.file_name().unwrap_or_default().to_owned();
+    name.push(format!(".hangar-novo.{}.{}", std::process::id(), crate::mods::state::random_hex(4)));
+    path.with_file_name(name)
+}
+
+fn make_symlink(target: &Path, link: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    { std::os::unix::fs::symlink(target, link) }
+    #[cfg(windows)]
+    {
+        if is_dir(target) { std::os::windows::fs::symlink_dir(target, link) } else { std::os::windows::fs::symlink_file(target, link) }
+    }
+}
+
+/// `shutil.copyfile`: os bytes, sem o modo de origem; destino que é link é seguido.
+fn copy_file(from: &Path, to: &Path) -> io::Result<()> {
+    let mut source = fs::File::open(from)?;
+    let mut target = fs::OpenOptions::new().write(true).create(true).truncate(true).open(to)?;
+    io::copy(&mut source, &mut target).map(drop)
+}
+
+fn same_bytes(a: &Path, b: &Path) -> io::Result<bool> {
+    if fs::metadata(a)?.len() != fs::metadata(b)?.len() { return Ok(false); }
+    Ok(fs::read(a)? == fs::read(b)?)
+}
+
+/// `os.path.realpath(strict=False)`: link morto resolve até onde dá e laço devolve o próprio caminho
+/// (o `canonicalize` falharia nos dois).
+#[cfg(unix)]
+fn realpath(path: &Path) -> PathBuf {
+    use std::collections::HashMap;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    enum Part { Name(Vec<u8>), Resolved(Vec<u8>) }
+    let parts = |text: &[u8]| text.split(|b| *b == b'/').rev().map(|p| Part::Name(p.to_vec())).collect::<Vec<_>>();
+    let text = path.as_os_str().as_bytes();
+    let mut rest = parts(text);
+    let mut count = rest.len();
+    let mut current = if text.starts_with(b"/") {
+        b"/".to_vec()
+    } else {
+        std::env::current_dir().map(|d| d.into_os_string().into_vec()).unwrap_or_else(|_| b"/".to_vec())
+    };
+    let mut seen: HashMap<Vec<u8>, Option<Vec<u8>>> = HashMap::new();
+    while count > 0 {
+        let Some(part) = rest.pop() else { break };
+        let name = match part {
+            Part::Resolved(link) => { seen.insert(link, Some(current.clone())); continue; }
+            Part::Name(name) => name,
+        };
+        count -= 1;
+        if name.is_empty() || name == b"." { continue; }
+        if name == b".." {
+            let cut = current.iter().rposition(|b| *b == b'/').unwrap_or(0);
+            current.truncate(cut);
+            if current.is_empty() { current = b"/".to_vec(); }
+            continue;
+        }
+        let next = if current == b"/" { [&b"/"[..], &name].concat() } else { [&current[..], b"/", &name].concat() };
+        let link = std::ffi::OsStr::from_bytes(&next);
+        match fs::symlink_metadata(link) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                if let Some(known) = seen.get(&next) {
+                    current = known.clone().unwrap_or(next);
+                    continue;
+                }
+                match fs::read_link(link) {
+                    Ok(target) => {
+                        let target = target.into_os_string().into_vec();
+                        if target.starts_with(b"/") { current = b"/".to_vec(); }
+                        seen.insert(next.clone(), None);
+                        rest.push(Part::Resolved(next));
+                        let more = parts(&target);
+                        count += more.len();
+                        rest.extend(more);
+                    }
+                    Err(_) => current = next,
+                }
+            }
+            _ => current = next,
+        }
+    }
+    PathBuf::from(OsString::from_vec(current))
+}
+
+/// No Windows: o que existe resolve pelo `canonicalize` (sem o prefixo `\\?\`), link morto segue o
+/// texto dele, e o resto do caminho é anexado.
+#[cfg(windows)]
+fn realpath(path: &Path) -> PathBuf {
+    let (mut current, mut tail, mut hops) = (path.to_owned(), Vec::new(), 0);
+    loop {
+        if let Ok(real) = fs::canonicalize(&current) {
+            let mut real = super::catalog::resolved(&real);
+            for name in tail.iter().rev() { real.push(name); }
+            return real;
+        }
+        if hops < 40 && let Ok(target) = fs::read_link(&current) {
+            hops += 1;
+            current = if target.is_absolute() { target } else { current.parent().map_or(target.clone(), |p| p.join(&target)) };
+            continue;
+        }
+        match (current.parent(), current.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name.to_owned());
+                current = parent.to_owned();
+            }
+            _ => return path.to_owned(),
+        }
+    }
+}
+
+/// O atalho já aponta para o alvo? Pelo caminho resolvido: no Windows o texto do link volta com `\\?\`.
+fn points_to(link: &Path, target: &Path) -> bool { realpath(link) == realpath(target) }
+
+/// Ordem do `sorted(Path)`: ponto de código no POSIX, caminho em minúsculas no Windows.
+fn sort_names(names: &mut [OsString]) {
+    if cfg!(windows) { names.sort_by_cached_key(|n| n.to_string_lossy().to_lowercase()) } else { names.sort() }
+}
+
+/// Ordem de ponto de código do Python, com o surrogate solto no lugar dele.
+fn py_order(a: &str, b: &str) -> std::cmp::Ordering { a.chars().map(py::py_code).cmp(b.chars().map(py::py_code)) }
+
+// ── JSON como o Python lê, compara e grava ────────────────────────────────────────────────────
+
+/// `json.loads(path.read_text("utf-8"))`: ausente é `None`; surrogate solto é aceito.
+fn read_json(path: &Path) -> std::result::Result<Option<Value>, String> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+    serde_json::from_str(&text).or_else(|error| {
+        if !text.contains("\\u") { return Err(error); }
+        serde_json::from_str(&pyjson::mark_lone_surrogates_using(&text, |c| py::mark(c).to_string())).map_err(|_| error)
+    }).map(Some).map_err(|e| e.to_string())
+}
+
+enum Num { Int(i128), Float(f64) }
+
+fn num(v: &Value) -> Option<Num> {
+    match v {
+        Value::Bool(b) => Some(Num::Int(i128::from(*b))),
+        Value::Number(n) => Some(n.as_i64().map(i128::from).or_else(|| n.as_u64().map(i128::from)).map_or_else(|| Num::Float(n.as_f64().unwrap_or(f64::NAN)), Num::Int)),
+        _ => None,
+    }
+}
+
+/// `==` do Python: `1 == 1.0 == True`, dict sem ordem. Troca só de tipo não é mudança.
+fn py_eq(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Null, Value::Null) => true,
+        (Value::String(x), Value::String(y)) => x == y,
+        (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| py_eq(p, q)),
+        (Value::Object(x), Value::Object(y)) => py_eq_map(x, y),
+        _ => match (num(a), num(b)) {
+            (Some(Num::Int(x)), Some(Num::Int(y))) => x == y,
+            (Some(Num::Float(x)), Some(Num::Float(y))) => x == y,
+            (Some(Num::Int(i)), Some(Num::Float(f))) | (Some(Num::Float(f)), Some(Num::Int(i))) =>
+                f.fract() == 0.0 && f.abs() < 1e30 && f as i128 == i,
+            _ => false,
+        },
+    }
+}
+
+fn py_eq_map(a: &Map<String, Value>, b: &Map<String, Value>) -> bool {
+    a.len() == b.len() && a.iter().all(|(k, v)| b.get(k).is_some_and(|w| py_eq(v, w)))
+}
+
+/// Grava por temporário e troca: um CLI vivo lendo o arquivo no meio receberia JSON truncado.
+fn write_replacing(path: &Path, text: &str) -> io::Result<()> {
+    let temp = sibling(path);
+    fs::write(&temp, text)?;
+    crate::runtime::queue::replace(&temp, path)
+}
+
+// ── travas ────────────────────────────────────────────────────────────────────────────────────
+
+/// Trava de arquivo presa até o fim da chamada.
+struct Held(fs::File);
+
+impl Drop for Held {
+    fn drop(&mut self) { let _ = self.0.unlock(); }
+}
+
+/// Exclusiva, tentando até `wait`: o Python esperava sem fim, e a abertura matava o subprocesso aos 120 s.
+fn lock(path: &Path, create: bool, wait: Duration) -> Result<Held> {
+    let mut options = fs::OpenOptions::new();
+    if create { options.read(true).append(true).create(true) } else { options.read(true).write(true) };
+    let file = options.open(path)?;
+    let deadline = Instant::now() + wait;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(Held(file)),
+            Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Err(fs::TryLockError::WouldBlock) =>
+                return Err(refused(format!("a trava {} ficou presa por outro processo por mais de {} s", path.display(), wait.as_secs()))),
+            Err(fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
+}
+
+// ── a reconciliação ───────────────────────────────────────────────────────────────────────────
+
+/// `~/.claude-<nome>`, recusando o nome fora da regra (barra, `..` e quebra de linha incluídas).
+pub fn account_dir(home: &Path, name: &str) -> Result<PathBuf> {
+    if !super::catalog::valid_name(name) { return Err(refused(NAME_REFUSED)); }
+    Ok(home.join(format!(".claude-{name}")))
+}
+
+/// Pasta de conta de verdade: diretório real com marcador real e sem pendência (nem link morto).
+pub fn is_account(dir: &Path) -> bool {
+    storage::real_dir(dir) && !storage::pending(dir) && storage::real_file(&dir.join(CLAUDE_MARKER))
+}
+
+/// `contas.reconciliar` sob a guarda que quem chama já segura: confere a conta e pega as travas.
+pub fn reconcile_account(home: &Path, name: &str, project: Option<&str>) -> Outcome {
+    let dir = match account_dir(home, name) {
+        Ok(dir) => dir,
+        Err(error) => return Outcome::failed(error),
+    };
+    if !is_account(&dir) { return Outcome::failed(refused(format!("{} não é uma conta criada pelo hangar", dir.display()))); }
+    reconcile_locked(home, &dir, project, CLAUDE_MARKER, LOCK_WAIT)
+}
+
+/// Trava compartilhada (duas contas devolvendo o mesmo arquivo ao `~/.claude`) e depois a da conta
+/// (no seed, a da pendência), sempre nessa ordem; soltas ao sair, também em erro.
+pub fn reconcile_locked(home: &Path, dir: &Path, project: Option<&str>, lock_name: &str, wait: Duration) -> Outcome {
+    let shared = match lock(&home.join(".hangar-contas.lock"), true, wait) {
+        Ok(held) => held,
+        Err(error) => return Outcome::failed(error),
+    };
+    let own = match lock(&dir.join(lock_name), false, wait) {
+        Ok(held) => held,
+        Err(error) => return Outcome::failed(error),
+    };
+    let outcome = reconcile(home, dir, project);
+    drop((own, shared));
+    outcome
+}
+
+/// O corpo, sem travas: quem chama já as segura.
+pub fn reconcile(home: &Path, dir: &Path, project: Option<&str>) -> Outcome {
+    let op = crate::mods::state::random_hex(8);
+    let started = Instant::now();
+    let mut diary = vec![event("conta.reconciliar.inicio", "ok", &op)];
+    let result = steps(home, dir, project, &op, &mut diary);
+    let mut end = event("conta.reconciliar.fim", if result.is_ok() { "ok" } else { "erro" }, &op);
+    end["codigo"] = json!(if result.is_ok() { "retornou" } else { "excecao" });
+    end["ms"] = json!(started.elapsed().as_millis() as u64);
+    if let Err(error) = &result {
+        end["erro_tipo"] = json!(match error { ConfigError::Refused(_) => "ContaError", ConfigError::Io(_) => "OSError" });
+        if let ConfigError::Io(error) = error && let Some(code) = error.raw_os_error() { end["errno"] = json!(code); }
+    }
+    diary.push(end);
+    Outcome { result, diary }
+}
+
+fn event(evento: &str, nivel: &str, op: &str) -> Value {
+    json!({"evento": evento, "nivel": nivel, "provider": "claude", "operacao": op})
+}
+
+fn conta_id(dir: &Path) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, dir.to_string_lossy().as_bytes());
+    digest.as_ref().iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut Vec<Value>) -> Result<Vec<String>> {
+    // O projeto entra em caminho: absoluto, `..` ou barra escapariam de `~/.claude/projects`.
+    if let Some(project) = project
+        && (project.is_empty() || !project.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')) {
+        return Err(refused("projeto inválido"));
+    }
+    let mut stage = |etapa: &str, id: bool| {
+        let mut e = event("conta.reconciliar.etapa", "ok", op);
+        e["etapa"] = json!(etapa);
+        if id { e["conta_id"] = json!(conta_id(dir)); }
+        diary.push(e);
+    };
+    let shared = home.join(".claude");
+    let mut warnings = Vec::new();
+    stage("ligar_arquivos", true);
+    let mut names = fs::read_dir(&shared)?.map(|entry| entry.map(|e| e.file_name())).collect::<io::Result<Vec<_>>>()?;
+    sort_names(&mut names);
+    for name in names {
+        let (target, destination) = (shared.join(&name), dir.join(&name));
+        let text = name.to_str().unwrap_or_default();
+        if ACCOUNT_RUNTIME.contains(&text) {
+            // Atalho de runtime de versão antiga: senão a conta segue gravando o runtime dela no compartilhado.
+            if is_symlink(&destination) && points_to(&destination, &target) { unlink(&destination)?; }
+            continue;
+        }
+        if NEVER_LINK.contains(&text) { continue; }
+        if is_symlink(&destination) && points_to(&destination, &target) { continue; }
+        if is_symlink(&destination) || exists(&destination) {
+            warnings.extend(collide(dir, &destination, &target)?);
+        }
+        link(&destination, &target)?;
+    }
+    stage("espelhar_settings", false);
+    warnings.extend(seed_settings(home, dir)?);
+    stage("conferir_plugins", false);
+    warnings.extend(check_plugins(home, dir)?);
+    stage("espelhar_config", false);
+    warnings.extend(mirror_claude_json(home, dir)?);
+    // Atalho para o que sumiu do compartilhado, e qualquer outro link morto no topo.
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if is_symlink(&path) && !exists(&path) { unlink(&path)?; }
+    }
+    stage("ligar_memoria", false);
+    warnings.extend(link_memory(home, dir, project)?);
+    let mut done = event("conta.reconciliar.concluiu", if warnings.is_empty() { "ok" } else { "aviso" }, op);
+    done["quantidade"] = json!(warnings.len());
+    done["codigo"] = json!(if warnings.is_empty() { "ok" } else { "com_avisos" });
+    diary.push(done);
+    Ok(warnings)
+}
+
+/// Troca atômica pelo atalho: `unlink` + `symlink` deixava um instante sem o caminho para o CLI vivo.
+fn link(destination: &Path, target: &Path) -> Result<()> {
+    let temp = sibling(destination);
+    if is_symlink(&temp) || exists(&temp) {
+        return Err(refused(format!("{} já existe — reconciliação anterior deixou lixo?", name_of(&temp))));
+    }
+    // Nunca cai para cópia: ela passaria a divergir do original calada.
+    make_symlink(target, &temp)
+        .map_err(|e| refused(format!("não consegui criar o atalho {}: {e}. {SYMLINK_HINT}", name_of(destination))))?;
+    crate::runtime::queue::replace(&temp, destination)?;
+    Ok(())
+}
+
+/// O caminho existe e não é o atalho esperado. Tipo incompatível vai para a gaveta; arquivo contra
+/// arquivo funde (a mudança sobe); link inesperado nunca é seguido (vazaria o alvo externo).
+fn collide(dir: &Path, destination: &Path, target: &Path) -> Result<Option<String>> {
+    if is_symlink(destination) || is_dir(destination) || !is_file(destination) || !is_file(target) {
+        return drawer(dir, destination).map(Some);
+    }
+    if !same_bytes(destination, target)? {
+        copy_file(destination, target)?;
+        unlink(destination)?;
+        return Ok(Some(format!("'{}' foi alterado dentro desta conta; a mudança subiu pro ~/.claude", name_of(destination))));
+    }
+    unlink(destination)?;
+    Ok(None)
+}
+
+/// `str.isdigit` do Python 3.14 (Unicode 16): decimais e os dígitos sobrescritos, circulados etc.
+fn py_isdigit(c: char) -> bool {
+    const DIGITS: [(u32, u32); 90] = [(0x30, 0x39), (0xB2, 0xB3), (0xB9, 0xB9), (0x660, 0x669), (0x6F0, 0x6F9), (0x7C0, 0x7C9),
+        (0x966, 0x96F), (0x9E6, 0x9EF), (0xA66, 0xA6F), (0xAE6, 0xAEF), (0xB66, 0xB6F), (0xBE6, 0xBEF), (0xC66, 0xC6F),
+        (0xCE6, 0xCEF), (0xD66, 0xD6F), (0xDE6, 0xDEF), (0xE50, 0xE59), (0xED0, 0xED9), (0xF20, 0xF29), (0x1040, 0x1049),
+        (0x1090, 0x1099), (0x1369, 0x1371), (0x17E0, 0x17E9), (0x1810, 0x1819), (0x1946, 0x194F), (0x19D0, 0x19DA),
+        (0x1A80, 0x1A89), (0x1A90, 0x1A99), (0x1B50, 0x1B59), (0x1BB0, 0x1BB9), (0x1C40, 0x1C49), (0x1C50, 0x1C59),
+        (0x2070, 0x2070), (0x2074, 0x2079), (0x2080, 0x2089), (0x2460, 0x2468), (0x2474, 0x247C), (0x2488, 0x2490),
+        (0x24EA, 0x24EA), (0x24F5, 0x24FD), (0x24FF, 0x24FF), (0x2776, 0x277E), (0x2780, 0x2788), (0x278A, 0x2792),
+        (0xA620, 0xA629), (0xA8D0, 0xA8D9), (0xA900, 0xA909), (0xA9D0, 0xA9D9), (0xA9F0, 0xA9F9), (0xAA50, 0xAA59),
+        (0xABF0, 0xABF9), (0xFF10, 0xFF19), (0x104A0, 0x104A9), (0x10A40, 0x10A43), (0x10D30, 0x10D39), (0x10D40, 0x10D49),
+        (0x10E60, 0x10E68), (0x11052, 0x1105A), (0x11066, 0x1106F), (0x110F0, 0x110F9), (0x11136, 0x1113F), (0x111D0, 0x111D9),
+        (0x112F0, 0x112F9), (0x11450, 0x11459), (0x114D0, 0x114D9), (0x11650, 0x11659), (0x116C0, 0x116C9), (0x116D0, 0x116E3),
+        (0x11730, 0x11739), (0x118E0, 0x118E9), (0x11950, 0x11959), (0x11BF0, 0x11BF9), (0x11C50, 0x11C59), (0x11D50, 0x11D59),
+        (0x11DA0, 0x11DA9), (0x11F50, 0x11F59), (0x16130, 0x16139), (0x16A60, 0x16A69), (0x16AC0, 0x16AC9), (0x16B50, 0x16B59),
+        (0x16D70, 0x16D79), (0x1CCF0, 0x1CCF9), (0x1D7CE, 0x1D7FF), (0x1E140, 0x1E149), (0x1E2F0, 0x1E2F9), (0x1E4F0, 0x1E4F9),
+        (0x1E5F1, 0x1E5FA), (0x1E950, 0x1E959), (0x1F100, 0x1F10A), (0x1FBF0, 0x1FBF9)];
+    let c = c as u32;
+    DIGITS.binary_search_by(|&(lo, hi)| if hi < c { std::cmp::Ordering::Less } else if lo > c { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Equal }).is_ok()
+}
+
+/// O nome de origem de uma entrada da gaveta: sem o sufixo `.N` que a gaveta põe.
+fn origin(name: &str) -> &str {
+    match name.rsplit_once('.') {
+        Some((base, last)) if !base.is_empty() && !last.is_empty() && last.chars().all(py_isdigit) => base,
+        _ => name,
+    }
+}
+
+fn mtime(meta: &fs::Metadata) -> f64 {
+    meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0.0, |d| d.as_secs() as f64 + f64::from(d.subsec_nanos()) * 1e-9)
+}
+
+/// Move para `.drift/<nome>.N` (a menor vaga livre) e guarda só as `DRIFT_CAP` mais novas do mesmo nome.
+fn drawer(dir: &Path, destination: &Path) -> Result<String> {
+    let drift = dir.join(".drift");
+    if is_symlink(&drift) || (exists(&drift) && !is_dir(&drift)) {
+        // Gaveta apontando para fora levaria as entradas, e a poda, para o diretório externo.
+        return Err(refused("a gaveta .drift desta conta é um symlink ou não é uma pasta"));
+    }
+    mkdir(&drift)?;
+    let name = name_of(destination);
+    let mut n = 1;
+    while exists(&drift.join(format!("{name}.{n}"))) { n += 1; }
+    // ponytail: só `rename` (o `shutil.move` copiava quando ele falhava); a gaveta mora na mesma pasta
+    // da conta, então só um ponto de montagem dentro dela traria o EXDEV.
+    fs::rename(destination, drift.join(format!("{name}.{n}")))?;
+    // Teto por nome de origem: pela gaveta inteira, três `skills` levavam o único `hooks.1`.
+    let mut siblings = Vec::new();
+    for entry in fs::read_dir(&drift)? {
+        let entry = entry?;
+        if origin(&entry.file_name().to_string_lossy()) == name {
+            // lstat: a entrada pode ser link, e o alvo quebrado não pode parar a poda.
+            siblings.push((mtime(&fs::symlink_metadata(entry.path())?), entry.path()));
+        }
+    }
+    siblings.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    for (_, old) in siblings.into_iter().skip(DRIFT_CAP) {
+        if is_symlink(&old) || is_file(&old) { unlink(&old)?; } else { let _ = fs::remove_dir_all(&old); }
+    }
+    Ok(format!("'{name}' era local nesta conta; movido pra .drift/{name}.{n}"))
+}
+
+/// `projects/` é real por conta (custo por pasta); só o `memory/` de cada projeto é atalho.
+fn link_memory(home: &Path, dir: &Path, project: Option<&str>) -> Result<Vec<String>> {
+    let root = home.join(".claude").join("projects");
+    fs::create_dir_all(&root)?;
+    let mut names = std::collections::BTreeSet::new();
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        if is_dir(&entry.path()) { names.insert(entry.file_name()); }
+    }
+    if let Some(project) = project.filter(|p| !p.is_empty()) {
+        fs::create_dir_all(root.join(project).join("memory"))?;
+        names.insert(project.into());
+    }
+    let mut warnings = Vec::new();
+    for name in names {
+        let target = root.join(&name).join("memory");
+        if !is_dir(&target) { continue; }
+        let local = dir.join("projects").join(&name);
+        fs::create_dir_all(&local)?;
+        let destination = local.join("memory");
+        if is_symlink(&destination) && points_to(&destination, &target) { continue; }
+        if is_symlink(&destination) || exists(&destination) {
+            warnings.extend(collide(dir, &destination, &target)?);
+        }
+        link(&destination, &target)?;
+    }
+    // A poda do topo não alcança `projects/`: sem esta passada o link morto ficava para sempre.
+    let projects = dir.join("projects");
+    if is_dir(&projects) {
+        for entry in fs::read_dir(&projects)? {
+            let memory = entry?.path().join("memory");
+            if is_symlink(&memory) && !exists(&memory) { unlink(&memory)?; }
+        }
+    }
+    Ok(warnings)
+}
+
+/// `settings.json` é cópia, não atalho (o CLI regravava o compartilhado pelo link). O link do layout
+/// antigo vira cópia; link para outro lugar vai para a gaveta; cópia existente recebe o espelho.
+fn seed_settings(home: &Path, dir: &Path) -> Result<Option<String>> {
+    let target = home.join(".claude").join("settings.json");
+    let destination = dir.join("settings.json");
+    let mut warning = None;
+    if is_symlink(&destination) {
+        if points_to(&destination, &target) { unlink(&destination)?; } else { warning = Some(drawer(dir, &destination)?); }
+    } else if exists(&destination) {
+        return mirror_settings(&target, &destination);
+    }
+    if is_file(&target) { copy_file(&target, &destination)?; }
+    Ok(warning)
+}
+
+/// O principal manda em toda chave que tem; o que só a cópia tem fica, e ausência no principal não
+/// apaga. `enabledPlugins` mescla por plugin (o `claude plugin install` da conta liga só na cópia).
+/// Avisa quando desfaz algo que a cópia tinha com outro valor; nunca escreve no principal.
+fn mirror_settings(target: &Path, destination: &Path) -> Result<Option<String>> {
+    let failed = |e: String| refused(format!("não consegui espelhar o settings.json pra conta: {e}"));
+    let Some(principal) = read_json(target).map_err(failed)? else { return Ok(None) };
+    let Some(copy) = read_json(destination).map_err(failed)? else { return Ok(None) };
+    let (Value::Object(principal), Value::Object(copy)) = (principal, copy) else {
+        return Err(refused("settings.json não é um objeto JSON — não dá pra espelhar pra conta"));
+    };
+    let mut merged = copy.clone();
+    for (key, value) in &principal {
+        if let ("enabledPlugins", Value::Object(theirs)) = (key.as_str(), value)
+            && let Some(Value::Object(ours)) = merged.get_mut(key) {
+            for (plugin, on) in theirs { ours.insert(plugin.clone(), on.clone()); }
+            continue;
+        }
+        merged.insert(key.clone(), value.clone());
+    }
+    if py_eq_map(&merged, &copy) { return Ok(None); }
+    let undone = |key: &String| -> bool {
+        let Some(old) = copy.get(key) else { return false };
+        if py_eq(old, &merged[key]) { return false; }
+        match (key.as_str(), old, &principal[key]) {
+            // Plugin só acrescentado pelo principal não desfaz nada.
+            ("enabledPlugins", Value::Object(old), Value::Object(theirs)) =>
+                theirs.iter().any(|(plugin, on)| old.get(plugin).is_some_and(|was| !py_eq(was, on))),
+            _ => true,
+        }
+    };
+    let mut undone: Vec<&String> = principal.keys().filter(|k| undone(k)).collect();
+    undone.sort_by(|a, b| py_order(a, b));
+    let text = pyjson::dumps_indent(&Value::Object(merged), 2, false) + "\n";
+    if text.chars().any(py::is_marker) {
+        return Err(refused("settings.json tem texto com surrogate solto, que não dá pra gravar em UTF-8 — não dá pra espelhar pra conta"));
+    }
+    write_replacing(destination, &text)?;
+    Ok((!undone.is_empty()).then(|| format!("settings.json: o principal sobrescreveu {} na cópia desta conta",
+        undone.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", "))))
+}
+
+/// A cópia com os `mcpServers` do principal por cima, servidor a servidor, e os servidores desfeitos.
+fn mcp_plan(principal: &Map<String, Value>, copy: &Map<String, Value>) -> Option<(Map<String, Value>, Vec<String>)> {
+    let Some(Value::Object(theirs)) = principal.get("mcpServers") else { return None };
+    if theirs.is_empty() { return None; }
+    let ours = match copy.get("mcpServers") { Some(Value::Object(m)) => m.clone(), _ => Map::new() };
+    let mut merged = ours.clone();
+    for (server, value) in theirs { merged.insert(server.clone(), value.clone()); }
+    if py_eq_map(&merged, &ours) { return None; }
+    let mut undone: Vec<String> = theirs.iter().filter(|(k, v)| ours.get(*k).is_some_and(|was| !py_eq(was, v))).map(|(k, _)| k.clone()).collect();
+    undone.sort_by(|a, b| py_order(a, b));
+    let mut copy = copy.clone();
+    copy.insert("mcpServers".into(), Value::Object(merged));
+    Some((copy, undone))
+}
+
+/// Só os `mcpServers` do `~/.claude.json` chegam à conta: o resto do arquivo (oauthAccount, projetos)
+/// é estado do CLI dela.
+fn mirror_claude_json(home: &Path, dir: &Path) -> Result<Option<String>> {
+    let failed = |e: String| refused(format!("não consegui espelhar o ~/.claude.json pra conta: {e}"));
+    let not_object = || refused("~/.claude.json não é um objeto JSON — não dá pra espelhar pra conta");
+    let destination = dir.join(".claude.json");
+    let Some(principal) = read_json(&home.join(".claude.json")).map_err(failed)? else { return Ok(None) };
+    let Some(copy) = read_json(&destination).map_err(failed)? else { return Ok(None) };
+    let (Value::Object(principal), Value::Object(copy)) = (principal, copy) else { return Err(not_object()) };
+    if mcp_plan(&principal, &copy).is_none() { return Ok(None); }
+    // Regrava sob a trava do Claude Code, relendo dentro dela: uma sessão viva da conta grava o mesmo arquivo.
+    let _lock = crate::session_open::claude::lock_config(&destination).ok();
+    let copy = match read_json(&destination).map_err(failed)? {
+        None => return Ok(None),
+        Some(Value::Object(copy)) => copy,
+        Some(_) => return Err(not_object()),
+    };
+    let Some((copy, undone)) = mcp_plan(&principal, &copy) else { return Ok(None) };
+    write_replacing(&destination, &pyjson::dumps_indent(&Value::Object(copy), 2, true))?;
+    Ok((!undone.is_empty()).then(|| format!(".claude.json: o principal sobrescreveu os MCP {} na cópia desta conta", undone.join(", "))))
+}
+
+/// Plugin ligado no `settings.json` da conta sem instalação no compartilhado: avisa, nunca instala
+/// (instalar escreveria no compartilhado a partir de uma conta).
+fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
+    let Some(settings) = read_json(&dir.join("settings.json"))
+        .map_err(|e| refused(format!("não consegui ler o settings.json da conta: {e}")))? else { return Ok(vec![]) };
+    let Value::Object(settings) = settings else {
+        return Err(refused("o settings.json da conta não é um objeto JSON — não dá pra conferir os plugins"));
+    };
+    let enabled = match settings.get("enabledPlugins").filter(|v| py::truthy(Some(v))) {
+        None => Map::new(),
+        Some(Value::Object(map)) => map.clone(),
+        Some(_) => return Ok(vec![]),
+    };
+    let registry = home.join(".claude").join("plugins").join("installed_plugins.json");
+    let malformed = || refused(format!("plugins: {} fora do formato esperado — não dá pra conferir os plugins", registry.display()));
+    let installed = match read_json(&registry) {
+        Err(e) => return Ok(vec![format!("plugins: não consegui ler {}: {e}", registry.display())]),
+        Ok(None) => Value::Object(Map::new()),
+        Ok(Some(Value::Object(data))) => data.get("plugins").filter(|v| py::truthy(Some(v))).cloned().unwrap_or_else(|| json!({})),
+        Ok(Some(_)) => return Err(malformed()),
+    };
+    let mut names: Vec<(&String, &Value)> = enabled.iter().collect();
+    names.sort_by(|a, b| py_order(a.0, b.0));
+    let mut warnings = Vec::new();
+    for (name, on) in names {
+        if !py::truthy(Some(on)) { continue; }
+        let Value::Object(installed) = &installed else { return Err(malformed()) };
+        let Some(entries) = installed.get(name).filter(|v| py::truthy(Some(v))) else {
+            warnings.push(format!("plugin {name} está ligado no settings.json mas não consta em installed_plugins.json — \
+                reinstalar: claude plugin install {name}"));
+            continue;
+        };
+        let Value::Array(entries) = entries else { return Err(malformed()) };
+        let mut missing = Vec::new();
+        for entry in entries {
+            let Value::Object(entry) = entry else { return Err(malformed()) };
+            match entry.get("installPath") {
+                Some(Value::String(path)) if !path.is_empty() => if !is_dir(Path::new(path)) { missing.push(path.clone()) },
+                path if !py::truthy(path) => missing.push(py::py_str(path.unwrap_or(&Value::Null))),
+                // `Path(5)`: o Python levantava TypeError cru.
+                _ => return Err(malformed()),
+            }
+        }
+        if !missing.is_empty() {
+            warnings.push(format!("plugin {name} consta instalado mas a pasta sumiu ({}) — reinstalar: claude plugin install {name}",
+                missing.join(", ")));
+        }
+    }
+    Ok(warnings)
+}
+
+/// O preparo da pasta pendente da criação: `~/.claude` garantido, o `.claude.json` do principal sem o
+/// `oauthAccount` (as permissões e os MCP ficam, o login não), `projects/` e a reconciliação sob a
+/// trava da pendência, o único arquivo que existe antes da publicação.
+pub fn seed(home: &Path, dir: &Path) -> Outcome {
+    let prepared = (|| -> Result<()> {
+        fs::create_dir_all(home.join(".claude"))?;
+        let mut data = match read_json(&home.join(".claude.json")) {
+            Ok(None) => Map::new(),
+            Ok(Some(Value::Object(data))) => data,
+            Ok(Some(_)) => return Err(refused("o ~/.claude.json não é um objeto JSON — não dá pra semear a conta")),
+            Err(e) => return Err(refused(format!("não consegui ler o ~/.claude.json pra semear a conta: {e}"))),
+        };
+        data.shift_remove("oauthAccount");
+        fs::write(dir.join(".claude.json"), pyjson::dumps_indent(&Value::Object(data), 2, true))?;
+        Ok(mkdir(&dir.join("projects"))?)
+    })();
+    match prepared {
+        Ok(()) => reconcile_locked(home, dir, None, PENDING, LOCK_WAIT),
+        Err(error) => Outcome::failed(error),
+    }
+}
+
+// ── o comando `hangar-server conta` ───────────────────────────────────────────────────────────
+
+const DOC: &str = "CLI de contas Claude, para o wrapper de shell chamar.
+
+Mesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas
+direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.
+
+  hangar-conta --list                    -> um nome de conta por linha
+  hangar-conta --prep <nome> [<projeto>] -> refaz os atalhos e imprime o caminho do config dir;
+                                            com o projeto (a pasta já saneada), liga a memória dele
+  hangar-conta --new <nome>              -> cria a conta e imprime o caminho
+";
+
+/// Os eventos de um comando no diário exportável, num arquivo só dos comandos (`diario/hangar-conta`):
+/// no Windows dois processos anexando no mesmo arquivo se sobrescrevem, então quem grava segura a
+/// trava das contas. Falha não chega a quem chamou.
+pub fn write_cli_diary(env: &AccountEnvironment, events: &[Value]) {
+    if events.is_empty() { return; }
+    let Some(dir) = crate::runtime::local_policy::log_base_in(env).map(|base| base.join("diario").join("hangar-conta")) else { return };
+    let Ok(_held) = lock(&env.home.join(".hangar-contas.lock"), true, Duration::from_secs(5)) else { return };
+    let _ = crate::diag::write_diary(&dir, events, chrono::Local::now());
+}
+
+/// `contas.listar`: os nomes das contas do Hangar, em ordem.
+fn list(home: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(home) else { return vec![] };
+    let mut names: Vec<String> = entries.flatten().filter_map(|entry| {
+        let name = entry.file_name().to_str()?.strip_prefix(".claude-")?.to_owned();
+        is_account(&entry.path()).then_some(name)
+    }).collect();
+    names.sort_by(|a, b| py_order(a, b));
+    names
+}
+
+/// A guarda compartilhada de existência, como a do `ciclo_conta`: 5 s, depois "ocupada".
+fn guard(home: &Path, dir: &Path) -> Result<super::AccountGuard> {
+    let locks = AccountLocks::new(home.join(".hangar").join("account-locks"));
+    let key = AccountKey::new(Provider::Claude, dir)?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match locks.try_acquire(&key, GuardMode::Shared) {
+            Ok(guard) => return Ok(guard),
+            Err(LockError::Busy) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            Err(LockError::Busy) => return Err(refused("a conta está ocupada por outra operação")),
+            Err(LockError::Io(error)) => return Err(error.into()),
+        }
+    }
+}
+
+fn refusal(err: &mut dyn Write, error: &ConfigError) -> u8 {
+    match error {
+        ConfigError::Refused(detail) => { let _ = writeln!(err, "hangar-conta: {detail}"); 1 }
+        ConfigError::Io(error) => { let _ = writeln!(err, "hangar-conta: falha ao executar: {error}"); 126 }
+    }
+}
+
+fn prep(env: &AccountEnvironment, name: &str, project: Option<&str>, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
+    let dir = match account_dir(&env.home, name) {
+        Ok(dir) => dir,
+        Err(error) => return refusal(err, &error),
+    };
+    let outcome = match guard(&env.home, &dir) {
+        Ok(_guard) => reconcile_account(&env.home, name, project),
+        Err(error) => return refusal(err, &error),
+    };
+    write_cli_diary(env, &outcome.diary);
+    match outcome.result {
+        Ok(warnings) => {
+            for warning in warnings { let _ = writeln!(err, "hangar-conta: {warning}"); }
+            let _ = writeln!(out, "{}", dir.display());
+            0
+        }
+        Err(error) => refusal(err, &error),
+    }
+}
+
+fn new(env: &AccountEnvironment, name: &str, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
+    let mut seeded: Option<Outcome> = None;
+    let created = AccountService::new(env.clone()).create(Provider::Claude, name, |path| {
+        let outcome = seed(&env.home, path);
+        let failed = outcome.result.as_ref().err()
+            .map(|e| super::catalog::AccountError::new(500, "account_prepare_failed", e.to_string(), json!({})));
+        seeded = Some(outcome);
+        failed.map_or(Ok(()), Err)
+    });
+    if let Some(outcome) = &seeded { write_cli_diary(env, &outcome.diary); }
+    match (created, seeded.and_then(|o| o.result.err())) {
+        // Os avisos da primeira reconciliação não saem: a conta acabou de nascer, como no `criar`.
+        (Ok(_), _) => { let _ = writeln!(out, "{}", env.home.join(format!(".claude-{name}")).display()); 0 }
+        (Err(_), Some(error)) => refusal(err, &error),
+        (Err(error), None) => { let _ = writeln!(err, "hangar-conta: {}", error.message); 1 }
+    }
+}
+
+/// O comando com o ambiente e as saídas dadas; devolve o código de saída.
+pub fn run(args: &[String], env: &AccountEnvironment, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
+    match args {
+        [flag] if flag == "--help" || flag == "-h" => { let _ = writeln!(out, "{DOC}"); 0 }
+        [flag] if flag == "--list" => {
+            for name in list(&env.home) { let _ = writeln!(out, "{name}"); }
+            0
+        }
+        [flag, name] if flag == "--new" => new(env, name, out, err),
+        [flag, name] if flag == "--prep" => prep(env, name, None, out, err),
+        [flag, name, project] if flag == "--prep" => prep(env, name, Some(project), out, err),
+        _ => { let _ = writeln!(err, "{DOC}"); 2 }
+    }
+}
+
+/// `hangar-server conta …`: `args` sem o nome do subcomando.
+pub fn cli(args: &[String]) -> std::process::ExitCode {
+    let env = AccountEnvironment::capture();
+    std::process::ExitCode::from(run(args, &env, &mut io::stdout().lock(), &mut io::stderr().lock()))
+}
