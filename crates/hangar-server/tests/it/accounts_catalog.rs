@@ -1,10 +1,7 @@
 //! Contrato HTTP do catálogo; o backend de reserva não pode produzir a resposta.
 use axum::{Router, http::StatusCode};
 use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::Arc;
 
 /// O multiplexador das sondas é o falso da referência Python (`GET /__contract__/mux`), nunca o
 /// tmux real da máquina. Resposta diferente de 200 é multiplexador sem resposta.
@@ -25,15 +22,15 @@ pub(crate) fn reference_mux(upstream: String) -> hangar_server::accounts::enviro
 
 #[tokio::test]
 async fn owner_catalog_is_not_a_python_proxy() {
-    let hits = Arc::new(AtomicUsize::new(0));
-    let recorded = hits.clone();
+    let paths = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let recorded = paths.clone();
     let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_addr = upstream.local_addr().unwrap();
     let python = tokio::spawn(async move {
         axum::serve(
             upstream,
-            Router::new().fallback(move || {
-                recorded.fetch_add(1, Ordering::SeqCst);
+            Router::new().fallback(move |uri: axum::http::Uri| {
+                recorded.lock().unwrap().push(uri.path().to_owned());
                 async { (StatusCode::SERVICE_UNAVAILABLE, "handler Python bloqueado") }
             }),
         )
@@ -66,11 +63,11 @@ async fn owner_catalog_is_not_a_python_proxy() {
         status, 200,
         "o catálogo do dono ainda depende do handler Python"
     );
-    assert_eq!(
-        hits.load(Ordering::SeqCst),
-        0,
-        "o catálogo chegou ao Python"
-    );
+    // Qualquer processo da máquina pode sondar uma porta de loopback nova (um detector de servidor
+    // local manda `HEAD /` direto ao Python falso e ao servidor, que o repassa): só rota do app conta.
+    let reached: Vec<String> = paths.lock().unwrap().iter()
+        .filter(|p| p.starts_with("/api/") || p.starts_with("/internal/")).cloned().collect();
+    assert!(reached.is_empty(), "o catálogo chegou ao Python: {reached:?}");
 }
 
 #[test]
