@@ -114,7 +114,6 @@ from app.codex_contas_login import CodexContasLogin
 from app.pair import PairLink
 from app.hook_state import hook_state
 from app import push
-from app import stall_watch
 from app.omp_plugin_sync import PluginSynchronizer, PluginSyncLoop
 from app.sync import sync_admin_router, sync_router
 from app.deploy import deploy_router
@@ -238,16 +237,6 @@ async def _lifespan(app: FastAPI):
 
     task.add_done_callback(_watch_done)
 
-    stall_task = asyncio.create_task(stall_watch.watch())
-
-    def _stall_watch_done(t: asyncio.Task) -> None:
-        if not t.cancelled():
-            exc = t.exception()
-            if exc is not None:
-                _log.exception("stall_watch.watch crashed", exc_info=exc)
-
-    stall_task.add_done_callback(_stall_watch_done)
-
     loop_monitor_task = asyncio.create_task(loop_monitor.watch(), name="loop-monitor")
 
     # Poda periodica dos sidecars de sessao morta (Task G3): varre na subida e depois a cada
@@ -283,33 +272,6 @@ async def _lifespan(app: FastAPI):
 
     prune_task.add_done_callback(_prune_done)
 
-    # Boot-resume dos loops: flags em memoria (tick em voo) morrem no restart; o sidecar e a verdade.
-    # Loop ACTIVE cuja sessao existe e esta idle -> reagenda o tick; sessao sumida -> failed.
-    def _boot_resume_loops() -> None:
-        try:
-            live = {loop_mod._sanitize(i.name): i for i in registry.list()}
-            for p in loop_mod._loop_dir().glob("*.json"):
-                stem = p.stem
-                link = loop_mod.LoopLink(stem)
-                d = link.get()
-                if not d or d["status"] not in loop_mod.ACTIVE:
-                    continue
-                info = live.get(stem)
-                if info is None:
-                    loop_mod._end(link, stem, "failed", "sessão morta no boot", push.notify_loop)
-                    continue
-                m = hook_state.get_state(session_key(info.jsonl)) if info.jsonl else None
-                if m and m[0] == "idle":
-                    loop_mod.schedule_tick(info.name, lambda n=info.name: _loop_ctx(n))
-        except Exception as e:
-            # Com o Rust ainda subindo a lista levanta; os loops ativos ficam sem reagendar.
-            _log.warning("boot-resume de loops falhou", exc_info=True)
-            diag.registrar("loop.boot_resume_falhou", "erro",
-                           codigo=getattr(e, "code", None) or type(e).__name__)
-
-    # Em segundo plano: com o Rust esperado, a lista espera o desfecho dele (até 30 s), e a subida
-    # do servidor não pode ficar presa nisso.
-    app.state.boot_resume_task = asyncio.create_task(asyncio.to_thread(_boot_resume_loops))
     pricing.atualizar_em_background()  # NUNCA num request: o cliente aborta em 4s
     # Mesmo motivo, outra rede: usd_brl() tem cache de 1h e timeout de 3s, e é chamado DENTRO do
     # montar(). Sem aquecer aqui, o primeiro /api/costs depois de todo restart paga a coleta fria
@@ -317,9 +279,6 @@ async def _lifespan(app: FastAPI):
     threading.Thread(target=_usd_brl, name="usd-brl-warm", daemon=True).start()
     # Catálogo do pi/omp em fundo: a primeira lista de modelos depois do restart levava segundos.
     pi_catalog.warm()
-    # Primeira coleta de custos/uso desta subida, em background e só depois de o boot assentar:
-    # máquina nova varre 1 GB+ de transcript sem ninguém ter clicado, e a tela já abre pronta.
-    costs_sources.agendar_aquecimento(30)
     from app import transcript_index
     transcript_index.start_background()
     # A linha vive no loop do servidor, mas o send_prompt roda em thread — ver pi_inbox.entregar_sync.
@@ -346,19 +305,12 @@ async def _lifespan(app: FastAPI):
     )
     app.state.omp_plugin_sync = omp_sync
     await omp_sync.start()
-    # Em tarefa: o download dos binários na primeira vez não pode segurar a subida. Criada colada no
-    # `try`: falha no meio da subida não pode deixar o frpc e o Caddy sem quem os pare.
-    from app import connect as connect_mod
-    connect_task = asyncio.create_task(connect_mod.start(), name="connect-start")
     try:
         yield
     finally:
         diag.registrar("backend.encerrando")
         await runtime.shutdown()
         await runtime.close_events()
-        connect_task.cancel()
-        await asyncio.gather(connect_task, return_exceptions=True)
-        await connect_mod.stop()
         costs_sources.cancelar_aquecimento()
         # Claude sem terminal fica vivo no cano: só fecha a conexão; o próximo backend religa.
         if _transfer_recovery is not None:
@@ -372,16 +324,11 @@ async def _lifespan(app: FastAPI):
         except Exception:
             _log.exception("Falha ao encerrar a integração Codex")
         task.cancel()
-        stall_task.cancel()
         loop_monitor_task.cancel()
         prune_task.cancel()
         await omp_sync.close()
         try:
             await task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await stall_task
         except asyncio.CancelledError:
             pass
         await asyncio.gather(loop_monitor_task, return_exceptions=True)
@@ -1211,17 +1158,24 @@ async def _cached_info(name: str) -> SessionInfo | None:
     return await asyncio.to_thread(_cached_info_sync, name)
 
 
+def _rust_conduz(info) -> bool:
+    """Sessão que o Rust de pé conduz (Claude e Codex): fila, loop, `then` e avisos dela são dele."""
+    from app import runtime_coordinator
+    c = runtime_coordinator.current()
+    return c is not None and c.mode in {"pending", "rust"} and c.rust_owns(info.provider, bool(getattr(info, "headless", False)))
+
+
 def _notify_async(session_id: str, send_fn) -> None:
     """Resolve uuid->nome e manda o push escolhido, TUDO numa thread: registry.list() mexe no tmux
     e o webpush e rede — nada disso pode bloquear o loop do watch."""
     def _work() -> None:
         try:
-            name = next(
-                (s.name for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id),
+            info = next(
+                (s for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id),
                 None,
             )
-            if name:
-                send_fn(name)
+            if info and not _rust_conduz(info):
+                send_fn(info.name)
         except Exception:
             _log.warning("push falhou (%s)", session_id, exc_info=True)
     threading.Thread(target=_work, daemon=True).start()
@@ -1274,22 +1228,12 @@ def _do_notify_awaiting(session_id: str) -> None:
     toda sessao parada >60s empurrava push falso "Aguardando sua resposta". Push so sai com awaiting
     REAL: askq pendente no sidecar OU menu/overlay no pane (retry curto cobre o frame de render)."""
     info = next((s for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id), None)
-    if info is None:
+    if info is None or _rust_conduz(info):
         return
     def _real() -> bool:
         if getattr(info, "headless", False):
             # Sem pane: quem sabe da permissão/pergunta em aberto é o adapter. `registry.list`
             # não calcula estado (sai sempre idle), então ler dali nunca mandava o push.
-            from app import runtime_coordinator
-            coordinator = runtime_coordinator.current()
-            if coordinator is not None and coordinator.managed_runtime(info.name):
-                # Com o Rust de pé a sessão é dele: o estado é o último que ele publicou.
-                state = ((coordinator.slot(info.name).view or {}).get("view") or {}).get("public_state")
-                if not isinstance(state, dict):
-                    _log.warning("push aguardando: sem a vista do Rust para %s; push não enviado", info.name)
-                    return False
-                info.state, info.question = state.get("state"), state.get("question")
-                return state.get("state") == "awaiting_input"
             snap = get_adapter(CLAUDE_HEADLESS).snapshot(info.name)
             if snap is None:
                 return False
@@ -1765,7 +1709,7 @@ def _on_hook_transition(session_id: str, state: str) -> None:
             try:
                 info = next((s for s in registry.list()
                              if s.jsonl and session_key(s.jsonl) == session_id), None)
-                if info:
+                if info and not _rust_conduz(info):
                     with loop_mod._lock:
                         link = loop_mod.LoopLink(info.name)
                         d = link.get()
@@ -1788,6 +1732,8 @@ def _on_hook_transition(session_id: str, state: str) -> None:
         try:
             info = next((s for s in registry.list()
                          if s.jsonl and session_key(s.jsonl) == session_id), None)
+            if info and _rust_conduz(info):
+                return
             # Sessao nao encontrada (morreu, ou nao esta no tmux): o push de "terminou" continua
             # saindo pelo caminho de sempre. Nao ha como desconfiar do idle sem o transcript.
             if state == "idle" and not (info and info.jsonl):
@@ -7382,7 +7328,6 @@ async def connect_put(body: ConnectBody):
         connect.save(body.code)
     except connect.ConnectError as e:
         raise HTTPException(e.status, detail=erro(e.code, e.msg)) from None
-    await connect.start()
     return connect.status()
 
 

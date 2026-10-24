@@ -126,7 +126,8 @@ def test_rotas(_api):
     assert "token" not in json.dumps(r.json())
     assert c.put("/api/connect", json={"code": "lixo"}).status_code == 400
     assert c.delete("/api/connect").json()["configured"] is False
-    assert chamadas == ["start"]
+    # O Connect fica inativo até a reescrita no Rust: gravar o código não liga o frpc nem o Caddy.
+    assert chamadas == []
 
 
 def test_sem_porta_do_connect_nao_liga(tmp_path, monkeypatch):

@@ -27,6 +27,7 @@ use super::capped;
 use super::facts::{self as list_facts, FactsClient, ListFacts};
 use super::facts_files::{self, HookStates};
 use super::hub::HeadlessSource;
+use super::{local_facts, local_shortcuts, local_transfers};
 use super::mux::{Mux, Pane};
 use super::plan::PlanTracker;
 use super::procs::{self, ChildrenMap, ProcessView};
@@ -39,7 +40,6 @@ pub const DISCOVER_TTL: Duration = Duration::from_secs(1);
 pub const SNAPSHOT_TTL: Duration = Duration::from_secs(2);
 /// Sessão fora da lista por este tempo perde os caches por nome.
 const FORGET_AFTER: Duration = Duration::from_secs(10);
-const PYTHON_APPS_TTL: Duration = Duration::from_secs(10);
 /// Rodada da lista mais velha que isto não serve à limpeza das páginas: são vários tiques sem rodada.
 const LIVE_FRESH: Duration = Duration::from_secs(15);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -85,20 +85,22 @@ pub fn parse_dirs(raw: &str) -> Option<Dirs> {
         omp_config: p("omp_config")?, omp_agent: p("omp_agent")?, kimi_home: p("kimi_home")? })
 }
 
-/// O que quem produz sabe e o Python não: quantas listas do dono estão abertas no Rust (o hub).
+/// Quantas listas do dono estão abertas no Rust (o hub).
 #[derive(Clone, Default)]
 pub struct ProduceFacts {
     pub owner_clients: u32,
-    /// Rodada em sombra: nada do que ela produz sai daqui, nem o rebaixamento de `awaiting`.
-    pub shadow: bool,
 }
 
-/// Lista decorada e os fatos do Python da mesma rodada (navegador, terminais de atalho, escondidas
-/// do dono), que o hub entrega junto.
+/// Lista decorada e os fatos da mesma rodada (terminais de atalho, escondidas do dono), que o hub
+/// entrega junto.
 #[derive(Clone)]
 pub struct Produced { pub rows: Arc<Vec<SessionRow>>, pub facts: Arc<ListFacts>,
-    /// `false`: o Python não respondeu nesta rodada e `facts` é o último bom.
+    /// `false`: o Python não respondeu sobre Pi/omp/Kimi nesta rodada e o estado deles é o último bom.
     pub facts_ok: bool }
+
+/// Últimas leituras boas do disco que podem falhar numa rodada: transferências e atalhos.
+#[derive(Default)]
+struct LocalLast { transfers: Option<(Vec<SessionRow>, HashSet<String>)>, shortcuts: Option<String> }
 
 struct Discovery { at: Instant, wall: f64, epoch: u64,
     /// Mapa de processos relido nesta descoberta, não o do cache de 3 s.
@@ -112,7 +114,7 @@ struct Snapshot { at: Instant, epoch: u64, produced: Produced,
 /// O que a classificação e a decoração de uma rodada usaram além das linhas.
 struct RoundInputs { agent_pids: Arc<HashMap<String, u32>>, targets: Arc<BTreeMap<String, String>>,
     headless: Option<BTreeMap<String, Value>>, facts: Arc<ListFacts>,
-    /// Problema do runtime por sessão: o do lançador (Python) sem terminal, o do ator do Rust com terminal.
+    /// Problema do runtime por sessão: o do sidecar sem terminal, o do ator do Rust com terminal.
     problems: BTreeMap<String, String> }
 
 /// Uma produção inteira guardada: as linhas Claude como a descoberta e os fatos as deram, antes de
@@ -232,7 +234,8 @@ fn git_due_dirs(caches: &Caches, rows: &[SessionRow], now: Instant) -> Vec<GitDu
 pub struct ListBridge {
     env: Arc<ListEnv>,
     facts: FactsClient,
-    shadow_facts: FactsClient,
+    local: Mutex<LocalLast>,
+    shortcuts: local_shortcuts::Refresher,
     caches: Arc<Caches>,
     /// Retrato do runtime das sessões sem terminal; sem ele, a linha diz `list_runtime_absent`.
     runtime: std::sync::OnceLock<Arc<dyn HeadlessSource>>,
@@ -243,8 +246,6 @@ pub struct ListBridge {
     owner_clients: AtomicU32,
     /// Última rodada em que cada nome estava na lista: sumido há `FORGET_AFTER`, os caches dele saem.
     seen: Mutex<HashMap<String, Instant>>,
-    /// Aparelhos do dono atendidos pelo Python (Connect), da última resposta boa dos fatos, e quando chegou.
-    python_apps: Mutex<Option<(u32, Instant)>>,
     /// Trava assíncrona = um por vez: quem chega durante a varredura espera e reaproveita o resultado.
     discovery: tokio::sync::Mutex<Option<Discovery>>,
     snapshot: tokio::sync::Mutex<Option<Snapshot>>,
@@ -267,6 +268,8 @@ pub struct ListBridge {
     test_plugins: Mutex<Option<BTreeMap<String, Result<crate::state::facts::PluginReading, String>>>>,
     /// Transcripts da última rodada do dono, para a limpeza das páginas; `None` = rodada incerta.
     live_jsonl: Mutex<Option<(Instant, HashSet<String>)>>,
+    /// Pedidos de navegador do agente: a lista os publica, e sessão que acaba ou troca de nome os leva junto.
+    pub nav: Arc<crate::nav_requests::NavStore>,
 }
 
 /// Tarefa bloqueante que entrou em pânico: o hook já registrou onde; aqui fica qual operação.
@@ -283,8 +286,9 @@ impl ListBridge {
     pub fn new(env: ListEnv, facts: FactsClient) -> Self {
         let (caches, demoted) = (Arc::<Caches>::default(), Arc::<crate::state::demote::Demoted>::default());
         caches.classify.with(|c| c.hooks.set_demoted(demoted.clone()));
-        Self { env: Arc::new(env), shadow_facts: facts.sibling(), facts, caches, runtime: std::sync::OnceLock::new(),
-            shares: std::sync::OnceLock::new(), owner_clients: AtomicU32::new(0), seen: Mutex::default(), python_apps: Mutex::default(),
+        let nav = Arc::new(crate::nav_requests::NavStore::load(env.dirs.as_ref().map(|d| d.home.as_path())));
+        Self { nav, env: Arc::new(env), local: Mutex::default(), shortcuts: Default::default(), facts, caches, runtime: std::sync::OnceLock::new(),
+            shares: std::sync::OnceLock::new(), owner_clients: AtomicU32::new(0), seen: Mutex::default(),
             discovery: tokio::sync::Mutex::new(None),
             snapshot: tokio::sync::Mutex::new(None), git_running: Arc::default(),
             git_slots: Arc::new(tokio::sync::Semaphore::new(GIT_SLOTS)), epoch: AtomicU64::new(0),
@@ -295,14 +299,19 @@ impl ListBridge {
         }
     }
 
-    /// Rebaixamentos da rodada valem no cache Rust da lista e do Monitor, e vão ao mapa de marcadores do
-    /// Python, que o push e as rotas dele ainda leem e que ele grava no arquivo de estado.
+    /// Rebaixamentos da rodada valem no cache Rust da lista e do Monitor, e no marcador em disco.
     fn demote(&self, effects: Vec<Effect>) {
         let sids: Vec<String> = effects.into_iter().map(|Effect::DemoteAwaiting { sid, ts }| {
             self.demoted.demote(&sid, ts);
             sid
         }).collect();
-        if !sids.is_empty() { self.facts.demote(sids); }
+        if sids.is_empty() { return; }
+        let Ok(dirs) = self.dirs() else { return };
+        let caches = self.caches.clone();
+        tokio::task::spawn_blocking(move || {
+            let config_dirs = caches.config_dirs(&dirs);
+            for sid in &sids { facts_files::demote_marker(&config_dirs, sid); }
+        });
     }
 
     /// Uma vez, na montagem do estado com `HANGAR_SHARES_FILE`.
@@ -330,11 +339,6 @@ impl ListBridge {
     }
 
     pub fn owner_clients(&self) -> u32 { self.owner_clients.load(Ordering::Relaxed) }
-    /// Aparelhos do dono que entraram pelo Python (Connect). Vence em 10 s, como o `_apps_remotos` do Python:
-    /// fatos que pararam de chegar não seguram permissão num app que ninguém vê.
-    pub fn python_apps(&self) -> u32 {
-        lock(&self.python_apps).filter(|(_, at)| at.elapsed() <= PYTHON_APPS_TTL).map_or(0, |(count, _)| count)
-    }
 
     async fn plugin_facts(&self, rows: &[SessionRow]) -> BTreeMap<String, Result<crate::state::facts::PluginReading, String>> {
         #[cfg(test)]
@@ -518,7 +522,7 @@ impl ListBridge {
             return Ok(s.produced.clone());
         }
         let at = Instant::now();
-        let input = ProduceFacts { owner_clients: self.owner_clients.load(Ordering::Relaxed), shadow: false };
+        let input = ProduceFacts { owner_clients: self.owner_clients.load(Ordering::Relaxed) };
         let done = self.produce_round(&input).await;
         // A rodada parcial só parte da última produção que deu certo: sobre uma anterior, publicaria
         // lista velha por cima do erro.
@@ -598,13 +602,19 @@ impl ListBridge {
     async fn produce_round(&self, input: &ProduceFacts) -> Result<(Produced, Option<Arc<Round>>), ListError> {
         let dirs = self.dirs()?;
         let (rows, agent_pids, panes, children) = self.discovery(None).await?;
-        let client = if input.shadow { &self.shadow_facts } else { &self.facts };
         // Um ator lento não soma o prazo dele ao dos fatos.
         let runtime = async { match self.runtime.get() { Some(r) => Some(r.snapshots().await), None => None } };
         let pane_pids = pi_pane_pids(&rows, &panes);
-        let (fetched, runtime, plugins) = tokio::join!(client.fetch(&rows, input.owner_clients, &pane_pids, input.shadow), runtime, self.plugin_facts(&rows));
-        if fetched.ok && !input.shadow { *lock(&self.python_apps) = Some((fetched.facts.owner_apps, Instant::now())); }
-        let (mut rows, mut aside) = list_facts::apply((*rows).clone(), &fetched.facts, fetched.ok);
+        let others: Vec<SessionRow> = rows.iter().filter(|r| list_facts::OTHERS.contains(&r.provider.as_str())).cloned().collect();
+        // Sem linha Pi/omp/Kimi o Python não é perguntado.
+        let python = async { if others.is_empty() { None } else { Some(self.facts.fetch(&others, &pane_pids).await) } };
+        let (program, kids) = (self.env.capture_program.clone(), children.clone());
+        let shortcuts = self.shortcuts.round(move || async move { local_shortcuts::list_all(&program, &kids).await });
+        let (fetched, runtime, plugins) = tokio::join!(python, runtime, self.plugin_facts(&rows));
+        let (facts_ok, facts_fresh) = fetched.as_ref().map_or((true, true), |f| (f.ok, f.fresh));
+        let states = fetched.map(|f| f.states).unwrap_or_default();
+        let facts = Arc::new(self.local_facts(&rows, &dirs, states, shortcuts).await?);
+        let (mut rows, mut aside) = list_facts::apply((*rows).clone(), &facts, facts_ok);
         if let Some(share) = self.shares.get() {
             let active = share.store.active_sessions();
             list_facts::mark_shared(&mut rows, &active);
@@ -630,12 +640,12 @@ impl ListBridge {
             }
         }
         let terminal = match self.plugin_runtime.get() { Some(registry) => registry.terminal_problems().await, None => BTreeMap::new() };
-        let problems = claude_problems(&rows, &fetched.facts.problems, &terminal);
+        let problems = claude_problems(&rows, &facts.problems, &terminal);
         let (env, caches) = (self.env.clone(), self.caches.clone());
         let inputs = Arc::new(RoundInputs { targets: Arc::new(targets),
-            headless: runtime.map(|by_key| headless_by_name(&rows, by_key)), facts: fetched.facts.clone(), agent_pids, problems });
+            headless: runtime.map(|by_key| headless_by_name(&rows, by_key)), facts: facts.clone(), agent_pids, problems });
         // Só o hub acorda por arquivo: sem lista do dono aberta, ninguém usaria a cópia.
-        let keep = input.owner_clients > 0 && !input.shadow;
+        let keep = input.owner_clients > 0;
         let handle = tokio::runtime::Handle::current();
         // Teto dos caches por sessão acompanha as linhas vivas: acima dele cada tique relia do zero.
         capped::set_live(rows.len() + aside.len());
@@ -647,6 +657,16 @@ impl ListBridge {
             let alive = |pid: i64| pid_alive(&*env.procs, pid);
             let io = MuxCapture::new(env.capture_program.clone(), CAPTURE_TIMEOUT, inp.targets.clone());
             let pre: Vec<SessionRow> = if keep { rows.iter().filter(|r| r.provider == "claude").cloned().collect() } else { Vec::new() };
+            let (stall, wall) = (inp.facts.stall_seconds, io.wall());
+            for row in rows.iter_mut().filter(|r| r.provider == "codex") {
+                // Codex abrindo, ainda sem thread: os passos e o menu só estão na tela.
+                if !row.headless && row.jsonl.is_none() && let Ok(pane) = handle.block_on(io.capture(&row.name)) {
+                    local_facts::codex_launch(row, &pane);
+                }
+                local_facts::codex_row(row, stall, wall);
+            }
+            let codex: HashSet<String> = rows.iter().filter(|r| r.provider == "codex").map(|r| r.name.clone()).collect();
+            local_facts::forget_codex_status(&|name| codex.contains(name));
             let effects = caches.classify.with(|Classify { classifier, hooks }| {
                 hooks.refresh(&config_dirs);
                 let facts = Facts { hooks, alive: &alive, config_dirs: &config_dirs,
@@ -654,24 +674,70 @@ impl ListBridge {
                     monitors: &published };
                 handle.block_on(classifier.classify(&mut rows, &facts, &io))
             });
+            // Travada pelo estado que a classificação decidiu (o do ator).
+            for row in rows.iter_mut().filter(|r| r.provider == "codex") {
+                row.stalled = row.state == "working" && row.last_activity.is_some_and(|l| wall - l > stall);
+            }
             let git_dirs = decorate(&env, &caches, &dirs, &config_dirs, &inp, &mut rows, io.wall(), io.mono(), true);
             (rows, effects, git_dirs, pre)
         }).await.map_err(|e| joined(e, "produção interrompida"))?;
         self.flush_notes();
         self.refresh_git(git_dirs);
-        if !input.shadow { self.demote(effects); }
+        self.demote(effects);
         let mut rows = rows;
         self.project_plugins(&mut rows, &plugins);
         public_problems(&mut rows);
         rows.extend(aside);
-        list_facts::mark_stale(&mut rows, &fetched.facts, fetched.ok);
-        if !input.shadow { self.gate_problems(&mut rows, true); }
-        if !input.shadow {
-            self.prune_gone(&rows, Instant::now());
-            self.record_live(&rows, fetched.fresh);
-        }
+        list_facts::mark_stale(&mut rows, &facts, facts_ok);
+        self.gate_problems(&mut rows, true);
+        self.prune_gone(&rows, Instant::now());
+        self.record_live(&rows, facts_fresh && !facts.unknown);
         let round = keep.then(|| Arc::new(Round { inputs, pre }));
-        Ok((Produced { rows: Arc::new(rows), facts: fetched.facts, facts_ok: fetched.ok }, round))
+        Ok((Produced { rows: Arc::new(rows), facts, facts_ok }, round))
+    }
+
+    /// Os fatos que o Python dava sobre todas as linhas, lidos do disco: transferências, orquestrações,
+    /// acesso de convidado, problema do Claude sem terminal, prazo da travada e atalhos. Leitura que
+    /// falha fica com a última boa e vai ao diário.
+    async fn local_facts(&self, rows: &Arc<Vec<SessionRow>>, dirs: &Dirs, states: list_facts::States,
+        shortcuts: Option<Result<String, &'static str>>) -> Result<ListFacts, ListError> {
+        let (found, d) = (rows.clone(), dirs.clone());
+        let (transfers, (orq, orq_failed), guests, problems, stall_seconds) = tokio::task::spawn_blocking(move || {
+            let problems: BTreeMap<String, String> = found.iter().filter(|r| r.provider == "claude" && r.headless)
+                .filter_map(|r| Some((r.name.clone(), local_facts::headless_problem(&d.home, &r.name)?))).collect();
+            (local_transfers::transfers(&found, &d), local_facts::orq_rows(&d.home, wall_now()),
+                local_facts::Guests::read(&d.claude), problems, local_facts::stall_seconds(&d.claude))
+        }).await.map_err(|e| joined(e, "fatos locais interrompidos"))?;
+        if orq_failed {
+            self.facts.diag.report("rust.list_orq_unavailable", "", "list_orq_unavailable", "orquestração ilegível; fica a última linha boa");
+        }
+        let (unknown, (overrides, frozen), shortcuts) = {
+            let mut last = lock(&self.local);
+            match transfers {
+                Ok(t) => last.transfers = Some(t),
+                Err(code) => self.facts.diag.report("rust.list_transfers_unavailable", "", &code, "transferências ilegíveis; fica a última leitura boa"),
+            }
+            match shortcuts {
+                None => {}
+                Some(Ok(s)) => last.shortcuts = Some(s),
+                Some(Err(code)) => self.facts.diag.report("rust.list_shortcuts_unavailable", "", code, "terminais de atalho sem resposta; fica a última leitura"),
+            }
+            (last.transfers.is_none(), last.transfers.clone().unwrap_or_default(), last.shortcuts.clone())
+        };
+        let mut names: Vec<(String, Option<String>)> = Vec::new();
+        if guests.has_claims() {
+            let all: HashSet<&str> = rows.iter().chain(&overrides).chain(&orq).map(|r| r.name.as_str()).collect();
+            for name in all {
+                let life = match (guests.claimed(name), self.shares.get()) {
+                    (true, Some(share)) => share.lives.life(name, false).await,
+                    _ => None,
+                };
+                names.push((name.to_owned(), life));
+            }
+        }
+        let (owners, hidden) = guests.access(&names);
+        Ok(ListFacts { states, overrides, frozen, orq, owners, hidden: hidden.into_iter().collect(), problems, stall_seconds,
+            shortcuts, unknown })
     }
 
     /// Git em segundo plano, um por pasta: um repositório lento não atrasa o card de ninguém. Só
@@ -788,6 +854,7 @@ impl ListBridge {
 
     /// `_forget`: nome reusado por outra sessão não herda nada da morta. Não espera, como `seed`.
     pub fn forget(&self, name: &str) {
+        self.nav.forget(name);
         lock(&self.plugin_projection).remove(name);
         let c = &self.caches;
         let n = name.to_owned();
@@ -798,6 +865,11 @@ impl ListBridge {
 
     /// Não espera, como `seed`.
     pub fn rename(&self, old: &str, new: &str) {
+        self.nav.rename(old, new);
+        // O loop e o `then` vão com o nome, e quem encadeava para o velho passa a apontar o novo.
+        if let Ok(dirs) = self.dirs() && let Err(error) = crate::loops::store::Store::new(&dirs.claude).rename(old, new) {
+            self.facts.diag.report("loop.rename_failed", new, &format!("{:?}", error.kind()), "loop ou then não acompanhou a troca de nome");
+        }
         let mut projected = lock(&self.plugin_projection);
         projected.remove(old); projected.remove(new);
         drop(projected);
@@ -926,10 +998,9 @@ fn public_problems(rows: &mut [SessionRow]) {
     }
 }
 
-/// Problema do runtime das linhas Claude: sem terminal, o que o lançador (Python) registrou; com terminal,
-/// o do ator do Rust, nunca o eco dele que passou pelo Python. Os demais provedores seguem os fatos.
-fn claude_problems(rows: &[SessionRow], python: &BTreeMap<String, String>, terminal: &BTreeMap<String, String>) -> BTreeMap<String, String> {
-    let mut problems = python.clone();
+/// Problema do runtime das linhas Claude: sem terminal, o gravado no sidecar; com terminal, o do ator do Rust.
+fn claude_problems(rows: &[SessionRow], headless: &BTreeMap<String, String>, terminal: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut problems = headless.clone();
     for row in rows.iter().filter(|row| row.provider == "claude" && !row.headless) {
         match terminal.get(&row.name) {
             Some(code) => { problems.insert(row.name.clone(), code.clone()); }

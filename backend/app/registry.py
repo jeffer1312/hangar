@@ -1640,7 +1640,7 @@ class SessionRegistry:
             return session_key(jsonl) if jsonl else None
         # `corrige_ocioso_kimi` LE o fim do wire.jsonl (state._kimi_turno_aberto) quando o mtime
         # contradiz um marcador ocioso — I/O de arquivo, nao mais um stat. Esta corrotina e awaitada
-        # DIRETO no event loop (/api/sessions, o poller do SSE, o stall_watch), entao a leitura vai
+        # DIRETO no event loop (/api/sessions, o poller do SSE), entao a leitura vai
         # pro threadpool numa tacada so: mesma regra do git status em `_decorate_git`, e o mesmo
         # incidente que ela documenta — feature lenta na corrotina congela o backend pra TODAS as
         # sessoes e conexoes, nao so pra dona do arquivo grande.
@@ -1990,7 +1990,7 @@ class SessionRegistry:
                 info.context = ctx if jsonl_lido == info.jsonl else None
                 info.model = model if jsonl_lido == info.jsonl else None
         # Travada (feature #7): "working" ha mais de CP_STALL_SECONDS sem o transcript avancar. So o
-        # bool derivado pra UI/sig — o push (1x, com dedupe) e responsabilidade do stall_watch, nao daqui.
+        # bool derivado pra UI/sig — o push (1x, com dedupe) e do vigia do Rust (push/watch.rs), nao daqui.
         now = time.time()
         for info in infos:
             info.stalled = (
@@ -2006,7 +2006,7 @@ class SessionRegistry:
         await asyncio.to_thread(self._decorate_replies, infos)
         # Estado de git por sessão — SÓ aqui (payload do /api/sessions), nunca em list(): git_summary
         # forka `git status` e list() é o caminho leve chamado por kill()/resume/SSE. E como
-        # list_with_state é awaitado direto no event loop (/api/sessions, sse, stall_watch), o loop
+        # list_with_state é awaitado direto no event loop (/api/sessions, sse), o loop
         # de forks vai pro threadpool via asyncio.to_thread — rodar na corrotina congelaria o backend
         # inteiro no cache-miss. Gate em .git e except GitError moram no git_summary; cache de 3s
         # segura o custo vs o poll de 2s.

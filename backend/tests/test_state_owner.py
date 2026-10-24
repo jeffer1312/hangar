@@ -121,28 +121,24 @@ def _nomes(vistos):
     return [e["event"] for e in vistos]
 
 
-@pytest.mark.parametrize("porta", ["interno", "convidado", "connect"])
+@pytest.mark.parametrize("count_app", [False, True])
 @pytest.mark.parametrize("modo", ["rust", "pending"])
-async def test_no_python_state_monitor_for_rust_terminal(rust, monkeypatch, porta, modo):
+async def test_no_python_state_monitor_for_rust_terminal(rust, monkeypatch, count_app, modo):
     adapter, jsonl = rust
     monkeypatch.setattr(runtime_coordinator, "_current", _Dono(modo))
-    side, count_app = {"interno": (True, True), "convidado": (False, False), "connect": (False, True)}[porta]
     async with _CanalRust():
-        gen = sse.merged_events("s", str(jsonl), side=side, count_app=count_app)
-        vistos = await _coleta(gen, lambda v: "ping" in _nomes(v) and (side or "suggest" in _nomes(v)))
+        gen = sse.merged_events("s", str(jsonl), count_app=count_app)
+        vistos = await _coleta(gen, lambda v: "ping" in _nomes(v) and "suggest" in _nomes(v))
     # O adapter e o broker levantariam: chegar aqui já prova que nada do estado subiu no Python.
     assert "ping" in _nomes(vistos)
     await asyncio.sleep(0.05)
     assert adapter.drains == [], "a entrega é pedida pelo Rust (session.deliverable), não pelo SSE"
-    if side:
-        assert not {"state", "preview", "ask_question", "suggest"} & set(_nomes(vistos))
-        assert adapter.tails == [], "o tail_pump da conexão interna só servia à prévia do Python"
 
 
 async def test_python_mode_still_runs_python_state(rust, monkeypatch):
     adapter, jsonl = rust
     monkeypatch.setattr(runtime_coordinator, "_current", _Dono("python"))
-    gen = sse.merged_events("s", str(jsonl), side=True)
+    gen = sse.merged_events("s", str(jsonl))
     with pytest.raises(AssertionError, match="StateMonitor|PreviewBroker"):
         await _coleta(gen, lambda v: False, limite=2.0)
 
@@ -181,20 +177,6 @@ async def test_guest_channel_failure_closes_the_stream(rust):
     with pytest.raises(sse.RustStateChannelError) as exc:
         await _coleta(gen, lambda v: False)
     assert exc.value.code == "state_channel_off"
-
-
-async def test_side_events_keeps_nav_ping_toast_and_leaves_the_queue_to_the_hub(rust):
-    adapter, jsonl = rust
-    pqueue.PromptQueue("s").append("manda isso depois", delivered=False)
-    sse.nav_pendente("s", "http://localhost:5173")
-    plugin_bridge._store_toast("s", "Jenkins configurado.", 9000, "demo")
-    vistos = await _por(sse.merged_events("s", str(jsonl), side=True), 1.5)
-    assert {"nav", "ping", "plugin_toast"} <= set(_nomes(vistos))
-    assert "info" not in _nomes(vistos), "a conversa é escolhida pelo Rust"
-    assert not {"message", "queue_confirmed"} & set(_nomes(vistos)), "a fila sai do hub"
-    assert not {"state", "preview", "ask_question", "suggest"} & set(_nomes(vistos))
-    assert adapter.drains == [] and adapter.tails == []
-    sse.nav_confirmar("s")
 
 
 async def test_guest_reads_the_queue_from_the_rust_channel(rust):
@@ -277,14 +259,6 @@ async def _por(gen, segundos):
     return vistos
 
 
-async def test_codex_headless_internal_connection_sends_none_of_the_six(codex, monkeypatch):
-    adapter, jsonl, _sidecar, confirmados = codex
-    vistos = await _por(sse.merged_events("cx", str(jsonl), provider="codex", side=True), 1.5)
-    assert not _SEIS & set(_nomes(vistos)), _nomes(vistos)
-    assert adapter.tails == [] and confirmados == [], "a baixa da fila do Codex é pedida pelo hub, em processo"
-    assert adapter.drains == [], "a fila do Codex o ator drena sozinho"
-
-
 async def test_codex_headless_guest_reads_six_from_rust_channel(codex):
     _adapter, jsonl, _sidecar, confirmados = codex
     async with _CanalRust(_CODEX_EVENTS):
@@ -349,9 +323,9 @@ async def test_codex_turning_rust_owned_moves_the_queue_to_the_channel(codex, mo
 
 
 @pytest.mark.parametrize("count_app", [False, True])
-async def test_nav_marker_only_reaches_owner_connections(rust, count_app):
-    # A url do rascunho de página leva o token do dono: convidado e par externo (count_app=False)
-    # nunca recebem o marcador; o dono pela porta do Connect recebe.
+async def test_python_never_delivers_the_nav_marker_while_rust_owns_it(rust, count_app):
+    # Com o Rust de pé o pedido de navegador é dele (`nav_requests.rs`): o Python não o entrega a
+    # ninguém, nem ao dono pela porta do Connect. A url leva o token do dono.
     _adapter, jsonl = rust
     sse.nav_pendente("s", "http://127.0.0.1:8765/api/sessions/s/pages/abc?token=segredo")
     vistos = []
@@ -368,9 +342,8 @@ async def test_nav_marker_only_reaches_owner_connections(rust, count_app):
         finally:
             await gen.aclose()
     sse.nav_confirmar("s")
-    assert ("nav" in _nomes(vistos)) is count_app
-    if not count_app:
-        assert not any("segredo" in str(e.get("data", "")) for e in vistos)
+    assert "nav" not in _nomes(vistos)
+    assert not any("segredo" in str(e.get("data", "")) for e in vistos)
 
 
 # --- Claude sem terminal: o feed do hub é dono dos seis, sugestão incluída ---
@@ -410,19 +383,11 @@ def test_claude_headless_state_is_rust_when_owned(monkeypatch, modo, owns, rust)
     assert sse._estado_do_rust(sse.CLAUDE_HEADLESS, "h") is rust
 
 
-async def test_claude_headless_internal_connection_sends_none_of_the_six(headless):
-    adapter, jsonl = headless
-    vistos = await _por(sse.merged_events("h", str(jsonl), provider="claude", side=True), 1.5)
-    assert not _SEIS & set(_nomes(vistos)), _nomes(vistos)
-    assert adapter.drains == [], "a fila do Claude sem terminal o ator drena sozinho"
-    assert adapter.tails == [], "a prévia gravada é suprimida no hub"
-
-
 async def test_claude_headless_python_mode_runs_python_state(headless, monkeypatch):
     _adapter, jsonl = headless
     monkeypatch.setattr(runtime_coordinator, "_current", _Dono("python"))
     with pytest.raises(AssertionError, match="StateMonitor"):
-        await _coleta(sse.merged_events("h", str(jsonl), provider="claude", side=True), lambda v: False, limite=2.0)
+        await _coleta(sse.merged_events("h", str(jsonl), provider="claude"), lambda v: False, limite=2.0)
 
 
 async def test_python_state_stream_closes_when_the_rust_comes_back(headless, monkeypatch):

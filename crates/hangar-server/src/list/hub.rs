@@ -133,7 +133,7 @@ impl InternalSubscription {
 
 /// O que o produtor guarda entre tiques para só publicar mudança.
 #[derive(Default)]
-struct Last { sig: Option<String>, nav: Value, shortcuts: Option<String> }
+struct Last { sig: Option<String>, nav: Vec<(String, crate::nav_requests::Marker)>, shortcuts: Option<String> }
 
 /// Pânico fora da produção (assinatura, publicação) não deixa o hub sem produtor: as listas abertas
 /// ficariam só com `ping`, e nenhuma nova religaria.
@@ -181,11 +181,16 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, diag: DiagClient) {
             diag.report("rust.list_failed", "", code, "lista do dono em erro");
         }
         publish(&hub.tx, &mut last, outcome, &diag);
+        publish_nav(&hub.tx, &mut last, list.nav.live(crate::nav_requests::now()));
         let tick = tokio::time::Instant::now() + TICK;
         // Até o tique, escrita numa pasta de estado reclassifica só a sessão dela.
         loop {
             let first = tokio::select! {
                 () = tokio::time::sleep_until(tick) => break,
+                () = list.nav.changed.notified() => {
+                    publish_nav(&hub.tx, &mut last, list.nav.live(crate::nav_requests::now()));
+                    continue;
+                }
                 w = files.recv() => w,
             };
             tokio::time::sleep(COALESCE).await;
@@ -413,16 +418,20 @@ fn publish(tx: &watch::Sender<Arc<Published>>, last: &mut Last, outcome: Result<
                 last.shortcuts = Some(sc.to_owned());
                 changed = true;
             }
-            if p.facts.nav != last.nav {
-                last.nav = p.facts.nav.clone();
-                next.nav = Arc::new(nav_entries(&last.nav));
-                changed = true;
-            }
         }
     }
     if changed {
         tx.send_replace(Arc::new(next));
     }
+}
+
+/// Pedidos de navegador vivos, fora da rodada: lista em erro não segura nem repete o pedido.
+fn publish_nav(tx: &watch::Sender<Arc<Published>>, last: &mut Last, nav: Vec<(String, crate::nav_requests::Marker)>) {
+    if nav == last.nav { return; }
+    let mut next = (**tx.borrow()).clone();
+    next.nav = Arc::new(nav_entries(&nav));
+    last.nav = nav;
+    tx.send_replace(Arc::new(next));
 }
 
 /// Na transição ou na troca de motivo: lista vazia por falha seria igual a nenhuma sessão.
@@ -435,13 +444,9 @@ fn fail(prev: &Published, next: &mut Published, code: &'static str) -> bool {
     true
 }
 
-/// `{nome: {url, ts}}` dos fatos em quadros prontos.
-fn nav_entries(nav: &Value) -> Vec<(String, f64, Bytes)> {
-    let Some(map) = nav.as_object() else { return Vec::new() };
-    map.iter().filter_map(|(name, m)| {
-        let url = m["url"].as_str()?;
-        Some((name.clone(), m["ts"].as_f64().unwrap_or(0.0), sse_frame("nav", &json!({"name": name, "url": url}).to_string(), None)))
-    }).collect()
+/// Pedidos em quadros prontos.
+fn nav_entries(nav: &[(String, crate::nav_requests::Marker)]) -> Vec<(String, f64, Bytes)> {
+    nav.iter().map(|(name, m)| (name.clone(), m.ts, sse_frame("nav", &json!({"name": name, "url": m.url}).to_string(), None))).collect()
 }
 
 /// O que uma conexão já entregou.
@@ -668,7 +673,8 @@ mod tests {
     #[test]
     fn nav_map_is_pruned_with_the_request() {
         let mut sent = Sent::default();
-        let p = Published { nav: Arc::new(nav_entries(&json!({"a": {"url": "u", "ts": 1.0}}))), ..Default::default() };
+        let marker = crate::nav_requests::Marker { url: "u".into(), ts: 1.0 };
+        let p = Published { nav: Arc::new(nav_entries(&[("a".into(), marker)])), ..Default::default() };
         assert_eq!(frames(&p, &mut sent).len(), 1);
         frames(&Published::default(), &mut sent);
         assert!(sent.nav.is_empty());

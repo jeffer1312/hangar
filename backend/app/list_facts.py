@@ -1,116 +1,35 @@
 """Fatos da lista que continuam do Python (`docs/migracao-rust/lista-estado/desenho.md`, "Fatos por
-pergunta e resposta"). O Rust descobre e classifica as linhas Claude; a cada produção da lista ele
-manda aqui as linhas e a contagem de clientes do dono, e recebe o que ainda é do Python: estado dos
-provedores não migrados, conta de Kimi/Pi/omp, transferências, orquestrações, acesso, navegador,
-terminais de atalho e problemas do runtime. Falha levanta: o Rust guarda o último valor e marca as
-linhas, nunca troca a lista pela do Python."""
-import asyncio
-import logging
-
-from app import guest_users, registry, runtime_config, sse
+pergunta e resposta"). O Rust descobre, classifica e lê do disco tudo o que é de Claude e Codex; só
+com linha Pi, omp ou Kimi na lista ele manda essas linhas aqui e recebe o estado e a conta delas.
+Falha levanta: o Rust guarda o último valor e marca as linhas, nunca troca a lista pela do Python."""
+from app import registry, sse
 from app.internal_pool import internal_thread
 from app.models import SessionInfo
 
-_log = logging.getLogger("hangar.list")
-# Uma linha de log por sessão e motivo: os fatos são pedidos a cada 1,5 s.
-_problema_avisado: set[tuple[str, str]] = set()
-
-_OTHERS = frozenset({"codex", "pi", "omp", "kimi"})
+_OTHERS = frozenset({"pi", "omp", "kimi"})
 _STATE_FIELDS = ("state", "label", "question", "options", "problema", "status_line", "pending_questions",
-                 "startup_steps", "last_activity", "limited", "limit_reset", "stalled", "codex_service_tier",
+                 "startup_steps", "last_activity", "limited", "limit_reset", "stalled",
                  "last_reply", "last_reply_at")
-# A lista não espera terminal de atalho: o leitor do refresher, com a última leitura boa.
-_shortcuts = sse._ListRefresher()
-# Campos do `sse._list_sig`, pelo nome: a sombra do Rust compara campo a campo e grava só o nome.
-SIG_FIELDS = ("name", "cwd", "branch", "git_cwd", "worktree_gone", "git_dirty",
-              "git_ahead", "git_behind", "git_added", "git_removed", "state", "tracked", "headless",
-              "jsonl", "question", "stalled", "limited", "lifecycle_id", "transfer_id", "transfer_phase",
-              "interaction_id", "last_reply", "last_reply_at", "pending_questions", "limit_reset", "then_target", "status_line",
-              "context", "model", "label", "startup_steps", "loop_status", "loop_iter", "engine", "conta",
-              "codex_service_tier", "plan_name", "plan_done", "plan_total", "plan_task", "plan_task_total",
-              "plan_complete", "plan_tasks", "plan_hidden", "problema", "provider", "shared", "owner",
-              "orq_arbiter", "pair_peers", "pair_gid", "pair_task", "pair_external")
-# Lista servida mais velha que isto não se compara com a produção de agora.
-_SHADOW_MAX_AGE = 3.0
 
 
-async def compute(rows: list[dict], owner_clients: int, pane_pids: dict[str, int], shadow: bool = False) -> dict:
+async def compute(rows: list[dict], pane_pids: dict[str, int]) -> dict:
     infos = [SessionInfo.model_validate(r) for r in rows]
-    if shadow:
-        return await _shadow(infos, pane_pids)
     others = [i for i in infos if i.provider in _OTHERS]
     if others:
         # O código de hoje, só sobre as linhas que o Rust não classifica.
         await sse._list_registry.list_with_state(others, state_only=True)
     # Tudo o que lê disco numa ida só ao threadpool.
-    out = await internal_thread(_files, infos, others, pane_pids)
-    # No laço: `nav_pendente`/`nav_confirmar` mexem no mesmo mapa daqui, sem trava.
-    out["nav"] = dict(sse.nav_vivos())
-    loop = asyncio.get_running_loop()
-    if _shortcuts._loop is not loop:
-        # Leitura de outro laço nunca termina neste: recomeça (testes, reinício do servidor).
-        _shortcuts._loop, _shortcuts._sc_task, _shortcuts._sc_failing = loop, None, False
-    _shortcuts.shortcuts_data = _shortcuts._harvest_shortcuts()
-    _shortcuts._launch_shortcuts()
-    out["shortcuts"] = _shortcuts.shortcuts_data
-    out["shadow"] = None
-    # Lista e chat do dono que o Python atende (Connect): também seguram a permissão no app, no Rust.
-    from app import plugin_bridge
-    out["owner_apps"] = plugin_bridge.apps_abertos()
-    return out
+    return await internal_thread(_files, others, pane_pids)
 
 
-async def _shadow(infos: list[SessionInfo], pane_pids: dict[str, int]) -> dict:
-    """Rodada em sombra: o Python segue dono da lista. O estado das linhas não migradas sai da lista
-    que ele serviu (reclassificar mexeria nos caches dele e capturaria panes de novo), a presença do
-    app não é tocada e nem o navegador nem o atalho são lidos. Junto vai a assinatura de cada linha servida."""
-    served = sse.recent_list(_SHADOW_MAX_AGE)
-    by_name = {i.name: i for i in served or ()}
-    others = [by_name[i.name] for i in infos if i.provider in _OTHERS and i.name in by_name]
-    out = await internal_thread(_files, infos, [], pane_pids)
-    out["states"] = {i.name: {f: getattr(i, f) for f in (*_STATE_FIELDS, "conta")} for i in others}
-    # `nav_vivos` grava ao vencer marcador; a sombra não serve navegador.
-    out["nav"] = {}
-    out["shortcuts"] = None
-    out["shadow"] = None if served is None else {i.name: _row_sig(i) for i in served}
-    return out
-
-
-def _row_sig(i: SessionInfo) -> dict:
-    """A tupla do `sse._list_sig`, com nome por campo."""
-    d = i.model_dump(mode="json", include=set(SIG_FIELDS))
-    d["interaction_id"] = i.interaction_id      # fora do JSON do modelo, dentro da assinatura
-    d["status_line"] = sse._status_sig(i.status_line)
-    d["context"] = sse._context_sig(i.context)
-    d["label"] = i.label if i.provider == "codex" and not i.tracked else bool(i.label)
-    d["plan_tasks"] = d.get("plan_tasks") or []
-    return d
-
-
-def _files(infos: list[SessionInfo], others: list[SessionInfo], pane_pids: dict[str, int]) -> dict:
+def _files(others: list[SessionInfo], pane_pids: dict[str, int]) -> dict:
     accounts = _accounts(others, pane_pids)
     states = {}
     for info in others:
         states[info.name] = {f: getattr(info, f) for f in _STATE_FIELDS}
         if info.name in accounts:
             states[info.name]["conta"] = accounts[info.name]
-    overrides, frozen = _transfers(infos)
-    orq, orq_error = _orq_rows()
-    names = {i.name for i in infos} | {r["name"] for r in overrides} | {r["name"] for r in orq}
-    owners, hidden = _access(names)
-    return {
-        "states": states,
-        "overrides": overrides,
-        "frozen": frozen,
-        "orq": orq,
-        "orq_error": orq_error,
-        "owners": owners,
-        "hidden": hidden,
-        "problems": _problems(infos),
-        # A pergunta segurada pelo plugin é do Store do Rust; o campo fica vazio pelo contrato.
-        "held": {},
-        "stall_seconds": float(runtime_config.get("stall_seconds")),
-    }
+    return {"states": states}
 
 
 def _accounts(others: list[SessionInfo], pane_pids: dict[str, int]) -> dict[str, str | None]:
@@ -127,66 +46,4 @@ def _accounts(others: list[SessionInfo], pane_pids: dict[str, int]) -> dict[str,
             cfg = registry._config_dir_of(pid) if pid else None
             atual = pi_models.provider_atual(info.jsonl, cfg) if info.jsonl else None
             out[info.name] = cotas.conta_de_provider_pi(atual)
-    return out
-
-
-def _transfers(infos: list[SessionInfo]) -> tuple[list[dict], list[str]]:
-    """Linhas que a transferência substitui ou cria, inteiras, e as em curso, que o Rust não
-    classifica nem decora (`list_with_state` as separa do mesmo jeito)."""
-    from app.conversation_transfer import TransferPhase
-    terminal = {p.value for p in (TransferPhase.COMPLETE, TransferPhase.REJECTED, TransferPhase.ROLLED_BACK)}
-    rows = [i.model_copy() for i in infos]
-    registry._decorate_transfers(rows)
-    touched = [i for i in rows if i.transfer_id]
-    return ([i.model_dump(mode="json") for i in touched],
-            [i.name for i in touched if i.transfer_phase and i.transfer_phase not in terminal])
-
-
-def _orq_rows() -> tuple[list[dict], str | None]:
-    """Linhas `orq` e o código da falha: com ele, o Rust fica com as da última resposta boa, marcadas,
-    em vez de servir a lista sem as orquestrações calado."""
-    try:
-        runs = registry.orq_runs.active()
-    except Exception:
-        _log.warning("orq: leitura das orquestrações falhou (vale a última)", exc_info=True)
-        return [], "orq_unreadable"
-    out = []
-    for run in runs:
-        state, last = registry.orq_runs.activity(run["timeline"])
-        out.append(SessionInfo(name=run["name"], cwd=run["repo"], jsonl=run["timeline"], provider="orq",
-                               tracked=True, pair_gid=run["gid"], orq_arbiter=run["arbiter"],
-                               state=state, last_activity=last).model_dump(mode="json"))
-    return out, None
-
-
-def _access(names: set[str]) -> tuple[dict[str, str], list[str]]:
-    # "Compartilhada" o Rust tira da loja de convites dele.
-    if not guest_users.has_claims():
-        return {}, []
-    owners = {n: o for n in names if (o := guest_users.owner_name(n))}
-    hidden = sorted(n for n in names if not guest_users.visible_to(None, n))
-    return owners, hidden
-
-
-def _problems(infos: list[SessionInfo]) -> dict[str, str]:
-    """Problema do runtime das linhas Claude: o registrado pelo adaptador sem terminal, ou o que o
-    Rust publicou no vínculo da sessão com terminal."""
-    from app.adapters import CLAUDE_HEADLESS, get_adapter
-    from app.runtime_adapter import runtime_problem
-    hl = get_adapter(CLAUDE_HEADLESS)
-    out = {}
-    for info in infos:
-        if info.provider != "claude":
-            continue
-        try:
-            problem = hl.problema_de(info.name) if info.headless else runtime_problem(info.name)
-        except RuntimeError as exc:
-            # Sem fato novo só para ela (derrubar os fatos de todas tirava a lista do ar), mas com rastro:
-            # um RuntimeError de outra origem não pode esconder o problema da sessão calado.
-            if (info.name, str(exc)) not in _problema_avisado:
-                _problema_avisado.add((info.name, str(exc)))
-                _log.warning("lista: problema de %s indisponível: %s", info.name, exc)
-            continue
-        if problem:
-            out[info.name] = problem[0]
     return out

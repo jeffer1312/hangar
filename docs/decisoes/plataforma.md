@@ -3183,6 +3183,33 @@ qualquer sessão: `session-env/<id>/`, `.caveman-sessions/<id>.mode` e o servido
 `codegraph`, que roda em sessão própria por pasta e é reaproveitado. Cada reserva descartada
 repete os hooks de SessionStart da conta.
 
+## Faixa `stats` no hub do Rust (23/10/2026)
+
+Antes, cada conversa aberta de Claude ou Codex tinha no Python um `stats_pump` relendo o transcript
+a cada 1 s pela conexão interna, e a medida exata ia e voltava: o ator do Rust a publicava em
+`/runtime/events`, o `live_rate` do Python a guardava por nome, e o hub sobrepunha a do plugin. Agora
+o `crates/hangar-server/src/stats.rs` dobra o mesmo arquivo (porte das contas de Claude e Codex do
+`stats.py`), um produtor por ligação do hub, acordado pelo observador do arquivo e por um tique de
+1 s (a medida exata chega fora do arquivo). Os acumuladores são compartilhados por (provider,
+caminho), com os 16 soltos mais recentes guardados para a reabertura. A medida exata (plugin e canal
+`rate` do ator) mora no `RateStore` por vida (chave, geração e conversa). A conexão interna descarta
+o `stats` que um Python antigo ainda mande (`stats_python_leak`). O `stats.py` fica para o `/events`
+do Python (Connect, convidado pelo Python, modo `python`) e para o consumo da orquestração.
+
+Diferenças aprovadas: o Rust conserta S1 (conta que recomeça sem chamada publica `null` e a faixa
+velha sai), S2 (o uso de uma mensagem conta uma vez mesmo com uma linha de subagente entre os
+blocos), S3 (horário que volta para trás não conta nem puxa o relógio), S5 (cheio de ferramentas
+sem resultado, sai a mais velha; o Python parava de contar ferramenta para sempre), S6 (medida por
+vida, não por nome) e S8 (a medida do Claude sem terminal confere a vida como a do com terminal).
+Copia o Python em S4 (sem resposta no transcript, a medida exata vale) e S7 (a 1ª resposta medida do
+Codex substitui a média do transcript).
+
+Paridade: 51 casos gravados executando o Python (`backend/tests/fixtures/contract/gen_stats.py`,
+formatos do `test_stats.py` e transcripts versionados, inteiros e em três pedaços) saem iguais no
+Rust, campo a campo. Diferencial em 174 transcripts reais desta máquina (114 Claude, 60 Codex, os
+mais recentes, conteúdo fora do repo): 134 iguais, 40 diferentes só em `llm_ms`/`tok_s`, e as 40
+iguais ao Python com só o conserto do S3 aplicado.
+
 ## Trocar o nome da sessão é do Rust (23/10/2026)
 
 **Regra.** `POST /api/sessions/{name}/rename` é atendido inteiro pelo `hangar-server`

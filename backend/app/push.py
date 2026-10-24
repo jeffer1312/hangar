@@ -352,7 +352,7 @@ def notify_dead(session_name: str) -> None:
 def notify_stalled(session_name: str) -> None:
     """Push: sessao travada (feature #7) — "working" silencioso ha muito tempo (loop infinito de
     ferramenta, subprocesso esperando stdin) que nunca vira awaiting/finished/dead sozinho. Disparado
-    UMA vez pelo watchdog (app.stall_watch); o dedupe/re-arme mora la, aqui e so o envio."""
+    UMA vez por quem vigia a lista; o dedupe/re-arme mora la, aqui e so o envio."""
     if _suppressed(session_name):
         return
     _broadcast(session_name, lambda l: _msg(l, "travada"))
@@ -360,8 +360,8 @@ def notify_stalled(session_name: str) -> None:
 
 def notify_limited(session_name: str, reset: str | None = None) -> None:
     """Push: sessao bateu no rate-limit de uso (feature #8) — banner de limite detectado no pane
-    (best-effort, ver app.state.rate_limit_reset). Disparado UMA vez pelo watchdog (app.stall_watch,
-    que reusa o MESMO ciclo do stall pra isto); dedupe/re-arme mora la, aqui e so o envio."""
+    (best-effort, ver app.state.rate_limit_reset). Disparado UMA vez por quem vigia a lista;
+    dedupe/re-arme mora la, aqui e so o envio."""
     if _suppressed(session_name):
         return
     def corpo(locale: str) -> str:

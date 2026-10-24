@@ -96,32 +96,30 @@ async fn partial_line_is_delivered_once_when_completed() {
 }
 
 #[tokio::test]
-async fn devices_share_one_internal_connection_and_late_one_gets_snapshot() {
+async fn devices_share_one_hub_and_late_one_gets_snapshot() {
     let (_dir, _jsonl, _offs, fake, srv) = setup(0..1, "sess-d").await;
     let mut a = sse(open_events(srv, "s", "", &[]).await);
     messages(&mut a, 1).await;
-    wait_until(|| fake.side_conns() == 1).await;
 
-    // `stats` segue do Python; `state` de Claude com terminal é do `Monitor` do Rust, e a fila, do
-    // produtor do hub (testes em `side.rs`).
-    let state = r#"{"turns":3}"#;
-    fake.push_side("stats", state);
-    assert_eq!(next_named(&mut a, "stats").await.data, state);
+    // A faixa sai do produtor do hub, lendo o transcript (ST-24/ST-30): quem entra depois recebe o retrato.
+    let mut file = std::fs::OpenOptions::new().append(true).open(&_jsonl).unwrap();
+    std::io::Write::write_all(&mut file, br#"{"type":"assistant","timestamp":"2026-10-23T12:00:02Z","message":{"id":"m1","usage":{"input_tokens":4,"output_tokens":6}}}
+"#).unwrap();
+    let stats = next_named(&mut a, "stats").await.data;
+    assert_eq!(serde_json::from_str::<Value>(&stats).unwrap()["out_tok"], 6);
 
     let mut b = sse(open_events(srv, "s", "", &[]).await);
     assert_eq!(id_of(&messages(&mut b, 1).await[0]), "u0");
-    assert_eq!(next_named(&mut b, "stats").await.data, state);
-
-    assert_eq!(fake.side_conns(), 1);
-    assert_eq!(fake.side_apps(), vec!["1".to_string()]);
+    assert_eq!(next_named(&mut b, "stats").await.data, stats);
+    assert_eq!(fake.hits_to("/internal/sessions/s/side-events"), 0, "a conversa não abre conexão ao Python");
 }
 
-/// Lê até o quadro marcador e falha se no caminho vier outro `reset`.
-async fn no_reset_until(es: &mut Events, event: &str, data: &str) {
+/// Lê até a mensagem marcadora (linha `id` do transcript) e falha se no caminho vier outro `reset`.
+async fn no_reset_until_line(es: &mut Events, id: &str) {
     loop {
         let ev = next_any(es).await;
         assert_ne!(ev.event, "reset", "um reset só por troca");
-        if ev.event == event && ev.data == data {
+        if ev.event == "message" && id_of(&ev) == id {
             return;
         }
     }
@@ -129,7 +127,7 @@ async fn no_reset_until(es: &mut Events, event: &str, data: &str) {
 
 #[tokio::test]
 async fn transcript_read_twice_resets_every_device_and_follows_new_file() {
-    let (dir, a_path, _offs, fake, srv) = setup(0..2, "sess-e").await;
+    let (dir, _a_path, _offs, fake, srv) = setup(0..2, "sess-e").await;
     let b_path = dir.path().join("sess-e2.jsonl");
     append_lines(&b_path, 100..102);
 
@@ -139,8 +137,6 @@ async fn transcript_read_twice_resets_every_device_and_follows_new_file() {
         messages(&mut es, 2).await;
         devices.push(es);
     }
-    wait_until(|| fake.side_conns() == 1).await;
-    assert_eq!(fake.side_jsonls(), [a_path.to_string_lossy()]);
 
     fake.set_info(info_json("claude", &b_path));
     readings(&fake, 1).await;
@@ -150,13 +146,10 @@ async fn transcript_read_twice_resets_every_device_and_follows_new_file() {
         assert_eq!(id_of(&m[0]), "u100");
         assert!(m[0].id.starts_with("sess-e2:"));
     }
-    // A conexão interna é religada com o transcript novo.
-    wait_until(|| fake.side_conns() == 2).await;
-    assert_eq!(fake.side_jsonls()[1], b_path.to_string_lossy());
-    let marker = r#"{"turns":42}"#;
-    fake.push_side("stats", marker);
+    // O hub segue o transcript novo, sem outro reset.
+    append_lines(&b_path, 102..103);
     for es in &mut devices {
-        no_reset_until(es, "stats", marker).await;
+        no_reset_until_line(es, "u102").await;
     }
 }
 
@@ -192,15 +185,13 @@ async fn transcript_read_once_keeps_the_conversation() {
     append_lines(&other, 100..101);
     let mut a = sse(open_events(srv, "s", "", &[]).await);
     messages(&mut a, 2).await;
-    wait_until(|| fake.side_conns() == 1).await;
 
     fake.set_info(info_json("claude", &other));
     readings(&fake, 1).await;
     fake.set_info(info_json("claude", &a_path));
     readings(&fake, 2).await;
-    let marker = r#"{"turns":9}"#;
-    fake.push_side("stats", marker);
-    no_reset_until(&mut a, "stats", marker).await;
+    append_lines(&a_path, 2..3);
+    no_reset_until_line(&mut a, "u2").await;
     // Um aparelho que entra com a leitura solta também não troca nada.
     fake.set_info(info_json("claude", &other));
     let mut b = sse(open_events(srv, "s", "", &[]).await);
@@ -209,23 +200,19 @@ async fn transcript_read_once_keeps_the_conversation() {
     let r = client().get(format!("http://{srv}/api/sessions/s/history")).bearer_auth(OWNER).send().await.unwrap();
     let evs: Vec<Value> = serde_json::from_str(&r.text().await.unwrap()).unwrap();
     let ids: Vec<String> = evs.iter().map(|e| e["id"].as_str().unwrap().to_owned()).collect();
-    assert_eq!(ids, ["u0", "u1"]);
-    assert_eq!(fake.side_conns(), 1);
+    assert_eq!(ids, ["u0", "u1", "u2"]);
 }
 
 /// Linha da descoberta ainda sem transcript (sessão nascendo, troca em curso) não fecha o hub.
 #[tokio::test]
 async fn reading_without_transcript_keeps_the_conversation() {
-    let (_dir, _jsonl, _offs, fake, srv) = setup(0..1, "sess-sem").await;
+    let (_dir, jsonl, _offs, fake, srv) = setup(0..1, "sess-sem").await;
     let mut a = sse(open_events(srv, "s", "", &[]).await);
     messages(&mut a, 1).await;
-    wait_until(|| fake.side_conns() == 1).await;
     fake.set_info(json!({"provider": "claude", "session_key": "", "history": {}}));
     readings(&fake, 2).await;
-    let marker = r#"{"turns":3}"#;
-    fake.push_side("stats", marker);
-    no_reset_until(&mut a, "stats", marker).await;
-    assert_eq!(fake.side_conns(), 1);
+    append_lines(&jsonl, 1..2);
+    no_reset_until_line(&mut a, "u1").await;
 }
 
 #[tokio::test]
@@ -233,7 +220,6 @@ async fn provider_outside_rust_resets_and_next_connection_goes_to_python() {
     let (_dir, jsonl, _offs, fake, srv) = setup(0..1, "sess-f").await;
     let mut a = sse(open_events(srv, "s", "", &[]).await);
     messages(&mut a, 1).await;
-    wait_until(|| fake.side_conns() == 1).await;
 
     let pi = json!({"provider": "pi", "jsonl": jsonl, "session_key": "sess-f", "history": {}});
     fake.set_info(pi.clone());
@@ -269,7 +255,6 @@ async fn same_name_with_new_transcript_never_serves_the_dead_one() {
     fake.set_info(with_life(&a_path, "b:1"));
     let mut a = sse(open_events(srv, "s", "", &[]).await);
     assert_eq!(id_of(&messages(&mut a, 1).await[0]), "u0");
-    wait_until(|| fake.side_conns() == 1).await;
 
     // A sessão morreu e nasceu outra com o mesmo nome: outra vida, troca na hora, sem confirmação.
     let nova = dir.path().join("sess-nova.jsonl");
@@ -284,15 +269,12 @@ async fn same_name_with_new_transcript_never_serves_the_dead_one() {
 
     next_named(&mut a, "reset").await;
     assert_eq!(id_of(&messages(&mut a, 1).await[0]), "u100");
-    wait_until(|| fake.side_conns() == 2).await;
 
-    // A vigia lê a mesma conversa nova: nenhum reset a mais, nenhuma religação a mais.
+    // A vigia lê a mesma conversa nova: nenhum reset a mais.
     readings(&fake, 2).await;
-    let marker = r#"{"turns":42}"#;
-    fake.push_side("stats", marker);
-    no_reset_until(&mut a, "stats", marker).await;
-    no_reset_until(&mut b, "stats", marker).await;
-    assert_eq!(fake.side_conns(), 2);
+    append_lines(&nova, 101..102);
+    no_reset_until_line(&mut a, "u101").await;
+    no_reset_until_line(&mut b, "u101").await;
 }
 
 #[tokio::test]
@@ -376,29 +358,6 @@ async fn history_without_owner_or_supported_provider_goes_to_python() {
     let r = client().get(&url).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.text().await.unwrap(), "from-python");
     assert_eq!(fake.info_calls(), 1, "o dono vindo do loopback consulta a rota interna");
-}
-
-#[tokio::test]
-async fn python_state_events_never_reach_devices_of_a_claude_terminal_session() {
-    // A troca de dono: com o `Monitor` do Rust, o que o Python mandar dos quatro eventos do estado
-    // não chega ao aparelho; o resto da conexão interna segue igual.
-    let (_dir, _jsonl, _offs, fake, srv) = setup(0..1, "sess-q").await;
-    let mut a = sse(open_events(srv, "s", "", &[]).await);
-    messages(&mut a, 1).await;
-    wait_until(|| fake.side_conns() == 1).await;
-    for (event, data) in [("state", r#"{"session":"s","state":"python"}"#), ("ask_question", r#"{"questions":[]}"#),
-                          ("preview", r#"{"session":"s","text":"do python"}"#), ("suggest", r#"{"text":"do python"}"#)] {
-        fake.push_side(event, data);
-    }
-    let marker = r#"{"turns":7}"#;
-    fake.push_side("stats", marker);
-    loop {
-        let ev = next_any(&mut a).await;
-        assert!(!ev.data.contains("python"), "evento do estado vindo do Python: {} {}", ev.event, ev.data);
-        if ev.event == "stats" && ev.data == marker {
-            break;
-        }
-    }
 }
 
 #[tokio::test]

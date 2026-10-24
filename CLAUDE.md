@@ -609,34 +609,38 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
 - **O que ainda passa pelo Python com o Rust de pé (modo `rust`).** Esta lista é o inventário
   vivo: migração que tira um item o apaga daqui no mesmo commit; item novo só entra com o arquivo
   e a linha. Conferir antes de afirmar que algo "é do Rust" ou "ainda é do Python".
-  - Chat Claude/Codex: `/history`, `/events`, mensagens, estado, prévia e fila são do Rust. Cada
-    conversa aberta mantém a conexão interna `side-events` (`side.rs` `side_once` →
-    `internal_api.py` → `sse.merged_events(side=True)`), da qual sai só `stats` (custo e tokens,
-    `stats.py` relendo o transcript a cada 1 s), `nav` e a faixa de plugin que o `mods` do Rust não
-    atende.
-  - Lista do dono: montada pelo Rust, mas todo tique com lista aberta pede `POST
-    /internal/list/facts` (`list/facts.rs` → `list_facts.py`), mesmo sem Pi/omp/Kimi: estado e
-    passos do Codex, problema das sessões Claude, transferências, orquestrações, donos de
-    convidado, navegador, atalhos e `owner_apps`.
+  - Chat Claude/Codex do dono: nada. `/history`, `/events`, mensagens, estado, prévia, fila, faixa
+    `stats` (`stats.rs`), faixa e avisos de mod (`mods`) e pedido de navegador (`nav_requests.rs`)
+    são do hub do Rust, sem conexão ao Python. O `sse.merged_events` só serve o `/events` do próprio
+    Python: Pi/omp/Kimi, convidado com login próprio (lê o canal privado do hub) e o modo `python`;
+    o `stats.py` serve esse `/events` e o consumo da orquestração.
+  - Lista do dono: montada pelo Rust; só com linha Pi/omp/Kimi o tique pede `POST
+    /internal/list/facts` (`list/facts.rs` → `list_facts.py`), levando só essas linhas: estado,
+    conta e última resposta delas.
   - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (cada abertura),
-    `workspace/context`, `worktrees/context`, `orq/*`, `transcription/config`, `costs/scopes`,
-    `diag`, `ping`, `list/demote`, e a cópia do `/api/plugin/ui` (`mods/bridge.rs`).
+    `accounts/claude-window`, `accounts/codex-invalidate`, `workspace/context`,
+    `worktrees/context`, `orq/*` (`group-phase`, `promote`, `is-orchestrator`, `conductor-facts`),
+    `transcription/config`, `costs/scopes`, `migration/status`, `diag` e `ping`.
   - Partes inteiras ainda no Python: Pi, omp e Kimi; Arquivo; orquestração (lista, timeline,
-    lançamento); transferência Claude→Codex; navegador (`/nav`, `navegador`); peers; loops,
-    workflows e runners; atualização; porta 8768 do Connect e login de convidado.
-  - Tarefas próprias do Python em modo `rust`: `hook_state.watch` (push e drain), `watch_sessions`
-    do Codex a cada 2 s, `stall_watch`, índice do Arquivo, `git fetch`, atualização automática.
+    lançamento); transferência Claude→Codex; navegador (`navegador`, `nav-remoto`); peers;
+    workflows e runners; atualização; login de convidado. O Connect (8768) está inativo.
+  - Tarefas próprias do Python em modo `rust`: `hook_state.watch` (estado de Pi/omp/Kimi; não reage
+    a sessão do Rust), `watch_sessions` do Codex a cada 2 s (desligada quando todo Codex é do Rust),
+    índice do Arquivo, `git fetch`, atualização automática. Travada, limite e queda são avisados
+    pelo Rust (`push/watch.rs`); o vigia Python foi apagado e, no modo `python`, esses avisos não
+    saem. A retomada dos loops ativos na subida também é só do Rust (`loops/watch.rs`): no modo
+    `python` eles não voltam depois do reinício.
 - **Qual conversa é a da sessão é o Rust que decide** (`locate.rs`, a descoberta da lista), e a
   troca de transcript só vale lida duas vezes seguidas; provider, modo do Codex ou outra vida da
   sessão trocam na hora. Com o chat ao vivo aberto, o `/history` segue o transcript que o hub
-  confirmou. A conexão interna recebe a conversa do Rust; a reabertura em erro também é do Rust
+  confirmou. A reabertura em erro também é do Rust
   (`RuntimeRegistry::request_reopen`), sem pedir ao Python. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#a-conversa-da-sessão-é-escolhida-pelo-rust-e-a-troca-espera-duas-leituras).
 - **A porta 8765 é do `hangar-server` (Rust); o Python escuta atrás, numa porta de loopback.**
   O Rust atende `/history` e `/events` de Claude/Codex, `/api/costs`, `/api/uso`, `/api/cotacao` e o
   custo de sessão Codex com o token do dono, e o terminal real do dono (só pelo
   `?token=`, sem conferir Origin). Custos e uso têm índice próprio
-  (`custos-rust.sqlite3`) no cache local; stats continuam no Python. Contas Claude/Codex e
+  (`custos-rust.sqlite3`) no cache local; a faixa `stats` do chat também é do Rust. Contas Claude/Codex e
   cotas são só do Rust: no modo `python` respondem `accounts_need_rust_server`, sem reserva
   Python. Anexos, o `/transcribe` da sessão, a saída ao vivo de ferramenta (`bash-output`,
   `tool-progress`) e a imagem colada no terminal são só do Rust, com a sessão tirada da lista dele:
@@ -656,8 +660,8 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   filho nasce; não subiu, nova desistência. Falha determinística só tenta de novo com o binário
   mudado. Nunca duas portas nem dois donos; a saída dos SSE é do sinal real, não do `should_exit`. O segredo interno nunca entra no `os.environ`. Formato de
   `ChatEvent`, ids de evento e contrato interno
-  mudam nos dois lados no mesmo commit. Mexeu no contrato interno (rotas `/internal`, eventos do
-  `side-events`, variáveis do filho): suba `RUST_SERVER_PROTOCOL` (Python) e `INTERNAL_PROTOCOL`
+  mudam nos dois lados no mesmo commit. Mexeu no contrato interno (rotas `/internal`, canal
+  privado do estado, variáveis do filho): suba `RUST_SERVER_PROTOCOL` (Python) e `INTERNAL_PROTOCOL`
   (Rust) juntos. O `versao` do snapshot do `hangar-cano` acompanha o `VERSAO` do `cano.py`.
   Medidas e motivo em [plataforma.md](docs/decisoes/plataforma.md#hangar-server-a-porta-pública-em-rust-o-python-atrás).
   Índice, paridade e medidas de custos em [plataforma.md](docs/decisoes/plataforma.md#custos-e-uso-no-hangar-server).
@@ -738,9 +742,10 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   ligado enquanto houver lista aberta, tique de 1,5 s, JSON só quando a assinatura muda; cada
   conexão só lê o publicado. Escrita nas pastas de estado das contas (marcador, registro nativo,
   pergunta aberta) reclassifica só a sessão afetada sobre a última rodada boa, juntada em 150 ms;
-  observador que falha vai ao diário e o tique continua valendo. Estado de Pi/omp/Kimi, contagem e
-  conta do Codex, transferências, `orq`, acesso, navegador e atalhos vêm de
-  `POST /internal/list/facts`; sessão sem terminal e Codex com terminal adotado, do
+  observador que falha vai ao diário e o tique continua valendo. Só estado, conta e resposta de
+  Pi/omp/Kimi vêm de `POST /internal/list/facts`, e só com linha deles; transferências, `orq`,
+  acesso de convidado, atalhos e problema do Claude sem terminal a ponte lê do disco
+  (`list/local_*.rs`); sessão sem terminal e Codex com terminal adotado, do
   `RuntimeRegistry`; pergunta segurada e presença do app no Claude, do `plugin::Store`. Falha
   nunca vira lista vazia nem a do Python: 503 com código no `GET`, `list_error` com código no SSE,
   `problema` interno na linha quando só os fatos caíram (a saída o tira e o registra no diário).
@@ -786,7 +791,7 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   ele (login de convidado, 8768). Ele publica `state`, `preview`, `ask_question` e `suggest` pelo retrato do hub, com o
   `interaction_id` da pergunta ou permissão em aberto, e drena a fila direto no `RuntimeRegistry`
   (`LiveSources::deliverable`); o Python não sobe `StateMonitor` nem `PreviewBroker` dessas
-  sessões e o hub descarta, registrando uma vez, os quatro que vierem dele. Captura em processo
+  sessões. Captura em processo
   (`-C`; psmux avulso no Windows), fatos do plugin lidos do `plugin::Store` do Rust; leitura que
   não vem é `problema=state_facts_unavailable`, nunca estado inventado, e esse código vai ao diário
   e ao log, não à tela (portão de saída, regra "Aviso na tela só para ação que falhou"). O `Sources` não tem método com corpo
@@ -803,9 +808,8 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   [plataforma.md](docs/decisoes/plataforma.md#estado-do-claude-sem-terminal-no-feed-do-runtime).
 - **A fila durável ao vivo do chat é do hub do Rust no modo `rust`/`pending`, em qualquer porta.**
   Um produtor por hub e por geração (`queue_feed.rs`) lê a projeção da fila e publica
-  `message`/`queue_confirmed` pelo retrato; o canal privado os leva à 8768 e ao convidado com login.
-  A conexão interna não abre o `follow`, nem confirma ou segue o Codex: a baixa da fila do Codex sem
-  terminal é pedida pelo hub ao ator, em processo. O `follow` do Python fica com Pi/omp/Kimi e o modo
+  `message`/`queue_confirmed` pelo retrato; o canal privado os leva ao convidado com login. A
+  baixa da fila do Codex sem terminal é pedida pelo hub ao ator, em processo. O `follow` do Python fica com Pi/omp/Kimi e o modo
   `python`. Contrato e diferenças em
   [plataforma.md](docs/decisoes/plataforma.md#fila-durável-ao-vivo-no-hub-do-rust).
 - **Com o Rust de pé, o Python não lê o arquivo de estado da fila (`runtime/<chave>.json`).** No

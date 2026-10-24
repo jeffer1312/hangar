@@ -10,12 +10,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
-from sse_starlette.sse import EventSourceResponse
 
 from app import diag
 from app.internal_pool import internal_thread
 from app.mensagens import erro
-from app.sse import merged_events
 
 _LOOPBACK = {"127.0.0.1", "::1"}
 
@@ -149,25 +147,22 @@ async def rust_diag(request: Request) -> dict:
 
 @router.post("/list/facts")
 async def list_facts(request: Request) -> dict:
-    """Fatos da lista para o Rust (`list/facts.rs`): ele manda as linhas que descobriu, a contagem
-    de listas do dono abertas nele, o pid do pane das linhas Pi/omp e se o pedido é da sombra
-    (`CP_LIST_SHADOW=1`), que recebe a assinatura da lista que o Python serviu."""
+    """Estado das linhas Pi/omp/Kimi para o Rust (`list/facts.rs`), com o pid do pane das Pi/omp."""
     global _list_facts_invalid_at
     import pydantic
     from app import list_facts as service
     raw = await request.body()
     try:
         body = json.loads(raw) if len(raw) <= _LIST_FACTS_MAX else None
-        if (not isinstance(body, dict) or set(body) != {"rows", "owner_clients", "pane_pids", "shadow"}
+        if (not isinstance(body, dict) or set(body) != {"rows", "pane_pids"}
                 or not isinstance(body["rows"], list) or not all(isinstance(r, dict) for r in body["rows"])
-                or type(body["owner_clients"]) is not int or body["owner_clients"] < 0
-                or not isinstance(body["pane_pids"], dict) or type(body["shadow"]) is not bool
+                or not isinstance(body["pane_pids"], dict)
                 or not all(isinstance(k, str) and type(v) is int for k, v in body["pane_pids"].items())):
             raise ValueError("fatos inválidos")
     except (ValueError, RecursionError):
         raise HTTPException(400) from None
     try:
-        return await service.compute(body["rows"], body["owner_clients"], body["pane_pids"], body["shadow"])
+        return await service.compute(body["rows"], body["pane_pids"])
     except (pydantic.ValidationError, TypeError) as e:
         # Só o campo: a mensagem do pydantic repete a linha, e ela carrega a última resposta.
         loc = e.errors()[0]["loc"] if isinstance(e, pydantic.ValidationError) else ()
@@ -176,26 +171,6 @@ async def list_facts(request: Request) -> dict:
             _list_facts_invalid_at = time.monotonic()
             diag.registrar("lista.fatos_invalidos", "erro", campo=".".join(map(str, loc[-1:])))
         raise HTTPException(400) from None
-
-
-@router.post("/list/demote")
-async def list_demote(request: Request) -> dict:
-    """`hooks.demote_awaiting`: o pane que a lista do Rust capturou contradisse o marcador."""
-    from app import hook_state
-    raw = await request.body()
-    try:
-        body = json.loads(raw) if len(raw) <= 64 * 1024 else None
-        if (not isinstance(body, dict) or set(body) != {"sids"} or not isinstance(body["sids"], list)
-                or not all(isinstance(s, str) and 0 < len(s) <= 256 for s in body["sids"])):
-            raise ValueError("rebaixamento inválido")
-    except (ValueError, RecursionError):
-        raise HTTPException(400) from None
-    # No laço, como o rebaixamento de hoje: o mapa e o registro são mexidos sem trava pelo vigia.
-    # O mapa de marcadores e o registro nativo em memória são do Python (a prévia e as transições leem
-    # deles), então o Rust pede aqui em vez de regravar o sidecar.
-    for sid in body["sids"]:
-        hook_state.hook_state.demote_awaiting(sid)
-    return {"ok": True}
 
 
 @router.get("/workspace/context")
@@ -237,26 +212,6 @@ async def worktrees_context() -> dict:
         "activities": [{"cwd": f.cwd, "mtime": f.mtime} for f in folders if f.cwd],
     }
 
-
-
-@router.get("/sessions/{name}/plugin")
-async def plugin_pending(name: str) -> dict:
-    """A pergunta que o plugin segura, para o Rust decidir `/select` e `/interrupt`. Some com o plugin no Rust."""
-    from app import plugin_bridge
-    return {"pending": plugin_bridge.pergunta_pendente(name)}
-
-
-class _PluginInterrupted(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    interrupted: str | None
-
-
-@router.post("/sessions/{name}/plugin")
-async def plugin_interrupted(name: str, body: _PluginInterrupted) -> dict:
-    """O Esc do app fechou a pergunta `interrupted` no terminal. Some com o plugin no Rust."""
-    from app import plugin_bridge
-    plugin_bridge.interrompeu(name, body.interrupted)
-    return {"ok": True}
 
 
 @router.get("/migration/status")
@@ -335,18 +290,6 @@ async def orq_is_orchestrator(body: _OrqNames) -> dict:
 async def costs_scopes() -> dict:
     from app import costs_sources
     return await internal_thread(costs_sources.scopes_for_rust)
-
-
-@router.get("/sessions/{name}/side-events")
-async def side_events(name: str, provider: str, jsonl: str, app: int = 0):
-    """Uma conexão por sessão para o hangar-server, que reparte estado, prévia, perguntas e fila
-    entre os aparelhos. `provider` e `jsonl` são a conversa que o Rust escolheu; a troca ele faz
-    religando a conexão. `app=1`: há ao menos um aparelho do dono no chat (push fica calado)."""
-    if provider not in ("claude", "claude-headless", "codex") or not Path(jsonl).is_absolute():
-        raise HTTPException(400, detail=erro("erro_conversa_invalida", "provider ou transcript inválido"))
-    return EventSourceResponse(
-        merged_events(name, jsonl, provider=provider, count_app=bool(app), side=True),
-        send_timeout=30)
 
 
 @router.get("/orq/{exec_id}/conductor-facts")

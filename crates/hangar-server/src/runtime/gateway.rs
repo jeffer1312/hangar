@@ -1284,6 +1284,24 @@ impl RuntimeRegistry {
     }
     pub fn ingress(&self) -> &super::ingress::IngressGates { &self.ingress }
     pub fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> { self.events.subscribe() }
+    /// Medida do stream do ator (canal `rate`), guardada pela vida para a faixa do hub. Medida malformada
+    /// sai com registro no diário (`rate_report`/`first_response_report` do Python) e não toca o estado.
+    pub(super) fn record_rate(&self,name:&str,key:&str,generation:u64,data:&Value) {
+        let Some(hubs)=self.hubs.get().and_then(crate::side::WeakHubs::upgrade) else {return};
+        let Some(measure)=crate::stats::Measure::parse(data) else {
+            self.diag.report("runtime.rate_invalid",name,"rate_invalid","medida do stream malformada; descartada");
+            return;
+        };
+        let life=|conversation:&str|crate::interactions::InteractionBinding{key:key.to_owned(),conversation:conversation.to_owned(),generation};
+        let rates=hubs.plugin_rates();
+        let recorded=match measure {
+            crate::stats::Measure::FirstResponse {seconds,conversation}=>rates.record_first_response(&life(&conversation),seconds),
+            crate::stats::Measure::Rate {tokens,seconds,conversation}=>rates.record(&life(&conversation),tokens,seconds,crate::state::monitor::wall_now()),
+        };
+        if let Err(error)=recorded {
+            if crate::warn_limit::allow(Some(name),error.0) { tracing::warn!(session=%name,code=error.0,"taxa: medida do ator recusada"); }
+        }
+    }
     /// Último valor da sessão `name` para o feed do hub; `None` enquanto ela não está aberta aqui.
     pub fn live(&self,name:&str) -> LiveReceiver {
         let mut map = self.live.lock().unwrap_or_else(|e|e.into_inner());

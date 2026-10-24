@@ -31,7 +31,7 @@ use hangar_server::share::pairs::PairStore;
 use hangar_server::share::store::{Kind, ShareStore};
 use hangar_server::share::tunnel::Real;
 use hangar_server::terminal_input::TerminalBinding;
-use list_support::{calls, names, set_facts, write_marker};
+use list_support::{calls, names, write_marker};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_tungstenite::tungstenite;
@@ -203,18 +203,20 @@ async fn lista_do_convidado_marca_o_tipo_de_cada_sessao() {
 #[tokio::test(flavor = "multi_thread")]
 async fn stream_da_lista_filtrado_e_sem_contar_app() {
     let dir = tempfile::tempdir().unwrap();
-    let srv = list_srv(dir.path(), 2).await;
     // O dono tem pedido de navegador e terminal de atalho: nenhum dos dois vai ao convidado.
-    set_facts(&srv.python, "nav", json!({"s0": {"url": "http://127.0.0.1:5173/", "ts": 7.0}}));
-    set_facts(&srv.python, "shortcuts", json!("{\"s0\":[]}"));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+    let pending = dir.path().join("home/.hangar/nav/_pendentes.json");
+    std::fs::create_dir_all(pending.parent().unwrap()).unwrap();
+    std::fs::write(&pending, json!({"s0": {"url": "http://127.0.0.1:5173/", "ts": now}}).to_string()).unwrap();
+    let srv = list_srv(dir.path(), 2).await;
     let t = srv.g.token("s0", Kind::Share);
     let mut es = open_sse(format!("http://{}/api/sessions/events?token={t}", srv.guest)).await;
     let ev = next_named(&mut es, "sessions").await;
     assert_eq!(names(&serde_json::from_str(&ev.data).unwrap()), ["s0"]);
-    // O produtor roda só com o convidado, e o Python sabe que nenhuma lista do dono está aberta.
+    // O produtor roda só com o convidado, que não conta como lista do dono aberta.
     let root = dir.path().to_owned();
     wait_until(move || calls(&root, "list-panes") >= 2).await;
-    assert_eq!(srv.python.list_facts_last.lock().unwrap()["owner_clients"], 0);
+    assert_eq!(srv.st.list.owner_clients(), 0);
     write_marker(dir.path(), 0, "working");
     loop {
         let ev = next_non_ping(&mut es).await;
@@ -395,7 +397,7 @@ async fn forwarded_guest_websocket_closes_4410_when_revoked() {
 
 // ── stream da sessão ─────────────────────────────────────────────────────────────────────────
 
-/// Codex com terminal: o estado vem do Python pela conexão interna, sem `Monitor` no meio.
+/// Codex com terminal sem ator no Rust: sem `Monitor` nem feed, o hub só reparte o que as fontes do Rust entregam.
 fn codex_session(srv: &Srv, dir: &Path) {
     let jsonl = dir.join("rollout.jsonl");
     std::fs::write(&jsonl, "").unwrap();
@@ -415,17 +417,20 @@ async fn until_state(es: &mut Events, data: &str) -> Vec<String> {
 #[tokio::test(flavor = "multi_thread")]
 async fn guest_events_drop_plugin_toast_and_nav() {
     let dir = tempfile::tempdir().unwrap();
-    let srv = plain_srv(dir.path(), |_| {}).await;
+    let mut mods = None;
+    let mut hubs = None;
+    let srv = plain_srv(dir.path(), |st| { mods = Some(st.mods.clone()); hubs = Some(st.side.hubs.clone()); }).await;
+    let hubs = hubs.unwrap();
     codex_session(&srv, dir.path());
     let t = srv.g.token("s", Kind::Share);
     let mut owner = sse(open_events(srv.owner, "s", "", &[]).await);
     let mut guest = open_sse(format!("http://{}/api/sessions/s/events?token={t}", srv.guest)).await;
-    srv.python.push_side("state", "\"m0\"");
+    hubs.deliver("s", "state", "\"m0\"");
     until_state(&mut owner, "\"m0\"").await;
     until_state(&mut guest, "\"m0\"").await;
-    srv.python.push_side("plugin_toast", &json!({"id": "a1", "timeoutMs": 60000, "text": "segredo"}).to_string());
-    srv.python.push_side("nav", &json!({"url": "http://127.0.0.1:5173/?token=dono"}).to_string());
-    srv.python.push_side("state", "\"m1\"");
+    mods.unwrap().loose_toast("s", "m", "segredo", 60000);
+    hubs.deliver("s", "nav", &json!({"url": "http://127.0.0.1:5173/?token=dono"}).to_string());
+    hubs.deliver("s", "state", "\"m1\"");
     let seen = until_state(&mut owner, "\"m1\"").await;
     assert!(seen.contains(&"plugin_toast".into()) && seen.contains(&"nav".into()), "{seen:?}");
     let seen = until_state(&mut guest, "\"m1\"").await;
@@ -433,7 +438,7 @@ async fn guest_events_drop_plugin_toast_and_nav() {
     // Quem entra depois não recebe o aviso guardado no retrato.
     let mut late = open_sse(format!("http://{}/api/sessions/s/events?token={t}", srv.guest)).await;
     let mut seen = until_state(&mut late, "\"m1\"").await;
-    srv.python.push_side("state", "\"m2\"");
+    hubs.deliver("s", "state", "\"m2\"");
     seen.extend(until_state(&mut late, "\"m2\"").await);
     assert!(!seen.iter().any(|e| e == "plugin_toast" || e == "nav"), "{seen:?}");
 }
@@ -441,35 +446,36 @@ async fn guest_events_drop_plugin_toast_and_nav() {
 #[tokio::test(flavor = "multi_thread")]
 async fn stream_da_sessao_do_convidado_nao_conta_como_app_do_dono() {
     let dir = tempfile::tempdir().unwrap();
-    let srv = plain_srv(dir.path(), |_| {}).await;
+    let mut hubs = None;
+    let srv = plain_srv(dir.path(), |st| hubs = Some(st.side.hubs.clone())).await;
+    let hubs = hubs.unwrap();
     codex_session(&srv, dir.path());
     let t = srv.g.token("s", Kind::Share);
     let mut guest = open_sse(format!("http://{}/api/sessions/s/events?token={t}", srv.guest)).await;
     next_any(&mut guest).await;
-    let python = srv.python.clone();
-    wait_until(move || python.side_conns() == 1).await;
-    assert_eq!(srv.python.side_apps(), ["0"]);
+    hubs.deliver("s", "state", "\"g\"");
+    until_state(&mut guest, "\"g\"").await;
+    assert!(!hubs.app_present(), "o convidado assina o hub sem ser o app do dono");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn guest_keeps_events_when_the_owner_count_crosses_zero() {
     let dir = tempfile::tempdir().unwrap();
-    let srv = plain_srv(dir.path(), |_| {}).await;
+    let mut hubs = None;
+    let srv = plain_srv(dir.path(), |st| hubs = Some(st.side.hubs.clone())).await;
+    let hubs = hubs.unwrap();
     codex_session(&srv, dir.path());
     let t = srv.g.token("s", Kind::Share);
     let mut guest = open_sse(format!("http://{}/api/sessions/s/events?token={t}", srv.guest)).await;
-    let python = srv.python.clone();
-    wait_until(move || python.side_conns() == 1).await;
-    let owner = sse(open_events(srv.owner, "s", "", &[]).await);
-    let python = srv.python.clone();
-    wait_until(move || python.side_conns() == 2).await;
-    srv.python.push_side("state", "\"a\"");
+    next_any(&mut guest).await;
+    let mut owner = sse(open_events(srv.owner, "s", "", &[]).await);
+    next_any(&mut owner).await;
+    wait_until(|| hubs.app_present()).await;
+    hubs.deliver("s", "state", "\"a\"");
     until_state(&mut guest, "\"a\"").await;
     drop(owner);
-    let python = srv.python.clone();
-    wait_until(move || python.side_conns() == 3).await;
-    assert_eq!(srv.python.side_apps(), ["0", "1", "0"]);
-    srv.python.push_side("state", "\"b\"");
+    wait_until(|| !hubs.app_present()).await;
+    hubs.deliver("s", "state", "\"b\"");
     until_state(&mut guest, "\"b\"").await;
 }
 

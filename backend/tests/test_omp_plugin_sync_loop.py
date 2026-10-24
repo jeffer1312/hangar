@@ -150,7 +150,6 @@ def _serve_test_backend():
     for name in ("_fetch_loop", "_auto_update_loop", "_prune_loop"):
         setattr(api, name, idle)
     api.hook_state.watch = idle
-    api.stall_watch.watch = idle
     api.registry.list = lambda: []
     api.pricing.atualizar_em_background = lambda: None
     api._usd_brl = lambda: None

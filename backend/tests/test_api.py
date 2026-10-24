@@ -960,6 +960,52 @@ def test_working_started_cleaned_up_on_dead(_transition_fixture, monkeypatch):
     assert "s7" not in api_mod._working_started
 
 
+def _rust_owner_world(monkeypatch):
+    """Rust de pé, dono de Claude e Codex; uma sessão Claude e uma Kimi na lista. Grava o que o
+    Python faria por cada transição (fila, confirmação, loop, `then`, avisos)."""
+    from app import runtime_coordinator
+    fake = SimpleNamespace(mode="rust", rust_owns=lambda provider, headless: provider in ("claude", "codex"))
+    monkeypatch.setattr(runtime_coordinator, "current", lambda: fake)
+    rows = [SimpleNamespace(name="c1", jsonl="/p/claude-sid.jsonl", provider="claude", headless=False),
+            SimpleNamespace(name="k1", jsonl="/k/kimi-sid.jsonl", provider="kimi", headless=False)]
+    monkeypatch.setattr(api_mod.registry, "list", lambda: rows)
+    monkeypatch.setattr(api_mod.threading, "Thread", lambda target, daemon=None, **kw: SimpleNamespace(start=target))
+    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: None)
+    feitos = []
+    monkeypatch.setattr(api_mod, "_drenar", lambda name, jsonl, provider: feitos.append(("drain", name)) or 0)
+    monkeypatch.setattr(api_mod, "_agendar_confirmacao", lambda name, delay: feitos.append(("confirm", name)))
+    monkeypatch.setattr(api_mod, "_maybe_chain", lambda name: feitos.append(("then", name)))
+    monkeypatch.setattr(api_mod, "_push_terminou", lambda sid, started: feitos.append(("terminou", sid)))
+    monkeypatch.setattr(api_mod.loop_mod, "LoopLink", lambda name: SimpleNamespace(
+        get=lambda: {"status": "running"} if name == "c1" else None,
+        update=lambda **kw: feitos.append(("pausa", name))))
+    monkeypatch.setattr(api_mod.loop_mod, "schedule_tick", lambda name, ctx: feitos.append(("tick", name)))
+    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body=None: feitos.append(("aguardando", name)))
+    monkeypatch.setattr(api_mod.push, "notify_dead", lambda name: feitos.append(("caiu", name)))
+    monkeypatch.setattr(api_mod.settings, "notify_dead", True)
+    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: True)
+    return feitos
+
+
+def test_rust_owned_session_transitions_do_nothing_in_python(monkeypatch):
+    # Com o Rust de pé, fila, confirmação, loop, `then` e avisos da sessão Claude são do Rust:
+    # o Python repetiria a cutucada e mandaria o aviso em dobro.
+    feitos = _rust_owner_world(monkeypatch)
+    for state in ("idle", "awaiting_input", "dead"):
+        api_mod._on_hook_transition("claude-sid", state)
+    api_mod._do_notify_awaiting("claude-sid")
+    enviados = []
+    api_mod._notify_async("claude-sid", enviados.append)
+    assert feitos == [] and enviados == []
+
+
+def test_kimi_transitions_still_run_in_python_with_rust_up(monkeypatch):
+    # Kimi segue no Python: o fim de turno dele drena e confirma por aqui.
+    feitos = _rust_owner_world(monkeypatch)
+    api_mod._on_hook_transition("kimi-sid", "idle")
+    assert ("drain", "k1") in feitos and ("confirm", "k1") in feitos
+
+
 # ---------------------------------------------------------------------------
 # Feature #12: encadeamento de sessao (_maybe_chain) + kill-switch mestre (automations_enabled)
 # ---------------------------------------------------------------------------
@@ -1333,45 +1379,6 @@ def test_do_notify_awaiting_sem_terminal_usa_o_estado_da_lista(monkeypatch):
     snap.state = "working"
     api_mod._do_notify_awaiting("uuid1")
     assert len(calls) == 1
-
-
-def test_do_notify_awaiting_sem_terminal_no_rust_le_o_estado_do_runtime(monkeypatch):
-    # Com o Rust de pé o adapter Python não tem a sessão (snapshot None); o estado é o que o Rust publicou.
-    from app import runtime_coordinator
-    from app.adapters import CLAUDE_HEADLESS, get_adapter
-    calls = []
-    info = SimpleNamespace(name="hl", jsonl="/x/uuid1.jsonl", cwd="/x", headless=True, state="idle", question=None)
-    view = {"view": {"public_state": {"state": "awaiting_input", "question": "Permitir Bash? ls"}}}
-    fake = SimpleNamespace(managed_runtime=lambda name: name == "hl", slot=lambda name: SimpleNamespace(view=view))
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: fake)
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(get_adapter(CLAUDE_HEADLESS), "snapshot", lambda name: None)
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
-    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: pytest.fail("raspou pane inexistente"))
-    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid1")
-    assert calls == [("hl", "Permitir Bash? ls")]
-    view["view"]["public_state"]["state"] = "idle"
-    api_mod._do_notify_awaiting("uuid1")
-    assert len(calls) == 1
-
-
-def test_do_notify_awaiting_sem_vista_do_rust_avisa_no_log(monkeypatch, caplog):
-    # Sem a vista do Rust o push não sai, e isso aparece no log com o nome da sessão (sem reserva Python).
-    import logging
-    from app import runtime_coordinator
-    calls = []
-    info = SimpleNamespace(name="hl", jsonl="/x/uuid1.jsonl", cwd="/x", headless=True, state="idle", question=None)
-    fake = SimpleNamespace(managed_runtime=lambda name: True, slot=lambda name: SimpleNamespace(view={}))
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: fake)
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    with caplog.at_level(logging.WARNING):
-        api_mod._do_notify_awaiting("uuid1")
-    assert calls == []
-    assert any("hl" in r.getMessage() and r.levelno == logging.WARNING for r in caplog.records), caplog.text
 
 
 def test_do_notify_awaiting_skips_idle_notification(monkeypatch):

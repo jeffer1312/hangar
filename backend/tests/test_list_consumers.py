@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from app import list_bridge, prune, registry, runtime_coordinator, sse, stall_watch
+from app import list_bridge, prune, registry, runtime_coordinator, sse
 from app.models import SessionInfo
 from app.registry import SessionRegistry
 
@@ -138,14 +138,6 @@ def test_list_refresher_never_starts_in_rust_mode(rust, monkeypatch):
     assert _first_list_event()["event"] == "list_error"
 
 
-def test_stall_watch_reads_bridge_snapshot_without_clients(rust, monkeypatch):
-    monkeypatch.setattr(sse, "_cached_list", _no_python_async)
-    monkeypatch.setattr(sse._list_registry, "list_with_state", _no_python_async)
-    monkeypatch.setattr(list_bridge, "snapshot", lambda: _rows("alfa"))
-    assert _names(asyncio.run(stall_watch._default_list_fn())) == ["alfa"]
-    monkeypatch.setattr(list_bridge, "snapshot", _down)
-    with pytest.raises(list_bridge.ListBridgeError):
-        asyncio.run(stall_watch._default_list_fn())
 
 
 def test_prune_keeps_files_on_bridge_error(rust, tmp_path, monkeypatch):

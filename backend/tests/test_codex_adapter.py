@@ -328,6 +328,22 @@ async def test_warm_sessions_reconnects_all_sidecars_without_stopping_on_error(m
     assert seen == ["um", "dois"]
 
 
+async def test_warm_sessions_skips_disk_when_rust_owns_every_codex(monkeypatch):
+    from types import SimpleNamespace
+    from app import runtime_coordinator
+    adapter = CodexAdapter()
+    lidos = []
+    monkeypatch.setattr(codex_sessions, "list_all", lambda: lidos.append(1) or [])
+    dono = {"rust": SimpleNamespace(mode="rust", rust_owns=lambda provider, headless: True),
+            "parcial": SimpleNamespace(mode="rust", rust_owns=lambda provider, headless: headless)}
+    monkeypatch.setattr(runtime_coordinator, "current", lambda: dono["rust"])
+    await adapter.warm_sessions()
+    assert lidos == []
+    monkeypatch.setattr(runtime_coordinator, "current", lambda: dono["parcial"])
+    await adapter.warm_sessions()
+    assert lidos == [1], "Codex com terminal fora do Rust ainda precisa do laço"
+
+
 async def test_warm_descobre_nova_sessao_sem_reconectar_as_existentes(monkeypatch):
     from types import SimpleNamespace
     adapter = CodexAdapter()

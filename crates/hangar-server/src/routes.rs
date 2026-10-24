@@ -141,9 +141,6 @@ impl AppState {
         let facts = crate::list::facts::FactsClient::new(cfg.upstream, cfg.internal_secret.clone());
         let list = Arc::new(crate::list::bridge::ListBridge::new(crate::list::bridge::ListEnv::from_env(), facts));
         let mut side = SideCtx {
-            upstream: cfg.upstream,
-            secret: cfg.internal_secret.clone(),
-            http: http.clone(),
             watchers: Watchers::default(),
             hubs: Hubs::default(),
             locate: Arc::new(crate::locate::ListLocate { list: list.clone() }),
@@ -275,6 +272,10 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _group_sweep = crate::groups::sweep::spawn(state.clone()).map(crate::AbortOnDrop);
     let _link_return = crate::groups::link_return::spawn(state.clone()).map(crate::AbortOnDrop);
     let _federation = crate::groups::federation::spawn(state.clone()).map(crate::AbortOnDrop);
+    // O aviso no celular é decidido aqui, com ou sem lista aberta.
+    let _push_watch: Vec<crate::AbortOnDrop> = crate::push::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
+    // Assina as transições depois do vigia de avisos, que as publica.
+    let _loop_watch: Vec<crate::AbortOnDrop> = crate::loops::watch::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
     let _limit_switch = crate::session_write::limit_switch::spawn(state.clone()).map(crate::AbortOnDrop);
     // Sem a fotografia do Python a varredura não revoga nada (ver `life::sweep`); o túnel religa já.
     let _share_sweep = state.share.clone().map(|share| crate::AbortOnDrop(tokio::spawn(
@@ -545,6 +546,13 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Reserva pré-aquecida do Claude sem terminal: só o dono; outro método segue ao Python.
         .route("/api/sessions/prewarm", axum::routing::put(crate::prewarm::http::put).fallback(pass_any))
         .route("/api/sessions/prewarm/{id}", axum::routing::delete(crate::prewarm::http::delete).fallback(pass_any))
+        // Pedido de navegador do agente: só o dono; o Connect chega pela ponte (`forwarded`).
+        .route("/api/sessions/{name}/nav", axum::routing::post(crate::nav_requests::open).delete(crate::nav_requests::confirm).fallback(pass_any))
+        // Loop e `then` do dono; o convidado segue ao Python.
+        .route("/api/sessions/{name}/then", axum::routing::put(crate::loops::http::route).delete(crate::loops::http::route).fallback(pass_any))
+        .route("/api/sessions/{name}/loop", get(crate::loops::http::route).post(crate::loops::http::route).delete(crate::loops::http::route).fallback(pass_any))
+        .route("/api/sessions/{name}/loop/refine", axum::routing::post(crate::loops::http::route).fallback(pass_any))
+        .route("/api/sessions/{name}/loop/resolve", axum::routing::post(crate::loops::http::route).fallback(pass_any))
         // Bastão do dono: o Python prepara o dossiê e a sucessora Claude com terminal nasce aqui.
         .route("/api/sessions/{name}/bastao", axum::routing::post(crate::session_open::server::bastao).fallback(pass_any))
         // Retomar do Arquivo e o `/resume` ao vivo: a abertura e a reabertura do Rust, com a conversa que já existe.
@@ -570,6 +578,11 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_any))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
         .route("/api/push/expo/subscribe", axum::routing::post(crate::push_expo::subscribe))
+        .route("/api/push/vapid", get(crate::push::http::route).fallback(pass_any))
+        .route("/api/push/settings", get(crate::push::http::route).fallback(pass_any))
+        .route("/api/push/subscribe", axum::routing::post(crate::push::http::route).fallback(pass_any))
+        .route("/api/push/mute", axum::routing::post(crate::push::http::route).fallback(pass_any))
+        .route("/api/push/quiet-hours", axum::routing::post(crate::push::http::route).fallback(pass_any))
         .route("/api/presence", get(crate::presence::route).fallback(pass_any))
         // Mesmo caminho: o axum junta o POST à rota de cima (um repasse só, o dela).
         .route("/api/presence", axum::routing::post(crate::presence::route))
@@ -932,6 +945,8 @@ async fn events(
     if let Some(info) = &info { lease.hub.learn_queue(info); }
     let hub = lease.hub.clone();
     let (tx, rx) = mpsc::channel::<Queued>(64);
+    // Pedido de navegador ainda vivo: o aparelho do dono que abre a conversa agora também o recebe.
+    if !guest && let Some(frame) = crate::nav_requests::chat_frame(&st, &name) { let _ = tx.try_send(frame.into()); }
     tokio::spawn(client_loop(lease, resume, tx));
     let mut resp = Response::new(Body::from_stream(device_stream(rx, hub, deltas, guest).map(Ok::<Bytes, Infallible>)));
     let h = resp.headers_mut();
@@ -1120,16 +1135,13 @@ mod tests {
         assert!(is_owner(&st, "127.0.0.1"));
     }
 
-    /// Aparelho ligado a um hub sem conexão interna (porta sem ninguém): só o que o teste entrega chega.
+    /// Aparelho ligado a um hub sem fontes do estado: só o que o teste entrega chega.
     async fn device(dir: &std::path::Path) -> (SideCtx, std::pin::Pin<Box<dyn futures_util::Stream<Item = Bytes> + Send>>) {
         device_with(dir, false).await
     }
 
     async fn device_with(dir: &std::path::Path, deltas: bool) -> (SideCtx, std::pin::Pin<Box<dyn futures_util::Stream<Item = Bytes> + Send>>) {
         let ctx = SideCtx {
-            upstream: "127.0.0.1:9".parse().unwrap(),
-            secret: "s".into(),
-            http: proxy::client(),
             watchers: Watchers::default(),
             hubs: Hubs::default(),
             locate: Arc::new(crate::locate::Unavailable),

@@ -79,7 +79,7 @@ export interface SessionInfo {
   pending_questions?: number;
   options?: string[] | null;   // awaiting_input: rótulos das opções
   // True quando "working" ha mais de CP_STALL_SECONDS sem avancar (feature #7: watchdog de travada) —
-  // so tinge a linha; o backend (stall_watch.py) e quem decide o push.
+  // so tinge a linha; o servidor (vigia do Rust) e quem decide o push.
   stalled?: boolean;
   // Problema DESTA sessão que o app mostra em vez de esconder. Vem como CÓDIGO do backend e é
   // traduzido aqui (regra de i18n). Hoje só 'codex_hooks_nao_aprovados': sessão Codex com turno

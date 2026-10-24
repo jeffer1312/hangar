@@ -123,18 +123,25 @@ async fn snapshot_is_single_flight() {
         "duas perguntas sem retrato produzem uma vez");
 }
 
-/// Fatos que nunca responderam não viram lista servida: acesso e escondidas seriam vazios, e o
-/// convidado veria sessões que não são dele.
+/// Lista sem Pi/omp/Kimi sai sem o Python (o de `spawn` nem responde). Transferências que nunca foram
+/// lidas não viram lista servida: a linha que só elas mostram seria tomada por ausente.
 #[tokio::test]
-async fn snapshot_without_facts_is_an_error() {
+async fn snapshot_needs_the_transfers_not_the_python() {
     let dir = tempfile::tempdir().unwrap();
     let addr = spawn(dir.path(), 0).await;
+    let (status, body) = call(addr, Some(SECRET), "list.snapshot", json!({})).await;
+    assert_eq!((status, names(&body)), (200, vec!["alpha"]));
+    let other = tempfile::tempdir().unwrap();
+    let store = other.path().join("home/.hangar/conversation-transfers");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(store.join("11111111-1111-4111-8111-111111111111.json"), "{").unwrap();
+    let addr = spawn(other.path(), 0).await;
     let (status, body) = call(addr, Some(SECRET), "list.snapshot", json!({})).await;
     assert_eq!(status, 200);
     assert_eq!((&body["ok"], &body["error"]["code"]), (&json!(false), &json!("list_facts_unknown")));
     // Não fica no retrato: a próxima pergunta produz de novo (e captura de novo).
     call(addr, Some(SECRET), "list.snapshot", json!({})).await;
-    assert_eq!(calls(dir.path(), "capture-pane"), 2);
+    assert_eq!(calls(other.path(), "capture-pane"), 2);
 }
 
 /// Com o Python respondendo, o retrato sai com os fatos aplicados.
@@ -206,44 +213,53 @@ async fn bridge_with_sessions(root: &Path, n: usize, marker: (&str, f64)) -> (Li
     (bridge, python)
 }
 
-/// A sombra produz sem entregar nada: o pane pronto contradiz o `awaiting` velho, e só a produção de
-/// verdade pede ao Python para rebaixá-lo.
+/// Lista só de Claude: a rodada não pergunta nada ao Python, e o pane pronto que contradiz o
+/// `awaiting` velho rebaixa o marcador no Rust e no mapa do Python.
 #[tokio::test(flavor = "multi_thread")]
-async fn shadow_never_demotes_and_tells_python() {
+async fn claude_only_round_never_asks_python_for_facts_and_demotes() {
     let dir = tempfile::tempdir().unwrap();
     let (bridge, python) = bridge_with_sessions(dir.path(), 1, ("awaiting_input", 60.0)).await;
-    let shadow = hangar_server::list::bridge::ProduceFacts { shadow: true, ..Default::default() };
-    let p = bridge.produce(&shadow).await.unwrap();
-    assert_eq!(p.rows.len(), 1);
-    assert!(p.facts_ok);
-    assert_eq!(python.list_facts_last.lock().unwrap()["shadow"], true);
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(python.hits_to("/internal/list/demote"), 0);
-    let sid = "00000000-0000-0000-0000-000000000000";
-    let marker: Value = serde_json::from_slice(&std::fs::read(dir.path().join(format!("home/.claude/.hangar-state/{sid}.json"))).unwrap()).unwrap();
-    let ts = marker["ts"].as_f64().unwrap();
-    assert!(!bridge.demoted.applies(sid, ts), "a sombra não rebaixa nem aqui");
-    bridge.invalidate();
-    bridge.produce(&Default::default()).await.unwrap();
-    assert!(bridge.demoted.applies(sid, ts), "o rebaixamento vale já no Rust, para a lista e o `Monitor`");
-    assert_eq!(python.list_facts_last.lock().unwrap()["shadow"], false);
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while python.hits_to("/internal/list/demote") == 0 { tokio::time::sleep(Duration::from_millis(20)).await; }
-    }).await.expect("sem a sombra, o rebaixamento sai");
-}
-
-/// Fatos do Python que não vieram: a linha sai com o estado e sem o aviso "lista desatualizada", que é
-/// diagnóstico; sem o prazo, o que fosse de tela já sairia.
-#[tokio::test(flavor = "multi_thread")]
-async fn stale_facts_never_reach_the_row() {
-    let dir = tempfile::tempdir().unwrap();
-    let (bridge, python) = bridge_with_sessions(dir.path(), 1, ("idle", 60.0)).await;
     python.list_facts.lock().unwrap().0 = json!("quebrado");
     bridge.set_problem_hold(Duration::ZERO);
     let p = bridge.produce(&Default::default()).await.unwrap();
-    assert!(!p.facts_ok, "os fatos não vieram");
     assert_eq!(p.rows.len(), 1);
+    assert!(p.facts_ok && !p.facts.unknown);
     assert_eq!(p.rows[0].problema, None);
+    assert_eq!(python.list_facts_calls.load(std::sync::atomic::Ordering::SeqCst), 0, "nenhuma pergunta de fatos");
+    let sid = "00000000-0000-0000-0000-000000000000";
+    let path = dir.path().join(format!("home/.claude/.hangar-state/{sid}.json"));
+    let marker: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(bridge.demoted.applies(sid, marker["ts"].as_f64().unwrap()), "o rebaixamento vale já no Rust, para a lista e o `Monitor`");
+    // O Rust regrava o marcador (o boot e o Python releem do disco), com o `ts` original, sem perguntar ao Python.
+    let rewritten = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let m: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            if m["state"] == "idle" { return m; }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }).await.expect("o marcador é regravado idle");
+    assert_eq!(rewritten["ts"], marker["ts"]);
+    assert_eq!(python.hits_to("/internal/list/demote"), 0, "o Python não grava o rebaixamento");
+}
+
+/// Com linha Pi o Python é perguntado só por ela; sem resposta, só ela leva o aviso (diagnóstico,
+/// que a saída tira), e a Claude não.
+#[tokio::test(flavor = "multi_thread")]
+async fn pi_row_alone_goes_to_python() {
+    let dir = tempfile::tempdir().unwrap();
+    let (bridge, python) = bridge_with_sessions(dir.path(), 1, ("idle", 60.0)).await;
+    let pi = dir.path().join("w-pi");
+    std::fs::create_dir_all(&pi).unwrap();
+    let script = dir.path().join("tmux");
+    let panes = format!("s0\\t1\\t\\t{}\\t%%0\\t\\t\\t\\t0\\t0\\npp\\t1\\t\\t{}\\t%%9\\t\\tpi\\t\\t0\\t0\\n",
+        dir.path().join("w0").display(), pi.display());
+    crate::write_executable(&script, format!("#!/bin/sh\n[ \"$1\" = list-panes ] || {{ printf '● pronto\\n❯\\n'; exit 0; }}\nprintf '{panes}'\n"));
+    let p = bridge.produce(&Default::default()).await.unwrap();
+    let body = python.list_facts_last.lock().unwrap().clone();
+    let asked: Vec<&str> = body["rows"].as_array().unwrap().iter().map(|r| r["provider"].as_str().unwrap()).collect();
+    assert_eq!(asked, ["pi"], "só a linha Pi vai ao Python");
+    assert!(body.get("owner_clients").is_none() && body.get("shadow").is_none());
+    assert!(p.facts_ok);
 }
 
 fn peak_rss_kb() -> u64 {
@@ -257,10 +273,9 @@ fn peak_rss_kb() -> u64 {
 #[ignore]
 async fn measure_tick_20_sessions() {
     let dir = tempfile::tempdir().unwrap();
-    // Os fatos vêm de um Python de mentira, para o tique pagar a ida e volta real.
-    let (bridge, python) = bridge_with_sessions(dir.path(), 20, ("idle", -60.0)).await;
+    let (bridge, _python) = bridge_with_sessions(dir.path(), 20, ("idle", -60.0)).await;
     let first = bridge.produce(&Default::default()).await.unwrap();
-    assert!(first.rows.iter().all(|r| r.problema.is_none()), "fatos do Python de mentira responderam");
+    assert!(first.rows.iter().all(|r| r.problema.is_none()));
     assert_eq!(first.rows.len(), 20);
     let rss0 = peak_rss_kb();
     let cpu = |s: &str| -> f64 { let f: Vec<&str> = s.rsplit(')').next().unwrap().split_whitespace().collect();
@@ -270,8 +285,7 @@ async fn measure_tick_20_sessions() {
     let n = 300;
     for i in 0..n {
         bridge.invalidate();
-        // Entrada nova a cada tique: paga a pergunta ao Python, como o hub (tique de 1,5 s > prazo de 1 s).
-        let input = hangar_server::list::bridge::ProduceFacts { owner_clients: i % 2, ..Default::default() };
+        let input = hangar_server::list::bridge::ProduceFacts { owner_clients: i % 2 };
         let p = bridge.produce(&input).await.unwrap();
         assert_eq!(p.rows.len(), 20);
     }
@@ -279,36 +293,5 @@ async fn measure_tick_20_sessions() {
     let cpu_tick = (cpu(&std::fs::read_to_string("/proc/self/stat").unwrap()) - cpu0) / n as f64;
     println!("tique (20 sessões): parede {:.2} ms, CPU (com filhos) {:.2} ms, pico RSS {} → {} kB",
         wall * 1e3, cpu_tick * 1e3, rss0, peak_rss_kb());
-    // Tique da sombra: a mesma produção, sem rebaixar, mais a comparação com a assinatura do Python.
-    let sigs: serde_json::Map<String, Value> = first.rows.iter().map(|r| {
-        let raw = serde_json::to_value(r).unwrap();
-        let sig: serde_json::Map<String, Value> = SIG_FIELDS.iter().map(|f| ((*f).to_owned(), raw.get(*f).cloned().unwrap_or(Value::Null))).collect();
-        (r.name.clone(), Value::Object(sig))
-    }).collect();
-    let mut reply = python.list_facts.lock().unwrap().0.clone();
-    reply["shadow"] = Value::Object(sigs);
-    python.list_facts.lock().unwrap().0 = reply;
-    let mut reporter = hangar_server::list::shadow::Reporter::default();
-    let (cpu0, t0) = (cpu(&std::fs::read_to_string("/proc/self/stat").unwrap()), std::time::Instant::now());
-    let mut cmp = Duration::ZERO;
-    for i in 0..n {
-        bridge.invalidate();
-        let input = hangar_server::list::bridge::ProduceFacts { owner_clients: i % 2, shadow: true, ..Default::default() };
-        let p = bridge.produce(&input).await.unwrap();
-        let py = p.facts.shadow.as_ref().expect("assinatura do Python");
-        let c = std::time::Instant::now();
-        reporter.record(hangar_server::list::shadow::compare(&p.rows, py), std::time::Instant::now());
-        cmp += c.elapsed();
-    }
-    println!("tique da sombra (20 sessões): parede {:.2} ms, CPU (com filhos) {:.2} ms, comparação {:.0} µs, pico RSS {} kB",
-        t0.elapsed().as_secs_f64() / n as f64 * 1e3,
-        (cpu(&std::fs::read_to_string("/proc/self/stat").unwrap()) - cpu0) / n as f64 * 1e3,
-        cmp.as_secs_f64() / n as f64 * 1e6, peak_rss_kb());
 }
 
-/// `list_facts.SIG_FIELDS` do Python.
-const SIG_FIELDS: [&str; 44] = ["name", "cwd", "branch", "git_cwd", "worktree_gone", "git_dirty", "state", "tracked", "headless",
-    "jsonl", "question", "stalled", "limited", "lifecycle_id", "transfer_id", "transfer_phase", "last_reply", "last_reply_at",
-    "pending_questions", "limit_reset", "then_target", "status_line", "context", "model", "label", "startup_steps",
-    "loop_status", "loop_iter", "engine", "conta", "codex_service_tier", "plan_name", "plan_done", "plan_total", "plan_task",
-    "plan_task_total", "plan_complete", "plan_tasks", "plan_hidden", "problema", "provider", "shared", "owner", "orq_arbiter"];

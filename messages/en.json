@@ -1056,7 +1056,6 @@
   "problema_list_runtime_unavailable": "This session's runtime didn't respond",
   "problema_list_runtime_absent": "State without the runtime: it comes from the session's last marker",
   "problema_list_facts_unavailable": "Out-of-date list: the server didn't answer this session's details",
-  "problema_list_orq_unavailable": "Couldn't read this orchestration; showing the last reading",
   "problema_interacao_indisponivel": "Couldn't identify the open question; open the conversation to answer",
   "board_pareada_com_clicar": "paired with {n} — clicking gathers the group here",
   "board_pareada_com": "paired with {n}",

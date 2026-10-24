@@ -224,16 +224,16 @@ async fn notice_waiting_on_closed_ingress_does_not_block_rename() {
 }
 
 /// Um rename que fecha a porta de s0 enquanto o `/pair` dela está entre a conferência e a gravação
-/// (preso nos fatos da lista) espera a gravação: o grupo nunca fica com o nome velho por cima.
+/// (preso na varredura da lista) espera a gravação: o grupo nunca fica com o nome velho por cima.
 #[tokio::test(flavor = "multi_thread")]
 async fn rename_closing_the_gate_waits_for_the_join_write() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), 2).await;
-    srv.python.list_facts.lock().unwrap().1 = Duration::from_millis(800);
+    std::fs::write(dir.path().join("slow"), "").unwrap();
     let addr = srv.addr;
     let pairing = tokio::spawn(async move { call(addr, "POST", "s0/pair", Some(&json!({"peers": ["s1"]})), OWNER).await });
-    let python = srv.python.clone();
-    fake::wait_until(move || python.list_facts_calls.load(std::sync::atomic::Ordering::SeqCst) > 0).await;
+    let root = dir.path().to_owned();
+    fake::wait_until(move || list_support::calls(&root, "list-panes") > 0).await;
     assert!(!srv.pair.join("s0.json").exists(), "o /pair ainda não gravou");
     srv.runtime.ingress().close("s0", Duration::from_secs(5)).await.expect("o /pair solta a porta depois de gravar");
     assert!(srv.pair.join("s0.json").is_file(), "o fechamento esperou o join gravar");

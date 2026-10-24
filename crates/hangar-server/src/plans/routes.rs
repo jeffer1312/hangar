@@ -83,7 +83,7 @@ fn refused(status: StatusCode, code: &'static str, msg: &str, params: Value) -> 
 }
 
 /// O 422 do FastAPI para o corpo, no formato que os clientes já leem.
-fn unprocessable_body(msg: &str) -> Response {
+pub(crate) fn unprocessable_body(msg: &str) -> Response {
     json_response(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": [{"type": "value_error", "loc": ["body"], "msg": msg, "input": null}]}))
 }
 
@@ -179,12 +179,23 @@ fn parse_write(tail: &str, bytes: &[u8]) -> Result<WriteOp, String> {
     }
 }
 
-/// `_transfer_guard`: troca de conversa ou de conta em curso recusa com o código do Python. O passe
-/// segura a porta até a escrita acabar; sem runtime, nenhum.
-async fn enter(st: &AppState, name: &str) -> Result<Option<crate::runtime::ingress::IngressPass>, Response> {
+/// `require_available`: transferência gravada em curso para o nome (a leitura do disco da lista).
+pub(crate) fn transfer_busy(facts: &crate::list::facts::ListFacts, name: &str) -> bool { facts.frozen.contains(name) }
+
+/// `_transfer_guard`: troca de conversa ou de conta em curso recusa com o código do Python, pela
+/// porta em memória e pela transferência gravada no disco. O passe segura a porta até a escrita
+/// acabar; sem runtime, nenhum.
+pub(crate) async fn enter(st: &AppState, name: &str) -> Result<Option<crate::runtime::ingress::IngressPass>, Response> {
+    let busy = || crate::diag::coded(json_response(StatusCode::CONFLICT, busy_body()), "session_transfer_busy");
     let Some(runtime) = st.state.runtime.get() else { return Ok(None) };
-    runtime.ingress().enter(name, st.write_gate_wait).await.map(Some)
-        .map_err(|_| crate::diag::coded(json_response(StatusCode::CONFLICT, busy_body()), "session_transfer_busy"))
+    let pass = runtime.ingress().enter(name, st.write_gate_wait).await.map_err(|_| busy())?;
+    match st.list.snapshot().await {
+        Ok(produced) if transfer_busy(&produced.facts, name) => return Err(busy()),
+        Ok(produced) if produced.facts.unknown => tracing::warn!(session = name, code = "list_facts_unknown", "transferências sem leitura; a escrita segue só com a porta em memória"),
+        Err(e) => tracing::warn!(session = name, code = e.code, "lista indisponível; a escrita segue só com a porta em memória"),
+        Ok(_) => {}
+    }
+    Ok(Some(pass))
 }
 
 async fn write(st: &Arc<AppState>, name: &str, tail: &str, bytes: &[u8]) -> Response {

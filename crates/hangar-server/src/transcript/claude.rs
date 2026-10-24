@@ -186,13 +186,13 @@ fn first<'a>(items: &'a [Value], type_name: &str) -> Option<&'a Map<String, Valu
         .find(|it| it.get("type").and_then(Value::as_str) == Some(type_name))
 }
 
-fn is_command_meta(text: &str) -> bool {
+pub(crate) fn is_command_meta(text: &str) -> bool {
     let t = lstrip(text);
     COMMAND_META_PREFIXES.iter().any(|p| t.starts_with(p))
 }
 
 /// `_strip_meta_blocks` (transcript.py:300).
-fn strip_meta_blocks(text: &str) -> String {
+pub(crate) fn strip_meta_blocks(text: &str) -> String {
     strip(&strip_pasted(&META_BLOCK.replace_all(text, ""))).to_string()
 }
 

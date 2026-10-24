@@ -2,13 +2,14 @@
 //! entra no `claude -p` pelo `--plugin-dir` que o Python põe no lançamento (S7) e usa só `press-start` e
 //! `opened`, no clique do app pela superfície `desktop`. Na sessão com terminal do Rust (fase 3) o plugin
 //! roda no terminal e usa todas: a faixa e os painéis (`ui`), os avisos, o press, a cópia, a URL, o foco da
-//! reserva por teclado e a rolagem. Sessão que o Rust não atende segue ao Python com o mesmo corpo.
+//! reserva por teclado e a rolagem. A faixa e os avisos da sessão Claude que o Rust não atende (aberta à
+//! mão) também ficam aqui (`Mods::loose_ui`); as demais rotas dela seguem ao Python com o mesmo corpo.
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -34,8 +35,6 @@ const TOAST_BODY_LIMIT: usize = UI_BODY_LIMIT;
 const ID_MAX: usize = 64;
 const ELEMENT_MAX: usize = 256;
 const CAPS_MAX: usize = 16;
-/// Prazo da cópia do `/ui` ao Python: o plugin espera a resposta, e a cópia não decide nada.
-const PYTHON_COPY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// O que toda chamada da ponte traz: a sessão (o nome com que o processo nasceu) e o token dela.
 #[derive(Deserialize)]
@@ -51,7 +50,7 @@ struct Opened { attempt: String, url: String }
 
 /// O token da ponte só do nome, igual ao `plugin_bridge.mint(nome)` do Python: HMAC-SHA256 do token do
 /// dono (ou "hangar", sem token) sobre `plugin:<nome>`, em 32 dígitos hexadecimais. É o dos processos
-/// lançados antes da chave e o da cópia do `/ui` ao Python.
+/// lançados antes da chave.
 pub fn mint(secret: &str, name: &str) -> String {
     hmac_hex(secret, &format!("plugin:{name}"))
 }
@@ -92,6 +91,24 @@ async fn owned_sized<T: DeserializeOwned>(st: &Arc<AppState>, peer: SocketAddr, 
         (Ok(envelope), Some(name)) => Ok((envelope, name)),
         (Err(_), Some(_)) => Err(Box::new(invalid(None))),
         _ => Err(Box::new(pass(st, Request::from_parts(parts, Body::from(bytes)), &fwd).await)),
+    }
+}
+
+/// Corpo do `/ui` e do `/toast`, que não seguem ao Python: com a sessão do Rust (nome atual), ou `None`
+/// para a sessão sem entrada aqui, guardada pelo `sessao` do plugin depois de conferido o token.
+async fn session_or_loose<T: DeserializeOwned>(st: &Arc<AppState>, req: Request, limit: usize) -> Result<(Envelope<T>, Option<String>), Box<Response>> {
+    let Ok(bytes) = to_bytes(req.into_body(), limit).await else { return Err(Box::new(StatusCode::PAYLOAD_TOO_LARGE.into_response())) };
+    let Ok(envelope) = serde_json::from_slice::<Envelope<T>>(&bytes) else { return Err(Box::new(invalid(None))) };
+    let name = st.mods.bridge_session(&envelope.sessao, &envelope.token);
+    Ok((envelope, name))
+}
+
+/// O prazo do aviso como o Python o tratava: ausente ou zero é o padrão (`0` aqui), o resto vai a 1 s até
+/// 5 min, sem fração.
+fn toast_ms(ms: Option<f64>) -> u64 {
+    match ms {
+        Some(ms) if ms.is_finite() && ms != 0.0 => ms.clamp(1000.0, crate::side::TOAST_MAX_MS) as u64,
+        _ => 0,
     }
 }
 
@@ -158,7 +175,7 @@ pub async fn opened(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 #[derive(Deserialize)]
 struct UiBody {
     #[serde(default)] above: Value,
-    /// O de hoje: `bodyColumns` mais as 5 colunas do `[-]`, que o Python lê para cortar a prévia.
+    /// `bodyColumns` mais as 5 colunas do `[-]`: onde a prévia corta as linhas do pane (`crop_columns`).
     #[serde(default)] columns: Option<u64>,
     /// O que o mod recebeu e o evento publica.
     #[serde(default, rename = "bodyColumns")] body_columns: Option<u64>,
@@ -185,33 +202,23 @@ fn forbidden() -> Response { reply(None, StatusCode::FORBIDDEN, json!({"detail":
 /// Campo opcional: ausente, ou dentro do limite.
 fn fits_opt(text: &Option<String>, max: usize) -> bool { text.as_deref().is_none_or(|text| fits(text, max)) }
 
-/// A cópia do `/ui` para o Python, no formato de hoje: a prévia (`preview.py`, `transcript_columns` e
-/// `band_anchor`) e o campo `faixa` do `/pull` continuam lendo o cache dele, sem código novo no Python. O
-/// `plugin_ui` que ele publica com ela é descartado no hub (a sessão é do Rust). Falha só vai ao log, sem
-/// URL, token nem conteúdo: a prévia fica sem o corte até o próximo `/ui`, e o app não perde nada.
-async fn copy_to_python(st: &AppState, body: &Value) {
-    let url = format!("http://{}/api/plugin/ui", st.cfg.upstream);
-    let Ok(request) = axum::http::Request::post(url).header(header::CONTENT_TYPE, "application/json").body(Body::from(body.to_string())) else { return };
-    match tokio::time::timeout(PYTHON_COPY_TIMEOUT, st.http.request(request)).await {
-        Ok(Ok(response)) if response.status().is_success() => {}
-        Ok(Ok(response)) => tracing::debug!(status = response.status().as_u16(), "cópia da faixa ao Python recusada"),
-        _ => tracing::debug!("cópia da faixa ao Python sem resposta"),
-    }
-}
-
 /// A faixa e os painéis da sessão com terminal, como o plugin do Hangar os viu; dispara a leitura do
 /// painel na frente pela tela (a fonte, risco "shown_id na troca de aba sem redesenho").
-pub async fn ui(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (envelope, name) = match owned_sized::<UiBody>(&st, peer, req, UI_BODY_LIMIT).await { Ok(found) => found, Err(response) => return *response };
+pub async fn ui(State(st): State<Arc<AppState>>, req: Request) -> Response {
+    let (envelope, name) = match session_or_loose::<UiBody>(&st, req, UI_BODY_LIMIT).await { Ok(found) => found, Err(response) => return *response };
     let Envelope { sessao, token, body } = envelope;
-    // Os limites do `BandPane` do Python vêm antes do token, como lá.
-    if !body.panes.iter().all(|pane| fits(&pane.id, ID_MAX)) || !fits_opt(&body.shown, ID_MAX)
-        || body.caps.len() > CAPS_MAX || !body.caps.iter().all(|cap| fits(cap, ID_MAX)) {
+    // Os limites do `BandBody` do Python vêm antes do token, como lá: `above` é objeto ou nulo.
+    if !(body.above.is_object() || body.above.is_null()) || !body.panes.iter().all(|pane| fits(&pane.id, ID_MAX))
+        || !fits_opt(&body.shown, ID_MAX) || body.caps.len() > CAPS_MAX || !body.caps.iter().all(|cap| fits(cap, ID_MAX)) {
         return invalid(None);
     }
     if !token_ok(&st, &sessao, &token) {
         return forbidden();
     }
+    let Some(name) = name else {
+        st.mods.loose_ui(&sessao, body.above, body.panes);
+        return ok();
+    };
     // Sessão do Rust sem terminal: a faixa dela vem da superfície; do plugin entram só o que ele atende e o
     // estado estruturado dos painéis, juntados à vista da superfície.
     if !st.mods.is_terminal(&name) {
@@ -219,24 +226,21 @@ pub async fn ui(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
         st.mods.surface_extra(&name, SurfaceExtra { caps: body.caps, data });
         return ok();
     }
-    // Antes de responder e em ordem: dois `/ui` seguidos não chegam trocados ao cache do Python. Com o nome
-    // atual e o token dele: numa sessão renomeada, o cache do Python é pelo nome de agora.
-    let copy = json!({"sessao": name, "token": mint(&st.cfg.auth_token, &name), "above": body.above, "columns": body.columns, "panes": body.panes});
-    copy_to_python(&st, &copy).await;
     st.mods.terminal_ui(&name, TerminalView { above: body.above, columns: body.body_columns, panes: body.panes, shown: body.shown, caps: body.caps, crop_columns: body.columns });
     st.mods.schedule_shown(&name);
     ok()
 }
 
-pub async fn toast(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (envelope, name) = match owned_sized::<ToastBody>(&st, peer, req, TOAST_BODY_LIMIT).await { Ok(found) => found, Err(response) => return *response };
+pub async fn toast(State(st): State<Arc<AppState>>, req: Request) -> Response {
+    let (envelope, name) = match session_or_loose::<ToastBody>(&st, req, TOAST_BODY_LIMIT).await { Ok(found) => found, Err(response) => return *response };
     if !token_ok(&st, &envelope.sessao, &envelope.token) {
         return forbidden();
     }
     let body = &envelope.body;
-    if let Some(life) = st.mods.life(&name) {
-        let ms = body.timeout_ms.filter(|ms| ms.is_finite() && *ms > 0.0).map_or(0, |ms| ms as u64);
-        st.mods.toast(&name, life, body.plugin.as_deref().unwrap_or(""), &body.text, ms);
+    let (plugin, ms) = (body.plugin.as_deref().unwrap_or(""), toast_ms(body.timeout_ms));
+    match name {
+        Some(name) => if let Some(life) = st.mods.life(&name) { st.mods.toast(&name, life, plugin, &body.text, ms) },
+        None => st.mods.loose_toast(&envelope.sessao, plugin, &body.text, ms),
     }
     ok()
 }
@@ -312,4 +316,23 @@ pub async fn scroll(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     }
     st.mods.scrolled(&name, &body.request_id, i64::try_from(body.offset).unwrap_or(i64::MAX));
     ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Prazo e texto do plugin, quaisquer: o prazo fica no do Python (padrão ou 1 s a 5 min) e o aviso da
+        /// sessão sem entrada nunca derruba o servidor.
+        #[test]
+        fn any_toast_from_the_plugin_is_kept_without_panicking(ms in proptest::option::of(any::<f64>()), text in "(?s).{0,300}", plugin in ".{0,80}") {
+            let got = toast_ms(ms);
+            prop_assert!(got == 0 || (1000..=300_000).contains(&got));
+            let mods = crate::mods::state::Mods::default();
+            mods.loose_toast("solta", &plugin, &text, got);
+            mods.loose_ui("solta", Value::Null, Vec::new());
+        }
+    }
 }

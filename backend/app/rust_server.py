@@ -30,9 +30,9 @@ from app import claude_customizations, diag, diag_logging, log_paths, migration_
 _log = logging.getLogger("hangar.rust_server")
 
 HEALTH_PATH = "/__hangar_server/health"
-# Versão do contrato interno (rotas /internal, side-events, ambiente). Tem de casar com o
+# Versão do contrato interno (rotas /internal, canal privado do estado, ambiente). Tem de casar com o
 # `protocol` da saúde (hangar_server::INTERNAL_PROTOCOL); outro número = o Python atende sozinho.
-RUST_SERVER_PROTOCOL = 88
+RUST_SERVER_PROTOCOL = 89
 START_TIMEOUT = 10.0
 OP_TIMEOUT_S = 75
 CRASH_WINDOW = 60.0

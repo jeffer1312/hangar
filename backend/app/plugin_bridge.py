@@ -283,8 +283,8 @@ def mint(name: str, key: str | None = None) -> str:
     a sessão viva batendo 403 para sempre. Com a chave dentro do token, a conferência se refaz
     igual depois do restart sem guardar nada. Não é o bearer do app: é um HMAC dele, de mão única.
 
-    O formato só com o nome é o dos processos lançados antes da chave, e o da cópia do `/ui` que o
-    Rust manda com o nome atual; dois processos com o mesmo nome têm o mesmo token nele.
+    O formato só com o nome é o dos processos lançados antes da chave; dois processos com o mesmo
+    nome têm o mesmo token nele.
     """
     from app.config import settings
     segredo = (settings.auth_token or "hangar").encode()
@@ -735,10 +735,6 @@ VALIDADE_ESTADO_S = 90.0
 # Quantos SSE do app (lista ou conversa) estão abertos agora. Pedido de permissão só é segurado
 # pelo plugin com alguém no app para responder.
 _apps_abertos = 0
-# Listas do dono abertas no Rust, pela contagem do pedido de fatos (`list_facts`). Vence sozinha:
-# Rust que parou de perguntar não pode deixar a permissão presa num app que ninguém vê.
-_apps_remotos = (0, 0.0)
-_APP_REMOTO_TTL_S = 10.0
 
 
 def app_entrou() -> None:
@@ -747,28 +743,15 @@ def app_entrou() -> None:
         _apps_abertos += 1
 
 
-def apps_abertos() -> int:
-    """Aparelhos do dono que este processo atende (lista e chat, inclusive pelo Connect; sem convidado)."""
-    with _lock:
-        return _apps_abertos
-
-
 def app_saiu() -> None:
     global _apps_abertos
     with _lock:
         _apps_abertos = max(0, _apps_abertos - 1)
 
 
-def app_remoto(count: int) -> None:
-    global _apps_remotos
-    with _lock:
-        _apps_remotos = (count, time.monotonic())
-
-
 def app_presente() -> bool:
     with _lock:
-        count, at = _apps_remotos
-        return _apps_abertos > 0 or (count > 0 and time.monotonic() - at <= _APP_REMOTO_TTL_S)
+        return _apps_abertos > 0
 
 
 def terminal_preso(name: str) -> bool:

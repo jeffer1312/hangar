@@ -253,6 +253,32 @@ struct Inner {
     /// porque a limpeza de uma sessão substituída também precisa da vez. Ordem: ela antes de `inner` e dos hubs.
     /// ponytail: uma entrada por nome visto, nunca removida; nomes de sessão são poucos.
     publishing: HashMap<String, Arc<Mutex<()>>>,
+    /// Faixa e avisos da sessão Claude sem entrada aqui (aberta à mão no terminal), pelo nome com que o
+    /// plugin assina: os aparelhos os veem como antes, quando era o Python que os guardava. Saem quando a
+    /// sessão entra no Rust.
+    loose: HashMap<String, Loose>,
+}
+
+#[derive(Default)]
+struct Loose {
+    ui: Option<Arc<str>>,
+    toasts: Vec<(Instant, Value)>,
+}
+
+/// O aviso com o número `seq`, guardado em `toasts` com o vencimento, até `TOASTS_KEPT` vivos.
+fn push_toast(toasts: &mut Vec<(Instant, Value)>, seq: u64, plugin: &str, text: &str, timeout_ms: u64) -> Value {
+    let ms = if timeout_ms == 0 { TOAST_DEFAULT_MS } else { timeout_ms }.clamp(TOAST_MIN_MS, TOAST_MAX_MS);
+    let toast = json!({"id": format!("rs-{}-{seq}", boot()),
+        "text": text.chars().take(TOAST_MAX_CHARS).collect::<String>(),
+        "plugin": plugin.chars().take(TOAST_PLUGIN_CHARS).collect::<String>(), "timeoutMs": ms});
+    let now = Instant::now();
+    toasts.retain(|(until, _)| *until > now);
+    toasts.push((now + Duration::from_millis(ms), toast.clone()));
+    if toasts.len() > TOASTS_KEPT {
+        let extra = toasts.len() - TOASTS_KEPT;
+        toasts.drain(..extra);
+    }
+    toast
 }
 
 #[derive(Clone, Default)]
@@ -325,6 +351,7 @@ impl Mods {
         let publishing = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (replaced, old_probe) = {
             let mut inner = self.inner.lock().unwrap();
+            inner.loose.remove(name);
             let old = inner.sessions.remove(name);
             let replaced = old.as_ref().is_some_and(|old| old.process != process);
             let old_probe = old.as_ref().and_then(|old| old.terminal.as_ref().map(|terminal| terminal.probe.clone()));
@@ -470,20 +497,42 @@ impl Mods {
             inner.toast_seq += 1;
             let seq = inner.toast_seq;
             let Some(session) = inner.sessions.get_mut(name).filter(|session| session.life == life) else { return };
-            let ms = if timeout_ms == 0 { TOAST_DEFAULT_MS } else { timeout_ms }.clamp(TOAST_MIN_MS, TOAST_MAX_MS);
-            let toast = json!({"id": format!("rs-{}-{seq}", boot()),
-                "text": text.chars().take(TOAST_MAX_CHARS).collect::<String>(),
-                "plugin": plugin.chars().take(TOAST_PLUGIN_CHARS).collect::<String>(), "timeoutMs": ms});
-            let now = Instant::now();
-            session.toasts.retain(|(until, _)| *until > now);
-            session.toasts.push((now + Duration::from_millis(ms), toast.clone()));
-            if session.toasts.len() > TOASTS_KEPT {
-                let extra = session.toasts.len() - TOASTS_KEPT;
-                session.toasts.drain(..extra);
-            }
-            toast
+            push_toast(&mut session.toasts, seq, plugin, text, timeout_ms)
         };
         self.deliver(name, "plugin_toast", &toast.to_string());
+    }
+
+    /// Aviso de mod da sessão sem entrada aqui (`Loose`).
+    pub fn loose_toast(&self, name: &str, plugin: &str, text: &str, timeout_ms: u64) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let toast = {
+            let mut inner = self.inner.lock().unwrap();
+            // Entrou no Rust no meio: o aviso dela é do processo, pela ponte com a sessão.
+            if inner.sessions.contains_key(name) { return; }
+            inner.toast_seq += 1;
+            let seq = inner.toast_seq;
+            push_toast(&mut inner.loose.entry(name.to_owned()).or_default().toasts, seq, plugin, text, timeout_ms)
+        };
+        self.deliver(name, "plugin_toast", &toast.to_string());
+    }
+
+    /// Faixa e painéis da sessão sem entrada aqui, no formato que o Python publicava (`{above, panes}`,
+    /// sem a largura nem o estado estruturado dos painéis). Reenvio igual não vira evento.
+    pub fn loose_ui(&self, name: &str, above: Value, panes: Vec<TerminalPane>) {
+        let panes: Vec<TerminalPane> = panes.into_iter().map(|pane| TerminalPane { data: None, ..pane }).collect();
+        let raw: Arc<str> = json!({"above": above, "panes": panes}).to_string().into();
+        let lock = self.publishing(name);
+        let _publishing = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.sessions.contains_key(name) { return; }
+            let loose = inner.loose.entry(name.to_owned()).or_default();
+            if loose.ui.as_ref() == Some(&raw) { return; }
+            loose.ui = Some(raw.clone());
+        }
+        self.deliver(name, "plugin_ui", &raw);
     }
 
     /// O mod copiou um texto. Com clique do app em aberto, o texto volta na resposta do clique, para o
@@ -586,8 +635,11 @@ impl Mods {
     pub fn replay(&self, name: &str) -> Vec<(&'static str, String)> {
         let (ui, toasts) = {
             let inner = self.inner.lock().unwrap();
-            let Some(session) = inner.sessions.get(name) else { return Vec::new() };
-            (session.ui.clone(), session.toasts.clone())
+            match (inner.sessions.get(name), inner.loose.get(name)) {
+                (Some(session), _) => (session.ui.clone(), session.toasts.clone()),
+                (None, Some(loose)) => (loose.ui.clone(), loose.toasts.clone()),
+                (None, None) => return Vec::new(),
+            }
         };
         let now = Instant::now();
         let mut frames: Vec<(&'static str, String)> = ui.iter().map(|ui| ("plugin_ui", ui.to_string())).collect();
@@ -608,8 +660,15 @@ impl Mods {
     }
 
     /// Sessão com terminal: se o espelho do plugin já chegou nesta vida. None fora do terminal.
-    pub fn terminal_mirrored(&self, name: &str) -> Option<bool> {
-        self.inner.lock().unwrap().sessions.get(name).and_then(|session| session.terminal.as_ref()).map(|terminal| terminal.view.is_some())
+    /// O campo `faixa` do `/pull`: `false` faz o plugin reenviar o `/ui` sem esperar redesenho. Falta só o
+    /// espelho da sessão com terminal já ligada (sem faixa ele ainda traz os `caps`) e a faixa da sessão sem
+    /// entrada aqui, que se perde quando o servidor reinicia.
+    pub fn band_present(&self, name: &str) -> bool {
+        let inner = self.inner.lock().unwrap();
+        match inner.sessions.get(name) {
+            Some(session) => session.terminal.as_ref().is_none_or(|terminal| terminal.view.is_some()),
+            None => inner.loose.get(name).is_some_and(|loose| loose.ui.is_some()),
+        }
     }
 
     /// O espelho da sessão com terminal só na vida `life`: o clique de uma sessão substituída não lê o da nova.
@@ -879,13 +938,13 @@ mod tests {
     #[test]
     fn terminal_mirror_counts_from_the_first_ui_even_without_a_band() {
         let mods = Mods::default();
-        assert_eq!(mods.terminal_mirrored("s"), None, "sessão desconhecida");
+        assert!(!mods.band_present("s"), "sessão sem entrada e sem `/ui`: o plugin reenvia");
         mods.attach_terminal("s", "key:%1:1", 1, Arc::new(Quiet));
-        assert_eq!(mods.terminal_mirrored("s"), Some(false), "aberta, sem o /ui do plugin");
+        assert!(!mods.band_present("s"), "aberta, sem o /ui do plugin");
         mods.terminal_ui("s", TerminalView { above: Value::Null, caps: vec!["btw".into()], ..Default::default() });
-        assert_eq!(mods.terminal_mirrored("s"), Some(true), "o /ui sem faixa já é o espelho");
+        assert!(mods.band_present("s"), "o /ui sem faixa já é o espelho");
         mods.attach("u", 2, Arc::new(Quiet));
-        assert_eq!(mods.terminal_mirrored("u"), None, "sem terminal");
+        assert!(mods.band_present("u"), "sem terminal, o `/ui` não teria onde cair");
     }
 
     /// Com uma publicação entregando, outra da mesma sessão nem grava: a que grava por último é também a última a

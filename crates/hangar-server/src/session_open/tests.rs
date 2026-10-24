@@ -1905,6 +1905,18 @@ fn a_reused_name_does_not_inherit_the_dead_session_then_link() {
     assert_eq!(left, ["outra.json"]);
 }
 
+/// B2: o loop da sessão morta sai com o nome reusado; a nova não acorda com a volta da antiga.
+#[test]
+fn a_reused_name_does_not_inherit_the_dead_session_loop() {
+    let base = tempfile::tempdir().unwrap();
+    let dir = base.path().join(".hangar-loop");
+    std::fs::create_dir_all(&dir).unwrap();
+    for file in ["par-externo.json", "par-externo.tmp", "outra.json"] { std::fs::write(dir.join(file), "{}").unwrap(); }
+    server::forget_queue(base.path(), "par externo").unwrap();
+    let left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(left, ["outra.json"]);
+}
+
 /// O provedor lembrado vai ao `runtime-config.json` sem mexer no resto dele; o mesmo valor não regrava
 /// e o arquivo ilegível fica como está, com a falha devolvida.
 #[test]

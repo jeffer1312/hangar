@@ -21,10 +21,12 @@ pub mod groups;
 pub mod interactions;
 pub mod list;
 pub mod locate;
+pub mod loops;
 pub mod mcp;
 pub mod mermaid;
 pub mod migration_status;
 pub mod mods;
+pub mod nav_requests;
 pub mod pages;
 pub mod prewarm;
 pub(crate) mod queue_feed;
@@ -39,6 +41,7 @@ pub mod runtime;
 pub mod session_open;
 pub mod session_rename;
 pub mod session_defaults;
+pub mod push;
 pub mod push_expo;
 pub mod session_media;
 pub mod session_write;
@@ -46,6 +49,7 @@ pub mod share_reach;
 pub mod side;
 pub mod share;
 pub mod state;
+pub mod stats;
 pub mod subagents;
 pub mod tail;
 pub mod term;
@@ -70,9 +74,9 @@ pub mod worktree_routes;
 pub mod worktree_policy;
 mod warn_limit;
 
-/// Versão do contrato com o Python (rotas `/internal`, eventos do side-events, ambiente). O
+/// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 88;
+pub const INTERNAL_PROTOCOL: u32 = 89;
 
 /// Todo cliente HTTP do servidor nasce aqui. Uma dependência liga `gzip`, `http2` e (no Windows)
 /// `native-tls` no reqwest, e o Cargo estende isso a todo cliente: sem estes desligamentos ele
@@ -132,8 +136,6 @@ pub async fn serve_until_with_guest(
     let device_logins=state.accounts.device_logins.clone();
     let mut runtime_registry=None;
     let mut refresh_loop=None;
-    // Abortada na saída: o laço segura a ponte da lista, que sobreviveria ao servidor.
-    let _shadow = list::shadow::spawn(state.list.clone(), state.diag.clone()).map(AbortOnDrop);
     let result=async {
     if let Some(home) = std::env::home_dir() {
         transcription.recover_on_startup(&home).await;

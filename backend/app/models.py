@@ -142,7 +142,7 @@ class SessionInfo(BaseModel):
     options: Optional[list[str]] = None  # awaiting_input: rótulos das opções
     # True quando "working" ha mais de CP_STALL_SECONDS sem avancar (last_activity parado) — feature #7:
     # loop infinito de ferramenta / subprocesso esperando stdin nunca vira awaiting/finished/dead sozinho.
-    # Derivado em list_with_state(); so tinta a linha, o watchdog (stall_watch.py) e quem pinga 1x.
+    # Derivado em list_with_state(); so tinta a linha; quem avisa 1x é o vigia do Rust (push/watch.rs).
     stalled: bool = False
     # Problema DESTA sessão que o app tem que mostrar em vez de esconder: CÓDIGO, nunca texto — a
     # tradução é do front (regra de i18n do CLAUDE.md). Hoje só "codex_hooks_nao_aprovados": sessão
@@ -151,7 +151,7 @@ class SessionInfo(BaseModel):
     problema: Optional[str] = None
     # Feature #8 (rate-limit radar): banner de limite de uso detectado no pane (best-effort, ver
     # app.state.rate_limit_reset). limit_reset = horario cru ("3pm"/"15:30") pro chip "limitado · HH:MM".
-    # Derivado em list_with_state(); o push (1x, dedupe) e o auto-resume opt-in moram no stall_watch.py.
+    # Derivado em list_with_state(); o push (1x, dedupe) e o auto-resume opt-in moram no vigia do Rust (push/watch.rs).
     limited: bool = False
     limit_reset: Optional[str] = None
     # Sessão com convite ativo (link pendente ou convidado dentro): selo 🔗 nas listas.

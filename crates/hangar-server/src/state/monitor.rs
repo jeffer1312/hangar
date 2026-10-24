@@ -1032,7 +1032,7 @@ mod tests {
         use crate::transcript::Provider;
         let dir = tempfile::tempdir().unwrap();
         let (spawn, count) = fake_monitors(IDLE_PANE);
-        let ctx = SideCtx { upstream: "127.0.0.1:9".parse().unwrap(), secret: "s".into(), http: crate::proxy::client(),
+        let ctx = SideCtx {
             watchers: Default::default(), hubs: Hubs::default(), locate: std::sync::Arc::new(crate::locate::Unavailable), monitors: Some(spawn), mods: Default::default(), runtime: Default::default(), queue_dir: None, problem_hold: std::time::Duration::ZERO, shown_problems: Default::default(),
             diag: crate::diag::DiagClient::new("127.0.0.1:9".parse().unwrap(), "s".into()) };
         let binding = |p| Binding { provider: p, jsonl: dir.path().join("a.jsonl"), key: "a".into(), headless: false, life: None };

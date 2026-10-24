@@ -1,0 +1,939 @@
+{
+ "origin": {
+  "commit": "272617d30f14d4d0c82d60b88728d47a2538b88c",
+  "command": "uv run python tests/fixtures/contract/push/gen_push.py"
+ },
+ "summary": [
+  {
+   "text": null,
+   "out": null
+  },
+  {
+   "text": "",
+   "out": null
+  },
+  {
+   "text": "   ",
+   "out": null
+  },
+  {
+   "text": "Pronto.",
+   "out": "Pronto."
+  },
+  {
+   "text": "Feito: **tudo** `ok` [o link](http://x) e _nome_ de snake_case __dunder__ fim",
+   "out": "Feito: tudo ok o link e nome de snake_case dunder fim"
+  },
+  {
+   "text": "# Título\n\n> citação | tabela",
+   "out": "Título  citação  tabela"
+  },
+  {
+   "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "out": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…"
+  },
+  {
+   "text": "palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra",
+   "out": "palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra…"
+  },
+  {
+   "text": "x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x fim",
+   "out": "x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x…"
+  },
+  {
+   "text": "_a b_ c__d e__",
+   "out": "a b c__d e"
+  }
+ ],
+ "quiet": [
+  {
+   "prefs": {},
+   "now": "03:00",
+   "out": false
+  },
+  {
+   "prefs": {
+    "quiet_hours": {
+     "start": "22:00",
+     "end": "07:00"
+    }
+   },
+   "now": "23:30",
+   "out": true
+  },
+  {
+   "prefs": {
+    "quiet_hours": {
+     "start": "22:00",
+     "end": "07:00"
+    }
+   },
+   "now": "06:59",
+   "out": true
+  },
+  {
+   "prefs": {
+    "quiet_hours": {
+     "start": "22:00",
+     "end": "07:00"
+    }
+   },
+   "now": "07:00",
+   "out": false
+  },
+  {
+   "prefs": {
+    "quiet_hours": {
+     "start": "09:00",
+     "end": "18:00"
+    }
+   },
+   "now": "12:00",
+   "out": true
+  },
+  {
+   "prefs": {
+    "quiet_hours": {
+     "start": "09:00",
+     "end": "18:00"
+    }
+   },
+   "now": "18:00",
+   "out": false
+  },
+  {
+   "prefs": {
+    "quiet_hours": {
+     "start": "09:00",
+     "end": "09:00"
+    }
+   },
+   "now": "09:00",
+   "out": false
+  }
+ ],
+ "reset": [
+  {
+   "reset": "3pm",
+   "now": "2026-10-23T14:30:00",
+   "out": 1800.0
+  },
+  {
+   "reset": "3:30pm",
+   "now": "2026-10-23T14:30:00",
+   "out": 3600.0
+  },
+  {
+   "reset": "12am",
+   "now": "2026-10-23T14:30:00",
+   "out": 34200.0
+  },
+  {
+   "reset": "12pm",
+   "now": "2026-10-23T14:30:00",
+   "out": 77400.0
+  },
+  {
+   "reset": "15:05",
+   "now": "2026-10-23T14:30:00",
+   "out": 2100.0
+  },
+  {
+   "reset": "9",
+   "now": "2026-10-23T14:30:00",
+   "out": 66600.0
+  },
+  {
+   "reset": " 7 AM ",
+   "now": "2026-10-23T14:30:00",
+   "out": 59400.0
+  },
+  {
+   "reset": "14:30",
+   "now": "2026-10-23T14:30:00",
+   "out": 86400.0
+  },
+  {
+   "reset": "25:00",
+   "now": "2026-10-23T14:30:00",
+   "out": null
+  },
+  {
+   "reset": "3:61",
+   "now": "2026-10-23T14:30:00",
+   "out": null
+  },
+  {
+   "reset": "amanhã",
+   "now": "2026-10-23T14:30:00",
+   "out": null
+  },
+  {
+   "reset": "",
+   "now": "2026-10-23T14:30:00",
+   "out": null
+  }
+ ],
+ "payloads": [
+  {
+   "case": "awaiting_question",
+   "web": [
+    {
+     "endpoint": "e-pt",
+     "payload": {
+      "title": "Casa · s",
+      "body": "Qual ambiente?",
+      "session": "s",
+      "url": "/?server=s1&session=s"
+     }
+    },
+    {
+     "endpoint": "e-en",
+     "payload": {
+      "title": "Work · s",
+      "body": "Qual ambiente?",
+      "session": "s",
+      "url": "/?server=s2&session=s"
+     }
+    },
+    {
+     "endpoint": "e-old",
+     "payload": {
+      "title": "claude · s",
+      "body": "Qual ambiente?",
+      "session": "s",
+      "url": "/?server=s3&session=s"
+     }
+    }
+   ],
+   "expo": [
+    {
+     "session": "s",
+     "title": {
+      "pt": "s",
+      "en": "s"
+     },
+     "body": {
+      "pt": "Qual ambiente?",
+      "en": "Qual ambiente?"
+     },
+     "list": false
+    }
+   ]
+  },
+  {
+   "case": "awaiting_default",
+   "web": [
+    {
+     "endpoint": "e-pt",
+     "payload": {
+      "title": "Casa · s",
+      "body": "Aguardando sua resposta",
+      "session": "s",
+      "url": "/?server=s1&session=s"
+     }
+    },
+    {
+     "endpoint": "e-en",
+     "payload": {
+      "title": "Work · s",
+      "body": "Awaiting your reply",
+      "session": "s",
+      "url": "/?server=s2&session=s"
+     }
+    },
+    {
+     "endpoint": "e-old",
+     "payload": {
+      "title": "claude · s",
+      "body": "Aguardando sua resposta",
+      "session": "s",
+      "url": "/?server=s3&session=s"
+     }
+    }
+   ],
+   "expo": [
+    {
+     "session": "s",
+     "title": {
+      "pt": "s",
+      "en": "s"
+     },
+     "body": {
+      "pt": "Aguardando sua resposta",
+      "en": "Awaiting your reply"
+     },
+     "list": false
+    }
+   ]
+  },
+  {
+   "case": "awaiting_coalesced",
+   "web": [
+    {
+     "endpoint": "e-pt",
+     "payload": {
+      "title": "Casa · 2 sessões aguardando",
+      "body": "2 sessões aguardando: a, b",
+      "session": "a, b",
+      "url": "/",
+      "tag": "cp-awaiting-coalesced"
+     }
+    },
+    {
+     "endpoint": "e-en",
+     "payload": {
+      "title": "Work · 2 sessions waiting",
+      "body": "2 sessions waiting: a, b",
+      "session": "a, b",
+      "url": "/",
+      "tag": "cp-awaiting-coalesced"
+     }
+    },
+    {
+     "endpoint": "e-old",
+     "payload": {
+      "title": "claude · 2 sessões aguardando",
+      "body": "2 sessões aguardando: a, b",
+      "session": "a, b",
+      "url": "/",
+      "tag": "cp-awaiting-coalesced"
+     }
+    }
+   ],
+   "expo": [
+    {
+     "session": "a, b",
+     "title": {
+      "pt": "2 sessões aguardando",
+      "en": "2 sessions waiting"
+     },
+     "body": {
+      "pt": "2 sessões aguardando: a, b",
+      "en": "2 sessions waiting: a, b"
+     },
+     "list": true
+    }
+   ]
+  },
+  {
+   "case": "finished_reply",
+   "web": [
+    {
+     "endpoint": "e-pt",
+     "payload": {
+      "title": "Casa · s",
+      "body": "Terminou: Tudo pronto",
+      "session": "s",
+      "url": "/?server=s1&session=s"
+     }
+    },
+    {
+     "endpoint": "e-en",
+     "payload": {
+      "title": "Work · s",
+      "body": "Finished: Tudo pronto",
+      "session": "s",
+      "url": "/?server=s2&session=s"
+     }
+    },
+    {
+     "endpoint": "e-old",
+     "payload": {
+      "title": "claude · s",
+      "body": "Terminou: Tudo pronto",
+      "session": "s",
+      "url": "/?server=s3&session=s"
+     }
+    }
+   ],
+   "expo": [
+    {
+     "session": "s",
+     "title": {
+      "pt": "s",
+      "en": "s"
+     },
+     "body": {
+      "pt": "Terminou: Tudo pronto",
+      "en": "Finished: Tudo pronto"
+     },
+     "list": false
+    }
+   ]
+  },
+  {
+   "case": "finished_plain",
+   "web": [
+    {
+     "endpoint": "e-pt",
+     "payload": {
+      "title": "Casa · s",
+      "body": "Terminou",
+      "session": "s",
+      "url": "/?server=s1&session=s"
+     }
+    },
+    {
+     "endpoint": "e-en",
+     "payload": {
+      "title": "Work · s",
+      "body": "Finished",
+      "session": "s",
+      "url": "/?server=s2&session=s"
+     }
+    },
+    {
+     "endpoint": "e-old",
+     "payload": {
+      "title": "claude · s",
+      "body": "Terminou",
+      "session": "s",
+      "url": "/?server=s3&session=s"
+     }
+    }
+   ],
+   "expo": [
+    {
+     "session": "s",
+     "title": {
+      "pt": "s",
+      "en": "s"
+     },
+     "body": {
+      "pt": "Terminou",
+      "en": "Finished"
+     },
+     "list": false
+    }
+   ]
+  },
+  {
+   "case": "dead",
+   "web": [
+    {
+     "endpoint": "e-pt",
+     "payload": {
+      "title": "Casa · s",
+      "body": "Caiu",
+      "session": "s",
+      "url": "/?server=s1&session=s"
+     }
+    },
+    {
+     "endpoint": "e-en",
+     "payload": {
+      "title": "Work · s",
+      "body": "Died",
+      "session": "s",
+      "url": "/?server=s2&session=s"
+     }
+    },
+    {
+     "endpoint": "e-old",
+     "payload": {
+      "title": "claude · s",
+      "body": "Caiu",
+      "session": "s",
+      "url": "/?server=s3&session=s"
+     }
+    }
+   ],
+   "expo": [
+    {
+     "session": "s",
+     "title": {
+      "pt": "s",
+      "en": "s"
+     },
+     "body": {
+      "pt": "Caiu",
+      "en": "Died"
+     },
+     "list": false
+    }
+   ]
+  },
+  {
+   "case": "stalled",
+   "web": [
+    {
+     "endpoint": "e-pt",
+     "payload": {
+      "title": "Casa · s",
+      "body": "Pode estar travada",
+      "session": "s",
+      "url": "/?server=s1&session=s"
+     }
+    },
+    {
+     "endpoint": "e-en",
+     "payload": {
+      "title": "Work · s",
+      "body": "May be stuck",
+      "session": "s",
+      "url": "/?server=s2&session=s"
+     }
+    },
+    {
+     "endpoint": "e-old",
+     "payload": {
+      "title": "claude · s",
+      "body": "Pode estar travada",
+      "session": "s",
+      "url": "/?server=s3&session=s"
+     }
+    }
+   ],
+   "expo": [
+    {
+     "session": "s",
+     "title": {
+      "pt": "s",
+      "en": "s"
+     },
+     "body": {
+      "pt": "Pode estar travada",
+      "en": "May be stuck"
+     },
+     "list": false
+    }
+   ]
+  },
+  {
+   "case": "limited_reset",
+   "web": [
+    {
+     "endpoint": "e-pt",
+     "payload": {
+      "title": "Casa · s",
+      "body": "Limite de uso atingido · volta 3pm",
+      "session": "s",
+      "url": "/?server=s1&session=s"
+     }
+    },
+    {
+     "endpoint": "e-en",
+     "payload": {
+      "title": "Work · s",
+      "body": "Usage limit reached · resets 3pm",
+      "session": "s",
+      "url": "/?server=s2&session=s"
+     }
+    },
+    {
+     "endpoint": "e-old",
+     "payload": {
+      "title": "claude · s",
+      "body": "Limite de uso atingido · volta 3pm",
+      "session": "s",
+      "url": "/?server=s3&session=s"
+     }
+    }
+   ],
+   "expo": [
+    {
+     "session": "s",
+     "title": {
+      "pt": "s",
+      "en": "s"
+     },
+     "body": {
+      "pt": "Limite de uso atingido · volta 3pm",
+      "en": "Usage limit reached · resets 3pm"
+     },
+     "list": false
+    }
+   ]
+  },
+  {
+   "case": "limited_plain",
+   "web": [
+    {
+     "endpoint": "e-pt",
+     "payload": {
+      "title": "Casa · s",
+      "body": "Limite de uso atingido",
+      "session": "s",
+      "url": "/?server=s1&session=s"
+     }
+    },
+    {
+     "endpoint": "e-en",
+     "payload": {
+      "title": "Work · s",
+      "body": "Usage limit reached",
+      "session": "s",
+      "url": "/?server=s2&session=s"
+     }
+    },
+    {
+     "endpoint": "e-old",
+     "payload": {
+      "title": "claude · s",
+      "body": "Limite de uso atingido",
+      "session": "s",
+      "url": "/?server=s3&session=s"
+     }
+    }
+   ],
+   "expo": [
+    {
+     "session": "s",
+     "title": {
+      "pt": "s",
+      "en": "s"
+     },
+     "body": {
+      "pt": "Limite de uso atingido",
+      "en": "Usage limit reached"
+     },
+     "list": false
+    }
+   ]
+  }
+ ],
+ "scan": [
+  {
+   "case": "so_resposta",
+   "lines": [
+    "{\"type\": \"assistant\", \"uuid\": \"a1\", \"timestamp\": \"2026-10-23T12:00:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Pronto, **feito**.\"}]}}"
+   ],
+   "now": 1792757400.0,
+   "open": 0,
+   "last_reply": "Pronto, **feito**."
+  },
+  {
+   "case": "so_resposta",
+   "lines": [
+    "{\"type\": \"assistant\", \"uuid\": \"a1\", \"timestamp\": \"2026-10-23T12:00:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Pronto, **feito**.\"}]}}"
+   ],
+   "now": 1792761000.0,
+   "open": 0,
+   "last_reply": "Pronto, **feito**."
+  },
+  {
+   "case": "fundo_aberto",
+   "lines": [
+    "{\"type\": \"assistant\", \"uuid\": \"a1\", \"timestamp\": \"2026-10-23T12:00:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Pronto, **feito**.\"}]}}",
+    "{\"type\": \"assistant\", \"uuid\": \"a2\", \"timestamp\": \"2026-10-23T12:01:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"tu1\", \"name\": \"Bash\", \"input\": {\"command\": \"sleep 99\", \"run_in_background\": true}}]}}",
+    "{\"type\": \"user\", \"uuid\": \"u1\", \"timestamp\": \"2026-10-23T12:01:01.000Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"tu1\", \"content\": \"Command running in background with ID: bash_7\"}]}}"
+   ],
+   "now": 1792757400.0,
+   "open": 1,
+   "last_reply": "Pronto, **feito**."
+  },
+  {
+   "case": "fundo_aberto",
+   "lines": [
+    "{\"type\": \"assistant\", \"uuid\": \"a1\", \"timestamp\": \"2026-10-23T12:00:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Pronto, **feito**.\"}]}}",
+    "{\"type\": \"assistant\", \"uuid\": \"a2\", \"timestamp\": \"2026-10-23T12:01:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"tu1\", \"name\": \"Bash\", \"input\": {\"command\": \"sleep 99\", \"run_in_background\": true}}]}}",
+    "{\"type\": \"user\", \"uuid\": \"u1\", \"timestamp\": \"2026-10-23T12:01:01.000Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"tu1\", \"content\": \"Command running in background with ID: bash_7\"}]}}"
+   ],
+   "now": 1792761000.0,
+   "open": 0,
+   "last_reply": "Pronto, **feito**."
+  },
+  {
+   "case": "fundo_fechado",
+   "lines": [
+    "{\"type\": \"assistant\", \"uuid\": \"a1\", \"timestamp\": \"2026-10-23T12:00:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Pronto, **feito**.\"}]}}",
+    "{\"type\": \"assistant\", \"uuid\": \"a2\", \"timestamp\": \"2026-10-23T12:01:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"tu1\", \"name\": \"Bash\", \"input\": {\"command\": \"sleep 99\", \"run_in_background\": true}}]}}",
+    "{\"type\": \"user\", \"uuid\": \"u1\", \"timestamp\": \"2026-10-23T12:01:01.000Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"tu1\", \"content\": \"Command running in background with ID: bash_7\"}]}}",
+    "{\"type\": \"user\", \"uuid\": \"u2\", \"timestamp\": \"2026-10-23T12:05:00.000Z\", \"message\": {\"role\": \"user\", \"content\": \"<task-notification>\\n<task-id>bash_7</task-id>\\n<status>completed</status>\\n<summary>Background command \\\"x\\\" completed</summary>\\n</task-notification>\"}}",
+    "{\"type\": \"assistant\", \"uuid\": \"a3\", \"timestamp\": \"2026-10-23T12:06:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Depois do fundo.\"}]}}"
+   ],
+   "now": 1792757400.0,
+   "open": 0,
+   "last_reply": "Depois do fundo."
+  },
+  {
+   "case": "fundo_fechado",
+   "lines": [
+    "{\"type\": \"assistant\", \"uuid\": \"a1\", \"timestamp\": \"2026-10-23T12:00:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Pronto, **feito**.\"}]}}",
+    "{\"type\": \"assistant\", \"uuid\": \"a2\", \"timestamp\": \"2026-10-23T12:01:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"tu1\", \"name\": \"Bash\", \"input\": {\"command\": \"sleep 99\", \"run_in_background\": true}}]}}",
+    "{\"type\": \"user\", \"uuid\": \"u1\", \"timestamp\": \"2026-10-23T12:01:01.000Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"tu1\", \"content\": \"Command running in background with ID: bash_7\"}]}}",
+    "{\"type\": \"user\", \"uuid\": \"u2\", \"timestamp\": \"2026-10-23T12:05:00.000Z\", \"message\": {\"role\": \"user\", \"content\": \"<task-notification>\\n<task-id>bash_7</task-id>\\n<status>completed</status>\\n<summary>Background command \\\"x\\\" completed</summary>\\n</task-notification>\"}}",
+    "{\"type\": \"assistant\", \"uuid\": \"a3\", \"timestamp\": \"2026-10-23T12:06:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Depois do fundo.\"}]}}"
+   ],
+   "now": 1792761000.0,
+   "open": 0,
+   "last_reply": "Depois do fundo."
+  },
+  {
+   "case": "aviso_parcial_nao_fecha",
+   "lines": [
+    "{\"type\": \"assistant\", \"uuid\": \"a1\", \"timestamp\": \"2026-10-23T12:00:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Pronto, **feito**.\"}]}}",
+    "{\"type\": \"assistant\", \"uuid\": \"a2\", \"timestamp\": \"2026-10-23T12:01:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"tu1\", \"name\": \"Bash\", \"input\": {\"command\": \"sleep 99\", \"run_in_background\": true}}]}}",
+    "{\"type\": \"user\", \"uuid\": \"u1\", \"timestamp\": \"2026-10-23T12:01:01.000Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"tu1\", \"content\": \"Command running in background with ID: bash_7\"}]}}",
+    "{\"type\": \"user\", \"uuid\": \"u3\", \"timestamp\": \"2026-10-23T12:05:00.000Z\", \"message\": {\"role\": \"user\", \"content\": \"<task-notification>\\n<task-id>bash_7</task-id>\\n<status>completed</status>\\n<summary>Agent \\\"x\\\" is waiting on its own background work</summary>\\n</task-notification>\"}}"
+   ],
+   "now": 1792757400.0,
+   "open": 1,
+   "last_reply": "Pronto, **feito**."
+  },
+  {
+   "case": "aviso_parcial_nao_fecha",
+   "lines": [
+    "{\"type\": \"assistant\", \"uuid\": \"a1\", \"timestamp\": \"2026-10-23T12:00:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Pronto, **feito**.\"}]}}",
+    "{\"type\": \"assistant\", \"uuid\": \"a2\", \"timestamp\": \"2026-10-23T12:01:00.000Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"tu1\", \"name\": \"Bash\", \"input\": {\"command\": \"sleep 99\", \"run_in_background\": true}}]}}",
+    "{\"type\": \"user\", \"uuid\": \"u1\", \"timestamp\": \"2026-10-23T12:01:01.000Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"tu1\", \"content\": \"Command running in background with ID: bash_7\"}]}}",
+    "{\"type\": \"user\", \"uuid\": \"u3\", \"timestamp\": \"2026-10-23T12:05:00.000Z\", \"message\": {\"role\": \"user\", \"content\": \"<task-notification>\\n<task-id>bash_7</task-id>\\n<status>completed</status>\\n<summary>Agent \\\"x\\\" is waiting on its own background work</summary>\\n</task-notification>\"}}"
+   ],
+   "now": 1792761000.0,
+   "open": 0,
+   "last_reply": "Pronto, **feito**."
+  },
+  {
+   "case": "vazio",
+   "lines": [],
+   "now": 1792757400.0,
+   "open": 0,
+   "last_reply": null
+  },
+  {
+   "case": "vazio",
+   "lines": [],
+   "now": 1792761000.0,
+   "open": 0,
+   "last_reply": null
+  }
+ ],
+ "sweep": [
+  {
+   "case": "morre_e_volta",
+   "notify_dead": true,
+   "steps": [
+    [
+     "a",
+     "b"
+    ],
+    [
+     "a"
+    ],
+    [
+     "a"
+    ],
+    [
+     "a",
+     "b"
+    ],
+    [
+     "a"
+    ]
+   ],
+   "notices": [
+    [],
+    [
+     [
+      "notify_dead",
+      "b"
+     ]
+    ],
+    [],
+    [],
+    [
+     [
+      "notify_dead",
+      "b"
+     ]
+    ]
+   ]
+  },
+  {
+   "case": "morte_sem_aviso",
+   "notify_dead": false,
+   "steps": [
+    [
+     "a"
+    ],
+    []
+   ],
+   "notices": [
+    [],
+    []
+   ]
+  },
+  {
+   "case": "travada_uma_vez",
+   "notify_dead": true,
+   "steps": [
+    [
+     "a"
+    ],
+    [
+     "a:stalled"
+    ],
+    [
+     "a:stalled"
+    ],
+    [
+     "a"
+    ],
+    [
+     "a:stalled"
+    ]
+   ],
+   "notices": [
+    [],
+    [
+     [
+      "notify_stalled",
+      "a"
+     ]
+    ],
+    [],
+    [],
+    [
+     [
+      "notify_stalled",
+      "a"
+     ]
+    ]
+   ]
+  },
+  {
+   "case": "limite_uma_vez",
+   "notify_dead": true,
+   "steps": [
+    [
+     "a:limited=3pm"
+    ],
+    [
+     "a:limited=3pm"
+    ],
+    [
+     "a"
+    ],
+    [
+     "a:limited"
+    ]
+   ],
+   "notices": [
+    [
+     [
+      "notify_limited",
+      "a",
+      "3pm"
+     ]
+    ],
+    [],
+    [],
+    [
+     [
+      "notify_limited",
+      "a",
+      null
+     ]
+    ]
+   ]
+  },
+  {
+   "case": "orquestrador_fora",
+   "notify_dead": true,
+   "steps": [
+    [
+     "o:orq",
+     "a"
+    ],
+    [
+     "a"
+    ]
+   ],
+   "notices": [
+    [],
+    []
+   ]
+  }
+ ],
+ "series": [
+  {
+   "case": "turno_unico",
+   "steps": [
+    [
+     "working",
+     100
+    ],
+    [
+     "idle",
+     160
+    ]
+   ],
+   "started": [
+    100,
+    100
+   ]
+  },
+  {
+   "case": "continua_a_serie",
+   "steps": [
+    [
+     "working",
+     100
+    ],
+    [
+     "idle",
+     160
+    ],
+    [
+     "working",
+     200
+    ],
+    [
+     "idle",
+     300
+    ]
+   ],
+   "started": [
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "case": "parada_longa_abre_nova",
+   "steps": [
+    [
+     "working",
+     100
+    ],
+    [
+     "idle",
+     160
+    ],
+    [
+     "working",
+     1961
+    ]
+   ],
+   "started": [
+    100,
+    100,
+    1961
+   ]
+  },
+  {
+   "case": "morte_limpa",
+   "steps": [
+    [
+     "working",
+     100
+    ],
+    [
+     "dead",
+     120
+    ],
+    [
+     "working",
+     130
+    ]
+   ],
+   "started": [
+    100,
+    null,
+    130
+   ]
+  }
+ ]
+}

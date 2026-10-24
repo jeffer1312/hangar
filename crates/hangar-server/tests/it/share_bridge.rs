@@ -221,14 +221,12 @@ async fn owner_invite_routes_on_the_public_port_are_answered_by_rust() {
 }
 
 #[test]
-fn shared_mark_comes_from_the_share_store_and_python_may_omit_it() {
+fn shared_mark_comes_from_the_share_store() {
     let dir = tempfile::tempdir().unwrap();
     let store = ShareStore::open(dir.path().join("shares.json"), Arc::new(|| 100.0));
     store.create("a", Some("k:A".into()), Kind::Share, false).unwrap();
     store.create("p", Some("k:P".into()), Kind::Pair, false).unwrap();
-    let facts: facts::ListFacts = serde_json::from_value(json!({"states": {}, "overrides": [], "frozen": [], "orq": [],
-        "owners": {}, "hidden": [], "problems": {}, "held": {}, "stall_seconds": 300.0, "nav": {}, "shortcuts": null,
-        "shadow": null})).expect("sem `shared` do Python");
+    let facts = facts::ListFacts { unknown: false, ..Default::default() };
     let row = |n: &str| -> SessionRow { serde_json::from_value(json!({"name": n, "provider": "claude"})).unwrap() };
     let (mut work, _) = facts::apply(vec![row("a"), row("p"), row("z")], &facts, true);
     facts::mark_shared(&mut work, &store.active_sessions());
