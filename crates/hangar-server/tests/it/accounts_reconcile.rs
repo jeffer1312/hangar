@@ -1254,6 +1254,53 @@ fn stale_config_lock(home: &Path) {
     mtime(&lock, 1_000_000_000);
 }
 
+/// C179/K10: um segundo `--prep` sem nada a mudar não regrava o `settings.json` nem o `.claude.json` da
+/// conta (mesmo inode e mtime): a adoção da reserva pré-aquecida compara a marca deles.
+#[test]
+fn a_second_prep_with_nothing_to_change_rewrites_nothing() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    conta(&home, "conta2");
+    put(&home.join(".claude.json"), r#"{"mcpServers": {"tavily": {}, "novo": {}}}"#);
+    let prep = || {
+        let out = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[]).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    };
+    prep();
+    let files = ["settings.json", ".claude.json"].map(|f| home.join(".claude-conta2").join(f));
+    let stamp = || files.iter().map(|f| { let m = std::fs::metadata(f).unwrap(); (m.ino(), m.mtime(), m.mtime_nsec()) }).collect::<Vec<_>>();
+    let before = stamp();
+    prep();
+    assert_eq!(stamp(), before, "o segundo --prep regravou a cópia da conta");
+}
+
+/// C186/D16: com avisos e projeto, o diário leva só os campos do contrato: nenhum texto de aviso, nome de
+/// projeto, nome de arquivo ou argumento.
+#[test]
+fn the_diary_carries_no_warning_text_project_or_arguments() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    (scenario("prep_shared_link_and_modes").build)(&home);
+    let out = command(&Side::Rust, &home, &["--prep".into(), "conta2".into(), "projeto-secreto".into()], &[]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success() && stderr.contains("sobrescreveu theme"), "o cenário avisa: {stderr}");
+    let (_, raw) = diary(&home, &["conta2".to_owned()].into());
+    assert!(raw.len() >= 7, "o diário da reconciliação foi gravado: {raw:?}");
+    // Os do evento e o envelope que o diário põe em toda linha (`ts`, `backend`, `pid_backend`, `origem`).
+    let allowed = ["evento", "nivel", "provider", "operacao", "etapa", "conta_id", "codigo", "quantidade", "ms", "erro_tipo", "errno",
+        "ts", "backend", "pid_backend", "origem"];
+    for event in &raw {
+        let extra: Vec<&String> = event.as_object().unwrap().keys().filter(|k| !allowed.contains(&k.as_str())).collect();
+        assert!(extra.is_empty(), "campo fora do contrato {extra:?} em {event}");
+        let text = event.to_string();
+        for leak in ["projeto-secreto", "CLAUDE.md", "settings.json", "theme", "sobrescreveu", "conta2", "--prep", "dotfiles"] {
+            assert!(!text.contains(leak), "o diário leva {leak:?}: {text}");
+        }
+    }
+}
+
 /// C93: a mudança da conta entra no arquivo dos dotfiles no lugar (mesmo inode e modo), e o atalho do
 /// `~/.claude` continua atalho. A paridade com o Python (`prep_shared_link_and_modes`) não vê o inode.
 #[test]
