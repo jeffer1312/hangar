@@ -68,12 +68,14 @@ struct Record { subprocesses: Vec<Value>, probes: Vec<Value>, rust_bridge: Vec<V
     /// Os nomes que a abertura limpou (grupo antigo, fila, `then`): só o restore mostra, porque o Python não grava.
     cleaned: Vec<String>,
     /// O passo da criação visto pelo aquecimento do Codex; só aparece com a criação acompanhada.
-    progress_seen: Vec<Value> }
+    progress_seen: Vec<Value>,
+    /// `fakes.guard_probe`: a guarda da conta estava presa (exclusiva recusada) quando o pane nasceu.
+    guard_at_new_session: Option<bool> }
 
 /// O tmux em memória do harness: o estado inicial do cenário, os `new-session` gravados e as consultas
 /// respondidas pelo estado.
 struct FakeTmux { sessions: Mutex<BTreeMap<String, Value>>, force: Value, record: std::sync::Arc<Mutex<Record>>,
-    silenced: std::sync::atomic::AtomicBool }
+    silenced: std::sync::atomic::AtomicBool, guard_probe: Option<std::path::PathBuf> }
 
 impl Mux for FakeTmux {
     fn scope(&self) -> BoxFuture<'_, Vec<String>> { Box::pin(async { SCOPE.map(str::to_owned).into() }) }
@@ -96,6 +98,10 @@ impl Mux for FakeTmux {
         let mut sessions = self.sessions.lock().unwrap();
         let (code, stdout, stderr) = match args.first().map(String::as_str) {
             Some("new-session") => {
+                if let Some(lock) = &self.guard_probe {
+                    let busy = std::fs::OpenOptions::new().read(true).write(true).open(lock).is_ok_and(|f| f.try_lock().is_err());
+                    self.record.lock().unwrap().guard_at_new_session = Some(busy);
+                }
                 let name = opt("-s").unwrap_or_default();
                 let (code, stderr) = if !self.force.is_null() {
                     (self.force["rc"].as_i64().unwrap_or(1) as i32, self.force["stderr"].as_str().unwrap_or("").to_owned())
@@ -332,7 +338,9 @@ pub async fn run_with(scenario: &Value, root: &Path, env: BTreeMap<String, Strin
     let home = root.join("home");
     let terminal = TerminalEnv { birth: Duration::from_millis(100), ..TerminalEnv::local(&home, &env) };
     let host = Host { home: home.clone(), env: env.clone(), terminal,
-        mux: FakeTmux { sessions: Mutex::new(sessions), force: fakes["tmux_new_session"].clone(), record: record.clone(), silenced: Default::default() },
+        mux: FakeTmux { sessions: Mutex::new(sessions), force: fakes["tmux_new_session"].clone(), record: record.clone(), silenced: Default::default(),
+            guard_probe: fakes["guard_probe"].as_str().and_then(|dir| crate::accounts::AccountKey::new(crate::accounts::Provider::Claude, Path::new(dir)).ok())
+                .and_then(|key| crate::accounts::AccountLocks::new(home.join(".hangar/account-locks")).path(&key).ok()) },
         fakes: fakes.clone(), record: record.clone(), prewarm };
     let mut steps = Vec::new();
     let mut restored = false;
@@ -412,5 +420,6 @@ pub async fn run_with(scenario: &Value, root: &Path, env: BTreeMap<String, Strin
         "runtime_requests": record.runtime_requests, "signals": [], "network": [], "tmux_sessions": tmux_sessions, "diary": record.diary});
     if restored { out["cleaned"] = json!(record.cleaned); }
     if !record.progress_seen.is_empty() { out["progress_seen"] = json!(record.progress_seen); }
+    if let Some(busy) = record.guard_at_new_session { out["guard_at_new_session"] = json!(busy); }
     out
 }

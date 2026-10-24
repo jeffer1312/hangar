@@ -2323,6 +2323,31 @@ fn the_account_guard_covers_the_preparation() {
     assert_eq!(std::fs::read_to_string(root.join("home/guarda")).unwrap(), "presa\n", "a guarda da conta estava livre na reconciliação");
 }
 
+/// H35/K02: a guarda da conta segue presa quando o pane nasce, não só durante a reconciliação.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_account_guard_is_still_held_when_the_pane_is_born() {
+    let (raw, _dir, _root) = run_contract_with("create_claude_terminal_hangar_account",
+        |s| s["fakes"]["guard_probe"] = json!("<ROOT>/home/.claude-conta2"), |_| {});
+    assert_eq!(raw["steps"][0]["status"], 200, "{}", raw["steps"][0]["body"]);
+    assert_eq!(raw["guard_at_new_session"], json!(true), "a guarda da conta estava livre quando o pane nasceu");
+}
+
+/// K01: os avisos da reconciliação vêm antes dos da abertura.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_reconciliation_warnings_come_before_the_opening_ones() {
+    let (raw, _dir, _root) = run_contract_with("create_claude_terminal_hangar_account", |_| {}, |root| {
+        std::fs::write(root.join("home/.claude/CLAUDE.md"), "# regras").unwrap();
+        std::fs::write(root.join("home/.claude-conta2/CLAUDE.md"), "# editado na conta").unwrap();
+        std::fs::write(root.join("home/.claude-conta2/settings.json"), r#"{"model": "gpt-6"}"#).unwrap();
+    });
+    assert_eq!(raw["steps"][0]["status"], 200, "{}", raw["steps"][0]["body"]);
+    let avisos: Vec<&str> = raw["steps"][0]["body"]["avisos"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    let position = |needle: &str| avisos.iter().position(|a| a.contains(needle)).unwrap_or_else(|| panic!("falta {needle:?} em {avisos:?}"));
+    assert!(position("'CLAUDE.md' foi alterado dentro desta conta") < position("não é da Anthropic"), "{avisos:?}");
+}
+
 /// A reconciliação roda dentro do processo da abertura, sem `hangar-conta` no PATH: o link da memória do
 /// projeto nasce, os avisos chegam à resposta e os eventos dela vão ao diário de quem abre, antes da criação.
 #[cfg(target_os = "linux")]
@@ -2456,6 +2481,7 @@ fn an_account_without_login_is_refused_before_the_pane() {
     });
     assert_eq!((raw["steps"][0]["status"].clone(), raw["steps"][0]["body"]["detail"]["code"].clone()),
         (json!(409), json!("erro_conta_sem_login")), "{}", raw["steps"][0]["body"]);
+    assert_eq!(raw["steps"][0]["body"]["detail"]["params"], json!({"conta": "conta2"}), "a tela diz qual conta logar");
     assert!(!raw["subprocesses"].as_array().unwrap().iter().any(|p| p["argv"][0] == "new-session"), "nenhum pane");
 }
 
