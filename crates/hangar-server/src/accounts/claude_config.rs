@@ -926,6 +926,9 @@ pub fn run(args: &[String], env: &AccountEnvironment, out: &mut dyn Write, err: 
 
 /// `hangar-server conta …`: `args` sem o nome do subcomando.
 pub fn cli(args: &[String]) -> std::process::ExitCode {
+    // Os avisos internos (rollback que não concluiu, trava que não saiu) chegam ao stderr; sem eles, nada muda.
+    let _ = tracing_subscriber::fmt().with_writer(io::stderr).with_max_level(tracing::Level::WARN)
+        .without_time().with_target(false).with_ansi(false).try_init();
     let env = AccountEnvironment::capture();
     std::process::ExitCode::from(run(args, &env, &mut io::stdout().lock(), &mut io::stderr().lock()))
 }

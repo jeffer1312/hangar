@@ -1223,6 +1223,20 @@ fn the_mcp_mirror_without_the_config_lock_writes_and_warns() {
     assert!(line.contains("trava largada"), "o aviso diz o arquivo e o motivo: {text}");
 }
 
+/// D22: o aviso interno do comando chega ao stderr dele, sem mudar a saída nem o código.
+#[test]
+fn the_account_command_prints_internal_warnings_to_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    stale_config_lock(&home);
+    let output = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[]).output().unwrap();
+    let (stdout, stderr) = (String::from_utf8(output.stdout).unwrap(), String::from_utf8(output.stderr).unwrap());
+    assert_eq!((output.status.code(), stdout.trim()), (Some(0), home.join(".claude-conta2").to_str().unwrap()), "{stderr}");
+    let file = home.join(".claude-conta2/.claude.json");
+    assert!(stderr.lines().any(|l| l.contains("WARN") && l.contains(&file.display().to_string()) && l.contains("trava largada")),
+        "o aviso interno não chegou ao stderr: {stderr}");
+}
+
 /// Travas livres mas o prazo da abertura já passado: nada da reconciliação roda, e a recusa é a do limite.
 #[test]
 fn locks_taken_after_the_opening_deadline_reconcile_nothing() {
