@@ -340,7 +340,12 @@ export function parseRealtimeDelegation(text: string): { input: string; transcri
 
 export type PeerScope = 'peer' | 'group' | 'panel' | 'external';
 const _SCOPES: Record<string, PeerScope> = { de: 'peer', grupo: 'group', painel: 'panel' };
+// O Claude Code embrulha o `$.message.send` de um plugin assim; é aviso automático, como o `[painel: …]`.
+const _PLUGIN_RE = /^The (\S+) plugin sent a message:\s*/;
+
 export function parsePeerMessage(text: string): { from: string; text: string; scope: PeerScope } | null {
+  const plugin = _PLUGIN_RE.exec(text);
+  if (plugin) return { from: `plugin ${plugin[1]}`, text: text.slice(plugin[0].length), scope: 'panel' };
   const m = _PEER_RE.exec(text);
   // Só "de" tem a forma "de fora" (par externo); "[grupo fora: …]" não existe.
   if (!m || (m[2] && m[1] !== 'de')) return null;

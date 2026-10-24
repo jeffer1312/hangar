@@ -71,12 +71,11 @@ def test_headless_metadata_retains_choices_without_copying_them_to_new_sessions(
     monkeypatch.setattr(sessions, "_dir", lambda: tmp_path / "sessions")
     sessions.save("chosen", str(tmp_path), SID, claude_settings=SETTINGS)
     sessions.update("chosen", model="opus")
-    sessions.rename("chosen", "renamed")
     sessions.save("fresh", str(tmp_path), "22222222-2222-2222-2222-222222222222")
 
-    renamed = sessions.load("renamed")
+    chosen = sessions.load("chosen")
     fresh = sessions.load("fresh")
-    assert renamed is not None and renamed["claude_settings"] == SETTINGS
+    assert chosen is not None and chosen["claude_settings"] == SETTINGS
     assert fresh is not None and "claude_settings" not in fresh
 
 

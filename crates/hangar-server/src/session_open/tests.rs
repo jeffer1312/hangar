@@ -871,6 +871,36 @@ fn local_facts_read_transfers_and_real_paths() {
     assert_eq!(open(&home.join("guest/fora/proj"), &guest), Some((403, Some("erro_fora_da_pasta"))));
 }
 
+#[test]
+fn fast_recognizes_cliproxy_client_keys_in_both_config_formats() {
+    let runtime = test_runtime();
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    for dir in ["work", ".claude", ".cli-proxy-api"] { std::fs::create_dir_all(home.join(dir)).unwrap(); }
+    std::fs::write(home.join(".claude/engines.json"),
+        json!({"gpt": {"base_url": "http://127.0.0.1:8317/v1", "api_key": "k", "model": "gpt-6.1-sol"}}).to_string()).unwrap();
+    let body = json!({"name": "s1", "cwd": home.join("work"), "provider": "claude", "headless": false,
+        "engine": "gpt", "model": "gpt-6.1-sol", "service_tier": "priority"});
+    let request = SessionOpenRequest::parse(body.to_string().as_bytes()).unwrap();
+    let facts = local_facts(&home, &runtime);
+    for (config, accepted) in [
+        ("access:\n  api-keys:\n    - k\n", true),
+        ("access:\n  api-keys:\n    - k\napi-keys:\n  codex: []\n", true),
+        ("api-keys:\n  - k\n", true),
+        ("access:\n  api-keys: []\napi-keys:\n  - k\n", true),
+        ("access:\n  api-keys:\n    - ' '\n", false),
+    ] {
+        std::fs::write(home.join(".cli-proxy-api/config.yaml"), config).unwrap();
+        let resolved = resolve::resolve_open(&request, &OWNER, &facts);
+        if accepted {
+            let spec = resolved.unwrap_or_else(|e| panic!("{config}: {e}")).spec;
+            assert_eq!(spec.service_tier, Some(ServiceTier::Priority), "{config}");
+        } else {
+            assert_eq!(resolved.err().map(|e| (e.status, e.code)), Some((400, Some("erro_criacao_sessao"))), "{config}");
+        }
+    }
+}
+
 /// `model: ""` com Fast cai no modelo do motor como o `or` do Python: o Fast passa, e quem recusa é
 /// a regra do modelo, com o código e o texto de lá.
 #[test]
@@ -1351,6 +1381,60 @@ fn the_kimi_folder_is_pretrusted_once() {
     agents::kimi_pretrust(home.path(), "/w/proj", 2000);
     let written: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
     assert_eq!(written, json!({"root": "/w/proj", "trustedAt": 1000}));
+}
+
+/// A confiança espera a trava do Claude Code (`<arquivo>.lock`): quem a segura regrava o arquivo
+/// inteiro, e a confiança gravada no meio sumiria.
+#[test]
+fn pretrust_waits_for_the_claude_code_config_lock() {
+    let home = tempfile::tempdir().unwrap();
+    let file = home.path().join(".claude.json");
+    std::fs::write(&file, r#"{"projects": {}}"#).unwrap();
+    let lock = home.path().join(".claude.json.lock");
+    std::fs::create_dir(&lock).unwrap();
+    // Uma sessão viva que leu o arquivo antes regrava a cópia dela e só então solta a trava. A
+    // confiança roda ao lado e só grava depois de pegar a trava, em qualquer ordem que as duas andem.
+    let trust = { let file = file.clone(); std::thread::spawn(move || claude::pretrust(&file, "/x", false)) };
+    std::fs::write(&file, r#"{"projects": {"/outra": {"lastCost": 1}}}"#).unwrap();
+    std::fs::remove_dir(&lock).unwrap();
+    trust.join().unwrap().unwrap();
+    let data: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(data["projects"]["/x"]["hasTrustDialogAccepted"], true, "a confiança sobrevive à regravação da sessão viva");
+    assert_eq!(data["projects"]["/outra"]["lastCost"], 1, "e não apaga o que a sessão viva gravou");
+    assert!(!lock.exists(), "a trava da confiança sai com ela");
+}
+
+/// Trava que não solta (sessão travada no meio da gravação): a confiança grava sem ela, como o
+/// próprio Claude Code faz, e não mexe na trava alheia.
+#[test]
+fn pretrust_writes_without_a_lock_that_never_frees() {
+    let home = tempfile::tempdir().unwrap();
+    let file = home.path().join(".claude.json");
+    std::fs::write(&file, r#"{"projects": {}}"#).unwrap();
+    let lock = home.path().join(".claude.json.lock");
+    std::fs::create_dir(&lock).unwrap();
+    claude::pretrust(&file, "/x", false).unwrap();
+    let data: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(data["projects"]["/x"]["hasTrustDialogAccepted"], true);
+    assert!(lock.is_dir(), "a trava de outro processo fica onde estava");
+}
+
+/// Trava vencida (processo morto): a confiança grava sem ela e não a apaga; apagar pelo caminho
+/// levaria junto a trava nova de quem a recuperou no meio.
+#[cfg(unix)]
+#[test]
+fn pretrust_leaves_a_stale_lock_alone() {
+    let home = tempfile::tempdir().unwrap();
+    let file = home.path().join(".claude.json");
+    std::fs::write(&file, r#"{"projects": {}}"#).unwrap();
+    let lock = home.path().join(".claude.json.lock");
+    std::fs::create_dir(&lock).unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+    std::fs::File::open(&lock).unwrap().set_modified(old).unwrap();
+    claude::pretrust(&file, "/x", false).unwrap();
+    let data: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(data["projects"]["/x"]["hasTrustDialogAccepted"], true);
+    assert_eq!(std::fs::metadata(&lock).unwrap().modified().unwrap(), old, "a trava vencida fica como estava");
 }
 
 /// `_pretrust_cwd` e `default_model.drop_foreign` (test_registry, test_default_model): a pasta

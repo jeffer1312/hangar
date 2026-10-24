@@ -508,8 +508,9 @@ fn plan_owner(dir: &PairDir, me: &str, ask: &JoinAsk, outside: &HashSet<String>,
         let mut peers: Vec<String> = members.iter().filter(|x| !x.same(m)).map(|x| x.view(me)).collect();
         peers.extend(kept_outside.iter().cloned());
         let linked_by = old.as_ref().and_then(|s| s.linked_by.clone());
+        let lead = old.as_ref().and_then(|s| s.lead.clone());
         writes.push((m.name.clone(), Sidecar { peers, task: Some(task.clone()), gid: survivor.clone(), harness: harness_all.clone(), orq: false,
-            fed: Some(Fed { owner: me.into(), local: true, version }), linked_by }));
+            fed: Some(Fed { owner: me.into(), local: true, version }), linked_by, lead }));
         before.insert(m.name.clone(), old);
     }
     let before_records = gids.iter().map(|g| (g.clone(), records.iter().find(|r| &r.gid == g).cloned())).collect();
@@ -982,7 +983,7 @@ fn apply_push(dir: &PairDir, me: &str, gid: &str, body: &PushBody, renamed: &Has
             h.extend(harness.iter().filter(|(k, _)| **k == m.name).map(|(k, v)| (k.clone(), v.clone())));
             for x in members.iter().filter(|x| !x.provider.is_empty()) { h.entry(x.view(me)).or_insert_with(|| x.provider.clone()); }
             writes.push((m.name.clone(), Sidecar { peers, task: Some(body.task.clone()), gid: gid.into(), harness: h, orq: false,
-                fed: Some(Fed { owner: body.owner.clone(), local: false, version: body.version }), linked_by: old.linked_by }));
+                fed: Some(Fed { owner: body.owner.clone(), local: false, version: body.version }), linked_by: old.linked_by, lead: old.lead }));
             if was_loose { newcomers.push(m.name.clone()); }
             names.push(m.name.clone());
         }

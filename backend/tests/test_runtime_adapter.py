@@ -152,14 +152,10 @@ def test_sync_lifecycle_does_not_touch_legacy_while_owned(owner):
     class Adapter:
         def close_sync(self, name):
             raise AssertionError("fechamento Legacy sem barreira")
-        def rename(self, old, new):
-            raise AssertionError("rename Legacy sem barreira")
     install_adapter(Adapter, "codex")
     adapter = Adapter()
     with pytest.raises(RuntimeError):
         adapter.close_sync("session")
-    with pytest.raises(RuntimeError):
-        adapter.rename("session", "new")
 
 
 def test_sync_endpoint_uses_server_loop(owner):
@@ -716,7 +712,7 @@ def test_state_monitor_error_without_owner_change_still_surfaces(monkeypatch):
 
 def test_reads_during_hand_over_use_python_view(monkeypatch):
     # A lista de sessões lia o estado na passagem e dava 500 para todas as sessões.
-    from app.runtime_coordinator import Phase, TransferInProgress
+    from app.runtime_coordinator import Phase
     owner = _Owner(Phase.RecoveringPython)
     owner.legacy_active = set()
     monkeypatch.setattr(runtime_coordinator, "_current", owner)
@@ -724,13 +720,8 @@ def test_reads_during_hand_over_use_python_view(monkeypatch):
     class Adapter:
         def snapshot(self, name):
             return "vista python"
-
-        def rename(self, old, new):
-            raise AssertionError("rename sem barreira")
     install_adapter(Adapter, "claude")
     assert Adapter().snapshot("session") == "vista python"
-    with pytest.raises(TransferInProgress):
-        Adapter().rename("session", "new")
 
 
 @pytest.mark.parametrize("reply,expected", [

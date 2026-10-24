@@ -517,6 +517,7 @@ fn guest_rows<'a>(rows: impl IntoIterator<Item = &'a SessionRow>, guest: &Guest)
         let mut r = r.clone();
         if let Some(peers) = r.pair_peers.as_mut() { peers.retain(|p| guest.sees(p)); }
         r.linked_by = r.linked_by.filter(|p| guest.sees(p));
+        r.pair_lead = r.pair_lead.filter(|p| guest.sees(p));
         if guest.invite { r.pair_task = None; }
         (r.pair_external, r.pair_externals, r.then_target) = (None, None, None);
         r.guest_kind = guest.kind_of(&r.name).map(|k| match k { Kind::Share => "share", Kind::Pair => "pair" }.to_owned());

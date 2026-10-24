@@ -206,15 +206,6 @@ def claim(session: str, gid: str) -> None:
         _life_cache.pop(session, None)
 
 
-def rename_session(old: str, new: str) -> None:
-    with _writing() as st:
-        entry = st["sessions"].pop(old, None)
-        if entry is None:
-            return
-        st["sessions"][new] = entry
-        _save()
-
-
 def set_life(session: str, life: str | None) -> None:
     # Trocar terminal <-> sem terminal muda a vida; sem isto a sessão deixaria de ser do convidado.
     if life is None:

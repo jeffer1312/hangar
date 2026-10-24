@@ -58,6 +58,17 @@ impl MuxProcess {
         self.has_session(name).await.map(|alive| !alive)
     }
 
+    /// `rename-session` com alvo exato (`=` vale no psmux também). `Some(true)` = renomeou; `None` = o
+    /// multiplexador não respondeu, e o rename pode ou não ter acontecido. O psmux SOBRESCREVE uma
+    /// sessão viva com o nome novo em vez de recusar: lá o destino ocupado é conferido antes.
+    pub async fn rename_session(&self, old: &str, new: &str) -> Option<bool> {
+        if cfg!(windows) && self.has_session(new).await? { return Some(false); }
+        self.output(&["rename-session", "-t", &format!("={old}"), new]).await.ok().map(|out| out.status.success())
+    }
+
+    /// Comando avulso; `Err` = o multiplexador não respondeu.
+    pub async fn run(&self, args: &[&str]) -> Result<std::process::Output, &'static str> { self.output(args).await }
+
     /// Sessão marcada `@cp_hidden`: o shell `term-<nome>` que o app abriu.
     pub async fn is_hidden(&self, name: &str) -> bool {
         self.output(&["show-options", "-v", "-t", &format!("={name}:"), "@cp_hidden"]).await
@@ -256,6 +267,7 @@ mod tests {
         fn runtime_problem(&self) -> Option<(String, String)> { None }
         async fn ask_payload(&self) -> Result<Option<hangar_api::ask::AskQuestion>, String> { Ok(None) }
         fn deliverable(&self) {}
+        fn trust_dialog(&self) {}
         async fn preview_capture(&self) -> Option<Result<Frame, CaptureFailed>> { None }
         async fn preview_files(&self, _: &str) -> Vec<crate::state::preview::HookFile> { Vec::new() }
         fn committed(&self) -> Option<Arc<str>> { None }

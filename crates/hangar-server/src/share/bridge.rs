@@ -31,7 +31,6 @@ enum Operation {
     ModeChangeBegin { name: String },
     ModeChangeEnd { name: String, #[serde(default)] source_life: Option<String> },
     FactsSnapshot { lives: HashMap<String, String>, changing: HashSet<String> },
-    Rename { old: String, new: String },
     SessionDied { name: String },
     EndPair { local: String, address: String },
     ActiveSessions {},
@@ -61,11 +60,6 @@ async fn execute(st: Arc<AppState>, share: Arc<ShareState>, op: Operation) -> Re
             Ok(json!({}))
         }
         Operation::FactsSnapshot { lives, changing } => { facts.apply_snapshot(lives, changing); Ok(json!({})) }
-        Operation::Rename { old, new } => {
-            share.store.rename(&old, &new).map_err(io_failed)?;
-            share.pairs.rename_local(&old, &new).map_err(io_failed)?;
-            Ok(json!({}))
-        }
         Operation::SessionDied { name } => {
             pair_routes::session_died(st, share, Arc::new(Direct), &name).await;
             Ok(json!({}))

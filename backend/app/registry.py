@@ -18,7 +18,6 @@ from app.config import settings
 from app import claude_customizations as session_customizations
 from app import plugin_bridge
 from app import runtime_config
-from app.names import sanitize_session_name
 from app.git_ops import git_summary, git_diffstat
 from app import worktrees
 from app.models import SessionInfo, session_key
@@ -1222,16 +1221,6 @@ class SessionRegistry:
                 if required:
                     raise
 
-    def _rename_rust(self, old: str, new: str) -> None:
-        """O rename já aconteceu: falha da ponte fica no diário (`lista.ponte`), e o nome velho é
-        esquecido de novo antes de qualquer sessão nascer com ele (`_forget` na criação)."""
-        if _rust_caches():
-            from app import list_bridge
-            try:
-                list_bridge.rename(old, new)
-            except (list_bridge.ListBridgeError, tmux.MuxIndisponivel):
-                pass
-
     def _forget(self, name: str, required: bool = False) -> None:
         """Esquece o nome aqui e no Rust. `required`: criação, antes de qualquer efeito; a falha
         levanta, porque o nome reusado herdaria o cache e abriria a conversa da morta. Nos demais
@@ -2411,85 +2400,6 @@ class SessionRegistry:
         await asyncio.to_thread(self._forget, record.name)
         await asyncio.to_thread(self._seed, record.name, meta["jsonl"], True)
 
-    def rename(self, old: str, new: str) -> None:
-        from app.conversation_transfer import require_available
-        require_available(old)
-        require_available(new)
-
-        if headless_sessions.exists(old):
-            from app.adapters import get_adapter, CLAUDE_HEADLESS
-            new = sanitize_session_name(new)
-            if not new or new == old:
-                return
-            if tmux.has_session(new) or codex_sessions.exists(new) or headless_sessions.exists(new):
-                raise ValueError("ja existe uma sessao com esse nome")
-            headless_sessions.rename(old, new)
-            get_adapter(CLAUDE_HEADLESS).rename(old, new)
-            self._jsonl_cache.pop(old, None)
-            self._rename_rust(old, new)
-            PromptQueue(old).rename(new)
-            ThenLink(old).rename(new)
-            shortcut_terminals.rename_owner(old, new)
-            from app.conversation_transfer import rename_transfer
-            rename_transfer(old, new)
-            return
-        if codex_sessions.exists(old):
-            from app.adapters import get_adapter
-            codex_sessions.rename(old, new)
-            get_adapter("codex").rename(old, new)
-        # Cache e keyed por NOME -> ao renomear, move a entrada pro nome novo e esquece o velho. Senao
-        # o nome velho apontaria pro jsonl pra sempre (reuso futuro = transcript errado) e o nome novo
-        # cairia no fallback newest-by-mtime ate um sinal confiavel reaparecer.
-        j = self._jsonl_cache.pop(old, None)
-        if j is not None:
-            self._jsonl_cache[new] = j
-        if old in self._fd_locked:           # move o fd-lock junto com o cache
-            self._fd_locked.discard(old)
-            self._fd_locked.add(new)
-        st = self._status_cache.pop(old, None)   # statusline move junto (mesma sessao, so outro nome)
-        if st is not None:
-            self._status_cache[new] = st
-        if old in self._label_cache:
-            self._label_cache[new] = self._label_cache.pop(old)
-        if old in self._limit_cache:
-            self._limit_cache[new] = self._limit_cache.pop(old)
-        if old in self._reply_cache:
-            self._reply_cache[new] = self._reply_cache.pop(old)
-        self._rename_rust(old, new)
-        # A fila duravel tambem e keyed por NOME -> move junto, senao a sessao renomeada perde as
-        # entradas nao-drenadas e elas ficam orfas no nome velho (fantasma se reusarem `old`).
-        PromptQueue(old).rename(new)
-        # Vinculo 'then' (feature #12): mesmo motivo — keyed por NOME, move junto pra sessao renomeada
-        # nao perder o encadeamento armado.
-        ThenLink(old).rename(new)
-        # O grupo já foi renomeado pelo Rust, antes do tmux (`group.rename` na rota).
-        # L71 da revisao final: o shell escondido e keyed por NOME (`term-<nome>`) e NAO acompanha o
-        # rename sozinho -- ele ficava orfa pra sempre, invisivel no app (marcado @cp_hidden) e fora
-        # do alcance do `kill()`, que so procura `term-<nome NOVO>`. Pior: a aba Shell do nome novo
-        # criaria um shell NOVO e o velho seguiria vivo consumindo o nome, ate colidir com uma
-        # sessao futura.
-        # RENOMEIA, nao mata: `rename-session` nao mexe no cwd nem no que esta rodando no pane -- o
-        # shell continua no mesmo diretorio, que e o diretorio da sessao renomeada. (O perigo de
-        # "shell no diretorio errado" e outro caminho: reatar um `term-<nome>` orfa de OUTRO repo,
-        # tratado no tmux.new_hidden_shell.) Matar em silencio derrubaria um `npm run dev` que
-        # estivesse rodando ali, e o unico registro disso e um `_log.debug`.
-        # Kill so como FALLBACK: renomear falha se `term-<novo>` ja existir (shell de uma vida
-        # anterior daquele nome), e ai deixar o velho vivo traz de volta o orfa que este bloco
-        # existe pra evitar.
-        # A marca e o gate, como no `_kill_hidden_shell`: sem ela, um `term-<velho>` de TERCEIRO
-        # seria sequestrado pelo rename. `is_hidden` mira `={nome}:` (exato), entao o rename so
-        # roda quando a sessao existe de verdade -- sem risco do prefix-match do tmux pegar
-        # `term-<velho>-2`.
-        # Terminais de atalho seguem a conversa pelo dono gravado neles (nao pelo nome tmux).
-        shortcut_terminals.rename_owner(old, new)
-        from app.conversation_transfer import rename_transfer
-        rename_transfer(old, new)
-        alvo = f"term-{old}"
-        if tmux.is_hidden(alvo) and not tmux.rename_session(alvo, f"term-{new}"):
-            _log.info("rename: %r nao pode virar %r (nome ja ocupado?) — matando o shell escondido",
-                      alvo, f"term-{new}")
-            self._kill_hidden_shell(old)
-
     @staticmethod
     def _kill_hidden_shell(name: str) -> None:
         # Task 6 (achado da revisao, rodada 2): mata `term-<name>` SO se a marca confirmar que a
@@ -2615,5 +2525,5 @@ class SessionRegistry:
 
 
 from app.runtime_adapter import registry_method as _runtime_registry_method
-for _method_name in ("kill", "rename", "para_headless"):
+for _method_name in ("kill", "para_headless"):
     setattr(SessionRegistry, _method_name, _runtime_registry_method(getattr(SessionRegistry, _method_name)))

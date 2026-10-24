@@ -127,6 +127,9 @@ export function createActivityFolder(): ActivityFolder {
   // Colega de equipe trabalha em rodadas: SendMessage reabre, aviso de ocioso fecha. O aviso chega
   // ao lider atrasado (depois do SendMessage seguinte), entao so fecha o aviso com ts posterior.
   let acordado = new Map<string, number>();
+  // SendMessage ao agentId de um agente de fundo comum: tool_use_id -> agentId. Só retoma quando o
+  // resultado vem sem erro (recado recusado não reabre nada).
+  let retomada = new Map<string, string>();
   // Marca um agente background como terminado pelo agentId, com o launch vindo ANTES ou DEPOIS do fim.
   function completeAgent(agentId: string): void {
     const tuid = bgAgent.get(agentId);
@@ -143,6 +146,15 @@ export function createActivityFolder(): ActivityFolder {
     }
     if (e.kind === 'tool_result' && e.tool_use_id) {
       semResultado.delete(e.tool_use_id);
+      const alvo = retomada.get(e.tool_use_id);
+      if (alvo !== undefined) {
+        retomada.delete(e.tool_use_id);
+        const tuid = bgAgent.get(alvo);
+        if (!e.is_error && tuid) {
+          resulted.delete(tuid);
+          if (typeof e.ts === 'number') acordado.set(alvo, e.ts);
+        }
+      }
       // tool_result sintetico do backend (transcript.py): <task-notification> virou "task:<id>".
       // Resolve o launch background correspondente e marca como terminado.
       if (e.tool_use_id.startsWith('task:')) {
@@ -177,6 +189,9 @@ export function createActivityFolder(): ActivityFolder {
       return;
     }
     if (e.kind === 'user_msg' && e.text && e.text.includes('<task-notification>')) {
+      // Subagente que só parou para esperar o próprio trabalho de fundo: segue vivo. Só o <summary>,
+      // porque o <result> do fim de verdade pode citar a frase.
+      if (/<summary>[^<]*is waiting on its own background work[^<]*<\/summary>/.test(e.text)) return;
       const match = e.text.match(/<task-id>([^<]+)<\/task-id>/);
       if (match) completeAgent(match[1].trim());
       return;
@@ -193,6 +208,7 @@ export function createActivityFolder(): ActivityFolder {
         const msg = input.message as Record<string, unknown> | undefined;
         if (msg && typeof msg === 'object' && String(msg.type ?? '').startsWith('shutdown')) break;
         const para = String(input.to ?? input.recipient ?? '');
+        if (bgAgent.has(para) && e.tool_use_id) retomada.set(e.tool_use_id, para);
         for (const [alvo, tuid] of bgAgent) {
           if (alvo !== `teammate:${para}` && !(para === '*' && alvo.startsWith('teammate:'))) continue;
           resulted.delete(tuid);
@@ -321,6 +337,7 @@ export function createActivityFolder(): ActivityFolder {
     completedIds = new Set();
     semResultado = new Set();
     acordado = new Map();
+    retomada = new Map();
     shells = [];
     bgPendente = new Set();
     for (const e of events) push(e);

@@ -155,6 +155,7 @@ mod monitor {
         fn runtime_problem(&self) -> Option<(String, String)> { None }
         async fn ask_payload(&self) -> Result<Option<hangar_api::ask::AskQuestion>, String> { Ok(None) }
         fn deliverable(&self) {}
+        fn trust_dialog(&self) {}
         async fn preview_capture(&self) -> Option<Result<Frame, CaptureFailed>> { None }
         async fn preview_files(&self, _: &str) -> Vec<hangar_server::state::preview::HookFile> { Vec::new() }
         fn committed(&self) -> Option<Arc<str>> { None }

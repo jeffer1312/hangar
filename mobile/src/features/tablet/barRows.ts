@@ -52,8 +52,9 @@ export function barRows(rows: AggSession[], identities: ReadonlyMap<string, stri
     const opens = (parent: AggSession, child: AggSession) => child.serverId === parent.serverId && child.linked_by === parent.name;
     const opener = (s: AggSession) => list.some(child => opens(s, child));
     const opened = (s: AggSession) => list.some(parent => opens(parent, s));
-    // Numa cadeia de filhas, quem abriu a primeira fica antes das demais.
-    const mother = list.find(s => opener(s) && !opened(s)) ?? list.find(opener) ?? list.find(isOrq);
+    // Como no nativo: o árbitro, depois quem formou o grupo; numa cadeia de filhas, quem abriu a primeira.
+    const formed = list.find(s => list.some(o => o.serverId === s.serverId && o.pair_lead === s.name));
+    const mother = list.find(isOrq) ?? formed ?? list.find(s => opener(s) && !opened(s)) ?? list.find(opener);
     const sorted = mother ? [mother, ...list.filter(s => s !== mother)] : list;
     const key = group.key ?? (mother ? `mother:${keyOf(mother)}` : `members:${JSON.stringify(list.map(keyOf).sort())}`);
     const label = sorted.map(s => s.pair_task?.trim()).find(Boolean) || null;

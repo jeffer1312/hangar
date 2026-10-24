@@ -150,17 +150,6 @@ def delete(name: str) -> None:
         pass
 
 
-def rename(old: str, new: str) -> None:
-    src, dst = _path(old), _path(new)
-    with _locked(old, new):
-        if not src.exists():
-            return
-        atomico.substituir(src, dst)
-        meta = load(new)
-        if meta is not None:
-            _write(new, {**meta, "name": new})
-
-
 def list_all() -> list[dict]:
     out: list[dict] = []
     try:

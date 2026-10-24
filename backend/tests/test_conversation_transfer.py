@@ -177,20 +177,6 @@ def test_clear_drops_active_composition_keeps_archive(tmp_path):
     assert "tool_output_token_limit" not in cx_sessions.load("s")
 
 
-def test_rename_keeps_snapshot_and_archive_association(tmp_path):
-    record = sample_record(tmp_path, phase=TransferPhase.COMPLETE)
-    store.save_transfer(record)
-    cx_sessions.save("s", "old-thread", record.boundary.rollout_path, str(tmp_path),
-                     key="old", codex_home="/tmp/codex", transfer_id=record.id)
-    cx_sessions.rename("s", "new")
-    store.rename_transfer("s", "new")
-    renamed = store.load_transfer(record.id)
-    assert renamed.name == "new" and renamed.source == record.source
-    assert store.transfer_for_session("s", lifecycle_id="k:new") is None
-    assert store.transfer_for_session("new") == renamed
-    assert store.transfer_for_thread("/tmp/codex", "old-thread") == renamed
-
-
 def test_terminal_without_key_adopts_once(tmp_path):
     record = sample_record(tmp_path, source_life="t:100")
     record = replace(record, origin_meta={k: v for k, v in record.origin_meta.items() if k != "key"})

@@ -131,6 +131,9 @@ pub trait Sources: Send + Sync {
     fn ask_payload(&self) -> impl Future<Output = Result<Option<AskQuestion>, String>> + Send;
     /// `session.deliverable`: só dispara; quem implementa não segura a rodada e registra a falha.
     fn deliverable(&self);
+    /// A tela mostra o "trust this folder?" que a abertura devia ter evitado: só dispara, e quem
+    /// implementa registra o que o `.claude.json` diz da pasta naquela hora.
+    fn trust_dialog(&self);
     /// Captura só para a prévia, entre as rodadas de estado; `None`: a fonte não as faz.
     fn preview_capture(&self) -> impl Future<Output = Option<Result<Frame, CaptureFailed>>> + Send;
     /// `.hangar-preview/<stem>.json` legíveis, na ordem das pastas de config. Chamado a cada toque
@@ -170,7 +173,12 @@ struct Memory {
     switch_misses: u8,
     /// Última linha de status sem métrica de contexto já registrada.
     ctx_warned: Option<String>,
+    /// O "trust this folder?" na tela já foi avisado.
+    trust_reported: bool,
 }
+
+/// Cabeçalho do diálogo de confiança do Claude Code, que a linha de status carrega enquanto ele está aberto.
+const TRUST_DIALOG: &str = "Accessing workspace:";
 
 static CTX_PAIR: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"([\d.,]+)\s*[kKmM]?\s*/\s*([\d.,]+)\s*[kKmM]?").unwrap());
 static CTX_LABELED: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\bctx\s*[\d.,]+\s*[kKmM]?\s*/\s*[\d.,]+\s*[kKmM]?").unwrap());
@@ -325,6 +333,10 @@ impl<S: Sources> Monitor<S> {
             tracing::info!(session = self.src.name(), statusline = line, "estado: sem métrica de contexto");
             self.mem.ctx_warned = Some(line.to_owned());
         }
+        // Uma vez por aparição: o diálogo que volta depois de sumir é outra ocorrência.
+        let trust = event.status_line.as_deref().is_some_and(|line| line.contains(TRUST_DIALOG));
+        if trust && !self.mem.trust_reported { self.src.trust_dialog(); }
+        self.mem.trust_reported = trust;
         // Como o Python, a borda vale com problema na linha; só o estado que não foi observado não decide.
         if event.problema.as_deref() != Some(OBSERVATION_FAILED) && self.edges.deliverable(&event) {
             self.src.deliverable();
@@ -591,6 +603,7 @@ mod tests {
         ask: Mutex<Option<AskQuestion>>,
         ask_reads: AtomicU32,
         deliveries: Mutex<Vec<u32>>,
+        trust_dialogs: Mutex<u32>,
         files_failed: Mutex<Option<String>>,
         permissions: Mutex<Option<permission::PermissionStore>>,
         captured_permission: Mutex<Option<permission::MemoryRevision>>,
@@ -604,7 +617,7 @@ mod tests {
             Arc::new(Self { frames, round: AtomicU32::new(0), has_session: AtomicU32::new(0), facts: Mutex::default(),
                 wake: Arc::default(), epoch: AtomicU64::new(0), events: Mutex::default(), others: Mutex::default(),
                 runtime: Mutex::default(), runtime_wake: Arc::default(), ask: Mutex::default(), ask_reads: AtomicU32::new(0),
-                deliveries: Mutex::default(), files_failed: Mutex::default(), permissions: Mutex::default(), captured_permission: Mutex::default(), finish_mode: Mutex::default(),
+                deliveries: Mutex::default(), trust_dialogs: Mutex::default(), files_failed: Mutex::default(), permissions: Mutex::default(), captured_permission: Mutex::default(), finish_mode: Mutex::default(),
                 hook: Mutex::default(), previews: Mutex::default() })
         }
         fn rounds(&self) -> u32 { self.round.load(Ordering::SeqCst) }
@@ -667,6 +680,7 @@ mod tests {
             Ok(self.ask.lock().unwrap().clone())
         }
         fn deliverable(&self) { self.deliveries.lock().unwrap().push(self.rounds()); }
+        fn trust_dialog(&self) { *self.trust_dialogs.lock().unwrap() += 1; }
         fn hub_wake(&self) -> Arc<Notify> { Arc::default() }
         async fn preview_capture(&self) -> Option<Result<Frame, CaptureFailed>> { None }
         async fn preview_files(&self, _: &str) -> Vec<HookFile> { self.hook.lock().unwrap().clone() }
@@ -911,6 +925,16 @@ mod tests {
         fake.epoch.fetch_add(1, Ordering::SeqCst);
         tokio::time::sleep(POLL * 2).await;
         assert_eq!(others(&fake, "ask_question").len(), 2, "uma antes e uma depois do /clear");
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn trust_dialog_is_reported_once_per_appearance() {
+        const TRUST: &str = "────────────\n Accessing workspace:\n /w/x\n Quick safety check: Is this a project you created or one you trust?\n ❯ No, continue without these permissions\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel";
+        let fake = Fake::new(vec![Ok(IDLE), Ok(TRUST), Ok(TRUST), Ok(IDLE), Ok(TRUST), Ok(IDLE)]);
+        let task = tokio::spawn(Monitor::new(fake.clone()).run());
+        tokio::time::sleep(POLL * 6).await;
+        assert_eq!(*fake.trust_dialogs.lock().unwrap(), 2, "duas aparições, cada uma avisada uma vez: {:?}", fake.states());
         task.abort();
     }
 

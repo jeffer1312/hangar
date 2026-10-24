@@ -42,6 +42,7 @@ impl Sources for HubFake {
     fn runtime_problem(&self) -> Option<(String, String)> { None }
     async fn ask_payload(&self) -> Result<Option<AskQuestion>, String> { Ok(None) }
     fn deliverable(&self) {}
+    fn trust_dialog(&self) {}
     async fn preview_capture(&self) -> Option<Result<Frame, CaptureFailed>> { None }
     async fn preview_files(&self, _: &str) -> Vec<HookFile> { Vec::new() }
     fn committed(&self) -> Option<Arc<str>> { self.hub.upgrade()?.committed() }

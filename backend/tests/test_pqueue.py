@@ -38,20 +38,6 @@ def test_bump_attempts_incrementa_e_devolve():
     assert q.bump_attempts("id-que-nao-existe") == 0
 
 
-def test_rename_moves_entries_and_drops_old():
-    PromptQueue("old").append("msg um")
-    PromptQueue("old").append("msg dois")
-    PromptQueue("old").rename("new")
-    assert PromptQueue("old").load() == []  # nome velho ficou vazio
-    assert [e["text"] for e in PromptQueue("new").load()] == ["msg um", "msg dois"]
-
-
-def test_rename_without_queue_is_noop():
-    # Sessao sem fila: rename nao deve criar nada nem estourar.
-    PromptQueue("sem-fila").rename("destino")
-    assert PromptQueue("destino").load() == []
-
-
 def test_append_default_pending_and_eager_delivered():
     PromptQueue("s").append("pendente")
     PromptQueue("s").append("eager", delivered=True)

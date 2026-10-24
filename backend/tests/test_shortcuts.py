@@ -289,7 +289,6 @@ def test_hangar_terminal_is_outside_the_session(client, monkeypatch, tmp_path, h
     assert client.get("/api/sessions/a/shortcut-terminals", headers=_auth()).json()["terminals"] == []
     assert shortcut_terminals.find("a", ident) is None
     shortcut_terminals.close_all("a")
-    shortcut_terminals.rename_owner("a", "a2")
     assert [t["alive"] for t in _hangar(client)] == [True]
 
 
@@ -575,14 +574,13 @@ def test_list_and_close_require_auth(client):
     assert client.post("/api/sessions/s/shortcut-terminals/abcdef/close").status_code == 401
 
 
-def test_session_close_and_rename_carry_the_shortcut_terminals(monkeypatch, tmp_path, private_tmux):
+def test_session_close_carries_the_shortcut_terminals(monkeypatch, tmp_path, private_tmux):
     from app import shortcut_terminals as st
     monkeypatch.setenv("SHELL", "/bin/sh")
     st.start("velho", str(tmp_path), "sleep 30", "x", {})
-    st.rename_owner("velho", "novo")
-    assert st.list_for("velho") == [] and len(st.list_for("novo")) == 1
-    st.close_all("novo")
-    assert st.list_for("novo") == []
+    assert len(st.list_for("velho")) == 1
+    st.close_all("velho")
+    assert st.list_for("velho") == []
 
 
 def test_terminal_is_hidden_from_the_session_list(monkeypatch, tmp_path, private_tmux):
@@ -895,7 +893,6 @@ def test_mux_without_answer_never_breaks_the_best_effort_paths(monkeypatch):
     from app import shortcut_terminals as st
     monkeypatch.setattr(st, "_read_rows", lambda: None)
     st.close_all("s")
-    st.rename_owner("a", "b")
     st._abort("shortcut-x-abcdef")                    # sem lista, cai no kill direto
 
 

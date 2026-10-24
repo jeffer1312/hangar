@@ -31,17 +31,30 @@ export function SessionSectionHeader({ section, onToggle }: { section: SessionSe
 }
 
 // Abre o bloco do grupo dentro da seção: rótulo (tarefa ou nomes) e, entre máquinas, quantas são.
-export function GroupBlockHeader({ head }: { head: GroupHead }) {
+// Recolhido, quem espera resposta continua contado no cabeçalho.
+export function GroupBlockHeader({ head, onToggle }: { head: GroupHead; onToggle: (id: string) => void }) {
   const { theme } = useUnistyles();
   const muted = theme.tokens.text.muted;
   const machines = head.machines > 1 ? m.grupo_selo_maquinas({ n: head.machines }) : null;
+  const awaiting = head.awaiting > 0 ? `${head.awaiting} ${m.estado_aguardando()}` : null;
   return (
-    <View style={styles.groupHead} accessible accessibilityRole="header"
-      accessibilityLabel={[m.par_grupo_titulo({ n: head.size }), head.label, machines].filter(Boolean).join(', ')}>
+    <Pressable onPress={() => onToggle(head.id)} style={styles.groupHead} accessibilityRole="button"
+      accessibilityLabel={[m.par_grupo_titulo({ n: head.size }), head.label, machines, awaiting].filter(Boolean).join(', ')}
+      accessibilityState={{ expanded: !head.collapsed }}
+      accessibilityHint={head.collapsed ? m.sessao_expandir() : m.sessao_recolher()}>
       <GroupGlyph size={14} color={muted} />
-      <Text style={[styles.groupHeadLabel, { color: theme.tokens.text.secondary }]} numberOfLines={1}>{head.label}</Text>
+      <Text accessibilityRole="header" style={[styles.groupHeadLabel, { color: theme.tokens.text.primary }]} numberOfLines={2}>{head.label}</Text>
       {machines ? <Text style={[styles.count, { color: muted }]} numberOfLines={1}>{machines}</Text> : null}
-    </View>
+      {head.awaiting > 0 ? <View style={[styles.badge, { backgroundColor: superficie(theme, 0.5) }]}>
+        <Text style={[styles.count, { color: theme.tokens.pill.input.fg }]}>{head.awaiting}</Text>
+      </View> : null}
+      <View style={[styles.badge, { backgroundColor: superficie(theme, 0.5) }]}>
+        <Text style={[styles.count, { color: muted }]}>{head.size}</Text>
+      </View>
+      <View style={styles.arrow}>
+        <Icon name={head.collapsed ? 'ChevronRight' : 'ChevronDown'} size={12} color={muted} />
+      </View>
+    </Pressable>
   );
 }
 
@@ -63,7 +76,7 @@ const styles = StyleSheet.create((theme) => ({
   badge: { paddingHorizontal: theme.base.space[1.5], paddingVertical: theme.base.space[0.5], borderRadius: theme.base.radius.full },
   count: { fontSize: theme.base.text.xs, fontVariant: ['tabular-nums'] },
   arrow: { marginLeft: 'auto' },
-  groupHead: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5], paddingHorizontal: theme.base.space[3], paddingTop: theme.base.space[2], paddingBottom: theme.base.space[1] },
+  groupHead: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5], minHeight: 44, paddingHorizontal: theme.base.space[3], paddingVertical: theme.base.space[2] },
   groupHeadLabel: { flexShrink: 1, fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold },
   card: { overflow: 'hidden' },
   first: { borderTopLeftRadius: theme.base.radius.lg, borderTopRightRadius: theme.base.radius.lg },

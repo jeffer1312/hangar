@@ -31,8 +31,6 @@ enum Operation {
     /// gid vem no pedido, lida pelo Python antes de chamar.
     #[serde(rename = "group.leave")]
     Leave { name: String, phases: std::collections::HashMap<String, Value> },
-    #[serde(rename = "group.rename")]
-    Rename { old: String, new: String },
     #[serde(rename = "group.orq_associate")]
     OrqAssociate { name: String, gid: String, mtime: f64, facts: TeamFacts },
 }
@@ -182,14 +180,6 @@ async fn execute(st: Arc<AppState>, groups: Arc<GroupService>, op: Operation) ->
                 Ok::<_, Failed>((ex, notify_exit(&st, &groups, &name, &tell).await))
             }).await?;
             Ok(json!({"ex_peers": ex, "warnings": warnings, "deliveries": ctx.take_deliveries()}))
-        }
-        Operation::Rename { old, new } => {
-            match super::fed_exit::rename(&st, &groups, &old, &new).await {
-                Some(done) => done,
-                None => groups.rename(&old, &new).await,
-            }.map_err(group_failed)?;
-            super::link_return::renamed(&st, &old, &new).await;
-            Ok(json!({}))
         }
         Operation::OrqAssociate { name, gid, mtime, facts } => {
             // Sob o lock: um join ou uma saída concorrente não vê o time meio associado.

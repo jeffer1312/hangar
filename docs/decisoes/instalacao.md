@@ -165,13 +165,24 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `--tudo --passos mobile`). Evidência em
   [Verificação local antes do push](#verificação-local-antes-do-push-06102026).
 - **No Linux a verificação prepara uma vez e roda os passos em duas faixas (cargo e o resto); o
-  registro é por passo.** O rápido do front não roda os testes do front quando só o core mudou, e o
-  do backend escolhe os testes por quem importa o módulo. O preparo é o único que compila e instala, e o pytest roda com `pytest-xdist`, um arquivo
+  registro é por passo.** Faixa que abre com a memória disponível abaixo de
+  `HANGAR_VERIFICAR_MEM_GB` (padrão 6) espera a anterior terminar, com os mesmos passos. Quando o
+  core muda, o rápido do front roda os testes dos arquivos do front que importam um nome que o diff
+  do core mudou, direto ou por quem o usa dentro do core (`scripts/core-front-tests.mjs`); o do
+  backend escolhe os testes por quem importa o módulo. O preparo é o único que compila e instala, e o pytest roda com `pytest-xdist`, um arquivo
   por processo (`git config hangar.verificarProcessos`, padrão 4; `1` = em fila). Um passo que passou
   fica gravado para a árvore, e a rodada seguinte só repete o que falta. O Node é o do `.node-version`
   da árvore verificada. Teste do backend não pode deixar timer, thread que age, `sys.modules`,
   módulo recarregado ou tratador de sinal alterado para o arquivo seguinte: com a suíte repartida, quem paga é o vizinho. Evidência em
   [Verificação local em paralelo](#verificação-local-em-paralelo-09102026).
+- **Build e teste locais: target comum, binário fixado na worktree, mensagens com carimbo.** Toda
+  worktree compila no target comum da máquina pelo `scripts/cargo-pinned`, que pega a trava
+  `/tmp/hangar-build.lock` e copia os executáveis para o `crates/target` do checkout na mesma trava:
+  pytest e `CP_RUST_SERVER_BIN` rodam essa cópia, nunca o executável do target comum. A troca em
+  `~/.hangar/bin` usa o release do target aquecido; o perfil dev não é mais rápido na mudança
+  incremental. O `i18n:compile` de front, core e app passa por `scripts/i18n-compile.mjs` e pula
+  quando entrada e saída batem com o carimbo da última compilação. Evidência em
+  [Build e teste locais rápidos](#build-e-teste-locais-rápidos-23102026).
 - **Build Rust: testes de integração do `hangar-server` num executável só, e o CI publica com LTO
   fat só na `main`.** Teste novo entra como módulo de `crates/hangar-server/tests/it/`; teste que
   mexe em estado do processo inteiro (PATH, HOME, TZ, logger global, gancho de pânico) vai para um
@@ -796,6 +807,38 @@ os passos do que mudou, e árvore que já passou não roda nada.
   verificado inteiro, e cada push seguinte nele ou na `main` também.
 - **`release.yml` saiu.** Empacotava o shell Electron em tag `v*` (última em 25/08); nada no
   instalador, no Atualizar, no app nativo nem no site lê essas releases.
+
+## Build e teste locais rápidos (23/10/2026)
+
+Regra: otimizar sem tirar verificação; cada mudança provada com o mesmo resultado. Medido nesta
+máquina (12 núcleos, 23 GB, outras sessões abertas), uma compilação ou suíte por vez, `-j 2`; pico =
+maior RSS de um processo da medição.
+
+- **Dev não acelera a troca.** `cargo build -p hangar-server`, target comum aquecido, uma linha
+  mudada: release 29 s, dev 48 s (pico ~3,2 GB nos dois). Do zero: release 1.124 s, dev 416 s. Os
+  10–13 min da troca em `~/.hangar/bin` eram de target frio, por isso o `cargo-pinned` (target comum)
+  e não o perfil dev.
+- **Target comum sem binário velho.** O cargo separa os crates do workspace por caminho do checkout;
+  o que se misturava era o executável final, que todos gravam no mesmo lugar. O `cargo-pinned`
+  copia o executável na mesma trava do build (`scripts/test-cargo-pinned.sh` prova que o build de
+  outro checkout não muda a cópia).
+- **Mensagens com carimbo.** `npm run i18n:compile` do front (core junto): 18–22 s e 670–830 MB
+  antes; 0,7 s e 72 MB sem mudança em `messages/`. Saída igual à do `paraglide-js compile` direto
+  (hash da árvore em `scripts/test-i18n-compile.mjs`).
+- **Cache de transformação do Vitest** (`experimental.fsModuleCache`). Suíte do front: 382 s sem,
+  348 s na primeira rodada com ele, 310 s com ele quente; os mesmos 2.300 testes passando, um a um.
+  Core: 32 s → 25 s, os mesmos 1.531.
+- **Seleção do front pelo core.** Arquivos do front escolhidos pelos nomes que o diff mudou: em
+  commits recentes, `format.ts` 14 arquivos (76 pelo arquivo inteiro), `activity.ts` 11,
+  `updateAll.ts` 12, contra 326 que importam o core. Antes, nenhum teste do front rodava.
+- **Memória na verificação.** `verificar-local` rápido de um commit com uma linha no
+  `hangar-server` e uma no front: as duas rodadas passaram, com 10 GB livres; a espera não disparou,
+  então o ganho sob pouca memória não foi medido.
+- **Não entrou, por mudar o resultado ou não render:** tipos das mensagens em `.d.ts` com `.js` sem
+  JSDoc (suíte do front 382 s → 242 s, mas o `svelte-check` passa de 0 a 14.257 erros nos `.js`
+  gerados, e compilar as mensagens vai de 15 s a 77 s); uma cópia só das mensagens (o runtime do
+  front tem outra estratégia de idioma, e 20 testes do app trocam o idioma no runtime dele, que o
+  core passaria a seguir); `tsc` incremental no core (7,8 s, 4,1 s, 7,7 s: ganho instável).
 
 ## Verificação local em paralelo (09/10/2026)
 

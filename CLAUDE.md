@@ -99,6 +99,7 @@ npm --prefix frontend run dev              # Vite dev server
 npm --prefix frontend run build            # production build — does NOT typecheck
 npm --prefix frontend run check            # svelte-check + tsc — THIS is the type gate
 
+scripts/cargo-pinned build -p hangar-server   # target comum da máquina, trava e -j 2; fixa o binário em crates/target da worktree
 scripts/verificar-local                    # só o ligado aos arquivos mudados (o que a trava pre-push exige)
 scripts/verificar-local --completo         # o que o CI rodaria para o commit (Linux + VM Windows)
 scripts/verificar-local --passos rust      # repete só um passo (o que já passou nesta árvore fica gravado)
@@ -592,10 +593,13 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   "local" por cabeçalho. Cookie de login só autoriza `GET`/`HEAD` e, em https, só o
   `__Host-cp_token`: máquinas do Connect dividem o mesmo site. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#connect-a-porta-dele-nunca-é-local).
-- **Backend novo nasce no Rust (`crates/`), não em `backend/app/`.** Rota, ponte, poller ou
-  integração nova vai para o `hangar-server`. O Python só é tocado quando o Rust precisa de um fato
-  ou rota que ainda mora lá, ou na porta que é dele (8768 do Connect), e nela ele só repassa ao
-  Rust, num sentido.
+- **Nada nasce no Python: o objetivo é tirá-lo do projeto.** Rota, ponte, poller, integração e
+  qualquer recurso novo vão para o `hangar-server` (`crates/`). Sem pedido explícito do usuário, no
+  `backend/app/` só se apaga código. Toda linha que ACRESCENTA no Python — lógica, releitura,
+  cache, ponte, rota, repasse ao Rust, condição de modo, compatibilidade — é perguntada ao usuário
+  ANTES de escrever, dizendo o que é, por que o Rust sozinho não basta e o que se perde sem ela.
+  Vale para migração, correção e subagente (que para e pergunta pela sessão). Linha nova no Python
+  sem essa autorização é defeito na revisão, mesmo que "só repasse".
 - **Migrar do Python para o Rust é migrar o caminho inteiro.** Antes de dar a migração por feita,
   procure nos dois lados todo chamador da responsabilidade (rotas `/internal/*`, `*_bridge`,
   `to_thread` que esperam o Rust) e apague o que ficou no Python. O Rust nunca pergunta ao Python o
@@ -710,6 +714,11 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   pelo Python: texto que nasce nele (broadcast) acorda Claude/Codex sem terminal pedindo
   ao Rust, e a transferência Claude→Codex. Decisões e medições em
   [plataforma.md](docs/decisoes/plataforma.md#abertura-de-sessão-única-no-rust).
+- **Trocar o nome da sessão é do Rust (`session_rename/`), com desfazer.** Tudo que recusa vem antes
+  do primeiro efeito; a troca segura a reserva do nome novo e as portas dos dois nomes; a sessão viva
+  fecha sem matar e reabre no nome novo na mesma geração; falha no meio desfaz e diz o que não voltou.
+  O Python só repassa (Connect, convidado com conta). Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#trocar-o-nome-da-sessão-é-do-rust-23102026).
 - **Nova conversa do Claude sem terminal usa uma reserva pré-aquecida** (`crates/hangar-server/src/prewarm/`):
   com a tela aberta o cliente pede `PUT /api/sessions/prewarm` e o create leva `prewarm`. A reserva
   nasce pelo mesmo lançador, sem sidecar até a adoção, com chave, id e nome definitivos; adota só

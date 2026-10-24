@@ -93,9 +93,10 @@ async fn group(srv: &Server, name: &str, others: &[&str]) {
 async fn bridge_needs_the_secret_and_the_private_port() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), 1).await;
-    assert_eq!(bridge(srv.private, "group.rename", json!({"old": "s0", "new": "s1"}), None).await.0, 404);
-    assert_eq!(bridge(srv.private, "group.rename", json!({"old": "s0", "new": "s1"}), Some("outro")).await.0, 404);
-    assert_eq!(bridge(srv.public, "group.rename", json!({"old": "s0", "new": "s1"}), Some(SECRET)).await.0, 404, "a porta pública não tem a ponte");
+    let leave = json!({"name": "s0", "phases": {}});
+    assert_eq!(bridge(srv.private, "group.leave", leave.clone(), None).await.0, 404);
+    assert_eq!(bridge(srv.private, "group.leave", leave.clone(), Some("outro")).await.0, 404);
+    assert_eq!(bridge(srv.public, "group.leave", leave, Some(SECRET)).await.0, 404, "a porta pública não tem a ponte");
     assert_eq!(bridge(srv.private, "group.nada", json!({}), Some(SECRET)).await.0, 400);
     let health: Value = serde_json::from_str(&client().get(format!("http://{}/__hangar_server/health", srv.public)).send().await.unwrap()
         .text().await.unwrap()).unwrap();
@@ -182,16 +183,6 @@ async fn contract_write_goes_through_the_bridge() {
     assert_eq!(written["status"], 200, "{written}");
     let read = result(&srv, "group.route", json!({"method": "GET", "name": "s1", "route": "contract", "body": null})).await;
     assert_eq!((read["body"]["content"].clone(), read["body"]["mtime"].clone()), (json!("x\n"), written["body"]["mtime"].clone()), "{read}");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn rename_op() {
-    let dir = tempfile::tempdir().unwrap();
-    let srv = server(dir.path(), 3).await;
-    group(&srv, "s0", &["s1"]).await;
-    assert_eq!(result(&srv, "group.rename", json!({"old": "s0", "new": "s9"})).await, json!({}));
-    let s1: Value = serde_json::from_str(&std::fs::read_to_string(srv.pair.join("s1.json")).unwrap()).unwrap();
-    assert_eq!(s1["peers"], json!(["s9"]));
 }
 
 fn mtime(path: &Path) -> f64 {

@@ -75,6 +75,18 @@ export function ContextTab({ serverId, name, onPick }: { serverId: string; name:
   );
 }
 
+const GROUP_VISIBLE_ROWS = 4;
+
+// Mesma ordem do nativo (`linked_children::rank`): o que não é pergunta, pronto nem encerrado conta como trabalhando.
+function groupRank(session: AggSession): number {
+  switch (session.state) {
+    case 'awaiting_input': return 0;
+    case 'idle': return 2;
+    case 'dead': return 3;
+    default: return 1;
+  }
+}
+
 function GroupCard({ session, onPick }: { session: AggSession; onPick?: (session: AggSession) => void }) {
   const { serverId, name } = session;
   const rows = useSessions(s => s.rows);
@@ -90,6 +102,8 @@ function GroupCard({ session, onPick }: { session: AggSession; onPick?: (session
       ? rows.find(s => s.serverId === member.server && s.name === member.name) ?? [] : []);
     members.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : a.serverId < b.serverId ? -1 : a.serverId > b.serverId ? 1 : 0);
     const others = members.filter(s => s.serverId !== serverId || s.name !== name);
+    // Com rolagem, quem pede resposta e quem trabalha vem primeiro; o nome desempata (sort estável).
+    if (others.length > GROUP_VISIBLE_ROWS) others.sort((a, b) => groupRank(a) - groupRank(b));
     const away = found.members.flatMap(member => member.kind === 'missing' ? [`${member.server_id}::${member.name}`]
       : member.kind === 'outside' ? [`${member.alias}::${member.session}`] : []);
     return { total: found.members.length, members, others, away, working: others.filter(isWorking).length,

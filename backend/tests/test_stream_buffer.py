@@ -96,28 +96,6 @@ def test_timer_failure_is_reported_without_hot_retry_loop(caplog):
     assert "LookupError" in failures[1].getMessage()
 
 
-def test_rebind_preserves_pending_prefix_and_publishes_without_new_delta():
-    async def run():
-        published = []
-        emitted = asyncio.Event()
-
-        async def publish(value):
-            published.append(value)
-            if value == "firsttail":
-                emitted.set()
-
-        buffer = StreamBuffer(publish, interval=1e10)
-        await buffer.append("first")
-        await buffer.append("tail")
-        buffer.rebind()
-        await asyncio.wait_for(emitted.wait(), 1)
-        await buffer.append("next")
-        await buffer.flush()
-        assert published == ["first", "firsttail", "firsttailnext"]
-        await buffer.discard()
-    asyncio.run(run())
-
-
 def test_revision_keeps_delta_written_during_blocked_publication():
     async def run():
         entered = asyncio.Event()

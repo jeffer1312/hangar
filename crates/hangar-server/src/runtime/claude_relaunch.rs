@@ -108,7 +108,7 @@ impl Recipe {
             snapshots.push(procs.recipe(pid).map_err(|_|failure("relaunch_process_read"))?);
         }
         let agent=snapshots.last().cloned().ok_or_else(||failure("relaunch_process_binding"))?;
-        if agent.birth!=birth || agent.argv.is_empty() || agent.environ.is_empty() {return Err(failure("relaunch_process_binding"));}
+        if !crate::terminal_facts::same_birth(agent.birth,birth) || agent.argv.is_empty() || agent.environ.is_empty() {return Err(failure("relaunch_process_binding"));}
         let executable=Path::new(&agent.argv[0]).file_stem().and_then(OsStr::to_str).unwrap_or("");
         let native_version=agent.executable.parent().is_some_and(|p|p.file_name()==Some(OsStr::new("versions"))
             && p.parent().is_some_and(|p|p.file_name()==Some(OsStr::new("claude"))))

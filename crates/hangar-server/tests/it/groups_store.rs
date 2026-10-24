@@ -59,7 +59,7 @@ fn fed_round_trip_and_python_shape() {
     let s = Sidecar {
         peers: vec!["b".into(), "lab::c".into()], task: Some("t".into()), gid: "ab12cd34".into(),
         harness: [("a".into(), "claude".into()), ("fora".into(), "pi".into())].into(),
-        orq: false, fed: Some(Fed { owner: "casa".into(), local: true, version: 7 }), linked_by: Some("b".into()),
+        orq: false, fed: Some(Fed { owner: "casa".into(), local: true, version: 7 }), linked_by: Some("b".into()), lead: Some("a".into()),
     };
     dir.write_sidecar("a", &s).unwrap();
     let raw: Value = serde_json::from_str(&std::fs::read_to_string(tmp.path().join("a.json")).unwrap()).unwrap();
@@ -68,6 +68,8 @@ fn fed_round_trip_and_python_shape() {
     assert_eq!(dir.sidecar("a").unwrap().unwrap().fed, s.fed);
     assert_eq!(raw["linked_by"], "b");
     assert_eq!(dir.sidecar("a").unwrap().unwrap().linked_by, s.linked_by, "linked_by volta igual da leitura");
+    assert_eq!(raw["lead"], "a");
+    assert_eq!(dir.sidecar("a").unwrap().unwrap().lead, s.lead, "lead volta igual da leitura");
     assert!(!tmp.path().join("a.json.tmp").exists(), "o temporário não fica");
 }
 

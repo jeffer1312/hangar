@@ -177,11 +177,8 @@ async fn seed_then_resolve_then_forget() {
     call(addr, Some(SECRET), "list.seed", json!({"name": "alpha", "jsonl": "/x/semeado.jsonl"})).await;
     let (_, body) = call(addr, Some(SECRET), "list.resolve", json!({"name": "alpha", "cwd": cwd})).await;
     assert_eq!(body["result"], json!({"jsonl": "/x/semeado.jsonl", "tracked": true}));
-    call(addr, Some(SECRET), "list.rename", json!({"old": "alpha", "new": "beta"})).await;
-    let (_, body) = call(addr, Some(SECRET), "list.resolve", json!({"name": "beta", "cwd": cwd})).await;
-    assert_eq!(body["result"]["jsonl"], "/x/semeado.jsonl", "o cache segue o nome novo");
-    call(addr, Some(SECRET), "list.forget", json!({"name": "beta"})).await;
-    let (_, body) = call(addr, Some(SECRET), "list.resolve", json!({"name": "beta", "cwd": cwd})).await;
+    call(addr, Some(SECRET), "list.forget", json!({"name": "alpha"})).await;
+    let (_, body) = call(addr, Some(SECRET), "list.resolve", json!({"name": "alpha", "cwd": cwd})).await;
     assert_eq!(body["result"], json!({"jsonl": null, "tracked": false}));
 }
 

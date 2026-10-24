@@ -356,7 +356,7 @@ fn account_mode(config: &Path) -> Result<String, ServiceError> {
     let value = read_json(&config.join("settings.json"), "terminal_account_mode_unavailable")?;
     Ok(value.as_ref().and_then(|value| value["permissions"]["defaultMode"].as_str()).and_then(canonical_mode).unwrap_or("bypassPermissions").into())
 }
-fn same_birth(a: f64, b: f64) -> bool { if cfg!(any(target_os = "linux", windows)) { (a - b).abs() < 0.001 } else { a.floor() == b.floor() } }
+pub(crate) fn same_birth(a: f64, b: f64) -> bool { if cfg!(any(target_os = "linux", windows)) { (a - b).abs() < 0.001 } else { a.floor() == b.floor() } }
 #[cfg(not(windows))]
 pub fn agent_birth(pid: u32) -> Option<f64> { SystemProcs::default().start_time(i64::from(pid)) }
 #[cfg(windows)]

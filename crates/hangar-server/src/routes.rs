@@ -442,6 +442,8 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/keys", axum::routing::post(crate::session_write::control::keys).fallback(fallback.clone()))
         .route("/api/sessions/{name}/term-input", axum::routing::post(crate::session_write::control::term_input).fallback(fallback.clone()))
         // Pergunta lateral: inteira no Rust, com e sem terminal; o convidado completo também.
+        // Trocar o nome da sessão: inteiro no Rust; o convidado com acesso completo também.
+        .route("/api/sessions/{name}/rename", axum::routing::post(crate::session_rename::route).fallback(fallback.clone()))
         .route("/api/sessions/{name}/btw", axum::routing::post(crate::session_write::btw::ask).get(crate::session_write::btw::list).fallback(fallback.clone()))
         // Painel da fila. `reorder` é caminho fixo: o DELETE e o PATCH dele valem como os de um id de mesmo nome.
         .route("/api/sessions/{name}/queue/reorder", axum::routing::post(crate::session_write::control::queue_reorder)

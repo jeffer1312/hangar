@@ -172,6 +172,19 @@ fn leave_keeps_remaining_group() {
 }
 
 #[test]
+fn lead_that_leaves_does_not_come_back_as_lead() {
+    let (d, h) = (Disk::new(), none());
+    let p = plan_join(&d.read(), &input("coord", &["a".into(), "b".into()], "", &h), &gid("g1")).ok().unwrap();
+    d.apply(&p.writes, &[]);
+    let l = plan_leave(&d.read(), "coord", false).unwrap();
+    d.apply(&l.writes, &l.clears);
+    assert_eq!(d.read()("a").unwrap().lead, None);
+    let back = plan_join(&d.read(), &input("a", &["coord".into()], "", &h), &gid("g2")).ok().unwrap();
+    d.apply(&back.writes, &[]);
+    assert_eq!(d.read()("coord").unwrap().lead, None, "quem volta entra como membro, não como principal");
+}
+
+#[test]
 fn live_orq_group_keeps_last_member() {
     let (d, h) = (Disk::new(), none());
     let p = plan_join(&d.read(), &JoinInput { name: "arb", others: &["exec".into()], task: "", replace_task: false, harness: &h, orq: true, outside: &mine, linked: false }, &gid("o1")).ok().unwrap();
@@ -213,6 +226,28 @@ fn link_marks_only_the_child_and_survives_merge_join_and_rename() {
     let (clears, writes) = plan_rename(&d.read(), "pai", "pai2");
     d.apply(&writes, &clears);
     assert_eq!(d.read()("filha").unwrap().linked_by.as_deref(), Some("pai2"));
+}
+
+#[test]
+fn lead_is_who_formed_the_group_and_survives_join_merge_and_rename() {
+    let (d, h) = (Disk::new(), none());
+    let p = plan_join(&d.read(), &input("coord", &["a".into(), "b".into()], "", &h), &gid("g1")).ok().unwrap();
+    d.apply(&p.writes, &[]);
+    assert!(["coord", "a", "b"].iter().all(|m| d.read()(m).unwrap().lead.as_deref() == Some("coord")));
+    // Quem entra depois (mesmo chamando o pareamento) não vira a principal.
+    let p = plan_join(&d.read(), &input("c", &["a".into()], "", &h), &gid("g2")).ok().unwrap();
+    d.apply(&p.writes, &[]);
+    assert_eq!(d.read()("c").unwrap().lead.as_deref(), Some("coord"));
+    // Fusão: vale a principal do grupo sobrevivente.
+    let p = plan_join(&d.read(), &input("x", &["y".into()], "", &h), &gid("g3")).ok().unwrap();
+    d.apply(&p.writes, &[]);
+    let p = plan_join(&d.read(), &input("b", &["x".into()], "", &h), &gid("g4")).ok().unwrap();
+    assert_eq!(p.gid, "g1");
+    d.apply(&p.writes, &[]);
+    assert_eq!(d.read()("y").unwrap().lead.as_deref(), Some("coord"));
+    let (clears, writes) = plan_rename(&d.read(), "coord", "coord2");
+    d.apply(&writes, &clears);
+    assert!(["coord2", "a", "b", "c", "x", "y"].iter().all(|m| d.read()(m).unwrap().lead.as_deref() == Some("coord2")));
 }
 
 #[test]
@@ -280,7 +315,7 @@ fn external_link_refuses_orq_and_own_machine_groups() {
 #[test]
 fn lone_orq_arbiter_refuses_an_external_pair() {
     let d = Disk::new();
-    let arbiter = Sidecar { peers: vec![], task: Some("t".into()), gid: "o1".into(), harness: none(), orq: true, fed: None, linked_by: None };
+    let arbiter = Sidecar { peers: vec![], task: Some("t".into()), gid: "o1".into(), harness: none(), orq: true, fed: None, linked_by: None, lead: None };
     d.apply(&[("arb".to_owned(), arbiter.clone())], &[]);
     assert!(matches!(plan_external_link(&d.read(), "arb", "fulano::x", &none(), &outside, &gid("e1")), Err(JoinRefusal::Orq)));
     assert_eq!(d.read()("arb"), Some(arbiter));

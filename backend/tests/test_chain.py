@@ -38,18 +38,6 @@ def test_set_overwrites_existing_link():
     assert ThenLink("a").get() == {"target": "c", "text": "segundo"}
 
 
-def test_rename_moves_link_and_drops_old():
-    ThenLink("old").set("alvo", "texto")
-    ThenLink("old").rename("new")
-    assert ThenLink("old").get() is None
-    assert ThenLink("new").get() == {"target": "alvo", "text": "texto"}
-
-
-def test_rename_without_link_is_noop():
-    ThenLink("sem-vinculo").rename("destino")
-    assert ThenLink("destino").get() is None
-
-
 def test_set_com_surrogate_solto_grava_e_le_de_volta():
     # Mesmo buraco do pqueue: texto do usuário com meio emoji estourava no write_text.
     ThenLink("a").set("b", "roda \ud83d")

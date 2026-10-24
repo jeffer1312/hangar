@@ -84,35 +84,6 @@ def test_ingress_busy_propagates_and_freeze_does_not_proceed(tmp_path):
     coordinator.close_python_leases()
 
 
-def test_rename_closes_old_and_new_name(tmp_path):
-    transport = Transport()
-    coordinator, _ = coordinator_with(tmp_path, transport)
-    async def flow():
-        async with coordinator.freeze("session", also=("novo",)):
-            assert transport.ingress() == [("session", True), ("novo", True)]
-    asyncio.run(flow())
-    assert transport.ingress()[2:] == [("session", False), ("novo", False)]
-    coordinator.close_python_leases()
-
-
-def test_partial_close_failure_reopens_only_what_closed(tmp_path):
-    transport = Transport()
-    coordinator, _ = coordinator_with(tmp_path, transport)
-    original = transport.op
-    async def op(descriptor, command, operation_id, clock):
-        if command.get("name") == "novo" and command["closed"]:
-            raise RustOpError("ingress_busy", 503, "ingress_busy")
-        return await original(descriptor, command, operation_id, clock)
-    transport.op = op
-    async def flow():
-        with pytest.raises(RustOpError):
-            async with coordinator.freeze("session", also=("novo",)):
-                pytest.fail("não congela")
-    asyncio.run(flow())
-    assert transport.ingress() == [("session", True), ("session", False)]
-    coordinator.close_python_leases()
-
-
 def session_file(monkeypatch, record):
     """Arquivo da sessão falso que `_rebind` relê antes de religar."""
     from app.adapters.claude_headless import sessions

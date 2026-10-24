@@ -39,6 +39,7 @@ mod plugin_listener;
 pub mod routes;
 pub mod runtime;
 pub mod session_open;
+pub mod session_rename;
 pub mod session_defaults;
 pub mod push;
 pub mod push_expo;
@@ -75,7 +76,7 @@ mod warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 88;
+pub const INTERNAL_PROTOCOL: u32 = 89;
 
 /// Todo cliente HTTP do servidor nasce aqui. Uma dependência liga `gzip`, `http2` e (no Windows)
 /// `native-tls` no reqwest, e o Cargo estende isso a todo cliente: sem estes desligamentos ele

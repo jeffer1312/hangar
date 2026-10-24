@@ -101,6 +101,7 @@ export interface SessionInfo {
   pair_task?: string | null;    // rótulo do grupo (ex: ABC-1234) pro header do cluster
   pair_owner?: string | null;   // identificador da máquina dona do grupo entre máquinas; ausente = grupo de uma máquina só
   linked_by?: string | null;    // sessão que abriu esta como filha ligada (está em pair_peers)
+  pair_lead?: string | null;    // sessão que formou o grupo (é esta ou está em pair_peers): a principal da aba
   // Linha do orquestrador sem LLM: nome da sessão do árbitro atual, para onde o botão
   // "Falar com o árbitro" leva. null enquanto o árbitro não está registrado.
   orq_arbiter?: string | null;

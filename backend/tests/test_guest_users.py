@@ -44,15 +44,11 @@ def test_survives_reload(tmp_path):
     assert guest_users.lookup_token(token).id == g.id
 
 
-def test_claimed_session_belongs_to_guest_and_follows_rename(tmp_path):
+def test_claimed_session_belongs_to_guest(tmp_path):
     g, _ = _guest(tmp_path)
     LIVES["s1"] = "t:100"
     guest_users.claim("s1", g.id)
     assert guest_users.owner_name("s1") == "ana"
-    guest_users.rename_session("s1", "s2")
-    LIVES["s2"] = "t:100"
-    assert guest_users.owner_of("s2").id == g.id
-    assert guest_users.owner_of("s1") is None
 
 
 def test_same_name_new_life_is_owners(tmp_path):

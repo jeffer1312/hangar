@@ -142,21 +142,6 @@ def test_claude_update_keeps_what_the_other_writer_saved_under_the_lock(claude_d
     assert (meta["model"], meta["effort"]) == ("m", "high")
 
 
-def test_claude_rename_takes_both_locks(claude_dir):
-    claude_sessions.save("a", "/tmp", "sid")
-    handle = _hold(claude_dir / "b.lock")
-    done = threading.Event()
-    worker = threading.Thread(target=lambda: (claude_sessions.rename("a", "b"), done.set()))
-    worker.start()
-    try:
-        assert not done.wait(0.3), "o rename gravou o destino sem a trava dele"
-    finally:
-        handle.close()
-    assert done.wait(5)
-    worker.join()
-    assert claude_sessions.load("b")["name"] == "b"
-
-
 @pytest.mark.skipif(os.name != "nt", reason="compartilhamento de arquivo do Windows")
 def test_the_reader_shares_deletion_like_the_rust_reader(tmp_path):
     """O leitor do Python aberto compartilha a exclusão, como o `std::fs::read` do Rust: é o que deixa

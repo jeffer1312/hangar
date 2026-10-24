@@ -1036,13 +1036,16 @@ export async function submitConversationDraft(serverId: string, name: string, te
       const latest = readDraft(serverId, name);
       if (!latest || (current.transcript !== null && latest.transcript !== current.transcript)
         || latest.submission?.draftRevision !== submission.draftRevision || latest.submission.text !== text) return;
-      // Falha devolve o texto só ao campo ainda vazio; o que a pessoa digitou depois fica, e o Recuperar traz o outro.
-      const restore = status !== null && fromField && !latest.text.trim();
-      const sentRecordings = current.recordings ?? [];
+      const failed = status !== null && fromField;
+      // O texto volta só ao campo que ninguém tocou depois da limpeza; o que a pessoa digitou fica, e o Recuperar traz o outro.
+      // Os áudios enviados voltam sempre: o Recuperar só traz o texto.
+      const restore = failed && latest.revision === current.revision + 1 && !latest.text.trim();
+      const sentRecordings = failed ? current.recordings ?? [] : [];
       writeDraft(serverId, name, { ...latest,
-        ...(restore ? { text: current.text, revision: latest.revision + 1,
-          ...(sentRecordings.length ? { recordings: [...sentRecordings,
-            ...(latest.recordings ?? []).filter((recording) => !sentRecordings.some((sent) => sent.id === recording.id))] } : {}) } : {}),
+        ...(restore ? { text: current.text } : {}),
+        ...(restore || sentRecordings.length ? { revision: latest.revision + 1 } : {}),
+        ...(sentRecordings.length ? { recordings: [...sentRecordings,
+          ...(latest.recordings ?? []).filter((recording) => !sentRecordings.some((sent) => sent.id === recording.id))] } : {}),
         submission: status === null ? null : { ...submission, status },
       });
     };

@@ -115,16 +115,6 @@ def test_cap_keeps_pending(tmp_path):
     assert store.state["rows"] == rows
 
 
-def test_rename_keeps_key(tmp_path):
-    store = open_store(tmp_path)
-    store.exec(1, "append", CLOCK, append())
-    store.exec(1, "rename", CLOCK, {"kind": "rename", "name": "new-name"})
-    assert store.state["owner_key"] == "key"
-    assert store.state_path.name == "key.queue-state.json"
-    assert not (store.projection_dir / "session.jsonl").exists()
-    assert (store.projection_dir / "new-name.jsonl").exists()
-
-
 def test_unknown_reply_cannot_downgrade_final(tmp_path):
     store = open_store(tmp_path)
     store.exec(1, "prepare", CLOCK, {"kind": "prepare", "id": "op", "payload": {}, "entry_id": None})
@@ -216,8 +206,6 @@ def test_facade_and_reserve_share_authoritative_state(tmp_path, monkeypatch):
         assert queue.remove(row["id"]) is True
         local = queue.append_saida_local("Saída local")
         assert local["confirmed"] is True
-        queue.rename("renamed")
-        assert store.state["name"] == "renamed"
         queue.clear()
         assert queue.load() == []
     finally:

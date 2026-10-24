@@ -1,12 +1,10 @@
 //! Sair, morrer, renomear e dissolver num grupo entre máquinas: a máquina do membro grava na hora e
 //! avisa a dona pela fila; a dona tira o membro e, com uma máquina só com membros, dissolve.
-//! Mesmas três máquinas no processo do `groups_federation.rs` (`casa`, `lab`, `vm`), mais a porta
-//! privada para a ponte de grupos do Python.
+//! Mesmas três máquinas no processo do `groups_federation.rs` (`casa`, `lab`, `vm`).
 #![cfg(unix)]
 use crate::fake;
 use crate::groups_support::*;
 
-use fake::{SECRET, client};
 use hangar_server::groups::federation;
 use hangar_server::groups::outbox::OutboxItem;
 use serde_json::{Value, json};
@@ -22,15 +20,6 @@ async fn pair(m: &Machine, name: &str, others: &[&str]) -> String {
 async fn unpair(m: &Machine, name: &str) {
     let (status, body) = call(m.addr, "DELETE", &format!("/api/sessions/{name}/pair"), None).await;
     assert_eq!(status, 200, "{body}");
-}
-
-/// O que o Python pede pela ponte privada de grupos (renomear a sessão).
-async fn bridge(m: &Machine, op: &str, args: Value) -> Value {
-    let resp = client().post(format!("http://{}/__hangar_server/groups", m.private)).header("content-type", "application/json")
-        .header("x-hangar-internal", SECRET).body(json!({"op": op, "args": args}).to_string()).send().await.unwrap();
-    let body: Value = serde_json::from_str(&resp.text().await.unwrap()).unwrap();
-    assert_eq!(body["ok"], true, "{op}: {body}");
-    body["result"].clone()
 }
 
 /// O sidecar de `name` em `m` chega a `want` (a fila entrega depois da resposta).
@@ -91,7 +80,8 @@ async fn rename_reaches_the_owner() {
     let n = net().await;
     let gid = pair(&n.casa, "s0", &["lab::s1", "vm::s2"]).await;
     sidecar_becomes(&n.lab, "s1", |s| s.is_some()).await;
-    bridge(&n.lab, "group.rename", json!({"old": "s1", "new": "s3"})).await;
+    let groups = n.lab.state.groups.clone().unwrap();
+    hangar_server::groups::fed_exit::rename(&n.lab.state, &groups, "s1", "s3").await.expect("grupo entre máquinas").unwrap();
     assert!(sidecar(&n.lab, "s1").is_none());
     assert!(sidecar(&n.lab, "s3").is_some());
     record_becomes(&n.casa, &gid, has_members(&["casa::s0", "lab::s3", "vm::s2"])).await;
@@ -108,7 +98,8 @@ async fn push_before_rename_keeps_new_name() {
     let gid = pair(&n.casa, "s0", &["lab::s1"]).await;
     sidecar_becomes(&n.lab, "s1", |s| s.is_some()).await;
     peers(&n.lab, &[("casa", closed_port().await), ("vm", n.vm.addr)]);
-    bridge(&n.lab, "group.rename", json!({"old": "s1", "new": "s3"})).await;
+    let groups = n.lab.state.groups.clone().unwrap();
+    hangar_server::groups::fed_exit::rename(&n.lab.state, &groups, "s1", "s3").await.expect("grupo entre máquinas").unwrap();
     let (status, answer) = push(&n.lab, &gid, json!({"protocol": 1, "owner": "casa", "version": 2, "members": [member("casa", "s0"), member("lab", "s1")]})).await;
     assert_eq!(status, 200, "{answer}");
     let s3 = sidecar(&n.lab, "s3").expect("o nome novo continua no grupo");

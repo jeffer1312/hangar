@@ -77,6 +77,7 @@ pub fn list_sig<'a>(rows: impl IntoIterator<Item = &'a SessionRow>) -> String {
             if let (Value::Array(items), false) = (&mut sig, i.plugin_tool_servers.is_empty()) { items.push(json!(i.plugin_tool_servers)); }
             if let (Value::Array(items), Some(parent)) = (&mut sig, i.linked_by.as_ref()) { items.push(json!({"linked_by": parent})); }
             if let (Value::Array(items), Some(owner)) = (&mut sig, i.pair_owner.as_ref()) { items.push(json!({"pair_owner": owner})); }
+            if let (Value::Array(items), Some(lead)) = (&mut sig, i.pair_lead.as_ref()) { items.push(json!({"pair_lead": lead})); }
             sig
         })
         .collect();

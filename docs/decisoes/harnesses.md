@@ -918,6 +918,34 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   partes. Só o Claude tem esse gancho: Codex, Pi, omp e Kimi perdem o protocolo ao compactar
   (limite registrado). Ver [grupos: o Rust grava](plataforma.md#grupos-o-rust-grava).
 
+- **A pasta da sessão Claude nasce confiada, gravada sob a trava do próprio Claude Code.** O
+  `claude::pretrust` marca `hasTrustDialogAccepted` no `.claude.json` da conta segurando a pasta
+  `<arquivo real>.lock` (a do `proper-lockfile` que o CLI usa), só quando precisa gravar e fora das
+  threads do runtime (`pretrust_async`). Espera até 1 s; trava largada há mais de 10 s sai; ocupada,
+  faz como o CLI: grava sem ela. Se o "trust this folder?" aparecer mesmo assim, o `Monitor` avisa
+  uma vez por aparição (`rust.trust_dialog_shown`, código `trust_flag_present` ou
+  `trust_flag_absent`) e o log guarda a entrada, a idade do arquivo e a trava. Ver
+  [diálogo de confiança com a pasta confiada](#diálogo-de-confiança-com-a-pasta-já-confiada-23102026).
+
+## Diálogo de confiança com a pasta já confiada (23/10/2026)
+
+Uma sessão aberta numa worktree em `~/.hangar/worktrees/`, numa conta adicional do Hangar
+(Claude 2.1.309 em bypass), nasceu presa no "Accessing workspace… Yes, I trust
+this folder", embora a etapa `confiar_pasta` da abertura tivesse gravado a marca às 06:27:42, antes
+do Claude subir. O repositório versiona um `.claude/settings.local.json` com regras de permissão,
+que acrescenta ao diálogo o aviso "This folder pre-approves 5 tool permissions".
+
+O que não é: num diretório descartável, com o mesmo binário, o `settings.local.json` real, dentro de
+worktree e em bypass, a marca gravada antes da subida bastou em todos os testes. Caminho real,
+conta do pane e executável batiam; o `hangar-conta --prep` roda antes da marca.
+
+O que sobra: a conta tinha várias sessões vivas, e o CLI grava o `.claude.json` (lê, muda, troca
+por renomeação) sob a trava `.claude.json.lock`, que a Hangar não segurava. Uma gravação que leu o
+arquivo antes da marca a apaga ao trocar. Não provado: o CLI relê o disco antes de gravar e, num
+teste em sequência, a entrada de fora sobreviveu; as cópias de segurança do CLI só cobriam os
+últimos minutos. Por isso a trava entrou junto do registro: se o diálogo voltar com
+`trust_flag_present`, a causa é outra; com `trust_flag_absent`, alguém apagou a marca.
+
 ## Voz para quem não conhece o app (22/10/2026)
 
 Uso real de uma pessoa sem experiência com IA: a voz nunca sugeriu abrir sessão, prometeu abrir e não

@@ -656,7 +656,7 @@ async fn headless_life(host: &dyn OpenHost, spec: &mut SessionSpec, previous_non
     let route = engine_route(host, spec)?;
     spec.conversation = Some(sid.clone());
     diary.step("confiar_pasta");
-    if let Err(error) = claude::pretrust(&claude::claude_json(host.terminal(), host.home(), spec.account.config_dir()), &spec.cwd, host.terminal().windows) {
+    if let Err(error) = claude::pretrust_async(claude::claude_json(host.terminal(), host.home(), spec.account.config_dir()), spec.cwd.clone(), host.terminal().windows).await {
         diary.trust_failed(&error);
     }
     // Antes do sidecar: depois dele o runtime pode adotar a sessão nova no meio da limpeza.
@@ -792,8 +792,8 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
     };
     diary.step("confiar_pasta");
     match spec.provider {
-        AgentProvider::Claude => if let Err(error) = claude::pretrust(&claude::claude_json(host.terminal(), host.home(), spec.account.config_dir()),
-            &spec.cwd, host.terminal().windows) { diary.trust_failed(&error); },
+        AgentProvider::Claude => if let Err(error) = claude::pretrust_async(claude::claude_json(host.terminal(), host.home(), spec.account.config_dir()),
+            spec.cwd.clone(), host.terminal().windows).await { diary.trust_failed(&error); },
         AgentProvider::Kimi => {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
             agents::kimi_pretrust(&agents::kimi_home(host.home(), host.env()), &spec.cwd, now);
