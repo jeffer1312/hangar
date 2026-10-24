@@ -30,7 +30,7 @@ fn proc_root(root: &Path) -> PathBuf { root.join(".harness").join("proc-rust") }
 fn fake_backend(root: &Path) -> PathBuf { root.join(".harness").join("backend") }
 
 /// O que o lado Python não monta e o Rust lê do disco: os panes do cenário (um `tmux` que só lista e
-/// o `/proc` deles), o `plugin-dir` que o servidor publica ao subir e o `hangar-conta` desta árvore.
+/// o `/proc` deles) e o `plugin-dir` que o servidor publica ao subir.
 pub fn prepare(scenario: &Value, root: &Path, repo: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let bin = root.join("bin");
@@ -59,7 +59,6 @@ pub fn prepare(scenario: &Value, root: &Path, repo: &Path) -> std::io::Result<()
     crate::write_test_executable(&bin.join("tmux"), b"#!/bin/sh\n[ \"$1\" = list-panes ] || exit 1\ncat \"$(dirname \"$0\")/panes.txt\"\n");
     let roots: String = ["hangar", "github-actions"].iter().map(|m| format!("{}\n", repo.join("plugins").join(m).display())).collect();
     write(&root.join("home/.hangar/plugin-dir"), roots.as_bytes())?;
-    crate::write_test_executable(&bin.join("hangar-conta"), format!("#!/bin/sh\nexec python3 '{}' \"$@\"\n", repo.join("scripts/hangar-conta").display()));
     Ok(())
 }
 
@@ -213,9 +212,8 @@ impl OpenHost for Host {
     fn run(&self, argv: Vec<String>, timeout: Duration) -> BoxFuture<'_, MuxOutput> {
         Box::pin(async move {
             let prog = Path::new(&argv[0]).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            // `git` e o `hangar-conta` rodam de verdade, dentro da raiz, como no lado Python (lá o
-            // `contas.reconciliar` roda no próprio processo).
-            if matches!(prog.as_str(), "git" | "hangar-conta") { return super::server::run_program(&self.env, argv, timeout).await; }
+            // `git` roda de verdade, dentro da raiz, como no lado Python.
+            if prog == "git" { return super::server::run_program(&self.env, argv, timeout).await; }
             let args = &argv[1..];
             let found = rule(&self.fakes, &prog, args);
             let code = found.map_or(0, |r| r["rc"].as_i64().unwrap_or(0) as i32);
@@ -271,6 +269,7 @@ impl OpenHost for Host {
     }
 
     fn diary(&self, events: Vec<Value>) { self.record.lock().unwrap().diary.extend(events); }
+    fn account_diary(&self, events: Vec<Value>) { self.record.lock().unwrap().diary.extend(events); }
     fn new_session_id(&self) -> String { super::open::uuid4(&crate::mods::state::random_hex(16)) }
     fn new_bridge_key(&self) -> String { crate::mods::state::random_hex(16) }
     fn wake(&self, name: &str) {

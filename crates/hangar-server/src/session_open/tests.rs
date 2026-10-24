@@ -1487,7 +1487,7 @@ fn what_the_creation_changed_by_itself_is_in_the_log() {
     std::fs::create_dir_all(home.path().join(".claude")).unwrap();
     std::fs::write(home.path().join(".claude/settings.json"), r#"{"model": "gpt-6"}"#).unwrap();
     claude::drop_foreign_model(home.path(), None);
-    claude::prep_result("b", Some(0), "hangar-conta: plugin x atualizado\n").unwrap();
+    claude::account_result("b", Ok(vec!["plugin x atualizado".into()])).unwrap();
     let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
     for expected in [format!("create_session s1: {warning}"), "modelo padrão 'gpt-6' não é da Anthropic; removido do settings.json".into(),
                      "conta b: plugin x atualizado".into()] {
@@ -2302,18 +2302,68 @@ fn an_unwritten_record_fails_the_open_before_the_pane() {
     assert_eq!(String::from_utf8_lossy(&branches.stdout).trim(), "* main", "a branch criada sai junto");
 }
 
-/// A conta do Hangar fica sob a guarda compartilhada desde o `hangar-conta --prep` até o pane: a
-/// exclusão da conta (exclusiva) não passa no meio.
+/// A conta do Hangar fica sob a guarda compartilhada desde a reconciliação até o pane: a exclusão da
+/// conta (exclusiva) não passa no meio. Com a trava das contas presa por fora, a reconciliação espera
+/// dentro da abertura; quem segura a trava confere a guarda nesse instante e só então solta.
 #[cfg(target_os = "linux")]
 #[test]
 fn the_account_guard_covers_the_preparation() {
-    let (raw, _dir, _root) = run_contract_with("create_claude_terminal_hangar_account", |_| {}, |root| {
-        let script = concat!("#!/bin/sh\nheld=0\nfor f in \"$HOME\"/.hangar/account-locks/*.lock; do\n",
-            "  [ -e \"$f\" ] && ! flock -n -x \"$f\" true && held=1\ndone\n",
-            "[ $held = 1 ] || { echo 'hangar-conta: a guarda da conta estava livre' >&2; exit 1; }\n");
-        crate::write_test_executable(&root.join("bin/hangar-conta"), script);
+    let mut holder = None;
+    let (raw, _dir, root) = run_contract_with("create_claude_terminal_hangar_account", |_| {}, |root| {
+        let home = root.join("home");
+        let script = format!(concat!("exec 9>>'{h}/.hangar-contas.lock'; flock -x 9; touch '{h}/segurando'; i=0\n",
+            "while [ $i -lt 600 ]; do for f in '{h}'/.hangar/account-locks/*.lock; do\n",
+            "  [ -e \"$f\" ] && ! flock -n -x \"$f\" true && {{ echo presa > '{h}/guarda'; exit 0; }}\n",
+            "done; i=$((i+1)); sleep 0.05; done; echo livre > '{h}/guarda'\n"), h = home.display());
+        holder = Some(std::process::Command::new("sh").arg("-c").arg(script).spawn().unwrap());
+        while !home.join("segurando").exists() { std::thread::sleep(std::time::Duration::from_millis(10)); }
+    });
+    holder.unwrap().wait().unwrap();
+    assert_eq!(raw["steps"][0]["status"], 200, "{}", raw["steps"][0]["body"]);
+    assert_eq!(std::fs::read_to_string(root.join("home/guarda")).unwrap(), "presa\n", "a guarda da conta estava livre na reconciliação");
+}
+
+/// A reconciliação roda dentro do processo da abertura, sem `hangar-conta` no PATH: o link da memória do
+/// projeto nasce, os avisos chegam à resposta e os eventos dela vão ao diário de quem abre, antes da criação.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_hangar_account_reconciles_in_process() {
+    let (raw, _dir, root) = run_contract_with("create_claude_terminal_hangar_account", |_| {}, |root| {
+        assert!(!root.join("bin/hangar-conta").exists(), "o PATH da abertura não tem hangar-conta");
+        std::fs::write(root.join("home/.claude/settings.json"), r#"{"enabledPlugins": {"sumido@x": true}}"#).unwrap();
     });
     assert_eq!(raw["steps"][0]["status"], 200, "{}", raw["steps"][0]["body"]);
+    assert_eq!(raw["steps"][0]["body"]["avisos"], json!(["plugin sumido@x está ligado no settings.json mas não consta em \
+        installed_plugins.json — reinstalar: claude plugin install sumido@x"]));
+    let project = hangar_workspace::worktrees::sanitize_cwd(&root.join("work/proj").to_string_lossy());
+    let memory = root.join(format!("home/.claude-conta2/projects/{project}/memory"));
+    assert_eq!(std::fs::read_link(&memory).unwrap(), root.join(format!("home/.claude/projects/{project}/memory")));
+    let events: Vec<String> = raw["diary"].as_array().unwrap().iter()
+        .map(|e| format!("{}:{}", e["evento"].as_str().unwrap(), e["etapa"].as_str().unwrap_or(""))).collect();
+    let reconcile = ["conta.reconciliar.inicio:", "conta.reconciliar.etapa:ligar_arquivos", "conta.reconciliar.etapa:espelhar_settings",
+        "conta.reconciliar.etapa:conferir_plugins", "conta.reconciliar.etapa:espelhar_config", "conta.reconciliar.etapa:ligar_memoria",
+        "conta.reconciliar.concluiu:", "conta.reconciliar.fim:", "sessao.criar.inicio:"];
+    assert_eq!(&events[..reconcile.len().min(events.len())], reconcile, "{events:?}");
+    let account = root.join("home/.claude-conta2");
+    let digest: String = ring::digest::digest(&ring::digest::SHA256, account.to_string_lossy().as_bytes()).as_ref().iter()
+        .map(|b| format!("{b:02x}")).collect();
+    assert_eq!(raw["diary"][1]["conta_id"].as_str(), Some(&digest[..16]), "conta_id = sha256 do caminho, como o Python");
+}
+
+/// A reconciliação que falha recusa a abertura com o motivo dela, antes de qualquer pane.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failed_reconciliation_refuses_the_open_with_its_reason() {
+    let (raw, _dir, _root) = run_contract_with("create_claude_terminal_hangar_account", |_| {}, |root| {
+        std::fs::write(root.join("home/.claude/settings.json"), "{}").unwrap();
+        std::fs::write(root.join("home/.claude-conta2/settings.json"), "[1]").unwrap();
+    });
+    let body = &raw["steps"][0]["body"]["detail"];
+    let reason = "settings.json não é um objeto JSON — não dá pra espelhar pra conta";
+    assert_eq!((raw["steps"][0]["status"].clone(), body["code"].clone(), body["params"].clone()),
+        (json!(500), json!("erro_conta_reconciliacao_falhou"), json!({"nome_conta": "conta2", "erro": reason})), "{body}");
+    assert_eq!(body["msg"], format!("não consegui reconciliar a conta conta2: {reason}"));
+    assert!(!raw["subprocesses"].as_array().unwrap().iter().any(|p| p["argv"][0] == "new-session"), "nenhum pane");
 }
 
 /// Conta do Hangar sem login: o Claude subiria mudo. A abertura recusa antes de qualquer pane.

@@ -49,6 +49,9 @@ pub trait OpenHost: Send + Sync {
     /// abre) e recebe a primeira mensagem. Devolve avisos.
     fn warm_codex<'a>(&'a self, name: &'a str, initial_prompt: Option<&'a str>) -> BoxFuture<'a, Vec<String>>;
     fn diary(&self, events: Vec<Value>);
+    /// Os eventos `conta.reconciliar.*`: o servidor grava no diário dele; o comando de terminal, que não
+    /// grava os da criação, no arquivo dos comandos de conta.
+    fn account_diary(&self, events: Vec<Value>);
     /// Id da conversa (`--session-id`) e chave da ponte do plugin, novos a cada vida.
     fn new_session_id(&self) -> String;
     fn new_bridge_key(&self) -> String;
@@ -486,7 +489,7 @@ pub(crate) fn account_key(host: &dyn OpenHost, spec: &SessionSpec, codex_home: O
 }
 
 /// O começo de toda abertura e da reserva pré-aquecida: login da conta do Hangar, guarda compartilhada
-/// da conta (vale até quem chamou soltá-la) e a reconciliação `hangar-conta --prep`. Devolve a guarda
+/// da conta (vale até quem chamou soltá-la) e a reconciliação da conta, aqui mesmo. Devolve a guarda
 /// e os avisos da reconciliação.
 pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, codex_home: Option<&str>)
     -> Result<(Option<crate::accounts::AccountGuard>, Vec<String>), OpenError> {
@@ -519,8 +522,12 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         let account = claude::hangar_account(Path::new(dir))
             .ok_or_else(|| OpenError::plain(404, format!("{dir} não é uma conta criada pelo hangar")))?;
         progress_step(&spec.name, "conta", json!({"conta": account}));
-        let out = host.run(claude::prep_argv(&account, &spec.cwd), Duration::from_secs(120)).await;
-        avisos = claude::prep_result(&account, out.code, &out.stderr)?;
+        let (home, name, project) = (host.home().to_owned(), account.clone(), hangar_workspace::worktrees::sanitize_cwd(&spec.cwd));
+        let outcome = tokio::task::spawn_blocking(move || crate::accounts::claude_config::reconcile_account(&home, &name, Some(&project))).await
+            .unwrap_or_else(|e| crate::accounts::claude_config::Outcome {
+                result: Err(crate::accounts::claude_config::ConfigError::Refused(format!("a reconciliação parou no meio: {e}"))), diary: Vec::new() });
+        host.account_diary(outcome.diary);
+        avisos = claude::account_result(&account, outcome.result)?;
     }
     Ok((guard, avisos))
 }

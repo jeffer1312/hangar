@@ -197,21 +197,19 @@ pub fn hangar_account(dir: &Path) -> Option<String> {
     (real && marker && !pending).then(|| dir.file_name()?.to_str()?.strip_prefix(".claude-").map(str::to_owned)).flatten()
 }
 
-/// `hangar-conta --prep <conta> <projeto>`: os atalhos, o espelho do `settings.json` e a memória do
-/// projeto da pasta, pelo mesmo script que o `claude-conta` do terminal usa.
-pub fn prep_argv(account: &str, cwd: &str) -> Vec<String> {
-    vec!["hangar-conta".into(), "--prep".into(), account.into(), hangar_workspace::worktrees::sanitize_cwd(cwd)]
-}
-
-/// Saída do `hangar-conta --prep`: os avisos vão à resposta; falha é recusa com o motivo dele.
-pub fn prep_result(account: &str, code: Option<i32>, stderr: &str) -> Result<Vec<String>, super::OpenError> {
-    let lines = || stderr.lines().filter_map(|l| l.trim().strip_prefix("hangar-conta: ")).map(str::to_owned);
-    if code == Some(0) {
-        let warnings: Vec<String> = lines().collect();
-        for warning in &warnings { tracing::warn!("conta {account}: {warning}"); }
-        return Ok(warnings);
-    }
-    let cause = lines().last().unwrap_or_else(|| stderr.trim().chars().take(200).collect());
+/// A reconciliação da conta do Hangar: os avisos vão à resposta e ao log; falha é recusa com o motivo
+/// dela, na frase que o `hangar-conta` imprimiria.
+pub fn account_result(account: &str, result: Result<Vec<String>, crate::accounts::claude_config::ConfigError>)
+    -> Result<Vec<String>, super::OpenError> {
+    use crate::accounts::claude_config::ConfigError;
+    let cause = match result {
+        Ok(warnings) => {
+            for warning in &warnings { tracing::warn!("conta {account}: {warning}"); }
+            return Ok(warnings);
+        }
+        Err(ConfigError::Refused(detail)) => detail,
+        Err(ConfigError::Io(error)) => format!("falha ao executar: {error}"),
+    };
     Err(super::OpenError::new(500, "erro_conta_reconciliacao_falhou", format!("não consegui reconciliar a conta {account}: {cause}"))
         .with_params(json!({"nome_conta": account, "erro": cause})))
 }
