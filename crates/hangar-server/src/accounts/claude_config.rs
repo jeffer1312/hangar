@@ -482,7 +482,81 @@ fn mtime(meta: &fs::Metadata) -> f64 {
 }
 
 /// Move para `.drift/<nome>.N` (a menor vaga livre) e guarda só as `DRIFT_CAP` mais novas do mesmo nome.
-fn drawer(dir: &Path, destination: &Path) -> Result<String> {
+fn drawer(dir: &Path, destination: &Path) -> Result<String> { drawer_with(dir, destination, &|from, to| fs::rename(from, to)) }
+
+/// O link com o mesmo texto, sem segui-lo (no Windows, link de arquivo, como o `os.symlink` do `shutil`).
+fn relink(text: &Path, at: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    { std::os::unix::fs::symlink(text, at) }
+    #[cfg(windows)]
+    { std::os::windows::fs::symlink_file(text, at) }
+}
+
+/// Acesso e modificação de `meta` em `path`, e depois o modo (o `copystat`: o modo por último, para um
+/// modo sem escrita não barrar as datas).
+fn copy_stat(path: &Path, meta: &fs::Metadata) -> Result<()> {
+    let times = fs::FileTimes::new().set_accessed(meta.accessed().at(path)?).set_modified(meta.modified().at(path)?);
+    #[cfg(unix)]
+    let file = fs::File::open(path).at(path)?;
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_WRITE_ATTRIBUTES e FILE_FLAG_BACKUP_SEMANTICS: abre pasta também.
+        fs::OpenOptions::new().access_mode(0x100).custom_flags(0x0200_0000).open(path).at(path)?
+    };
+    file.set_times(times).at(path)?;
+    drop(file);
+    fs::set_permissions(path, meta.permissions()).at(path)
+}
+
+/// `copy2`: os bytes, depois datas e modo. Pasta ou arquivo especial (FIFO) não é copiado: abrir um FIFO
+/// para leitura esperaria um escritor para sempre.
+fn copy2(from: &Path, to: &Path, meta: &fs::Metadata) -> Result<()> {
+    if !meta.is_file() { return Err(ConfigError::Io(io::Error::other("não é um arquivo comum"), from.display().to_string())); }
+    copy_file(from, to)?;
+    copy_stat(to, meta)
+}
+
+/// `copytree(symlinks=True)`: links ficam links, sem seguir; a pasta recebe datas e modo por último.
+fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+    fs::create_dir(to).at(to)?;
+    for entry in fs::read_dir(from).at(from)? {
+        let source = entry.at(from)?.path();
+        let target = to.join(source.file_name().unwrap_or_default());
+        let meta = fs::symlink_metadata(&source).at(&source)?;
+        // ponytail: o link interno não guarda o próprio mtime (o `copystat` do Python guardava); a poda
+        // só lê o das entradas do topo da gaveta.
+        if meta.file_type().is_symlink() {
+            relink(&fs::read_link(&source).at(&source)?, &target).between(&source, &target)?;
+        } else if meta.is_dir() {
+            copy_tree(&source, &target)?;
+        } else {
+            copy2(&source, &target, &meta)?;
+        }
+    }
+    copy_stat(to, &fs::metadata(from).at(from)?)
+}
+
+/// `shutil.move` para uma vaga livre: `rename`; se ele falha (outro volume, link morto na vaga), copia
+/// sem seguir link, com datas e modo, e só apaga a origem depois da cópia inteira. Cópia que falha
+/// deixa a origem intacta (o destino pode ficar pela metade, como no Python).
+fn move_entry(from: &Path, to: &Path, rename: &dyn Fn(&Path, &Path) -> io::Result<()>) -> Result<()> {
+    if rename(from, to).is_ok() { return Ok(()); }
+    let meta = fs::symlink_metadata(from).at(from)?;
+    if meta.file_type().is_symlink() {
+        relink(&fs::read_link(from).at(from)?, to).between(from, to)?;
+        return unlink(from).at(from);
+    }
+    if meta.is_dir() {
+        copy_tree(from, to)?;
+        return fs::remove_dir_all(from).at(from);
+    }
+    copy2(from, to, &meta)?;
+    unlink(from).at(from)
+}
+
+/// `drawer` com o `rename` dado: os testes simulam o outro volume (EXDEV).
+fn drawer_with(dir: &Path, destination: &Path, rename: &dyn Fn(&Path, &Path) -> io::Result<()>) -> Result<String> {
     let drift = dir.join(".drift");
     if is_symlink(&drift) || (exists(&drift) && !is_dir(&drift)) {
         // Gaveta apontando para fora levaria as entradas, e a poda, para o diretório externo.
@@ -493,9 +567,7 @@ fn drawer(dir: &Path, destination: &Path) -> Result<String> {
     let mut n = 1;
     while exists(&drift.join(format!("{name}.{n}"))) { n += 1; }
     let slot = drift.join(format!("{name}.{n}"));
-    // ponytail: só `rename` (o `shutil.move` copiava quando ele falhava); a gaveta mora na mesma pasta
-    // da conta, então só um ponto de montagem dentro dela traria o EXDEV.
-    fs::rename(destination, &slot).between(destination, &slot)?;
+    move_entry(destination, &slot, rename)?;
     // Teto por nome de origem: pela gaveta inteira, três `skills` levavam o único `hooks.1`.
     let mut siblings = Vec::new();
     for entry in fs::read_dir(&drift).at(&drift)? {
@@ -833,4 +905,107 @@ pub fn run(args: &[String], env: &AccountEnvironment, out: &mut dyn Write, err: 
 pub fn cli(args: &[String]) -> std::process::ExitCode {
     let env = AccountEnvironment::capture();
     std::process::ExitCode::from(run(args, &env, &mut io::stdout().lock(), &mut io::stderr().lock()))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    /// O `rename` entre volumes: a gaveta tem de copiar, como o `shutil.move`.
+    fn cross_device(_: &Path, _: &Path) -> io::Result<()> { Err(io::ErrorKind::CrossesDevices.into()) }
+
+    fn set_mtime(path: &Path, secs: u64) {
+        let at = std::time::UNIX_EPOCH + Duration::from_secs(secs);
+        let file = fs::File::open(path).unwrap();
+        file.set_times(fs::FileTimes::new().set_accessed(at).set_modified(at)).unwrap();
+    }
+    fn mtime_secs(path: &Path) -> u64 {
+        fs::symlink_metadata(path).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+    }
+    fn mode(path: &Path) -> u32 { fs::symlink_metadata(path).unwrap().permissions().mode() & 0o7777 }
+
+    #[test]
+    fn a_folder_crossing_devices_is_copied_with_links_mode_and_mtime() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        let skills = dir.join("skills");
+        fs::create_dir_all(skills.join("a/b")).unwrap();
+        fs::write(skills.join("a/b/fundo.md"), "fundo").unwrap();
+        fs::write(skills.join("topo.sh"), "topo").unwrap();
+        fs::set_permissions(skills.join("topo.sh"), fs::Permissions::from_mode(0o750)).unwrap();
+        symlink("../fora", skills.join("a/link")).unwrap();
+        set_mtime(&skills.join("topo.sh"), 1_600_000_000);
+        set_mtime(&skills, 1_700_000_000);
+        let warning = drawer_with(dir, &skills, &cross_device);
+        assert_eq!(warning.ok(), Some("'skills' era local nesta conta; movido pra .drift/skills.1".to_owned()));
+        let slot = dir.join(".drift/skills.1");
+        assert!(fs::symlink_metadata(&skills).is_err(), "a origem sai depois da cópia inteira");
+        assert_eq!(fs::read_to_string(slot.join("a/b/fundo.md")).unwrap(), "fundo");
+        assert_eq!(fs::read_to_string(slot.join("topo.sh")).unwrap(), "topo");
+        assert_eq!(fs::read_link(slot.join("a/link")).unwrap(), Path::new("../fora"), "link fica link, sem ser seguido");
+        assert_eq!((mode(&slot.join("topo.sh")), mtime_secs(&slot.join("topo.sh"))), (0o750, 1_600_000_000));
+        assert_eq!(mtime_secs(&slot), 1_700_000_000, "a pasta guarda o mtime: a poda da gaveta lê ele");
+    }
+
+    #[test]
+    fn a_link_crossing_devices_moves_as_a_link() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        symlink(dir.join("segredo.txt"), dir.join("CLAUDE.md")).unwrap();
+        assert!(drawer_with(dir, &dir.join("CLAUDE.md"), &cross_device).is_ok());
+        assert_eq!(fs::read_link(dir.join(".drift/CLAUDE.md.1")).unwrap(), dir.join("segredo.txt"));
+        assert!(fs::symlink_metadata(dir.join("CLAUDE.md")).is_err());
+    }
+
+    #[test]
+    fn a_file_crossing_devices_keeps_bytes_mode_and_mtime() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        let hooks = dir.join("hooks");
+        fs::write(&hooks, "velho").unwrap();
+        fs::set_permissions(&hooks, fs::Permissions::from_mode(0o640)).unwrap();
+        set_mtime(&hooks, 1_000);
+        assert!(drawer_with(dir, &hooks, &cross_device).is_ok());
+        let slot = dir.join(".drift/hooks.1");
+        assert!(fs::symlink_metadata(&hooks).is_err());
+        assert_eq!((fs::read_to_string(&slot).unwrap(), mode(&slot), mtime_secs(&slot)), ("velho".to_owned(), 0o640, 1_000));
+    }
+
+    /// Com o mtime antigo preservado, a cópia é a mais velha das irmãs e a poda a leva; nascida com o
+    /// mtime de agora, a poda levaria outra.
+    #[test]
+    fn the_pruning_reads_the_preserved_mtime_of_the_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        fs::create_dir(dir.join(".drift")).unwrap();
+        for n in 1..=3 {
+            let sibling = dir.join(format!(".drift/hooks.{n}"));
+            fs::write(&sibling, n.to_string()).unwrap();
+            set_mtime(&sibling, 1_500_000_000 + n);
+        }
+        let hooks = dir.join("hooks");
+        fs::write(&hooks, "velho").unwrap();
+        set_mtime(&hooks, 1_000);
+        assert!(drawer_with(dir, &hooks, &cross_device).is_ok());
+        let mut left: Vec<String> = fs::read_dir(dir.join(".drift")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        assert_eq!(left, ["hooks.1", "hooks.2", "hooks.3"], "a cópia com o mtime antigo é a podada");
+    }
+
+    #[test]
+    fn a_copy_failing_midway_keeps_the_source() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        let skills = dir.join("skills");
+        fs::create_dir(&skills).unwrap();
+        fs::write(skills.join("a.md"), "a").unwrap();
+        fs::write(skills.join("trancado.md"), "t").unwrap();
+        fs::set_permissions(skills.join("trancado.md"), fs::Permissions::from_mode(0o000)).unwrap();
+        let error = drawer_with(dir, &skills, &cross_device).unwrap_err().to_string();
+        fs::set_permissions(skills.join("trancado.md"), fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(error.contains(&skills.join("trancado.md").display().to_string()), "{error}");
+        assert_eq!(fs::read_to_string(skills.join("a.md")).unwrap(), "a", "a origem fica inteira");
+        assert_eq!(fs::read_to_string(skills.join("trancado.md")).unwrap(), "t");
+    }
 }
