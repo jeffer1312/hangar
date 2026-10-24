@@ -513,6 +513,53 @@ fn scenario(name: &str) -> Scenario {
             ln(&h.join(".claude-conta2/skills"), "../.claude/skills");
         }), cli(&PREP)]),
         "link_loop_drawer" => sc(|h| { casa(h); conta(h, "conta2"); ln(&h.join(".claude-conta2/CLAUDE.md"), "CLAUDE.md"); }, vec![cli(&PREP)]),
+        // B1 (reproduzido até o conserto): runtime do CLI fora da lista vai para a gaveta ou sobe.
+        "b1_runtime_not_listed" => sc(|h| {
+            casa(h);
+            conta(h, "conta2");
+            mkdirs(&h.join(".claude/.claude.json.lock"));
+            put(&h.join(".claude/mcp-needs-auth-cache.json"), "{}");
+            mkdirs(&h.join(".claude-conta2/.claude.json.lock"));
+            put(&h.join(".claude-conta2/mcp-needs-auth-cache.json"), r#"{"conta": 1}"#);
+        }, vec![cli(&PREP)]),
+        // B3 (mantido): a memória de todos os projetos divide o mesmo teto da gaveta.
+        "b3_memory_shared_bucket" => {
+            let mut s = sc(|h| {
+                casa(h);
+                conta(h, "conta2");
+                for (i, p) in ["-p1", "-p2", "-p3", "-p4"].iter().enumerate() {
+                    put(&h.join(format!(".claude/projects/{p}/memory/MEMORY.md")), *p);
+                    let local = h.join(format!(".claude-conta2/projects/{p}/memory"));
+                    put(&local.join("MEMORY.md"), format!("local {p}"));
+                    mtime(&local, 1_900_000_000 + i as i64);
+                }
+            }, vec![cli(&PREP)]);
+            s.rules.d6 = true;
+            s
+        }
+        "prep_ignores_claude_config_dir" => Scenario { env: vec![("CLAUDE_CONFIG_DIR", "<HOME>/outra")], ..sc(|h| {
+            casa(h);
+            conta(h, "conta2");
+            put(&h.join("outra/settings.json"), r#"{"theme":"outra"}"#);
+            put(&h.join("outra/so-da-outra.md"), "x");
+        }, vec![cli(&PREP)]) },
+        "drift_prunes_link_entry" => sc(|h| {
+            casa(h);
+            conta(h, "conta2");
+            mkdirs(&h.join(".claude/hooks"));
+            let drift = h.join(".claude-conta2/.drift");
+            // A entrada mais velha é um link vivo: a poda lê o mtime dele (lstat) e apaga o link, não o alvo.
+            put(&h.join("alvo-do-link"), "fica");
+            mtime(&h.join("alvo-do-link"), 2_100_000_000);
+            ln(&drift.join("hooks.1"), h.join("alvo-do-link"));
+            mtime(&drift.join("hooks.1"), 1_000);
+            for n in 2..=4 {
+                put(&drift.join(format!("hooks.{n}")), n.to_string());
+                mtime(&drift.join(format!("hooks.{n}")), 2_000_000_000 + n);
+            }
+            put(&h.join(".claude-conta2/hooks"), "novo");
+            mtime(&h.join(".claude-conta2/hooks"), 2_000_000_100);
+        }, vec![cli(&PREP)]),
         "never_link_names" => sc(|h| {
             casa(h);
             conta(h, "conta2");
@@ -562,7 +609,8 @@ scenarios!(
     plugins_list_falsy, plugins_seeded_not_object, shared_dead_link, user_dead_link_pruned, drift_slot_reuse,
     drift_slot_dead_link_file, drift_slot_dead_link_dir, drift_unicode_digit, drift_just_moved_pruned, top_order,
     fifo_goes_to_drift, memory_cases, memory_local_project_is_file, shared_pending_marker, relative_link_kept,
-    link_loop_drawer, never_link_names,
+    link_loop_drawer, never_link_names, b1_runtime_not_listed, b3_memory_shared_bucket, prep_ignores_claude_config_dir,
+    drift_prunes_link_entry,
 );
 
 // ── execução ────────────────────────────────────────────────────────────────────────────────
@@ -755,7 +803,10 @@ fn generate_fixtures() {
     let same = Command::new("git").arg("-C").arg(&root).args(["diff", "--quiet", ORIGIN, "--"]).args(files).status().unwrap();
     assert!(same.success(), "{} não está no commit de origem {ORIGIN} para {files:?}", root.display());
     std::fs::create_dir_all(fixture_dir()).unwrap();
-    for name in NAMES.iter().chain(ACCEPTED.iter()) {
+    // `HANGAR_FIXTURE_ONLY=a,b`: só esses cenários; os outros ficam como foram gravados.
+    let only = std::env::var("HANGAR_FIXTURE_ONLY").ok();
+    let wanted = |name: &str| only.as_deref().is_none_or(|list| list.split(',').any(|n| n == name));
+    for name in NAMES.iter().chain(ACCEPTED.iter()).filter(|n| wanted(n)) {
         let out = run(name, &Side::Python(&root));
         for event in &out.diary {
             if let Some(id) = event["conta_id"].as_str() { assert_eq!(id, "<CONTA_ID>", "{name}: conta_id fora de sha256(caminho)[:16]"); }
@@ -936,6 +987,30 @@ fn two_accounts_reconciling_together_keep_one_whole_version() {
         assert!(std::fs::symlink_metadata(home.join(format!(".claude-{name}/CLAUDE.md"))).unwrap().file_type().is_symlink());
     }
     for list in warnings { assert!(list.iter().any(|w| w.contains("CLAUDE.md")), "{list:?}"); }
+}
+
+/// A mesma conta reconciliada duas vezes ao mesmo tempo: a trava da conta serializa (sem ela, a janela
+/// entre trocar e refazer o link dava FileExistsError) e as duas terminam sem erro.
+#[test]
+fn the_same_account_reconciling_twice_at_once_never_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    conta(&home, "conta2");
+    for _ in 0..5 {
+        // Sem o link, as duas querem criá-lo ao mesmo tempo.
+        let _ = std::fs::remove_file(home.join(".claude-conta2/skills"));
+        let barrier = std::sync::Barrier::new(2);
+        let results: Vec<_> = std::thread::scope(|s| {
+            let runs: Vec<_> = (0..2).map(|_| s.spawn(|| {
+                barrier.wait();
+                claude_config::reconcile_account(&home, "conta2", Some("-p")).result
+            })).collect();
+            runs.into_iter().map(|r| r.join().unwrap()).collect()
+        });
+        for result in results { assert!(result.is_ok(), "{result:?}"); }
+    }
+    assert_eq!(std::fs::read_link(home.join(".claude-conta2/skills")).unwrap(), home.join(".claude/skills"));
 }
 
 /// M3: trava presa por outro dono recusa no teto, com o caminho dela, sem entrar na reconciliação.
