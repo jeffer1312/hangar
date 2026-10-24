@@ -247,6 +247,8 @@ type Document = (Rc<str>, f32, Option<(u8, u8, u8)>);
 
 type Publish = Rc<dyn Fn(&dyn Fn(&mut model::PageState))>;
 
+type Popups = Rc<RefCell<Vec<String>>>;
+
 pub struct Engine {
     session: Rc<Session>,
     /// Edita o estado da barra e o manda ao painel se mudou.
@@ -271,6 +273,8 @@ pub struct Engine {
     page_scale: Option<f32>,
     /// Zoom da tela cheia: a página vê `1/zoom` do espaço em densidade `zoom` vezes maior; o quadro não muda de tamanho.
     zoom: Cell<f32>,
+    /// Popups anunciados por esta página e ainda vivos: fecham junto com ela, mesmo se ninguém os adotou.
+    announced: Popups,
     /// Contexto próprio da página da conversa, fechado junto com ela.
     context: Option<String>,
 }
@@ -387,7 +391,8 @@ impl Starter {
         let sink = surface.clone();
         browser.sink(session.id(), Box::new(move |params| sink.frame(params)));
         let dead = Rc::new(Cell::new(false));
-        let publish = listen(&session, target, &state, &events, &self.executor, &dead, document.is_some(), popups);
+        let announced = Popups::default();
+        let publish = listen(&session, target, &state, &events, &self.executor, &dead, document.is_some(), popups.then_some(&announced));
         let host = events.clone();
         let _ = session.on("Runtime.bindingCalled", move |params| {
             if params["name"] == "hangarHost" { let _ = host.try_send(Event::Host(params["payload"].as_str().unwrap_or("").to_owned())); }
@@ -398,7 +403,7 @@ impl Starter {
             Err(e) if dead.get() => { surface.close(); Err(format!("{BORN_DEAD}: a pagina caiu ao nascer ({e})")) }
             _ if dead.get() => { surface.close(); Err(format!("{BORN_DEAD}: a pagina caiu ao nascer")) }
             Ok((window, decoration)) => Ok(Engine {
-                session, publish, state, target: target.to_owned(), window, decoration, executor: self.executor.clone(), background: self.background.clone(),
+                session, publish, state, announced, target: target.to_owned(), window, decoration, executor: self.executor.clone(), background: self.background.clone(),
                 surface, dead, page_scale: (!panel).then(|| browser.scale() as f32), context, placed: Cell::new(None), resizes: Rc::default(), visible: Rc::default(),
                 pressed: Cell::new(false), zoom: Cell::new(1.),
             }),
@@ -448,7 +453,7 @@ fn is_popup_window(features: &Value) -> bool {
 #[allow(clippy::too_many_arguments)]
 fn listen(
     session: &Rc<Session>, target: &str, state: &Rc<RefCell<model::PageState>>, events: &async_channel::Sender<Event>, executor: &ForegroundExecutor,
-    dead: &Rc<Cell<bool>>, block_documents: bool, popups: bool,
+    dead: &Rc<Cell<bool>>, block_documents: bool, popups: Option<&Popups>,
 ) -> Publish {
     let publish: Publish = {
         let (state, events) = (state.clone(), events.clone());
@@ -546,7 +551,7 @@ fn listen(
     // Popup de verdade (`popups`): o `window.open` pediu janela e a página guarda a referência (`canAccessOpener`). É o
     // login OAuth, que só termina com o `postMessage` ao `window.opener`. O `Page.windowOpen` chega antes do alvo nascer.
     let popup_asked = Rc::new(Cell::new(false));
-    if popups {
+    if popups.is_some() {
         let asked = popup_asked.clone();
         let _ = session.on("Page.windowOpen", move |params| asked.set(is_popup_window(&params["windowFeatures"])));
     }
@@ -554,7 +559,7 @@ fn listen(
     // nenhum navegador do app abriu (popup `noopener`, sem dono) fecha: sem painel, ninguém veria o JS dela rodando.
     let (weak, m, closing) = (Rc::downgrade(session), main.clone(), Rc::new(RefCell::new(HashSet::<String>::new())));
     for event in ["Target.targetCreated", "Target.targetInfoChanged"] {
-        let (weak, m, closing, asked, events) = (weak.clone(), m.clone(), closing.clone(), popup_asked.clone(), events.clone());
+        let (weak, m, closing, asked, events, announced) = (weak.clone(), m.clone(), closing.clone(), popup_asked.clone(), events.clone(), popups.cloned());
         session.watch(event, move |params| {
             let info = &params["targetInfo"];
             let Some(id) = info["targetId"].as_str() else { return };
@@ -568,6 +573,7 @@ fn listen(
             // Só o nascimento conta: o pedido é do último `window.open`, e um alvo antigo ainda sem endereço não o leva.
             if mine && event == "Target.targetCreated" && asked.take() && info["canAccessOpener"] == true {
                 browser.own(id, true);
+                if let Some(announced) = &announced { announced.borrow_mut().push(id.to_owned()); }
                 let _ = events.try_send(Event::Popup(id.to_owned()));
                 return;
             }
@@ -578,10 +584,11 @@ fn listen(
             drop(browser.call(None, "Target.closeTarget", json!({"targetId": id})));
         });
     }
-    let (closed, m) = (events.clone(), main.clone());
+    let (closed, m, announced) = (events.clone(), main.clone(), popups.cloned());
     session.watch("Target.targetDestroyed", move |params| {
         let Some(id) = params["targetId"].as_str() else { return };
         closing.borrow_mut().remove(id);
+        if let Some(announced) = &announced { announced.borrow_mut().retain(|p| p != id); }
         if id == m { let _ = closed.try_send(Event::Closed); }
     });
     let p = publish.clone();
@@ -630,10 +637,13 @@ impl Engine {
                     (engine.publish)(&|page| { page.url = Some(url.clone()); page.title = title.clone(); });
                     Ok(engine)
                 }
-                opened @ (Ok(_), Err(_)) => opened.0,
+                (Ok(engine), Err(e)) => {
+                    eprintln!("[nav] popup sem endereco na adocao: {e}");
+                    Ok(engine)
+                }
                 (Err(e), info) => {
                     // Login que se resolve sozinho fecha o popup antes de ele ser adotado: não é falha.
-                    if info.is_err() { return Err(format!("{POPUP_GONE}: {e}")); }
+                    if info.is_err_and(|i| i.contains("No target with given id")) { return Err(format!("{POPUP_GONE}: {e}")); }
                     drop(browser.call(None, "Target.closeTarget", json!({"targetId": target})));
                     Err(e)
                 }
@@ -874,6 +884,7 @@ impl Fit {
 impl Drop for Engine {
     fn drop(&mut self) {
         self.surface.close();
+        for popup in self.announced.take() { drop(self.session.browser().call(None, "Target.closeTarget", json!({"targetId": popup}))); }
         drop(self.session.browser().call(None, "Target.closeTarget", json!({"targetId": self.target})));
         if let Some(context) = &self.context {
             drop(self.session.browser().call(None, "Target.disposeBrowserContext", json!({"browserContextId": context})));
@@ -1169,7 +1180,16 @@ mod tests {
             eval(&origin, "window.open('/outra'), 0").await?;
             until(&origin, "location.pathname", json!("/outra")).await?;
             while let Ok(e) = received.try_recv() { if let super::Event::Popup(id) = e { return Err(format!("aba virou popup: {id}")); } }
-            Ok(())
+            // Página descartada com um popup anunciado que ninguém adotou: ele fecha junto, sem ficar rodando sem dono.
+            eval(&origin, "window.open('/popup', 'login', 'width=500,height=600'), 0").await?;
+            let Some(super::Event::Popup(target)) = next(&received, true).await else { return Err("o quarto popup nao foi anunciado".into()) };
+            let browser = origin.session.browser().clone();
+            drop(origin);
+            for _ in 0..50 {
+                if browser.call(None, "Target.getTargetInfo", json!({"targetId": target})).await.is_err() { return Ok(()); }
+                background.timer(Duration::from_millis(100)).await;
+            }
+            Err("popup nao adotado sobreviveu a pagina que o abriu".into())
         }
     }
 
