@@ -64,7 +64,7 @@ fn orq_rows_match_python() {
             let mtime = std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(at + run["timeline"].as_f64().unwrap());
             std::fs::File::options().write(true).open(&tl).unwrap().set_modified(mtime).unwrap();
         }
-        let got = orq_rows(dir.path(), at);
+        let (got, _) = orq_rows(dir.path(), at);
         let home = dir.path().to_string_lossy();
         let want = case["rows"].as_array().unwrap();
         assert_eq!(got.len(), want.len(), "{}", case["case"]);
@@ -170,6 +170,44 @@ fn stall_seconds_reads_the_runtime_config_first() {
     assert_eq!(stall_seconds(dir.path()), std::env::var("CP_STALL_SECONDS").ok().and_then(|v| v.parse().ok()).unwrap_or(STALL_DEFAULT));
     std::fs::write(dir.path().join("runtime-config.json"), r#"{"stall_seconds": 42}"#).unwrap();
     assert_eq!(stall_seconds(dir.path()), 42.0);
+}
+
+#[test]
+fn unreadable_guests_file_keeps_the_last_good_reading() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = json!({"guests": [{"id": "g", "name": "Ana", "token_hash": "h", "root": "/r", "owner_sees": false}],
+        "sessions": {"s": {"guest": "g"}}});
+    std::fs::write(dir.path().join("guests.json"), file.to_string()).unwrap();
+    let names = [("s".to_owned(), None)];
+    assert_eq!(Guests::read(dir.path()).access(&names).1, vec!["s"]);
+    std::fs::write(dir.path().join("guests.json"), "{").unwrap();
+    assert_eq!(Guests::read(dir.path()).access(&names).1, vec!["s"], "ilegível não mostra ao dono a sessão escondida");
+    std::fs::remove_file(dir.path().join("guests.json")).unwrap();
+    assert!(Guests::read(dir.path()).access(&names).1.is_empty(), "sem arquivo, ninguém é convidado");
+}
+
+#[test]
+fn unreadable_orq_keeps_the_last_good_row_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path().join(".hangar/orq/r1");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("orq.json"), json!({"auto": true, "repo": "/w"}).to_string()).unwrap();
+    let start = json!({"tipo": "execucao_inicio", "gid": "g1"});
+    std::fs::write(d.join("eventos.jsonl"), format!("{start}\n")).unwrap();
+    let beat = || json!({"ts": chrono::Local::now().to_rfc3339(), "interval_s": 60}).to_string();
+    std::fs::write(d.join("vigia.json"), beat()).unwrap();
+    let names = |rows: &[SessionRow]| rows.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
+    let (rows, failed) = orq_rows(dir.path(), now());
+    assert_eq!((names(&rows), failed), (vec!["g1-orq".to_owned()], false));
+    // Batimento lido no meio da escrita: a orquestração não some por um tique.
+    std::fs::write(d.join("vigia.json"), "{").unwrap();
+    let (rows, failed) = orq_rows(dir.path(), now());
+    assert_eq!((names(&rows), failed), (vec!["g1-orq".to_owned()], true));
+    // Encerrada de verdade: sai, sem falha.
+    std::fs::write(d.join("vigia.json"), beat()).unwrap();
+    std::fs::write(d.join("eventos.jsonl"), format!("{start}\n{}\n", json!({"tipo": "execucao_fim"}))).unwrap();
+    let (rows, failed) = orq_rows(dir.path(), now());
+    assert_eq!((names(&rows), failed), (Vec::<String>::new(), false));
 }
 
 #[test]

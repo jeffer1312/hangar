@@ -235,6 +235,7 @@ pub struct ListBridge {
     env: Arc<ListEnv>,
     facts: FactsClient,
     local: Mutex<LocalLast>,
+    shortcuts: local_shortcuts::Refresher,
     caches: Arc<Caches>,
     /// Retrato do runtime das sessões sem terminal; sem ele, a linha diz `list_runtime_absent`.
     runtime: std::sync::OnceLock<Arc<dyn HeadlessSource>>,
@@ -286,7 +287,7 @@ impl ListBridge {
         let (caches, demoted) = (Arc::<Caches>::default(), Arc::<crate::state::demote::Demoted>::default());
         caches.classify.with(|c| c.hooks.set_demoted(demoted.clone()));
         let nav = Arc::new(crate::nav_requests::NavStore::load(env.dirs.as_ref().map(|d| d.home.as_path())));
-        Self { nav, env: Arc::new(env), local: Mutex::default(), facts, caches, runtime: std::sync::OnceLock::new(),
+        Self { nav, env: Arc::new(env), local: Mutex::default(), shortcuts: Default::default(), facts, caches, runtime: std::sync::OnceLock::new(),
             shares: std::sync::OnceLock::new(), owner_clients: AtomicU32::new(0), seen: Mutex::default(),
             discovery: tokio::sync::Mutex::new(None),
             snapshot: tokio::sync::Mutex::new(None), git_running: Arc::default(),
@@ -607,8 +608,9 @@ impl ListBridge {
         let others: Vec<SessionRow> = rows.iter().filter(|r| list_facts::OTHERS.contains(&r.provider.as_str())).cloned().collect();
         // Sem linha Pi/omp/Kimi o Python não é perguntado.
         let python = async { if others.is_empty() { None } else { Some(self.facts.fetch(&others, &pane_pids).await) } };
-        let shortcuts = local_shortcuts::list_all(&self.env.capture_program, &children);
-        let (fetched, runtime, plugins, shortcuts) = tokio::join!(python, runtime, self.plugin_facts(&rows), shortcuts);
+        let (program, kids) = (self.env.capture_program.clone(), children.clone());
+        let shortcuts = self.shortcuts.round(move || async move { local_shortcuts::list_all(&program, &kids).await });
+        let (fetched, runtime, plugins) = tokio::join!(python, runtime, self.plugin_facts(&rows));
         let (facts_ok, facts_fresh) = fetched.as_ref().map_or((true, true), |f| (f.ok, f.fresh));
         let states = fetched.map(|f| f.states).unwrap_or_default();
         let facts = Arc::new(self.local_facts(&rows, &dirs, states, shortcuts).await?);
@@ -698,14 +700,17 @@ impl ListBridge {
     /// acesso de convidado, problema do Claude sem terminal, prazo da travada e atalhos. Leitura que
     /// falha fica com a última boa e vai ao diário.
     async fn local_facts(&self, rows: &Arc<Vec<SessionRow>>, dirs: &Dirs, states: list_facts::States,
-        shortcuts: Result<String, &'static str>) -> Result<ListFacts, ListError> {
+        shortcuts: Option<Result<String, &'static str>>) -> Result<ListFacts, ListError> {
         let (found, d) = (rows.clone(), dirs.clone());
-        let (transfers, orq, guests, problems, stall_seconds) = tokio::task::spawn_blocking(move || {
+        let (transfers, (orq, orq_failed), guests, problems, stall_seconds) = tokio::task::spawn_blocking(move || {
             let problems: BTreeMap<String, String> = found.iter().filter(|r| r.provider == "claude" && r.headless)
                 .filter_map(|r| Some((r.name.clone(), local_facts::headless_problem(&d.home, &r.name)?))).collect();
             (local_transfers::transfers(&found, &d), local_facts::orq_rows(&d.home, wall_now()),
                 local_facts::Guests::read(&d.claude), problems, local_facts::stall_seconds(&d.claude))
         }).await.map_err(|e| joined(e, "fatos locais interrompidos"))?;
+        if orq_failed {
+            self.facts.diag.report("rust.list_orq_unavailable", "", "list_orq_unavailable", "orquestração ilegível; fica a última linha boa");
+        }
         let (unknown, (overrides, frozen), shortcuts) = {
             let mut last = lock(&self.local);
             match transfers {
@@ -713,8 +718,9 @@ impl ListBridge {
                 Err(code) => self.facts.diag.report("rust.list_transfers_unavailable", "", &code, "transferências ilegíveis; fica a última leitura boa"),
             }
             match shortcuts {
-                Ok(s) => last.shortcuts = Some(s),
-                Err(code) => self.facts.diag.report("rust.list_shortcuts_unavailable", "", code, "terminais de atalho sem resposta; fica a última leitura"),
+                None => {}
+                Some(Ok(s)) => last.shortcuts = Some(s),
+                Some(Err(code)) => self.facts.diag.report("rust.list_shortcuts_unavailable", "", code, "terminais de atalho sem resposta; fica a última leitura"),
             }
             (last.transfers.is_none(), last.transfers.clone().unwrap_or_default(), last.shortcuts.clone())
         };

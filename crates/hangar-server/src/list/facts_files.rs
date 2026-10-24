@@ -194,19 +194,19 @@ fn read_native(path: &Path) -> Result<(String, Native), &'static str> {
     Ok((sid, Native { state, ts, pid, shell: status == "shell" }))
 }
 
-/// Entradas da pasta; ausente é normal, outro erro (permissão, disco) avisa: calado, toda sessão
-/// da conta ficaria sem marcador para sempre.
-fn entries(dir: &Path, what: &'static str) -> Vec<std::fs::DirEntry> {
+/// Entradas da pasta; ausente é normal (vazia), outro erro (permissão, disco) avisa e devolve
+/// `None`: quem chama mantém o que já sabia da pasta.
+fn entries(dir: &Path, what: &'static str) -> Option<Vec<std::fs::DirEntry>> {
     match std::fs::read_dir(dir) {
-        Ok(it) => it.flatten().collect(),
-        Err(e) if e.kind() == ErrorKind::NotFound => Vec::new(),
+        Ok(it) => Some(it.flatten().collect()),
+        Err(e) if e.kind() == ErrorKind::NotFound => Some(Vec::new()),
         Err(e) => {
             let code = format!("{what}:{:?}", e.kind());
             if crate::warn_limit::allow(None, &format!("list_state_dir_unreadable:{code}")) {
                 tracing::warn!(what, kind = ?e.kind(), "pasta de estado ilegível");
             }
-            super::facts::note("rust.list_state_dir_unreadable", "", code, "pasta de estado ilegível; a conta fica sem marcador");
-            Vec::new()
+            super::facts::note("rust.list_state_dir_unreadable", "", code, "pasta de estado ilegível; fica o último estado lido");
+            None
         }
     }
 }
@@ -272,27 +272,28 @@ impl HookStates {
     }
 
     /// Marcadores de cada `<config>/.hangar-state` e o registro nativo de cada `<config>/sessions`
-    /// (resolvido: as contas são symlink para o principal, e um só basta). Arquivo ilegível fica de
-    /// fora; arquivo sumido sai. Devolve os session ids cujo marcador ou registro nativo mudou desde
-    /// a leitura anterior: a lista acordada por arquivo reclassifica só essas sessões.
+    /// (resolvido: as contas são symlink para o principal, e um só basta). Arquivo ou pasta que não
+    /// leu vale o último estado bom, sem mudança (`hook_state._apply` do Python); arquivo sumido sai.
+    /// Devolve os session ids cujo marcador ou registro nativo mudou desde a leitura anterior: a
+    /// lista acordada por arquivo reclassifica só essas sessões.
     pub fn refresh(&mut self, dirs: &[PathBuf]) -> Vec<String> {
         let mut previous = std::mem::take(&mut self.files);
         let mut changed = Vec::new();
-        let (mut markers, mut native) = (HashMap::new(), HashMap::new());
-        // `parse` devolve `None` quando a leitura falhou: nada é guardado, e o próximo tique tenta de novo.
+        let mut unreadable: Vec<PathBuf> = Vec::new();
+        // `parse` devolve `None` quando a leitura falhou: fica o último estado, guardado com a versão
+        // velha para o próximo tique reler.
         let mut visit = |path: PathBuf, parse: &dyn Fn(&Path) -> Option<Parsed>, files: &mut HashMap<PathBuf, (FileKey, Parsed)>| {
             // Segue o symlink; sem versão não há como saber se mudou, e o arquivo fica de fora.
             let Some(key) = std::fs::metadata(&path).ok().as_ref().and_then(file_key) else { return };
             // Escrito há pouco pode ser reescrito no mesmo tique do relógio com o mesmo tamanho.
             let settled = key.0.elapsed().is_ok_and(|age| age > RACY_WINDOW);
-            let parsed = match previous.remove(&path) {
-                Some((k, parsed)) if k == key && settled => parsed,
+            let stored = match previous.remove(&path) {
+                Some((k, parsed)) if k == key && settled => (key, parsed),
                 before => {
                     #[cfg(test)]
                     { self.reads += 1; }
                     let Some(parsed) = parse(&path) else {
-                        // O estado da sessão some com a leitura: é mudança, e o próximo tique tenta de novo.
-                        changed.extend(before.and_then(|(_, b)| parsed_sid(&path, &b)));
+                        if let Some(last) = before { files.insert(path, last); }
                         return;
                     };
                     // Marcador rasgado (lido no meio da escrita): vale o último bom, como o `hook_state` do Python.
@@ -305,24 +306,16 @@ impl HookStates {
                         changed.extend(before.and_then(|(_, b)| parsed_sid(&path, &b)));
                         changed.extend(parsed_sid(&path, &parsed));
                     }
-                    parsed
+                    (key, parsed)
                 }
             };
-            match &parsed {
-                Parsed::Marker(Some(m)) => {
-                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        markers.insert(stem.to_owned(), m.clone());
-                    }
-                }
-                Parsed::Native(Some((sid, n))) => { native.insert(sid.clone(), n.clone()); }
-                _ => {}
-            }
-            files.insert(path, (key, parsed));
+            files.insert(path, stored);
         };
         let mut files = HashMap::new();
         // Contas com link para a mesma pasta: um `stat` por marcador, não um por conta.
         for d in unique(dirs, MARKER_DIR) {
-            for e in entries(&d, MARKER_DIR) {
+            let Some(found) = entries(&d, MARKER_DIR) else { unreadable.push(d); continue };
+            for e in found {
                 let path = e.path();
                 if path.extension().is_some_and(|x| x == "json") {
                     visit(path, &|p| read_marker(p).ok().map(Parsed::Marker), &mut files);
@@ -330,7 +323,8 @@ impl HookStates {
             }
         }
         for d in unique(dirs, NATIVE_DIR) {
-            for e in entries(&d, NATIVE_DIR) {
+            let Some(found) = entries(&d, NATIVE_DIR) else { unreadable.push(d); continue };
+            for e in found {
                 let name = e.file_name();
                 if !name.to_str().is_some_and(is_native_name) {
                     continue;
@@ -349,8 +343,25 @@ impl HookStates {
                 })), &mut files);
             }
         }
+        // Pasta que não leu: os arquivos dela ficam como estavam, sem mudança.
+        for d in &unreadable {
+            let kept: Vec<PathBuf> = previous.keys().filter(|p| p.parent() == Some(d.as_path())).cloned().collect();
+            for path in kept {
+                if let Some(entry) = previous.remove(&path) { files.insert(path, entry); }
+            }
+        }
         // Arquivo apagado também muda o estado da sessão dele.
         changed.extend(previous.iter().filter_map(|(path, (_, p))| parsed_sid(path, p)));
+        let (mut markers, mut native) = (HashMap::new(), HashMap::new());
+        for (path, (_, parsed)) in &files {
+            match parsed {
+                Parsed::Marker(Some(m)) => {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) { markers.insert(stem.to_owned(), m.clone()); }
+                }
+                Parsed::Native(Some((sid, n))) => { native.insert(sid.clone(), n.clone()); }
+                _ => {}
+            }
+        }
         self.files = files;
         self.markers = markers;
         self.native = native;
@@ -384,7 +395,7 @@ impl HookStates {
 pub fn native_pids(dirs: &[PathBuf], sid: &str) -> Vec<i64> {
     let mut out = Vec::new();
     for d in unique(dirs, NATIVE_DIR) {
-        for e in entries(&d, NATIVE_DIR) {
+        for e in entries(&d, NATIVE_DIR).unwrap_or_default() {
             if !e.file_name().to_str().is_some_and(is_native_name) {
                 continue;
             }
@@ -697,7 +708,8 @@ mod tests {
         write(&cfg.join(".hangar-state/s4.json"), r#"{"state": "idle", "ts": 3}"#);
         assert_eq!(hs.refresh(&dirs), ["s4"]);
         assert!(hs.refresh(&dirs).is_empty(), "escrita recente relida igual não é mudança");
-        // Leitura que falhou não fica guardada: consertada a permissão, a mesma versão é lida.
+        // Leitura que falhou vale o último estado bom, sem mudança (`hook_state._apply` do Python);
+        // consertada a permissão, a versão nova é lida.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -706,12 +718,34 @@ mod tests {
             std::fs::File::options().write(true).open(&f).unwrap()
                 .set_modified(SystemTime::now() - std::time::Duration::from_secs(20)).unwrap();
             std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o000)).unwrap();
-            hs.refresh(&dirs);
+            let changed = hs.refresh(&dirs);
             let blocked = hs.get_state(Some("s3"), |_| false);
             std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(changed.is_empty(), "erro de leitura não é mudança de estado");
             assert_eq!(hs.refresh(&dirs), ["s3"]);
-            assert_eq!((blocked, hs.get_state(Some("s3"), |_| false)), (None, Some(Marker { state: "idle".into(), ts: 5.0 })));
+            assert_eq!((blocked, hs.get_state(Some("s3"), |_| false)),
+                (Some(Marker { state: "working".into(), ts: 1.0 }), Some(Marker { state: "idle".into(), ts: 5.0 })));
         }
+    }
+
+    /// Pasta de marcadores ilegível por um instante: nenhuma sessão perde o estado nem "muda".
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_state_dir_keeps_every_marker() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join(".claude");
+        let dir = cfg.join(".hangar-state");
+        write(&dir.join("a.json"), r#"{"state": "awaiting_input", "ts": 1}"#);
+        let dirs = [cfg.clone()];
+        let mut hs = HookStates::load(&dirs);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let changed = hs.refresh(&dirs);
+        let kept = hs.get_state(Some("a"), |_| false);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(changed.is_empty());
+        assert_eq!(kept, Some(Marker { state: "awaiting_input".into(), ts: 1.0 }));
+        assert!(hs.refresh(&dirs).is_empty(), "voltou igual: nada mudou");
     }
 
     #[test]

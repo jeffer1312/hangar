@@ -29,8 +29,9 @@ pub fn stall_seconds(claude: &Path) -> f64 {
     std::env::var("CP_STALL_SECONDS").ok().and_then(|v| v.trim().parse::<i64>().ok()).map_or(STALL_DEFAULT, |v| v as f64)
 }
 
-/// `guests.json` como o `guest_users._load` o lê; ilegível = ninguém é convidado.
-#[derive(Debug, Default)]
+/// `guests.json` como o `guest_users._load` o lê. Ilegível vale a última leitura boa (sem nenhuma,
+/// ninguém é convidado): ler no meio de uma escrita não mostra ao dono a sessão escondida.
+#[derive(Debug, Default, Clone)]
 pub struct Guests {
     /// id → (nome, o dono vê as sessões dele).
     guests: HashMap<String, (String, bool)>,
@@ -40,8 +41,23 @@ pub struct Guests {
 
 impl Guests {
     pub fn read(claude: &Path) -> Self {
-        let Ok(raw) = std::fs::read(claude.join("guests.json")) else { return Self::default() };
-        Self::parse(&raw).unwrap_or_default()
+        static LAST: LazyLock<Mutex<HashMap<PathBuf, Guests>>> = LazyLock::new(Mutex::default);
+        let path = claude.join("guests.json");
+        let parsed = match std::fs::read(&path) {
+            Ok(raw) => Self::parse(&raw),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(Self::default()),
+            Err(_) => None,
+        };
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        match parsed {
+            Some(guests) => { last.insert(path, guests.clone()); guests }
+            None => {
+                if crate::warn_limit::allow(None, "guests_unreadable") {
+                    tracing::warn!(code = "guests_unreadable", "guests.json ilegível; fica a última leitura boa");
+                }
+                last.get(&path).cloned().unwrap_or_default()
+            }
+        }
     }
 
     fn parse(raw: &[u8]) -> Option<Self> {
@@ -121,27 +137,42 @@ fn modified(path: &Path) -> Option<f64> {
 
 fn task_number(v: &Value) -> bool { v.is_i64() || v.is_u64() }
 
+/// Leitura de um arquivo da orquestração: `Ok(None)` ausente, `Err` ilegível (disco, escrita no meio).
+type OrqRead<T> = Result<Option<T>, ()>;
+
+fn read_json(path: &Path) -> OrqRead<Value> {
+    match std::fs::read(path) {
+        Ok(raw) => serde_json::from_slice(&raw).map(Some).map_err(|_| ()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(()),
+    }
+}
+
 /// `orq._le_eventos` sem `strict`: linha ruim é pulada, só os tipos conhecidos ficam.
-fn orq_events(path: &Path) -> Vec<Value> {
-    let Ok(raw) = std::fs::read(path) else { return Vec::new() };
-    String::from_utf8_lossy(&raw).lines().filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
-        .filter(|e| e["tipo"].as_str().is_some_and(|t| ORQ_EVENTS.contains(&t))).collect()
+fn orq_events(path: &Path) -> Result<Vec<Value>, ()> {
+    let raw = match std::fs::read(path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err(()),
+    };
+    Ok(String::from_utf8_lossy(&raw).lines().filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+        .filter(|e| e["tipo"].as_str().is_some_and(|t| ORQ_EVENTS.contains(&t))).collect())
 }
 
 /// `runs._auto_run`: (orq.json, gid, encerrada) de uma execução `auto` com início gravado.
-fn auto_run(dir: &Path) -> Option<(Value, String, bool)> {
-    let cfg: Value = serde_json::from_slice(&std::fs::read(dir.join("orq.json")).ok()?).ok()?;
+fn auto_run(dir: &Path) -> OrqRead<(Value, String, bool)> {
+    let Some(cfg) = read_json(&dir.join("orq.json"))? else { return Ok(None) };
     if cfg.get("auto") != Some(&Value::Bool(true)) {
-        return None;
+        return Ok(None);
     }
-    let events = orq_events(&dir.join("eventos.jsonl"));
-    let gid = events.iter().find(|e| e["tipo"] == "execucao_inicio").and_then(|e| text(&e["gid"]))?.to_owned();
+    let events = orq_events(&dir.join("eventos.jsonl"))?;
+    let Some(gid) = events.iter().find(|e| e["tipo"] == "execucao_inicio").and_then(|e| text(&e["gid"])).map(str::to_owned) else { return Ok(None) };
     // `orq._current_end`: evento de Task depois do fim reabre a execução.
     let mut ended = false;
     for e in &events {
         if e["tipo"] == "execucao_fim" { ended = true } else if task_number(&e["task"]) { ended = false }
     }
-    Some((cfg, gid, ended))
+    Ok(Some((cfg, gid, ended)))
 }
 
 /// `orq_conductor._pid_alive`: só o Linux confere; fora dele vale vivo.
@@ -153,12 +184,12 @@ fn pid_alive(pid: &Value) -> bool {
 }
 
 /// `orq_conductor.watchdog(d, None)` sem systemd: o batimento do vigia decide se a execução vive.
-fn watchdog(dir: &Path, now: f64) -> Option<Value> {
-    let hb: Value = serde_json::from_slice(&std::fs::read(dir.join("vigia.json")).ok()?).ok()?;
-    let ts = iso_epoch(&hb["ts"])?;
+fn watchdog(dir: &Path, now: f64) -> OrqRead<Value> {
+    let Some(hb) = read_json(&dir.join("vigia.json"))? else { return Ok(None) };
+    let Some(ts) = iso_epoch(&hb["ts"]) else { return Ok(None) };
     let iv = hb["interval_s"].as_i64().filter(|v| *v >= 0 && !hb["interval_s"].is_boolean()).unwrap_or(60);
     let fresh = now - ts <= (2 * iv + 30) as f64;
-    (fresh && pid_alive(&hb["pid"])).then_some(hb)
+    Ok((fresh && pid_alive(&hb["pid"])).then_some(hb))
 }
 
 /// `runs._held`: trava presa por alguém, lida em `/proc/locks` (pegar a trava faria o `advance` desistir).
@@ -186,27 +217,48 @@ fn orq_activity(timeline: &Path, now: f64) -> (&'static str, Option<f64>) {
     (if busy { "working" } else { "idle" }, last)
 }
 
+/// A linha de uma execução: `Ok(None)` quando ela não está viva, `Err` quando um arquivo não leu.
+fn orq_row(dir: &Path, now: f64) -> OrqRead<SessionRow> {
+    let Some((cfg, gid, ended)) = auto_run(dir)? else { return Ok(None) };
+    if ended { return Ok(None); }
+    let Some(hb) = watchdog(dir, now)? else { return Ok(None) };
+    let resolved = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_owned());
+    let Some(name) = resolved.file_name().map(|n| n.to_string_lossy().into_owned()) else { return Ok(None) };
+    let timeline = dir.join(format!("timeline-{name}.jsonl"));
+    let (state, last) = orq_activity(&timeline, now);
+    let arbiter = text(&hb["arbiter"]).or_else(|| text(&cfg["arbiter"]));
+    Ok(serde_json::from_value(json!({
+        "name": format!("{gid}-orq"), "cwd": text(&cfg["repo"]), "jsonl": timeline.to_string_lossy(),
+        "provider": "orq", "tracked": true, "pair_gid": gid, "orq_arbiter": arbiter,
+        "state": state, "last_activity": last,
+    })).ok())
+}
+
 /// `runs.active()` + `list_facts._orq_rows`: uma linha por execução `auto` viva em `~/.hangar/orq`.
-pub fn orq_rows(home: &Path, now: f64) -> Vec<SessionRow> {
+/// Arquivo que não leu mantém a última linha boa daquela execução (`keep_orq`), e o `true` diz que
+/// houve falha, para o diário.
+pub fn orq_rows(home: &Path, now: f64) -> (Vec<SessionRow>, bool) {
+    static LAST: LazyLock<Mutex<HashMap<PathBuf, SessionRow>>> = LazyLock::new(Mutex::default);
     let root = home.join(".hangar").join("orq");
-    let Ok(entries) = std::fs::read_dir(&root) else { return Vec::new() };
-    let mut dirs: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    let mut dirs: Vec<PathBuf> = match std::fs::read_dir(&root) {
+        Ok(entries) => entries.flatten().map(|e| e.path()).collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => { last.retain(|d, _| !d.starts_with(&root)); return (Vec::new(), false); }
+        Err(_) => {
+            let mut kept: Vec<(&PathBuf, &SessionRow)> = last.iter().filter(|(d, _)| d.starts_with(&root)).collect();
+            kept.sort_by_key(|(d, _)| *d);
+            return (kept.into_iter().map(|(_, r)| r.clone()).collect(), true);
+        }
+    };
     dirs.sort();
-    dirs.iter().filter_map(|dir| {
-        let (cfg, gid, ended) = auto_run(dir)?;
-        if ended { return None; }
-        let hb = watchdog(dir, now)?;
-        let resolved = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
-        let name = resolved.file_name()?.to_string_lossy().into_owned();
-        let timeline = dir.join(format!("timeline-{name}.jsonl"));
-        let (state, last) = orq_activity(&timeline, now);
-        let arbiter = text(&hb["arbiter"]).or_else(|| text(&cfg["arbiter"]));
-        serde_json::from_value(json!({
-            "name": format!("{gid}-orq"), "cwd": text(&cfg["repo"]), "jsonl": timeline.to_string_lossy(),
-            "provider": "orq", "tracked": true, "pair_gid": gid, "orq_arbiter": arbiter,
-            "state": state, "last_activity": last,
-        })).ok()
-    }).collect()
+    let mut failed = false;
+    let rows = dirs.iter().filter_map(|dir| match orq_row(dir, now) {
+        Ok(Some(row)) => { last.insert(dir.clone(), row.clone()); Some(row) }
+        Ok(None) => { last.remove(dir); None }
+        Err(()) => { failed = true; last.get(dir).cloned() }
+    }).collect();
+    last.retain(|d, _| !d.starts_with(&root) || dirs.contains(d));
+    (rows, failed)
 }
 
 /// Problema gravado no sidecar do Claude sem terminal (`problema: [código, detalhe]`), que o ator

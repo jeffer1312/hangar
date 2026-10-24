@@ -178,6 +178,26 @@ async fn pending_question(program: &OsStr, target: &str, pane_pid: Option<u32>, 
     Some(question)
 }
 
+type Reading = Result<String, &'static str>;
+
+/// A leitura dos atalhos corre fora da rodada da lista, como o `_ListRefresher` do Python: cada
+/// rodada colhe a que terminou e dispara a próxima, sem esperar o multiplexador.
+#[derive(Default)]
+pub struct Refresher { task: std::sync::Mutex<Option<tokio::task::JoinHandle<Reading>>> }
+
+impl Refresher {
+    /// A leitura que terminou desde a rodada anterior; `None` = nada novo (vale a última boa).
+    pub fn round<F>(&self, read: impl FnOnce() -> F) -> Option<Reading>
+    where F: std::future::Future<Output = Reading> + Send + 'static {
+        use futures_util::FutureExt;
+        let mut slot = self.task.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.as_ref().is_some_and(|t| !t.is_finished()) { return None; }
+        let done = slot.take().and_then(|t| t.now_or_never()).map(|r| r.unwrap_or(Err("shortcuts_task_failed")));
+        *slot = Some(tokio::spawn(read()));
+        done
+    }
+}
+
 /// `list_all` em JSON: todos os terminais de atalho, do mais antigo ao mais novo. `Err` = o
 /// multiplexador não respondeu (lista vazia apagaria as abas e as perguntas).
 pub async fn list_all(program: &OsString, children: &ChildrenMap) -> Result<String, &'static str> {
@@ -224,5 +244,16 @@ mod tests {
         let screen = ["abcd", "ef:"];
         assert_eq!(logical_line(&screen, 1, 5), "abcd ef:");
         assert_eq!(logical_line(&screen, 1, 10), "ef:");
+    }
+
+    #[tokio::test]
+    async fn the_list_round_never_waits_for_the_mux() {
+        let stuck = Refresher::default();
+        assert!(stuck.round(std::future::pending).is_none(), "multiplexador parado não segura a rodada");
+        assert!(stuck.round(|| async { Ok("b".to_owned()) }).is_none(), "leitura em voo: nada novo");
+        let r = Refresher::default();
+        assert!(r.round(|| async { Ok("a".to_owned()) }).is_none());
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(r.round(|| async { Ok("b".to_owned()) }), Some(Ok("a".to_owned())), "a rodada colhe a leitura que terminou");
     }
 }
