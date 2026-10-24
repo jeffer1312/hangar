@@ -1185,6 +1185,44 @@ fn a_held_configuration_lock_refuses_at_the_deadline() {
     }
 }
 
+/// Conta com MCP a espelhar e a trava do Claude Code no `.claude.json` dela largada (vencida): o espelho
+/// grava sem ela, como o Claude Code faz.
+fn stale_config_lock(home: &Path) {
+    casa(home);
+    conta(home, "conta2");
+    let account = home.join(".claude-conta2");
+    rm(&account.join(".claude.json"));
+    put(&account.join(".claude.json"), r#"{"projects": {}}"#);
+    let lock = account.join(".claude.json.lock");
+    mkdirs(&lock);
+    mtime(&lock, 1_000_000_000);
+}
+
+/// D21: sem a trava do `.claude.json` da conta o espelho dos MCP grava sem ela, e o log diz qual trava
+/// e por quê.
+#[test]
+fn the_mcp_mirror_without_the_config_lock_writes_and_warns() {
+    #[derive(Clone)] struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> { self.0.lock().unwrap().extend_from_slice(data); Ok(data.len()) }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    stale_config_lock(&home);
+    let file = home.join(".claude-conta2/.claude.json");
+    let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let capture = Capture(output.clone());
+    let subscriber = tracing_subscriber::fmt().without_time().with_ansi(false).with_writer(move || capture.clone()).finish();
+    let outcome = tracing::subscriber::with_default(subscriber, || claude_config::reconcile_account(&home, "conta2", None, EACH));
+    assert!(outcome.result.is_ok(), "{:?}", outcome.result);
+    let copy: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(copy["mcpServers"], json!({"tavily": {}}), "o espelho grava sem a trava");
+    let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    let line = text.lines().find(|l| l.contains("WARN") && l.contains(&file.display().to_string())).unwrap_or_default();
+    assert!(line.contains("trava largada"), "o aviso diz o arquivo e o motivo: {text}");
+}
+
 /// Travas livres mas o prazo da abertura já passado: nada da reconciliação roda, e a recusa é a do limite.
 #[test]
 fn locks_taken_after_the_opening_deadline_reconcile_nothing() {

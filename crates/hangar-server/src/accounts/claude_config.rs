@@ -724,7 +724,10 @@ fn mirror_claude_json(home: &Path, dir: &Path) -> Result<Option<String>> {
     let (Value::Object(principal), Value::Object(copy)) = (principal, copy) else { return Err(not_object()) };
     if mcp_plan(&principal, &copy).is_none() { return Ok(None); }
     // Regrava sob a trava do Claude Code, relendo dentro dela: uma sessão viva da conta grava o mesmo arquivo.
-    let _lock = crate::session_open::claude::lock_config(&destination).ok();
+    // Sem a trava grava assim mesmo, como o Python e o próprio Claude Code.
+    let _lock = crate::session_open::claude::lock_config(&destination).inspect_err(|error| {
+        tracing::warn!(file = %destination.display(), error, "trava do .claude.json indisponível; o espelho dos MCP grava sem ela");
+    }).ok();
     let copy = match read_json(&destination).map_err(failed)? {
         None => return Ok(None),
         Some(Value::Object(copy)) => copy,
