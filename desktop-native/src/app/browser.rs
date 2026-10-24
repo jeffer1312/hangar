@@ -1453,6 +1453,8 @@ impl BrowserPanel {
                 .child(failure(tr("browser_failed").replace("{error}", error), cx)).into_any_element(),
             Some(Ok(engine)) => engine.clone(),
         };
+        #[cfg(target_os = "linux")]
+        let engine = self.popup.as_ref().map_or(engine, |p| p.engine.clone());
         // No Linux o erro da carga toma o lugar da página de erro do Chromium (em inglês e sem o botão). No Windows a
         // página é janela própria e ficaria por cima: lá o erro só vira página quando não há página nenhuma.
         if let Some(error) = &self.page.error && (cfg!(target_os = "linux") || self.page.url.is_none()) {

@@ -293,6 +293,9 @@ impl Browser {
         let Some(method) = message["method"].as_str() else { return };
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         if method == "Target.targetCrashed" && let Some(id) = params["targetId"].as_str() { self.crashed.borrow_mut().insert(id.to_owned()); }
+        // Alvo fechado pelo app segue dele até sumir: um popup largado ainda manda `targetInfoChanged` e, sem dono,
+        // seria aberto na página que o abriu.
+        if method == "Target.targetDestroyed" && let Some(id) = params["targetId"].as_str() { self.owned.borrow_mut().remove(id); }
         let Some(session) = message["sessionId"].as_str() else { return self.notify(method, params) };
         let handlers = self.handlers.borrow().get(&(session.to_owned(), method.to_owned())).cloned().unwrap_or_default();
         for handler in handlers { (handler.borrow_mut())(params.clone()); }

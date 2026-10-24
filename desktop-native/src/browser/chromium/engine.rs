@@ -620,15 +620,24 @@ impl Engine {
         let browser = self.session.browser().clone();
         async move {
             let opened = starter.open_target(&browser, &target, None, None, events, true, false).await;
-            if let Err(e) = &opened {
-                browser.own(&target, false);
-                // Login que se resolve sozinho fecha o popup antes de ele ser adotado: não é falha.
-                if browser.call(None, "Target.getTargetInfo", json!({"targetId": target})).await.is_err() {
-                    return Err(format!("{POPUP_GONE}: {e}"));
+            let info = browser.call(None, "Target.getTargetInfo", json!({"targetId": target})).await;
+            match (opened, info) {
+                // O popup navegou antes de haver sessão nele: o endereço e o título vêm do alvo.
+                (Ok(engine), Ok(info)) => {
+                    let info = &info["targetInfo"];
+                    let url = info["url"].as_str().unwrap_or("").to_owned();
+                    let title = info["title"].as_str().filter(|t| *t != url).unwrap_or("").to_owned();
+                    (engine.publish)(&|page| { page.url = Some(url.clone()); page.title = title.clone(); });
+                    Ok(engine)
                 }
-                drop(browser.call(None, "Target.closeTarget", json!({"targetId": target})));
+                opened @ (Ok(_), Err(_)) => opened.0,
+                (Err(e), info) => {
+                    // Login que se resolve sozinho fecha o popup antes de ele ser adotado: não é falha.
+                    if info.is_err() { return Err(format!("{POPUP_GONE}: {e}")); }
+                    drop(browser.call(None, "Target.closeTarget", json!({"targetId": target})));
+                    Err(e)
+                }
             }
-            opened
         }
     }
 
@@ -865,7 +874,6 @@ impl Fit {
 impl Drop for Engine {
     fn drop(&mut self) {
         self.surface.close();
-        self.session.browser().own(&self.target, false);
         drop(self.session.browser().call(None, "Target.closeTarget", json!({"targetId": self.target})));
         if let Some(context) = &self.context {
             drop(self.session.browser().call(None, "Target.disposeBrowserContext", json!({"browserContextId": context})));
@@ -1131,6 +1139,8 @@ mod tests {
             let Some(super::Event::Popup(target)) = next(&received, true).await else { return Err("o popup nao foi anunciado".into()) };
             let (popup_events, popup_received) = async_channel::unbounded();
             let popup = origin.adopt(target, popup_events).await?;
+            let shown = popup.page().url.unwrap_or_default();
+            if !shown.ends_with("/popup") { return Err(format!("barra do popup sem o endereço dele: {shown:?}")); }
             until(&popup, "location.pathname + ' ' + !!window.opener", json!("/popup true")).await?;
             until(&origin, "location.pathname", json!("/")).await?;
             eval(&popup, "window.opener.postMessage('ok', '*'); window.close(); 0").await?;
@@ -1147,6 +1157,14 @@ mod tests {
                 Err(e) => return Err(format!("popup que fechou sozinho virou falha: {e}")),
             }
             until(&origin, "document.title", json!("got:sozinho")).await?;
+            // "Fechar janela": o painel larga o popup, e a origem não abre o endereço dele no lugar.
+            eval(&origin, "window.open('/popup', 'login', 'width=500,height=600'), 0").await?;
+            let Some(super::Event::Popup(target)) = next(&received, true).await else { return Err("o terceiro popup nao foi anunciado".into()) };
+            let (popup_events, _popup_received) = async_channel::unbounded();
+            drop(origin.adopt(target, popup_events).await?);
+            background.timer(Duration::from_secs(1)).await;
+            let at = eval(&origin, "location.pathname").await?;
+            if at != json!("/") { return Err(format!("fechar o popup levou a origem para {at}")); }
             // Sem features de janela é aba: abre na própria página, sem popup.
             eval(&origin, "window.open('/outra'), 0").await?;
             until(&origin, "location.pathname", json!("/outra")).await?;
