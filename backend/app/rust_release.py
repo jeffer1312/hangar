@@ -35,6 +35,7 @@ RELEASES_URL = "https://github.com/jeffer1312/hangar/releases/download"
 MAIN_TAG = "server-latest"
 NAMES = ("hangar-server", "hangar-cano")
 _EVENT = "hangar_server.baixar"
+UPDATE_OWNS_RUST = "HANGAR_UPDATE_OWNS_RUST"
 
 # Constante de módulo pelo motivo do atualizar.py: o teste troca a decisão sem mexer no os.name.
 _E_WINDOWS = os.name == "nt"
@@ -401,6 +402,11 @@ def main(argv: list[str]) -> int:
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure:
             reconfigure(errors="replace")
+    # Instalador chamado por um passo do Atualizar: baixaria o binário do topo da release, sem a
+    # cópia que a volta devolve. Quem baixa é o Atualizar, pelo commit que ele escolheu.
+    if os.environ.get(UPDATE_OWNS_RUST) == "1":
+        print("binários Rust: quem baixa é o Atualizar, pelo commit escolhido")
+        return 0
     avisos = fetch()
     if avisos is None:
         print("binários Rust: a release não tem build para esta máquina; o Python atende sozinho")

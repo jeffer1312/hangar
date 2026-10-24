@@ -336,8 +336,17 @@ def test_permission_error_outside_windows_is_a_warning(release, tmp_path, monkey
     (["x"], ["--never-fail"], 0), (None, ["--never-fail"], 0),
 ])
 def test_cli_exit_codes(monkeypatch, result, argv, code):
+    monkeypatch.delenv(rust_release.UPDATE_OWNS_RUST, raising=False)
     monkeypatch.setattr(rust_release, "fetch", lambda: result)
     assert rust_release.main(argv) == code
+
+
+def test_cli_inside_the_update_leaves_the_binary_to_it(monkeypatch):
+    """O Atualizar baixa o binário do commit escolhido e guarda o anterior; o instalador chamado
+    por um passo baixaria o do topo da release, sem cópia para a volta."""
+    monkeypatch.setenv(rust_release.UPDATE_OWNS_RUST, "1")
+    monkeypatch.setattr(rust_release, "fetch", lambda: pytest.fail("nao pode baixar"))
+    assert rust_release.main([]) == 0
 
 
 def test_trickling_asset_hits_the_deadline_and_keeps_the_old_binary(tmp_path, monkeypatch):

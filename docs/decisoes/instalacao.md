@@ -35,6 +35,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   binário novo, a atualização guarda o anterior em `~/.hangar/bin/<nome>.prev`; a volta o
   devolve antes de reiniciar. Sem isso, código antigo com binário novo é contrato diferente e o
   Python atende sozinho. A cópia de outra rodada é descartada antes de instalar e ao terminar bem.
+- **Falha depois do código novo volta tudo, mesmo antes do reinício.** Passo ou instalação que
+  falha com o checkout já trocado passa pela mesma volta do reinício (código, binário, tela e
+  reinício): o próximo reinício, de qualquer origem, subiria versões que não se entendem.
+- **Dentro do Atualizar, só ele baixa o binário do Rust.** Ele marca o ambiente
+  (`HANGAR_UPDATE_OWNS_RUST=1`) e o `python -m app.rust_release` dos instaladores chamados pelos
+  passos não baixa; senão vinha o binário do topo da release, sem a cópia que a volta devolve.
+  Passo que falha mostra as linhas `##HANGAR-FALHA##` do instalador, não as últimas linhas.
 - **O Atualizar segue a main, ou a branch de `CP_UPDATE_BRANCH`.** Só ela e a branch em que a
   própria atualização pôs o checkout (`<config>/.hangar-update/branch`) escapam da recusa de
   branch de trabalho; esvaziar o campo volta para a main com o mesmo resgate. Branch ausente no

@@ -1216,6 +1216,8 @@ def _executar(porta: int) -> dict:
             return _falhou(f"a branch '{destino}' (CP_UPDATE_BRANCH) {motivo}; nada foi alterado",
                            porta=porta)
 
+    # Passos, instaladores e hooks do git herdam: o binário do Rust é só desta rodada.
+    os.environ[rust_release.UPDATE_OWNS_RUST] = "1"
     try:
         # A cópia que a volta devolve tem que ser a desta rodada: uma de outra rodada que não sai
         # trocaria um binário atual por um velho, então para antes de mexer em qualquer coisa.
@@ -1254,7 +1256,10 @@ def _executar(porta: int) -> dict:
         # lista de tipos que estava aqui não pegava `PassoFalhou`, e um passo com prova falha
         # produzia exatamente isso.
         msg = str(e)
-        # Falha depois da troca: o checkout não voltou, e a tela precisa dizer onde ele está.
+        # Código novo no disco com binário e tela velhos: o próximo reinício, de qualquer origem,
+        # subiria versões que não se entendem. No Windows o passo pode até já ter reiniciado.
+        if de and _git("rev-parse", "HEAD", timeout=30).stdout.strip() != de:
+            return _voltar(de, msg, pre["topologia"], porta, branch=pre.get("branch", ""))
         atual = _git("rev-parse", "--abbrev-ref", "HEAD", timeout=30).stdout.strip()
         if atual and pre.get("branch") and atual != pre.get("branch"):
             msg += f" (o checkout ficou na branch {atual})"
