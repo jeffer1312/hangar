@@ -33,6 +33,12 @@ pub fn msg(locale: &str, key: &str) -> &'static str {
     }
 }
 
+/// Pergunta longa estoura o payload do Web Push (~4 KB) e o aviso some: corta como o `summary`.
+fn clip(text: &str) -> String {
+    if text.chars().count() <= 160 { return text.to_owned(); }
+    format!("{}…", text.chars().take(159).collect::<String>().trim_end())
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Notice { Awaiting(Option<String>), Finished(Option<String>), Dead, Stalled, Limited(Option<String>),
     /// Desfecho do loop: a frase fixa no idioma da inscrição, o motivo como veio.
@@ -41,7 +47,7 @@ pub enum Notice { Awaiting(Option<String>), Finished(Option<String>), Dead, Stal
 impl Notice {
     pub fn body(&self, locale: &str) -> String {
         match self {
-            Self::Awaiting(Some(q)) => q.clone(),
+            Self::Awaiting(Some(q)) => clip(q),
             Self::Awaiting(None) => msg(locale, "aguardando").to_owned(),
             Self::Finished(Some(r)) => format!("{}: {r}", msg(locale, "terminou")),
             Self::Finished(None) => msg(locale, "terminou").to_owned(),
@@ -117,39 +123,54 @@ impl Sender {
 
     fn dir(&self) -> PathBuf { store::dir(&self.st.accounts.env.claude_base) }
 
-    pub fn gate(&self, session: &str) -> Gate {
-        let prefs = store::prefs(&self.dir());
-        let guests = crate::list::local_facts::Guests::read(&self.st.accounts.env.claude_base);
+    /// O convidado escondido é decidido pela vida da sessão, como na lista: o pedido velho de um
+    /// convidado não cala a sessão nova do dono com o mesmo nome.
+    pub async fn gate(&self, session: &str) -> Gate {
+        let (dir, base) = (self.dir(), self.st.accounts.env.claude_base.clone());
+        let (prefs, guests) = match tokio::task::spawn_blocking(move || (store::prefs(&dir), crate::list::local_facts::Guests::read(&base))).await {
+            Ok(read) => read,
+            Err(_) => {
+                tracing::warn!(code = "push_gate_read_failed", "aviso: preferências e convidados não leram; aviso segurado");
+                return Gate { muted: true, quiet: false, hidden_guest: false, owner_at_pc: false };
+            }
+        };
+        let life = match (guests.claimed(session), self.st.share.as_ref()) {
+            (true, Some(share)) => share.lives.life(session, false).await,
+            _ => None,
+        };
         Gate {
             muted: store::is_muted(&prefs, session),
             quiet: store::in_quiet_hours(&prefs, chrono::Local::now().time()),
-            hidden_guest: guests.access(&[(session.to_owned(), None)]).1.iter().any(|h| h == session),
+            hidden_guest: guests.access(&[(session.to_owned(), life)]).1.iter().any(|h| h == session),
             owner_at_pc: crate::presence::present(&self.st),
         }
     }
 
     /// Todo aviso que não é "aguardando".
     pub fn notify(self: &Arc<Self>, session: &str, notice: Notice) {
-        if self.gate(session).suppressed() { return; }
-        let me = self.clone();
-        let out = Outgoing::single(session, notice);
-        tokio::spawn(async move { me.broadcast(out).await });
+        let (me, session) = (self.clone(), session.to_owned());
+        tokio::spawn(async move {
+            if me.gate(&session).await.suppressed() { return; }
+            me.broadcast(Outgoing::single(&session, notice)).await
+        });
     }
 
     /// "Aguardando": entra na janela de 2 s; quem chega nela sai junto.
     pub fn awaiting(self: &Arc<Self>, session: &str, question: Option<String>) {
-        if self.gate(session).suppressed() { return; }
-        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-        let first = pending.is_none();
-        pending.get_or_insert_with(BTreeMap::new).insert(session.to_owned(), question);
-        drop(pending);
-        if first {
-            let me = self.clone();
-            tokio::spawn(async move {
+        let (me, session) = (self.clone(), session.to_owned());
+        tokio::spawn(async move {
+            if me.gate(&session).await.suppressed() { return; }
+            let first = {
+                let mut pending = me.pending.lock().unwrap_or_else(|e| e.into_inner());
+                let first = pending.is_none();
+                pending.get_or_insert_with(BTreeMap::new).insert(session, question);
+                first
+            };
+            if first {
                 tokio::time::sleep(COALESCE).await;
                 me.flush().await;
-            });
-        }
+            }
+        });
     }
 
     pub async fn flush(&self) {
@@ -167,7 +188,13 @@ impl Sender {
     pub async fn broadcast(&self, out: Outgoing) {
         let pick = |f: &dyn Fn(&str) -> String| (f("pt"), f("en"));
         crate::push_expo::send(&self.st, &out.session, pick(&|l| out.title_suffix(l)), pick(&*out.body), out.url.as_deref() == Some("/"));
-        let Some(vapid) = webpush::vapid(&self.env) else { return };
+        let Some(vapid) = webpush::vapid(&self.env) else {
+            // Sem chave o Web Push está desligado; chave pública presente e par inválido é falha.
+            if !webpush::public_key(&self.env).is_empty() {
+                self.st.diag.report("rust.push_web_failed", "push", "push_vapid_invalid", "chave VAPID inválida; Web Push não saiu");
+            }
+            return;
+        };
         let dir = self.dir();
         let subs = store::subs(&dir);
         if subs.is_empty() { return; }

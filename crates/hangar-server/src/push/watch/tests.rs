@@ -144,9 +144,71 @@ fn memory_survives_a_restart_so_nothing_is_lost_or_repeated() {
     m.save(&path).unwrap();
     let mut back = Memory::load(&path);
     assert_eq!(back.started.get("sid"), Some(&100.0), "o início da série sobrevive: o 'terminou' sai depois do reinício");
-    // Ainda travada depois do reinício: não repete; `b` sumiu enquanto o servidor estava fora: avisa.
+    // Ainda travada depois do reinício: não repete; quem não voltou (restauração em curso, reboot) não
+    // vira "caiu" em massa.
     let again = back.sweep(&[("a".into(), Some("sid".into()), true, None)], true);
-    assert_eq!(again, vec![("b".to_owned(), Notice::Dead)]);
+    assert_eq!(again, vec![]);
+    // Vista viva nesta execução e sumida depois: aí sim avisa.
+    assert_eq!(back.sweep(&[], true), vec![("a".to_owned(), Notice::Dead)]);
+}
+
+#[test]
+fn auto_resume_rearms_known_limits_only_on_the_first_sweep() {
+    let rows = vec![("a".to_owned(), None, false, Some(Some("3pm".to_owned()))), ("b".to_owned(), None, false, Some(None))];
+    assert_eq!(resume_candidates(&rows, &[], true), vec![("a".to_owned(), "3pm".to_owned())]);
+    assert!(resume_candidates(&rows, &[], false).is_empty(), "limite já conhecido não rearma depois da subida");
+    let fresh = [("a".to_owned(), Notice::Limited(Some("3pm".into())))];
+    assert_eq!(resume_candidates(&rows, &fresh, false), vec![("a".to_owned(), "3pm".to_owned())]);
+}
+
+#[test]
+fn auto_resume_needs_an_undelivered_entry_like_python() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(!undelivered(dir.path(), "s"), "sem fila");
+    let path = crate::locate::queue_path(dir.path(), "s");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "{\"id\":\"1\",\"delivered\":true}\nlixo\n").unwrap();
+    assert!(!undelivered(dir.path(), "s"), "tudo entregue");
+    std::fs::write(&path, "{\"id\":\"1\",\"delivered\":true}\n{\"id\":\"2\",\"delivered\":false}\n").unwrap();
+    assert!(undelivered(dir.path(), "s"));
+}
+
+#[test]
+fn seeding_resumes_the_finish_of_a_series_open_before_the_restart() {
+    let mut m = Memory::default();
+    assert!(!seed_resumes_finish(&m, "sid", "idle"), "sem série aberta");
+    m.working("sid", 100.0);
+    assert!(seed_resumes_finish(&m, "sid", "idle"));
+    assert!(!seed_resumes_finish(&m, "sid", "working"));
+}
+
+/// TK-12: painel de teclas aberto no pane também é pergunta de verdade (`is_overlay` do Python).
+#[test]
+fn open_overlay_counts_as_awaiting() {
+    assert!(really_awaiting(false, "idle", true));
+    assert!(really_awaiting(true, "idle", false));
+    assert!(really_awaiting(false, "awaiting_input", false));
+    assert!(!really_awaiting(false, "idle", false), "o aviso de 60 s parado do Claude não é pergunta");
+}
+
+/// TK-35: com os fatos desconhecidos a lista pode faltar sessão viva; a varredura pula o ciclo.
+#[test]
+fn sweep_skips_the_cycle_while_list_facts_are_unknown() {
+    let rows = vec![serde_json::from_value::<hangar_api::session::SessionRow>(json!({"name": "a", "provider": "claude", "jsonl": "/p/a.jsonl"})).unwrap(),
+        serde_json::from_value(json!({"name": "o", "provider": "orq"})).unwrap()];
+    let produced = |unknown| crate::list::bridge::Produced { rows: Arc::new(rows.clone()), facts_ok: true,
+        facts: Arc::new(crate::list::facts::ListFacts { unknown, ..Default::default() }) };
+    assert!(rows_for_sweep(&produced(true)).is_none());
+    let got = rows_for_sweep(&produced(false)).unwrap();
+    assert_eq!(got.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["a"], "orq fora da varredura");
+}
+
+#[test]
+fn long_question_is_clipped_to_fit_the_push_payload() {
+    let body = Notice::Awaiting(Some("x".repeat(5000))).body("pt");
+    assert_eq!(body.chars().count(), 160);
+    assert!(body.ends_with('…'));
+    assert_eq!(Notice::Awaiting(Some("Qual ambiente?".into())).body("pt"), "Qual ambiente?");
 }
 
 #[test]

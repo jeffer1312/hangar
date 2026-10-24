@@ -35,6 +35,9 @@ fn turns() -> &'static broadcast::Sender<TurnEvent> {
 /// 256 perde as mais velhas (`Lagged`).
 pub fn subscribe() -> broadcast::Receiver<TurnEvent> { turns().subscribe() }
 
+/// Uma linha da varredura: (nome, chave, travada, limite com o horário de volta).
+pub type SweepRow = (String, Option<String>, bool, Option<Option<String>>);
+
 /// O que o vigia lembra entre reinícios.
 #[derive(Default, Serialize, Deserialize)]
 pub struct Memory {
@@ -44,15 +47,27 @@ pub struct Memory {
     #[serde(default)] pub stalled: BTreeSet<String>,
     #[serde(default)] pub limited: BTreeSet<String>,
     #[serde(default)] pub dead: BTreeSet<String>,
-    /// Vivas na varredura anterior: nome → chave da conversa.
-    #[serde(default)] pub seen: BTreeMap<String, Option<String>>,
+    /// Vivas na varredura anterior desta execução: nome → chave da conversa. Fica fora do disco: quem
+    /// não voltou depois do reinício (reboot, restauração em curso) não vira "caiu" em massa.
+    #[serde(skip)] pub seen: BTreeMap<String, Option<String>>,
 }
 
 impl Memory {
     pub fn path(home: &Path) -> PathBuf { home.join(".hangar").join("push-watch.json") }
 
     pub fn load(path: &Path) -> Self {
-        std::fs::read(path).ok().and_then(|raw| serde_json::from_slice(&raw).ok()).unwrap_or_default()
+        let raw = match std::fs::read(path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(e) => {
+                tracing::warn!(code = "push_memory_unreadable", kind = ?e.kind(), "memória dos avisos ilegível; recomeça vazia");
+                return Self::default();
+            }
+        };
+        serde_json::from_slice(&raw).unwrap_or_else(|_| {
+            tracing::warn!(code = "push_memory_corrupt", "memória dos avisos corrompida; recomeça vazia");
+            Self::default()
+        })
     }
 
     fn save(&self, path: &Path) -> std::io::Result<()> {
@@ -69,9 +84,8 @@ impl Memory {
     /// A sessão morreu: a série dela acaba.
     pub fn forget(&mut self, sid: &str) { self.started.remove(sid); self.last_idle.remove(sid); }
 
-    /// Uma varredura da lista: o que avisar (nome, aviso) e o que liberar. `rows` = (nome, chave,
-    /// travada, limite com o horário de volta).
-    pub fn sweep(&mut self, rows: &[(String, Option<String>, bool, Option<Option<String>>)], notify_dead: bool) -> Vec<(String, Notice)> {
+    /// Uma varredura da lista: o que avisar (nome, aviso) e o que liberar.
+    pub fn sweep(&mut self, rows: &[SweepRow], notify_dead: bool) -> Vec<(String, Notice)> {
         let (mut out, mut dead_sids, mut dead_names) = (Vec::new(), Vec::new(), Vec::new());
         let now_live: BTreeMap<String, Option<String>> = rows.iter().map(|(n, k, _, _)| (n.clone(), k.clone())).collect();
         for (name, sid) in &self.seen {
@@ -230,7 +244,34 @@ pub fn scan(jsonl: &Path, now: f64) -> std::io::Result<Scan> {
 }
 
 /// "Aguardando" e "terminou" das sessões que o Rust conduz; Pi, omp e Kimi ainda saem do Python.
-fn turn_notices(provider: &str) -> bool { matches!(provider, "claude" | "codex") }
+pub(crate) fn turn_notices(provider: &str) -> bool { matches!(provider, "claude" | "codex") }
+
+/// Quem arma o auto-resume nesta varredura: o limite novo e, na primeira depois da subida, também o
+/// que a memória já sabia (o timer da execução anterior morreu com ela).
+pub fn resume_candidates(rows: &[SweepRow], notices: &[(String, Notice)], first: bool) -> Vec<(String, String)> {
+    if first { return rows.iter().filter_map(|r| Some((r.0.clone(), r.3.clone().flatten()?))).collect(); }
+    notices.iter().filter_map(|(n, x)| match x { Notice::Limited(Some(r)) => Some((n.clone(), r.clone())), _ => None }).collect()
+}
+
+/// Fila com entrada não entregue (`_has_undelivered_queue`): sem ela o drain não tem o que fazer.
+pub fn undelivered(claude: &Path, name: &str) -> bool {
+    std::fs::read(crate::locate::queue_path(claude, name)).is_ok_and(|raw| raw.split(|b| *b == b'\n')
+        .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
+        .any(|e| e.get("delivered") == Some(&Value::Bool(false))))
+}
+
+/// Pergunta de verdade (`_real` do Python): aberta no sidecar, menu no estado ou painel de teclas no pane.
+pub fn really_awaiting(ask: bool, state: &str, overlay: bool) -> bool { ask || state == "awaiting_input" || overlay }
+
+/// As linhas da varredura; `None` com os fatos desconhecidos, quando sessão viva pode faltar.
+pub fn rows_for_sweep(produced: &crate::list::bridge::Produced) -> Option<Vec<SweepRow>> {
+    if produced.facts.unknown { return None; }
+    Some(produced.rows.iter().filter(|r| r.provider != "orq").map(|r| (r.name.clone(),
+        r.jsonl.as_deref().map(crate::locate::session_key), r.stalled, r.limited.then(|| r.limit_reset.clone()))).collect())
+}
+
+/// Na primeira leitura depois da subida, a série aberta antes do reinício que já parou segue para o "terminou".
+pub fn seed_resumes_finish(memory: &Memory, sid: &str, state: &str) -> bool { state == "idle" && memory.started.contains_key(sid) }
 
 fn now_epoch() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64()) }
 
@@ -257,25 +298,42 @@ impl Watch {
     }
 
     async fn row_of(&self, sid: &str, fresh: bool) -> Option<hangar_api::session::SessionRow> {
-        let produced = if fresh { self.st.list.refresh().await } else { self.st.list.snapshot().await }.ok()?;
+        let produced = match if fresh { self.st.list.refresh().await } else { self.st.list.snapshot().await } {
+            Ok(produced) => produced,
+            Err(e) => {
+                tracing::warn!(code = e.code, "vigia de avisos: lista indisponível; aviso da sessão perdido");
+                self.st.diag.report("rust.push_list_unavailable", sid, e.code, "lista indisponível; aviso da sessão perdido");
+                return None;
+            }
+        };
         produced.rows.iter().find(|r| r.jsonl.as_deref().is_some_and(|j| crate::locate::session_key(j) == sid)).cloned()
     }
 
-    /// "Aguardando" só com pergunta de verdade: pergunta aberta no sidecar ou o estado que o Rust
-    /// publicou (pane com menu, ou a vista do runtime sem terminal). Relê uma vez depois de 1,5 s.
+    /// "Aguardando" só com pergunta de verdade: pergunta aberta no sidecar, o estado que o Rust
+    /// publicou (pane com menu, ou a vista do runtime sem terminal) ou o painel de teclas que o
+    /// `Monitor` viu no pane. Relê uma vez depois de 1,5 s.
     async fn awaiting(self: Arc<Self>, sid: String) {
+        let mut last = None;
         for attempt in 0..2 {
             if attempt == 1 { tokio::time::sleep(AWAITING_RETRY).await; }
             let Some(row) = self.row_of(&sid, attempt == 1).await else { return };
             if !turn_notices(&row.provider) { return; }
-            let ask = if row.headless { None } else {
+            let (ask, overlay) = if row.headless { (None, false) } else {
                 let dirs = self.st.list.state_dirs_blocking().map(|(d, _)| d.to_vec()).unwrap_or_default();
-                crate::list::facts_files::open_question(Some(&sid), &dirs).map(|q| q.question)
+                let stem = row.jsonl.as_deref().and_then(|j| Path::new(j).file_stem()).and_then(|s| s.to_str());
+                (crate::list::facts_files::open_question(Some(&sid), &dirs).map(|q| q.question),
+                    self.st.list.published.get(&row.name, stem).is_some_and(|ev| ev.overlay))
             };
-            if ask.is_some() || row.state == "awaiting_input" {
+            if really_awaiting(ask.is_some(), &row.state, overlay) {
                 self.sender.awaiting(&row.name, ask.or_else(|| row.question.clone().filter(|q| !q.is_empty())));
                 return;
             }
+            last = Some(row);
+        }
+        // Sessão sem terminal que o Rust perdeu: o aviso não sai, e o motivo fica no log (TK-15).
+        if let Some(row) = last.filter(|r| r.headless) && let Some(runtime) = self.st.side.runtime.get()
+            && let Some(code) = runtime.runtime_lost(&row.name).await {
+            tracing::warn!(session = %row.name, code, "push aguardando: sem a vista do Rust para a sessão sem terminal; push não enviado");
         }
     }
 
@@ -301,7 +359,10 @@ impl Watch {
         }
         self.persist();
         let s = self.settings();
-        let Some(row) = row else { return };
+        let Some(row) = row else {
+            tracing::warn!(code = "push_finished_row_missing", "terminou: sessão fora da lista; aviso não saiu");
+            return;
+        };
         if !s.notify_finished || !turn_notices(&row.provider) || idle_ts - started < s.finish_min_seconds { return; }
         self.sender.notify(&row.name, Notice::Finished(summary(reply.as_deref())));
     }
@@ -314,17 +375,19 @@ impl Watch {
                 self.memory.lock().unwrap_or_else(|e| e.into_inner()).working(sid, marker.ts);
                 self.persist();
             }
-            "idle" => {
-                let started = {
-                    let mut m = self.memory.lock().unwrap_or_else(|e| e.into_inner());
-                    m.last_idle.insert(sid.to_owned(), marker.ts);
-                    m.started.get(sid).copied()
-                };
-                self.persist();
-                if let Some(started) = started { tokio::spawn(self.clone().finished(sid.to_owned(), started, marker.ts)); }
-            }
+            "idle" => self.idle(sid, marker.ts),
             _ => {}
         }
+    }
+
+    fn idle(self: &Arc<Self>, sid: &str, ts: f64) {
+        let started = {
+            let mut m = self.memory.lock().unwrap_or_else(|e| e.into_inner());
+            m.last_idle.insert(sid.to_owned(), ts);
+            m.started.get(sid).copied()
+        };
+        self.persist();
+        if let Some(started) = started { tokio::spawn(self.clone().finished(sid.to_owned(), started, ts)); }
     }
 
     /// Marcadores e registro nativo a cada segundo; só o arquivo que mudou é relido.
@@ -346,6 +409,8 @@ impl Watch {
                 let before = last.insert(sid.clone(), marker.state.clone());
                 // A primeira leitura semeia; a sessão já aguardando não avisa de novo por um ts novo.
                 if seeded && before.as_deref() != Some(marker.state.as_str()) { self.transition(&sid, &marker); }
+                let resume = !seeded && seed_resumes_finish(&self.memory.lock().unwrap_or_else(|e| e.into_inner()), &sid, &marker.state);
+                if resume { self.idle(&sid, marker.ts); }
             }
             seeded = true;
             tokio::time::sleep(TICK).await;
@@ -354,32 +419,43 @@ impl Watch {
 
     /// Varredura da lista: "caiu" pelo sumiço, "travada" e "limite" uma vez por janela, e o auto-resume.
     async fn sweep(self: Arc<Self>) {
-        let mut armed: BTreeSet<String> = BTreeSet::new();
+        use futures_util::FutureExt;
+        let (mut armed, mut first): (BTreeSet<String>, bool) = (BTreeSet::new(), true);
         loop {
             let s = self.settings();
-            match self.st.list.snapshot().await {
-                Ok(produced) => {
-                    let rows: Vec<_> = produced.rows.iter().filter(|r| r.provider != "orq").map(|r| (r.name.clone(),
-                        r.jsonl.as_deref().map(crate::locate::session_key), r.stalled, r.limited.then(|| r.limit_reset.clone()))).collect();
-                    let notices = self.memory.lock().unwrap_or_else(|e| e.into_inner()).sweep(&rows, s.notify_dead);
-                    self.persist();
-                    for (name, notice) in notices {
-                        if let Notice::Limited(Some(reset)) = &notice { self.auto_resume(&s, &name, reset, &mut armed); }
-                        self.sender.notify(&name, notice);
-                    }
-                    let limited = self.memory.lock().unwrap_or_else(|e| e.into_inner()).limited.clone();
-                    armed.retain(|n| limited.contains(n));
-                }
-                // Retrato com erro perde o ciclo; nunca vira "todos morreram".
-                Err(e) => tracing::warn!(code = e.code, "vigia de avisos: lista indisponível; ciclo perdido"),
+            // Pânico num ciclo perde só o ciclo, como o try/log do `stall_watch`.
+            match std::panic::AssertUnwindSafe(self.sweep_once(&s, &mut armed, first)).catch_unwind().await {
+                Ok(done) => first &= !done,
+                Err(_) => tracing::error!(code = "push_sweep_panicked", "vigia de avisos: ciclo da varredura entrou em pânico"),
             }
             tokio::time::sleep(s.poll).await;
         }
     }
 
+    /// Um ciclo; `true` quando a lista respondeu com os fatos conhecidos.
+    async fn sweep_once(&self, s: &Settings, armed: &mut BTreeSet<String>, first: bool) -> bool {
+        let produced = match self.st.list.snapshot().await {
+            Ok(produced) => produced,
+            // Retrato com erro perde o ciclo; nunca vira "todos morreram".
+            Err(e) => { tracing::warn!(code = e.code, "vigia de avisos: lista indisponível; ciclo perdido"); return false; }
+        };
+        let Some(rows) = rows_for_sweep(&produced) else {
+            tracing::warn!(code = "list_facts_unknown", "vigia de avisos: fatos da lista desconhecidos; ciclo perdido");
+            return false;
+        };
+        let notices = self.memory.lock().unwrap_or_else(|e| e.into_inner()).sweep(&rows, s.notify_dead);
+        self.persist();
+        for (name, reset) in resume_candidates(&rows, &notices, first) { self.auto_resume(s, &name, &reset, armed); }
+        for (name, notice) in notices { self.sender.notify(&name, notice); }
+        let limited = self.memory.lock().unwrap_or_else(|e| e.into_inner()).limited.clone();
+        armed.retain(|n| limited.contains(n));
+        true
+    }
+
     /// Opt-in (`CP_AUTO_RESUME` e a chave mestra): drena a fila da sessão no horário de volta.
     fn auto_resume(&self, s: &Settings, name: &str, reset: &str, armed: &mut BTreeSet<String>) {
         if !s.automations || !s.auto_resume || armed.contains(name) { return; }
+        if !undelivered(&self.st.accounts.env.claude_base, name) { return; }
         let Some(delay) = reset_delay(reset, chrono::Local::now().naive_local()) else {
             tracing::info!(session = name, reset, "auto-resume: horário de volta não parseou; não arma");
             return;
