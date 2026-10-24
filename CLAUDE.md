@@ -628,7 +628,8 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
     a sessão do Rust), `watch_sessions` do Codex a cada 2 s (desligada quando todo Codex é do Rust),
     índice do Arquivo, `git fetch`, atualização automática. Travada, limite e queda são avisados
     pelo Rust (`push/watch.rs`); o vigia Python foi apagado e, no modo `python`, esses avisos não
-    saem.
+    saem. A retomada dos loops ativos na subida também é só do Rust (`loops/watch.rs`): no modo
+    `python` eles não voltam depois do reinício.
 - **Qual conversa é a da sessão é o Rust que decide** (`locate.rs`, a descoberta da lista), e a
   troca de transcript só vale lida duas vezes seguidas; provider, modo do Codex ou outra vida da
   sessão trocam na hora. Com o chat ao vivo aberto, o `/history` segue o transcript que o hub
