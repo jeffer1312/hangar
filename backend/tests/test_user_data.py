@@ -32,6 +32,17 @@ def test_without_the_new_file_the_old_place_and_no_folder_is_created(monkeypatch
     assert not (home / ".hangar").exists()
 
 
+def test_on_a_package_the_first_write_goes_to_config_not_into_the_version(monkeypatch, tmp_path):
+    # Pacote: a `backend/` é da versão, que a próxima atualização apaga.
+    home = _home(monkeypatch, tmp_path)
+    (home / ".hangar" / "config").mkdir(parents=True)
+    version = tmp_path / "versions" / "1.0.0.5"
+    (version / "backend").mkdir(parents=True)
+    (version / "manifest.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(user_data, "_BACKEND", version / "backend")
+    assert user_data.path("peers.json") == home / ".hangar" / "config" / "peers.json"
+
+
 def _child(home: Path, code: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
     return subprocess.run([sys.executable, "-c", code], cwd=BACKEND, env=env, capture_output=True,
