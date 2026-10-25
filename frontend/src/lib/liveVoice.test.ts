@@ -10,7 +10,8 @@ class FakePc {
   ontrack: ((event: { streams: MediaStream[] }) => void) | null = null;
   onconnectionstatechange: (() => void) | null = null;
   addTrack = vi.fn();
-  createDataChannel = vi.fn();
+  channel = { onclose: null as (() => void) | null };
+  createDataChannel = vi.fn(() => this.channel);
   createOffer = vi.fn(async () => ({ type: 'offer', sdp: 'v=0 offer' }));
   setLocalDescription = vi.fn(async () => {});
   setRemoteDescription = vi.fn(async (description: RTCSessionDescriptionInit) => { this.remoteDescription = description; });
@@ -156,6 +157,34 @@ describe('LiveVoiceCall', () => {
     vi.advanceTimersByTime(100);
     expect(ws.sent.filter(m => m.type === 'level')).toEqual([{ type: 'level', input: 0.5 }]);
     expect(levels).toHaveBeenLastCalledWith({ input: 1, output: 0 });
+  });
+
+  it('audio that drops after live offers again on the same socket and keeps the call', async () => {
+    const failed = vi.fn(), phase = vi.fn();
+    const { ws, pc } = await started({ failed, phase });
+    pc.connect();
+    pc.channel.onclose?.();
+    await vi.waitFor(() => expect(ws.sent.filter(m => m.type === 'offer')).toHaveLength(2));
+    const second = FakePc.last;
+    expect(second).not.toBe(pc);
+    expect(pc.close).toHaveBeenCalled();
+    expect(phase).toHaveBeenLastCalledWith('connecting');
+    ws.receive({ type: 'answer', sdp: 'v=0 answer 2' });
+    await vi.waitFor(() => expect(second.remoteDescription?.sdp).toBe('v=0 answer 2'));
+    second.connect();
+    expect(ws.sent.at(-1)).toEqual({ type: 'live' });
+    expect(ws.sent.some(m => m.type === 'stop')).toBe(false);
+    expect(failed).not.toHaveBeenCalled();
+    expect(FakeWs.opened).toBe(1);
+  });
+
+  it('audio that fails before ever going live reports a lost connection', async () => {
+    const failed = vi.fn();
+    const { ws, pc } = await started({ failed });
+    pc.connectionState = 'failed';
+    pc.onconnectionstatechange?.();
+    expect(failed).toHaveBeenCalledWith('connection_lost', undefined);
+    expect(ws.sent.filter(m => m.type === 'offer')).toHaveLength(1);
   });
 
   it('a server error ends the call without reporting a lost connection', async () => {

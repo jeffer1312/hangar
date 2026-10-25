@@ -101,32 +101,9 @@ export class LiveVoiceCall {
       if (!current()) { media.getTracks().forEach(track => track.stop()); return; }
       this.media = media;
       media.getTracks().forEach(track => { track.enabled = false; });
-      const pc = this.pc = new RTCPeerConnection();
-      media.getTracks().forEach(track => pc.addTrack(track, media));
       this.meter('input', media);
-      pc.ontrack = event => {
-        if (!current()) return;
-        this.audio.srcObject = event.streams[0] ?? new MediaStream([event.track]);
-        this.meter('output', this.audio.srcObject as MediaStream);
-        this.audio.play().catch(() => { if (current()) this.end('playback'); });
-      };
-      pc.onconnectionstatechange = () => {
-        if (!current()) return;
-        if (pc.connectionState === 'connected') {
-          this.setMuted(this.muted);
-          this.send({ type: 'live' });
-          this.handlers.phase('live');
-          clearInterval(this.levelTimer);
-          // RMS cru: o limiar de fala do servidor foi medido sem o ganho da barra.
-          this.levelTimer = setInterval(() => { if (this.meters.input) this.send({ type: 'level', input: this.rms('input') }); }, 100);
-        } else if (pc.connectionState === 'failed') this.fail('connection_lost');
-      };
-      // O Realtime exige a linha de dados na oferta, mesmo sem uso aqui.
-      pc.createDataChannel('oai-events');
-      const offer = await pc.createOffer();
-      if (!current()) return;
-      await pc.setLocalDescription(offer);
-      if (!current()) return;
+      const offer = await this.connect(media, current);
+      if (!offer) return;
       const ws = this.ws = new WebSocket(liveVoiceUrlForServer(server, location.origin));
       // Também vale para a conexão que nunca abre: rede de VPN pendura em vez de recusar.
       this.lastPong = Date.now();
@@ -139,21 +116,69 @@ export class LiveVoiceCall {
           actions: this.handlers.actions() });
         this.send({ type: 'offer', sdp: offer.sdp });
       };
-      ws.onmessage = event => { void this.receive(event.data, pc); };
+      ws.onmessage = event => { void this.receive(event.data); };
       ws.onclose = () => this.fail('connection_lost');
     } catch {
       if (current()) this.end(this.media ? 'failed' : 'microphone');
     }
   }
 
-  private async receive(raw: string, pc: RTCPeerConnection) {
+  /** Conexão WebRTC com o microfone já aberto; `null` = a chamada mudou no meio. */
+  private async connect(media: MediaStream, current: () => boolean): Promise<RTCSessionDescriptionInit | null> {
+    const pc = this.pc = new RTCPeerConnection();
+    media.getTracks().forEach(track => pc.addTrack(track, media));
+    let live = false;
+    // A OpenAI encerra a sessão de áudio por tempo; o servidor guarda a conversa e espera outra oferta pelo mesmo socket.
+    const dropped = () => {
+      if (!current() || pc !== this.pc) return;
+      if (!live) { this.fail('connection_lost'); return; }
+      live = false;
+      pc.ontrack = pc.onconnectionstatechange = channel.onclose = null;
+      pc.close();
+      clearInterval(this.levelTimer);
+      this.handlers.phase('connecting');
+      void this.connect(media, current).then(offer => {
+        if (offer) this.send({ type: 'offer', sdp: offer.sdp });
+      }).catch(() => { if (current()) this.end('failed'); });
+    };
+    pc.ontrack = event => {
+      if (!current()) return;
+      this.audio.srcObject = event.streams[0] ?? new MediaStream([event.track]);
+      this.meter('output', this.audio.srcObject as MediaStream);
+      this.audio.play().catch(() => { if (current()) this.end('playback'); });
+    };
+    pc.onconnectionstatechange = () => {
+      if (!current()) return;
+      if (pc.connectionState === 'connected') {
+        live = true;
+        this.setMuted(this.muted);
+        this.send({ type: 'live' });
+        this.handlers.phase('live');
+        clearInterval(this.levelTimer);
+        // RMS cru: o limiar de fala do servidor foi medido sem o ganho da barra.
+        this.levelTimer = setInterval(() => { if (this.meters.input) this.send({ type: 'level', input: this.rms('input') }); }, 100);
+      } else if (pc.connectionState === 'failed') dropped();
+    };
+    // O Realtime exige a linha de dados na oferta, mesmo sem uso aqui; o fim dela é o fim da sessão de áudio.
+    const channel = pc.createDataChannel('oai-events');
+    channel.onclose = dropped;
+    const offer = await pc.createOffer();
+    if (!current()) return null;
+    await pc.setLocalDescription(offer);
+    return current() ? offer : null;
+  }
+
+  private async receive(raw: string) {
     let msg;
     try { msg = JSON.parse(raw); } catch { console.warn('live voice: unreadable server message'); return; }
     switch (msg.type) {
-      case 'answer':
+      case 'answer': {
+        const pc = this.pc;
+        if (!pc) break;
         try { await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp }); }
         catch (e) { if (pc === this.pc) this.end('failed', e instanceof Error ? e.message : undefined); }
         break;
+      }
       case 'state': this.handlers.state(msg.state); break;
       case 'tool': this.tool(msg.call, msg.name, msg.args ?? {}); break;
       case 'pong': this.lastPong = Date.now(); break;

@@ -379,20 +379,54 @@ describe('LiveVoiceCall público', () => {
   });
 
   it('disconnected repetido não reinicia tolerância; tick nativo decide mesmo sem timer JS', async () => {
-    const { pc, handlers } = await openCall(); pc.connect();
+    const { pc, socket, handlers } = await openCall(); pc.connect();
     pc.connectionState = 'disconnected'; pc.onconnectionstatechange?.();
     vi.setSystemTime(4000); pc.onconnectionstatechange?.();
+    expect(pc.close).not.toHaveBeenCalled();
     vi.setSystemTime(5000);
     for (const tick of rtc.ticks) tick();
-    expect(handlers.failed).toHaveBeenCalledExactlyOnceWith('connection_lost', undefined);
     expect(pc.close).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(socket.messages.filter(message => message.type === 'offer')).toHaveLength(2);
+    expect(handlers.failed).not.toHaveBeenCalled();
   });
 
-  it.each(['failed', 'closed'])('RTC %s encerra imediatamente, sem tolerância', async state => {
-    const { pc, handlers } = await openCall(); pc.connect();
+  it.each(['failed', 'closed'])('RTC %s depois de ao vivo manda oferta nova no mesmo socket e segue a chamada', async state => {
+    const { pc, socket, handlers } = await openCall(); pc.connect();
     pc.connectionState = state; pc.onconnectionstatechange?.();
-    expect(handlers.failed).toHaveBeenCalledExactlyOnceWith('connection_lost', undefined);
     expect(pc.close).toHaveBeenCalledOnce();
+    expect(handlers.phase).toHaveBeenLastCalledWith('connecting');
+    await vi.advanceTimersByTimeAsync(0);
+    const second = rtc.Peer.all.at(-1)!;
+    expect(second).not.toBe(pc);
+    expect(socket.messages.filter(message => message.type === 'offer')).toHaveLength(2);
+    socket.receive({ type: 'answer', sdp: 'answer-2' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(second.setRemoteDescription).toHaveBeenCalledWith({ type: 'answer', sdp: 'answer-2' });
+    second.connect();
+    expect(socket.messages.filter(message => message.type === 'live')).toHaveLength(2);
+    expect(handlers.phase).toHaveBeenLastCalledWith('live');
+    await vi.advanceTimersByTimeAsync(10_500);
+    expect(handlers.failed).not.toHaveBeenCalled();
+    expect(socket.messages.some(message => message.type === 'stop')).toBe(false);
+    expect(Socket.all).toHaveLength(1);
+  });
+
+  it('RTC que falha antes de ao vivo encerra com connection_lost', async () => {
+    const { pc, socket, handlers } = await openCall();
+    pc.connectionState = 'failed'; pc.onconnectionstatechange?.();
+    expect(handlers.failed).toHaveBeenCalledExactlyOnceWith('connection_lost', undefined);
+    expect(socket.messages.filter(message => message.type === 'offer')).toHaveLength(1);
+  });
+
+  it('conexão nova que falha antes de conectar encerra em vez de tentar de novo', async () => {
+    const { pc, socket, handlers } = await openCall(); pc.connect();
+    pc.connectionState = 'failed'; pc.onconnectionstatechange?.();
+    await vi.advanceTimersByTimeAsync(0);
+    const second = rtc.Peer.all.at(-1)!;
+    second.connectionState = 'failed'; second.onconnectionstatechange?.();
+    expect(handlers.failed).toHaveBeenCalledExactlyOnceWith('connection_lost', undefined);
+    expect(socket.messages.filter(message => message.type === 'offer')).toHaveLength(2);
   });
 
   it('callback e tolerância da desconexão antiga não encerram tentativa nova', async () => {

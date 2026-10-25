@@ -95,6 +95,11 @@ fn rtc_code(error: rtc::RtcError) -> &'static str {
     match error { rtc::RtcError::Microphone => "microphone", rtc::RtcError::Speaker => "speaker", rtc::RtcError::Media => "audio_stopped", _ => "network" }
 }
 
+/// Áudio que cai depois de ao vivo ganha uma oferta nova; a que nem chegou ao vivo, ou microfone e alto-falante, encerra.
+fn resumes(error: rtc::RtcError, live: bool) -> bool {
+    live && matches!(error, rtc::RtcError::Media | rtc::RtcError::Network)
+}
+
 fn send(socket: &TextSocket, msg: Value) -> Result<(), String> {
     socket.send(&msg.to_string()).map_err(|error| { log(format!("socket send failed error={error:?}")); socket_code(&error).to_owned() })
 }
@@ -149,6 +154,7 @@ async fn run_call(setup: Setup, events: &async_channel::Sender<VoiceEvent>, inbo
     let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + PING_EVERY, PING_EVERY);
     let mut last_pong = Instant::now();
     let mut last_level: Option<Instant> = None;
+    let mut live = false;
     loop {
         tokio::select! {
             message = incoming.recv() => match message {
@@ -187,6 +193,7 @@ async fn run_call(setup: Setup, events: &async_channel::Sender<VoiceEvent>, inbo
             event = rtc_rx.recv() => match event {
                 Ok(rtc::RtcEvent::Connected) => {
                     log("phase Live");
+                    live = true;
                     send(socket, json!({"type": "live"}))?;
                     let _ = events.send(VoiceEvent::Phase(Phase::Live)).await;
                 }
@@ -196,6 +203,17 @@ async fn run_call(setup: Setup, events: &async_channel::Sender<VoiceEvent>, inbo
                         last_level = Some(Instant::now());
                         send(socket, json!({"type": "level", "input": input}))?;
                     }
+                }
+                // A OpenAI encerra a sessão de áudio por tempo; o servidor guarda a conversa e espera outra oferta.
+                Ok(rtc::RtcEvent::Failed(error)) if resumes(error, live) => {
+                    log(format!("rtc failed error={error:?}: new offer on the same call"));
+                    live = false;
+                    if let Some(old) = peer.take() && !matches!(tokio::task::spawn_blocking(move || old.join()).await, Ok(Ok(()))) { log("rtc thread join failed (panic)"); }
+                    let _ = events.send(VoiceEvent::Phase(Phase::Connecting)).await;
+                    let fresh = tokio::task::spawn_blocking(rtc::offer).await.map_err(|_| "network".to_owned())?.map_err(|error| rtc_code(error).to_owned())?;
+                    send(socket, json!({"type": "offer", "sdp": fresh.sdp.clone()}))?;
+                    log(format!("offer sent bytes={}", fresh.sdp.len()));
+                    offer = Some(fresh);
                 }
                 Ok(rtc::RtcEvent::Failed(error)) => { log(format!("rtc failed error={error:?}")); return Err(rtc_code(error).to_owned()); }
                 Ok(rtc::RtcEvent::Closed) => { log("rtc closed"); return Ok(()); }
@@ -231,5 +249,15 @@ mod tests {
         assert_eq!(screen_json(None, own, &peers), Value::Null);
         assert_eq!(screen_json(Some(&("https://vps.example.com".into(), "x".into())), own, &peers), Value::Null);
         assert_eq!(screen_json(Some(&("http://127.0.0.1:8765".into(), "hangar".into())), own, &peers), json!({"server": "", "name": "hangar"}));
+    }
+
+    #[test]
+    fn audio_that_drops_after_live_reconnects_the_same_call() {
+        assert!(resumes(rtc::RtcError::Media, true), "sessão de áudio vencida (2 h) derruba o writer");
+        assert!(resumes(rtc::RtcError::Network, true), "ICE caiu depois de ao vivo");
+        assert!(!resumes(rtc::RtcError::Media, false), "nunca chegou ao vivo: falha de abertura encerra");
+        assert!(!resumes(rtc::RtcError::Microphone, true), "microfone sumiu não se resolve com oferta nova");
+        assert!(!resumes(rtc::RtcError::Speaker, true));
+        assert!(!resumes(rtc::RtcError::Answer, true));
     }
 }

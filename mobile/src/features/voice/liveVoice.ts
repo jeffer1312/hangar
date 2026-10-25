@@ -19,6 +19,8 @@ type Attempt = {
   closed: boolean;
   attached: boolean;
   live: boolean;
+  /** A conexão WebRTC atual chegou a conectar; `live` é da chamada, que sobrevive à troca dela. */
+  pcLive: boolean;
   answered: boolean;
   terminal?: 'failed' | 'taken' | 'closed';
   media?: MediaStream;
@@ -85,7 +87,7 @@ export class LiveVoiceCall {
     let cancelStart!: () => void;
     const cancelled = new Promise<void>(resolve => { cancelStart = resolve; });
     const call: Attempt = {
-      closed: false, attached: false, live: false, answered: false, reading: false, restoring: false,
+      closed: false, attached: false, live: false, pcLive: false, answered: false, reading: false, restoring: false,
       createdAt: 0, lastPong: 0, lastPing: 0, lastMeter: 0, lastInput: 0, audioRevision: 0, samples: new Map(),
       openingDeadline, cancelStart,
     };
@@ -155,32 +157,8 @@ export class LiveVoiceCall {
       try { await this.startAudio(call); }
       catch (error) { this.failAudio(call, error); return; }
       if (!this.current(call)) return;
-      const pc = call.pc = new RTCPeerConnection();
-      for (const track of media.getAudioTracks()) pc.addTrack(track, media);
-      pc.onconnectionstatechange = () => {
-        if (!this.current(call)) return;
-        if (pc.connectionState === 'connected') {
-          call.disconnectedAt = undefined;
-          this.updateTracks(call);
-          if (call.live) return;
-          if (!this.send(call, { type: 'live' })) return;
-          call.live = true;
-          clearTimeout(call.openingTimer);
-          call.lastInput = call.lastMeter = Date.now();
-          this.handlers.phase('live');
-        } else if (pc.connectionState === 'disconnected') {
-          call.disconnectedAt ??= Date.now();
-        } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-          this.fail(call, 'connection_lost');
-        }
-      };
-      // O Realtime exige esta linha na oferta, mesmo sem tráfego do cliente no canal.
-      call.channel = pc.createDataChannel('oai-events');
-      const offer = await pc.createOffer();
-      if (!this.current(call)) return;
-      if (!offer.sdp?.trim()) throw new Error('empty_offer');
-      await pc.setLocalDescription(offer);
-      if (!this.current(call)) return;
+      const sdp = await this.connect(call, media);
+      if (!sdp) return;
       let ws: WebSocket;
       const NativeWebSocket = WebSocket as typeof WebSocket & { new (url: string, protocols: string[], options: { headers: { Origin: string } }): WebSocket };
       try { ws = call.ws = new NativeWebSocket(url, [], { headers: { Origin: new URL(url.replace(/^ws/, 'http')).origin } }); }
@@ -191,7 +169,7 @@ export class LiveVoiceCall {
         try {
           if (!this.send(call, { type: 'hello', client: 'mobile', screen: this.screen, caps: LIVE_VOICE_CAPS, actions: this.handlers.actions() })) return;
           call.attached = true;
-          this.send(call, { type: 'offer', sdp: offer.sdp });
+          this.send(call, { type: 'offer', sdp });
         } catch (error) { this.fail(call, 'failed', detail(error), true); }
       };
       ws.onmessage = event => {
@@ -206,6 +184,51 @@ export class LiveVoiceCall {
     } catch (error) {
       if (this.current(call)) this.fail(call, failure, detail(error), true);
     }
+  }
+
+  /** Conexão WebRTC com o microfone e o áudio nativo já abertos; `null` = a tentativa mudou no meio. */
+  private async connect(call: Attempt, media: MediaStream): Promise<string | null> {
+    const pc = call.pc = new RTCPeerConnection();
+    const mine = () => this.current(call) && call.pc === pc;
+    call.pcLive = call.answered = false;
+    call.disconnectedAt = undefined;
+    for (const track of media.getAudioTracks()) pc.addTrack(track, media);
+    pc.onconnectionstatechange = () => {
+      if (!mine()) return;
+      if (pc.connectionState === 'connected') {
+        call.disconnectedAt = undefined;
+        this.updateTracks(call);
+        if (call.pcLive) return;
+        if (!this.send(call, { type: 'live' })) return;
+        call.pcLive = call.live = true;
+        clearTimeout(call.openingTimer);
+        call.lastInput = call.lastMeter = Date.now();
+        this.handlers.phase('live');
+      } else if (pc.connectionState === 'disconnected') {
+        call.disconnectedAt ??= Date.now();
+      } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        this.dropped(call, pc);
+      }
+    };
+    // O Realtime exige esta linha na oferta, mesmo sem tráfego do cliente no canal.
+    call.channel = pc.createDataChannel('oai-events');
+    const offer = await pc.createOffer();
+    if (!mine()) return null;
+    if (!offer.sdp?.trim()) throw new Error('empty_offer');
+    await pc.setLocalDescription(offer);
+    return mine() ? offer.sdp : null;
+  }
+
+  /** A OpenAI encerra a sessão de áudio por tempo; o servidor guarda a conversa e espera outra oferta pelo mesmo socket. */
+  private dropped(call: Attempt, pc: RTCPeerConnection): void {
+    if (!this.current(call) || call.pc !== pc) return;
+    if (!call.pcLive || !call.media) { this.fail(call, 'connection_lost'); return; }
+    pc.onconnectionstatechange = null;
+    try { call.channel?.close(); pc.close(); } catch { /* a conexão velha já caiu */ }
+    this.updateTracks(call);
+    this.handlers.phase('connecting');
+    void this.connect(call, call.media).then(sdp => { if (sdp) this.send(call, { type: 'offer', sdp }); },
+      error => { if (this.current(call)) this.fail(call, 'failed', detail(error), true); });
   }
 
   private startAudio(call: Attempt, revision?: number): Promise<void> {
@@ -350,7 +373,8 @@ export class LiveVoiceCall {
     if (!this.current(call)) return;
     const now = Date.now();
     if (call.disconnectedAt !== undefined && now - call.disconnectedAt >= DISCONNECT_GRACE_MS) {
-      this.fail(call, 'connection_lost');
+      if (call.pc) this.dropped(call, call.pc);
+      else this.fail(call, 'connection_lost');
       return;
     }
     if (call.ws) {
