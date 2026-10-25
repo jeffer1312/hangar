@@ -52,6 +52,75 @@ before "$S/out" 'o backend importa' 'passo malformado' && pass "novo: marca depo
 expect_no "novo: sem hook de git pull" "$S/out" 'sem .git|hook de atualização'
 SHIM="$S/home/.hangar/cache/install-bin/python3"
 expect_line "novo: python3 dos sub-scripts é o do pacote" "$SHIM" "exec \"$R/scripts/hangar-python\""
+expect_eq "novo: .env só do dono" "$(stat -c %a "$S/home/.hangar/config/.env")" 600
+
+# fnm_box <nome> [falha]: pacote sem Node, e o curl falso serve o instalador do fnm, que exige o unzip
+# como o de verdade. O fnm põe node e npm só em aliases/default/bin.
+fnm_box() {
+  pacote_sandbox "$1"
+  rm -f "$B/node" "$B/npm"
+  cat > "$S/fnm" <<'EOF'
+#!/bin/sh
+d="$HOME/.local/share/fnm/aliases/default/bin"
+mkdir -p "$d"
+printf '#!/bin/sh\necho v22.0.0\n' > "$d/node"; printf '#!/bin/sh\nexit 0\n' > "$d/npm"
+chmod +x "$d/node" "$d/npm"
+EOF
+  chmod +x "$S/fnm"
+  if [ "${2:-}" = falha ]; then
+    echo "echo 'fnm: causa real da falha'; exit 1" > "$S/fnm-install"
+  else
+    printf '%s\n' "command -v unzip >/dev/null || { echo 'Checking availability of unzip... Missing!'; exit 1; }" \
+      "mkdir -p \"\$HOME/.local/share/fnm\" && cp \"$S/fnm\" \"\$HOME/.local/share/fnm/fnm\"" > "$S/fnm-install"
+  fi
+  fake curl "case \"\$*\" in *fnm.vercel.app*) cat \"$S/fnm-install\" ;; *) exit 22 ;; esac"
+}
+
+# --- Caso: o Node que o fnm acabou de instalar é achado sem o .bashrc ---
+fnm_box fnm-path
+fake unzip 'exit 0'
+run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
+expect_eq "fnm-path: sai 0" "$rc" 0
+expect_line "fnm-path: Node instalado" "$S/out" 'Node 20\+ instalado'
+expect_no "fnm-path: não diz que falta" "$S/out" 'Node 20\+ continua faltando'
+
+# --- Caso: sem unzip o instalador do fnm não roda: o unzip entra como dependência do sistema ---
+fnm_box sem-unzip
+fake sudo "$SUDO_EXEC"
+cat > "$B/apt-get" <<EOF
+#!/bin/sh
+echo "apt-get \$*" >> "$S/log/calls"
+printf '#!/bin/sh\nexit 0\n' > "$B/unzip"; chmod +x "$B/unzip"
+EOF
+chmod +x "$B/apt-get"
+run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
+expect_line "sem-unzip: pede o unzip ao sistema" "$S/log/calls" '^sudo -n apt-get install -y unzip$'
+expect_eq "sem-unzip: sai 0" "$rc" 0
+before "$S/log/calls" 'apt-get install -y unzip' 'fnm\.vercel\.app' && pass "sem-unzip: unzip antes do fnm" || flunk "sem-unzip: unzip antes do fnm" "$S/log/calls"
+
+# --- Caso: o instalador do fnm falhou: a saída dele fica no log ---
+fnm_box fnm-falha falha
+fake unzip 'exit 0'
+run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
+expect_eq "fnm-falha: sai 1" "$rc" 1
+expect_line "fnm-falha: causa no log" "$S/home/.hangar/logs/privado/install.log" 'fnm: causa real da falha'
+
+# --- Caso: --yes sem git: a persistência de sessões é pulada com nota, sem pendência ---
+pacote_sandbox sem-git
+printf '#!/bin/sh\necho "$0 $*" >> "%s/log/scripts"\ncommand -v git >/dev/null || { echo "git not found" >&2; exit 1; }\n' "$S" > "$R/scripts/tmux-persist-setup.sh"
+fake sudo "$SUDO_EXEC"
+run_install "$S/out" --yes --tailscale=nao --sem-nativo; rc=$?
+expect_eq "sem-git: sai 0" "$rc" 0
+expect_no "sem-git: persistência não roda" "$S/log/scripts" 'tmux-persist-setup'
+expect_line "sem-git: diz que precisa do git" "$S/out" 'persistência de sessões.*precisa do git'
+expect_no "sem-git: sem pendência" "$S/out" 'persistência de sessões não instalou'
+
+# --- Caso: --yes com git: a persistência roda como hoje ---
+pacote_sandbox com-git
+fake git 'exit 0'
+fake sudo "$SUDO_EXEC"
+run_install "$S/out" --yes --tailscale=nao --sem-nativo
+expect_line "com-git: persistência roda" "$S/log/scripts" 'tmux-persist-setup'
 
 # --- Caso: rodou de novo numa instalação que já existia: nenhum passo marcado, e diz por quê ---
 pacote_sandbox de-novo

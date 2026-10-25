@@ -118,6 +118,7 @@ expect_eq "feliz: FIM ok é a última linha" "$(last_line "$S/out")" '##HANGAR-F
 expect_eq "feliz: etapas na ordem" "$(steps "$S/out")" \
   'preparar fazendo|preparar ok|instalar fazendo|celular fazendo|celular ok|instalar fazendo|instalar ok|final fazendo|final ok'
 expect_line "feliz: senha do app gravada" "$R/backend/.env" '^CP_AUTH_TOKEN=segredo-do-app-123$'
+expect_eq "feliz: .env só do dono" "$(stat -c %a "$R/backend/.env")" 600
 expect_no "feliz: senha fora da saída" "$S/out" 'segredo-do-app-123'
 expect_no "feliz: senha fora do log" "$S/home/.hangar/logs/privado/install.log" 'segredo-do-app-123'
 expect_no "feliz: nenhuma pergunta ficou sem resposta" "$S/out" 'assumindo NÃO'
@@ -134,9 +135,12 @@ expect_no "de novo: a senha nova não vaza" "$S/out2" 'outra-senha-456'
 # --- Caso: máquina migrada para o pacote lê e grava os dados em ~/.hangar/config ---
 new_sandbox migrada
 mkdir -p "$S/home/.hangar/config"
-printf 'CP_AUTH_TOKEN=do-pacote-123\nCP_SERVER_ID=casa\nCP_PORT=8799\n' > "$S/home/.hangar/config/.env"
+printf 'CP_AUTH_TOKEN=do-pacote-123\nCP_SERVER_ID=casa\nCP_PORT=8799\nCP_LAN_BIND_IP=127.0.0.1\n' > "$S/home/.hangar/config/.env"
+chmod 644 "$S/home/.hangar/config/.env"
 TEST_TOKEN='outra-senha-456' run_install "$S/out" "${APP_ARGS[@]}"; rc=$?
 expect_eq "migrada: sai 0" "$rc" 0
+expect_eq "migrada: .env aberto vira só do dono" "$(stat -c %a "$S/home/.hangar/config/.env")" 600
+expect_line "migrada: o bind reescrito" "$S/home/.hangar/config/.env" '^CP_LAN_BIND_IP=0\.0\.0\.0$'
 expect_eq "migrada: nenhum token novo no backend/.env" "$(cat "$R/backend/.env" 2>/dev/null | grep -c '^CP_AUTH_TOKEN=')" 0
 expect_eq "migrada: uma linha de senha só" "$(grep -c '^CP_AUTH_TOKEN=' "$S/home/.hangar/config/.env")" 1
 expect_line "migrada: a senha do pacote fica" "$S/home/.hangar/config/.env" '^CP_AUTH_TOKEN=do-pacote-123$'
@@ -436,6 +440,17 @@ TEST_ASKPASS="$B/askpass" run_install "$S/out" --app --tailscale=sim --sem-nativ
 expect_line "ts-instala: sh -c pelo sudo -n" "$S/log/calls" '^sudo -n sh -c curl -fsSL https://tailscale\.com/install\.sh \| sh$'
 expect_line "ts-instala: o script rodou" "$S/out" '^instalador-da-tailscale$'
 expect_line "ts-instala: sem o comando, item falhou" "$S/out" '^##HANGAR-ITEM## tailscale falhou Tailscale$'
+
+# --- Caso: --help lista as flags do parser e não instala nada ---
+new_sandbox ajuda
+run_install "$S/out" --help; rc=$?
+expect_eq "ajuda: sai 0" "$rc" 0
+expect_no "ajuda: não é flag desconhecida" "$S/out" 'flag desconhecida'
+for f in '--yes\|-y' '--check' '--agentes=' '--tailscale=sim\|--tailscale=nao' '--no-hangar-send\|--no-cp-send' '--no-frontend' '--help\|-h'; do
+  expect_line "ajuda: lista $f" "$S/out" "^  $f"
+done
+expect_no "ajuda: sem o padrão de erro" "$S/out" '--tailscale=\*'
+[ -e "$S/home/.hangar" ] && flunk "ajuda: nada escrito" || pass "ajuda: nada escrito"
 
 # --- fim dos casos ---
 if [ "$fail" = 0 ]; then echo "tudo ok"; else echo "houve falha"; fi

@@ -50,6 +50,11 @@ for arg in "$@"; do
     --no-hangar-send|--no-cp-send)  CPSEND=0 ;;
     --no-panel)    PANEL=0 ;;
     --no-frontend) FRONTEND=0 ;;
+    --help|-h)
+      # Lida deste próprio case: flag nova entra na ajuda sem lista à parte.
+      echo "uso: ./install.sh [flags]   (exemplos no começo do install.sh)"
+      sed -n '/^for arg in/,/^done/{/exit 1/!s/^ *\(-[^)]*\)).*/  \1/p;}' "$REPO/install.sh"
+      exit 0 ;;
     *) echo "flag desconhecida: $arg"; exit 1 ;;
   esac
 done
@@ -265,6 +270,10 @@ if [ "$PACOTE" = 1 ] && [ "$CHECK" = 0 ]; then
   chmod +x "$SHIM/python3"
   export PATH="$SHIM:$PATH"
 fi
+# O .env guarda o token: nasce só do dono, e o que já existia aberto é fechado.
+if [ "$CHECK" = 0 ]; then
+  { (umask 077 && : >> "$ENV_FILE") && chmod 600 "$ENV_FILE"; } || fail "não consegui deixar $ENV_FILE só para o dono (chmod 600)"
+fi
 
 # Quatro sabores, e a diferença é quem decide:
 #  ask       -> padrão SIM sem perguntar (--avancado pergunta). Sem terminal: NÃO.
@@ -312,6 +321,11 @@ detecta_pkg() {
   done
 }
 PKG=$(detecta_pkg)
+
+# Onde o fnm deixa o Node padrão (o mesmo caminho da unit). Só o .bashrc o põe no PATH, e ele não
+# carrega fora de terminal interativo: um Node instalado por uma rodada anterior seria dado como ausente.
+FNM_NODE="$HOME/.local/share/fnm/aliases/default/bin"
+[ -d "$FNM_NODE" ] && export PATH="$PATH:$FNM_NODE"
 
 # Cedo porque o 6/8 também precisa dela (o `tailscale serve` publica ESTA porta), não só o resumo.
 PORTA_FIM=$(grep '^CP_PORT=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
@@ -449,12 +463,16 @@ precisa_home() { # precisa_home <rótulo> <cmd> <comando de instalação> <pra q
   if [ "$UPDATE" = 1 ]; then erro "$rotulo faltando (--update não instala dependência)"; PENDENTE+=("$rotulo"); return 1; fi
   if ask "Instalar agora? (vai pro teu \$HOME, sem sudo)"; then
     mark_item "$cmd" fazendo "$rotulo"
-    # O erro vai ao log: o relatório de falha precisa da causa. O resultado é conferido logo abaixo.
-    eval "$instalacao" >/dev/null 2>>"$LOG" || true
-    # O instalador põe em ~/.local/bin, que pode não estar no PATH DESTE shell.
-    export PATH="$HOME/.local/bin:$HOME/.local/share/fnm:$PATH"
+    # A saída inteira vai ao log se falhar: instaladores como o do fnm dizem a causa no stdout.
+    # O resultado é conferido logo abaixo.
+    local saida; saida=$(mktemp)
+    eval "$instalacao" >"$saida" 2>&1 || true
+    # O instalador põe em ~/.local/bin (e o fnm em aliases/default/bin), fora do PATH DESTE shell:
+    # sem terminal interativo o .bashrc que os acrescenta não carrega.
+    export PATH="$HOME/.local/bin:$HOME/.local/share/fnm:$FNM_NODE:$PATH"
     hash -r 2>/dev/null || true
-    if command -v "$cmd" >/dev/null; then ok "$rotulo instalado"; mark_item "$cmd" ok "$rotulo"; return 0; fi
+    if command -v "$cmd" >/dev/null; then rm -f "$saida"; ok "$rotulo instalado"; mark_item "$cmd" ok "$rotulo"; return 0; fi
+    cat "$saida" >> "$LOG"; rm -f "$saida"
   fi
   erro "$rotulo continua faltando"; mark_item "$cmd" falhou "$rotulo"
   # Código do primeiro que faltou: agente tem frase própria; o resto quase sempre é download que não veio.
@@ -543,6 +561,8 @@ PRA_QUE_NODE='o frontend é Svelte'
 if [ "$FRONTEND" = 0 ]; then
   ok "Node: dispensado (--no-frontend)"
 elif ! command -v npm >/dev/null; then
+  # O instalador do fnm para sem o unzip; curl ele já tem, porque chegou por curl.
+  precisa_root "unzip" unzip unzip 'o instalador do Node (fnm) descompacta com ele' || true
   precisa_home "Node 20+" node \
     'curl -fsSL https://fnm.vercel.app/install | bash && "$HOME/.local/share/fnm/fnm" install 22 && "$HOME/.local/share/fnm/fnm" default 22' \
     "$PRA_QUE_NODE" || true
@@ -1003,6 +1023,9 @@ if [ -d "$HOME/.tmux/plugins/tmux-resurrect" ]; then
   ./scripts/tmux-persist-setup.sh >/dev/null && ok "persistência de sessões atualizada" || erro "persistência de sessões falhou ao atualizar"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
+elif ! command -v git >/dev/null; then
+  # A instalação pelo pacote não precisa do git; só este extra precisa, então ele não vira pendência.
+  nota "persistência de sessões pulada: ela precisa do git; instale o git e rode ./install.sh de novo"
 else
   nota "Opcional: fazer as sessões voltarem depois de um reboot/OOM, com a conversa junto."
   nota "Clona 3 plugins de tmux de terceiros (tpm, resurrect, continuum) no teu ~/.tmux."
