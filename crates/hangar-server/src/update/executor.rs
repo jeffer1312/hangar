@@ -364,7 +364,8 @@ pub async fn restart_only<R: Restarter, H: HealthProbe>(parts: &Parts, request_i
 
 /// Modo desenvolvedor: confere, `git pull --ff-only`, reinicia e prova com qualquer versão do Rust.
 /// Sem volta: o pull só avança a branch, e o checkout é de quem desenvolve.
-pub async fn dev_update<R: Restarter, H: HealthProbe>(parts: &Parts, root: &Path, restarter: &R, health: &H, settings: &Settings) -> bool {
+pub async fn dev_update<R: Restarter, H: HealthProbe>(parts: &Parts, root: &Path, restarter: &R, health: &H, settings: &Settings,
+    runner: Arc<dyn super::StepRunner + Send + Sync>) -> bool {
     let state = StateFile::new(&parts.state_dir);
     let Some(_lock) = lock(parts, &state) else { return false };
     let fail = |erro: String, no_ar: bool| {
@@ -391,6 +392,7 @@ pub async fn dev_update<R: Restarter, H: HealthProbe>(parts: &Parts, root: &Path
     };
     state.log(&output);
     state.write(json!({"commit_de": from, "commit_para": to}));
+    if let Some(warning) = super::dev_mode::fetch_rust(runner, root).await { state.warn(&warning); }
     if restarter.manual() {
         state.write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado", "reiniciar_manual": true}));
         return true;
@@ -409,7 +411,7 @@ pub async fn dev_update<R: Restarter, H: HealthProbe>(parts: &Parts, root: &Path
 
 /// O `dev-mode` pedido pela tela: a mesma troca, com o desfecho no estado que ela acompanha.
 pub async fn dev_mode<R: Restarter, H: HealthProbe>(parts: &Parts, request: &DevRequest, in_service_group: bool, restarter: &R, health: &H,
-    settings: &Settings) -> bool {
+    settings: &Settings, runner: Arc<dyn super::StepRunner + Send + Sync>) -> bool {
     use super::dev_mode::{Outcome as DevOutcome, BUSY, ROLLED_BACK};
     let state = StateFile::new(&parts.state_dir);
     // O pid só entra depois das recusas: antes, o `other_engine` da troca o tomaria pelo motor git.
@@ -422,7 +424,8 @@ pub async fn dev_mode<R: Restarter, H: HealthProbe>(parts: &Parts, request: &Dev
         }
         state.step(key);
     };
-    let result = super::dev_mode::switch(&parts.home, &parts.state_dir, request, in_service_group, restarter, health, settings, &on_step).await;
+    let result = super::dev_mode::switch(&parts.home, &parts.state_dir, request, in_service_group, restarter, health, settings, runner,
+        &on_step, &|warning| state.warn(warning)).await;
     let label = if *request == DevRequest::Off { "Modo desenvolvedor desligado" } else { "Modo desenvolvedor ligado" };
     // O pid vai em todo desfecho: a tela casa o fim pelo pid que o pedido devolveu, e recusa não passa pelo `trocar`.
     let pid = std::process::id();
@@ -484,13 +487,14 @@ async fn execute(env: &AccountEnvironment, args: &Args) -> bool {
     let health = super::HttpHealth::new(&parts.health_url);
     let settings = Settings::default();
     tracing::info!(task = ?args.task, topology = topology.name(), "update: executor de pé");
+    let fetch_runner = Arc::new(super::ShellRunner { timeout: super::dev_mode::FETCH_TIMEOUT });
     match &args.task {
         Task::Restart { request_id } => restart_only(&parts, request_id, &restarter, &health, &settings).await,
         Task::Dev => match super::http::mode(&parts.home) {
-            super::http::Mode::Developer(root) => dev_update(&parts, &root, &restarter, &health, &settings).await,
+            super::http::Mode::Developer(root) => dev_update(&parts, &root, &restarter, &health, &settings, fetch_runner).await,
             _ => { tracing::warn!("update: --dev sem modo desenvolvedor"); false }
         },
-        Task::DevMode(request) => dev_mode(&parts, request, super::migrate::in_service_group(), &restarter, &health, &settings).await,
+        Task::DevMode(request) => dev_mode(&parts, request, super::migrate::in_service_group(), &restarter, &health, &settings, fetch_runner).await,
         Task::Update { .. } => {
             let client = match crate::http_client().build() {
                 Ok(client) => client,
@@ -677,24 +681,26 @@ mod tests {
         let restart = Restart(AtomicUsize::new(0));
         let health = Health(&restart.0, false);
 
-        assert!(!dev_mode(&parts, &DevRequest::On(checkout.join("nada")), false, &restart, &health, &fast()).await);
+        assert!(!dev_mode(&parts, &DevRequest::On(checkout.join("nada")), false, &restart, &health, &fast(), silent()).await);
         let read = state.read();
         assert_eq!((read["fase"].clone(), read["ok"].clone(), read["codigo"].clone(), read["pid"].clone()),
             (json!("pronto"), json!(false), json!("erro_dev_mode_pasta_inexistente"), json!(std::process::id())), "a tela casa o fim pelo pid");
         assert!(read["erro"].as_str().unwrap().contains("não existe"));
         assert_eq!(restart.0.load(Ordering::SeqCst), 0);
 
-        assert!(dev_mode(&parts, &DevRequest::On(checkout.clone()), false, &restart, &health, &fast()).await);
+        assert!(dev_mode(&parts, &DevRequest::On(checkout.clone()), false, &restart, &health, &fast(), silent()).await);
         let read = state.read();
         assert_eq!((read["fase"].clone(), read["ok"].clone(), read["etapa"].clone(), read["pid"].clone(), read["codigo"].clone()),
             (json!("pronto"), json!(true), json!("reiniciar"), json!(std::process::id()), json!(null)));
+        // Checkout sem venv: o Rust dele não foi atualizado, e a tela mostra o aviso.
+        assert!(read["avisos"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("Python")), "{read:?}");
         assert_eq!(restart.0.load(Ordering::SeqCst), 1);
 
         // Trava ocupada por quem não gravou o estado (o `start` acabou de gravar o "começando"): a
         // recusa vai ao estado com o pid deste processo.
         state.write(json!({"fase": "rodando", "pid": null}));
         let _held = UpdateLock::try_acquire(&parts.layout).unwrap();
-        assert!(!dev_mode(&parts, &DevRequest::Off, false, &restart, &health, &fast()).await);
+        assert!(!dev_mode(&parts, &DevRequest::Off, false, &restart, &health, &fast(), silent()).await);
         let read = state.read();
         assert_eq!((read["fase"].clone(), read["ok"].clone(), read["codigo"].clone(), read["pid"].clone()),
             (json!("pronto"), json!(false), json!(super::super::dev_mode::BUSY), json!(std::process::id())));
@@ -702,7 +708,7 @@ mod tests {
 
         // Estado com o pid de outra rodada: é dela.
         state.write(json!({"fase": "rodando", "pid": 77}));
-        assert!(!dev_mode(&parts, &DevRequest::Off, false, &restart, &health, &fast()).await);
+        assert!(!dev_mode(&parts, &DevRequest::Off, false, &restart, &health, &fast(), silent()).await);
         assert_eq!((state.read()["fase"].clone(), state.read()["pid"].clone()), (json!("rodando"), json!(77)));
     }
 
@@ -714,16 +720,56 @@ mod tests {
         let parts = Parts::new(&env(dir.path(), None), &Args::parse(&strings(&["--dev"])).unwrap(), "x");
         std::fs::write(clone.join("a"), "editado").unwrap();
         let restart = Restart(AtomicUsize::new(0));
-        assert!(!dev_update(&parts, &clone, &restart, &Health(&restart.0, false), &fast()).await);
+        assert!(!dev_update(&parts, &clone, &restart, &Health(&restart.0, false), &fast(), silent()).await);
         assert_eq!(restart.0.load(Ordering::SeqCst), 0);
         assert!(!clone.join("b").exists(), "nada foi puxado");
         assert!(StateFile::new(&parts.state_dir).read()["erro"].as_str().unwrap().contains("com edição"));
 
         super::super::dev::tests::sh(&clone, "git checkout -q -- a");
-        assert!(dev_update(&parts, &clone, &restart, &Health(&restart.0, false), &fast()).await);
+        assert!(dev_update(&parts, &clone, &restart, &Health(&restart.0, false), &fast(), silent()).await);
         assert!(clone.join("b").exists());
         assert_eq!(restart.0.load(Ordering::SeqCst), 1);
         assert_eq!(StateFile::new(&parts.state_dir).read()["ok"], true);
+    }
+
+    /// Runner que não roda nada.
+    fn silent() -> Arc<dyn super::super::StepRunner + Send + Sync> { Arc::new(Seen::default()) }
+
+    /// Grava o comando, a pasta, quantos reinícios já houve e se o pull já tinha trazido o `b`.
+    #[derive(Default)]
+    struct Seen { restarts: Option<Arc<Restart>>, calls: Mutex<Vec<(String, PathBuf, usize, bool)>> }
+    impl super::super::StepRunner for Seen {
+        fn run(&self, command: &str, cwd: &Path) -> super::super::StepRun {
+            let restarts = self.restarts.as_ref().map_or(0, |r| r.0.load(Ordering::SeqCst));
+            let pulled = cwd.parent().is_some_and(|c| c.join("b").exists());
+            self.calls.lock().unwrap().push((command.to_owned(), cwd.to_owned(), restarts, pulled));
+            super::super::StepRun { code: Some(1), output: "sem rede".into() }
+        }
+    }
+
+    /// Cada atualização do modo desenvolvedor baixa o Rust da branch do checkout depois do pull e
+    /// antes do reinício; a falha é aviso, e a atualização segue.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn update_dev_fetches_the_checkout_rust_after_the_pull_and_before_the_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let clone = super::super::dev::tests::behind_clone(dir.path());
+        let python = crate::install_root::python_exe(&clone, false);
+        std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+        std::fs::write(&python, "").unwrap();
+        let parts = Parts::new(&env(dir.path(), None), &Args::parse(&strings(&["--dev"])).unwrap(), "x");
+        let restart = Arc::new(Restart(AtomicUsize::new(0)));
+        let runner = Arc::new(Seen { restarts: Some(restart.clone()), ..Seen::default() });
+        assert!(dev_update(&parts, &clone, &*restart, &Health(&restart.0, false), &fast(), runner.clone()).await);
+        let calls = runner.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        let (command, cwd, restarts, pulled) = &calls[0];
+        assert!(command.contains(&python.display().to_string()) && command.ends_with("-m app.rust_release"), "{command}");
+        assert_eq!((cwd, *restarts, *pulled), (&clone.join("backend"), 0, true));
+        assert_eq!(restart.0.load(Ordering::SeqCst), 1);
+        let state = StateFile::new(&parts.state_dir).read();
+        assert_eq!(state["ok"], true);
+        assert!(state["avisos"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("sem rede")), "{state:?}");
     }
 }
 

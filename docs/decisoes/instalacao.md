@@ -262,7 +262,9 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   frente recusa com o motivo. O laço automático do Python segue no motor `git` ali, e o executor do
   Rust recusa rodar junto (`OtherEngine`). Depois da migração, `hangar-server dev-mode on <checkout>`
   liga e `off` volta para a versão instalada mais nova deste sistema (sem nenhuma, recusa), com a troca,
-  o reinício e a prova do atualizador; servidor que não sobe faz o `current` voltar.
+  o reinício e a prova do atualizador; servidor que não sobe faz o `current` voltar. O checkout não
+  tem `bin/`: o Rust vem do `~/.hangar/bin`, atualizado pelo `app.rust_release` do venv do checkout
+  antes da troca no `on` e depois do `git pull` de cada atualização; falha é aviso e não para nada.
 - **A migração (`hangar-server migrate-package`) roda uma vez, fora do serviço, e se desfaz.**
   Checkout editado, com arquivo novo, fora da `main` e da `beta`, sem upstream, à frente ou servido
   pelo `vite` (`SERVE=preview`) vira modo desenvolvedor; o resto vira pacote do canal da branch

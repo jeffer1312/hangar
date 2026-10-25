@@ -14,7 +14,32 @@ use hangar_package::{Manifest, Version};
 
 use super::http::{mode, Mode};
 use super::restart::{SystemRestarter, Topology};
-use super::{HealthProbe, Layout, Reading, Restarter, Settings, StateFile, UpdateError};
+use super::{HealthProbe, Layout, Reading, Restarter, Settings, StateFile, StepRun, StepRunner, UpdateError};
+
+/// Teto do download do Rust do checkout, o mesmo dos comandos da migração.
+pub const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// O checkout não tem `bin/`, e o `rust_bins` dele acha o Rust em `~/.hangar/bin`: o `app.rust_release`
+/// do checkout o baixa da release da branch. Devolve o aviso quando não deu; quem chama segue.
+pub async fn fetch_rust(runner: Arc<dyn StepRunner + Send + Sync>, checkout: &Path) -> Option<String> {
+    let checkout = checkout.to_path_buf();
+    let failed = tokio::task::spawn_blocking(move || {
+        let windows = cfg!(windows);
+        let python = crate::install_root::python_exe(&checkout, windows);
+        if !python.is_file() { return Some(format!("sem o Python do checkout em {}", python.display())); }
+        // O runner marca o passo como dono do download (`HANGAR_UPDATE_OWNS_RUST=1`), e com ele o `rust_release` não baixa.
+        let command = if windows {
+            format!("set HANGAR_UPDATE_OWNS_RUST=&& \"{}\" -m app.rust_release", python.display())
+        } else {
+            format!("HANGAR_UPDATE_OWNS_RUST= '{}' -m app.rust_release", python.display().to_string().replace('\'', "'\\''"))
+        };
+        let StepRun { code, output } = runner.run(&command, &checkout.join("backend"));
+        (code != Some(0)).then(|| format!("o app.rust_release saiu com {code:?}: {}", output.trim()))
+    }).await.unwrap_or_else(|e| Some(e.to_string()))?;
+    let warning = format!("o Rust do modo desenvolvedor não foi atualizado ({failed}); o servidor pode subir com o binário antigo de ~/.hangar/bin");
+    tracing::warn!(code = "update_dev_rust_fetch_failed", "update: {warning}");
+    Some(warning)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
@@ -118,10 +143,11 @@ pub fn suggested_checkout(home: &Path) -> Option<PathBuf> {
 
 /// Troca o modo. `in_service_group`: este processo morre junto com o backend (cgroup da unit, Job do
 /// lançador), e o reinício o mataria no meio. `on_step` recebe `trocar` e `reiniciar`, só depois de
-/// todas as recusas.
+/// todas as recusas. `on_warning` recebe o que não impede a troca (o Rust do checkout não baixou).
 #[allow(clippy::too_many_arguments)]
 pub async fn switch<R: Restarter, H: HealthProbe>(home: &Path, state_dir: &Path, request: &Request, in_service_group: bool,
-    restarter: &R, health: &H, settings: &Settings, on_step: &(dyn Fn(&str) + Sync)) -> Result<Outcome, Failure> {
+    restarter: &R, health: &H, settings: &Settings, runner: Arc<dyn StepRunner + Send + Sync>, on_step: &(dyn Fn(&str) + Sync),
+    on_warning: &(dyn Fn(&str) + Sync)) -> Result<Outcome, Failure> {
     let layout = Layout::new(home);
     let (target, manifest) = match check(home, request)? {
         Checked::Already(text) => return Ok(Outcome::Already(text)),
@@ -139,6 +165,9 @@ pub async fn switch<R: Restarter, H: HealthProbe>(home: &Path, state_dir: &Path,
         return Err(Failure::new("erro_dev_mode_motor_git", format!("o motor git do Python está atualizando esta máquina (pid {pid}); tente de novo depois")));
     }
     on_step("trocar");
+    if matches!(request, Request::On(_)) {
+        if let Some(warning) = fetch_rust(runner, &target).await { on_warning(&warning); }
+    }
     let before = match health.read().await { Reading::Rust { pid, .. } => pid, _ => None };
     let (swap_layout, swap_target) = (layout.clone(), target.clone());
     let previous = super::blocking(move || super::swap(&swap_layout, &swap_target)).await
@@ -204,7 +233,8 @@ pub fn cli(args: &[String]) -> ExitCode {
         Err(e) => { println!("##HANGAR-FALHA## runtime: {e}"); return ExitCode::from(1); }
     };
     let result = runtime.block_on(switch(&home, &super::state_dir(&env.claude_base), &request, super::migrate::in_service_group(),
-        &restarter, &health, &Settings::default(), &|_| ()));
+        &restarter, &health, &Settings::default(), Arc::new(super::ShellRunner { timeout: FETCH_TIMEOUT }), &|_| (),
+        &|warning| println!("aviso: {warning}")));
     let label = if request == Request::Off { "desligado" } else { "ligado" };
     match result {
         Ok(Outcome::Switched(dir)) => println!("modo desenvolvedor {label}: {} aponta para {}; servidor reiniciado", current.display(), dir.display()),
@@ -277,8 +307,83 @@ mod tests {
             FakeHealth { restarts: self.restarts.clone(), proves, commit: commit.map(str::to_owned) }
         }
         async fn switch(&self, request: Request, inside: bool, health: &FakeHealth) -> Result<Outcome, String> {
-            switch(&self.home, &self.state_dir(), &request, inside, &self.restart(), health, &fast(), &|_| ()).await.map_err(|f| f.message)
+            switch(&self.home, &self.state_dir(), &request, inside, &self.restart(), health, &fast(), self.runner(Some(0)), &|_| (), &|_| ())
+                .await.map_err(|f| f.message)
         }
+        fn runner(&self, code: Option<i32>) -> Arc<Recorder> {
+            Arc::new(Recorder { home: self.home.clone(), code, calls: std::sync::Mutex::default() })
+        }
+        /// O Python do venv do checkout, onde o `fetch_rust` o procura.
+        fn venv(&self) -> PathBuf {
+            let python = crate::install_root::python_exe(&real(&self.checkout), cfg!(windows));
+            std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+            std::fs::write(&python, "").unwrap();
+            python
+        }
+    }
+
+    /// Grava o comando, a pasta e para onde o `current` apontava quando rodou.
+    struct Recorder { home: PathBuf, code: Option<i32>, calls: std::sync::Mutex<Vec<(String, PathBuf, PathBuf)>> }
+    impl StepRunner for Recorder {
+        fn run(&self, command: &str, cwd: &Path) -> StepRun {
+            self.calls.lock().unwrap().push((command.to_owned(), cwd.to_owned(), real(&Layout::new(&self.home).current())));
+            StepRun { code: self.code, output: "sem rede".into() }
+        }
+    }
+
+    /// O checkout não tem `bin/`: o Rust dele vem do `~/.hangar/bin`, que o `rust_release` do checkout
+    /// atualiza antes da troca. Falha vira aviso e a troca segue; o `off` não baixa nada.
+    #[tokio::test]
+    async fn dev_mode_on_fetches_the_checkout_rust_before_switching_and_a_failure_is_only_a_warning() {
+        let m = Machine::new();
+        let package = m.current();
+        let health = m.health(true, Some("c5"));
+        let warnings = std::sync::Mutex::new(Vec::<String>::new());
+        let warn = |w: &str| warnings.lock().unwrap().push(w.to_owned());
+        let (state_dir, request, restart, settings) = (m.state_dir(), Request::On(m.checkout.clone()), m.restart(), fast());
+        let on = |runner: Arc<Recorder>| switch(&m.home, &state_dir, &request, false, &restart, &health, &settings, runner, &|_| (), &warn);
+
+        let runner = m.runner(Some(0));
+        assert_eq!(on(runner.clone()).await, Ok(Outcome::Switched(real(&m.checkout))));
+        assert!(runner.calls.lock().unwrap().is_empty(), "sem venv não há o que rodar");
+        let missing = warnings.lock().unwrap().clone();
+        assert!(missing.len() == 1 && missing[0].contains("Python"), "{missing:?}");
+
+        let off = m.runner(Some(0));
+        switch(&m.home, &m.state_dir(), &Request::Off, false, &m.restart(), &health, &fast(), off.clone(), &|_| (), &warn).await.unwrap();
+        assert!(off.calls.lock().unwrap().is_empty(), "o off volta ao bin/ do pacote");
+
+        let python = m.venv();
+        warnings.lock().unwrap().clear();
+        let failing = m.runner(None);
+        assert_eq!(on(failing.clone()).await, Ok(Outcome::Switched(real(&m.checkout))), "a falha não impede a troca");
+        let calls = failing.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        let (command, cwd, current) = &calls[0];
+        assert!(command.contains(&python.display().to_string()) && command.ends_with("-m app.rust_release"), "{command}");
+        assert!(command.contains("HANGAR_UPDATE_OWNS_RUST="), "o runner marca o passo como dono do download: {command}");
+        assert_eq!(cwd, &real(&m.checkout).join("backend"));
+        assert_eq!(current, &package, "roda antes da troca e do reinício");
+        let failed = warnings.lock().unwrap().clone();
+        assert!(failed.len() == 1 && failed[0].contains("sem rede"), "{failed:?}");
+    }
+
+    /// O comando de verdade, pelo shell: o venv numa pasta com espaço e aspa, e o
+    /// `HANGAR_UPDATE_OWNS_RUST=1` do `ShellRunner` não chega ao `rust_release`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dev_mode_fetch_rust_runs_the_checkout_venv_from_backend_without_the_update_marker() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let checkout = dir.path().join("che ck'out");
+        let python = crate::install_root::python_exe(&checkout, false);
+        std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+        std::fs::write(&python, "#!/bin/sh\n[ \"$HANGAR_UPDATE_OWNS_RUST\" = 1 ] && exit 3\necho \"$PWD $*\" > \"$0.ran\"\n").unwrap();
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let runner = Arc::new(super::super::ShellRunner { timeout: Duration::from_secs(20) });
+        assert_eq!(fetch_rust(runner, &checkout).await, None);
+        let ran = std::fs::read_to_string(python.with_extension("ran")).unwrap();
+        assert_eq!(ran.trim(), format!("{} -m app.rust_release", checkout.join("backend").display()));
     }
 
     #[tokio::test]
@@ -378,7 +483,7 @@ mod tests {
     #[tokio::test]
     async fn dev_mode_by_hand_switches_without_restarting() {
         let m = Machine::new();
-        let outcome = switch(&m.home, &m.state_dir(), &Request::On(m.checkout.clone()), false, &Manual, &m.health(false, None), &fast(), &|_| ()).await;
+        let outcome = switch(&m.home, &m.state_dir(), &Request::On(m.checkout.clone()), false, &Manual, &m.health(false, None), &fast(), m.runner(Some(0)), &|_| (), &|_| ()).await;
         assert_eq!(outcome, Ok(Outcome::SwitchedManual(real(&m.checkout))));
         assert_eq!(m.current(), real(&m.checkout));
     }
@@ -421,10 +526,12 @@ mod tests {
         let seen = std::sync::Mutex::new(Vec::new());
         let note = |key: &str| seen.lock().unwrap().push(key.to_owned());
         let health = m.health(true, None);
-        let refused = switch(&m.home, &m.state_dir(), &Request::On(m.checkout.join("nada")), false, &m.restart(), &health, &fast(), &note).await;
+        let refused = switch(&m.home, &m.state_dir(), &Request::On(m.checkout.join("nada")), false, &m.restart(), &health, &fast(),
+            m.runner(Some(0)), &note, &|_| ()).await;
         assert!(refused.is_err());
         assert!(seen.lock().unwrap().is_empty());
-        switch(&m.home, &m.state_dir(), &Request::On(m.checkout.clone()), false, &m.restart(), &health, &fast(), &note).await.unwrap();
+        switch(&m.home, &m.state_dir(), &Request::On(m.checkout.clone()), false, &m.restart(), &health, &fast(), m.runner(Some(0)), &note, &|_| ())
+            .await.unwrap();
         assert_eq!(*seen.lock().unwrap(), ["trocar", "reiniciar"]);
     }
 
