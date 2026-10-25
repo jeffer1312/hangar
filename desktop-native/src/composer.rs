@@ -6,6 +6,38 @@ pub const IMAGE_MARK: &str = "📎 imagem: ";
 pub const FILE_MARK: &str = "📎 arquivo: ";
 const SUGGEST_MAX: usize = 8;
 
+/// Últimos envios do campo; os rascunhos da navegação não alteram o que foi enviado.
+#[derive(Default)]
+pub struct InputHistory {
+    entries: Vec<String>,
+    browsing: Vec<String>,
+    position: usize,
+}
+
+impl InputHistory {
+    pub fn record(&mut self, text: &str) {
+        if !text.trim().is_empty() {
+            self.entries.push(text.to_owned());
+            if self.entries.len() > 10 { self.entries.remove(0); }
+        }
+        self.browsing.clear();
+    }
+
+    pub fn navigate(&mut self, previous: bool, current: &str) -> Option<String> {
+        if self.entries.is_empty() { return None; }
+        if self.browsing.is_empty() {
+            if !previous { return None; }
+            self.browsing = self.entries.clone();
+            self.browsing.push(current.to_owned());
+            self.position = self.entries.len();
+        }
+        self.browsing[self.position] = current.to_owned();
+        self.position = if previous { self.position.saturating_sub(1) }
+            else { (self.position + 1).min(self.entries.len()) };
+        Some(self.browsing[self.position].clone())
+    }
+}
+
 /// `encodeURIComponent`: o backend decodifica o X-Filename com a mesma regra.
 pub fn encode_component(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -590,6 +622,41 @@ mod tests {
     use super::*;
     // O glob pode trazer o `test` da gpui, que colide com o atributo padrão; o nome explícito vence o glob.
     use core::prelude::v1::test;
+
+    #[test]
+    fn input_history_keeps_ten_sends_and_restores_the_draft() {
+        let mut history = InputHistory::default();
+        assert_eq!(history.navigate(true, "rascunho"), None);
+        for n in 1..=12 { history.record(&format!("Mensagem {n}")); }
+        let mut text = "rascunho com acentuação".to_owned();
+        for expected in (3..=12).rev() {
+            text = history.navigate(true, &text).unwrap();
+            assert_eq!(text, format!("Mensagem {expected}"));
+        }
+        assert_eq!(history.navigate(true, &text).as_deref(), Some("Mensagem 3"));
+        for expected in 4..=12 {
+            text = history.navigate(false, &text).unwrap();
+            assert_eq!(text, format!("Mensagem {expected}"));
+        }
+        assert_eq!(history.navigate(false, &text).as_deref(), Some("rascunho com acentuação"));
+    }
+
+    #[test]
+    fn input_history_edits_do_not_change_sends_or_lose_the_draft() {
+        let mut history = InputHistory::default();
+        history.record("primeira\nsegunda linha");
+        history.record("última");
+        assert_eq!(history.navigate(false, "rascunho"), None);
+        assert_eq!(history.navigate(true, "rascunho").as_deref(), Some("última"));
+        assert_eq!(history.navigate(true, "última editada").as_deref(), Some("primeira\nsegunda linha"));
+        assert_eq!(history.navigate(false, "primeira\nsegunda linha").as_deref(), Some("última editada"));
+        assert_eq!(history.navigate(false, "última editada").as_deref(), Some("rascunho"));
+        history.record("nova");
+        assert_eq!(history.navigate(true, "").as_deref(), Some("nova"));
+        assert_eq!(history.navigate(true, "nova").as_deref(), Some("última"));
+        history.record(" \n ");
+        assert_eq!(history.navigate(true, "").as_deref(), Some("nova"));
+    }
 
     #[test]
     fn citations_preserve_web_boundaries_lines_and_markdown() {

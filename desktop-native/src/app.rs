@@ -535,6 +535,7 @@ pub struct Hangar {
     stopping: HashSet<SessionKey>,
     stop_feedback: HashMap<SessionKey, (String, bool)>,
     drafts: HashMap<SessionKey, String>,
+    input_history: HashMap<SessionKey, composer::InputHistory>,
     flight: InFlight,
     action_feedback: HashMap<SessionKey, (String, bool)>,
     file_cards: HashMap<(SessionKey, Source), FileCard>,
@@ -1004,7 +1005,7 @@ impl Hangar {
             connection_dialog: true, list_online: false, chat_online: false, loading: false, history_started: false,
             history_installed: false, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None,
-            delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(),
+            delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
             flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
@@ -2112,6 +2113,7 @@ impl Hangar {
         let server = self.session_server()?;
         let (from, to) = (SessionKey::new(&server, old)?, SessionKey::new(&server, new)?);
         self.delivery.rekey(&from, &to);
+        if let Some(history) = self.input_history.remove(&from) { self.input_history.insert(to.clone(), history); }
         if let Some(list) = self.attachments.remove(&from) { self.attachments.insert(to.clone(), list); }
         self.rekey_context_refs(&from, &to);
         if let Some(batch) = self.uploading.remove(&from) { self.uploading.insert(to.clone(), batch); }
@@ -2704,6 +2706,7 @@ impl Hangar {
 
     /// Texto que saiu do campo no Enter não fica nele nem no rascunho guardado da conversa.
     fn clear_sent_field(&mut self, key: &SessionKey, window: &mut Window, cx: &mut Context<Self>) {
+        self.input_history.entry(key.clone()).or_default().record(&self.composer.read(cx).value());
         self.drafts.remove(key);
         self.composer.update(cx, |input, cx| input.set_value("", window, cx));
         cx.notify();
@@ -4729,8 +4732,8 @@ impl Hangar {
         });
         let field = div().id("composer-field").text_base()
             // Teclas do campo que o compositor intercepta; sem uso aqui, seguem para o editor.
-            .capture_action(cx.listener(move |this, _: &MoveUp, window, cx| { if preview { this.enter_tab_preview_event(window, cx); } this.move_suggestion(-1, cx) }))
-            .capture_action(cx.listener(move |this, _: &MoveDown, window, cx| { if preview { this.enter_tab_preview_event(window, cx); } this.move_suggestion(1, cx) }))
+            .capture_action(cx.listener(move |this, _: &MoveUp, window, cx| { if preview { this.enter_tab_preview_event(window, cx); } this.move_composer(-1, window, cx) }))
+            .capture_action(cx.listener(move |this, _: &MoveDown, window, cx| { if preview { this.enter_tab_preview_event(window, cx); } this.move_composer(1, window, cx) }))
             .capture_action(cx.listener(move |this, _: &IndentInline, window, cx| { if preview { this.enter_tab_preview_event(window, cx); } this.tab(window, cx) }))
                 .capture_action(cx.listener(move |this, _: &Escape, window, cx| {
                     if !preview { return this.escape(window, cx); }
@@ -4898,11 +4901,40 @@ impl Hangar {
             .into_any_element()
     }
 
-    fn move_suggestion(&mut self, step: isize, cx: &mut Context<Self>) {
+    fn move_composer(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
         if self.move_mention(step, cx) { cx.stop_propagation(); return; }
         let count = self.visible_suggestions(cx).len();
-        if count == 0 { return; }
-        self.suggest_pick = (self.suggest_pick as isize + step).rem_euclid(count as isize) as usize;
+        if count > 0 {
+            self.suggest_pick = (self.suggest_pick as isize + step).rem_euclid(count as isize) as usize;
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        if self.queue_edit_active() || self.connection_dialog { return; }
+        let Some(key) = self.selected_key() else { return; };
+        let input = self.composer.read(cx);
+        if !input.selected_range().is_empty() { return; }
+        let text = input.value().to_string();
+        let edge = if step < 0 { 0 } else { text.len() };
+        let cursor = input.cursor();
+        // O início fora do viewport pode ser mapeado para a primeira linha visível pelo editor.
+        if (if step < 0 { &text[..cursor] } else { &text[cursor..] }).contains('\n') { return; }
+        // A posição desenhada preserva também a navegação nas linhas quebradas pela largura do campo.
+        let boundary = match (input.cursor_layout(), input.range_to_bounds(&(edge..edge))) {
+            (Some((caret, line_height)), Some(bounds)) => {
+                let caret_center = caret.origin.y + caret.size.height / 2.;
+                let line_center = bounds.origin.y + line_height / 2.;
+                (caret_center - line_center).abs() < px(1.)
+            }
+            _ => cursor == edge,
+        };
+        if !boundary { return; }
+        let Some(text) = self.input_history.get_mut(&key).and_then(|history| history.navigate(step < 0, &text)) else { return; };
+        self.composer.update(cx, |input, cx| {
+            let end = text.len();
+            input.set_value(text, window, cx);
+            input.set_selected_range(end..end, cx);
+        });
         cx.stop_propagation();
         cx.notify();
     }

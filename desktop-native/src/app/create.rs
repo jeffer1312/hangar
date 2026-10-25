@@ -2843,6 +2843,7 @@ impl Hangar {
         // Chaves e seleção valem só na máquina onde a sessão nasceu.
         if let Some((_, text, message, result)) = first.as_ref()
             && let Some(key) = SessionKey::new(&server, &session) {
+            self.input_history.entry(key.clone()).or_default().record(text);
             self.drafts.entry(key.clone()).or_insert_with(|| text.clone());
             if result.is_err() && self.selected_key().as_ref() == Some(&key) && self.composer.read(cx).value().is_empty() {
                 self.composer.update(cx, |input, cx| input.set_value(text.clone(), window, cx));
