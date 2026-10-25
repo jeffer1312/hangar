@@ -141,6 +141,18 @@ def test_aplica_e_marca(passos, tmp_path):
     assert atualizacoes.aplicados() == {"um"}
 
 
+def test_falha_mostra_o_motivo_marcado_e_nao_a_cauda(passos):
+    """O instalador imprime o motivo bem antes do portão do fim, que ocupa as últimas linhas."""
+    script = passos.parent.parent / "falha.sh"
+    script.write_text("echo '##HANGAR-FALHA## tarefas agendadas: Porta 8765 ocupada por outro processo'\n"
+                      "for i in 1 2 3 4 5 6 7 8 9 10; do echo \"portao do fim $i\"; done\nexit 1\n",
+                      encoding="utf-8")
+    _escreve(passos, "um", id="um", titulo="Um", comando="sh falha.sh", prova="docs")
+    with pytest.raises(atualizacoes.PassoFalhou) as e:
+        atualizacoes.aplicar_pendentes()
+    assert e.value.motivo == "tarefas agendadas: Porta 8765 ocupada por outro processo"
+
+
 def test_comando_que_falha_nao_marca(passos):
     _escreve(passos, "um", id="um", titulo="Um", comando="exit 3", prova="docs")
     with pytest.raises(atualizacoes.PassoFalhou):

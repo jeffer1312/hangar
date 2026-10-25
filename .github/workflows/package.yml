@@ -1,0 +1,312 @@
+# Pacote por versão (docs/superpowers/plans/2026-10-24-pacote-por-versao.md): por sistema, monta com
+# scripts/montar-pacote.py o .tar.gz com binários Rust, Python embutido e o código, e publica na release
+# `package-latest` (main) ou `package-<branch>`, com o índice `package-<canal>.json` escrito por último.
+#
+# Só publica um commit cujos testes passaram NAQUELE commit: o job `backend` de um run de push do ci.yml
+# (Python) e os testes do server.yml do mesmo sistema (artefatos `testes-ok-<sistema>` e `server-<sistema>`).
+# Roda quando qualquer um dos dois termina; enquanto o outro não terminou, sai sem publicar e o fim dele
+# dispara de novo. Commit sem run do server.yml (o filtro de caminhos dele não pegou nada) usa os binários
+# da release `server-*` se nenhum caminho daquele filtro mudou desde o commit deles. Sistema que não está
+# pronto ou falhou fica com a entrada anterior no índice.
+#
+# Dois jobs: `montar` roda o código do commit e o build do sdist sem permissão de escrita e sem token no
+# passo; `publicar` só sobe o que o `montar` deixou como artefato.
+#
+# `workflow_run` só vale com este arquivo na branch padrão (main), também para os runs da `beta`.
+name: Package
+
+on:
+  workflow_run:
+    workflows: [Server, CI]
+    types: [completed]
+    # Só a beta até a prova nas máquinas reais; a main entra junto com o passo de migração.
+    branches: [beta]
+  workflow_dispatch:
+
+env:
+  SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+  BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+
+jobs:
+  montar:
+    # Run de fork nunca: o código do commit roda aqui.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_repository.full_name == github.repository
+    name: montar (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # python-build-standalone 20261021, CPython 3.14.9, variante stripped (sem símbolos de depuração:
+          # 123 MB contra 216 MB no pacote de Linux). sha256 do SHA256SUMS da release.
+          - platform: linux-x86_64
+            python: cpython-3.14.9+20261021-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz
+            python_sha256: 561e91c1cadf30e84aec94d1917384ae3267e5f3e6e135e51fd1578bb19f4064
+          - platform: windows-x86_64
+            python: cpython-3.14.9+20261021-x86_64-pc-windows-msvc-install_only_stripped.tar.gz
+            python_sha256: 57cc230da61d897e8e593511c9dac781491675a036cb727b7de5cb7a62ceebea
+    # O de Windows também monta no Linux: as dependências entram por `uv pip install --python-platform`.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PLATFORM: ${{ matrix.platform }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+          # A versão é VERSION + número de commits, e a conferência dos caminhos compara com outro commit.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Conferir testes e achar os binários
+        id: pronto
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Só runs do commit exato; o ci.yml só por push (o de pull_request testa o merge com a base).
+          runs() { gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$1/runs?head_sha=$SHA&per_page=100$2" \
+                     --jq ".workflow_runs[] | select(.head_sha == \"$SHA\") | \"\(.id) \(.status)\"" </dev/null; }
+          nao() { echo "::notice::$PLATFORM em $SHA: $1; nada publicado, o índice segue com a entrada anterior."; echo ok=false >> "$GITHUB_OUTPUT"; exit 0; }
+
+          ci_ok=false; ci_pendente=false
+          # Em variável, não `< <(...)`: erro da API derruba o passo em vez de virar "nenhum run".
+          ci=$(runs ci.yml '&event=push')
+          while read -r id status; do
+            [ -n "$id" ] || continue
+            if [ "$status" != completed ]; then ci_pendente=true; continue; fi
+            c=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" --paginate --jq '.jobs[] | select(.name == "backend") | .conclusion' </dev/null)
+            if [ "$c" = success ]; then ci_ok=true; fi
+          done <<<"$ci"
+          if ! $ci_ok; then
+            $ci_pendente && nao "o ci.yml ainda roda (o fim dele dispara de novo)"
+            nao "sem o job backend verde num run de push do ci.yml neste commit"
+          fi
+
+          server=$(runs server.yml '')
+          if [ -n "$server" ]; then
+            if grep -qv ' completed$' <<<"$server"; then nao "o server.yml ainda roda (o fim dele dispara de novo)"; fi
+            while read -r id status; do
+              nomes=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts" --paginate --jq '.artifacts[] | select(.expired | not) | .name' </dev/null)
+              if grep -qxF "server-$PLATFORM" <<<"$nomes" && grep -qxF "testes-ok-$PLATFORM" <<<"$nomes"; then
+                gh run download "$id" --repo "$GITHUB_REPOSITORY" --name "server-$PLATFORM" --dir bins </dev/null
+                echo ok=true >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            done <<<"$server"
+            nao "o server.yml deste commit não tem build e testes verdes de $PLATFORM"
+          fi
+
+          # Sem run do server.yml: vale o binário publicado se nada do que o server.yml testa mudou desde o
+          # commit dele. A lista é a do filtro `on.push.paths` do server.yml deste commit.
+          if [ "$BRANCH" = main ]; then stag=server-latest; else stag="server-${BRANCH//[^A-Za-z0-9._-]/-}"; fi
+          mapfile -t caminhos < <(yq -r '.on.push.paths[]' .github/workflows/server.yml | sed 's/^/:(glob)/')
+          [ "${#caminhos[@]}" -gt 0 ] || { echo "::error::não li on.push.paths do server.yml"; exit 1; }
+          # Só a release inexistente é "não pronto"; rede, token ou limite da API derrubam o passo.
+          if ! gh release view "$stag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>rel.err; then
+            grep -qi 'release not found' rel.err && nao "sem run do server.yml e sem a release $stag"
+            cat rel.err >&2; exit 1
+          fi
+          gh release download "$stag" --repo "$GITHUB_REPOSITORY" --pattern server-latest.json --dir srv
+          de=$(jq -r --arg p "$PLATFORM" '.platforms[$p].commit // empty' srv/server-latest.json)
+          [ -n "$de" ] && git cat-file -e "$de^{commit}" 2>/dev/null || nao "binário de $stag sem commit conhecido"
+          rc=0; git diff --quiet "$de" "$SHA" -- "${caminhos[@]}" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            [ "$rc" -eq 1 ] && nao "sem run do server.yml e algum caminho que ele testa mudou desde $de, o commit do binário de $stag"
+            exit "$rc"
+          fi
+          exe=; [ "$PLATFORM" = windows-x86_64 ] && exe=.exe
+          gh release download "$stag" --repo "$GITHUB_REPOSITORY" --dir bins \
+            --pattern "hangar-server-$PLATFORM$exe" --pattern "hangar-cano-$PLATFORM$exe"
+          for b in hangar-server hangar-cano; do
+            want=$(jq -r --arg k "$PLATFORM/$b" '.files[$k].sha256' srv/server-latest.json)
+            echo "$want  bins/$b-$PLATFORM$exe" | sha256sum -c -
+          done
+          echo "::notice::$PLATFORM: binários de $stag ($de), mesmas fontes testadas de $SHA"
+          echo ok=true >> "$GITHUB_OUTPUT"
+      - if: steps.pronto.outputs.ok == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - if: steps.pronto.outputs.ok == 'true'
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+      - name: Montar
+        if: steps.pronto.outputs.ok == 'true'
+        env:
+          PYTHON_ARCHIVE: ${{ matrix.python }}
+          PYTHON_SHA256: ${{ matrix.python_sha256 }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/python.tar.gz" \
+            "https://github.com/astral-sh/python-build-standalone/releases/download/20261021/${PYTHON_ARCHIVE//+/%2B}"
+          echo "$PYTHON_SHA256  $RUNNER_TEMP/python.tar.gz" | sha256sum -c -
+          if [ "$BRANCH" = main ]; then canal=latest; else canal="${BRANCH//[^A-Za-z0-9._-]/-}"; fi
+          [ "$BRANCH" = main ] || [ "$canal" != latest ] || { echo "::error::a branch '$BRANCH' vira o canal latest, que é o da main"; exit 1; }
+          python3 scripts/montar-pacote.py --os "$PLATFORM" --bin-dir bins \
+            --python-archive "$RUNNER_TEMP/python.tar.gz" --out out --channel "$canal"
+      - if: steps.pronto.outputs.ok == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pacote-${{ matrix.platform }}
+          path: out/
+          compression-level: 0
+          retention-days: 1
+
+  publicar:
+    needs: montar
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_repository.full_name == github.repository) }}
+    name: publicar (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux-x86_64, windows-x86_64]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: package-publish-${{ github.event.workflow_run.head_branch || github.ref_name }}-${{ matrix.platform }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PLATFORM: ${{ matrix.platform }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v4
+        id: pacote
+        continue-on-error: true
+        with:
+          name: pacote-${{ matrix.platform }}
+          path: out
+      # Artefato ausente = o `montar` achou o sistema não pronto ou falhou: nada a publicar. Artefato que existe
+      # e não baixou é falha de transporte: o job fica vermelho, nunca o índice velho calado.
+      - name: Conferir o que faltou
+        if: steps.pacote.outcome != 'success'
+        run: |
+          set -o pipefail
+          nomes=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name') \
+            || { echo "::error::não consegui conferir os artefatos deste run"; exit 1; }
+          if grep -qxF "pacote-$PLATFORM" <<<"$nomes"; then
+            echo "::error::o artefato pacote-$PLATFORM existe neste run e não baixou; nada publicado"
+            exit 1
+          fi
+          echo "::notice::$PLATFORM sem pacote montado neste run; o índice segue com a entrada anterior."
+      - name: Publicar na release
+        if: steps.pacote.outcome == 'success'
+        working-directory: out
+        run: |
+          set -euo pipefail
+          if [ "$BRANCH" = main ]; then canal=latest; else canal="${BRANCH//[^A-Za-z0-9._-]/-}"; fi
+          tag="package-$canal"
+          if [ "$canal" = latest ]; then
+            criar=(--title 'Pacote do Hangar (topo da main)'
+                   --notes 'Um .tar.gz por sistema e o índice package-latest.json. A atualização baixa daqui e confere o sha256.')
+          else
+            criar=(--prerelease --title "Pacote do Hangar (branch $BRANCH)"
+                   --notes "Um .tar.gz por sistema e o índice package-$canal.json, da branch $BRANCH.")
+          fi
+          # Dois sistemas podem achar a release ausente ao mesmo tempo: se o create falha, vale a que o outro criou.
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$SHA" --latest=false "${criar[@]}" \
+            || gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null
+          python3 - "$tag" "$PLATFORM" "package-$canal.json" <<'EOF'
+          import json, os, pathlib, random, shutil, subprocess, sys, time
+
+          tag, plat, index = sys.argv[1:]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          ENTRY = "package-entry-"
+          mine_file = pathlib.Path(f"{ENTRY}{plat}.json")
+          mine = json.loads(mine_file.read_text())
+          (asset,) = pathlib.Path().glob(f"hangar-*-{plat}.tar.gz")
+
+          def gh(*args, out=False):
+              r = subprocess.run(["gh", *args, "--repo", repo], check=True, capture_output=out, text=True)
+              return r.stdout
+
+          def version(e):
+              return tuple(int(x) for x in e["version"].split("."))
+
+          def descends_from_mine(commit):
+              # `compare/A...B` = "ahead": B vem depois de A no mesmo histórico. 404 = commit sumiu (force-push).
+              r = subprocess.run(["gh", "api", f"repos/{repo}/compare/{mine['commit']}...{commit}", "--jq", ".status"],
+                                 capture_output=True, text=True)
+              if r.returncode:
+                  if "HTTP 404" in r.stderr:
+                      return False
+                  sys.exit(f"não consegui comparar {mine['commit']} com {commit}: {r.stderr.strip()}")
+              return r.stdout.strip() == "ahead"
+
+          def assets():
+              return json.loads(gh("release", "view", tag, "--json", "assets", out=True))["assets"]
+
+          # As entradas por sistema são a fonte; o índice é composto delas. Só o job do sistema grava a dele.
+          def read():
+              d = pathlib.Path("lido")
+              shutil.rmtree(d, ignore_errors=True)
+              names = [a["name"] for a in assets() if a["name"].startswith(ENTRY)]
+              try:
+                  for n in names:
+                      gh("release", "download", tag, "--pattern", n, "--dir", str(d))
+              except subprocess.CalledProcessError as e:
+                  print(f"::warning::leitura das entradas falhou (rc {e.returncode}); tentando de novo")
+                  return None
+              return {n[len(ENTRY):-len(".json")]: json.loads((d / n).read_text()) for n in names}
+
+          for attempt in range(3):
+              got = read()
+              if got is not None:
+                  break
+              time.sleep(5)
+          else:
+              sys.exit("não consegui ler as entradas publicadas")
+          old = got.get(plat)
+          same = old is not None and old["commit"] == mine["commit"]
+          # Runs terminam fora de ordem. Na main a versão só sobe; numa branch um rebase diminui a contagem,
+          # então só não passa por cima de commit que vem depois deste no histórico.
+          if old and not same and (version(old) >= version(mine) if tag == "package-latest"
+                                   else descends_from_mine(old["commit"])):
+              print(f"{plat}: release já tem {old['version']} ({old['commit']}); {mine['version']} não publicado")
+              sys.exit(0)
+          if same:
+              # Run repetido: pacote e entrada deste commit já subiram; termina o índice com eles.
+              mine = old
+          else:
+              gh("release", "upload", tag, str(asset), "--clobber")
+              gh("release", "upload", tag, str(mine_file), "--clobber")
+          out = pathlib.Path(index)
+          for attempt in range(12):
+              if attempt:
+                  time.sleep(random.uniform(2, 8))
+              got = read()
+              if got is None or got.get(plat) != mine:
+                  continue
+              out.write_text(json.dumps({"platforms": got}, indent=2, sort_keys=True))
+              try:
+                  gh("release", "upload", tag, str(out), "--clobber")
+              except subprocess.CalledProcessError:
+                  continue   # outro sistema regravando o índice no mesmo instante
+              # Entrada que mudou entre a leitura e a gravação pode ter ficado de fora: refaz.
+              if read() == got:
+                  print(out.read_text())
+                  break
+          else:
+              sys.exit(f"{index} não estabilizou")
+
+          # Ficam os 5 pacotes mais novos do sistema: quem está no meio de uma atualização ainda acha o dele,
+          # e a release não chega ao teto de assets do GitHub.
+          mine_assets = sorted((a for a in assets() if a["name"].startswith("hangar-") and a["name"].endswith(f"-{plat}.tar.gz")),
+                               key=lambda a: a["createdAt"], reverse=True)
+          for a in mine_assets[5:]:
+              if a["name"] != mine["asset"]:
+                  if subprocess.run(["gh", "release", "delete-asset", tag, a["name"], "--repo", repo, "-y"]).returncode:
+                      print(f"::warning::não apaguei {a['name']} de {tag}; a release se aproxima do teto de assets")
+          subprocess.run(["gh", "api", "-X", "PATCH", f"repos/{repo}/git/refs/tags/{tag}", "-f",
+                          f"sha={mine['commit']}", "-F", "force=true"], check=True, stdout=subprocess.DEVNULL)
+          EOF

@@ -60,6 +60,11 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(atualizar, "_pid_do_servidor", lambda topologia, porta: None)
     # Sem Rust o checkout vai ao topo sem ler release nenhuma; quem testa a escolha liga de volta.
     monkeypatch.setattr(atualizar.config.settings, "rust_server", False)
+    # A pasta pessoal é da máquina real: a marca do app nativo instalado faria o fluxo baixar o
+    # manifesto, e a volta mexeria nos binários de ~/.hangar/bin.
+    monkeypatch.setattr(atualizar.Path, "home", lambda: tmp_path / "home")
+    # O `executar` marca o próprio ambiente para os filhos; registrado aqui, a marca sai no fim.
+    monkeypatch.setenv(atualizar.rust_release.UPDATE_OWNS_RUST, "")
     return d
 
 
@@ -174,6 +179,40 @@ def test_falha_no_meio_nao_reinicia(repo, monkeypatch):
     final = atualizar.executar()
     assert "reiniciar" not in chamou
     assert final["ok"] is False and "build quebrou" in final["erro"]
+
+
+def test_falha_depois_do_codigo_novo_volta_tudo_antes_do_proximo_reinicio(repo, monkeypatch):
+    """Código novo no disco com binário e tela velhos: o próximo reinício subiria versões trocadas."""
+    antes = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    def _puxar_avanca(pre):
+        _commit(repo, "c.txt", "versao nova\n")
+
+    def _passo_quebra():
+        raise RuntimeError("passo quebrou")
+
+    chamou = []
+    monkeypatch.setattr(atualizar, "_puxar", _puxar_avanca)
+    monkeypatch.setattr(atualizar, "_aplicar_passos", _passo_quebra)
+    monkeypatch.setattr(atualizar, "_preparar", lambda t, *a, **k: chamou.append(("preparar", k.get("dist", True))))
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t, *a, **k: chamou.append(("reiniciar", None)))
+    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
+    final = atualizar.executar()
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == antes
+    assert final["ok"] is False and final["voltou"] is True and "passo quebrou" in final["erro"]
+    assert chamou == [("preparar", False), ("reiniciar", None)]
+
+
+def test_passos_rodam_sabendo_que_o_binario_e_da_atualizacao(repo, monkeypatch):
+    visto = []
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: None)
+    monkeypatch.setattr(atualizar, "_aplicar_passos",
+                        lambda: visto.append(atualizar.os.environ.get(atualizar.rust_release.UPDATE_OWNS_RUST)))
+    monkeypatch.setattr(atualizar, "_preparar", lambda t, *a, **k: None)
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t, *a, **k: None)
+    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
+    atualizar.executar()
+    assert visto == ["1"]
 
 
 def test_erro_inesperado_vira_estado_e_nao_traceback(repo, monkeypatch):
@@ -888,6 +927,55 @@ def test_troca_de_dono_do_lock_nunca_deixa_o_arquivo_vazio(repo, monkeypatch):
     assert not list(trava.parent.glob("*.tmp")), "sobrou tmp da troca de dono"
 
 
+def test_volta_devolve_o_binario_anterior_antes_de_reiniciar(repo, monkeypatch):
+    """Código antigo com o binário novo é contrato diferente: o Python atenderia sozinho."""
+    ordem = []
+
+    def _preparar_quebra(t, *a, **k):
+        ordem.append("preparar")
+        raise RuntimeError("uv sync falhou")
+
+    monkeypatch.setattr(atualizar, "_preparar", _preparar_quebra)
+    monkeypatch.setattr(atualizar.rust_release, "restore_previous", lambda: ordem.append("binario") or [])
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t, *a, **k: ordem.append("reiniciar"))
+    atualizar._voltar(atualizar._git("rev-parse", "HEAD").stdout.strip(), "o servidor caiu", "systemd", 1)
+    # O resto da volta pode falhar; o binário já voltou antes dele.
+    assert ordem == ["binario", "preparar"]
+
+
+def test_volta_que_nao_devolve_o_binario_avisa(repo, monkeypatch):
+    monkeypatch.setattr(atualizar, "_preparar", lambda t, *a, **k: None)
+    monkeypatch.setattr(atualizar.rust_release, "restore_previous", lambda: ["hangar-server: preso"])
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t, *a, **k: None)
+    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
+    final = atualizar._voltar(atualizar._git("rev-parse", "HEAD").stdout.strip(), "o servidor caiu", "systemd", 1)
+    assert "hangar-server: preso" in final["avisos"]
+
+
+def test_atualizacao_que_deu_certo_descarta_a_copia_do_binario(repo, monkeypatch):
+    descartes = []
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: None)
+    monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
+    monkeypatch.setattr(atualizar, "_preparar", lambda t, *a, **k: descartes.append("preparar"))
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t, *a, **k: None)
+    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
+    monkeypatch.setattr(atualizar, "_instalar_nativo", lambda destino, porta: None)
+    monkeypatch.setattr(atualizar.rust_release, "discard_previous", lambda: descartes.append("descarta") or [])
+    assert atualizar.executar()["ok"] is True
+    # Antes de instalar, uma cópia de outra rodada nunca é a que a volta devolve.
+    assert descartes == ["descarta", "preparar", "descarta"]
+
+
+def test_copia_velha_que_nao_sai_para_antes_de_mexer_em_algo(repo, monkeypatch):
+    antes = atualizar._git("rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: pytest.fail("nao pode puxar"))
+    monkeypatch.setattr(atualizar.rust_release, "discard_previous",
+                        lambda: ["hangar-server: a cópia anterior do binário não saiu"])
+    final = atualizar.executar()
+    assert final["ok"] is False and "não saiu" in final["erro"]
+    assert atualizar._git("rev-parse", "HEAD").stdout.strip() == antes
+
+
 def test_rollback_que_nao_sobe_nao_diz_que_esta_no_ar(repo, monkeypatch):
     """O restart que motivou o rollback já matou o processo antigo; se o do rollback também falha,
     não há nada rodando — dizer "no ar" manda a pessoa embora de um servidor morto."""
@@ -1366,13 +1454,15 @@ def test_branch_configurada_sem_upstream_nao_perde_commit_local(repo, canal):
     assert _rev(repo, f"refs/heads/{final['resgate']}") == local
 
 
-def test_troca_que_falha_depois_diz_onde_o_checkout_ficou(repo, canal, monkeypatch):
+def test_troca_que_falha_depois_volta_pra_branch_de_antes(repo, canal, monkeypatch):
+    antes = _rev(repo, "HEAD")
+
     def _quebra():
         raise RuntimeError("passo quebrou")
     monkeypatch.setattr(atualizar, "_aplicar_passos", _quebra)
     final = atualizar.executar()
-    assert final["ok"] is False and "passo quebrou" in final["erro"]
-    assert "o checkout ficou na branch teste" in final["erro"]
+    assert final["ok"] is False and final["voltou"] is True and "passo quebrou" in final["erro"]
+    assert _branch(repo) == "main" and _rev(repo, "HEAD") == antes
 
 
 def test_resgate_da_branch_local_aparece_nos_avisos(repo, canal):

@@ -230,8 +230,12 @@ def aplicar(passo: dict, rodar: bool = True) -> None:
     def executar() -> None:
         p = _rodar(passo["comando"])
         if p.returncode != 0:
+            # O instalador marca o motivo onde falhou; as últimas linhas são o portão do fim.
+            saida = f"{p.stdout or ''}\n{p.stderr or ''}"
+            marcados = [linha.split("##HANGAR-FALHA##", 1)[1].strip()
+                        for linha in saida.splitlines() if "##HANGAR-FALHA##" in linha]
             cauda = "\n".join((p.stderr or p.stdout or "").strip().splitlines()[-8:])
-            raise PassoFalhou(passo, cauda or f"saiu com {p.returncode}")
+            raise PassoFalhou(passo, "\n".join(marcados) or cauda or f"saiu com {p.returncode}")
 
     if passo["comando"] and rodar:
         executar()

@@ -87,6 +87,21 @@ fn their_branch<'a>(def:&'a Value,tag:&str,value:&str) -> Option<&'a Value> {
 fn fields_used_exist_in_checked_schema() {
     let slice = slice();
     assert_eq!(slice["version"],crate::version::CHECKED);
+    let missing = missing_fields(&slice);
+    assert!(missing.is_empty(),"campos usados pelo Hangar que não existem no Codex {}: {missing:#?}",crate::version::CHECKED);
+}
+
+/// O Codex instalado, sem gravar recorte: `CODEX_SCHEMA_DIR=<saída do generate-json-schema --experimental>
+/// cargo test -p hangar-codex -- --ignored fields_used_exist_in_installed_codex`.
+#[test]
+#[ignore]
+fn fields_used_exist_in_installed_codex() {
+    let dir = std::path::PathBuf::from(std::env::var("CODEX_SCHEMA_DIR").expect("CODEX_SCHEMA_DIR"));
+    let missing = missing_fields(&build_slice(&dir));
+    assert!(missing.is_empty(),"campos usados pelo Hangar que não existem no Codex de {}: {missing:#?}",dir.display());
+}
+
+fn missing_fields(slice:&Value) -> Vec<String> {
     let defs = &slice["definitions"];
     let mut missing = Vec::new();
     for (ours,props) in our_defs() {
@@ -108,7 +123,7 @@ fn fields_used_exist_in_checked_schema() {
             Some(branch) => { let theirs = their_props(branch); for p in props { if !theirs.contains(&p) { missing.push(format!("{name}::{value}.{p}")); } } }
         }
     }
-    assert!(missing.is_empty(),"campos usados pelo Hangar que não existem no Codex {}: {missing:#?}",crate::version::CHECKED);
+    missing
 }
 
 /// `CODEX_SCHEMA_DIR=<saída do generate-json-schema --experimental> cargo test -p hangar-codex -- --ignored regenerate_slice`
@@ -116,6 +131,13 @@ fn fields_used_exist_in_checked_schema() {
 #[ignore]
 fn regenerate_slice() {
     let dir = std::path::PathBuf::from(std::env::var("CODEX_SCHEMA_DIR").expect("CODEX_SCHEMA_DIR"));
+    let slice = build_slice(&dir);
+    let path = slice_path();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path,serde_json::to_string_pretty(&slice).unwrap() + "\n").unwrap();
+}
+
+fn build_slice(dir:&std::path::Path) -> Value {
     // v2 vence a raiz, que vence v1: o mesmo nome aparece em mais de uma pasta.
     let mut all:Map<String,Value> = Map::new();
     let mut methods = json!({});
@@ -147,8 +169,5 @@ fn regenerate_slice() {
         }
         out.insert(name,def);
     }
-    let slice = json!({"version":crate::version::CHECKED,"definitions":out,"methods":methods});
-    let path = slice_path();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path,serde_json::to_string_pretty(&slice).unwrap() + "\n").unwrap();
+    json!({"version":crate::version::CHECKED,"definitions":out,"methods":methods})
 }

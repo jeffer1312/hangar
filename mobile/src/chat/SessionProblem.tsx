@@ -21,7 +21,6 @@ const problemLabels: Record<string, () => string> = {
   headless_nao_subiu: m.problema_headless_nao_subiu,
   codex_headless_nao_subiu: m.problema_codex_headless_nao_subiu,
   codex_sem_conexao: m.problema_codex_sem_conexao,
-  codex_versao_nao_conferida: m.problema_codex_versao_nao_conferida,
   codex_limite_uso: m.problema_codex_limite_uso,
   limit_switch_no_room: m.problema_limit_switch_no_room,
   limit_switch_failed: m.problema_limit_switch_failed,

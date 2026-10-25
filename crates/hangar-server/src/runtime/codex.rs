@@ -1878,16 +1878,8 @@ impl Engine {
         match rpc.method.as_str() {
             "initialize" => {
                 self.initialized = true;
-                let response:wire::InitializeResponse = self.decode_reply(&rpc.method,&result,effects);
-                match hangar_codex::version::from_user_agent(&response.user_agent) {
-                    Some(installed) if hangar_codex::version::differs(installed) => {
-                        effects.push(Effect::Diag { event:DiagEvent::CodexVersion,code:hangar_codex::version::diag_code(installed) });
-                        self.put_problem("codex_versao_nao_conferida",Some(format!("instalado {installed}, conferido {}",hangar_codex::version::CHECKED)));
-                    }
-                    Some(installed) if hangar_codex::version::readable(installed) => {}
-                    // Sem versão legível o aviso não tem com o que comparar, mas a falta fica no diário.
-                    _ => effects.push(Effect::Diag { event:DiagEvent::CodexVersion,code:"codex_desconhecida".into() }),
-                }
+                // Só para o diário: resposta fora do formato vira `rust.codex_decode`.
+                let _:wire::InitializeResponse = self.decode_reply(&rpc.method,&result,effects);
             }
             "thread/resume" | "thread/start" => {
                 if let Some(parent) = self.fast_dropped(&rpc,&result) {

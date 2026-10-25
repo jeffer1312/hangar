@@ -928,25 +928,24 @@ fn diags(effects:&[Effect]) -> Vec<(DiagEvent,String)> {
 }
 
 #[test]
-fn other_codex_version_warns_once_on_initialize() {
-    let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":true}),1,clock(10.0));
-    let effects = engine.bootstrap(true,"boot".into()).unwrap();
-    let id = frames(&effects)[0]["id"].clone();
-    let effects = line(&mut engine,json!({"id":id,"result":{"userAgent":"hangar/9.1.0 (x)"}}),11.0);
-    assert_eq!(diags(&effects),vec![(DiagEvent::CodexVersion,"codex_9_1".into())]);
-    assert_eq!(engine.view()["problema"],"codex_versao_nao_conferida");
-    assert!(engine.view()["problema_detalhe"].as_str().unwrap().contains("9.1.0"));
+fn any_codex_version_initializes_silently() {
+    for ua in ["hangar/9.1.0 (x)","sem versão"] {
+        let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":true}),1,clock(10.0));
+        let effects = engine.bootstrap(true,"boot".into()).unwrap();
+        let id = frames(&effects)[0]["id"].clone();
+        let effects = line(&mut engine,json!({"id":id,"result":{"userAgent":ua}}),11.0);
+        assert!(diags(&effects).is_empty(),"{ua}");
+        assert!(engine.view()["problema"].is_null(),"{ua}");
+    }
 }
 
 #[test]
-fn checked_codex_version_is_silent() {
+fn malformed_initialize_reply_goes_to_the_diary() {
     let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":true}),1,clock(10.0));
     let effects = engine.bootstrap(true,"boot".into()).unwrap();
     let id = frames(&effects)[0]["id"].clone();
-    let ua = format!("hangar/{} (x)",hangar_codex::version::CHECKED);
-    let effects = line(&mut engine,json!({"id":id,"result":{"userAgent":ua}}),11.0);
-    assert!(diags(&effects).is_empty());
-    assert!(engine.view()["problema"].is_null());
+    let effects = line(&mut engine,json!({"id":id,"result":{"userAgent":5}}),11.0);
+    assert_eq!(diags(&effects),vec![(DiagEvent::CodexDecode,"initialize".into())]);
 }
 
 #[test]
@@ -1065,16 +1064,6 @@ fn undecodable_approval_shows_the_raw_command() {
     line(&mut engine,json!({"id":3,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1",
         "command":"rm -rf build","cwd":"/repo","reason":5}}),10.0);
     assert_eq!(engine.view()["question"],"Rodar `rm -rf build` em /repo?");
-}
-
-#[test]
-fn unreadable_codex_version_is_reported_without_problem() {
-    let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":true}),1,clock(10.0));
-    let effects = engine.bootstrap(true,"boot".into()).unwrap();
-    let id = frames(&effects)[0]["id"].clone();
-    let effects = line(&mut engine,json!({"id":id,"result":{"userAgent":"sem versão"}}),11.0);
-    assert_eq!(diags(&effects),vec![(DiagEvent::CodexVersion,"codex_desconhecida".into())]);
-    assert!(engine.view()["problema"].is_null());
 }
 
 #[test]

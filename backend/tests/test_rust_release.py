@@ -91,6 +91,87 @@ def test_held_download_writes_nothing_until_installed(release, tmp_path):
     assert (dest / "hangar-cano").read_bytes() == CANO
 
 
+def _held_install_over(url, pasta, dest, plat="linux-x86_64"):
+    _publish(pasta, {"hangar-server": SERVER, "hangar-cano": CANO}, plat=plat)
+    hold = []
+    assert rust_release.fetch(url, dest, hold=hold) == []
+    assert rust_release.install_held(hold) == []
+
+
+def test_rollback_puts_back_the_binaries_the_update_replaced(release, tmp_path, events):
+    url, pasta, _ = release
+    dest = tmp_path / "bin"
+    dest.mkdir()
+    (dest / "hangar-server").write_bytes(b"server antigo")
+    (dest / "hangar-cano").write_bytes(b"cano antigo")
+    _held_install_over(url, pasta, dest)
+    assert (dest / "hangar-server").read_bytes() == SERVER
+    assert rust_release.restore_previous(dest) == []
+    assert (dest / "hangar-server").read_bytes() == b"server antigo"
+    assert (dest / "hangar-cano").read_bytes() == b"cano antigo"
+    assert sorted(p.name for p in dest.iterdir()) == ["hangar-cano", "hangar-server"]
+    assert ("hangar_server.baixar", "ok", {"codigo": "restaurado", "detalhe": "hangar-server"}) in events
+
+
+def test_windows_rollback_puts_back_the_exe_that_was_running(release, windows):
+    url, pasta, _ = release
+    _held_install_over(url, pasta, windows, plat="windows-x86_64")
+    assert (windows / "hangar-server.exe").read_bytes() == SERVER
+    assert rust_release.restore_previous(windows) == []
+    assert (windows / "hangar-server.exe").read_bytes() == b"rodando"
+
+
+def test_failed_copy_warns_and_drops_a_stale_one(release, tmp_path, monkeypatch):
+    url, pasta, _ = release
+    dest = tmp_path / "bin"
+    dest.mkdir()
+    (dest / "hangar-server").write_bytes(b"server antigo")
+    (dest / "hangar-server.prev").write_bytes(b"de duas rodadas atras")
+    _publish(pasta, {"hangar-server": SERVER, "hangar-cano": CANO})
+    hold = []
+    assert rust_release.fetch(url, dest, hold=hold) == []
+
+    def recusa(origem, destino):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(rust_release.shutil, "copyfile", recusa)
+    avisos = rust_release.install_held(hold)
+    assert len(avisos) == 1 and avisos[0].startswith("hangar-server: sem cópia do binário anterior")
+    assert rust_release.restore_previous(dest) == []
+    assert (dest / "hangar-server").read_bytes() == SERVER
+
+
+def test_failed_install_leaves_no_copy_to_give_back(release, tmp_path, monkeypatch, events):
+    url, pasta, _ = release
+    dest = tmp_path / "bin"
+    dest.mkdir()
+    (dest / "hangar-server").write_bytes(b"server antigo")
+    _publish(pasta, {"hangar-server": SERVER, "hangar-cano": CANO})
+    hold = []
+    assert rust_release.fetch(url, dest, hold=hold) == []
+
+    def recusa(data, target):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(rust_release, "_install", recusa)
+    assert len(rust_release.install_held(hold)) == 2
+    assert not (dest / "hangar-server.prev").exists()
+    assert rust_release.restore_previous(dest) == []
+    assert not [e for e in events if e[2].get("codigo") == "restaurado"]
+
+
+def test_discarded_copy_is_not_restored(release, tmp_path):
+    url, pasta, _ = release
+    dest = tmp_path / "bin"
+    dest.mkdir()
+    (dest / "hangar-server").write_bytes(b"server antigo")
+    _held_install_over(url, pasta, dest)
+    rust_release.discard_previous(dest)
+    assert rust_release.restore_previous(dest) == []
+    assert (dest / "hangar-server").read_bytes() == SERVER
+    assert sorted(p.name for p in dest.iterdir()) == ["hangar-cano", "hangar-server"]
+
+
 def test_same_release_again_downloads_only_the_manifest(release, tmp_path):
     url, pasta, pedidos = release
     _publish(pasta, {"hangar-server": SERVER, "hangar-cano": CANO})
@@ -255,8 +336,17 @@ def test_permission_error_outside_windows_is_a_warning(release, tmp_path, monkey
     (["x"], ["--never-fail"], 0), (None, ["--never-fail"], 0),
 ])
 def test_cli_exit_codes(monkeypatch, result, argv, code):
+    monkeypatch.delenv(rust_release.UPDATE_OWNS_RUST, raising=False)
     monkeypatch.setattr(rust_release, "fetch", lambda: result)
     assert rust_release.main(argv) == code
+
+
+def test_cli_inside_the_update_leaves_the_binary_to_it(monkeypatch):
+    """O Atualizar baixa o binário do commit escolhido e guarda o anterior; o instalador chamado
+    por um passo baixaria o do topo da release, sem cópia para a volta."""
+    monkeypatch.setenv(rust_release.UPDATE_OWNS_RUST, "1")
+    monkeypatch.setattr(rust_release, "fetch", lambda: pytest.fail("nao pode baixar"))
+    assert rust_release.main([]) == 0
 
 
 def test_trickling_asset_hits_the_deadline_and_keeps_the_old_binary(tmp_path, monkeypatch):

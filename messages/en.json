@@ -1021,7 +1021,6 @@
   "problema_headless_nao_subiu": "The Claude process did not start — check that `claude` is installed and the folder exists",
   "problema_codex_headless_nao_subiu": "The Codex app-server did not start — check that `codex` is installed and logged in; close the session and create it again",
   "problema_codex_sem_conexao": "Codex cannot reach the model provider and keeps retrying — if it does not come back, restart the session",
-  "problema_codex_versao_nao_conferida": "This Codex is a version Hangar has not checked yet; if something is missing on screen, this is why",
   "problema_codex_limite_uso": "This account's Codex quota ran out — wait for it to reset or use another account",
   "problema_limit_switch_no_room": "This account hit its usage limit and no other Claude account has room; the session waits until the quota resets",
   "problema_limit_switch_failed": "This account hit its usage limit and the automatic account switch failed; switch the session's account",

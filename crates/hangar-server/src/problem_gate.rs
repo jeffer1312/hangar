@@ -6,10 +6,10 @@ use std::time::{Duration, Instant};
 pub const HOLD: Duration = Duration::from_secs(3);
 
 /// Falha de acompanhamento, dado velho ou condição que some sozinha: vai ao diário, nunca à tela.
-const DIAGNOSTIC: [&str; 10] = [
+const DIAGNOSTIC: [&str; 9] = [
     crate::state::facts::UNAVAILABLE, crate::state::monitor::OBSERVATION_FAILED, crate::state::monitor::PERMISSION_FAILED,
     crate::list::facts::UNAVAILABLE, "list_capture_failed", "list_runtime_unavailable", crate::list::classify::RUNTIME_ABSENT,
-    "codex_versao_nao_conferida", "codex_sem_conexao", crate::runtime::codex_terminal::CONTROL_LOST,
+    "codex_sem_conexao", crate::runtime::codex_terminal::CONTROL_LOST,
 ];
 
 /// O código vai só ao diário, qualquer que seja o estado da sessão.

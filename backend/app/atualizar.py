@@ -1216,7 +1216,14 @@ def _executar(porta: int) -> dict:
             return _falhou(f"a branch '{destino}' (CP_UPDATE_BRANCH) {motivo}; nada foi alterado",
                            porta=porta)
 
+    # Passos, instaladores e hooks do git herdam: o binário do Rust é só desta rodada.
+    os.environ[rust_release.UPDATE_OWNS_RUST] = "1"
     try:
+        # A cópia que a volta devolve tem que ser a desta rodada: uma de outra rodada que não sai
+        # trocaria um binário atual por um velho, então para antes de mexer em qualquer coisa.
+        if falhas := rust_release.discard_previous():
+            raise RuntimeError("; ".join(falhas))
+
         _etapa("resguardar")
         resgate = resguardar(pre)
         if resgate:
@@ -1249,7 +1256,10 @@ def _executar(porta: int) -> dict:
         # lista de tipos que estava aqui não pegava `PassoFalhou`, e um passo com prova falha
         # produzia exatamente isso.
         msg = str(e)
-        # Falha depois da troca: o checkout não voltou, e a tela precisa dizer onde ele está.
+        # Código novo no disco com binário e tela velhos: o próximo reinício, de qualquer origem,
+        # subiria versões que não se entendem. No Windows o passo pode até já ter reiniciado.
+        if de and _git("rev-parse", "HEAD", timeout=30).stdout.strip() != de:
+            return _voltar(de, msg, pre["topologia"], porta, branch=pre.get("branch", ""))
         atual = _git("rev-parse", "--abbrev-ref", "HEAD", timeout=30).stdout.strip()
         if atual and pre.get("branch") and atual != pre.get("branch"):
             msg += f" (o checkout ficou na branch {atual})"
@@ -1287,6 +1297,8 @@ def _executar(porta: int) -> dict:
     except Exception as e:                           # noqa: BLE001 — o servidor já está atualizado
         _avisar(f"app nativo nao atualizou: {e or type(e).__name__}")
     _dist_velho_apagar()
+    for falha in rust_release.discard_previous():
+        _avisar(falha)
     _escrever(fase="pronto", ok=True, texto="Atualizado")
     return estado()
 
@@ -1351,6 +1363,10 @@ def _voltar(commit: str, motivo: str, topologia: str, porta: int, branch: str = 
         # anterior" com a máquina rodando exatamente o que quebrou. Para aqui e conta a verdade.
         return _falhou(f"{motivo}; e nao consegui voltar pra versao anterior: {_cauda(r)}",
                        no_ar=False)
+    # Código antigo com o binário novo é contrato diferente: o Python atenderia sozinho. Antes do
+    # resto da volta, que pode falhar e pular o que vier depois.
+    if falhas := rust_release.restore_previous():
+        _escrever(avisos=list(estado().get("avisos") or []) + falhas)
     try:
         _dist_velho_voltar()
         _preparar(topologia, dist=False)
