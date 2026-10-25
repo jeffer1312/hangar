@@ -30,10 +30,10 @@ fn login(argv: &[String]) -> bool {
 }
 
 /// O alvo da sessão no multiplexador: `=nome` casa exato; o psmux não aceita o `=` nesses comandos.
-fn session_target(name: &str) -> String { if cfg!(windows) { name.to_owned() } else { format!("={name}") } }
+pub(super) fn session_target(name: &str) -> String { if cfg!(windows) { name.to_owned() } else { format!("={name}") } }
 
 /// A chave lida do ambiente da sessão (`show-environment`); ausente = `None`.
-fn session_key(output: &str) -> Option<String> {
+pub(super) fn session_key(output: &str) -> Option<String> {
     let value = output.lines().find_map(|line| line.trim().strip_prefix("CP_SESSION_KEY="))?;
     super::codex_terminal::valid_key(value).then(|| value.to_owned())
 }

@@ -330,6 +330,41 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     answer(&ctx, result)
 }
 
+/// Texto para o Codex com terminal que ainda abre a conversa: fica na fila da chave dela e a resposta é a
+/// do envio enfileirado, na hora. Sem turno, orientar vira só fila; `/clear` e `/compact` esperam a conversa.
+async fn queue_opening(st: &AppState, name: &str, key: &str, text: &str, steer: bool) -> (StatusCode, Value) {
+    if is_codex_clear("codex", text) || is_codex_compact("codex", text) {
+        let error = crate::runtime::codex_relaunch::starting();
+        return (StatusCode::CONFLICT, detail_body(&error.code, &error.message, json!({})));
+    }
+    let Some(runtime) = st.state.runtime.get() else { return (StatusCode::SERVICE_UNAVAILABLE, detail_body("runtime_watcher", "o servidor ainda não abriu as sessões", json!({}))) };
+    match runtime.queue_codex_opening(name, key, text).await {
+        Ok(()) => (StatusCode::OK, json!({"ok": true, "delivered": false, "steered": false, "native": false})),
+        // A fila já tem dono (adotada nesse meio-tempo, ou o ator segura a trava): o texto vai pela entrada
+        // dele, uma vez só; vida antiga gravada na fila sem ator nenhum fica no erro.
+        Err(error) if error.code == crate::runtime::codex_terminal::ADOPTED_MEANWHILE || error.code == "runtime_lease" => {
+            match route_write(runtime, name, WriteRoute::Input, st.write_gate_wait).await {
+                Write::Rust(held, target) => {
+                    let result = send(st, name, &target, text, steer, None).await;
+                    drop(held);
+                    result
+                }
+                _ => (StatusCode::SERVICE_UNAVAILABLE, detail_body(&error.code, &error.message, json!({}))),
+            }
+        }
+        Err(error) => (super::failed_status(&error), detail_body(&error.code, &error.message, json!({}))),
+    }
+}
+
+/// `/input` do dono (ou pela ponte) para o Codex com terminal que ainda abre a conversa.
+pub(super) async fn opening_response(st: &Arc<AppState>, name: &str, key: &str, headers: &HeaderMap, bytes: &Bytes) -> Response {
+    let Some((text, steer, _)) = parse_input(bytes).filter(|_| json_content_type(headers)) else { return invalid_body(headers) };
+    let (status, body) = queue_opening(st, name, key, &text, steer).await;
+    let mut response = json_response(status, body);
+    cors(headers, response.headers_mut());
+    response
+}
+
 /// Recado de fora da rota (aviso de grupo): o mesmo `/input` com `steer: false` que o `_enviar` do
 /// Python faz. `Err` = o `detail` da resposta, o envelope `{code, params, msg}`.
 pub async fn deliver_text(st: &AppState, name: &str, text: &str) -> Result<(), Value> {
@@ -373,12 +408,13 @@ pub async fn write_input(st: &AppState, name: &str, text: &str, steer: bool) -> 
             result
         }
         Write::Busy => (StatusCode::CONFLICT, busy_body()),
+        Write::Opening(key) => queue_opening(st, name, &key, text, steer).await,
         // Pela ponte do Python: ele mesmo entrega, depois de a ponte responder (sem ida e volta).
         Write::Python => match crate::groups::bridge::current() {
             Some(ctx) => { ctx.defer_delivery(name, text, steer); (StatusCode::OK, json!({"ok": true, "deferred": true})) }
             None => relay_as_owner(st, name, body).await,
         },
-        Write::Failed(error) => (StatusCode::SERVICE_UNAVAILABLE, detail_body(&error.code, &error.message, json!({}))),
+        Write::Failed(error) => (super::failed_status(&error), detail_body(&error.code, &error.message, json!({}))),
     }
 }
 
@@ -411,6 +447,8 @@ pub async fn broadcast(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
         if runtime.has_entry(None, name).await { ours.insert(name.clone()); continue; }
         match runtime.adopt_now(name).await {
             Some(Ok(())) => { ours.insert(name.clone()); }
+            // Conversa ainda abrindo: a entrega do `/input` guarda o texto na fila dela.
+            Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING => { ours.insert(name.clone()); }
             Some(Err(error)) => {
                 let detail = detail_body(&error.code, &error.message, json!({}))["detail"].clone();
                 refused.insert(name.clone(), json!({"ok": false, "error": detail, "delivered": false}));
