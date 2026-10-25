@@ -7,6 +7,7 @@
 //!   hangar-server update --run [--channel <canal>] [--listen <ip:porta>]
 //!   hangar-server update --restart --request-id <id> [--listen <ip:porta>]
 //!   hangar-server update --dev [--listen <ip:porta>]
+//!   hangar-server update --dev-mode-on <checkout> | --dev-mode-off [--listen <ip:porta>]
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -14,6 +15,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 
+use super::dev_mode::Request as DevRequest;
 use super::restart::{SystemRestarter, Topology};
 use super::{HealthProbe, Layout, Outcome, Reading, Release, Restarter, Settings, StateFile, UpdateLock};
 use crate::accounts::environment::AccountEnvironment;
@@ -26,6 +28,8 @@ pub enum Task {
     Restart { request_id: String },
     /// Modo desenvolvedor: `git pull --ff-only` no checkout e reinício.
     Dev,
+    /// Liga ou desliga o modo desenvolvedor, como o `hangar-server dev-mode`.
+    DevMode(DevRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,11 +45,13 @@ impl Args {
     /// `args` sem o nome do programa nem o `update`.
     pub fn parse(args: &[String]) -> Result<Args, String> {
         let (mut task, mut channel, mut request_id, mut listen) = (None, None, None, DEFAULT_LISTEN.parse().expect("endereço padrão"));
+        let mut checkout = None;
         let mut it = args.iter();
         while let Some(arg) = it.next() {
             let mut value = |name: &str| it.next().cloned().ok_or_else(|| format!("{name} sem valor"));
             match arg.as_str() {
-                "--run" | "--restart" | "--dev" if task.is_none() => task = Some(arg.clone()),
+                "--run" | "--restart" | "--dev" | "--dev-mode-off" if task.is_none() => task = Some(arg.clone()),
+                "--dev-mode-on" if task.is_none() => { task = Some(arg.clone()); checkout = Some(value("--dev-mode-on")?); }
                 "--channel" => channel = Some(value("--channel")?),
                 "--request-id" => request_id = Some(value("--request-id")?),
                 "--listen" => listen = value("--listen")?.parse().map_err(|e| format!("--listen inválido: {e}"))?,
@@ -56,7 +62,9 @@ impl Args {
             Some("--run") => Task::Update { channel },
             Some("--restart") => Task::Restart { request_id: request_id.ok_or("--restart pede --request-id")? },
             Some("--dev") => Task::Dev,
-            _ => return Err("falta --run, --restart ou --dev".into()),
+            Some("--dev-mode-on") => Task::DevMode(DevRequest::On(checkout.unwrap_or_default().into())),
+            Some("--dev-mode-off") => Task::DevMode(DevRequest::Off),
+            _ => return Err("falta --run, --restart, --dev, --dev-mode-on ou --dev-mode-off".into()),
         };
         Ok(Args { task, listen })
     }
@@ -71,6 +79,8 @@ impl Args {
             }
             Task::Restart { request_id } => argv.extend(["--restart".into(), "--request-id".into(), request_id.clone()]),
             Task::Dev => argv.push("--dev".into()),
+            Task::DevMode(DevRequest::On(dir)) => argv.extend(["--dev-mode-on".into(), dir.display().to_string()]),
+            Task::DevMode(DevRequest::Off) => argv.push("--dev-mode-off".into()),
         }
         argv.extend(["--listen".into(), self.listen.to_string()]);
         argv
@@ -155,8 +165,9 @@ fn scope_refusal(prefix_empty: bool, require: bool) -> Option<String> {
 }
 
 /// O executor saiu com erro antes de gravar o pid dele: o estado de "começando" vira a falha, com o
-/// código de saída e o fim do log. Quem já gravou o pid é dono do estado e escreve o próprio desfecho.
-pub fn conclude_early_exit(state_dir: &Path, code: Option<i32>, log: Option<&Path>) {
+/// código de saída, o fim do log e o `pid` que o `start` devolveu (a tela casa o fim por ele). Quem
+/// já gravou o pid é dono do estado e escreve o próprio desfecho.
+pub fn conclude_early_exit(state_dir: &Path, pid: u32, code: Option<i32>, log: Option<&Path>) {
     let state = StateFile::new(state_dir);
     let current = state.read();
     if current.get("fase").and_then(serde_json::Value::as_str) != Some("rodando") || current.get("pid").is_some_and(|p| !p.is_null()) { return; }
@@ -165,7 +176,7 @@ pub fn conclude_early_exit(state_dir: &Path, code: Option<i32>, log: Option<&Pat
     let tail = lines[lines.len().saturating_sub(3)..].join(" | ");
     let erro = format!("o processo da atualização saiu com {} antes de começar: {tail}", code.map_or("sinal".to_owned(), |c| c.to_string()));
     tracing::warn!("update: {erro}");
-    state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": true}));
+    state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": true, "pid": pid}));
 }
 
 /// Quem lança o executor; o real é [`Detached`], o teste anota.
@@ -227,7 +238,7 @@ impl Spawner for Detached {
         std::thread::spawn(move || {
             let mut child = child;
             if let Ok(status) = child.wait() && !status.success() {
-                conclude_early_exit(&state_dir, status.code(), log.as_deref());
+                conclude_early_exit(&state_dir, pid, status.code(), log.as_deref());
             }
         });
         Ok(pid)
@@ -396,12 +407,58 @@ pub async fn dev_update<R: Restarter, H: HealthProbe>(parts: &Parts, root: &Path
     }
 }
 
+/// O `dev-mode` pedido pela tela: a mesma troca, com o desfecho no estado que ela acompanha.
+pub async fn dev_mode<R: Restarter, H: HealthProbe>(parts: &Parts, request: &DevRequest, in_service_group: bool, restarter: &R, health: &H,
+    settings: &Settings) -> bool {
+    use super::dev_mode::{Outcome as DevOutcome, BUSY, ROLLED_BACK};
+    let state = StateFile::new(&parts.state_dir);
+    // O pid só entra depois das recusas: antes, o `other_engine` da troca o tomaria pelo motor git.
+    let on_step = |key: &str| {
+        if key == "trocar" {
+            state.write(json!({"fase": "rodando", "ok": null, "erro": null, "codigo": null, "voltou": null, "no_ar": null, "resgate": null,
+                "pid": std::process::id(), "reinicio_erro": null, "request_id": null, "versao_para": null, "reiniciar_manual": false,
+                "log": [], "avisos": []}));
+            for note in &parts.notes { state.warn(note); }
+        }
+        state.step(key);
+    };
+    let result = super::dev_mode::switch(&parts.home, &parts.state_dir, request, in_service_group, restarter, health, settings, &on_step).await;
+    let label = if *request == DevRequest::Off { "Modo desenvolvedor desligado" } else { "Modo desenvolvedor ligado" };
+    // O pid vai em todo desfecho: a tela casa o fim pelo pid que o pedido devolveu, e recusa não passa pelo `trocar`.
+    let pid = std::process::id();
+    match result {
+        Ok(DevOutcome::Switched(_)) => { state.write(json!({"fase": "pronto", "ok": true, "texto": label, "pid": pid})); true }
+        Ok(DevOutcome::SwitchedManual(_)) => {
+            state.write(json!({"fase": "pronto", "ok": true, "texto": label, "reiniciar_manual": true, "pid": pid}));
+            true
+        }
+        Ok(DevOutcome::Already(text)) => { state.write(json!({"fase": "pronto", "ok": true, "texto": text, "pid": pid})); true }
+        Err(failure) if failure.code == BUSY => {
+            tracing::warn!("update: dev-mode: {failure}");
+            // Estado com o pid de outra rodada é dela; sem pid é o "começando" deste pedido.
+            if state.read().get("pid").is_none_or(|p| p.is_null() || *p == json!(pid)) {
+                state.write(json!({"fase": "pronto", "ok": false, "erro": failure.message, "codigo": failure.code,
+                    "voltou": false, "no_ar": true, "pid": pid}));
+            }
+            false
+        }
+        Err(failure) => {
+            tracing::warn!(code = failure.code, "update: dev-mode: {failure}");
+            let no_ar = !matches!(health.read().await, Reading::Down(_));
+            state.write(json!({"fase": "pronto", "ok": false, "erro": failure.message, "codigo": failure.code,
+                "voltou": failure.code == ROLLED_BACK, "no_ar": no_ar, "pid": pid}));
+            false
+        }
+    }
+}
+
 /// `hangar-server update …`: `args` sem o nome do programa nem o `update`.
 pub fn cli(args: &[String]) -> ExitCode {
     let args = match Args::parse(args) {
         Ok(args) => args,
         Err(e) => {
-            eprintln!("hangar-server update: {e}\nuso: hangar-server update --run [--channel C] | --restart --request-id ID | --dev  [--listen IP:PORTA]");
+            eprintln!("hangar-server update: {e}\nuso: hangar-server update --run [--channel C] | --restart --request-id ID | --dev \
+                | --dev-mode-on PASTA | --dev-mode-off  [--listen IP:PORTA]");
             return ExitCode::from(2);
         }
     };
@@ -433,6 +490,7 @@ async fn execute(env: &AccountEnvironment, args: &Args) -> bool {
             super::http::Mode::Developer(root) => dev_update(&parts, &root, &restarter, &health, &settings).await,
             _ => { tracing::warn!("update: --dev sem modo desenvolvedor"); false }
         },
+        Task::DevMode(request) => dev_mode(&parts, request, super::migrate::in_service_group(), &restarter, &health, &settings).await,
         Task::Update { .. } => {
             let client = match crate::http_client().build() {
                 Ok(client) => client,
@@ -467,7 +525,12 @@ mod tests {
         let restart = Args::parse(&strings(&["--restart", "--request-id", "abc"])).unwrap();
         assert_eq!(restart, Args { task: Task::Restart { request_id: "abc".into() }, listen: DEFAULT_LISTEN.parse().unwrap() });
         assert_eq!(Args::parse(&strings(&["--dev"])).unwrap().task, Task::Dev);
-        for bad in [&[][..], &["--restart"], &["--run", "--listen"], &["--run", "--dev"], &["--run", "--x"], &["--run", "--listen", "nada"]] {
+        for task in [Task::DevMode(DevRequest::On("/x/hangar".into())), Task::DevMode(DevRequest::Off)] {
+            let args = Args { task, listen: DEFAULT_LISTEN.parse().unwrap() };
+            assert_eq!(Args::parse(&args.argv()[1..]).unwrap(), args);
+        }
+        for bad in [&[][..], &["--restart"], &["--run", "--listen"], &["--run", "--dev"], &["--run", "--x"], &["--run", "--listen", "nada"],
+                    &["--dev-mode-on"], &["--dev-mode-off", "--dev"]] {
             assert!(Args::parse(&strings(bad)).is_err(), "{bad:?}");
         }
     }
@@ -591,6 +654,58 @@ mod tests {
         assert!(state["reinicio_erro"].as_str().unwrap().contains("mesmo de antes"));
     }
 
+    /// Uma máquina em pacote e um checkout ao lado.
+    fn packaged(dir: &Path) -> (Parts, PathBuf) {
+        let home = dir.join("home");
+        let version = home.join(".hangar/versions/0.1.0.5");
+        std::fs::create_dir_all(&version).unwrap();
+        std::fs::write(version.join("manifest.json"), json!({"version": "0.1.0.5", "commit": "c5", "channel": "latest", "protocol": 1,
+            "api": 1, "os": super::super::platform(), "files": {}}).to_string()).unwrap();
+        super::super::swap(&Layout::new(&home), &version).unwrap();
+        let checkout = dir.join("hangar");
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        std::fs::create_dir_all(checkout.join("backend/app")).unwrap();
+        let args = Args { task: Task::DevMode(DevRequest::Off), listen: DEFAULT_LISTEN.parse().unwrap() };
+        (Parts::new(&env(&home, None), &args, "x"), checkout)
+    }
+
+    #[tokio::test]
+    async fn update_dev_mode_writes_the_outcome_to_the_state_the_screen_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let (parts, checkout) = packaged(dir.path());
+        let state = StateFile::new(&parts.state_dir);
+        let restart = Restart(AtomicUsize::new(0));
+        let health = Health(&restart.0, false);
+
+        assert!(!dev_mode(&parts, &DevRequest::On(checkout.join("nada")), false, &restart, &health, &fast()).await);
+        let read = state.read();
+        assert_eq!((read["fase"].clone(), read["ok"].clone(), read["codigo"].clone(), read["pid"].clone()),
+            (json!("pronto"), json!(false), json!("erro_dev_mode_pasta_inexistente"), json!(std::process::id())), "a tela casa o fim pelo pid");
+        assert!(read["erro"].as_str().unwrap().contains("não existe"));
+        assert_eq!(restart.0.load(Ordering::SeqCst), 0);
+
+        assert!(dev_mode(&parts, &DevRequest::On(checkout.clone()), false, &restart, &health, &fast()).await);
+        let read = state.read();
+        assert_eq!((read["fase"].clone(), read["ok"].clone(), read["etapa"].clone(), read["pid"].clone(), read["codigo"].clone()),
+            (json!("pronto"), json!(true), json!("reiniciar"), json!(std::process::id()), json!(null)));
+        assert_eq!(restart.0.load(Ordering::SeqCst), 1);
+
+        // Trava ocupada por quem não gravou o estado (o `start` acabou de gravar o "começando"): a
+        // recusa vai ao estado com o pid deste processo.
+        state.write(json!({"fase": "rodando", "pid": null}));
+        let _held = UpdateLock::try_acquire(&parts.layout).unwrap();
+        assert!(!dev_mode(&parts, &DevRequest::Off, false, &restart, &health, &fast()).await);
+        let read = state.read();
+        assert_eq!((read["fase"].clone(), read["ok"].clone(), read["codigo"].clone(), read["pid"].clone()),
+            (json!("pronto"), json!(false), json!(super::super::dev_mode::BUSY), json!(std::process::id())));
+        assert!(read["erro"].as_str().unwrap().contains("rodando"));
+
+        // Estado com o pid de outra rodada: é dela.
+        state.write(json!({"fase": "rodando", "pid": 77}));
+        assert!(!dev_mode(&parts, &DevRequest::Off, false, &restart, &health, &fast()).await);
+        assert_eq!((state.read()["fase"].clone(), state.read()["pid"].clone()), (json!("rodando"), json!(77)));
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn update_dev_refuses_a_dirty_checkout_without_touching_it_and_pulls_a_clean_one() {
@@ -645,15 +760,16 @@ mod review_tests {
         let log = dir.path().join("executor.log");
         std::fs::write(&log, "linha velha\nhangar-server update: argumento inesperado: --x\n").unwrap();
         state.write(json!({"fase": "rodando", "pid": null}));
-        conclude_early_exit(dir.path(), Some(2), Some(&log));
+        conclude_early_exit(dir.path(), 4242, Some(2), Some(&log));
         let read = state.read();
-        assert_eq!((read["fase"].clone(), read["ok"].clone()), (json!("pronto"), json!(false)));
+        assert_eq!((read["fase"].clone(), read["ok"].clone(), read["pid"].clone()), (json!("pronto"), json!(false), json!(4242)),
+            "a tela casa o fim pelo pid que o pedido devolveu");
         let erro = read["erro"].as_str().unwrap();
         assert!(erro.contains('2') && erro.contains("argumento inesperado"), "{erro}");
 
         // Quem já gravou o pid é dono do estado.
         state.write(json!({"fase": "rodando", "pid": 77, "ok": null, "erro": null}));
-        conclude_early_exit(dir.path(), Some(1), Some(&log));
+        conclude_early_exit(dir.path(), 4242, Some(1), Some(&log));
         assert_eq!(state.read()["fase"], "rodando");
     }
 

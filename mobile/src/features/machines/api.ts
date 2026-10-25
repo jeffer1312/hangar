@@ -84,6 +84,30 @@ export async function webUi(server: Server, signal: AbortSignal, on?: boolean): 
   return value.web_ui;
 }
 
+export type DevMode = { developer: boolean; channel: string; checkout: string };
+
+/** O modo da máquina migrada, do `GET /api/atualizacao`. `null`: servidor sem a troca pela tela ou máquina sem migrar. */
+export async function readDevMode(server: Server, signal: AbortSignal): Promise<DevMode | null> {
+  let value: unknown;
+  try { value = await request(server, '/api/atualizacao', signal, 'GET', undefined, 20_000); }
+  catch (error) {
+    if ([404, 405].includes((error as { status?: number }).status ?? 0)) return null;
+    throw error;
+  }
+  if (!object(value)) throw invalid();
+  if ((value.modo !== 'pacote' && value.modo !== 'desenvolvedor') || typeof value.canal !== 'string') return null;
+  return { developer: value.modo === 'desenvolvedor', channel: value.canal, checkout: typeof value.checkout === 'string' ? value.checkout : '' };
+}
+
+/** `POST /api/atualizacao/dev-mode`: o pid do executor a acompanhar, ou o `detalhe` quando a máquina já estava no modo pedido. */
+export async function switchDevMode(server: Server, on: boolean, checkout: string, signal: AbortSignal): Promise<{ pid: number } | { already: string }> {
+  // O teto do nativo: a rota confere o checkout antes de lançar o executor.
+  const value = await request(server, '/api/atualizacao/dev-mode', signal, 'POST', on ? { on, checkout } : { on }, 30_000);
+  if (object(value) && value.nada_a_fazer === true) return { already: typeof value.detalhe === 'string' ? value.detalhe : '' };
+  if (!object(value) || value.ok !== true || typeof value.pid !== 'number' || !Number.isSafeInteger(value.pid) || value.pid <= 0) throw invalid();
+  return { pid: value.pid };
+}
+
 function peers(value: unknown): Peer[] {
   if (!Array.isArray(value) || !value.every((p) => object(p) && typeof p.id === 'string' && validIdentifier(p.id) && !!p.id
     && typeof p.base_url === 'string' && (p.enabled === undefined || typeof p.enabled === 'boolean'))) throw invalid();

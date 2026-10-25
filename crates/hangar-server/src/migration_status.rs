@@ -99,7 +99,7 @@ pub fn area_of(path: &str) -> usize {
 pub fn rust_route(method: &Method, path: &str) -> bool {
     if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/session-defaults" | "/api/web-ui") { return true; }
     if (*method == Method::GET && path == "/api/atualizacao")
-        || (*method == Method::POST && matches!(path, "/api/atualizacao/iniciar" | "/api/atualizacao/reiniciar")) { return true; }
+        || (*method == Method::POST && matches!(path, "/api/atualizacao/iniciar" | "/api/atualizacao/reiniciar" | "/api/atualizacao/dev-mode")) { return true; }
     if *method == Method::POST && path == "/api/push/expo/subscribe" { return true; }
     if crate::orq_conductor::matches(method, path) { return true; }
     if crate::prewarm::http::matches(method, path) { return true; }

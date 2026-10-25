@@ -12,6 +12,7 @@ import { ServerSettings } from './ServerSettings';
 import { MachineOperations } from './MachineOperations';
 import { PeerSettings } from './PeerSettings';
 import { WebUiSetting } from './WebUiSetting';
+import { DevModeSetting } from './DevModeSetting';
 import * as m from '../../paraglide/messages';
 
 export function useForgetMachine(onForgot?: () => void) {
@@ -39,7 +40,7 @@ export function MachineSettings({ server, view, onNavigate, onClose }: {
   if (view === 'connection' || view === 'discover' || view === 'remote') return <MachineConnection server={server} view={view} onNavigate={onNavigate} />;
   if (view === 'identity' || view === 'terminal' || view === 'diagnostics') return <ServerSettings server={server} view={view} />;
   if (view === 'peers') return <MachinePage title={m.mobile_machines_peers_title()}><PeerSettings server={server} /></MachinePage>;
-  if (view === 'maintenance') return <MachinePage title={m.mobile_machines_maintenance()}><MachineOperations server={server} /><WebUiSetting server={server} /></MachinePage>;
+  if (view === 'maintenance') return <MachinePage title={m.mobile_machines_maintenance()}><MachineOperations server={server} /><WebUiSetting server={server} /><DevModeSetting server={server} /></MachinePage>;
   if (view === 'advanced') return <MachinePage title={m.mobile_machines_advanced_title()}>
     <MachineGroup>
       <MachineRow title={m.mobile_machines_identity_title()} onPress={() => onNavigate('identity')} />

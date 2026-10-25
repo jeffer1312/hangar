@@ -1,4 +1,5 @@
-//! `GET /api/atualizacao`, `POST /api/atualizacao/iniciar` e `POST /api/atualizacao/reiniciar`.
+//! `GET /api/atualizacao`, `POST /api/atualizacao/iniciar`, `POST /api/atualizacao/reiniciar` e
+//! `POST /api/atualizacao/dev-mode`.
 //! O Rust atende o dono só na máquina migrada: pacote (`current` com `manifest.json`) ou modo
 //! desenvolvedor (`current` num checkout git sem manifesto). Máquina não migrada, convidado e quem
 //! não é dono seguem ao motor `git` do Python, como antes.
@@ -197,7 +198,11 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         let (layout, running) = (layout.clone(), running.clone());
         tokio::task::spawn_blocking(move || super::for_screen(&super::state_dir(&claude), &layout, running.as_deref())).await.unwrap_or_default()
     };
-    let body = match mode {
+    let suggested = {
+        let home = home.clone();
+        tokio::task::spawn_blocking(move || super::dev_mode::suggested_checkout(&home)).await.ok().flatten()
+    };
+    let mut body = match mode {
         Mode::Package(_) if let Some(why) = super::broken_manifest(&layout) => {
             // Pacote sem o que o atualizador precisa: o botão fica preso com o motivo, sem ir ao Python.
             let mut body = package_body(None, running.as_deref(), None, None, topology, estado);
@@ -218,6 +223,12 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         }
         Mode::Unmigrated => unreachable!("filtrado em owned"),
     };
+    // A linha do modo e o interruptor do modo desenvolvedor: canal do pacote, ou a branch do checkout.
+    body["canal"] = match body["modo"].as_str() {
+        Some("pacote") => super::installed(&layout).map_or_else(|| "latest".to_owned(), |m| m.channel),
+        _ => body["pre_voo"]["branch"].as_str().unwrap_or_default().to_owned(),
+    }.into();
+    body["checkout"] = suggested.map(|p| p.display().to_string()).into();
     with_cors(req.headers(), json_response(StatusCode::OK, body))
 }
 
@@ -279,6 +290,39 @@ pub async fn restart(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     }
     let request_id = crate::mods::state::random_hex(16);
     with_cors(req.headers(), started(launch(&st, Task::Restart { request_id }).await))
+}
+
+#[derive(serde::Deserialize)]
+struct DevModeBody {
+    on: bool,
+    #[serde(default)]
+    checkout: Option<String>,
+}
+
+/// `POST /api/atualizacao/dev-mode` `{"on": true, "checkout": "<pasta>"}` ou `{"on": false}`: a troca do
+/// `hangar-server dev-mode`, pelo executor destacado (ela reinicia o servidor). As recusas que não
+/// dependem de trava voltam aqui, antes de lançar; o desfecho sai pelo estado do `GET`.
+pub async fn switch_dev_mode(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    if !gate(&st, peer, &req).1 { return pass_any(State(st), ConnectInfo(peer), req).await; }
+    let headers = req.headers().clone();
+    let parsed = axum::body::to_bytes(req.into_body(), 64 * 1024).await.ok()
+        .and_then(|raw| serde_json::from_slice::<DevModeBody>(&raw).ok());
+    let request = match parsed {
+        Some(DevModeBody { on: false, .. }) => super::dev_mode::Request::Off,
+        Some(DevModeBody { on: true, checkout: Some(dir) }) if Path::new(dir.trim()).is_absolute() =>
+            super::dev_mode::Request::On(PathBuf::from(dir.trim())),
+        _ => return with_cors(&headers, detail(StatusCode::UNPROCESSABLE_ENTITY, "erro_corpo_invalido",
+            "esperado {\"on\": true, \"checkout\": \"<pasta absoluta>\"} ou {\"on\": false}", json!({}))),
+    };
+    let (home, checked_request) = (st.accounts.env.home.clone(), request.clone());
+    let checked = tokio::task::spawn_blocking(move || super::dev_mode::check(&home, &checked_request)).await;
+    let response = match checked {
+        Err(e) => detail(StatusCode::INTERNAL_SERVER_ERROR, "erro_dev_mode_falhou", &e.to_string(), json!({})),
+        Ok(Err(failure)) => detail(StatusCode::CONFLICT, failure.code, &failure.message, json!({})),
+        Ok(Ok(super::dev_mode::Checked::Already(text))) => json_response(StatusCode::OK, json!({"ok": true, "nada_a_fazer": true, "detalhe": text})),
+        Ok(Ok(super::dev_mode::Checked::Switch { .. })) => started(launch(&st, Task::DevMode(request)).await),
+    };
+    with_cors(&headers, response)
 }
 
 #[cfg(test)]

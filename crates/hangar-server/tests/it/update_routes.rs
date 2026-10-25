@@ -154,3 +154,82 @@ async fn update_routes_incomplete_manifest_is_package_mode_with_a_clear_refusal(
     assert_eq!((state["fase"].clone(), state["ok"].clone()), (json!("pronto"), json!(false)));
     assert!(state["erro"].as_str().unwrap().contains("manifest.json"), "{state}");
 }
+
+impl Fixture {
+    /// Um checkout do Hangar ao lado da casa: `.git` e `backend/app`.
+    fn checkout(&self) -> std::path::PathBuf {
+        let dir = self.home.path().join("hangar");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::create_dir_all(dir.join("backend/app")).unwrap();
+        dir
+    }
+
+    async fn dev_mode(&self, body: Value, owner: bool) -> reqwest::Response {
+        let request = reqwest::Client::new().post(format!("{}/api/atualizacao/dev-mode", self.base)).json(&body);
+        let request = if owner { request.bearer_auth("fixture-owner") } else { request };
+        request.send().await.unwrap()
+    }
+
+    fn state(&self) -> std::path::PathBuf { self.home.path().join(".claude/.hangar-update/estado.json") }
+}
+
+#[tokio::test]
+async fn update_routes_status_says_the_channel_and_the_checkout_the_screen_offers() {
+    let fixture = Fixture::start("0.1.0.1").await;
+    fixture.package("0.1.0.1");
+    let status = body(fixture.call(reqwest::Method::GET, "/api/atualizacao", true).await).await;
+    assert_eq!((status["canal"].clone(), status["checkout"].clone()), (json!("latest"), json!(null)));
+    std::fs::write(fixture.home.path().join(".hangar/migration.json"), json!({"mode": "package", "date": "d", "checkout": "/x/hangar",
+        "version": null, "reason": null, "notes": [], "done": []}).to_string()).unwrap();
+    let status = body(fixture.call(reqwest::Method::GET, "/api/atualizacao", true).await).await;
+    assert_eq!(status["checkout"], "/x/hangar");
+}
+
+/// Cada recusa chega antes de lançar o executor: código na resposta, estado e `current` intactos.
+#[tokio::test]
+async fn update_routes_dev_mode_refuses_with_a_code_and_launches_nothing() {
+    let fixture = Fixture::start("0.1.0.1").await;
+    let checkout = fixture.checkout();
+    let on = json!({"on": true, "checkout": checkout.display().to_string()});
+
+    let unmigrated = fixture.dev_mode(on.clone(), true).await;
+    assert_eq!(unmigrated.status(), 409);
+    assert_eq!(body(unmigrated).await["detail"]["code"], "erro_dev_mode_nao_migrado");
+
+    fixture.package("0.1.0.1");
+    for bad in [json!({}), json!({"on": true}), json!({"on": true, "checkout": "relativa"}), json!({"on": "sim"})] {
+        let response = fixture.dev_mode(bad.clone(), true).await;
+        assert_eq!(response.status(), 422, "{bad}");
+        assert_eq!(body(response).await["detail"]["code"], "erro_corpo_invalido");
+    }
+    let not_checkout = fixture.dev_mode(json!({"on": true, "checkout": fixture.home.path().display().to_string()}), true).await;
+    assert_eq!(not_checkout.status(), 409);
+    assert_eq!(body(not_checkout).await["detail"]["code"], "erro_dev_mode_nao_e_checkout");
+    let already = fixture.dev_mode(json!({"on": false}), true).await;
+    assert_eq!(already.status(), 200);
+    let value = body(already).await;
+    assert_eq!((value["ok"].clone(), value["nada_a_fazer"].clone()), (json!(true), json!(true)), "{value}");
+    assert!(!fixture.state().exists(), "nada lançado");
+
+    // Sem o token do dono: o Python decide, nunca o Rust.
+    assert_eq!(fixture.dev_mode(on, false).await.text().await.unwrap(), "python");
+}
+
+#[tokio::test]
+async fn update_routes_dev_mode_off_without_a_package_refuses() {
+    let fixture = Fixture::start("0.1.0.1").await;
+    let checkout = fixture.checkout();
+    fixture.point_current(&checkout);
+    let status = body(fixture.call(reqwest::Method::GET, "/api/atualizacao", true).await).await;
+    assert_eq!(status["modo"], "desenvolvedor");
+    // Pela pasta canônica: no Windows o `canonicalize` daqui traz o prefixo `\\?\`, e o servidor o tira.
+    let offered = std::fs::canonicalize(status["checkout"].as_str().unwrap()).unwrap();
+    assert_eq!(offered, std::fs::canonicalize(&checkout).unwrap());
+
+    let already = body(fixture.dev_mode(json!({"on": true, "checkout": checkout.display().to_string()}), true).await).await;
+    assert_eq!(already["nada_a_fazer"], true);
+    let refused = fixture.dev_mode(json!({"on": false}), true).await;
+    assert_eq!(refused.status(), 409);
+    assert_eq!(body(refused).await["detail"]["code"], "erro_dev_mode_sem_pacote");
+    assert!(!fixture.state().exists(), "nada lançado");
+}

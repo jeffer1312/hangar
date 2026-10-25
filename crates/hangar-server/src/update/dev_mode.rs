@@ -44,54 +44,107 @@ pub fn newest_package(layout: &Layout, platform: &str) -> Option<(PathBuf, Manif
     }).max_by_key(|(version, ..)| *version).map(|(_, dir, manifest)| (dir, manifest))
 }
 
-/// Troca o modo. `in_service_group`: este processo morre junto com o backend (cgroup da unit, Job do
-/// lançador), e o reinício o mataria no meio.
-pub async fn switch<R: Restarter, H: HealthProbe>(home: &Path, state_dir: &Path, request: &Request, in_service_group: bool,
-    restarter: &R, health: &H, settings: &Settings) -> Result<Outcome, String> {
+/// Recusa ou falha, com o código que a rota devolve à tela.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Failure {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl Failure {
+    fn new(code: &'static str, message: impl Into<String>) -> Failure { Failure { code, message: message.into() } }
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.message) }
+}
+
+/// A trava ocupada: o estado é de quem a segura.
+pub const BUSY: &str = "erro_atualizacao_ja_rodando";
+/// O servidor novo não provou estar de pé, e o `current` voltou para onde estava.
+pub const ROLLED_BACK: &str = "erro_dev_mode_voltou";
+
+/// O que o pedido faria, conferido sem tocar em nada.
+#[derive(Debug)]
+pub enum Checked {
+    Switch { target: PathBuf, manifest: Option<Manifest> },
+    Already(String),
+}
+
+/// As recusas que não dependem de trava nem de processo: a rota responde com elas antes de lançar.
+pub fn check(home: &Path, request: &Request) -> Result<Checked, Failure> {
     let layout = Layout::new(home);
     // Sem `current` o serviço não passa pelo lançador: apontá-lo não mudaria o que roda.
     if std::fs::symlink_metadata(layout.current()).is_err() && std::fs::symlink_metadata(layout.aside()).is_err() {
-        return Err(format!("esta máquina não roda pelo {}; migre antes com `hangar-server migrate-package`", layout.current().display()));
+        return Err(Failure::new("erro_dev_mode_nao_migrado",
+            format!("esta máquina não roda pelo {}; migre antes com `hangar-server migrate-package`", layout.current().display())));
     }
-    let (target, manifest) = match request {
+    match request {
         Request::On(dir) => {
-            if !dir.exists() { return Err(format!("{} não existe", dir.display())); }
-            let dir = super::real(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let missing = |e: String| Failure::new("erro_dev_mode_pasta_inexistente", e);
+            if !dir.exists() { return Err(missing(format!("{} não existe", dir.display()))); }
+            let dir = super::real(dir).map_err(|e| missing(format!("{}: {e}", dir.display())))?;
             if !super::migrate::is_checkout(&dir) {
-                return Err(format!("{} não é um checkout do Hangar (precisa de .git e backend/app)", dir.display()));
+                return Err(Failure::new("erro_dev_mode_nao_e_checkout",
+                    format!("{} não é um checkout do Hangar (precisa de .git e backend/app)", dir.display())));
             }
             if mode(home) == Mode::Developer(dir.clone()) {
-                return Ok(Outcome::Already(format!("o modo desenvolvedor já está ligado em {}; nada a fazer", dir.display())));
+                return Ok(Checked::Already(format!("o modo desenvolvedor já está ligado em {}; nada a fazer", dir.display())));
             }
-            (dir, None::<Manifest>)
+            Ok(Checked::Switch { target: dir, manifest: None })
         }
         Request::Off => {
             if let Mode::Package(_) = mode(home) {
                 let version = super::installed(&layout).map_or_else(String::new, |m| m.version);
-                return Ok(Outcome::Already(format!("o modo desenvolvedor já está desligado (pacote {version}); nada a fazer")));
+                return Ok(Checked::Already(format!("o modo desenvolvedor já está desligado (pacote {version}); nada a fazer")));
             }
             let platform = super::platform();
-            let (dir, manifest) = newest_package(&layout, &platform).ok_or_else(|| format!(
+            let none = || Failure::new("erro_dev_mode_sem_pacote", format!(
                 "nenhuma versão do pacote para {platform} em {}, e não há para onde voltar; no modo desenvolvedor o Atualizar só faz \
                  `git pull`: para ter o pacote, desfaça a migração (`hangar-server migrate-package --undo`) e migre de novo com o \
-                 checkout limpo na main", layout.versions().display()))?;
-            (super::real(&dir).map_err(|e| format!("{}: {e}", dir.display()))?, Some(manifest))
+                 checkout limpo na main", layout.versions().display()));
+            let (dir, manifest) = newest_package(&layout, &platform).ok_or_else(none)?;
+            let target = super::real(&dir).map_err(|e| Failure::new("erro_dev_mode_sem_pacote", format!("{}: {e}", dir.display())))?;
+            Ok(Checked::Switch { target, manifest: Some(manifest) })
         }
+    }
+}
+
+/// A pasta que a tela oferece: o checkout no ar no modo desenvolvedor; senão o que a migração gravou.
+pub fn suggested_checkout(home: &Path) -> Option<PathBuf> {
+    if let Mode::Developer(root) = mode(home) { return Some(root); }
+    super::migrate::read_record(&home.join(".hangar").join(super::migrate::MARKER)).map(|r| r.checkout)
+}
+
+/// Troca o modo. `in_service_group`: este processo morre junto com o backend (cgroup da unit, Job do
+/// lançador), e o reinício o mataria no meio. `on_step` recebe `trocar` e `reiniciar`, só depois de
+/// todas as recusas.
+#[allow(clippy::too_many_arguments)]
+pub async fn switch<R: Restarter, H: HealthProbe>(home: &Path, state_dir: &Path, request: &Request, in_service_group: bool,
+    restarter: &R, health: &H, settings: &Settings, on_step: &(dyn Fn(&str) + Sync)) -> Result<Outcome, Failure> {
+    let layout = Layout::new(home);
+    let (target, manifest) = match check(home, request)? {
+        Checked::Already(text) => return Ok(Outcome::Already(text)),
+        Checked::Switch { target, manifest } => (target, manifest),
     };
     if in_service_group {
-        return Err("o dev-mode está rodando dentro do serviço do backend, e o reinício o mataria no meio; rode-o num terminal fora dele".into());
+        return Err(Failure::new("erro_dev_mode_no_servico",
+            "o dev-mode está rodando dentro do serviço do backend, e o reinício o mataria no meio; rode-o num terminal fora dele"));
     }
     let _lock = super::UpdateLock::try_acquire(&layout).map_err(|e| match e {
-        UpdateError::Locked => "uma atualização está rodando nesta máquina; tente de novo depois".to_owned(),
-        e => e.to_string(),
+        UpdateError::Locked => Failure::new(BUSY, "uma atualização está rodando nesta máquina; tente de novo depois"),
+        e => Failure::new("erro_dev_mode_falhou", e.to_string()),
     })?;
     if let Some(pid) = super::other_engine(&StateFile::new(state_dir), state_dir) {
-        return Err(format!("o motor git do Python está atualizando esta máquina (pid {pid}); tente de novo depois"));
+        return Err(Failure::new("erro_dev_mode_motor_git", format!("o motor git do Python está atualizando esta máquina (pid {pid}); tente de novo depois")));
     }
+    on_step("trocar");
     let before = match health.read().await { Reading::Rust { pid, .. } => pid, _ => None };
     let (swap_layout, swap_target) = (layout.clone(), target.clone());
-    let previous = super::blocking(move || super::swap(&swap_layout, &swap_target)).await.map_err(|e| e.to_string())?;
+    let previous = super::blocking(move || super::swap(&swap_layout, &swap_target)).await
+        .map_err(|e| Failure::new("erro_dev_mode_falhou", e.to_string()))?;
     if restarter.manual() { return Ok(Outcome::SwitchedManual(target)); }
+    on_step("reiniciar");
     let proved = match restarter.restart().await {
         Err(e) => Err(format!("o servidor não reiniciou: {e}")),
         Ok(()) => match &manifest {
@@ -107,15 +160,16 @@ pub async fn switch<R: Restarter, H: HealthProbe>(home: &Path, state_dir: &Path,
 
 /// O `current` volta para onde apontava e o servidor reinicia de novo; devolve o motivo com o
 /// desfecho da volta.
-async fn roll_back<R: Restarter>(layout: &Layout, previous: Option<PathBuf>, why: String, restarter: &R) -> String {
-    let Some(previous) = previous else { return format!("{why}; o current de antes estava quebrado e não há para onde voltar") };
+async fn roll_back<R: Restarter>(layout: &Layout, previous: Option<PathBuf>, why: String, restarter: &R) -> Failure {
+    let failed = |text: String| Failure::new("erro_dev_mode_falhou", text);
+    let Some(previous) = previous else { return failed(format!("{why}; o current de antes estava quebrado e não há para onde voltar")) };
     let layout = layout.clone();
     if let Err(e) = super::blocking(move || super::swap(&layout, &previous)).await {
-        return format!("{why}; e o current não voltou para onde estava: {e}");
+        return failed(format!("{why}; e o current não voltou para onde estava: {e}"));
     }
     match restarter.restart().await {
-        Ok(()) => format!("{why}; o current voltou para onde estava e o servidor reiniciou"),
-        Err(e) => format!("{why}; o current voltou para onde estava, mas o reinício falhou: {e}"),
+        Ok(()) => Failure::new(ROLLED_BACK, format!("{why}; o current voltou para onde estava e o servidor reiniciou")),
+        Err(e) => Failure::new(ROLLED_BACK, format!("{why}; o current voltou para onde estava, mas o reinício falhou: {e}")),
     }
 }
 
@@ -150,7 +204,7 @@ pub fn cli(args: &[String]) -> ExitCode {
         Err(e) => { println!("##HANGAR-FALHA## runtime: {e}"); return ExitCode::from(1); }
     };
     let result = runtime.block_on(switch(&home, &super::state_dir(&env.claude_base), &request, super::migrate::in_service_group(),
-        &restarter, &health, &Settings::default()));
+        &restarter, &health, &Settings::default(), &|_| ()));
     let label = if request == Request::Off { "desligado" } else { "ligado" };
     match result {
         Ok(Outcome::Switched(dir)) => println!("modo desenvolvedor {label}: {} aponta para {}; servidor reiniciado", current.display(), dir.display()),
@@ -223,7 +277,7 @@ mod tests {
             FakeHealth { restarts: self.restarts.clone(), proves, commit: commit.map(str::to_owned) }
         }
         async fn switch(&self, request: Request, inside: bool, health: &FakeHealth) -> Result<Outcome, String> {
-            switch(&self.home, &self.state_dir(), &request, inside, &self.restart(), health, &fast()).await
+            switch(&self.home, &self.state_dir(), &request, inside, &self.restart(), health, &fast(), &|_| ()).await.map_err(|f| f.message)
         }
     }
 
@@ -324,9 +378,54 @@ mod tests {
     #[tokio::test]
     async fn dev_mode_by_hand_switches_without_restarting() {
         let m = Machine::new();
-        let outcome = switch(&m.home, &m.state_dir(), &Request::On(m.checkout.clone()), false, &Manual, &m.health(false, None), &fast()).await;
+        let outcome = switch(&m.home, &m.state_dir(), &Request::On(m.checkout.clone()), false, &Manual, &m.health(false, None), &fast(), &|_| ()).await;
         assert_eq!(outcome, Ok(Outcome::SwitchedManual(real(&m.checkout))));
         assert_eq!(m.current(), real(&m.checkout));
+    }
+
+    /// A rota confere antes de lançar o executor: cada recusa tem o código que a tela recebe.
+    #[tokio::test]
+    async fn dev_mode_check_answers_each_refusal_with_its_code() {
+        let m = Machine::new();
+        let code = |request: Request| check(&m.home, &request).map(|_| ()).unwrap_err().code;
+        assert_eq!(code(Request::On(m.checkout.join("nada"))), "erro_dev_mode_pasta_inexistente");
+        assert_eq!(code(Request::On(m.checkout.join("backend"))), "erro_dev_mode_nao_e_checkout");
+        assert!(matches!(check(&m.home, &Request::Off), Ok(Checked::Already(_))));
+        assert!(matches!(check(&m.home, &Request::On(m.checkout.clone())), Ok(Checked::Switch { .. })));
+
+        m.switch(Request::On(m.checkout.clone()), false, &m.health(true, None)).await.unwrap();
+        assert!(matches!(check(&m.home, &Request::On(m.checkout.clone())), Ok(Checked::Already(_))));
+        std::fs::remove_dir_all(m.layout().versions()).unwrap();
+        assert_eq!(code(Request::Off), "erro_dev_mode_sem_pacote");
+
+        crate::update::remove_link(&m.layout().current()).unwrap();
+        assert_eq!(code(Request::On(m.checkout.clone())), "erro_dev_mode_nao_migrado");
+    }
+
+    /// A pasta que a tela preenche: o checkout no ar no modo desenvolvedor; senão o da migração.
+    #[tokio::test]
+    async fn dev_mode_suggested_checkout_is_the_running_one_or_the_migrated_one() {
+        let m = Machine::new();
+        assert_eq!(suggested_checkout(&m.home), None, "pacote sem registro da migração");
+        std::fs::write(m.home.join(".hangar/migration.json"), json!({"mode": "package", "date": "d", "checkout": "/x/hangar",
+            "version": null, "reason": null, "notes": [], "done": []}).to_string()).unwrap();
+        assert_eq!(suggested_checkout(&m.home), Some(PathBuf::from("/x/hangar")));
+        m.switch(Request::On(m.checkout.clone()), false, &m.health(true, None)).await.unwrap();
+        assert_eq!(suggested_checkout(&m.home), Some(real(&m.checkout)));
+    }
+
+    /// Os passos só são anunciados depois das recusas: quem anuncia grava o pid no estado.
+    #[tokio::test]
+    async fn dev_mode_steps_are_announced_only_once_the_switch_is_going_ahead() {
+        let m = Machine::new();
+        let seen = std::sync::Mutex::new(Vec::new());
+        let note = |key: &str| seen.lock().unwrap().push(key.to_owned());
+        let health = m.health(true, None);
+        let refused = switch(&m.home, &m.state_dir(), &Request::On(m.checkout.join("nada")), false, &m.restart(), &health, &fast(), &note).await;
+        assert!(refused.is_err());
+        assert!(seen.lock().unwrap().is_empty());
+        switch(&m.home, &m.state_dir(), &Request::On(m.checkout.clone()), false, &m.restart(), &health, &fast(), &note).await.unwrap();
+        assert_eq!(*seen.lock().unwrap(), ["trocar", "reiniciar"]);
     }
 
     #[test]
