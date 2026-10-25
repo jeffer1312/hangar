@@ -674,8 +674,9 @@ fn scenario(name: &str) -> Scenario {
 }
 
 /// D12 e D13: o gerador grava o Python, e o teste confere o Rust contra o que foi aceito.
-const ACCEPTED: [&str; 7] = ["new_fixed_dirs", "list_pending_dead_link", "prep_pending_dead_link", "b1_runtime_not_listed",
-    "drift_just_moved_pruned", "drift_slot_dead_link_file", "drift_slot_dead_link_dir"];
+const ACCEPTED: [&str; 11] = ["new_fixed_dirs", "list_pending_dead_link", "prep_pending_dead_link", "b1_runtime_not_listed",
+    "drift_just_moved_pruned", "drift_slot_dead_link_file", "drift_slot_dead_link_dir", "b3_memory_shared_bucket", "memory_cases",
+    "prep_memory_local_drawer", "prep_every_warning_kind"];
 
 macro_rules! scenarios {
     ($($name:ident),* $(,)?) => {
@@ -692,7 +693,7 @@ scenarios!(
     prep_mirror_warns_changed_key, prep_absent_key_kept, prep_settings_old_symlink, prep_dir_appears_later,
     prep_runtime_stays_local, prep_runtime_links_elsewhere, prep_dead_link_pruned, prep_local_change_goes_up,
     prep_local_identical, prep_drift_cap, prep_not_an_account, prep_file_vs_dir_drawer, prep_unexpected_symlink,
-    prep_drift_symlink, prep_drift_is_file, prep_root_symlink, prep_memory_local_drawer, prep_memory_project_removed,
+    prep_drift_symlink, prep_drift_is_file, prep_root_symlink, prep_memory_project_removed,
     prep_tmp_name_user_file, prep_drift_cap_per_origin, prep_plugins_warnings, prep_no_plugins_silent, prep_invalid_name,
     prep_name_32_chars, prep_pending_account, prep_marker_symlink_or_dir, prep_shared_missing, prep_shared_is_file,
     prep_guard_busy, prep_symlink_refused, prep_account_readonly, settings_principal_invalid, settings_copy_invalid,
@@ -705,11 +706,11 @@ scenarios!(
     plugins_install_path_number, plugins_install_path_shapes, plugins_enabled_shapes, plugins_list_truthy,
     plugins_list_falsy, plugins_seeded_not_object, shared_dead_link, user_dead_link_pruned, drift_slot_reuse,
     drift_unicode_digit, top_order,
-    fifo_goes_to_drift, memory_cases, memory_local_project_is_file, shared_pending_marker, relative_link_kept,
-    link_loop_drawer, never_link_names, b3_memory_shared_bucket, prep_ignores_claude_config_dir,
+    fifo_goes_to_drift, memory_local_project_is_file, shared_pending_marker, relative_link_kept,
+    link_loop_drawer, never_link_names, prep_ignores_claude_config_dir,
     drift_prunes_link_entry, prep_absent_guard_busy, prep_shared_link_and_modes, prep_shared_readonly_collision,
     settings_nested_objects_shallow, mcp_two_undone_sorted, mcp_copy_without_key, settings_control_escapes,
-    plugins_entries_object, prep_every_warning_kind,
+    plugins_entries_object,
 );
 
 // ── execução ────────────────────────────────────────────────────────────────────────────────
@@ -926,10 +927,11 @@ fn fixture(name: &str) -> Value {
     value
 }
 
-/// D6: `.drift/memory.N` renumeradas pela ordem do conteúdo, igual nos dois lados.
+/// D6: as vagas da memória, com o nome do Python (`memory.N`) ou o de agora (`memory-<projeto>.N`, U10),
+/// renumeradas pela ordem do conteúdo, igual nos dois lados.
 fn d6_tree(tree: &Value) -> Value {
     let map = tree.as_object().unwrap();
-    let slot = regex::Regex::new(r"^(<HOME>/[^/]+/\.drift/memory\.)(\d+)(/.*)?$").unwrap();
+    let slot = regex::Regex::new(r"^(<HOME>/[^/]+/\.drift/memory)((?:-[^/.]*)?\.\d+)(/.*)?$").unwrap();
     let mut groups: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
     for (key, value) in map {
         if let Some(c) = slot.captures(key) {
@@ -942,7 +944,7 @@ fn d6_tree(tree: &Value) -> Value {
     let mut out = Map::new();
     for (key, value) in map {
         let key = match slot.captures(key) {
-            Some(c) => format!("{}{}{}", &c[1], rank[&c[2]], c.get(3).map_or("", |m| m.as_str())),
+            Some(c) => format!("{}.{}{}", &c[1], rank[&c[2]], c.get(3).map_or("", |m| m.as_str())),
             None => key.clone(),
         };
         out.insert(key, value.clone());
@@ -1095,6 +1097,71 @@ fn drift_just_moved_pruned() {
         "a recém-movida foi podada");
     let kept = tree.keys().filter(|k| k.starts_with("<HOME>/.claude-conta2/.drift/hooks.")).count();
     assert_eq!(kept, 3, "teto de três por nome de origem");
+}
+
+/// U10: a memória local de cada projeto vai para a gaveta com o nome dele (`memory-<projeto>`). O resto é
+/// o do Python: as vagas da memória são comparadas pelo conteúdo, e cada aviso de memória do Rust tem de
+/// citar o mesmo nome no rótulo e na vaga; `projects` são os projetos que foram para a gaveta.
+fn check_memory_after(name: &str, projects: &[&str]) {
+    let expected = fixture(name);
+    let got = run(name, &Side::Rust);
+    let warning = regex::Regex::new(r"^hangar-conta: '(memory[^']*)' era local nesta conta; movido pra \.drift/(memory[^ ]*)\.\d+$").unwrap();
+    let mut moved = std::collections::BTreeSet::new();
+    let want_steps = expected["steps"].as_array().unwrap();
+    assert_eq!(want_steps.len(), got.steps.len(), "{name}: passos");
+    for (i, (want, got)) in want_steps.iter().zip(&got.steps).enumerate() {
+        assert_eq!((&want["args"], &want["exit"], &want["stdout"]), (&got["args"], &got["exit"], &got["stdout"]), "{name}[{i}]");
+        let mut canon = |lines: &Value, rust: bool| -> Vec<String> {
+            lines.as_array().unwrap().iter().map(|line| {
+                let line = line.as_str().unwrap();
+                let Some(c) = warning.captures(line) else { return line.to_owned() };
+                assert_eq!(&c[1], &c[2], "{name}[{i}]: rótulo e vaga diferentes: {line}");
+                if rust {
+                    let project = c[1].strip_prefix("memory-").unwrap_or_else(|| panic!("{name}[{i}]: sem o projeto: {line}"));
+                    moved.insert(project.to_owned());
+                } else {
+                    assert_eq!(&c[1], "memory", "{name}[{i}]: o Python dava o nome só de memory");
+                }
+                "<memória para a gaveta>".to_owned()
+            }).collect()
+        };
+        assert_eq!(canon(&want["stderr"], false), canon(&got["stderr"], true), "{name}[{i}]: stderr");
+    }
+    assert_eq!(moved, projects.iter().map(|p| p.to_string()).collect(), "{name}: projetos que foram para a gaveta");
+    for project in projects {
+        assert!(got.tree.as_object().unwrap().keys().any(|k| k.starts_with(&format!("<HOME>/.claude-conta2/.drift/memory-{project}."))),
+            "{name}: a gaveta não tem memory-{project}");
+    }
+    assert_tree(name, &d6_tree(&expected["tree"]), &d6_tree(&got.tree));
+    assert_eq!(expected["diary"], json!(got.diary), "{name}: diário");
+}
+
+#[test]
+fn memory_cases() { check_memory_after("memory_cases", &["-arquivo", "-link-errado"]); }
+
+#[test]
+fn prep_memory_local_drawer() { check_memory_after("prep_memory_local_drawer", &["-tmp-x"]); }
+
+#[test]
+fn prep_every_warning_kind() { check_memory_after("prep_every_warning_kind", &["-tmp-x"]); }
+
+/// U10/B3: com um nome de gaveta por projeto, o teto conta por projeto. O Python punha a memória de
+/// todos no mesmo `memory`, e o quarto projeto levava a de outro.
+#[test]
+fn b3_memory_shared_bucket() {
+    let python = fixture("b3_memory_shared_bucket");
+    let slots = |tree: &Value| tree.as_object().unwrap().keys()
+        .filter(|k| k.starts_with("<HOME>/.claude-conta2/.drift/memory") && !k.contains("/MEMORY.md")).count();
+    assert_eq!(slots(&python["tree"]), 3, "o Python podava a memória de um dos quatro projetos");
+    let got = run("b3_memory_shared_bucket", &Side::Rust);
+    let mut stderr: Vec<String> = serde_json::from_value(got.steps[0]["stderr"].clone()).unwrap();
+    stderr.sort();
+    let projects = ["-p1", "-p2", "-p3", "-p4"];
+    assert_eq!(stderr, projects.map(|p| format!("hangar-conta: 'memory-{p}' era local nesta conta; movido pra .drift/memory-{p}.1")));
+    assert_eq!(slots(&got.tree), 4, "cada projeto guarda a sua");
+    for p in projects {
+        assert_eq!(got.tree[format!("<HOME>/.claude-conta2/.drift/memory-{p}.1/MEMORY.md")]["text"], format!("local {p}"));
+    }
 }
 
 /// U9(a): a vaga da gaveta ocupada por link morto conta como ocupada. O Python a dava por livre: a pasta

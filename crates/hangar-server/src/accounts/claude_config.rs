@@ -539,7 +539,13 @@ fn mtime(meta: &fs::Metadata) -> f64 {
 }
 
 /// Move para `.drift/<nome>.N` (a menor vaga livre) e guarda só as `DRIFT_CAP` mais novas do mesmo nome.
-fn drawer(dir: &Path, destination: &Path) -> Result<String> { drawer_with(dir, destination, &|from, to| fs::rename(from, to)) }
+fn drawer(dir: &Path, destination: &Path) -> Result<String> { drawer_as(dir, destination, &name_of(destination)) }
+
+/// `drawer` com o nome de gaveta dado: a memória de cada projeto vai como `memory-<projeto>`, e o teto
+/// conta por projeto (com um `memory` só, o quarto projeto levava a de outro).
+fn drawer_as(dir: &Path, destination: &Path, name: &str) -> Result<String> {
+    drawer_with(dir, destination, name, &|from, to| fs::rename(from, to))
+}
 
 /// O link com o mesmo texto, sem segui-lo (no Windows, link de arquivo, como o `os.symlink` do `shutil`).
 fn relink(text: &Path, at: &Path) -> io::Result<()> {
@@ -613,14 +619,13 @@ fn move_entry(from: &Path, to: &Path, rename: &dyn Fn(&Path, &Path) -> io::Resul
 }
 
 /// `drawer` com o `rename` dado: os testes simulam o outro volume (EXDEV).
-fn drawer_with(dir: &Path, destination: &Path, rename: &dyn Fn(&Path, &Path) -> io::Result<()>) -> Result<String> {
+fn drawer_with(dir: &Path, destination: &Path, name: &str, rename: &dyn Fn(&Path, &Path) -> io::Result<()>) -> Result<String> {
     let drift = dir.join(".drift");
     if is_symlink(&drift) || (exists(&drift) && !is_dir(&drift)) {
         // Gaveta apontando para fora levaria as entradas, e a poda, para o diretório externo.
         return Err(refused("a gaveta .drift desta conta é um symlink ou não é uma pasta"));
     }
     mkdir(&drift).at(&drift)?;
-    let name = name_of(destination);
     let mut n = 1;
     // Link morto ocupa a vaga: dado como livre, a pasta não entrava nele e o arquivo o sobrescrevia.
     while fs::symlink_metadata(drift.join(format!("{name}.{n}"))).is_ok() { n += 1; }
@@ -663,8 +668,9 @@ fn link_memory(home: &Path, dir: &Path, project: Option<&str>) -> Result<Vec<Str
         let destination = local.join("memory");
         if points_to(&destination, &target) { continue; }
         fs::create_dir_all(&local).at(&local)?;
+        // O alvo é pasta: o que estiver no lugar nunca funde, vai para a gaveta com o nome do projeto.
         if is_symlink(&destination) || exists(&destination) {
-            warnings.extend(collide(dir, &destination, &target)?);
+            warnings.push(drawer_as(dir, &destination, &format!("memory-{}", name.to_string_lossy()))?);
         }
         link(&destination, &target)?;
     }
@@ -1016,7 +1022,7 @@ mod tests {
         symlink("../fora", skills.join("a/link")).unwrap();
         set_mtime(&skills.join("topo.sh"), 1_600_000_000);
         set_mtime(&skills, 1_700_000_000);
-        let warning = drawer_with(dir, &skills, &cross_device);
+        let warning = drawer_with(dir, &skills, "skills", &cross_device);
         assert_eq!(warning.ok(), Some("'skills' era local nesta conta; movido pra .drift/skills.1".to_owned()));
         let slot = dir.join(".drift/skills.1");
         assert!(fs::symlink_metadata(&skills).is_err(), "a origem sai depois da cópia inteira");
@@ -1032,7 +1038,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path();
         symlink(dir.join("segredo.txt"), dir.join("CLAUDE.md")).unwrap();
-        assert!(drawer_with(dir, &dir.join("CLAUDE.md"), &cross_device).is_ok());
+        assert!(drawer_with(dir, &dir.join("CLAUDE.md"), "CLAUDE.md", &cross_device).is_ok());
         assert_eq!(fs::read_link(dir.join(".drift/CLAUDE.md.1")).unwrap(), dir.join("segredo.txt"));
         assert!(fs::symlink_metadata(dir.join("CLAUDE.md")).is_err());
     }
@@ -1045,7 +1051,7 @@ mod tests {
         fs::write(&hooks, "velho").unwrap();
         fs::set_permissions(&hooks, fs::Permissions::from_mode(0o640)).unwrap();
         set_mtime(&hooks, 1_000);
-        assert!(drawer_with(dir, &hooks, &cross_device).is_ok());
+        assert!(drawer_with(dir, &hooks, "hooks", &cross_device).is_ok());
         let slot = dir.join(".drift/hooks.1");
         assert!(fs::symlink_metadata(&hooks).is_err());
         assert_eq!((fs::read_to_string(&slot).unwrap(), mode(&slot), mtime_secs(&slot)), ("velho".to_owned(), 0o640, 1_000));
@@ -1088,7 +1094,7 @@ mod tests {
         let hooks = dir.join("hooks");
         fs::write(&hooks, "velho").unwrap();
         set_mtime(&hooks, 1_000);
-        assert!(drawer_with(dir, &hooks, &cross_device).is_ok());
+        assert!(drawer_with(dir, &hooks, "hooks", &cross_device).is_ok());
         assert_eq!(fs::read_to_string(dir.join(".drift/hooks.4")).ok().as_deref(), Some("velho"), "a recém-movida nunca é podada");
         fs::write(&hooks, "novo").unwrap();
         set_mtime(&hooks, 2_000_000_000);
@@ -1108,7 +1114,7 @@ mod tests {
         fs::write(skills.join("a.md"), "a").unwrap();
         fs::write(skills.join("trancado.md"), "t").unwrap();
         fs::set_permissions(skills.join("trancado.md"), fs::Permissions::from_mode(0o000)).unwrap();
-        let error = drawer_with(dir, &skills, &cross_device).unwrap_err().to_string();
+        let error = drawer_with(dir, &skills, "skills", &cross_device).unwrap_err().to_string();
         fs::set_permissions(skills.join("trancado.md"), fs::Permissions::from_mode(0o644)).unwrap();
         assert!(error.contains(&skills.join("trancado.md").display().to_string()), "{error}");
         assert_eq!(fs::read_to_string(skills.join("a.md")).unwrap(), "a", "a origem fica inteira");
