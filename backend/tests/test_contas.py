@@ -60,6 +60,8 @@ def test_listar_devolve_so_conta_carimbada_e_real(casa):
         (casa / ".claude-evil").symlink_to(fora, target_is_directory=True)
         (marcador_link / contas.MARCADOR).symlink_to(fora / contas.MARCADOR)
     except OSError as exc:
+        if sys.platform != "win32":
+            raise
         pytest.skip(f"Symlink indisponível nesta máquina: {exc}")
     (_carimbada(casa, "pendente") / ".hangar-account-pending").write_text("", encoding="utf-8")
     assert contas.listar() == ["a", "b"]
