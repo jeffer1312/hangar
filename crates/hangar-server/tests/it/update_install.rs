@@ -77,9 +77,12 @@ impl Release {
 }
 
 async fn install(home: &Path, args: &[&str]) -> std::process::Output {
-    tokio::process::Command::new(env!("CARGO_BIN_EXE_hangar-server")).arg("install-package").args(args)
-        .env_clear().env("HOME", home).env("USERPROFILE", home).env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .output().await.unwrap()
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_hangar-server"));
+    command.arg("install-package").args(args)
+        .env_clear().env("HOME", home).env("USERPROFILE", home).env("PATH", std::env::var_os("PATH").unwrap_or_default());
+    // Sem o SystemRoot o Winsock não inicializa e nenhuma conexão sai, nem para o 127.0.0.1.
+    if let Some(root) = std::env::var_os("SystemRoot") { command.env("SystemRoot", root); }
+    command.output().await.unwrap()
 }
 
 fn text(out: &std::process::Output) -> String { format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)) }
