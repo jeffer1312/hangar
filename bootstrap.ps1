@@ -59,6 +59,8 @@ foreach ($nome in @('HANGAR_TOKEN', 'HANGAR_ASKPASS', 'HANGAR_ASKPASS_CODE')) {
     if ($valor) { $appEnv[$nome] = $valor }
     Remove-Item "Env:$nome" -ErrorAction SilentlyContinue
 }
+# So esta execucao diz ao install.ps1 que acabou de criar a instalacao: herdada, marcaria passos pendentes.
+Remove-Item Env:HANGAR_FRESH_PACKAGE -ErrorAction SilentlyContinue
 
 $repoUrl = 'https://github.com/jeffer1312/hangar.git'
 $ramo    = 'main'
@@ -224,14 +226,17 @@ function Install-WithoutPackage($motivo) {
 
 # Baixa <url> em <arquivo>. https nunca segue redirecionamento para http (o `--proto =https` do
 # bootstrap.sh); file:// so serve ao teste.
+# $segundos e o teto do download inteiro (o `--max-time` do curl), nao de cada leitura.
 function Get-Download([string]$url, [string]$arquivo, [int]$segundos) {
     $https = $url.StartsWith('https://')
+    $prazo = [DateTime]::UtcNow.AddSeconds($segundos)
+    $resta = { $ms = [int]($prazo - [DateTime]::UtcNow).TotalMilliseconds; if ($ms -le 0) { throw "o download passou de $segundos s" }; $ms }
     for ($salto = 0; $salto -lt 6; $salto++) {
         $req = [Net.WebRequest]::Create($url)
-        $req.Timeout = $segundos * 1000
+        $req.Timeout = & $resta
         if ($req -is [Net.HttpWebRequest]) {
             $req.AllowAutoRedirect = $false
-            $req.ReadWriteTimeout = $segundos * 1000
+            $req.ReadWriteTimeout = & $resta
             $req.UserAgent = 'hangar-bootstrap'
         }
         $resp = $null
@@ -249,7 +254,16 @@ function Get-Download([string]$url, [string]$arquivo, [int]$segundos) {
             }
             $fluxo = $resp.GetResponseStream()
             $gravado = [IO.File]::Create($arquivo)
-            try { $fluxo.CopyTo($gravado) } finally { $gravado.Dispose(); $fluxo.Dispose() }
+            try {
+                $buf = New-Object byte[] 65536
+                while ($true) {
+                    if ($fluxo.CanTimeout) { $fluxo.ReadTimeout = & $resta }
+                    $n = $fluxo.Read($buf, 0, $buf.Length)
+                    if ($n -le 0) { break }
+                    $gravado.Write($buf, 0, $n)
+                    $null = & $resta
+                }
+            } finally { $gravado.Dispose(); $fluxo.Dispose() }
             return
         } finally { if ($resp) { $resp.Close() } }
     }
@@ -316,6 +330,8 @@ function Install-FromPackage {
         4 { Stop-Bootstrap $jaInstalado }
         default { Stop-Bootstrap 'a instalacao do pacote parou (motivo acima)' }
     }
+    # Instalacao criada agora: o install.ps1 marca os passos de atualizacao como ja aplicados.
+    $env:HANGAR_FRESH_PACKAGE = '1'
     Invoke-Installer $pacote
 }
 

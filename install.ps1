@@ -49,6 +49,9 @@ if ($App) {
 $tokenDoApp = ''
 if ($App) { $tokenDoApp = "$env:HANGAR_TOKEN" }
 Remove-Item Env:HANGAR_TOKEN -ErrorAction SilentlyContinue
+# So o bootstrap que acabou de criar a instalacao pelo pacote manda isto: rodar de novo nao marca passo.
+$pacoteNovo = ($env:HANGAR_FRESH_PACKAGE -eq '1')
+Remove-Item Env:HANGAR_FRESH_PACKAGE -ErrorAction SilentlyContinue
 
 # O Hangar pilota agentes de codigo e precisa de pelo menos um; o Claude Code e o padrao, nao o unico.
 $todosAgentes = @('claude', 'codex', 'pi', 'omp', 'kimi')
@@ -2891,7 +2894,9 @@ if ($morreu) {
 # Instalacao do zero pelo pacote ja cumpre todo passo de docs\atualizacoes\: o hangar-server os
 # registra como aplicados, so agora que a instalacao chegou ao fim. A saida fica visivel: ela avisa
 # passo malformado.
-if ($pacote -and -not $Update) {
+if ($pacote -and -not $Update -and -not $pacoteNovo) {
+    Nota 'instalacao que ja existia: nenhum passo de atualizacao marcado; os pendentes rodam no Atualizar do app'
+} elseif ($pacote -and -not $Update) {
     $saidaPassos = & { $ErrorActionPreference = 'Continue'; & "$raiz\bin\hangar-server.exe" install-package --mark-steps 2>&1 } | ForEach-Object { "$_" }
     $rcPassos = $LASTEXITCODE
     foreach ($l in $saidaPassos) { Nota $l }

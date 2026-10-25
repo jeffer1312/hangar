@@ -283,7 +283,10 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   `.git` pula git, `uv`, venv, build da tela e binários Rust, grava o `.env` em `~/.hangar/config`,
   põe um `python3` que é o `hangar-python` à frente do PATH dos sub-scripts, confere a tela da
   `dist_key` em `~/.hangar/ui` (ausente com a tela web ligada é pendência) e, só ao chegar ao fim,
-  registra os passos como aplicados (`install-package --mark-steps`, malformado vira aviso). O
+  registra os passos como aplicados (`install-package --mark-steps`, malformado vira aviso). Marca
+  só com `HANGAR_FRESH_PACKAGE=1`, que o bootstrap põe quando o `install-package` acabou de criar a
+  instalação; rodar o bootstrap de novo numa instalação existente não marca nada, e o passo que
+  falhou numa atualização continua pendente para o Atualizar. O
   `--dev` grava `~/.hangar/dev-requested`; a migração lê isso como modo desenvolvedor e o apaga.
 - **No Windows é o mesmo fluxo, pelo `bootstrap.ps1`, com as opções por variável** (`irm | iex` não
   tem argumento): `$env:CP_CANAL='beta'` é o `--beta`; `$env:CP_DEV='1'`, `$env:CP_DESTINO` e o
@@ -292,7 +295,9 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   recusa (4) também com a tarefa já gravada (`%LOCALAPPDATA%\hangar\hangar-backend.vbs`). O
   `install.ps1` do pacote pula Python, `uv`, `uv sync`, build da tela, `rust_release` e o hook de
   `git pull`; roda o backend pelo `python\python.exe` do pacote e os lançadores pelo Python do
-  `current`; marca os passos com `install-package --mark-steps` depois da fumaça. A barra de status do
+  `current`; marca os passos com `install-package --mark-steps` depois da fumaça, com a mesma
+  condição do `HANGAR_FRESH_PACKAGE`. O download do `bootstrap.ps1` tem teto total (o
+  `--max-time` do curl), não só por leitura. A barra de status do
   Claude grava o caminho pelo `current` (`configure-statusline.cjs`), nos dois sistemas.
 - **A tela web é opcional, ligada por padrão, e servida pelo Rust** de `~/.hangar/ui/<dist_key>/`
   (checkout: `frontend/dist`). `GET`/`PUT /api/web-ui` (só o dono) grava `~/.hangar/web-ui.json`;

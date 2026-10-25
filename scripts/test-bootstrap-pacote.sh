@@ -27,6 +27,7 @@ new_box() {
 d=$(dirname "$0")
 printf '%s\n' "$@" > "$d/args"
 printf '%s' "${HANGAR_TOKEN-}" > "$d/tok"
+printf '%s' "${HANGAR_FRESH_PACKAGE-}" > "$d/fresh"
 pwd > "$d/cwd"
 exit 0
 EOF
@@ -90,6 +91,7 @@ run_boot() {
   local out=$1; shift
   ( env -i HOME="$S/home" PATH="$B:$S/sys" FAKE_LOG="$S/git.log" FAKE_INSTALL="$S/install-fake.sh" \
       HANGAR_RELEASE_BASE="${TEST_RELEASE_BASE-file://$REL}" ${TEST_TOKEN:+HANGAR_TOKEN=$TEST_TOKEN} \
+      ${TEST_FRESH:+HANGAR_FRESH_PACKAGE=$TEST_FRESH} \
       ${FAKE_RC:+FAKE_RC=$FAKE_RC} ${FAKE_OS:+FAKE_OS=$FAKE_OS} ${FAKE_ARCH:+FAKE_ARCH=$FAKE_ARCH} \
       timeout 60 setsid -w "$BASH_BIN" "$REPO/bootstrap.sh" "$@" </dev/null 2>&1 ) > "$out"
 }
@@ -112,6 +114,7 @@ expect_eq "padrao: install-package do latest" "$(head -1 "$S/server.log" 2>/dev/
 expect_eq "padrao: opções chegam ao install.sh do pacote" "$(paste -sd' ' "$V/args" 2>/dev/null)" '--app --tailscale=nao --agentes=codex' "$S/out"
 expect_eq "padrao: install.sh roda do current" "$(cat "$V/cwd" 2>/dev/null)" "$S/home/.hangar/current"
 expect_eq "padrao: install.sh recebe a senha" "$(cat "$V/tok" 2>/dev/null)" segredo-123
+expect_eq "padrao: install.sh sabe que a instalação é nova" "$(cat "$V/fresh" 2>/dev/null)" 1
 expect_no "padrao: o servidor não vê a senha" "$S/server.log" 'viu a senha'
 expect_absent "padrao: nada de git" "$S/git.log"
 expect_eq "padrao: temporário do download apagado" "$(ls "$S/home/.hangar/cache" 2>/dev/null | grep -c bootstrap)" 0
@@ -138,6 +141,7 @@ expect_line "sem-pacote: motivo na tela" "$S/out" 'não tem pacote para linux-x8
 expect_line "sem-pacote: clona" "$S/git.log" "clone --branch main .* $S/home/hangar"
 expect_eq "sem-pacote: install.sh do checkout" "$(paste -sd' ' "$S/home/hangar/args" 2>/dev/null)" '--yes' "$S/out"
 expect_absent "sem-pacote: sem marca de --dev" "$S/home/.hangar/dev-requested"
+expect_eq "sem-pacote: checkout sem marca de instalação nova" "$(cat "$S/home/hangar/fresh" 2>/dev/null)" ''
 
 # --- Release sem o hangar-server deste sistema: git, sem baixar nada ---
 new_box sem-build; publish latest macos-aarch64
@@ -193,9 +197,10 @@ expect_eq "pasta-pacote: FIM falhou" "$(last_line "$S/out")" '##HANGAR-FIM## fal
 new_box de-novo; publish latest
 mkdir -p "$S/home/.hangar/current"; echo '{}' > "$S/home/.hangar/current/manifest.json"
 cp "$S/install-fake.sh" "$S/home/.hangar/current/install.sh"
-run_boot "$S/out" --yes
+TEST_FRESH=1 run_boot "$S/out" --yes
 expect_absent "de-novo: nada baixado" "$S/server.log"
 expect_eq "de-novo: install.sh do current" "$(paste -sd' ' "$S/home/.hangar/current/args" 2>/dev/null)" '--yes' "$S/out"
+expect_eq "de-novo: install.sh não marca passos (nem com a variável herdada)" "$(cat "$S/home/.hangar/current/fresh" 2>/dev/null)" '' "$S/out"
 
 # --- install-package recusa (instalação existente): para com o motivo ---
 new_box recusa; publish latest

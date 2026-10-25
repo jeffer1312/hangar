@@ -56,6 +56,7 @@ exit /b 0
 Set-Content -Encoding ASCII -Path $fakeInstall -Value @'
 param([switch]$App, [string]$Tailscale, [switch]$SemNativo, [string]$Agentes, [switch]$SoChecar, [switch]$Sim, [switch]$Avancado, [switch]$ConsertarRoda)
 Add-Content -Encoding ASCII -Path $env:FAKE_LOG -Value "install $PSScriptRoot App=$App Tailscale=$Tailscale SoChecar=$SoChecar tok=$env:HANGAR_TOKEN"
+Add-Content -Encoding ASCII -Path $env:FAKE_LOG -Value "fresh=$env:HANGAR_FRESH_PACKAGE"
 exit 0
 '@
 
@@ -97,6 +98,7 @@ $calls = Calls
 Assert ($calls -contains "server install-package --channel latest --release-base file:///$($releases -replace '\\', '/')") 'padrao: install-package do canal latest'
 Assert ($calls -contains "install $current App=True Tailscale=nao SoChecar=False tok=segredo-123") 'padrao: roda o install.ps1 do pacote com as opcoes e a senha'
 Assert (-not ($calls -contains 'server viu o segredo')) 'padrao: o hangar-server nao ve a senha'
+Assert ($calls -contains 'fresh=1') 'padrao: o install.ps1 sabe que a instalacao e nova'
 Assert (-not ($calls | Where-Object { $_ -like 'git *' })) 'padrao: nenhum git'
 Assert (-not (Get-ChildItem (Join-Path $perfil '.hangar\cache') -Filter 'bootstrap.*' -ErrorAction SilentlyContinue)) 'padrao: o temporario sai'
 Assert (($out -join "`n") -match 'conferido \(sha256\)') 'padrao: diz que conferiu'
@@ -142,6 +144,7 @@ Reset-Machine; Publish 'latest'
 $out = Run-Bootstrap @() @{ FAKE_SERVER_RC = '3' }
 Assert (($out -join "`n") -match 'Sem pacote: motivo do servidor falso 3') 'rc 3: motivo da ultima linha'
 Assert ((Calls) | Where-Object { $_ -like 'git clone *' }) 'rc 3: segue pelo git'
+Assert ((Calls) -contains 'fresh=') 'rc 3: checkout sem marca de instalacao nova'
 
 # --- install-package sai 4 (instalacao existente): para com o motivo ---
 Reset-Machine; Publish 'latest'
@@ -159,8 +162,9 @@ Reset-Machine
 New-Item -ItemType Directory -Force -Path $current | Out-Null
 '{}' | Set-Content -Encoding ASCII (Join-Path $current 'manifest.json')
 Copy-Item $fakeInstall (Join-Path $current 'install.ps1')
-$out = Run-Bootstrap @('-SoChecar')
+$out = Run-Bootstrap @('-SoChecar') @{ HANGAR_FRESH_PACKAGE = '1' }
 Assert ((Calls) -contains "install $current App=False Tailscale= SoChecar=True tok=") 'ja no pacote: roda o instalador dele (com -SoChecar)'
+Assert ((Calls) -contains 'fresh=') 'ja no pacote: install.ps1 nao marca passos (nem com a variavel herdada)'
 Assert (-not ((Calls) | Where-Object { $_ -like 'server *' })) 'ja no pacote: nada baixado'
 
 # --- CP_DEV ou pasta numa maquina ja no pacote: recusa, o caminho e o dev-mode ---
@@ -197,6 +201,30 @@ $env:HANGAR_RELEASE_BASE = 'file:///' + ($releases -replace '\\', '/'); $env:Pat
 & $ps -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Raw '$bootstrap' | iex" *> $null
 $env:Path = $pathOriginal; $env:USERPROFILE = $perfilOriginal
 Assert ((Calls) -contains "install $current App=False Tailscale= SoChecar=False tok=") 'iex: instala pelo pacote'
+
+# --- Download que pinga um byte a cada meio segundo: o teto vale para o download inteiro ---
+$tk = $null; $pe = $null
+$bAst = [Management.Automation.Language.Parser]::ParseFile($bootstrap, [ref]$tk, [ref]$pe)
+. ([scriptblock]::Create($bAst.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-Download' }, $true).Extent.Text))
+$escuta = New-Object Net.Sockets.TcpListener ([Net.IPAddress]::Loopback, 0)
+$escuta.Start()
+$lento = [powershell]::Create().AddScript({
+    param($escuta)
+    $c = $escuta.AcceptTcpClient(); $s = $c.GetStream()
+    $h = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Length: 100000`r`n`r`n")
+    $s.Write($h, 0, $h.Length)
+    for ($i = 0; $i -lt 40; $i++) { Start-Sleep -Milliseconds 500; try { $s.WriteByte(65); $s.Flush() } catch { break } }
+    $c.Close()
+}).AddArgument($escuta)
+$rodando = $lento.BeginInvoke()
+$relogio = [Diagnostics.Stopwatch]::StartNew()
+$erroLento = ''
+try { Get-Download "http://127.0.0.1:$($escuta.LocalEndpoint.Port)/x" (Join-Path $raiz 'lento.bin') 3 } catch { $erroLento = "$_" }
+$segundosLento = $relogio.Elapsed.TotalSeconds
+$escuta.Stop(); $null = $lento.EndInvoke($rodando); $lento.Dispose()
+# O prazo vence no meio de uma leitura (timeout dela) ou entre duas (o teto do Get-Download).
+Assert ($erroLento -match 'passou de 3 s|timed out') "download lento: para no teto total ($erroLento)"
+Assert ($segundosLento -lt 8) "download lento: para perto dos 3 s (levou $([int]$segundosLento) s)"
 
 Remove-Item Env:HANGAR_RELEASE_BASE, Env:FAKE_LOG, Env:FAKE_INSTALL_SRC -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force $raiz -ErrorAction SilentlyContinue

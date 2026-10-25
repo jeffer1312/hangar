@@ -56,6 +56,8 @@ set -- ${ARGS[@]+"${ARGS[@]}"}
 # Senha do celular e auxiliar de administrador do app: só o install.sh as recebe, não o git.
 APP_TOKEN=${HANGAR_TOKEN-}; APP_ASKPASS=${HANGAR_ASKPASS-}; APP_ASKPASS_CODE=${HANGAR_ASKPASS_CODE-}
 unset HANGAR_TOKEN HANGAR_ASKPASS HANGAR_ASKPASS_CODE
+# Só esta execução diz ao install.sh que acabou de criar a instalação: herdada, marcaria passos pendentes.
+unset HANGAR_FRESH_PACKAGE
 
 say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32mok\033[0m  %s\n' "$*"; }
@@ -261,6 +263,8 @@ pelo_pacote() {
     *) fail "a instalação do pacote parou (motivo acima)" ;;
   esac
   limpa_tmp
+  # Instalação criada agora: o install.sh marca os passos de atualização como já aplicados.
+  export HANGAR_FRESH_PACKAGE=1
   roda_instalador "$PACOTE" "$@"
 }
 

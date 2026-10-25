@@ -115,6 +115,9 @@ unset HANGAR_TOKEN
 APP_ASKPASS=${HANGAR_ASKPASS-}
 APP_ASKPASS_CODE=${HANGAR_ASKPASS_CODE-}
 unset HANGAR_ASKPASS HANGAR_ASKPASS_CODE
+# Só o bootstrap que acabou de criar a instalação pelo pacote manda isto: rodar de novo não marca passo.
+FRESH=${HANGAR_FRESH_PACKAGE-}
+unset HANGAR_FRESH_PACKAGE
 mark_item() { [ "$APP" = 1 ] || return 0; echo "##HANGAR-ITEM## $1 $2 $3"; }
 # Item de uma parte inteira: pendente quando ela somou problema desde a contagem `antes`.
 mark_item_since() { # mark_item_since <id> <antes> <texto>
@@ -1103,8 +1106,12 @@ else
 fi
 
 if [ "$PACOTE" = 1 ] && [ "$UPDATE" = 0 ]; then
-  bin/hangar-server install-package --mark-steps \
-    || anota_problema "os passos de atualização não foram marcados como aplicados — rode: ~/.hangar/current/bin/hangar-server install-package --mark-steps"
+  if [ "$FRESH" = 1 ]; then
+    bin/hangar-server install-package --mark-steps \
+      || anota_problema "os passos de atualização não foram marcados como aplicados — rode: ~/.hangar/current/bin/hangar-server install-package --mark-steps"
+  else
+    nota "instalação que já existia: nenhum passo de atualização marcado; os pendentes rodam no Atualizar do app"
+  fi
 fi
 
 # ── Portão final: extra que a pessoa pediu e falhou NÃO passa em branco ────────────────────

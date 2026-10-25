@@ -31,7 +31,7 @@ pacote_sandbox() {
 
 # --- Caso: instalação nova pelo assistente, sem git, uv, npm nem python3 na máquina ---
 pacote_sandbox novo
-TEST_TOKEN='segredo-do-app-123' run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
+TEST_FRESH=1 TEST_TOKEN='segredo-do-app-123' run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
 expect_eq "novo: sai 0" "$rc" 0
 expect_eq "novo: FIM ok" "$(last_line "$S/out")" '##HANGAR-FIM## ok'
 expect_line "novo: senha em ~/.hangar/config/.env" "$S/home/.hangar/config/.env" '^CP_AUTH_TOKEN=segredo-do-app-123$'
@@ -53,6 +53,13 @@ expect_no "novo: sem hook de git pull" "$S/out" 'sem .git|hook de atualização'
 SHIM="$S/home/.hangar/cache/install-bin/python3"
 expect_line "novo: python3 dos sub-scripts é o do pacote" "$SHIM" "exec \"$R/scripts/hangar-python\""
 
+# --- Caso: rodou de novo numa instalação que já existia: nenhum passo marcado, e diz por quê ---
+pacote_sandbox de-novo
+run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
+expect_eq "de-novo: sai 0" "$rc" 0
+[ -e "$S/log/server" ] && flunk "de-novo: nada marcado" "$S/out" || pass "de-novo: nada marcado"
+expect_line "de-novo: diz que os pendentes ficam para o Atualizar" "$S/out" 'nenhum passo de atualização marcado.*Atualizar'
+
 # --- Caso: a tela da chave do pacote não veio: pendência, não "vem pronta" ---
 pacote_sandbox sem-tela
 rm -rf "$S/home/.hangar/ui"
@@ -73,14 +80,14 @@ expect_no "tela-desligada: sem pendência" "$S/out" '^##HANGAR-PENDENCIA##'
 # --- Caso: a marca dos passos falhou: pendência ---
 pacote_sandbox marca-falha
 : > "$S/mark-fails"
-run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
+TEST_FRESH=1 run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
 expect_eq "marca-falha: sai 1" "$rc" 1
 expect_line "marca-falha: pendência" "$S/out" '^##HANGAR-PENDENCIA## .*passos de atualização'
 
 # --- Caso: a instalação parou antes do fim: nenhum passo marcado ---
 pacote_sandbox falha-cedo
 fake tmux 'exit 1'
-run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
+TEST_FRESH=1 run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
 expect_eq "falha-cedo: sai 1" "$rc" 1
 [ -e "$S/log/server" ] && flunk "falha-cedo: nada marcado" "$S/out" || pass "falha-cedo: nada marcado"
 

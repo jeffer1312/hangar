@@ -92,8 +92,8 @@ public static class FakeMark {
 }
 '@
     $env:FAKE_LOG = $log
-    $passos = Trecho 'if ($pacote -and -not $Update) {' 'install-package --mark-steps'
-    $raiz = $versao; $pacote = $true; $Update = $false
+    $passos = Trecho 'if ($pacote -and -not $Update' 'install-package --mark-steps'
+    $raiz = $versao; $pacote = $true; $Update = $false; $pacoteNovo = $true
     Limpa; . $passos
     Assert ((Get-Content $log) -eq 'install-package --mark-steps') 'passos: --mark-steps pelo hangar-server do pacote'
     Assert ((Saida) -match 'nota aviso: passo malformado ignorado: torto.md') 'passos: passo malformado aparece'
@@ -106,6 +106,13 @@ public static class FakeMark {
     $Update = $true
     Limpa; . $passos
     Assert (-not (Test-Path $log)) 'passos: -Update nao marca'
+    $Update = $false; $pacoteNovo = $false
+    Limpa; . $passos
+    Assert (-not (Test-Path $log)) 'passos: instalacao que ja existia nao marca'
+    Assert ((Saida) -match 'nota .*nenhum passo de atualizacao marcado.*Atualizar') 'passos: diz que os pendentes ficam para o Atualizar'
+    # O bootstrap manda a marca pelo ambiente; o instalador a le e tira dela.
+    $texto0 = [IO.File]::ReadAllText($installer)
+    Assert ($texto0.Contains("`$pacoteNovo = (`$env:HANGAR_FRESH_PACKAGE -eq '1')") -and $texto0.Contains('Remove-Item Env:HANGAR_FRESH_PACKAGE')) 'passos: marca de instalacao nova vem do HANGAR_FRESH_PACKAGE'
 
     # --- O que o pacote pula, e onde ---
     $texto = [IO.File]::ReadAllText($installer) -replace "`r`n", "`n"

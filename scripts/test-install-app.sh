@@ -53,7 +53,7 @@ new_sandbox() {
 run_install() {
   local out=$1; shift
   ( cd "$R" && env -i HOME="$S/home" PATH="$B:$S/sys" HANGAR_TOKEN="${TEST_TOKEN-}" \
-      HANGAR_ASKPASS="${TEST_ASKPASS-}" HANGAR_ASKPASS_CODE=c0de-do-teste \
+      HANGAR_ASKPASS="${TEST_ASKPASS-}" HANGAR_ASKPASS_CODE=c0de-do-teste HANGAR_FRESH_PACKAGE="${TEST_FRESH-}" \
       timeout 120 setsid -w "$BASH_BIN" ./install.sh "$@" </dev/null 2>&1 ) | cat > "$out"
   return "${PIPESTATUS[0]}"
 }
