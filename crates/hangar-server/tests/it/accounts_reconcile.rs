@@ -1164,6 +1164,45 @@ fn b3_memory_shared_bucket() {
     }
 }
 
+/// O nome da gaveta da memória cabe no limite de 255 bytes de um nome de arquivo mesmo com o nome de
+/// projeto longo que a pasta aceita, e continua um por projeto e o mesmo a cada passada.
+#[test]
+fn a_long_project_name_still_fits_the_memory_drawer() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    conta(&home, "conta2");
+    let (long_a, long_b) = (format!("-{}", "a".repeat(249)), format!("-{}b", "a".repeat(248)));
+    let local = |p: &str| home.join(format!(".claude-conta2/projects/{p}/memory"));
+    for p in [&long_a, &long_b] {
+        put(&home.join(format!(".claude/projects/{p}/memory/MEMORY.md")), "comum");
+        put(&local(p).join("MEMORY.md"), format!("local {p}"));
+    }
+    let warning = regex::Regex::new(r"^hangar-conta: '([^']+)' era local nesta conta; movido pra \.drift/([^ ]+)\.(\d+)$").unwrap();
+    let prep = || -> Vec<(String, String)> {
+        let out = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[]).output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(out.status.success(), "{stderr}");
+        stderr.lines().filter_map(|l| warning.captures(l)).map(|c| {
+            assert_eq!(&c[1], &c[2], "rótulo e vaga diferentes");
+            (c[1].to_owned(), c[3].to_owned())
+        }).collect()
+    };
+    let first = prep();
+    assert_eq!(first.len(), 2, "{first:?}");
+    assert_ne!(first[0].0, first[1].0, "dois projetos longos com o mesmo começo dividem a gaveta");
+    for (name, slot) in &first {
+        assert!(name.starts_with("memory-") && format!("{name}.{slot}").len() <= 255, "{name}");
+        assert!(home.join(format!(".claude-conta2/.drift/{name}.{slot}/MEMORY.md")).is_file());
+    }
+    rm(&local(&long_a));
+    put(&local(&long_a).join("MEMORY.md"), "de novo");
+    let second = prep();
+    let name_a = &first.iter().find(|(n, _)| home.join(format!(".claude-conta2/.drift/{n}.1/MEMORY.md")).is_file()
+        && std::fs::read_to_string(home.join(format!(".claude-conta2/.drift/{n}.1/MEMORY.md"))).unwrap() == format!("local {long_a}")).unwrap().0;
+    assert_eq!(second, vec![(name_a.clone(), "2".to_owned())], "o nome não é o mesmo a cada passada");
+}
+
 /// U9(a): a vaga da gaveta ocupada por link morto conta como ocupada. O Python a dava por livre: a pasta
 /// não entrava (toda abertura da conta falhava) e o arquivo sobrescrevia o link sem aviso.
 #[test]

@@ -419,9 +419,24 @@ fn event(event_name: &str, level: &str, op: &str) -> Value {
     json!({"evento": event_name, "nivel": level, "provider": "claude", "operacao": op})
 }
 
-fn account_id(dir: &Path) -> String {
-    let digest = ring::digest::digest(&ring::digest::SHA256, dir.to_string_lossy().as_bytes());
-    digest.as_ref().iter().take(8).map(|b| format!("{b:02x}")).collect()
+fn account_id(dir: &Path) -> String { sha256_hex(&dir.to_string_lossy(), 8) }
+
+/// Os primeiros `bytes` bytes do SHA-256 de `text`, em hexadecimal.
+fn sha256_hex(text: &str, bytes: usize) -> String {
+    ring::digest::digest(&ring::digest::SHA256, text.as_bytes()).as_ref().iter().take(bytes).map(|b| format!("{b:02x}")).collect()
+}
+
+/// O nome da gaveta da memória do projeto: `memory-<projeto>`. O nome da pasta do projeto pode chegar
+/// perto dos 255 bytes de um nome de arquivo, e o prefixo e o `.N` passariam do limite: aí fica o começo
+/// do projeto e o hash dele, estável e um por projeto.
+fn memory_drawer_name(project: &str) -> String {
+    const MAX: usize = 200;
+    let full = format!("memory-{project}");
+    if full.len() <= MAX { return full; }
+    let hash = sha256_hex(project, 6);
+    let mut cut = MAX - "memory--".len() - hash.len();
+    while !project.is_char_boundary(cut) { cut -= 1; }
+    format!("memory-{}-{hash}", &project[..cut])
 }
 
 fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut Vec<Value>) -> Result<Vec<String>> {
@@ -670,7 +685,7 @@ fn link_memory(home: &Path, dir: &Path, project: Option<&str>) -> Result<Vec<Str
         fs::create_dir_all(&local).at(&local)?;
         // O alvo é pasta: o que estiver no lugar nunca funde, vai para a gaveta com o nome do projeto.
         if is_symlink(&destination) || exists(&destination) {
-            warnings.push(drawer_as(dir, &destination, &format!("memory-{}", name.to_string_lossy()))?);
+            warnings.push(drawer_as(dir, &destination, &memory_drawer_name(&name.to_string_lossy()))?);
         }
         link(&destination, &target)?;
     }
