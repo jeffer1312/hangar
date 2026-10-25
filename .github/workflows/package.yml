@@ -149,6 +149,19 @@ jobs:
           [ "$BRANCH" = main ] || [ "$canal" != latest ] || { echo "::error::a branch '$BRANCH' vira o canal latest, que é o da main"; exit 1; }
           python3 scripts/montar-pacote.py --os "$PLATFORM" --bin-dir bins \
             --python-archive "$RUNNER_TEMP/python.tar.gz" --out out --channel "$canal"
+      # O Python embutido importa todo app.*: dependência que só o grupo dev trazia (o psutil no
+      # Linux) derrubava o backend na subida, e o build passava. O de Windows não roda neste runner.
+      - name: Importar o backend com o Python do pacote
+        if: steps.pronto.outputs.ok == 'true' && matrix.platform == 'linux-x86_64'
+        run: |
+          set -euo pipefail
+          dir=$(mktemp -d); tar -xzf out/hangar-*-linux-x86_64.tar.gz -C "$dir"
+          cd "$dir/backend"
+          HOME=$(mktemp -d) PYTHONDONTWRITEBYTECODE=1 "$dir/python/bin/python3" -c '
+          import importlib, pkgutil, app
+          for m in pkgutil.iter_modules(app.__path__):
+              importlib.import_module("app." + m.name)
+          print("ok:", len(list(pkgutil.iter_modules(app.__path__))), "modulos")'
       - if: steps.pronto.outputs.ok == 'true'
         uses: actions/upload-artifact@v4
         with:
