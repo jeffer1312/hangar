@@ -1476,6 +1476,18 @@ fn the_mcp_mirror_without_the_config_lock_writes_and_warns() {
     assert!(line.contains("trava largada"), "o aviso diz o arquivo e o motivo: {text}");
 }
 
+/// U9(e): variável de ambiente fora do UTF-8 não derruba o comando.
+#[test]
+fn a_non_utf8_environment_variable_does_not_crash_the_command() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    conta(&home, "conta2");
+    let out = command(&Side::Rust, &home, &["--list".into()], &[]).env("NAO_UTF8", std::ffi::OsStr::from_bytes(b"\xff\xfe")).output().unwrap();
+    assert_eq!((out.status.code(), String::from_utf8_lossy(&out.stdout).trim()), (Some(0), "conta2"), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
 /// D22: o aviso interno do comando chega ao stderr dele, sem mudar a saída nem o código.
 #[test]
 fn the_account_command_prints_internal_warnings_to_stderr() {
