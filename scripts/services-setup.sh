@@ -46,6 +46,9 @@ UV_BIN="$(command -v uv || true)"
 # versão em uso pelo ~/.hangar/current, e os dados do usuário moram em ~/.hangar/config.
 LAUNCHER="$HOME/.hangar/bin/hangar-launcher"
 if [[ ! -e "$HOME/.hangar/current" || ! -x "$LAUNCHER" ]]; then LAUNCHER=""; fi
+# Rodando de dentro de um pacote (manifest.json sem .git): sem npm nem frontend/, a tela é do backend.
+PACOTE=0
+[[ -f "$REPO/manifest.json" && ! -e "$REPO/.git" ]] && PACOTE=1
 ENV_FILE="$REPO/backend/.env"
 if [[ -f "$HOME/.hangar/config/.env" ]]; then ENV_FILE="$HOME/.hangar/config/.env"; fi
 BACK_DIR="$REPO/backend"
@@ -93,9 +96,11 @@ case "${1:-}" in
     exit 0 ;;
 esac
 
+[[ "$PACOTE" == 0 || -n "$LAUNCHER" ]] || { echo "pacote sem o lançador em $HOME/.hangar/bin/hangar-launcher (ou sem ~/.hangar/current): rode o hangar-server install-package" >&2; exit 1; }
 [[ -n "$UV_BIN" || -n "$LAUNCHER" ]] || { echo "uv not found in PATH" >&2; exit 1; }
-[[ "$BACKEND_ONLY" == 1 ]] || [[ -x "$NODE_BIN/npm" ]] || { echo "npm nao encontrado em $NODE_BIN — instale Node 20+ (ou, se usa fnm, rode: fnm default <ver>)" >&2; exit 1; }
-[[ -d "$REPO/node_modules" ]] || log "WARNING: node_modules missing — run 'npm install' at the repo root first (frontend is a workspace)"
+[[ "$BACKEND_ONLY" == 1 || "$PACOTE" == 1 ]] || [[ -x "$NODE_BIN/npm" ]] || { echo "npm nao encontrado em $NODE_BIN — instale Node 20+ (ou, se usa fnm, rode: fnm default <ver>)" >&2; exit 1; }
+[[ "$PACOTE" == 1 || -d "$REPO/node_modules" ]] || log "WARNING: node_modules missing — run 'npm install' at the repo root first (frontend is a workspace)"
+[[ "$PACOTE" == 1 ]] && SERVE=backend
 
 if [[ "$BACKEND_ONLY" == 0 && -z "$SERVE" ]]; then
   if [[ "$FRONT_JA_EXISTE" == 1 ]]; then

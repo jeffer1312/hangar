@@ -25,12 +25,21 @@ como PWA e operar o chat. Site: [hangar.dev.br](https://hangar.dev.br). Pra arqu
 Numa máquina sem Hangar ele oferece instalar o servidor em poucas telas, sem terminal. Detalhes
 em [App de desktop](#app-de-desktop-nativo).
 
-**Pelo terminal, é uma linha só** — ela clona o repositório em `~/hangar` e chama o instalador:
+**Pelo terminal, é uma linha só.** No Linux ela instala o **pacote pronto** do Hangar (código,
+Python próprio e servidor Rust do mesmo commit) em `~/.hangar`, sem `git`, `uv` nem build da tela,
+e roda o instalador que vem nele:
 
 ```bash
 # Linux/macOS
 curl -fsSL https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.sh | bash
+curl -fsSL …/bootstrap.sh | bash -s -- --beta   # canal de teste
+curl -fsSL …/bootstrap.sh | bash -s -- --dev    # pelo git, para editar o código (modo desenvolvedor)
 ```
+
+Com `--dev` (ou dando uma pasta) ela clona o repositório em `~/hangar` e chama o instalador do
+checkout, como antes; a máquina fica em modo desenvolvedor. Sistema sem pacote publicado (macOS,
+hoje) segue pelo git e diz o motivo. Rodar de novo numa máquina já instalada pelo pacote só refaz o
+instalador dela; atualizar é pelo botão Atualizar do app.
 
 ```powershell
 # Windows
@@ -41,8 +50,8 @@ Outra pasta de destino, ou flags do `install.sh`, vão **depois de `-s --`** (so
 esse separador que impede o próprio bash de comê-las):
 
 ```bash
-curl -fsSL …/bootstrap.sh | bash -s -- ~/apps/hangar --no-frontend
-curl -fsSL …/bootstrap.sh | bash -s -- --check      # só confere dependências e sai
+curl -fsSL …/bootstrap.sh | bash -s -- --dev ~/apps/hangar --no-frontend
+curl -fsSL …/bootstrap.sh | bash -s -- --check      # só confere uma instalação existente e sai
 ```
 
 No Windows, defina `$env:CP_DESTINO = 'D:\hangar'` **antes** da linha do `irm` — sob

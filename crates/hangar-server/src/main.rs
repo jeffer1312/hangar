@@ -17,6 +17,10 @@ fn main() -> std::process::ExitCode {
     if args.first().map(String::as_str) == Some("migrate-package") {
         return hangar_server::update::migrate::cli(&args[1..]);
     }
+    // Instalação nova direto pelo pacote, sem git (o bootstrap.sh chama).
+    if args.first().map(String::as_str) == Some("install-package") {
+        return hangar_server::update::install::cli(&args[1..]);
+    }
     // Liga e desliga o modo desenvolvedor numa máquina já migrada.
     if args.first().map(String::as_str) == Some("dev-mode") {
         return hangar_server::update::dev_mode::cli(&args[1..]);

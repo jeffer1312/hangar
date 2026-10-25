@@ -170,11 +170,11 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, String> {
 
 #[test]
 fn migrate_decides_developer_by_edits_ahead_branch_and_preview() {
-    let clean = Facts { dirty: 0, untracked: 0, ahead: 0, branch: "main".into(), upstream: true, preview: false };
+    let clean = Facts { dirty: 0, untracked: 0, ahead: 0, branch: "main".into(), upstream: true, preview: false, dev_requested: false };
     assert_eq!(decide(&clean).0, Mode::Package);
     assert_eq!(decide(&Facts { branch: "beta".into(), ..clean.clone() }), (Mode::Package, None), "beta é o canal de teste");
     for facts in [Facts { dirty: 2, ..clean.clone() }, Facts { untracked: 1, ..clean.clone() },Facts { ahead: 1, ..clean.clone() }, Facts { branch: "PM-1".into(), ..clean.clone() },
-                  Facts { preview: true, ..clean.clone() }, Facts { upstream: false, ..clean.clone() }] {
+                  Facts { preview: true, ..clean.clone() }, Facts { upstream: false, ..clean.clone() }, Facts { dev_requested: true, ..clean.clone() }] {
         let (mode, why) = decide(&facts);
         assert_eq!(mode, Mode::Developer, "{facts:?}");
         assert!(why.is_some(), "{facts:?}");

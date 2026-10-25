@@ -12,6 +12,8 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
+# Pacote: os links gravados fora do Hangar apontam para o `current`, não para a versão (a poda a apaga).
+if [ "$(realpath "$HOME/.hangar/current" 2>/dev/null)" = "$REPO" ]; then REPO="$HOME/.hangar/current"; fi
 
 mkdir -p "$HOME/.local/bin"
 
@@ -150,5 +152,5 @@ else
 fi
 
 # Trava de vazamento: toda máquina que instala o hangar-send liga também os hooks git versionados
-# (scripts/hooks/), senão o clone novo commita nome interno sem nada recusar.
-"$(dirname "$(realpath "$0")")/install-hooks.sh"
+# (scripts/hooks/), senão o clone novo commita nome interno sem nada recusar. O pacote não é clone.
+if [ -e "$REPO/.git" ]; then "$(dirname "$(realpath "$0")")/install-hooks.sh"; fi

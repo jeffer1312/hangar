@@ -272,6 +272,16 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   dados, registra cada efeito (`~/.hangar/migration.partial.json`, depois `migration.json`), desfaz
   tudo se falhar antes da prova e recusa rodar dentro do cgroup ou do Job do backend. `--undo`
   reaponta tudo para o checkout, que nunca é apagado.
+- **Instalação nova no Linux é pelo pacote; `--dev` é pelo git.** O `bootstrap.sh` baixa o
+  `hangar-server` da `server-<canal>` (sha256 do `server-latest.json`), roda `hangar-server
+  install-package --channel <canal>` e depois o `install.sh` do `current`. O `install-package` reusa o
+  download da migração, copia o `bin/hangar-server` do pacote para o lançador, registra todo passo
+  como aplicado e grava a marca `migration.json` (pacote, sem checkout) antes do `current`; recusa
+  (4) com `current`, migração, checkout anotado ou unit já no lugar, e sai 3 sem pacote para o
+  sistema, quando o bootstrap segue pelo git. O `install.sh` com `manifest.json` e sem `.git` pula
+  git, `uv`, venv, build da tela e binários Rust, grava o `.env` em `~/.hangar/config` e põe um
+  `python3` que é o `hangar-python` à frente do PATH dos sub-scripts. O `--dev` grava
+  `~/.hangar/dev-requested`, e a migração lê isso como modo desenvolvedor.
 - **A tela web é opcional, ligada por padrão, e servida pelo Rust** de `~/.hangar/ui/<dist_key>/`
   (checkout: `frontend/dist`). `GET`/`PUT /api/web-ui` (só o dono) grava `~/.hangar/web-ui.json`;
   desligada, a raiz responde 404 `web_ui_disabled` e o atualizador não baixa a tela. O interruptor

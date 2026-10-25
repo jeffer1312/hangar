@@ -138,7 +138,8 @@ pub fn check(home: &Path, request: &Request) -> Result<Checked, Failure> {
 /// A pasta que a tela oferece: o checkout no ar no modo desenvolvedor; senão o que a migração gravou.
 pub fn suggested_checkout(home: &Path) -> Option<PathBuf> {
     if let Mode::Developer(root) = mode(home) { return Some(root); }
-    super::migrate::read_record(&home.join(".hangar").join(super::migrate::MARKER)).map(|r| r.checkout)
+    // Instalação nova pelo pacote grava a marca sem checkout.
+    super::migrate::read_record(&home.join(".hangar").join(super::migrate::MARKER)).map(|r| r.checkout).filter(|c| !c.as_os_str().is_empty())
 }
 
 /// Troca o modo. `in_service_group`: este processo morre junto com o backend (cgroup da unit, Job do

@@ -201,11 +201,24 @@ pub fn applied(state_dir: &Path) -> BTreeSet<String> {
 
 /// Lista ordenada de strings, como o `_gravar` do Python.
 fn mark(state_dir: &Path, id: &str) -> Result<(), UpdateError> {
+    record(state_dir, [id.to_owned()]).map_err(|e| UpdateError::Step(format!("não consegui registrar o passo {id}: {e}")))
+}
+
+fn record(state_dir: &Path, new: impl IntoIterator<Item = String>) -> std::io::Result<()> {
     let mut ids = applied(state_dir);
-    ids.insert(id.to_owned());
+    ids.extend(new);
     std::fs::create_dir_all(state_dir)
         .and_then(|()| crate::runtime::queue::atomic_write(&registry_path(state_dir), &serde_json::to_vec(&ids).unwrap_or_default()))
-        .map_err(|e| UpdateError::Step(format!("não consegui registrar o passo {id}: {e}")))
+}
+
+/// Registra todo passo válido de `root/docs/atualizacoes` sem rodar nenhum, como o `marcar_todos`
+/// do Python: a instalação do zero já cumpre o que eles levam às máquinas antigas.
+pub fn mark_all(root: &Path, state_dir: &Path) -> Result<usize, UpdateError> {
+    let (steps, _) = read_steps(&root.join("docs").join("atualizacoes"), cfg!(windows));
+    let count = steps.len();
+    record(state_dir, steps.into_iter().map(|s| s.id))
+        .map_err(|e| UpdateError::Step(format!("não consegui registrar os passos como aplicados: {e}")))?;
+    Ok(count)
 }
 
 /// Caminho da prova: absoluto, com `~`, ou relativo à raiz da versão.

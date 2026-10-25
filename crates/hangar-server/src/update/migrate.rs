@@ -26,7 +26,7 @@ use serde_json::Value;
 use super::{HealthProbe, Layout, Reading, Release, Settings, UpdateError, UpdateLock};
 
 pub const MARKER: &str = "migration.json";
-const PARTIAL: &str = "migration.partial.json";
+pub(super) const PARTIAL: &str = "migration.partial.json";
 /// Dados do usuário, em `backend/` antes e em `~/.hangar/config/` depois.
 const DATA: [&str; 4] = [".env", "peers.json", "projects.json", "launchers"];
 /// Pastas com links para o checkout que passam a apontar para o `current` (Linux).
@@ -37,14 +37,19 @@ const LINK_DIRS: [&str; 7] = [".local/bin", ".claude/skills", ".claude/agents", 
 #[serde(rename_all = "snake_case")]
 pub enum Mode { Package, Developer, NotMigrated }
 
+/// Marca que o `bootstrap.sh --dev` grava em `~/.hangar`: quem instalou pelo git pediu o modo desenvolvedor.
+pub const DEV_REQUESTED: &str = "dev-requested";
+
 /// O que decide o modo.
 #[derive(Debug, Clone, Default)]
-pub struct Facts { pub dirty: usize, pub untracked: usize, pub ahead: u64, pub branch: String, pub upstream: bool, pub preview: bool }
+pub struct Facts { pub dirty: usize, pub untracked: usize, pub ahead: u64, pub branch: String, pub upstream: bool, pub preview: bool,
+    pub dev_requested: bool }
 
-/// Pacote só com o checkout limpo, na `main` ou na `beta`, sem nada à frente do upstream e sem o
-/// `vite`; senão desenvolvedor, com o motivo.
+/// Pacote só com o checkout limpo, na `main` ou na `beta`, sem nada à frente do upstream, sem o
+/// `vite` e sem o `--dev` da instalação; senão desenvolvedor, com o motivo.
 pub fn decide(f: &Facts) -> (Mode, Option<String>) {
-    let why = if f.preview { Some("a máquina serve a tela pelo vite (SERVE=preview)".to_owned()) }
+    let why = if f.dev_requested { Some("a instalação foi feita com --dev".to_owned()) }
+        else if f.preview { Some("a máquina serve a tela pelo vite (SERVE=preview)".to_owned()) }
         else if f.dirty > 0 { Some(format!("o checkout tem {} arquivo(s) com edição", f.dirty)) }
         else if f.untracked > 0 { Some(format!("o checkout tem {} arquivo(s) novo(s) fora do git", f.untracked)) }
         else if f.branch != "main" && f.branch != "beta" { Some(format!("o checkout está na branch {}, fora da main e da beta", f.branch)) }
@@ -135,7 +140,7 @@ impl Machine<'_> {
     fn layout(&self) -> Layout { Layout::new(&self.home) }
     fn config(&self) -> PathBuf { self.hangar().join("config") }
     fn backend(&self) -> PathBuf { self.checkout.join("backend") }
-    fn launcher(&self) -> PathBuf { self.hangar().join("bin").join(if self.windows { "hangar-launcher.exe" } else { "hangar-launcher" }) }
+    fn launcher(&self) -> PathBuf { launcher_path(&self.home, self.windows) }
     fn marker(&self) -> PathBuf { self.hangar().join(MARKER) }
     fn partial(&self) -> PathBuf { self.hangar().join(PARTIAL) }
     /// O arquivo que sobe o backend: a unit (Linux) ou o `.vbs` da tarefa (Windows).
@@ -156,17 +161,18 @@ impl Machine<'_> {
 
 fn facts(m: &Machine<'_>) -> Result<Facts, String> {
     let checkout = super::dev::read(&m.checkout, false).map_err(|e| format!("não consegui ler o checkout {}: {e}", m.checkout.display()))?;
-    Ok(Facts { dirty: checkout.dirty, untracked: checkout.untracked,ahead: checkout.ahead, branch: checkout.branch, upstream: checkout.upstream.is_some(), preview: m.preview()? })
+    Ok(Facts { dirty: checkout.dirty, untracked: checkout.untracked,ahead: checkout.ahead, branch: checkout.branch, upstream: checkout.upstream.is_some(), preview: m.preview()?,
+        dev_requested: m.hangar().join(DEV_REQUESTED).exists() })
 }
 
 pub(super) fn read_record(path: &Path) -> Option<Record> { serde_json::from_slice(&std::fs::read(path).ok()?).ok() }
 
-fn save(path: &Path, record: &Record) -> Result<(), String> {
+pub(super) fn save(path: &Path, record: &Record) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(record).map_err(|e| e.to_string())?;
     crate::runtime::queue::atomic_write(path, &bytes).map_err(|e| format!("não consegui gravar {}: {e}", path.display()))
 }
 
-fn now() -> String { chrono::Local::now().to_rfc3339() }
+pub(super) fn now() -> String { chrono::Local::now().to_rfc3339() }
 
 fn b64(bytes: &[u8]) -> String { base64::engine::general_purpose::STANDARD.encode(bytes) }
 
@@ -393,6 +399,22 @@ fn rewrite(m: &Machine<'_>, record: &mut Record, path: &Path, new: &[u8]) -> Res
     crate::runtime::queue::atomic_write(path, new).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// `~/.hangar/bin/hangar-launcher`: o lançador estável que a unit e as tarefas chamam.
+pub(super) fn launcher_path(home: &Path, windows: bool) -> PathBuf {
+    home.join(".hangar").join("bin").join(if windows { "hangar-launcher.exe" } else { "hangar-launcher" })
+}
+
+/// Copia o lançador com nome temporário e `rename`: um lançador pela metade nunca tem o nome final.
+pub(super) fn write_launcher(source: &Path, launcher: &Path) -> Result<(), String> {
+    let bytes = std::fs::read(source).map_err(|e| format!("não consegui ler o lançador {}: {e}", source.display()))?;
+    let tmp = launcher.with_extension("new");
+    std::fs::write(&tmp, &bytes).and_then(|()| {
+        #[cfg(unix)]
+        { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?; }
+        std::fs::rename(&tmp, launcher)
+    }).map_err(|e| { let _ = std::fs::remove_file(&tmp); format!("não consegui gravar o lançador {}: {e}", launcher.display()) })
+}
+
 /// Os efeitos, na ordem; cada um entra no registro assim que feito.
 fn apply(m: &Machine<'_>, record: &mut Record, target: &Path, service: &Path) -> Result<(), String> {
     let current = m.layout().current();
@@ -426,16 +448,10 @@ fn apply(m: &Machine<'_>, record: &mut Record, target: &Path, service: &Path) ->
         }
     }
     // Lançador estável, fora das versões: a unit e as tarefas o chamam.
-    let bytes = std::fs::read(&m.launcher_source).map_err(|e| format!("não consegui ler o lançador {}: {e}", m.launcher_source.display()))?;
     let launcher = m.launcher();
     create_dir(m, record, launcher.parent().expect("bin"))?;
     push(m, record, Done::Launcher { existed: launcher.exists() })?;
-    let tmp = launcher.with_extension("new");
-    std::fs::write(&tmp, &bytes).and_then(|()| {
-        #[cfg(unix)]
-        { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?; }
-        std::fs::rename(&tmp, &launcher)
-    }).map_err(|e| { let _ = std::fs::remove_file(&tmp); format!("não consegui gravar o lançador {}: {e}", launcher.display()) })?;
+    write_launcher(&m.launcher_source, &launcher)?;
     // O apontador.
     push(m, record, Done::Current)?;
     super::swap(&m.layout(), target).map_err(|e| e.to_string())?;
@@ -791,12 +807,14 @@ pub struct ReleaseFetcher {
     pub platform: String,
     pub home: PathBuf,
     pub deadline: Duration,
+    /// Onde moram as releases ([`super::RELEASE_BASE`]; o teste troca).
+    pub base_url: String,
 }
 
 impl Fetcher for ReleaseFetcher {
     fn fetch<'a>(&'a self, layout: &'a Layout, channel: &'a str) -> Pin<Box<dyn Future<Output = Result<Fetched, String>> + Send + 'a>> {
         Box::pin(async move {
-            let release = Release::github(channel);
+            let release = Release { base_url: self.base_url.clone(), channel: channel.to_owned() };
             let entry = match super::check(&self.client, &release, &self.platform, None).await {
                 Ok(Some(entry)) => entry,
                 Ok(None) => return Err("o índice não trouxe pacote".into()),
@@ -954,8 +972,8 @@ pub fn cli(args: &[String]) -> ExitCode {
         Ok(client) => client,
         Err(e) => { eprintln!("##HANGAR-FALHA## cliente http: {e}"); return ExitCode::from(1); }
     };
-    let fetcher = ReleaseFetcher { client,
-        platform: super::platform(), home: home.clone(), deadline: probe.settings.download_deadline };
+    let fetcher = ReleaseFetcher { client, platform: super::platform(), home: home.clone(), deadline: probe.settings.download_deadline,
+        base_url: super::RELEASE_BASE.to_owned() };
     let machine = Machine { service: &service, fetcher: &fetcher, ..probe };
     let health = super::HttpHealth::new(&format!("http://127.0.0.1:{port}"));
     let runtime = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {

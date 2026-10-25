@@ -15,6 +15,7 @@ mod device_install;
 mod install_root;
 mod web_ui;
 mod update_routes;
+mod update_install;
 mod dictation_routes;
 mod dictation_catalog;
 mod dictation_harness;

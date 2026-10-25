@@ -17,6 +17,7 @@ pub mod dev;
 pub mod dev_mode;
 pub mod executor;
 pub mod http;
+pub mod install;
 pub mod migrate;
 pub mod periodic;
 pub mod restart;

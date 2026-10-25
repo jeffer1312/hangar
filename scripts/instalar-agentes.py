@@ -10,6 +10,10 @@ import shutil
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[1]
+# Pacote: o link aponta para o `current`, não para a versão (a poda a apaga).
+_CURRENT = Path.home() / ".hangar" / "current"
+if _CURRENT.exists() and _CURRENT.resolve() == RAIZ:
+    RAIZ = _CURRENT
 
 
 def cabecalho(texto: str) -> tuple[dict, str]:

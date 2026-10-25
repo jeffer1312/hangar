@@ -16,10 +16,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 REPO=$(pwd)
-# Dados do usuário: depois da migração para o pacote o `.env` mora em ~/.hangar/config; antes, aqui.
+# Modo pacote: esta pasta é uma versão extraída (manifest.json sem .git, o critério do install_root).
+# Python, dependências, binários e tela vieram prontos: nada de git, uv, venv nem build da tela.
+PACOTE=0
+[ -f manifest.json ] && [ ! -e .git ] && PACOTE=1
+# Dados do usuário: no pacote (e depois da migração) o `.env` mora em ~/.hangar/config; antes, aqui.
 # Gravar no do checkout numa máquina migrada criaria um token que o novo esconde.
 ENV_FILE=backend/.env
-if [ -f "$HOME/.hangar/config/.env" ]; then ENV_FILE="$HOME/.hangar/config/.env"; fi
+if [ "$PACOTE" = 1 ] || [ -f "$HOME/.hangar/config/.env" ]; then ENV_FILE="$HOME/.hangar/config/.env"; fi
 
 YES=0; CHECK=0; UPDATE=0; WRAPPER=1; SERVICES=1; CPSEND=1; PANEL=1; FRONTEND=1; AVANCADO=0; AGENTES=''
 APP=0; TAILSCALE=''; SEM_NATIVO=0
@@ -242,6 +246,21 @@ if [ "$UPDATE" = 0 ] && [ "$CHECK" = 0 ]; then
   mkdir -p "$(dirname "$LOG")"
   printf '\n===== %s  %s =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$0 $*" >> "$LOG"
   exec > >(tee -a "$LOG") 2>&1
+fi
+
+# O Python do backend: o embutido do pacote (pelo hangar-python) ou o venv do checkout.
+py_backend() {
+  if [ "$PACOTE" = 1 ]; then (cd backend && ../scripts/hangar-python "$@")
+  else (cd backend && uv run --quiet --no-sync python "$@"); fi
+}
+if [ "$PACOTE" = 1 ] && [ "$CHECK" = 0 ]; then
+  mkdir -p "$HOME/.hangar/config" && chmod 700 "$HOME/.hangar/config"
+  # Os sub-scripts chamam `python3`; no pacote ele é o Python embutido, e a máquina pode não ter outro.
+  SHIM="$HOME/.hangar/cache/install-bin"
+  mkdir -p "$SHIM"
+  printf '#!/bin/sh\nexec "%s/scripts/hangar-python" "$@"\n' "$REPO" > "$SHIM/python3"
+  chmod +x "$SHIM/python3"
+  export PATH="$SHIM:$PATH"
 fi
 
 # Quatro sabores, e a diferença é quem decide:
@@ -510,13 +529,20 @@ elif [ -n "$ACHADOS" ]; then
 else
   precisa_home "Claude Code" claude "$CLAUDE_INSTALL" 'nenhum agente de código encontrado; o Claude Code é o padrão' || true
 fi
-precisa_home "uv"          uv     'curl -LsSf https://astral.sh/uv/install.sh | sh' 'gerencia o venv do backend' || true
+if [ "$PACOTE" = 1 ]; then
+  ok "Python e dependências do backend: vieram no pacote"
+else
+  precisa_home "uv"          uv     'curl -LsSf https://astral.sh/uv/install.sh | sh' 'gerencia o venv do backend' || true
+fi
+# No pacote a tela vem pronta; o Node segue servindo à statusline do Claude e ao hangar-preview.
+PRA_QUE_NODE='o frontend é Svelte'
+[ "$PACOTE" = 1 ] && PRA_QUE_NODE='statusline do Claude e hangar-preview'
 if [ "$FRONTEND" = 0 ]; then
   ok "Node: dispensado (--no-frontend)"
 elif ! command -v npm >/dev/null; then
   precisa_home "Node 20+" node \
     'curl -fsSL https://fnm.vercel.app/install | bash && "$HOME/.local/share/fnm/fnm" install 22 && "$HOME/.local/share/fnm/fnm" default 22' \
-    'o frontend é Svelte' || true
+    "$PRA_QUE_NODE" || true
 elif ! node -e 'process.exit(parseInt(process.versions.node) >= 20 ? 0 : 1)' 2>/dev/null; then
   erro "Node 20+ é necessário (atual: $(node --version))"; mark_item node falhou "Node 20+"; PENDENTE+=("Node 20+")
 else
@@ -586,8 +612,8 @@ fi
 [ -n "$TS_STATE" ] && mark_step preparar fazendo
 
 if [ "$CHECK" = 1 ]; then
-  if [ -x backend/.venv/bin/python ]; then
-    say "Diagnóstico"; (cd backend && uv run --quiet --no-sync python -m app.doctor) || PENDENTE+=("doctor")
+  if [ "$PACOTE" = 1 ] || [ -x backend/.venv/bin/python ]; then
+    say "Diagnóstico"; py_backend -m app.doctor || PENDENTE+=("doctor")
   fi
   if [ ${#PENDENTE[@]} -eq 0 ]; then mark_step preparar ok; FINAL_STATE=ok; say "Nada faltando."; exit 0; fi
   mark_step preparar pendente; FINAL_STATE=pendente
@@ -599,17 +625,21 @@ mark_step preparar ok
 # ── 2/8 Backend ──────────────────────────────────────────────────────────────
 mark_step instalar fazendo
 say "2/8 Backend"
-(cd backend && uv sync --quiet) || fail_with "$(net_code)" "uv sync falhou — o backend ficou sem as dependências"
-ok "dependências instaladas"
+if [ "$PACOTE" = 1 ]; then
+  ok "dependências: vieram no pacote"
+else
+  (cd backend && uv sync --quiet) || fail_with "$(net_code)" "uv sync falhou — o backend ficou sem as dependências"
+  ok "dependências instaladas"
+fi
 mark_item backend ok "servidor do Hangar"
 # Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve.
-(cd backend && uv run --quiet --no-sync python -m app.vapid_setup) \
+py_backend -m app.vapid_setup \
   || anota_problema "chaves do push para o celular não geradas — rode: cd backend && uv run python -m app.vapid_setup" push
 nota "psutil NÃO entra aqui: no Linux existe /proc e ele é mais rápido (ver app/procinfo.py)"
 
 for a in $AGENTES_NOVOS; do
   mark_item "$a" fazendo "$(nome_agente "$a")"
-  if (cd backend && gira "instalando $(nome_agente "$a")" uv run --quiet --no-sync python -m app.harness_commands "$a"); then
+  if gira "instalando $(nome_agente "$a")" py_backend -m app.harness_commands "$a"; then
     export PATH="$HOME/.local/bin:$PATH"; hash -r 2>/dev/null || true
     if command -v "$a" >/dev/null; then ok "$(nome_agente "$a") instalado"; mark_item "$a" ok "$(nome_agente "$a")"
     else
@@ -679,7 +709,10 @@ baixar_dist() { # 0 = frontend/dist agora tem o build publicado pelo CI
   return 1
 }
 say "4/8 Frontend"
-if [ "$FRONTEND" = 0 ]; then
+if [ "$PACOTE" = 1 ]; then
+  # O install-package já baixou a tela da chave do pacote (~/.hangar/ui), e o backend a serve.
+  ok "a tela vem pronta com o pacote (nada a compilar)"
+elif [ "$FRONTEND" = 0 ]; then
   ok "pulado (--no-frontend)"
   nota "UM frontend atende VÁRIOS backends: ele guarda a lista de servidores no próprio"
   nota "navegador (chave cp_servers) e você adiciona cada máquina pelo menu de conta."
@@ -755,8 +788,10 @@ fi
 # Sem eles o backend em Python atende sozinho: falha aqui nunca para a instalação.
 say "Binários Rust"
 RUST_RC=0
-(cd backend && uv run --quiet --no-sync python -m app.rust_release) || RUST_RC=$?
+if [ "$PACOTE" = 1 ]; then RUST_RC=pacote
+else (cd backend && uv run --quiet --no-sync python -m app.rust_release) || RUST_RC=$?; fi
 case "$RUST_RC" in
+  pacote) ok "hangar-server e hangar-cano: vieram no pacote"; mark_item rust ok "servidor rápido" ;;
   0) ok "hangar-server e hangar-cano em ~/.hangar/bin"; mark_item rust ok "servidor rápido" ;;
   2) falta "sem binários Rust para esta máquina — o backend em Python atende sozinho"; mark_item rust ok "servidor rápido (não há para esta máquina)" ;;
   *) anota_problema "binários Rust não baixaram — o backend em Python atende sozinho (tente: cd backend && uv run python -m app.rust_release)"; mark_item rust pendente "servidor rápido" ;;
@@ -987,7 +1022,8 @@ fi
 # uma máquina ANTIGA até aqui. Sem esta marca, a primeira vez que essa máquina apertasse Atualizar
 # no app, ela rodaria a história inteira de passos, todos já cumpridos por este instalador.
 # No --update NÃO se marca nada: ali a máquina é justamente a antiga, e os passos precisam rodar.
-if [ "$UPDATE" = 1 ]; then
+# No pacote quem marcou foi o install-package, antes de criar o `current`.
+if [ "$UPDATE" = 1 ] || [ "$PACOTE" = 1 ]; then
   :
 else
   say "Passos de atualização"
@@ -1005,6 +1041,8 @@ fi
 HOOK=".git/hooks/post-merge"
 if [ "$UPDATE" = 1 ]; then
   :   # o próprio hook está rodando; não se re-instala no meio da própria execução
+elif [ "$PACOTE" = 1 ]; then
+  :   # o pacote se atualiza pelo Atualizar do app, sem git pull
 elif [ ! -d .git ]; then
   nota "sem .git (cópia sem histórico?) — hook de atualização indisponível"
 elif [ -f "$HOOK" ] && grep -q 'install.sh --update' "$HOOK"; then
@@ -1039,11 +1077,11 @@ fi
 mark_step instalar ok
 mark_step final fazendo
 say "8/8 Checagem de fumaça"
-(cd backend && uv run python -c "from app import api, registry, procinfo, projects" ) \
+py_backend -c "from app import api, registry, procinfo, projects" \
   && { ok "o backend importa"; mark_item backend-importa ok "o servidor abre"; } \
   || fail "o backend não importa nesta máquina"
 
-(cd backend && uv run python -c "from app import procinfo; assert procinfo._TEM_PROC, 'sem /proc'") \
+py_backend -c "from app import procinfo; assert procinfo._TEM_PROC, 'sem /proc'" \
   && ok "leitura de processo via /proc funcionando" \
   || nota "sem /proc (macOS?) — o backend usa psutil, confira se ele foi instalado"
 
@@ -1119,7 +1157,7 @@ if [ "$TEM_TTY" = 1 ] && [ "$UPDATE" = 0 ]; then
   # Só no terminal: a URL do QR carrega o token, e o log não pode tê-lo.
   # rc 0 é a prova de que o desenho saiu (2 = sem tty); sem ela a tela mandaria ler um QR que
   # não existe.
-  if (cd backend && uv run --quiet --no-sync python -m app.doctor --qr) > /dev/tty 2>/dev/null; then
+  if py_backend -m app.doctor --qr > /dev/tty 2>/dev/null; then
     QR_MOSTRADO=1
   fi
 fi
