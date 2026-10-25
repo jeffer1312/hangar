@@ -49,12 +49,23 @@ pub fn launch(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
     let home = crate::accounts::environment::AccountEnvironment::capture().home;
+    let log = args.iter().position(|a| a == "--log").and_then(|i| args.get(i + 1)).map(PathBuf::from);
     match backend_command(&home, &args[1..], cfg!(windows)) {
-        Ok(command) => run(command),
+        Ok(command) => run(command, log.as_deref()),
         Err((code, path)) => {
-            eprintln!("hangar-server launch: {code}: {}", path.display());
+            report(log.as_deref(), &format!("{code}: {}", path.display()));
             ExitCode::from(3)
         }
+    }
+}
+
+/// A tarefa do Windows roda o lançador sem console: o erro dele vai também ao log do backend.
+fn report(log: Option<&Path>, line: &str) {
+    eprintln!("hangar-server launch: {line}");
+    if let Some(log) = log {
+        use std::io::Write;
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open(log)
+            .and_then(|mut f| writeln!(f, "[hangar] hangar-server launch: {line}"));
     }
 }
 
@@ -77,24 +88,27 @@ pub fn backend_command(home: &Path, args: &[String], windows: bool) -> Result<st
 
 /// No Unix o lançador vira o backend: o serviço acompanha o próprio Python.
 #[cfg(unix)]
-fn run(mut command: std::process::Command) -> ExitCode {
+fn run(mut command: std::process::Command, log: Option<&Path>) -> ExitCode {
     use std::os::unix::process::CommandExt;
     let error = command.exec();
-    eprintln!("hangar-server launch: launch_exec_failed: {error}");
+    report(log, &format!("launch_exec_failed: {error}"));
     ExitCode::from(126)
 }
 
 /// No Windows não há `exec`: espera o backend e sai com o código dele, os dois no mesmo Job.
 #[cfg(windows)]
-fn run(mut command: std::process::Command) -> ExitCode {
+fn run(mut command: std::process::Command, log: Option<&Path>) -> ExitCode {
     // Sem o Job o backend sobe como antes, só sem a proteção: a falha vai ao log da tarefa.
     if let Err(error) = die_with_the_launcher() {
-        eprintln!("hangar-server launch: launch_job_failed: {error}");
+        report(log, &format!("launch_job_failed: {error}"));
     }
     match command.status() {
-        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+        Ok(status) => {
+            if !status.success() { report(log, &format!("launch_backend_exited: {status}")); }
+            std::process::exit(status.code().unwrap_or(1))
+        }
         Err(error) => {
-            eprintln!("hangar-server launch: launch_exec_failed: {error}");
+            report(log, &format!("launch_exec_failed: {error}"));
             ExitCode::from(126)
         }
     }
