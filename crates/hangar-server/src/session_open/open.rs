@@ -528,14 +528,15 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         let account = claude::hangar_account(Path::new(dir))
             .ok_or_else(|| OpenError::plain(404, format!("{dir} não é uma conta criada pelo hangar")))?;
         progress_step(&spec.name, "conta", json!({"conta": account}));
-        use crate::accounts::claude_config::{Outcome, Wait, late_outcome, reconcile_account, refused};
-        let (home, name, project) = (host.home().to_owned(), account.clone(), hangar_workspace::worktrees::sanitize_cwd(&spec.cwd));
+        use crate::accounts::claude_config::{Outcome, Wait, late_outcome, reconcile_dir, refused};
+        // A pasta conferida acima, não `~/.claude-<nome>`: a conta pode morar fora do HOME.
+        let (home, dir, project) = (host.home().to_owned(), PathBuf::from(dir), hangar_workspace::worktrees::sanitize_cwd(&spec.cwd));
         let limit = host.reconcile_limit();
         let wait = Wait::within(limit);
         // As travas esperam só até o prazo, e a guarda vai com a tarefa: a recusa no limite não deixa
         // reconciliação rodando sem ela (a exclusão da conta esperaria) nem segurando o runtime.
         let held = guard.take();
-        let task = tokio::task::spawn_blocking(move || (held, reconcile_account(&home, &name, Some(&project), wait)));
+        let task = tokio::task::spawn_blocking(move || (held, reconcile_dir(&home, &dir, Some(&project), wait)));
         let outcome = match tokio::time::timeout(limit, task).await {
             Ok(Ok((held, outcome))) => {
                 guard = held;

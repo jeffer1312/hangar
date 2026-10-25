@@ -345,12 +345,16 @@ pub fn is_account(dir: &Path) -> bool {
 
 /// `contas.reconciliar` sob a guarda que quem chama já segura: confere a conta e pega as travas.
 pub fn reconcile_account(home: &Path, name: &str, project: Option<&str>, wait: Wait) -> Outcome {
-    let dir = match account_dir(home, name) {
-        Ok(dir) => dir,
-        Err(error) => return Outcome::failed(error),
-    };
-    if !is_account(&dir) { return Outcome::failed(refused(format!("{} não é uma conta criada pelo hangar", dir.display()))); }
-    reconcile_locked(home, &dir, project, CLAUDE_MARKER, wait)
+    match account_dir(home, name) {
+        Ok(dir) => reconcile_dir(home, &dir, project, wait),
+        Err(error) => Outcome::failed(error),
+    }
+}
+
+/// A conta na pasta dada, que pode estar fora do HOME (as do `CP_CLAUDE_CONFIG_DIRS`).
+pub fn reconcile_dir(home: &Path, dir: &Path, project: Option<&str>, wait: Wait) -> Outcome {
+    if !is_account(dir) { return Outcome::failed(refused(format!("{} não é uma conta criada pelo hangar", dir.display()))); }
+    reconcile_locked(home, dir, project, CLAUDE_MARKER, wait)
 }
 
 /// Trava compartilhada (duas contas devolvendo o mesmo arquivo ao `~/.claude`) e depois a da conta

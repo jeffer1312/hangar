@@ -2323,6 +2323,25 @@ fn the_account_guard_covers_the_preparation() {
     assert_eq!(std::fs::read_to_string(root.join("home/guarda")).unwrap(), "presa\n", "a guarda da conta estava livre na reconciliação");
 }
 
+/// U9(c): a abertura reconcilia a pasta que conferiu sob a guarda (o `config_dir`), também fora do HOME,
+/// como as que o `CP_CLAUDE_CONFIG_DIRS` lista; nada nasce em `~/.claude-<nome>`.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_opening_reconciles_the_config_dir_it_checked() {
+    let (mut scenario, _dir, root, mut env) = contract_setup("create_claude_terminal_hangar_account", |_| {});
+    let outside = root.join("fora/.claude-conta2");
+    std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+    std::fs::rename(root.join("home/.claude-conta2"), &outside).unwrap();
+    env.insert("CP_CLAUDE_CONFIG_DIRS".into(), format!("conta2:{}", outside.display()));
+    scenario["steps"][0]["json"]["config_dir"] = json!(outside.display().to_string());
+    let raw = test_runtime().block_on(contract::run(&scenario, &root, env));
+    assert_eq!(raw["steps"][0]["status"], 200, "{}", raw["steps"][0]["body"]);
+    let project = hangar_workspace::worktrees::sanitize_cwd(&root.join("work/proj").to_string_lossy());
+    assert_eq!(std::fs::read_link(outside.join(format!("projects/{project}/memory"))).unwrap(),
+        root.join(format!("home/.claude/projects/{project}/memory")), "a pasta conferida foi reconciliada");
+    assert!(std::fs::symlink_metadata(root.join("home/.claude-conta2")).is_err(), "nada nasce no HOME");
+}
+
 /// H35/K02: a guarda da conta segue presa quando o pane nasce, não só durante a reconciliação.
 #[cfg(target_os = "linux")]
 #[test]
