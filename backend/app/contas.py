@@ -118,25 +118,25 @@ def _conferir_plugins(dir_conta: Path) -> list[str]:
     return avisos
 
 
-def _conta_rust(*args: str) -> list[str]:
+def _run_account_command(*args: str) -> list[str]:
     """`hangar-server conta <args>`: os avisos `hangar-conta: ` do stderr; saída diferente de 0 é ContaError."""
     exe = rust_bins.find_bin("hangar-server", "CP_RUST_SERVER_BIN")
     if exe is None:
         raise ContaError(503, "hangar-server não encontrado: as contas Claude são reconciliadas e criadas pelo Rust")
     proc = subprocess.run([str(exe), "conta", *args], stdin=subprocess.DEVNULL, capture_output=True,
                           text=True, encoding="utf-8", errors="replace")
-    avisos = [linha.removeprefix("hangar-conta: ") for linha in proc.stderr.splitlines() if linha.startswith("hangar-conta: ")]
+    warnings = [line.removeprefix("hangar-conta: ") for line in proc.stderr.splitlines() if line.startswith("hangar-conta: ")]
     if proc.returncode != 0:
-        raise ContaError(500, avisos[-1] if avisos else proc.stderr.strip()[:200])
-    return avisos
+        raise ContaError(500, warnings[-1] if warnings else proc.stderr.strip()[:200])
+    return warnings
 
 
 def reconciliar(nome: str, projeto: str | None = None) -> list[str]:
-    return _conta_rust("--prep", nome, *([] if projeto is None else [projeto]))
+    return _run_account_command("--prep", nome, *([] if projeto is None else [projeto]))
 
 
 @diag.rastrear("conta.criar", provider="claude")
 def criar(nome: str) -> Path:
     """Cria a pasta pronta pro `/login`. NÃO loga — o OAuth abre navegador e é interativo."""
-    _conta_rust("--new", nome)
+    _run_account_command("--new", nome)
     return caminho(nome)

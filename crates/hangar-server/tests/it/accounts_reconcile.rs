@@ -852,7 +852,7 @@ fn walkdir(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn conta_id(home: &Path, account: &str) -> String {
+fn account_id(home: &Path, account: &str) -> String {
     let path = home.join(format!(".claude-{account}"));
     let digest = ring::digest::digest(&ring::digest::SHA256, path.to_str().unwrap().as_bytes());
     digest.as_ref().iter().map(|b| format!("{b:02x}")).collect::<String>()[..16].to_owned()
@@ -863,7 +863,7 @@ fn diary(home: &Path, accounts: &std::collections::BTreeSet<String>) -> (Vec<Val
     let mut files: Vec<PathBuf> = walkdir(&home.join(".hangar/logs/diario")).into_iter()
         .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("uso-") && n.ends_with(".jsonl"))).collect();
     files.sort();
-    let ids: BTreeMap<String, String> = accounts.iter().map(|a| (conta_id(home, a), "<CONTA_ID>".to_owned())).collect();
+    let ids: BTreeMap<String, String> = accounts.iter().map(|a| (account_id(home, a), "<CONTA_ID>".to_owned())).collect();
     let (mut kept, mut raw) = (vec![], vec![]);
     for file in files {
         for line in std::fs::read_to_string(&file).unwrap().lines().filter(|l| !l.trim().is_empty()) {

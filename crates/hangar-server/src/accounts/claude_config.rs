@@ -396,11 +396,11 @@ pub fn reconcile(home: &Path, dir: &Path, project: Option<&str>) -> Outcome {
     Outcome { result, diary }
 }
 
-fn event(evento: &str, nivel: &str, op: &str) -> Value {
-    json!({"evento": evento, "nivel": nivel, "provider": "claude", "operacao": op})
+fn event(event_name: &str, level: &str, op: &str) -> Value {
+    json!({"evento": event_name, "nivel": level, "provider": "claude", "operacao": op})
 }
 
-fn conta_id(dir: &Path) -> String {
+fn account_id(dir: &Path) -> String {
     let digest = ring::digest::digest(&ring::digest::SHA256, dir.to_string_lossy().as_bytes());
     digest.as_ref().iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
@@ -411,15 +411,15 @@ fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut V
         && (project.is_empty() || !project.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')) {
         return Err(refused("projeto inválido"));
     }
-    let mut stage = |etapa: &str, id: bool| {
+    let mut log_stage = |stage: &str, id: bool| {
         let mut e = event("conta.reconciliar.etapa", "ok", op);
-        e["etapa"] = json!(etapa);
-        if id { e["conta_id"] = json!(conta_id(dir)); }
+        e["etapa"] = json!(stage);
+        if id { e["conta_id"] = json!(account_id(dir)); }
         diary.push(e);
     };
     let shared = home.join(".claude");
     let mut warnings = Vec::new();
-    stage("ligar_arquivos", true);
+    log_stage("ligar_arquivos", true);
     let mut names = fs::read_dir(&shared).at(&shared)?.map(|entry| entry.map(|e| e.file_name())).collect::<io::Result<Vec<_>>>().at(&shared)?;
     sort_names(&mut names);
     for name in names {
@@ -437,11 +437,11 @@ fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut V
         }
         link(&destination, &target)?;
     }
-    stage("espelhar_settings", false);
+    log_stage("espelhar_settings", false);
     warnings.extend(seed_settings(home, dir)?);
-    stage("conferir_plugins", false);
+    log_stage("conferir_plugins", false);
     warnings.extend(check_plugins(home, dir)?);
-    stage("espelhar_config", false);
+    log_stage("espelhar_config", false);
     warnings.extend(mirror_claude_json(home, dir)?);
     // Atalho para o que sumiu do compartilhado, e qualquer outro link morto no topo.
     for entry in fs::read_dir(dir).at(dir)? {
@@ -449,7 +449,7 @@ fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut V
         let path = entry.path();
         if entry.file_type().is_ok_and(|t| t.is_symlink()) && !exists(&path) { unlink(&path).at(&path)?; }
     }
-    stage("ligar_memoria", false);
+    log_stage("ligar_memoria", false);
     warnings.extend(link_memory(home, dir, project)?);
     let mut done = event("conta.reconciliar.concluiu", if warnings.is_empty() { "ok" } else { "aviso" }, op);
     done["quantidade"] = json!(warnings.len());
