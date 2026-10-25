@@ -200,7 +200,8 @@ jobs:
   # este escreve. Nao roda em pull_request (nao ha o que publicar de um fork, e o token la e read).
   publica-dist:
     needs: dist
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # A beta só alimenta a `dist-commits`: o pacote dela aponta para a tela pela chave das fontes.
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -220,7 +221,8 @@ jobs:
       # `--clobber` porque a release e reescrita; `create ... || true` porque ela so nao existe na
       # primeira vez. tar.gz e nao zip: o Windows 10+ ja traz `tar.exe`, entao os dois instaladores
       # extraem com o MESMO comando.
-      - env:
+      - if: github.ref == 'refs/heads/main'
+        env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view dist-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
