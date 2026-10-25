@@ -212,3 +212,16 @@ async fn install_package_wrong_usage_exits_2() {
     }
     assert!(!home.path().join(".hangar").exists());
 }
+
+// Um binário sem o subcomando pedido não pode subir como servidor: o bootstrap leria
+// `HANGAR_SERVER_LISTEN ausente` em vez do motivo.
+#[test]
+fn unknown_subcommand_is_refused_with_2() {
+    let home = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_hangar-server")).arg("instalar-coisa")
+        .env_clear().env("HOME", home.path()).env("USERPROFILE", home.path())
+        .stdin(std::process::Stdio::null()).output().unwrap();
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert!(text(&out).contains("subcomando desconhecido: instalar-coisa"), "{}", text(&out));
+    assert!(!home.path().join(".hangar").exists());
+}

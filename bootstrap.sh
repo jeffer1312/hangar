@@ -212,7 +212,7 @@ limpa_tmp() { [ -z "$TMP" ] || rm -rf "$TMP"; TMP=''; }
 
 # O caminho pelo pacote. Não volta.
 pelo_pacote() {
-  local plat url manifesto entrada nome sha recebido rc
+  local plat url manifesto entrada nome sha recebido rc indice
   # Re-rodar continua de onde parou: o pacote já instalado roda o instalador dele de novo.
   if [ -f "$PACOTE/manifest.json" ] && [ ! -e "$PACOTE/.git" ]; then
     ok "o Hangar já está instalado pelo pacote — rodando o instalador dele de novo (atualizar é pelo app)"
@@ -224,6 +224,19 @@ pelo_pacote() {
   plat=$(plataforma)
   [ -n "$plat" ] || sem_pacote "sem pacote para $(uname -s) $(uname -m)" "$@"
   command -v curl >/dev/null || fail "curl é obrigatório para baixar o pacote"
+
+  # O índice antes do hangar-server: num canal sem pacote, a release server-<canal> pode ter um binário
+  # de antes do `install-package`, que subiria como servidor em vez de dizer o motivo.
+  url="$RELEASES/package-$CANAL/package-$CANAL.json"
+  rc=0
+  # shellcheck disable=SC2086
+  indice=$(curl $PROTO -fsSL --max-time 60 -w '\n%{http_code}' "$url" 2>/dev/null) || rc=$?
+  if [ "$rc" = 22 ] && [ "${indice##*$'\n'}" = 404 ]; then
+    sem_pacote "o canal $CANAL ainda não publica pacote ($url não existe)" "$@"
+  fi
+  [ "$rc" = 0 ] || fail_with "$(net_code)" "não consegui ler $url (curl $rc, HTTP ${indice##*$'\n'})"
+  printf '%s' "${indice%$'\n'*}" | tr -d ' \t\r\n' | grep -q "\"$plat\":{" \
+    || sem_pacote "o canal $CANAL não tem pacote para $plat" "$@"
 
   say "Baixando o Hangar (canal $CANAL)"
   url="$RELEASES/server-$CANAL"

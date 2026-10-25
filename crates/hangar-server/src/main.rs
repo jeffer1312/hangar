@@ -33,6 +33,12 @@ fn main() -> std::process::ExitCode {
     if args.first().map(String::as_str) == Some("pair-context") {
         return hangar_server::groups::context_cmd::run(&args);
     }
+    // O servidor sobe sem argumento (ou com o do relançamento); qualquer outro é subcomando que este
+    // binário não tem, e subir como servidor esconderia isso atrás de "configuração inválida".
+    if let Some(first) = args.first() && first != hangar_server::runtime::claude_relaunch::RELAUNCH_FLAG {
+        eprintln!("hangar-server: subcomando desconhecido: {first}");
+        return std::process::ExitCode::from(2);
+    }
     // O glibc exige a configuração antes de o runtime criar threads.
     unsafe { hangar_server::tune_allocator(); }
     run();

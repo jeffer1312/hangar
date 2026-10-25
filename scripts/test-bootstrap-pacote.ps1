@@ -60,8 +60,17 @@ Add-Content -Encoding ASCII -Path $env:FAKE_LOG -Value "fresh=$env:HANGAR_FRESH_
 exit 0
 '@
 
-# Publica a release server-<canal>; $entrada troca a entrada do sistema (vazio = sem entrada).
-function Publish([string]$canal, $entrada = 'boa') {
+# Publica o indice package-<canal>.json com a entrada de $plat.
+function Publish-Index([string]$canal, [string]$plat = 'windows-x86_64') {
+    $dir = Join-Path $releases "package-$canal"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $json = @{ platforms = @{ $plat = @{ version = '0.1.0.42' } } } | ConvertTo-Json -Depth 5
+    [IO.File]::WriteAllText((Join-Path $dir "package-$canal.json"), $json)
+}
+# Publica a release server-<canal>; $entrada troca a entrada do sistema (vazio = sem entrada); $indice e a
+# plataforma do indice do pacote ($null = sem indice).
+function Publish([string]$canal, $entrada = 'boa', $indice = 'windows-x86_64') {
+    if ($indice) { Publish-Index $canal $indice }
     $dir = Join-Path $releases "server-$canal"
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     Copy-Item -Force $fakeServer (Join-Path $dir 'hangar-server-windows-x86_64.exe')
@@ -128,9 +137,43 @@ Assert (($out -join "`n") -match 'nao consegui ler o nome e o sha256') 'entrada 
 Assert (-not ((Calls) | Where-Object { $_ -like 'git *' })) 'entrada ilegivel: sem git'
 
 # --- server-latest.json ausente: falha visivel ---
-Reset-Machine
+Reset-Machine; Publish-Index 'latest'
 $out = Run-Bootstrap @()
 Assert (($out -join "`n") -match 'nao consegui ler .*server-latest\.json') 'sem manifesto: falha visivel'
+
+# --- Canal sem indice de pacote (HTTP 404): git com o motivo, sem baixar o hangar-server ---
+Reset-Machine; Publish 'latest' 'boa' $null
+$escuta404 = New-Object Net.Sockets.TcpListener ([Net.IPAddress]::Loopback, 0)
+$escuta404.Start()
+$servidor404 = [powershell]::Create().AddScript({
+    param($escuta)
+    $c = $escuta.AcceptTcpClient(); $s = $c.GetStream()
+    $r = New-Object IO.StreamReader($s); while ($r.ReadLine()) { }
+    $h = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 404 Not Found`r`nContent-Length: 0`r`nConnection: close`r`n`r`n")
+    $s.Write($h, 0, $h.Length); $s.Flush(); $c.Close()
+}).AddArgument($escuta404)
+$rodando404 = $servidor404.BeginInvoke()
+$out = Run-Bootstrap @() @{ HANGAR_RELEASE_BASE = "http://127.0.0.1:$($escuta404.LocalEndpoint.Port)" }
+$escuta404.Stop(); try { $null = $servidor404.EndInvoke($rodando404) } catch { }; $servidor404.Dispose()
+Assert (($out -join "`n") -match 'Sem pacote: o canal latest ainda nao publica pacote') 'sem indice: motivo na tela'
+Assert (-not ((Calls) | Where-Object { $_ -like 'server *' })) 'sem indice: o hangar-server nao rodou'
+Assert ((Calls) -contains "install $(Join-Path $perfil 'hangar') App=False Tailscale= SoChecar=False tok=") 'sem indice: instalador do checkout'
+
+# --- Indice sem o Windows: git com o motivo, sem baixar o hangar-server ---
+Reset-Machine; Publish 'latest' 'boa' 'linux-x86_64'
+$out = Run-Bootstrap @()
+Assert (($out -join "`n") -match 'Sem pacote: o canal latest nao tem pacote para windows-x86_64') 'indice sem o sistema: motivo na tela'
+Assert (-not ((Calls) | Where-Object { $_ -like 'server *' })) 'indice sem o sistema: o hangar-server nao rodou'
+Assert ((Calls) | Where-Object { $_ -like 'git clone --branch main *' }) 'indice sem o sistema: segue pelo git'
+
+# --- Indice que nao se le (porta fechada): falha visivel, sem cair no git ---
+Reset-Machine; Publish 'latest'
+$fechada = New-Object Net.Sockets.TcpListener ([Net.IPAddress]::Loopback, 0)
+$fechada.Start(); $portaFechada = $fechada.LocalEndpoint.Port; $fechada.Stop()
+$out = Run-Bootstrap @('-App') @{ HANGAR_RELEASE_BASE = "http://127.0.0.1:$portaFechada" }
+Assert (($out -join "`n") -match 'nao consegui ler .*package-latest\.json') 'indice ilegivel: falha visivel'
+Assert (-not ((Calls) | Where-Object { $_ -like 'git *' -or $_ -like 'server *' })) 'indice ilegivel: nem git nem hangar-server'
+Assert ((Last-Line $out) -eq '##HANGAR-FIM## falhou') 'indice ilegivel: FIM falhou'
 
 # --- Release sem o hangar-server do Windows: git, sem baixar nada ---
 Reset-Machine; Publish 'latest' $null

@@ -296,6 +296,19 @@ function Install-FromPackage {
     $tmp = Join-Path $cache ('bootstrap.' + [IO.Path]::GetRandomFileName())
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
     try {
+        # O indice antes do hangar-server: num canal sem pacote, a release server-<canal> pode ter um
+        # binario de antes do `install-package`, que subiria como servidor em vez de dizer o motivo.
+        $urlIndice = "$releases/package-$canal/package-$canal.json"
+        try { Get-Download $urlIndice (Join-Path $tmp 'indice.json') 60 }
+        catch {
+            if ($_.Exception.Message -eq 'HTTP 404') { Install-WithoutPackage "o canal $canal ainda nao publica pacote ($urlIndice nao existe)" }
+            Stop-Bootstrap "nao consegui ler $urlIndice ($($_.Exception.Message))" (Get-NetworkCode)
+        }
+        try { $indice = [IO.File]::ReadAllText((Join-Path $tmp 'indice.json')) | ConvertFrom-Json }
+        catch { Stop-Bootstrap "o $urlIndice nao e JSON legivel: $($_.Exception.Message)" }
+        if (-not ($indice.platforms -and $indice.platforms.PSObject.Properties[$plat])) {
+            Install-WithoutPackage "o canal $canal nao tem pacote para $plat"
+        }
         try { Get-Download "$url/server-latest.json" (Join-Path $tmp 'server-latest.json') 60 }
         catch { Stop-Bootstrap "nao consegui ler $url/server-latest.json ($($_.Exception.Message))" (Get-NetworkCode) }
         try { $manifesto = [IO.File]::ReadAllText((Join-Path $tmp 'server-latest.json')) | ConvertFrom-Json }

@@ -62,10 +62,16 @@ exit "\${FAKE_RC:-0}"
 EOF
 }
 
-# publish <canal> [plataforma] [sha]: o hangar-server falso na release server-<canal>, com o manifesto no formato do CI.
+# publish <canal> [plataforma] [sha] [plataforma do índice]: o hangar-server falso na release server-<canal>, com o
+# manifesto no formato do CI, e o índice package-<canal>.json com a entrada da plataforma do índice ("-" = sem índice).
 publish() {
-  local canal=$1 plat=${2:-linux-x86_64} sha=${3:-} dir="$REL/server-$1"
+  local canal=$1 plat=${2:-linux-x86_64} sha=${3:-} iplat=${4-linux-x86_64} dir="$REL/server-$1"
   mkdir -p "$dir"
+  if [ "$iplat" != - ]; then
+    mkdir -p "$REL/package-$canal"
+    printf '{\n  "platforms": {\n    "%s": {\n      "version": "0.1.0.42"\n    }\n  }\n}\n' "$iplat" \
+      > "$REL/package-$canal/package-$canal.json"
+  fi
   cp "$S/server-fake" "$dir/hangar-server-$plat"
   [ -n "$sha" ] || sha=$(sha256sum "$dir/hangar-server-$plat" | awk '{print $1}')
   cat > "$dir/server-latest.json" <<EOF
@@ -142,6 +148,37 @@ expect_line "sem-pacote: clona" "$S/git.log" "clone --branch main .* $S/home/han
 expect_eq "sem-pacote: install.sh do checkout" "$(paste -sd' ' "$S/home/hangar/args" 2>/dev/null)" '--yes' "$S/out"
 expect_absent "sem-pacote: sem marca de --dev" "$S/home/.hangar/dev-requested"
 expect_eq "sem-pacote: checkout sem marca de instalação nova" "$(cat "$S/home/hangar/fresh" 2>/dev/null)" ''
+
+# --- Canal sem índice de pacote (404): git com o motivo, antes de baixar o hangar-server ---
+new_box sem-indice; publish latest linux-x86_64 '' -
+cat > "$B/curl" <<EOF
+#!/bin/sh
+for a in "\$@"; do u=\$a; done
+case \$u in */package-latest/package-latest.json) printf '\n404'; exit 22 ;; esac
+exec "$S/sys/curl" "\$@"
+EOF
+chmod +x "$B/curl"
+run_boot "$S/out" --yes
+expect_line "sem-indice: motivo na tela" "$S/out" 'o canal latest ainda não publica pacote'
+expect_absent "sem-indice: hangar-server não rodou" "$S/server.log" "$S/out"
+expect_eq "sem-indice: install.sh do checkout" "$(paste -sd' ' "$S/home/hangar/args" 2>/dev/null)" '--yes' "$S/out"
+
+# --- Índice sem este sistema: git com o motivo, sem baixar o hangar-server ---
+new_box indice-sem-plat; publish latest linux-x86_64 '' macos-aarch64
+run_boot "$S/out" --yes
+expect_line "indice-sem-plat: motivo na tela" "$S/out" 'o canal latest não tem pacote para linux-x86_64'
+expect_absent "indice-sem-plat: hangar-server não rodou" "$S/server.log" "$S/out"
+expect_eq "indice-sem-plat: install.sh do checkout" "$(paste -sd' ' "$S/home/hangar/args" 2>/dev/null)" '--yes' "$S/out"
+
+# --- Índice que não se lê (rede): falha visível, sem cair no git ---
+new_box indice-rede; publish latest
+printf '#!/bin/sh\ncase "$*" in *-w*) printf "\\n000" ;; esac\nexit 7\n' > "$B/curl"; chmod +x "$B/curl"
+run_boot "$S/out" --app
+expect_line "indice-rede: diz que não leu o índice" "$S/out" 'não consegui ler .*package-latest.json'
+expect_line "indice-rede: código de rede" "$S/out" '##HANGAR-ERRO## sem-internet'
+expect_absent "indice-rede: hangar-server não rodou" "$S/server.log"
+expect_absent "indice-rede: nada de git" "$S/git.log"
+expect_eq "indice-rede: FIM falhou" "$(last_line "$S/out")" '##HANGAR-FIM## falhou'
 
 # --- Release sem o hangar-server deste sistema: git, sem baixar nada ---
 new_box sem-build; publish latest macos-aarch64
@@ -221,8 +258,16 @@ expect_eq "checkout: FIM falhou" "$(last_line "$S/out")" '##HANGAR-FIM## falhou'
 
 # --- Release por https: o curl só aceita https ---
 new_box https
-printf '#!/bin/sh\necho "curl $*" >> "%s/curl.log"\nexit 22\n' "$S" > "$B/curl"; chmod +x "$B/curl"
+cat > "$B/curl" <<EOF
+#!/bin/sh
+echo "curl \$*" >> "$S/curl.log"
+for a in "\$@"; do u=\$a; done
+case \$u in */package-latest.json) printf '{"platforms":{"linux-x86_64":{}}}\n200'; exit 0 ;; esac
+exit 22
+EOF
+chmod +x "$B/curl"
 TEST_RELEASE_BASE='' run_boot "$S/out" --app
+expect_line "https: índice com --proto =https" "$S/curl.log" "^curl --proto =https .*https://github.com/jeffer1312/hangar/releases/download/package-latest/package-latest.json"
 expect_line "https: manifesto com --proto =https" "$S/curl.log" "^curl --proto =https .*https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json"
 
 # --- --check sem instalação pelo pacote: não instala nada ---

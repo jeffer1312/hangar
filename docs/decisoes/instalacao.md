@@ -278,7 +278,10 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   download da migração, copia o `bin/hangar-server` do pacote para o lançador e grava a marca
   `migration.json` (pacote, sem checkout) antes do `current`; recusa (4) com `current`, migração,
   checkout anotado ou unit já no lugar, e sai 3 sem pacote para o sistema, quando o bootstrap segue
-  pelo git. O bootstrap também recusa checkout do Hangar na pasta padrão e, com o pacote no lugar,
+  pelo git. Antes de baixar o `hangar-server`, o bootstrap lê o `package-<canal>.json`: 404 ou sem
+  entrada do sistema segue pelo git com o motivo, outra falha para; o `hangar-server` antigo da
+  `server-<canal>` não tem o `install-package`, e o binário recusa subcomando desconhecido (código 2)
+  em vez de subir como servidor. O bootstrap também recusa checkout do Hangar na pasta padrão e, com o pacote no lugar,
   qualquer entrada pelo git (o caminho é o `dev-mode on`). O `install.sh` com `manifest.json` e sem
   `.git` pula git, `uv`, venv, build da tela e binários Rust, grava o `.env` em `~/.hangar/config`,
   põe um `python3` que é o `hangar-python` à frente do PATH dos sub-scripts, confere a tela da

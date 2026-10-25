@@ -34,7 +34,8 @@ MANIFEST_MAX = 4 << 20
 OSES = {"linux-x86_64": ("x86_64-manylinux_2_28", ""), "windows-x86_64": ("x86_64-pc-windows-msvc", ".exe")}
 # Os instaladores vão juntos: a instalação nova roda o do `current`, em modo pacote (sem git, uv nem build).
 TREES = ["backend/app", "backend/hooks", "resources", "scripts", "skills", "plugins", "shell", "messages",
-         "docs/atualizacoes", "VERSION", "install.sh", "install.ps1"]
+         "docs/atualizacoes", "docs/tmux.conf.windows.example", "docs/tmux.conf.example",
+         "VERSION", "install.sh", "install.ps1"]
 # Testes, provas, medições e ferramentas de quem desenvolve: rodam do checkout (modo desenvolvedor).
 EXCLUDE = [
     "*__pycache__*", "*.pyc", "*node_modules*", "*/tests/*", "*/test_*", "*/test-*", "*.test.*",
