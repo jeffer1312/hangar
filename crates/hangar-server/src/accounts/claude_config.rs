@@ -252,7 +252,26 @@ fn py_order(a: &str, b: &str) -> std::cmp::Ordering { a.chars().map(py::py_code)
 fn read_json(path: &Path) -> std::result::Result<Option<Value>, String> {
     // Leitura simples, como a do Python: a que atravessa a troca do Windows espera em todo arquivo
     // ausente, e a reconciliação lê vários que costumam faltar.
-    let bytes = match fs::read(path) {
+    parse_json(path, fs::read(path))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Os caminhos lidos por `read_claude_json`, para os testes conferirem quem passa por ela.
+    static REPLACED_READS: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `read_json` de um `.claude.json`, que o CLI vivo regrava por tmp+rename: no Windows a leitura no meio
+/// da troca o vê ausente por um instante, e a semeadura daria a conta nova por vazia. Ele quase sempre
+/// existe, então a espera do ausente quase nunca acontece.
+fn read_claude_json(path: &Path) -> std::result::Result<Option<Value>, String> {
+    #[cfg(test)]
+    REPLACED_READS.with(|reads| reads.borrow_mut().push(path.to_owned()));
+    parse_json(path, crate::runtime::queue::read_replaced(path))
+}
+
+fn parse_json(path: &Path, read: io::Result<Vec<u8>>) -> std::result::Result<Option<Value>, String> {
+    let bytes = match read {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("{}: {error}", path.display())),
@@ -735,8 +754,8 @@ fn mirror_claude_json(home: &Path, dir: &Path) -> Result<Option<String>> {
     let failed = |e: String| refused(format!("não consegui espelhar o ~/.claude.json pra conta: {e}"));
     let not_object = || refused("~/.claude.json não é um objeto JSON — não dá pra espelhar pra conta");
     let destination = dir.join(".claude.json");
-    let Some(principal) = read_json(&home.join(".claude.json")).map_err(failed)? else { return Ok(None) };
-    let Some(copy) = read_json(&destination).map_err(failed)? else { return Ok(None) };
+    let Some(principal) = read_claude_json(&home.join(".claude.json")).map_err(failed)? else { return Ok(None) };
+    let Some(copy) = read_claude_json(&destination).map_err(failed)? else { return Ok(None) };
     let (Value::Object(principal), Value::Object(copy)) = (principal, copy) else { return Err(not_object()) };
     if mcp_plan(&principal, &copy).is_none() { return Ok(None); }
     // Regrava sob a trava do Claude Code, relendo dentro dela: uma sessão viva da conta grava o mesmo arquivo.
@@ -744,7 +763,7 @@ fn mirror_claude_json(home: &Path, dir: &Path) -> Result<Option<String>> {
     let _lock = crate::session_open::claude::lock_config(&destination).inspect_err(|error| {
         tracing::warn!(file = %destination.display(), error, "trava do .claude.json indisponível; o espelho dos MCP grava sem ela");
     }).ok();
-    let mut copy = match read_json(&destination).map_err(failed)? {
+    let mut copy = match read_claude_json(&destination).map_err(failed)? {
         None => return Ok(None),
         Some(Value::Object(copy)) => copy,
         Some(_) => return Err(not_object()),
@@ -819,7 +838,7 @@ pub fn seed(home: &Path, dir: &Path) -> Outcome {
 fn prepare_pending(home: &Path, dir: &Path) -> Result<()> {
     let shared = home.join(".claude");
     fs::create_dir_all(&shared).at(&shared)?;
-    let mut data = match read_json(&home.join(".claude.json")) {
+    let mut data = match read_claude_json(&home.join(".claude.json")) {
         Ok(None) => Map::new(),
         Ok(Some(Value::Object(data))) => data,
         Ok(Some(_)) => return Err(refused("o ~/.claude.json não é um objeto JSON — não dá pra semear a conta")),
@@ -1016,6 +1035,28 @@ mod tests {
         let slot = dir.join(".drift/hooks.1");
         assert!(fs::symlink_metadata(&hooks).is_err());
         assert_eq!((fs::read_to_string(&slot).unwrap(), mode(&slot), mtime_secs(&slot)), ("velho".to_owned(), 0o640, 1_000));
+    }
+
+    /// Só as leituras dos `.claude.json` (o do HOME, na semeadura e no espelho, e o da conta) passam pela
+    /// que atravessa a troca do Windows; `settings.json` e o registro de plugins ficam na simples.
+    #[test]
+    fn only_the_claude_json_reads_cross_the_replace_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        for (path, text) in [(".claude/settings.json", r#"{"theme": "dark", "enabledPlugins": {"a@x": true}}"#),
+            (".claude/plugins/installed_plugins.json", r#"{"plugins": {}}"#), (".claude.json", r#"{"mcpServers": {"novo": {}}}"#),
+            (".claude-conta2/.hangar-conta", ""), (".claude-conta2/.claude.json", "{}"), (".claude-conta2/settings.json", r#"{"theme": "x"}"#)] {
+            fs::create_dir_all(home.join(path).parent().unwrap()).unwrap();
+            fs::write(home.join(path), text).unwrap();
+        }
+        let taken = || REPLACED_READS.with(|reads| std::mem::take(&mut *reads.borrow_mut()).into_iter().collect::<std::collections::BTreeSet<_>>());
+        taken();
+        assert!(reconcile(home, &home.join(".claude-conta2"), None).result.is_ok());
+        assert_eq!(taken(), [home.join(".claude.json"), home.join(".claude-conta2/.claude.json")].into());
+        let pending = home.join(".claude-nova");
+        fs::create_dir(&pending).unwrap();
+        prepare_pending(home, &pending).unwrap();
+        assert_eq!(taken(), [home.join(".claude.json")].into(), "a semeadura lê o ~/.claude.json pela mesma");
     }
 
     /// A recém-movida fica mesmo mais velha que as irmãs; na entrada seguinte, a cópia com o mtime antigo
