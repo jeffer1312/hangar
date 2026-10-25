@@ -827,15 +827,21 @@ pub(crate) fn in_service_group() -> bool {
     std::fs::read_to_string("/proc/self/cgroup").is_ok_and(|c| c.contains("hangar-backend.service"))
 }
 
-/// Windows: está num Job que mata tudo ao fechar (o do lançador da tarefa); parar a tarefa o levaria.
+/// Windows: está num Job que mata tudo ao fechar E que tem o backend dentro (o do lançador do
+/// pacote). Só o primeiro não basta: o OpenSSH põe cada sessão num Job assim, e o da tarefa
+/// agendada não mata ao fechar (o `Restart-HangarTask` encerra só os processos do backend).
 /// Job ilegível não recusa: a migração da máquina sem lançador (motor `git`) não pode travar nisso.
 #[cfg(windows)]
 pub(crate) fn in_service_group() -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::JobObjects::{
-        IsProcessInJob, JobObjectExtendedLimitInformation, QueryInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        IsProcessInJob, JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
-    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
     unsafe {
         let mut inside = 0;
         if IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut inside) == 0 || inside == 0 { return false; }
@@ -843,7 +849,25 @@ pub(crate) fn in_service_group() -> bool {
         // Handle nulo: o Job do próprio processo.
         let read = QueryInformationJobObject(std::ptr::null_mut(), JobObjectExtendedLimitInformation,
             &mut info as *mut _ as *mut std::ffi::c_void, std::mem::size_of_val(&info) as u32, std::ptr::null_mut());
-        read != 0 && info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0
+        if read == 0 || info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE == 0 { return false; }
+        // Lista de pids: dois u32 de cabeçalho (um usize, no x64) e os pids, um usize cada.
+        let mut list = vec![0usize; 1026];
+        let read = QueryInformationJobObject(std::ptr::null_mut(), JobObjectBasicProcessIdList,
+            list.as_mut_ptr() as *mut std::ffi::c_void, (list.len() * std::mem::size_of::<usize>()) as u32, std::ptr::null_mut());
+        if read == 0 { return false; }
+        let count = (list[0] >> 32) as usize;
+        let me = GetCurrentProcessId() as usize;
+        list[1..].iter().take(count.min(list.len() - 1)).filter(|&&pid| pid != me).any(|&pid| {
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+            if process.is_null() { return false; }
+            let mut name = [0u16; 1024];
+            let mut size = name.len() as u32;
+            let ok = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, name.as_mut_ptr(), &mut size) != 0;
+            CloseHandle(process);
+            let exe = String::from_utf16_lossy(&name[..size as usize]).to_lowercase();
+            let file = exe.rsplit('\\').next().unwrap_or_default();
+            ok && (file.starts_with("python") || file == "hangar-server.exe")
+        })
     }
 }
 
