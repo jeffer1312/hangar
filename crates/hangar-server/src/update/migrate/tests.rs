@@ -13,23 +13,29 @@ const VERSION: &str = "0.1.0.5";
 
 const UNIT: &str = "[Unit]\nDescription=hangar backend\n\n[Service]\nWorkingDirectory=CHECKOUT/backend\nEnvironment=MALLOC_ARENA_MAX=2\nExecStart=/usr/bin/uv run python -m app.main\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n";
 
-/// Para e sobe anotando; `fail_start` faz a primeira subida falhar.
+/// Para e sobe anotando; `fail_start` faz a primeira subida falhar, `fail_restop` a segunda parada.
 #[derive(Default)]
 struct FakeService {
     calls: Mutex<Vec<&'static str>>,
     starts: Arc<AtomicUsize>,
     fail_start: bool,
+    fail_restop: bool,
+    /// Roda na primeira subida: o que o backend novo mexe antes de a prova falhar.
+    on_start: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Avisa a cada subida (o "sinal" chega durante a prova).
     started: tokio::sync::Notify,
 }
 
 impl Service for FakeService {
     fn stop(&self) -> Result<(), String> {
-        self.calls.lock().unwrap().push("stop");
+        let mut calls = self.calls.lock().unwrap();
+        calls.push("stop");
+        if self.fail_restop && calls.iter().filter(|c| **c == "stop").count() == 2 { return Err("systemctl stop saiu com 1".into()); }
         Ok(())
     }
     fn start(&self) -> Result<(), String> {
         self.calls.lock().unwrap().push("start");
+        if let Some(touch) = self.on_start.lock().unwrap().take() { touch(); }
         let n = self.starts.fetch_add(1, Ordering::SeqCst) + 1;
         self.started.notify_one();
         if self.fail_start && n == 1 { return Err("systemctl start saiu com 1".into()); }
@@ -316,6 +322,49 @@ async fn migrate_undo_points_everything_back_to_the_checkout() {
     assert_eq!(kimi_after.matches("[[hooks]]").count(), kimi.matches("[[hooks]]").count());
     assert!(!b.home.join(".hangar/bin/hangar-launcher").exists());
     assert!(b.marker().is_none());
+}
+
+#[tokio::test]
+async fn migrate_rollback_leaves_everything_when_the_new_backend_does_not_stop() {
+    let b = Box_::new();
+    let service = FakeService { fail_restop: true, ..FakeService::default() };
+    let fetcher = FakeFetcher::default();
+    let error = migrate(&b.machine(&service, &fetcher), &health(&service, false), false).await.unwrap_err();
+    assert!(error.contains("não parou") && error.contains("migration.partial.json"), "{error}");
+    assert_eq!(*service.calls.lock().unwrap(), ["stop", "start", "stop"], "nada sobe por cima do backend que não parou");
+    assert!(std::fs::symlink_metadata(b.current()).is_ok(), "a volta não mexeu em nada");
+    assert!(b.checkout.join("backend/.env").is_symlink() && b.home.join(".hangar/config/.env").exists());
+    assert!(b.home.join(".hangar/migration.partial.json").exists());
+}
+
+#[tokio::test]
+async fn migrate_rollback_failures_keep_the_record_and_leave_unreadable_files_alone() {
+    let b = Box_::new();
+    let (home, codex, kimi) = (b.home.clone(), b.home.join(".codex/hooks.json"), b.home.join(".kimi-code/config.toml"));
+    let service = FakeService::default();
+    // O backend novo mexe antes de a prova falhar: arquivo a mais nos dados, hooks.json torto, config do Kimi sem UTF-8.
+    *service.on_start.lock().unwrap() = Some(Box::new(move || {
+        std::fs::write(home.join(".hangar/config/novo.txt"), "x").unwrap();
+        std::fs::write(&codex, "{ torto").unwrap();
+        std::fs::write(&kimi, b"\xff\xfe[[hooks]]").unwrap();
+    }));
+    let fetcher = FakeFetcher::default();
+    let error = migrate(&b.machine(&service, &fetcher), &health(&service, false), false).await.unwrap_err();
+    for what in ["hooks.json", "config.toml", ".hangar/config"] { assert!(error.contains(what), "{what}: {error}"); }
+    assert!(b.home.join(".hangar/migration.partial.json").exists(), "o registro fica para conferir à mão");
+    assert_eq!(std::fs::read(b.home.join(".codex/hooks.json")).unwrap(), b"{ torto", "ilegível não é sobrescrito");
+    assert_eq!(std::fs::read(b.home.join(".kimi-code/config.toml")).unwrap(), b"\xff\xfe[[hooks]]");
+}
+
+#[tokio::test]
+async fn migrate_notes_hook_files_it_could_not_read() {
+    let b = Box_::new();
+    std::fs::write(b.home.join(".codex/hooks.json"), "{ torto").unwrap();
+    std::fs::write(b.home.join(".kimi-code/config.toml"), b"\xff\xfe").unwrap();
+    let (service, fetcher) = (FakeService::default(), FakeFetcher::default());
+    assert_eq!(migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap(), Outcome::Migrated(Mode::Package));
+    let notes = b.marker().unwrap()["notes"].to_string();
+    assert!(notes.contains("hooks.json") && notes.contains("config.toml"), "{notes}");
 }
 
 #[tokio::test]

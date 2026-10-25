@@ -21,6 +21,8 @@ pub struct Checkout {
     pub upstream_head: Option<String>,
     /// `(sha curto, título)` dos commits do upstream que ainda não estão aqui.
     pub changes: Vec<(String, String)>,
+    /// O `git fetch` pedido falhou: o resto é a leitura do que já havia no disco.
+    pub fetch_error: Option<String>,
 }
 
 /// Teto de um comando `git`: rede presa não segura a tela nem o executor.
@@ -69,11 +71,11 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
 
 /// Lê o checkout; `fetch` vai à rede antes (falha de rede não impede a leitura do que já há).
 pub fn read(root: &Path, fetch: bool) -> Result<Checkout, String> {
-    if fetch && let Err(e) = git(root, &["fetch", "--quiet"]) {
-        tracing::warn!("update: fetch do modo desenvolvedor falhou: {e}");
-    }
+    let fetch_error = if fetch { git(root, &["fetch", "--quiet"]).err() } else { None };
+    if let Some(e) = &fetch_error { tracing::warn!(code = "update_dev_fetch_failed", "update: fetch do modo desenvolvedor falhou: {e}"); }
     let status = git(root, &["status", "--porcelain=v1"])?;
     let mut checkout = Checkout {
+        fetch_error,
         dirty: status.lines().filter(|l| !l.starts_with("??")).count(),
         untracked: status.lines().filter(|l| l.starts_with("??")).count(),
         branch: git(root, &["rev-parse", "--abbrev-ref", "HEAD"])?,
@@ -184,6 +186,18 @@ pub(crate) mod tests {
         ok.args(["-c", "echo oi"]);
         let out = run_timed(ok, std::time::Duration::from_secs(10)).unwrap();
         assert_eq!((out.0, String::from_utf8_lossy(&out.1).as_ref()), (true, "oi\n"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_dev_fetch_failure_is_kept_with_the_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let clone = behind_clone(dir.path());
+        assert_eq!(read(&clone, true).unwrap().fetch_error, None);
+        sh(&clone, "git remote set-url origin ../nao-existe");
+        let checkout = read(&clone, true).unwrap();
+        assert!(checkout.fetch_error.as_deref().is_some_and(|e| e.contains("fetch")), "{checkout:?}");
+        assert_eq!(checkout.behind, 1, "o que já havia segue lido");
     }
 
     #[cfg(unix)]

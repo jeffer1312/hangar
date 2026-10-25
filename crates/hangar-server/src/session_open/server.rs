@@ -156,7 +156,9 @@ impl ServerHost {
     pub async fn new(st: Arc<AppState>) -> Self {
         // `TerminalEnv::local` pode esperar o `systemctl --user` (até 3 s): fora das threads do runtime.
         let (env, terminal) = tokio::task::spawn_blocking(|| {
-            let dotenv = crate::user_data::env_file(std::env::current_dir().ok().as_deref()).unwrap_or_default();
+            let dotenv = crate::user_data::env_file(std::env::current_dir().ok().as_deref())
+                .inspect_err(|e| tracing::warn!(code = "user_data_env_unreadable", "abertura: .env dos dados do usuário ilegível, segue sem ele: {e}"))
+                .ok().flatten().unwrap_or_default();
             let env = AccountEnvironment::from_map(server_env(std::env::vars().collect(), &dotenv));
             let terminal = TerminalEnv::local(&env.home, &env.base);
             (env, terminal)

@@ -924,8 +924,9 @@ impl SetupWizard {
     fn connect_local(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let install = local::read_install(&self.dest);
         let Some(token) = install.token.clone() else {
-            let env = local::env_file(std::env::home_dir().as_deref(), &self.dest);
-            self.connection = Some(Err(tr("setup_connection_missing").replace("{path}", &env.display().to_string())));
+            // Sem conferir o lugar do `.env`, o motivo dessa falha entra no lugar do caminho.
+            let env = local::env_file(std::env::home_dir().as_deref(), &self.dest).map_or_else(|e| e, |env| env.display().to_string());
+            self.connection = Some(Err(tr("setup_connection_missing").replace("{path}", &env)));
             return;
         };
         let address = local::address(install.port);
@@ -1311,8 +1312,8 @@ impl SetupWizard {
         if matches!(self.qr, Qr::Loading | Qr::Shown { .. }) { return; }
         let install = local::read_install(&self.dest);
         let Some(api) = install.token.as_ref().and_then(|token| crate::api::Api::new(&local::address(install.port), token).ok()) else {
-            let env = local::env_file(std::env::home_dir().as_deref(), &self.dest);
-            self.qr = Qr::Failed(tr("setup_connection_missing").replace("{path}", &env.display().to_string()));
+            let env = local::env_file(std::env::home_dir().as_deref(), &self.dest).map_or_else(|e| e, |env| env.display().to_string());
+            self.qr = Qr::Failed(tr("setup_connection_missing").replace("{path}", &env));
             return cx.notify();
         };
         self.qr = Qr::Loading;

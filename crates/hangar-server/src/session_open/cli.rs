@@ -47,7 +47,13 @@ pub fn run(args: &[String]) -> ExitCode {
         Ok(request) => request,
         Err(error) => return refused(&error),
     };
-    let env_path = env_file();
+    let env_path = match env_file() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("hangar-server: não consegui conferir o .env do servidor: {error}");
+            return ExitCode::from(2);
+        }
+    };
     let server = env_path.as_ref().and_then(|path| std::fs::read_to_string(path).ok()).map(|text| dotenv(&text)).unwrap_or_default();
     let runtime = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
         Ok(runtime) => runtime,
@@ -106,7 +112,7 @@ pub fn run(args: &[String]) -> ExitCode {
 }
 
 /// O `.env` do servidor: `~/.hangar/config/.env` ou, sem ele, o da `backend/` da cópia do Hangar.
-fn env_file() -> Option<PathBuf> { crate::user_data::env_file(backend_dir().as_deref()) }
+fn env_file() -> std::io::Result<Option<PathBuf>> { crate::user_data::env_file(backend_dir().as_deref()) }
 
 /// Pasta `backend/` de uma cópia do Hangar. O `.env` pode já estar em `~/.hangar/config/`, então um
 /// arquivo que só o Hangar tem também a identifica (`app/main.py` casaria com qualquer projeto).

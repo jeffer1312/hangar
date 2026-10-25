@@ -82,16 +82,24 @@ fn service_dir() -> Option<PathBuf> {
 fn service_dir() -> Option<PathBuf> { None }
 
 /// O `.env` do servidor: `~/.hangar/config/.env` quando existe (máquina migrada), senão o da `backend/`.
-/// A mesma regra do `user_data::path` do `hangar-server`, que este crate não importa.
-pub(crate) fn env_file(home: Option<&Path>, dir: &Path) -> PathBuf {
-    home.map(|home| home.join(".hangar").join("config").join(".env")).filter(|new| new.exists())
-        .unwrap_or_else(|| dir.join("backend").join(".env"))
+/// A mesma regra do `user_data::path` do `hangar-server`, que este crate não importa. Disco que não deixa
+/// conferir o lugar novo é erro, com o caminho: cair no da `backend/` leria o token errado.
+pub(crate) fn env_file(home: Option<&Path>, dir: &Path) -> Result<PathBuf, String> {
+    if let Some(new) = home.map(|home| home.join(".hangar").join("config").join(".env")) {
+        match new.try_exists() {
+            Ok(true) => return Ok(new),
+            Ok(false) => {}
+            Err(e) => return Err(format!("{}: {e}", new.display())),
+        }
+    }
+    Ok(dir.join("backend").join(".env"))
 }
 
 pub(crate) fn read_install(dir: &Path) -> LocalInstall { read_install_in(std::env::home_dir().as_deref(), dir) }
 
+/// `.env` que não se confere fica sem porta nem token; quem mostra o motivo é o `env_file` da tela.
 fn read_install_in(home: Option<&Path>, dir: &Path) -> LocalInstall {
-    let (port, token) = std::fs::read_to_string(env_file(home, dir)).map(|text| parse_env(&text)).unwrap_or((None, None));
+    let (port, token) = env_file(home, dir).ok().and_then(|env| std::fs::read_to_string(env).ok()).map(|text| parse_env(&text)).unwrap_or((None, None));
     LocalInstall { dir: dir.to_owned(), port: port.unwrap_or(DEFAULT_PORT), token }
 }
 
@@ -181,15 +189,32 @@ mod tests {
         // Só no lugar novo: máquina migrada, sem `.env` na `backend/`.
         std::fs::write(&new, "CP_PORT=9100\nCP_AUTH_TOKEN=novo\n").unwrap();
         assert_eq!(read_install_in(Some(&home), &dir), LocalInstall { dir: dir.clone(), port: 9100, token: Some("novo".into()) });
-        assert_eq!(env_file(Some(&home), &dir), new);
+        assert_eq!(env_file(Some(&home), &dir), Ok(new.clone()));
         // Os dois: vale o novo.
         std::fs::write(dir.join("backend/.env"), "CP_PORT=9000\nCP_AUTH_TOKEN=velho\n").unwrap();
         assert_eq!(read_install_in(Some(&home), &dir), LocalInstall { dir: dir.clone(), port: 9100, token: Some("novo".into()) });
         // Só o antigo: como hoje.
         std::fs::remove_file(&new).unwrap();
         assert_eq!(read_install_in(Some(&home), &dir), LocalInstall { dir: dir.clone(), port: 9000, token: Some("velho".into()) });
-        assert_eq!(env_file(Some(&home), &dir), dir.join("backend/.env"));
+        assert_eq!(env_file(Some(&home), &dir), Ok(dir.join("backend/.env")));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_file_that_cannot_be_checked_is_an_error_not_the_old_place() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("hangar-local-stat-{}", std::process::id()));
+        let (home, dir) = (root.join("home"), root.join("hangar"));
+        let config = home.join(".hangar/config");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let (read, is_root) = (env_file(Some(&home), &dir), std::fs::read_dir(&config).is_ok());
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        if is_root { return; } // root lê tudo: o caso não se monta
+        let error = read.unwrap_err();
+        assert!(error.contains(".hangar/config/.env"), "{error}");
     }
 
     #[test]

@@ -475,7 +475,33 @@ async fn update_same_pid_after_restart_is_a_failure() {
 
     let outcome = run(&machine.job(&release), Arc::new(FakeSteps::default()), &restart, &health, Arc::new(NeverInUse)).await;
 
-    assert!(matches!(outcome, Outcome::Failed { voltou: true, .. }), "{outcome:?}");
+    // A volta também só ouve a versão nova: não há como dizer que a anterior voltou.
+    assert!(matches!(outcome, Outcome::Failed { voltou: false, no_ar: true, .. }), "{outcome:?}");
+}
+
+#[tokio::test]
+async fn update_roll_back_says_voltou_only_with_the_previous_version_answering() {
+    let fake = FakeRelease::new().await;
+    let machine = Machine::new();
+    let old = machine.current();
+    let (bytes, _) = new_package(&machine, "touch {proof}");
+    fake.publish(NEW, &bytes, None);
+    let release = fake.release();
+    let restart = FakeRestart::default();
+    // 1º reinício: ninguém; depois da volta, outro processo, mas ainda da versão nova.
+    let health = FakeHealth { restarts: restart.count.clone(), reading: Box::new(|n| match n {
+        0 => rust(100, OLD),
+        1 => Reading::Down("connection refused".into()),
+        n => rust(100 + n as u32, NEW),
+    }) };
+
+    let outcome = run(&machine.job(&release), Arc::new(FakeSteps::default()), &restart, &health, Arc::new(NeverInUse)).await;
+
+    let Outcome::Failed { voltou, no_ar, erro } = outcome else { panic!("{outcome:?}") };
+    assert!(!voltou && no_ar, "{erro}");
+    assert!(erro.contains("versão anterior") && erro.contains(&format!("commit-{NEW}")), "{erro}");
+    assert_eq!(machine.current(), old, "o current voltou mesmo assim");
+    assert_eq!(machine.state()["voltou"], false);
 }
 
 #[tokio::test]
@@ -830,9 +856,32 @@ fn update_screen_state_turns_a_dead_owner_into_a_failure() {
     write(serde_json::json!({"fase": "rodando", "pid": DEAD, "etapa": "reiniciar", "versao_para": OLD, "ts": old_ts}));
     let screen = for_screen(&machine.state_dir, &machine.layout, Some(OLD));
     assert_eq!((screen["fase"].clone(), screen["ok"].clone()), ("pronto".into(), true.into()));
-    // A mesma morte com o servidor ainda na versão de antes é falha.
+    // A mesma morte com o servidor ainda na versão de antes é falha, e o texto diz onde a máquina ficou.
     write(serde_json::json!({"fase": "rodando", "pid": DEAD, "etapa": "reiniciar", "versao_para": OLD, "ts": old_ts}));
-    assert_eq!(for_screen(&machine.state_dir, &machine.layout, Some("0.1.0.9"))["ok"], false);
+    let screen = for_screen(&machine.state_dir, &machine.layout, Some("0.1.0.9"));
+    assert_eq!(screen["ok"], false);
+    let erro = screen["erro"].as_str().unwrap();
+    assert!(erro.contains(&format!("aponta para a versão {OLD}")) && erro.contains("servidor de pé é o da versão 0.1.0.9"), "{erro}");
+}
+
+#[tokio::test]
+async fn update_unreadable_web_ui_choice_goes_to_the_diary_and_keeps_the_default() {
+    let fake = FakeRelease::new().await;
+    let machine = Machine::new();
+    fake.publish(NEW, &package_keyed(NEW, &format!("commit-{NEW}"), Some(KEY), &[]), None);
+    std::fs::write(machine.layout.hangar.join("web-ui.json"), "{ torto").unwrap();
+    let release = fake.release();
+    let restart = FakeRestart::default();
+    let health = FakeHealth { restarts: restart.count.clone(), reading: Box::new(served) };
+    let ui = FakeUi { asked: Mutex::default(), proof: machine.home.path().join("x"), fail: false };
+    let diary = machine.home.path().join("diario");
+    let mut job = machine.job(&release);
+    job.ui = Some(&ui);
+    job.diary_dir = Some(diary.clone());
+    assert_eq!(run(&job, Arc::new(FakeSteps::default()), &restart, &health, Arc::new(NeverInUse)).await, Outcome::Updated { version: NEW.into() });
+    assert_eq!(ui.asked.lock().unwrap().len(), 1, "o padrão é ligada");
+    let lines: String = std::fs::read_dir(&diary).unwrap().flatten().map(|e| std::fs::read_to_string(e.path()).unwrap()).collect();
+    assert!(lines.contains("update_web_ui_unreadable"), "{lines}");
 }
 
 #[tokio::test]

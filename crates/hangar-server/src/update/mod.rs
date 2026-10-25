@@ -263,17 +263,18 @@ pub fn swap(layout: &Layout, target: &Path) -> Result<Option<PathBuf>, UpdateErr
     let current = layout.current();
     let previous = real(&current).ok();
     let fresh = layout.hangar.join("current.new");
-    remove_link(&fresh);
+    let _ = remove_link(&fresh);
     make_link(&target, &fresh).map_err(|e| fail(&e))?;
     replace_link(&fresh, &current).map_err(|e| {
-        remove_link(&fresh);
+        let _ = remove_link(&fresh);
         fail(&e)
     })?;
     // O link de antes só sai depois de conferido o novo no lugar.
     if real(&current).ok().as_ref() != Some(&target) {
         return Err(fail(&format!("{} não aponta para {} depois da troca", current.display(), target.display())));
     }
-    remove_link(&layout.aside());
+    // Sobra ao lado não atrapalha: a troca seguinte a tira antes de usar o nome.
+    let _ = remove_link(&layout.aside());
     Ok(previous)
 }
 
@@ -290,8 +291,16 @@ pub fn recover(layout: &Layout) -> std::io::Result<bool> {
 #[cfg(unix)]
 fn make_link(target: &Path, link: &Path) -> std::io::Result<()> { std::os::unix::fs::symlink(target, link) }
 
+/// Link ausente já é o resultado pedido.
+fn absent_ok(result: std::io::Result<()>) -> std::io::Result<()> {
+    match result {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
 #[cfg(unix)]
-pub(crate) fn remove_link(link: &Path) { let _ = std::fs::remove_file(link); }
+pub(crate) fn remove_link(link: &Path) -> std::io::Result<()> { absent_ok(std::fs::remove_file(link)) }
 
 /// `rename` de link por cima de link é atômico: não há instante sem `current`.
 #[cfg(unix)]
@@ -310,7 +319,7 @@ fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
 
 /// `remove_dir` numa junction tira só o link, nunca o conteúdo do alvo.
 #[cfg(windows)]
-pub(crate) fn remove_link(link: &Path) { let _ = std::fs::remove_dir(link); }
+pub(crate) fn remove_link(link: &Path) -> std::io::Result<()> { absent_ok(std::fs::remove_dir(link)) }
 
 /// No Windows não há troca atômica de junction: a velha vai para o lado, a nova entra, e a velha
 /// volta se a nova não entrar. Hooks toleram o instante sem `current`; queda nesse instante é
@@ -319,7 +328,7 @@ pub(crate) fn remove_link(link: &Path) { let _ = std::fs::remove_dir(link); }
 fn replace_link(fresh: &Path, current: &Path) -> std::io::Result<()> {
     let aside = current.with_file_name("current.old");
     // Com o `current` presente (o `swap` recuperou antes), o que sobrou ao lado é de troca concluída.
-    remove_link(&aside);
+    let _ = remove_link(&aside);
     let had = std::fs::symlink_metadata(current).is_ok();
     if had { std::fs::rename(current, &aside)?; }
     if let Err(e) = std::fs::rename(fresh, current) {
@@ -534,13 +543,18 @@ pub fn running_package() -> Option<&'static PackageId> {
 /// Prova de vida da versão nova: o Rust responde com o contrato e o commit do manifesto novo (o
 /// processo velho também responde HTTP); pid igual ao de antes do reinício também reprova.
 pub(crate) async fn wait_rust<H: HealthProbe>(health: &H, manifest: &Manifest, before: Option<u32>, settings: &Settings) -> Result<(), String> {
+    wait_version(health, manifest, before, settings, "a versão nova").await
+}
+
+/// `wait_rust` com o nome da versão esperada no motivo (a nova, na ida; a anterior, na volta).
+async fn wait_version<H: HealthProbe>(health: &H, manifest: &Manifest, before: Option<u32>, settings: &Settings, what: &str) -> Result<(), String> {
     let (protocol, commit) = (manifest.protocol, manifest.commit.as_str());
     let deadline = Instant::now() + settings.health_deadline;
     loop {
         let why = match health.read().await {
-            Reading::Rust { protocol: p, .. } if p != protocol => format!("o servidor responde com o contrato {p}, e a versão nova é {protocol}"),
+            Reading::Rust { protocol: p, .. } if p != protocol => format!("o servidor responde com o contrato {p}, e {what} é {protocol}"),
             Reading::Rust { commit: None, .. } => "o servidor de pé não diz de que pacote subiu".to_owned(),
-            Reading::Rust { commit: Some(c), .. } if c != commit => format!("o servidor de pé é do commit {c}, e a versão nova é {commit}"),
+            Reading::Rust { commit: Some(c), .. } if c != commit => format!("o servidor de pé é do commit {c}, e {what} é {commit}"),
             Reading::Rust { pid: Some(pid), .. } if Some(pid) == before => format!("o processo na porta é o mesmo de antes (pid {pid})"),
             Reading::Rust { .. } => return Ok(()),
             Reading::NotRust(d) => format!("só o Python respondeu ({d}); o servidor não está no modo rust"),
@@ -567,16 +581,6 @@ pub(crate) async fn wait_new<H: HealthProbe>(health: &H, before: Option<u32>, se
     }
 }
 
-/// A primeira leitura em que alguém responde, ou a última dentro do prazo.
-async fn wait_answer<H: HealthProbe>(health: &H, settings: &Settings) -> Reading {
-    let deadline = Instant::now() + settings.health_deadline;
-    loop {
-        let reading = health.read().await;
-        if !matches!(reading, Reading::Down(_)) || Instant::now() >= deadline { return reading; }
-        tokio::time::sleep(settings.health_interval).await;
-    }
-}
-
 /// Falha sem troca: nada mudou, e `no_ar` é medido.
 async fn failed_before<H: HealthProbe>(state: &StateFile, health: &H, error: UpdateError) -> Outcome {
     tracing::warn!(code = error.code(), "update: {error}");
@@ -587,21 +591,29 @@ async fn failed_before<H: HealthProbe>(state: &StateFile, health: &H, error: Upd
 }
 
 /// Falha depois da troca: o `current` volta para `previous`, o servidor reinicia e a resposta é
-/// medida. `voltou` só com a volta inteira (troca e reinício), como no motor `git`.
+/// medida. `voltou` só com a volta inteira: troca, reinício e a versão anterior (`expected`)
+/// respondendo, com outro pid, como a prova da ida.
 /// Passo de máquina aplicado nesta rodada continua registrado: ele é compatível com a versão
 /// anterior e não volta; o aviso diz quais.
-async fn roll_back<R: Restarter, H: HealthProbe>(job: &Job<'_>, state: &StateFile, previous: Option<PathBuf>, applied_now: &[String],
-    why: String, restarter: &R, health: &H) -> Outcome {
+#[allow(clippy::too_many_arguments)]
+async fn roll_back<R: Restarter, H: HealthProbe>(job: &Job<'_>, state: &StateFile, previous: Option<PathBuf>, expected: Option<&Manifest>,
+    applied_now: &[String], why: String, restarter: &R, health: &H) -> Outcome {
     tracing::warn!("update: voltando para a versão anterior: {why}");
     state.write(json!({"fase": "rodando", "texto": "Voltando para a versão anterior"}));
     if !applied_now.is_empty() {
         state.warn(&format!("passos de máquina aplicados nesta rodada continuam valendo na versão anterior: {}", applied_now.join(", ")));
     }
+    // O processo que reprovou: quem responder depois da volta tem que ser outro. O da versão anterior
+    // que nunca caiu (reinício recusado) já é a volta.
+    let failed_pid = match health.read().await {
+        Reading::Rust { pid, commit, .. } if commit.as_deref() != expected.map(|m| m.commit.as_str()) => pid,
+        _ => None,
+    };
     let layout = job.layout.clone();
     let back = blocking(move || match previous {
         Some(previous) => swap(&layout, &previous).map(|_| ()),
         // Não havia `current` antes desta rodada: voltar é tirá-lo.
-        None => { remove_link(&layout.current()); Ok(()) }
+        None => remove_link(&layout.current()).map_err(|e| UpdateError::Swap(format!("{} não saiu: {e}", layout.current().display()))),
     }).await;
     let failure = match back {
         Err(e) => Some(format!("{why}; e não consegui voltar para a versão anterior: {e}")),
@@ -612,13 +624,19 @@ async fn roll_back<R: Restarter, H: HealthProbe>(job: &Job<'_>, state: &StateFil
         state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": no_ar}));
         return Outcome::Failed { voltou: false, no_ar, erro };
     }
-    let reading = wait_answer(health, &job.settings).await;
-    if let Reading::NotRust(d) = &reading {
-        state.warn(&format!("a versão anterior voltou, mas só o Python respondeu ({d})"));
+    let confirmed = match expected {
+        Some(manifest) => wait_version(health, manifest, failed_pid, &job.settings, "a versão anterior").await,
+        // Sem pacote antes desta rodada não há commit a conferir: basta o Rust com outro pid.
+        None => wait_new(health, failed_pid, &job.settings).await,
+    };
+    if let Err(unconfirmed) = confirmed {
+        let no_ar = !matches!(health.read().await, Reading::Down(_));
+        let erro = format!("{why}; o current voltou para a versão anterior e o servidor reiniciou, mas a versão anterior não se confirmou no ar: {unconfirmed}");
+        state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": no_ar}));
+        return Outcome::Failed { voltou: false, no_ar, erro };
     }
-    let no_ar = !matches!(reading, Reading::Down(_));
-    state.write(json!({"fase": "pronto", "ok": false, "erro": why, "voltou": true, "no_ar": no_ar}));
-    Outcome::Failed { voltou: true, no_ar, erro: why }
+    state.write(json!({"fase": "pronto", "ok": false, "erro": why, "voltou": true, "no_ar": true}));
+    Outcome::Failed { voltou: true, no_ar: true, erro: why }
 }
 
 /// Extração, passos, troca e poda bloqueiam por segundos ou minutos: fora dos fios do runtime.
@@ -649,7 +667,8 @@ const BIRTH_WINDOW: chrono::TimeDelta = chrono::TimeDelta::seconds(120);
 
 /// O estado para a tela, como o `estado_para_tela` do Python: `rodando` com o dono morto vira o
 /// desfecho que ele não gravou (e fica gravado). Morreu no reinício que pediu com a versão nova
-/// instalada e no ar (`running`): concluída.
+/// instalada e no ar (`running`): concluída. Quem chama é sempre o servidor de pé (rota, verificação
+/// periódica, lançamento do executor), com `running` = a versão dele.
 pub fn for_screen(state_dir: &Path, layout: &Layout, running: Option<&str>) -> serde_json::Map<String, Value> {
     let state = StateFile::new(state_dir);
     let current = state.read();
@@ -667,8 +686,16 @@ pub fn for_screen(state_dir: &Path, layout: &Layout, running: Option<&str>) -> s
         state.write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado"}));
     } else {
         tracing::warn!(pid = ?owner, "update: atualização abandonada, o processo que a executava não existe mais");
+        let disk = installed(layout).map(|m| m.version);
+        let place = match (target, disk.as_deref()) {
+            (Some(target), Some(disk)) if target == disk => format!("o current já aponta para a versão {target}, que sobe no próximo reinício"),
+            (_, Some(disk)) => format!("o current segue na versão {disk}"),
+            _ => "o current não aponta para uma versão em pacote".to_owned(),
+        };
+        let up = running.map_or_else(|| "de fora de pacote (versão desconhecida)".to_owned(), |v| format!("o da versão {v}"));
+        // Só o servidor de pé chama esta função: `no_ar` é ele mesmo respondendo.
         state.write(json!({"fase": "pronto", "ok": false, "voltou": false, "no_ar": true,
-            "erro": "a atualizacao foi interrompida — o processo que a executava nao existe mais"}));
+            "erro": format!("a atualização foi interrompida, o processo que a executava não existe mais; {place}, e o servidor de pé é {up}")}));
     }
     state.read()
 }
@@ -731,8 +758,14 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     };
     // A tela é opcional: falha deixa a da chave anterior servida, e a atualização segue.
     if let (Some(ui), Some(key)) = (job.ui, manifest.dist_key.as_deref()) {
-        if crate::ui::enabled(job.home).unwrap_or(true)
-            && let Err(e) = ui.fetch(key, &job.layout.hangar.join("ui")).await {
+        // Escolha ilegível: a tela fica ligada (o padrão), e a leitura que falhou vai ao diário.
+        let web_ui = crate::ui::enabled(job.home).unwrap_or_else(|e| {
+            tracing::warn!(code = "update_web_ui_unreadable", "update: escolha da tela web ilegível, segue ligada: {e}");
+            crate::diag::record_blocking(job.diary_dir.as_deref(), &[json!({"evento": "rust.update_web_ui_unreadable", "nivel": "aviso",
+                "detalhe": format!("~/.hangar/web-ui.json: {e}; a tela segue ligada")})], "update");
+            true
+        });
+        if web_ui && let Err(e) = ui.fetch(key, &job.layout.hangar.join("ui")).await {
             state.warn(&format!("a tela web não foi atualizada e segue a anterior: {e}"));
         }
     }
@@ -768,7 +801,7 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
         Ok(()) => wait_rust(health, &manifest, pid_before, &job.settings).await,
     };
     if let Err(why) = proved {
-        return roll_back(job, &state, previous, &applied_now, why, restarter, health).await;
+        return roll_back(job, &state, previous, before.as_ref(), &applied_now, why, restarter, health).await;
     }
 
     let layout = job.layout.clone();

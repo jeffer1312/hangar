@@ -67,20 +67,38 @@ pub(crate) async fn topology() -> Topology {
 /// Por quanto a entrada publicada vale sem `procurar` (o `_PUBLICADO_TTL_S` do Python).
 const PUBLISHED_TTL: Duration = Duration::from_secs(300);
 
-/// A entrada deste sistema no índice, guardada por índice; `procurar` relê. Falha vira `None` (e
-/// também fica guardada: a tela não bate na rede a cada 2 s sem rede).
-async fn published(release: &Release, refresh: bool) -> Option<PlatformEntry> {
-    static CACHE: LazyLock<Mutex<std::collections::HashMap<String, (Instant, Option<PlatformEntry>)>>> = LazyLock::new(Default::default);
+/// O que se sabe do índice: a última entrada lida e o erro da leitura mais recente, se falhou.
+#[derive(Debug, Clone, Default)]
+struct Published {
+    entry: Option<PlatformEntry>,
+    error: Option<String>,
+}
+
+impl Published {
+    /// Leitura que falha guarda o erro sem apagar a entrada boa de antes.
+    fn merge(old: Option<Published>, read: Result<PlatformEntry, String>) -> Published {
+        match read {
+            Ok(entry) => Published { entry: Some(entry), error: None },
+            Err(error) => Published { entry: old.and_then(|o| o.entry), error: Some(error) },
+        }
+    }
+}
+
+/// A entrada deste sistema no índice, guardada por índice; `procurar` relê. A falha também fica
+/// guardada pelo prazo: a tela não bate na rede a cada 2 s sem rede.
+async fn published(release: &Release, refresh: bool) -> Published {
+    static CACHE: LazyLock<Mutex<std::collections::HashMap<String, (Instant, Published)>>> = LazyLock::new(Default::default);
     static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| crate::http_client().build().unwrap_or_default());
     let url = release.index_url();
-    if !refresh && let Some((at, entry)) = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&url)
-        && at.elapsed() < PUBLISHED_TTL {
-        return entry.clone();
+    let cached = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&url).cloned();
+    if !refresh && let Some((at, known)) = &cached && at.elapsed() < PUBLISHED_TTL {
+        return known.clone();
     }
-    let entry = super::entry(&CLIENT, release, &super::platform()).await
-        .inspect_err(|e| tracing::warn!(code = e.code(), "update: índice da release ilegível: {e}")).ok();
-    CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(url, (Instant::now(), entry.clone()));
-    entry
+    let read = super::entry(&CLIENT, release, &super::platform()).await
+        .inspect_err(|e| tracing::warn!(code = e.code(), "update: índice da release ilegível: {e}")).map_err(|e| e.to_string());
+    let known = Published::merge(cached.map(|(_, known)| known), read);
+    CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(url, (Instant::now(), known.clone()));
+    known
 }
 
 /// `latest` é o canal da main; os outros têm o nome da branch.
@@ -97,13 +115,14 @@ fn distance(installed: &str, remote: &str) -> u64 {
     }
 }
 
-/// O `GET` no modo pacote.
-pub fn package_body(installed: Option<&Manifest>, running: Option<&str>, remote: Option<&PlatformEntry>, topology: &str,
-    estado: Map<String, Value>) -> Value {
+/// O `GET` no modo pacote. `remote_error`: a última leitura do índice falhou; vai ao `pre_voo`, e sem
+/// entrada conhecida a tela oferece o Atualizar, que diz o motivo (como o Python sem `origin`).
+pub fn package_body(installed: Option<&Manifest>, running: Option<&str>, remote: Option<&PlatformEntry>, remote_error: Option<&str>,
+    topology: &str, estado: Map<String, Value>) -> Value {
     let disk = installed.map_or("", |m| m.version.as_str());
     let behind = remote.map_or(0, |r| distance(disk, &r.version));
     let branch = target_branch(installed.map_or("latest", |m| m.channel.as_str()));
-    json!({
+    let mut body = json!({
         "modo": "pacote",
         // Versão no ar desconhecida (servidor fora de pacote) é a do disco: vazia, o nativo
         // ofereceria reiniciar para sempre.
@@ -119,15 +138,29 @@ pub fn package_body(installed: Option<&Manifest>, running: Option<&str>, remote:
             "behind": behind, "divergiu": false, "branch_de_trabalho": false, "topologia": topology,
             "commit": installed.map_or("", |m| m.commit.as_str())},
         "estado": estado,
-    })
+    });
+    if let Some(error) = remote_error {
+        body["pre_voo"]["erro"] = "indice_indisponivel".into();
+        body["pre_voo"]["detalhe"] = error.into();
+        if remote.is_none() { body["atualizacao_disponivel"] = true.into(); }
+    }
+    body
 }
 
 /// O `GET` no modo desenvolvedor; `checkout` com erro é o `nao_e_repo` do Python.
 pub fn dev_body(checkout: Result<&Checkout, &str>, boot: Option<&str>, topology: &str, estado: Map<String, Value>) -> Value {
     let pre = match checkout {
-        Ok(c) => json!({"pode": true, "faltando": [], "branch": c.branch, "alvo": c.branch, "sujo": c.dirty, "ahead": c.ahead,
-            "ahead_incerto": false, "behind": c.behind, "divergiu": c.ahead > 0 && c.behind > 0, "branch_de_trabalho": false,
-            "topologia": topology, "commit": c.head}),
+        Ok(c) => {
+            let mut pre = json!({"pode": true, "faltando": [], "branch": c.branch, "alvo": c.branch, "sujo": c.dirty, "ahead": c.ahead,
+                "ahead_incerto": false, "behind": c.behind, "divergiu": c.ahead > 0 && c.behind > 0, "branch_de_trabalho": false,
+                "topologia": topology, "commit": c.head});
+            // Fetch que falhou não segura o botão: a contagem é a do último fetch bom, com o motivo junto.
+            if let Some(error) = &c.fetch_error {
+                pre["erro"] = "fetch_falhou".into();
+                pre["detalhe"] = error.as_str().into();
+            }
+            pre
+        }
         Err(why) => json!({"pode": false, "faltando": [], "erro": "nao_e_repo", "detalhe": why, "topologia": topology}),
     };
     let c = checkout.ok();
@@ -167,7 +200,7 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let body = match mode {
         Mode::Package(_) if let Some(why) = super::broken_manifest(&layout) => {
             // Pacote sem o que o atualizador precisa: o botão fica preso com o motivo, sem ir ao Python.
-            let mut body = package_body(None, running.as_deref(), None, topology, estado);
+            let mut body = package_body(None, running.as_deref(), None, None, topology, estado);
             body["pre_voo"]["pode"] = false.into();
             body["pre_voo"]["erro"] = "manifesto_invalido".into();
             body["pre_voo"]["detalhe"] = why.into();
@@ -177,7 +210,7 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             let installed = super::installed(&layout);
             let channel = installed.as_ref().map_or_else(|| "latest".to_owned(), |m| m.channel.clone());
             let remote = published(&Release { base_url: st.update_release_base.clone(), channel }, refresh).await;
-            package_body(installed.as_ref(), running.as_deref(), remote.as_ref(), topology, estado)
+            package_body(installed.as_ref(), running.as_deref(), remote.entry.as_ref(), remote.error.as_deref(), topology, estado)
         }
         Mode::Developer(root) => {
             let checkout = tokio::task::spawn_blocking(move || super::dev::read(&root, refresh)).await.unwrap_or_else(|e| Err(e.to_string()));
@@ -285,7 +318,7 @@ mod tests {
     fn update_package_body_has_the_python_shape_with_package_values() {
         let installed = manifest("0.1.0.8200", "latest");
         let estado = json!({"fase": "pronto", "ok": true}).as_object().cloned().unwrap();
-        let body = package_body(Some(&installed), Some("0.1.0.8200"), Some(&entry("0.1.0.8207", 5)), "systemd", estado.clone());
+        let body = package_body(Some(&installed), Some("0.1.0.8200"), Some(&entry("0.1.0.8207", 5)), None, "systemd", estado.clone());
         assert_client_shape(&body);
         assert_eq!(body["atualizacao_disponivel"], true);
         assert_eq!(body["atras"], 7, "contagem de commits do número da versão");
@@ -296,12 +329,12 @@ mod tests {
         assert_eq!(body["versao_legivel"]["remoto"], "0.1.0.8207");
         assert_eq!(body["estado"], Value::Object(estado.clone()));
 
-        let same = package_body(Some(&installed), Some("0.1.0.8199"), Some(&entry("0.1.0.8200", 5)), "windows", estado.clone());
+        let same = package_body(Some(&installed), Some("0.1.0.8199"), Some(&entry("0.1.0.8200", 5)), None, "windows", estado.clone());
         assert_eq!((same["atualizacao_disponivel"].clone(), same["atras"].clone()), (json!(false), json!(0)));
         assert_ne!(same["versoes"]["repo"], same["versoes"]["backend"], "disco à frente do processo: a tela oferece reiniciar");
-        let base = package_body(Some(&installed), None, Some(&entry("0.2.0.10", 5)), "manual", estado.clone());
+        let base = package_body(Some(&installed), None, Some(&entry("0.2.0.10", 5)), None, "manual", estado.clone());
         assert_eq!((base["atras"].clone(), base["atualizacao_disponivel"].clone()), (json!(1), json!(true)), "VERSION novo");
-        let offline = package_body(Some(&manifest("0.1.0.8200", "beta")), Some("0.1.0.8200"), None, "systemd", estado);
+        let offline = package_body(Some(&manifest("0.1.0.8200", "beta")), Some("0.1.0.8200"), None, None, "systemd", estado);
         assert_client_shape(&offline);
         assert_eq!((offline["atualizacao_disponivel"].clone(), offline["api_publicado"].clone()), (json!(false), json!(4)), "sem índice: a API instalada");
         assert_eq!(offline["pre_voo"]["alvo"], "beta");
@@ -310,7 +343,7 @@ mod tests {
     #[test]
     fn update_dev_body_has_the_python_shape_with_the_checkout_values() {
         let checkout = Checkout { branch: "main".into(), upstream: Some("origin/main".into()), dirty: 2, untracked: 0, ahead: 0, behind: 3,
-            head: "aaa1111".into(), upstream_head: Some("bbb2222".into()), changes: vec![("bbb2222".into(), "fix: x".into())] };
+            head: "aaa1111".into(), upstream_head: Some("bbb2222".into()), changes: vec![("bbb2222".into(), "fix: x".into())], fetch_error: None };
         let body = dev_body(Ok(&checkout), Some("aaa1111"), "systemd", Map::new());
         assert_client_shape(&body);
         assert_eq!((body["atras"].clone(), body["atualizacao_disponivel"].clone()), (json!(3), json!(true)));
@@ -347,12 +380,40 @@ mod tests {
     #[test]
     fn update_unknown_running_version_is_the_disk_one() {
         // Vazio faria o nativo oferecer "reiniciar" para sempre (`behind` compara repo com backend).
-        let body = package_body(Some(&manifest("0.1.0.5", "latest")), None, None, "systemd", Map::new());
+        let body = package_body(Some(&manifest("0.1.0.5", "latest")), None, None, None, "systemd", Map::new());
         assert_eq!(body["versoes"], json!({"repo": "0.1.0.5", "backend": "0.1.0.5"}));
         assert_eq!(body["versao_legivel"]["backend"], "0.1.0.5");
         let checkout = Checkout { branch: "main".into(), head: "aaa1111".into(), ..Checkout::default() };
         let dev = dev_body(Ok(&checkout), None, "systemd", Map::new());
         assert_eq!(dev["versoes"], json!({"repo": "aaa1111", "backend": "aaa1111"}));
+    }
+
+    #[test]
+    fn update_index_failure_reaches_the_body_and_keeps_the_good_entry() {
+        let good = entry("0.1.0.8207", 5);
+        let first = Published::merge(None, Err("404 em x".into()));
+        assert_eq!((first.entry.clone(), first.error.as_deref()), (None, Some("404 em x")));
+        let ok = Published::merge(Some(first), Ok(good.clone()));
+        assert_eq!((ok.entry.clone(), ok.error.clone()), (Some(good.clone()), None));
+        let kept = Published::merge(Some(ok), Err("sem rede".into()));
+        assert_eq!((kept.entry.clone(), kept.error.as_deref()), (Some(good.clone()), Some("sem rede")), "a entrada boa fica");
+
+        let installed = manifest("0.1.0.8200", "latest");
+        let body = package_body(Some(&installed), None, kept.entry.as_ref(), kept.error.as_deref(), "systemd", Map::new());
+        assert_client_shape(&body);
+        assert_eq!((body["pre_voo"]["erro"].clone(), body["pre_voo"]["detalhe"].clone()), (json!("indice_indisponivel"), json!("sem rede")));
+        assert_eq!(body["atras"], 7, "o que se sabia continua valendo");
+        // Sem nada conhecido, como o Python: a tela oferece o Atualizar e o motor diz o motivo.
+        let blind = package_body(Some(&installed), None, None, Some("sem rede"), "systemd", Map::new());
+        assert_eq!((blind["atualizacao_disponivel"].clone(), blind["pre_voo"]["pode"].clone()), (json!(true), json!(true)));
+    }
+
+    #[test]
+    fn update_dev_fetch_failure_reaches_the_body() {
+        let checkout = Checkout { branch: "main".into(), head: "aaa1111".into(), fetch_error: Some("git fetch falhou: sem rede".into()), ..Checkout::default() };
+        let body = dev_body(Ok(&checkout), None, "systemd", Map::new());
+        assert_client_shape(&body);
+        assert_eq!((body["pre_voo"]["erro"].clone(), body["pre_voo"]["detalhe"].clone()), (json!("fetch_falhou"), json!("git fetch falhou: sem rede")));
     }
 
     #[test]

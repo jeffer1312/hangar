@@ -137,7 +137,10 @@ pub fn cli(args: &[String]) -> ExitCode {
     let env = crate::accounts::environment::AccountEnvironment::capture();
     let home = env.home.clone();
     let current = crate::install_root::current(&home);
-    let port = super::restart::env_port(&home, &current, "CP_PORT").unwrap_or(8765);
+    let port = match super::restart::env_port(&home, &current, "CP_PORT") {
+        Ok(port) => port.unwrap_or(8765),
+        Err(e) => { println!("##HANGAR-FALHA## {e}"); return ExitCode::from(1); }
+    };
     let runner = Arc::new(super::ShellRunner { timeout: super::steps::STEP_TIMEOUT });
     let topology = Topology::detect(&*runner, &home, cfg!(windows));
     let restarter = SystemRestarter { topology, runner, home: home.clone(), port };
@@ -262,7 +265,7 @@ mod tests {
         std::fs::remove_dir_all(m.state_dir()).unwrap();
 
         // Sem `current` a máquina não foi migrada: quem decide é a migração.
-        crate::update::remove_link(&m.layout().current());
+        crate::update::remove_link(&m.layout().current()).unwrap();
         let error = m.switch(Request::On(m.checkout.clone()), false, &health).await.unwrap_err();
         assert!(error.contains("migrate-package"), "{error}");
         assert!(std::fs::symlink_metadata(m.layout().current()).is_err(), "nada foi criado");

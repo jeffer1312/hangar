@@ -62,20 +62,18 @@ impl SystemRestarter {
                 let quote = |p: &Path| p.display().to_string().chars()
                     .flat_map(|c| if matches!(c, '\'' | '‘' | '’' | '‚' | '‛') { vec![c, c] } else { vec![c] }).collect::<String>();
                 format!("powershell -NoProfile -ExecutionPolicy Bypass -Command \". '{}'; Restart-HangarTasks '{}' {} {}\"",
-                    quote(&root.join("scripts").join("windows-tasks.ps1")), quote(&root), self.port, front_port(&self.home, &root))
+                    quote(&root.join("scripts").join("windows-tasks.ps1")), quote(&root), self.port, front_port(&self.home, &root)?)
             }
         }))
     }
 }
 
 /// `CP_FRONT_PORT` do `.env` dos dados do usuário; 0 sem a tarefa do front.
-fn front_port(home: &Path, root: &Path) -> u16 { env_port(home, root, "CP_FRONT_PORT").unwrap_or(0) }
+fn front_port(home: &Path, root: &Path) -> Result<u16, String> { Ok(env_port(home, root, "CP_FRONT_PORT")?.unwrap_or(0)) }
 
-/// Uma porta (`CP_PORT`, `CP_FRONT_PORT`) do `.env` dos dados do usuário.
-pub(crate) fn env_port(home: &Path, root: &Path, key: &str) -> Option<u16> {
-    let env = crate::user_data::path(home, Some(&root.join("backend")), ".env")?;
-    std::fs::read_to_string(env).ok()?.lines()
-        .find_map(|line| line.strip_prefix(key)?.strip_prefix('=')).and_then(|port| port.trim().parse().ok())
+/// Uma porta (`CP_PORT`, `CP_FRONT_PORT`) do `.env` dos dados do usuário da instalação em `root`.
+pub(crate) fn env_port(home: &Path, root: &Path, key: &str) -> Result<Option<u16>, String> {
+    crate::user_data::env_port(home, Some(&root.join("backend")), key)
 }
 
 /// As últimas linhas da saída: o motivo da recusa (mutex ocupado, unit negada) vai ao estado.
@@ -176,6 +174,22 @@ mod tests {
         assert_eq!(runner.ran.lock().unwrap().as_slice(), [format!(
             "powershell -NoProfile -ExecutionPolicy Bypass -Command \". '{}'; Restart-HangarTasks '{}' 8765 5173\"",
             helper.display(), root.display())]);
+    }
+
+    #[tokio::test]
+    async fn update_windows_restart_reads_the_front_port_like_the_env_and_refuses_a_bad_one() {
+        let (dir, _root) = windows_home("0.1.0.11");
+        let env = dir.path().join(".hangar/config/.env");
+        std::fs::write(&env, "CP_FRONT_PORT='5174'  # o front\n").unwrap();
+        let runner = script(|_| code(0, ""));
+        restarter(Topology::Windows, runner.clone(), dir.path()).restart().await.unwrap();
+        assert!(runner.ran.lock().unwrap()[0].ends_with(" 8765 5174\""), "{:?}", runner.ran.lock().unwrap());
+
+        std::fs::write(&env, "CP_FRONT_PORT=cinco\n").unwrap();
+        let runner = script(|_| code(0, ""));
+        let error = restarter(Topology::Windows, runner.clone(), dir.path()).restart().await.unwrap_err();
+        assert!(error.contains("CP_FRONT_PORT"), "{error}");
+        assert!(runner.ran.lock().unwrap().is_empty(), "porta ilegível não vira 0 calada");
     }
 
     #[tokio::test]

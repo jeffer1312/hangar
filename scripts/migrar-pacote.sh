@@ -10,27 +10,39 @@ cd "$(dirname "$0")/.."
 
 marca="$HOME/.hangar/migration.json"
 if [ -e "$marca" ]; then echo "já migrada: $marca"; exit 0; fi
-bin="$HOME/.hangar/migrate/hangar-server"
+pasta="$HOME/.hangar/migrate"
+bin="$pasta/hangar-server"
+
+# O binário de uma rodada anterior não pode rodar no lugar de um download que falhou.
+if ! rm -rf "$pasta"; then
+    echo "##HANGAR-FALHA## não consegui tirar o binário anterior de $pasta"
+    exit 1
+fi
 
 # 2 = a release não tem build para esta máquina; os avisos do download vão para a saída do passo.
-( cd backend && uv run --no-sync python -c "from pathlib import Path; from app import rust_release as r
+avisos="$( cd backend && uv run --no-sync python -c "from pathlib import Path; from app import rust_release as r
 a = r.fetch(dest=Path.home() / '.hangar' / 'migrate')
 print(*(a or []), sep='\n')
-raise SystemExit(2 if a is None else 0)" )
+raise SystemExit(2 if a is None else 0)" 2>&1 )"
 rc=$?
+[ -n "$avisos" ] && printf '%s\n' "$avisos"
 
 if [ "$rc" = 2 ]; then
     json() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
-    mkdir -p "$HOME/.hangar"
-    printf '{"mode":"not_migrated","date":"%s","checkout":"%s","version":null,"reason":"%s","notes":[],"done":[]}\n' \
-        "$(date +%Y-%m-%dT%H:%M:%S%z)" "$(json "$PWD")" \
-        "o Hangar não publica o binário do Rust para este sistema; a máquina segue no motor git" > "$marca.tmp" \
-        && mv "$marca.tmp" "$marca"
+    if ! { mkdir -p "$HOME/.hangar" \
+        && printf '{"mode":"not_migrated","date":"%s","checkout":"%s","version":null,"reason":"%s","notes":[],"done":[]}\n' \
+            "$(date +%Y-%m-%dT%H:%M:%S%z)" "$(json "$PWD")" \
+            "o Hangar não publica o binário do Rust para este sistema; a máquina segue no motor git" > "$marca.tmp" \
+        && mv "$marca.tmp" "$marca"; } 2>/dev/null; then
+        rm -f "$marca.tmp" 2>/dev/null
+        echo "##HANGAR-FALHA## sem binário do Rust para este sistema, e não consegui gravar a marca $marca"
+        exit 1
+    fi
     echo "não migrada: sem binário do Rust para este sistema"
     exit 0
 fi
 if [ "$rc" != 0 ] || [ ! -x "$bin" ]; then
-    echo "##HANGAR-FALHA## o binário da migração não foi baixado para $bin (download saiu com $rc)"
+    echo "##HANGAR-FALHA## o binário da migração não foi baixado para $bin (download saiu com $rc)${avisos:+: $(printf '%s' "$avisos" | tr '\n' ' ')}"
     exit 1
 fi
 # `exec`: o prazo do passo, se estourar, atinge a própria migração e não só este shell.

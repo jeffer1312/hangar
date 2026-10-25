@@ -140,16 +140,11 @@ impl Machine<'_> {
         let file = if self.windows { self.tasks_dir.as_ref()?.join("hangar-backend.vbs") } else { self.systemd_dir.join("hangar-backend.service") };
         file.is_file().then_some(file)
     }
-    /// O `.env` em uso: o novo quando existe, senão o do checkout.
-    fn env_value(&self, key: &str) -> Option<String> {
-        let env = crate::user_data::path(&self.home, Some(&self.backend()), ".env")?;
-        std::fs::read_to_string(env).ok()?.lines().filter_map(|l| l.trim().strip_prefix(key)?.strip_prefix('='))
-            .map(|v| v.split(" #").next().unwrap_or(v).trim().trim_matches(['"', '\'']).to_owned()).last()
-    }
+    /// Uma porta do `.env` em uso: o novo quando existe, senão o do checkout.
+    fn env_port(&self, key: &str) -> Result<Option<u16>, String> { crate::user_data::env_port(&self.home, Some(&self.backend()), key) }
     /// `SERVE=preview`: a unit do front existe ou o `.env` aponta o front para outra porta.
-    fn preview(&self) -> bool {
-        self.systemd_dir.join("hangar-frontend.service").exists()
-            || self.env_value("CP_FRONT_PORT").and_then(|p| p.parse::<u16>().ok()).is_some_and(|p| p > 0)
+    fn preview(&self) -> Result<bool, String> {
+        Ok(self.systemd_dir.join("hangar-frontend.service").exists() || self.env_port("CP_FRONT_PORT")?.is_some_and(|p| p > 0))
     }
     fn sep(&self) -> char { if self.windows { '\\' } else { '/' } }
     /// `<raiz>/backend/hooks/`, como os instaladores gravam no comando do hook.
@@ -158,7 +153,7 @@ impl Machine<'_> {
 
 fn facts(m: &Machine<'_>) -> Result<Facts, String> {
     let checkout = super::dev::read(&m.checkout, false).map_err(|e| format!("não consegui ler o checkout {}: {e}", m.checkout.display()))?;
-    Ok(Facts { dirty: checkout.dirty, untracked: checkout.untracked,ahead: checkout.ahead, branch: checkout.branch, upstream: checkout.upstream.is_some(), preview: m.preview() })
+    Ok(Facts { dirty: checkout.dirty, untracked: checkout.untracked,ahead: checkout.ahead, branch: checkout.branch, upstream: checkout.upstream.is_some(), preview: m.preview()? })
 }
 
 fn read_record(path: &Path) -> Option<Record> { serde_json::from_slice(&std::fs::read(path).ok()?).ok() }
@@ -452,17 +447,34 @@ fn apply(m: &Machine<'_>, record: &mut Record, target: &Path, service: &Path) ->
     rewrite(m, record, service, &new)?;
     // Hooks que apontam para o checkout: o Kimi só acrescenta e o Codex não troca hook de outro checkout.
     let needle = m.hooks_needle(&m.checkout);
+    // Arquivo que não se lê fica como está, com nota: o hook velho dele segue apontando para o checkout.
+    let unread = |record: &mut Record, path: &Path, e: &dyn std::fmt::Display| {
+        record.notes.push(format!("não li {} ({e}); os hooks de lá que apontam para o checkout ficaram", path.display()));
+        save(&m.partial(), record)
+    };
     let kimi = m.kimi_home.join("config.toml");
-    if let Ok(text) = std::fs::read_to_string(&kimi) {
-        let (new, removed) = kimi_drop(&text, &needle, m.windows);
-        if !removed.is_empty() {
-            push(m, record, Done::Kimi { path: kimi.clone(), removed })?;
-            crate::runtime::queue::atomic_write(&kimi, new.as_bytes()).map_err(|e| format!("{}: {e}", kimi.display()))?;
+    match std::fs::read_to_string(&kimi) {
+        Ok(text) => {
+            let (new, removed) = kimi_drop(&text, &needle, m.windows);
+            if !removed.is_empty() {
+                push(m, record, Done::Kimi { path: kimi.clone(), removed })?;
+                crate::runtime::queue::atomic_write(&kimi, new.as_bytes()).map_err(|e| format!("{}: {e}", kimi.display()))?;
+            }
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => unread(record, &kimi, &e)?,
     }
     for home in &m.codex_homes {
         let path = home.join("hooks.json");
-        let Some(mut doc) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { continue };
+        let read = match std::fs::read(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => Err(e.to_string()),
+            Ok(bytes) => serde_json::from_slice::<Value>(&bytes).map_err(|e| e.to_string()),
+        };
+        let mut doc = match read {
+            Ok(doc) => doc,
+            Err(e) => { unread(record, &path, &e)?; continue; }
+        };
         let removed = codex_drop(&mut doc, &needle, m.windows);
         if !removed.is_empty() {
             push(m, record, Done::Codex { path: path.clone(), removed })?;
@@ -476,7 +488,14 @@ fn apply(m: &Machine<'_>, record: &mut Record, target: &Path, service: &Path) ->
         for entry in std::fs::read_dir(&bin).into_iter().flatten().flatten() {
             let path = entry.path();
             if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd")) { continue; }
-            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let text = match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(e) => {
+                    record.notes.push(format!("não li o atalho {} ({e}); ele segue apontando para o checkout", path.display()));
+                    save(&m.partial(), record)?;
+                    continue;
+                }
+            };
             if let Some(new) = retarget(&text, &from, r"%USERPROFILE%\.hangar\current\scripts\", true) {
                 rewrite(m, record, &path, new.as_bytes())?;
             }
@@ -505,6 +524,14 @@ fn apply(m: &Machine<'_>, record: &mut Record, target: &Path, service: &Path) ->
     Ok(())
 }
 
+/// Arquivo apagado depois da migração volta só com o que ela tirou.
+fn absent_is_empty(read: std::io::Result<String>) -> std::io::Result<String> {
+    match read {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        other => other,
+    }
+}
+
 /// Desfaz os efeitos do fim para o começo; devolve o que não voltou.
 fn revert(m: &Machine<'_>, done: &[Done]) -> Vec<String> {
     let mut failures = Vec::new();
@@ -512,7 +539,11 @@ fn revert(m: &Machine<'_>, done: &[Done]) -> Vec<String> {
     let current = m.layout().current();
     for item in done.iter().rev() {
         match item {
-            Done::Dir { path } => { let _ = std::fs::remove_dir(path); }
+            Done::Dir { path } => match std::fs::remove_dir(path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => fail(format!("{} não saiu ({e}); o que sobrou dentro dela não é da migração", path.display())),
+                Ok(()) => {}
+            },
             Done::Data { name, copied, linked } => {
                 let (old, new) = (m.backend().join(name), m.config().join(name));
                 if *linked && std::fs::symlink_metadata(&old).is_ok_and(|meta| meta.is_symlink()) { let _ = std::fs::remove_file(&old); }
@@ -523,8 +554,10 @@ fn revert(m: &Machine<'_>, done: &[Done]) -> Vec<String> {
                     if *copied && let Err(e) = remove_tree(&new) { fail(format!("{} não saiu: {e}", new.display())); }
                 }
             }
-            Done::Launcher { existed } => if !existed { let _ = std::fs::remove_file(m.launcher()); },
-            Done::Current => super::remove_link(&current),
+            Done::Launcher { existed } => if !existed && let Err(e) = remove_tree(&m.launcher()) {
+                fail(format!("{} não saiu: {e}", m.launcher().display()));
+            },
+            Done::Current => if let Err(e) = super::remove_link(&current) { fail(format!("{} não saiu: {e}", current.display())); },
             Done::File { path, original } => {
                 let result = match original.as_deref().map(|o| base64::engine::general_purpose::STANDARD.decode(o)) {
                     Some(Ok(bytes)) => crate::runtime::queue::atomic_write(path, &bytes).map_err(|e| e.to_string()),
@@ -533,15 +566,27 @@ fn revert(m: &Machine<'_>, done: &[Done]) -> Vec<String> {
                 };
                 if let Err(e) = result { fail(format!("{} não voltou: {e}", path.display())); }
             }
+            // Ilegível fica como está: regravar só com os blocos devolvidos apagaria o resto do arquivo.
             Done::Kimi { path, removed } => {
-                let text = std::fs::read_to_string(path).unwrap_or_default();
+                let text = match absent_is_empty(std::fs::read_to_string(path)) {
+                    Ok(text) => text,
+                    Err(e) => { fail(format!("{} não voltou: ilegível ({e}), ficou como estava", path.display())); continue; }
+                };
                 let (text, _) = kimi_drop(&text, &m.hooks_needle(&current), m.windows);
                 if let Err(e) = crate::runtime::queue::atomic_write(path, kimi_restore(&text, removed).as_bytes()) {
                     fail(format!("{} não voltou: {e}", path.display()));
                 }
             }
             Done::Codex { path, removed } => {
-                let mut doc = std::fs::read(path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).unwrap_or(Value::Null);
+                let read = match std::fs::read(path) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
+                    Err(e) => Err(e.to_string()),
+                    Ok(bytes) => serde_json::from_slice::<Value>(&bytes).map_err(|e| e.to_string()),
+                };
+                let mut doc = match read {
+                    Ok(doc) => doc,
+                    Err(e) => { fail(format!("{} não voltou: ilegível ({e}), ficou como estava", path.display())); continue; }
+                };
                 codex_drop(&mut doc, &m.hooks_needle(&current), m.windows);
                 codex_restore(&mut doc, removed);
                 if let Err(e) = write_json(path, &doc) { fail(format!("{} não voltou: {e}", path.display())); }
@@ -554,7 +599,11 @@ fn revert(m: &Machine<'_>, done: &[Done]) -> Vec<String> {
 
 /// Volta a máquina como estava e sobe o backend de antes. `running`: o backend novo está de pé.
 fn roll_back(m: &Machine<'_>, record: &Record, running: bool, why: String) -> String {
-    if running && let Err(e) = m.service.stop() { tracing::warn!("migrate: o backend novo não parou: {e}"); }
+    // Desfazer com o backend novo de pé trocaria os dados e o `current` debaixo dele.
+    if running && let Err(e) = m.service.stop() {
+        return format!("{why}; e o backend novo não parou ({e}), então a volta não mexeu em nada: a máquina segue migrada \
+            pela metade, com o registro em {}; pare o backend e rode `hangar-server migrate-package --undo`", m.partial().display());
+    }
     let failures = revert(m, &record.done);
     let started = m.service.start();
     if failures.is_empty() { let _ = std::fs::remove_file(m.partial()); }
@@ -753,7 +802,13 @@ impl Fetcher for ReleaseFetcher {
             let manifest = Manifest::parse(&std::fs::read(dir.join(hangar_package::MANIFEST_FILE)).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
             let mut notes = Vec::new();
-            if let Some(key) = manifest.dist_key.as_deref() && crate::ui::enabled(&self.home).unwrap_or(true)
+            // Escolha ilegível: a tela fica ligada (o padrão), e a leitura que falhou fica na nota.
+            let web_ui = crate::ui::enabled(&self.home).unwrap_or_else(|e| {
+                tracing::warn!(code = "update_web_ui_unreadable", "migrate: escolha da tela web ilegível, segue ligada: {e}");
+                notes.push(format!("a escolha da tela web (~/.hangar/web-ui.json) está ilegível ({e}); a tela segue ligada"));
+                true
+            });
+            if let Some(key) = manifest.dist_key.as_deref() && web_ui
                 && let Err(e) = crate::ui::fetch(key, &layout.hangar.join("ui")).await {
                 notes.push(format!("a tela web não foi baixada: {e}"));
             }
@@ -861,7 +916,10 @@ pub fn cli(args: &[String]) -> ExitCode {
         // A prova cabe no prazo do passo do motor `git` (600 s), com o download antes dela.
         settings: Settings { download_deadline: Duration::from_secs(300), ..Settings::default() },
     };
-    let port = probe.env_value("CP_PORT").and_then(|p| p.parse().ok()).unwrap_or(8765);
+    let port = match probe.env_port("CP_PORT") {
+        Ok(port) => port.unwrap_or(8765),
+        Err(e) => { println!("##HANGAR-FALHA## {e}"); return ExitCode::from(1); }
+    };
     let service = SystemService { runner, windows, checkout, port };
     let client = match crate::http_client().build() {
         Ok(client) => client,
@@ -880,7 +938,9 @@ pub fn cli(args: &[String]) -> ExitCode {
     } else {
         runtime.block_on(async { migrate_until(&machine, &health, dry_run, interrupted()).await }).map(|outcome| match outcome {
             Outcome::DryRun(lines) => lines,
-            Outcome::Migrated(mode) => vec![format!("migrada para o {}; marca em {}", label(mode), machine.marker().display())],
+            Outcome::Migrated(mode) => std::iter::once(format!("migrada para o {}; marca em {}", label(mode), machine.marker().display()))
+                .chain(read_record(&machine.marker()).map(|r| r.notes).unwrap_or_default().into_iter().map(|note| format!("aviso: {note}")))
+                .collect(),
             Outcome::AlreadyMigrated(mode) => vec![format!("já migrada ({}); nada a fazer", label(mode))],
             Outcome::NotMigrated(reason) => vec![format!("não migrada: {reason}")],
         })

@@ -192,10 +192,13 @@ pub async fn setting(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         }
         enabled(&home)
     }).await;
-    match result {
-        Ok(Ok(on)) => json_response(StatusCode::OK, json!({"web_ui": on})),
-        _ => detail(StatusCode::SERVICE_UNAVAILABLE, "web_ui_unavailable", "não foi possível ler ou guardar a escolha da tela web", json!({})),
-    }
+    let cause = match result {
+        Ok(Ok(on)) => return json_response(StatusCode::OK, json!({"web_ui": on})),
+        Ok(Err(e)) => e.to_string(),
+        Err(e) => format!("tarefa morreu: {e}"),
+    };
+    tracing::warn!(code = "web_ui_unavailable", "tela web: escolha não lida ou não guardada: {cause}");
+    detail(StatusCode::SERVICE_UNAVAILABLE, "web_ui_unavailable", "não foi possível ler ou guardar a escolha da tela web", json!({}))
 }
 
 /// Baixa `frontend-dist-<chave>.tar.gz` de `dist-commits`, confere o `.sha256`, extrai em
