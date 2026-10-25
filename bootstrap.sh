@@ -216,6 +216,11 @@ pelo_pacote() {
   # Re-rodar continua de onde parou: o pacote já instalado roda o instalador dele de novo.
   if [ -f "$PACOTE/manifest.json" ] && [ ! -e "$PACOTE/.git" ]; then
     ok "o Hangar já está instalado pelo pacote — rodando o instalador dele de novo (atualizar é pelo app)"
+    local instalado
+    instalado=$(tr -d ' \t\r\n' < "$PACOTE/manifest.json" | sed -n 's/.*"channel":"\([A-Za-z0-9._-]*\)".*/\1/p')
+    # Não há troca de canal: o atualizador segue o canal do manifesto instalado.
+    [ -z "$instalado" ] || [ "$instalado" = "$CANAL" ] \
+      || nota "instalado no canal $instalado (pedido: $CANAL); o canal instalado é mantido"
     roda_instalador "$PACOTE" "$@"
   fi
   [ "$CHECK" = 0 ] || fail "não há instalação pelo pacote para conferir — rode sem --check para instalar"

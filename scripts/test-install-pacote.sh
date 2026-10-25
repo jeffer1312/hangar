@@ -129,6 +129,13 @@ expect_eq "de-novo: sai 0" "$rc" 0
 [ -e "$S/log/server" ] && flunk "de-novo: nada marcado" "$S/out" || pass "de-novo: nada marcado"
 expect_line "de-novo: diz que os pendentes ficam para o Atualizar" "$S/out" 'nenhum passo de atualização marcado.*Atualizar'
 
+# --- Caso: segunda rodada sem terminal acha o Claude que a primeira pôs em ~/.local/bin ---
+pacote_sandbox local-bin
+local_bin_box
+run_install "$S/out" --tailscale=nao --sem-nativo
+expect_no "local-bin: acha o claude" "$S/out" 'faltam: Claude Code|Claude Code continua faltando'
+expect_no "local-bin: o tmux do sistema vem antes" "$S/log/calls" '^tmux-do-local-bin'
+
 # --- Caso: a tela da chave do pacote não veio: pendência, não "vem pronta" ---
 pacote_sandbox sem-tela
 rm -rf "$S/home/.hangar/ui"

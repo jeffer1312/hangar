@@ -105,6 +105,16 @@ askpass_says() {
 $1"
 }
 
+# local_bin_box: tira o claude do PATH e o põe em ~/.local/bin, com um tmux quebrado ao lado que não
+# pode passar na frente do tmux do sistema.
+local_bin_box() {
+  rm -f "$B/claude"
+  mkdir -p "$S/home/.local/bin"
+  printf '#!/bin/sh\nexit 0\n' > "$S/home/.local/bin/claude"
+  printf '#!/bin/sh\necho "tmux-do-local-bin $*" >> "%s/log/calls"\nexit 1\n' "$S" > "$S/home/.local/bin/tmux"
+  chmod +x "$S/home/.local/bin/claude" "$S/home/.local/bin/tmux"
+}
+
 [ "$LIB_ONLY" = 1 ] && return 0
 
 APP_ARGS=(--app --tailscale=nao --sem-nativo --no-frontend)
@@ -451,6 +461,25 @@ for f in '--yes\|-y' '--check' '--agentes=' '--tailscale=sim\|--tailscale=nao' '
 done
 expect_no "ajuda: sem o padrão de erro" "$S/out" '--tailscale=\*'
 [ -e "$S/home/.hangar" ] && flunk "ajuda: nada escrito" || pass "ajuda: nada escrito"
+
+# --- Caso: segunda rodada sem terminal acha o Claude que a primeira pôs em ~/.local/bin ---
+new_sandbox local-bin
+local_bin_box
+run_install "$S/out" --tailscale=nao --sem-nativo --no-frontend
+expect_no "local-bin: acha o claude" "$S/out" 'faltam: Claude Code|Claude Code continua faltando'
+expect_no "local-bin: o tmux do sistema vem antes" "$S/log/calls" '^tmux-do-local-bin'
+
+# --- Caso: linger já ligado: nenhuma dica de enable-linger; resumo numerado em sequência ---
+new_sandbox linger-sim
+fake loginctl 'echo Linger=yes'
+run_install "$S/out" "${APP_ARGS[@]}"
+expect_no "linger-sim: sem dica de linger" "$S/out" 'enable-linger'
+new_sandbox linger-nao
+fake loginctl 'echo Linger=no'
+run_install "$S/out" "${APP_ARGS[@]}"
+expect_line "linger-nao: dica no 7/8" "$S/out" 'Pra sobreviver a logout/reboot também: loginctl enable-linger'
+expect_line "linger-nao: dica é o item 3 do resumo" "$S/out" '^   3\. Para o Hangar subir mesmo sem você logar'
+expect_no "linger-nao: sem item 4" "$S/out" '^   4\. '
 
 # --- fim dos casos ---
 if [ "$fail" = 0 ]; then echo "tudo ok"; else echo "houve falha"; fi

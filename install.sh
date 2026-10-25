@@ -326,6 +326,14 @@ PKG=$(detecta_pkg)
 # carrega fora de terminal interativo: um Node instalado por uma rodada anterior seria dado como ausente.
 FNM_NODE="$HOME/.local/share/fnm/aliases/default/bin"
 [ -d "$FNM_NODE" ] && export PATH="$PATH:$FNM_NODE"
+# Mesmo motivo: o Claude Code de uma rodada anterior fica em ~/.local/bin. No fim, para não passar na frente do sistema.
+[ -d "$HOME/.local/bin" ] && export PATH="$PATH:$HOME/.local/bin"
+
+# 0 = há loginctl e o linger deste usuário está desligado: só então a dica de enable-linger serve.
+linger_falta() {
+  command -v loginctl >/dev/null || return 1
+  ! loginctl show-user "${USER:-$(id -un)}" -p Linger 2>/dev/null | grep -qx 'Linger=yes'
+}
 
 # Cedo porque o 6/8 também precisa dela (o `tailscale serve` publica ESTA porta), não só o resumo.
 PORTA_FIM=$(grep '^CP_PORT=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
@@ -989,7 +997,7 @@ elif [ "$SERVICES" = 1 ] && ask "Rodar backend+frontend como serviços de usuár
   [ "$SETUP_RC" != 0 ] && anota_problema "services-setup.sh falhou (exit $SETUP_RC)"
   [ "$(systemctl --user is-active hangar-backend.service 2>/dev/null)" = active ] \
     || anota_problema "serviços instalados mas o hangar-backend não está active"
-  nota "Pra sobreviver a logout/reboot também: loginctl enable-linger \$USER"
+  linger_falta && nota "Pra sobreviver a logout/reboot também: loginctl enable-linger \$USER"
 else
   nota "pulado — rodando na mão, fechar o terminal derruba o backend"
 fi
@@ -1216,8 +1224,9 @@ if [ "$QR_MOSTRADO" = 1 ]; then
 else
   echo "   2. No celular: abra $URL_FIM e digite o token."
 fi
-[ "$QUER_TAILSCALE" = 1 ] && echo "   3. No celular: instale o app Tailscale e entre com a MESMA conta do PC."
-command -v loginctl >/dev/null && echo "   4. Para o Hangar subir mesmo sem você logar no PC:  sudo loginctl enable-linger \$USER"
+ITEM=3
+[ "$QUER_TAILSCALE" = 1 ] && { echo "   $ITEM. No celular: instale o app Tailscale e entre com a MESMA conta do PC."; ITEM=$((ITEM + 1)); }
+linger_falta && echo "   $ITEM. Para o Hangar subir mesmo sem você logar no PC:  sudo loginctl enable-linger \$USER"
 cat <<EOF
    Algo não abriu?  hangar-doctor   (diz o que falta e como consertar)
    Log desta instalação: $LOG

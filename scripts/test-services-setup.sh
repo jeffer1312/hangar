@@ -64,6 +64,9 @@ expect_line "pacote: unit chama o lançador" "$UNIT" "ExecStart=\"$H/.hangar/bin
 expect_no "pacote: sem unit do front" "$H/.config/systemd/user/hangar-frontend.service" '.'
 expect_no "pacote: não pede npm" "$S/out" 'npm nao encontrado|node_modules'
 [ -e "$H/.config/systemd/user/hangar-frontend.service" ] && flunk "pacote: unit do front criada" || pass "pacote: unit do front não criada"
+expect_no "pacote: sem dica do npm run dev" "$S/out" 'npm --prefix frontend'
+expect_no "pacote: sem caminho relativo do checkout" "$S/out" '\./scripts/services-setup\.sh'
+expect_line "pacote: dica pelo current" "$S/out" '  • Status:   ~/.hangar/current/scripts/services-setup.sh --status'
 
 # Pacote sem o lançador (install-package não rodou): recusa, em vez de gravar uma unit com uv.
 PACOTE_REPO=1 SEM_OPCOES=1 ESPERA_FALHA=1 sandbox pacote-sem-lancador 0

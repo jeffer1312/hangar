@@ -238,6 +238,23 @@ TEST_FRESH=1 run_boot "$S/out" --yes
 expect_absent "de-novo: nada baixado" "$S/server.log"
 expect_eq "de-novo: install.sh do current" "$(paste -sd' ' "$S/home/.hangar/current/args" 2>/dev/null)" '--yes' "$S/out"
 expect_eq "de-novo: install.sh não marca passos (nem com a variável herdada)" "$(cat "$S/home/.hangar/current/fresh" 2>/dev/null)" '' "$S/out"
+expect_no "de-novo: sem aviso de canal (manifesto sem canal)" "$S/out" 'canal'
+
+# --- Já instalado no beta, rodado sem --beta: o instalador do current, e o canal mantido avisado ---
+new_box canal-outro; publish latest
+mkdir -p "$S/home/.hangar/current"; printf '{\n  "channel": "beta",\n  "version": "0.1.0.42"\n}\n' > "$S/home/.hangar/current/manifest.json"
+cp "$S/install-fake.sh" "$S/home/.hangar/current/install.sh"
+run_boot "$S/out" --yes
+expect_absent "canal-outro: nada baixado" "$S/server.log"
+expect_eq "canal-outro: install.sh do current" "$(paste -sd' ' "$S/home/.hangar/current/args" 2>/dev/null)" '--yes' "$S/out"
+expect_line "canal-outro: diz o canal instalado e que é mantido" "$S/out" 'instalado no canal beta.*mantido'
+
+# --- Mesmo canal: nenhum aviso ---
+new_box canal-igual; publish beta
+mkdir -p "$S/home/.hangar/current"; printf '{\n  "channel": "beta"\n}\n' > "$S/home/.hangar/current/manifest.json"
+cp "$S/install-fake.sh" "$S/home/.hangar/current/install.sh"
+run_boot "$S/out" --beta --yes
+expect_no "canal-igual: sem aviso de canal" "$S/out" 'instalado no canal'
 
 # --- install-package recusa (instalação existente): para com o motivo ---
 new_box recusa; publish latest

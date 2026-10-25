@@ -238,7 +238,7 @@ if [[ "$BACKEND_ONLY" == 1 || "$SERVE" == backend ]]; then
   systemctl --user enable --now "$BACK"
   if [[ "$SERVE" == backend && "$BACKEND_ONLY" == 0 ]]; then
     log "Done. Backend up, servindo a interface em http://127.0.0.1:8765/"
-    echo "  Pra desenvolver com recarga ao vivo: npm --prefix frontend run dev (porta 5173)"
+    [[ "$PACOTE" == 1 ]] || echo "  Pra desenvolver com recarga ao vivo: npm --prefix frontend run dev (porta 5173)"
   else
   log "Done. Backend up (frontend NAO instalado: --backend-only)."
   echo "  Aponte um frontend ja existente para este backend — veja a URL no QR que ele imprime."
@@ -247,11 +247,15 @@ else
   systemctl --user enable --now "$BACK" "$FRONT"
   log "Done. Both services up."
 fi
+# No pacote não há checkout: o caminho estável é o do current.
+SETUP="./scripts/services-setup.sh"
+# shellcheck disable=SC2088  # o ~ é texto para a pessoa digitar
+[[ "$PACOTE" == 1 ]] && SETUP="~/.hangar/current/scripts/services-setup.sh"
 echo
-echo "  • Status:   ./scripts/services-setup.sh --status"
-echo "  • Logs:     ./scripts/services-setup.sh --logs"
-echo "  • Restart:  ./scripts/services-setup.sh --restart"
-echo "  • Stop all: ./scripts/services-setup.sh --uninstall"
+echo "  • Status:   $SETUP --status"
+echo "  • Logs:     $SETUP --logs"
+echo "  • Restart:  $SETUP --restart"
+echo "  • Stop all: $SETUP --uninstall"
 echo
 loginctl show-user "$USER" 2>/dev/null | grep -q 'Linger=yes' \
   && echo "Linger=yes → services survive logout/reboot." \
