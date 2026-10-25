@@ -162,7 +162,7 @@ def _setup_diag_logging() -> None:
     diag_logging.instalar()
 
 
-def _passos_pendentes_da_versao() -> None:
+def _passos_pendentes_da_versao(windows: bool = os.name == "nt") -> None:
     """Passos que a versão exige e que ainda não rodaram AQUI — os não destrutivos.
 
     Aqui, e não no installer, pelo mesmo motivo do `migracao_sidecars` logo acima: atualizar neste
@@ -177,6 +177,10 @@ def _passos_pendentes_da_versao() -> None:
     """
     try:
         from app import atualizacoes
+        # O instalador reinicia as tarefas e mataria este backend no meio da subida: fica para o botão.
+        if windows and any("install.ps1" in p["comando"] for p in atualizacoes.pendentes(incluir_destrutivos=False)):
+            print("[hangar] passos de atualizacao pendentes que chamam o instalador ficam para o botao Atualizar")
+            return
         feitos = atualizacoes.aplicar_pendentes(incluir_destrutivos=False)
         if feitos:
             print(f"[hangar] passos de atualizacao aplicados: {', '.join(feitos)}")
