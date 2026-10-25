@@ -20,8 +20,8 @@ export function MachineRow({ title, value, description, onPress, disabled, dange
   selected?: boolean;
   expanded?: boolean;
   valueTone?: 'success' | 'error';
-  /** Linha que liga e desliga pelo toque: anuncia como interruptor e não leva seta. */
-  checked?: boolean;
+  /** Linha que liga e desliga pelo toque: anuncia como interruptor e não leva seta; `mixed` enquanto o valor não é conhecido. */
+  checked?: boolean | 'mixed';
 }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
@@ -36,7 +36,9 @@ export function MachineRow({ title, value, description, onPress, disabled, dange
   </>;
   const style = [rowStyles.row, { borderTopColor: c.border, opacity: disabled ? 0.5 : 1 }];
   return onPress ? <Pressable accessibilityRole={checked === undefined ? 'button' : 'switch'} accessibilityLabel={title}
-    accessibilityValue={value ? { text: value } : undefined} accessibilityHint={description}
+    // No interruptor o estado já é lido pelo `checked`; o texto só vale enquanto ele é `mixed`.
+    accessibilityValue={value && (checked === undefined || checked === 'mixed') ? { text: value } : undefined}
+    accessibilityHint={description}
     accessibilityState={{ disabled, selected, expanded, checked }} disabled={disabled} onPress={onPress}
     style={({ pressed }) => [...style, pressed && { backgroundColor: c.hover }]}>{content}</Pressable>
     : <View style={style}>{content}</View>;

@@ -18,7 +18,7 @@ export function WebUiSetting({ server }: { server: Server }) {
     : on ? m.native_web_ui_on() : m.native_web_ui_off();
   return <>
     <MachineGroup>
-      <MachineRow title={m.native_web_ui_title()} description={m.native_web_ui_help()} value={value} checked={on ?? false}
+      <MachineRow title={m.native_web_ui_title()} description={m.native_web_ui_help()} value={value} checked={on === undefined || save.busy ? 'mixed' : on}
         disabled={on === undefined || read.busy || save.busy}
         onPress={() => { if (on !== undefined) void save.run((signal) => webUi(server, signal, !on), setOn); }} />
       {read.error ? <MachineRow title={m.mobile_machines_retry()} action onPress={load} disabled={read.busy} /> : null}
