@@ -14,6 +14,7 @@ use hangar_package::{ExtractError, Manifest, PackageIndex, PlatformEntry, Versio
 use serde_json::{json, Value};
 
 pub mod dev;
+pub mod dev_mode;
 pub mod executor;
 pub mod http;
 pub mod migrate;

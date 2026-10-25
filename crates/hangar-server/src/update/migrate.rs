@@ -768,14 +768,14 @@ fn label(mode: Mode) -> &'static str {
 
 /// Linux: este processo está no cgroup da unit do backend (o `systemctl stop` o mataria).
 #[cfg(target_os = "linux")]
-fn in_service_group() -> bool {
+pub(crate) fn in_service_group() -> bool {
     std::fs::read_to_string("/proc/self/cgroup").is_ok_and(|c| c.contains("hangar-backend.service"))
 }
 
 /// Windows: está num Job que mata tudo ao fechar (o do lançador da tarefa); parar a tarefa o levaria.
 /// Job ilegível não recusa: a migração da máquina sem lançador (motor `git`) não pode travar nisso.
 #[cfg(windows)]
-fn in_service_group() -> bool {
+pub(crate) fn in_service_group() -> bool {
     use windows_sys::Win32::System::JobObjects::{
         IsProcessInJob, JobObjectExtendedLimitInformation, QueryInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -793,7 +793,7 @@ fn in_service_group() -> bool {
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
-fn in_service_group() -> bool { false }
+pub(crate) fn in_service_group() -> bool { false }
 
 /// SIGTERM ou SIGINT (Unix), Ctrl-Break ou Ctrl-C (Windows). Registrado já na chamada, antes de a
 /// migração começar; sem registro, nunca dispara.
@@ -815,7 +815,7 @@ fn interrupted() -> Pin<Box<dyn Future<Output = ()> + Send>> {
     }
 }
 
-fn is_checkout(dir: &Path) -> bool { dir.join(".git").exists() && dir.join("backend").join("app").is_dir() }
+pub(crate) fn is_checkout(dir: &Path) -> bool { dir.join(".git").exists() && dir.join("backend").join("app").is_dir() }
 
 /// `hangar-server migrate-package …`: `args` sem o nome do programa nem o subcomando.
 pub fn cli(args: &[String]) -> ExitCode {

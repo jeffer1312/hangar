@@ -140,8 +140,10 @@ trocadas e apagadas sem perder nada disso. Máquina ainda não migrada continua 
 `~/.hangar/current` aponta para o checkout, e o Atualizar faz `git pull --ff-only` na branch dele e
 reinicia, sem recompilar nada. Com edição local ou commit à frente, ele recusa e diz o motivo. A
 migração escolhe esse modo sozinha quando o checkout tem edição, arquivo novo, commit à frente, está
-fora da `main` ou serve a tela pelo `vite`. Para voltar tudo ao checkout:
-`hangar-server migrate-package --undo` (o checkout nunca é apagado).
+fora da `main` ou serve a tela pelo `vite`. Depois, para editar o código de uma máquina em pacote:
+`hangar-server dev-mode on <pasta do checkout>`; para voltar à versão instalada mais nova:
+`hangar-server dev-mode off`. Os dois reiniciam o servidor e, se ele não voltar, desfazem a troca.
+Para voltar tudo ao checkout: `hangar-server migrate-package --undo` (o checkout nunca é apagado).
 
 **Tela web neste servidor** (nas configurações do servidor, no app nativo e no app do celular)
 liga ou desliga a página do Hangar no navegador por esta máquina. Vem ligada. Desligada, o

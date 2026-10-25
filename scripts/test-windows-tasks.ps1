@@ -119,7 +119,7 @@ try {
         Assert ('start' -notin $script:events) "Duplicou processo: $scenario"
         Assert ($script:task.Settings.RestartCount -eq 3) "Perdeu recuperacao automatica: $scenario"
     }
-    foreach ($scenario in @('healthy', 'transient', 'recent', 'updating', 'rust-updating', 'migrating', 'installing')) {
+    foreach ($scenario in @('healthy', 'transient', 'recent', 'updating', 'rust-updating', 'migrating', 'dev-mode', 'installing')) {
         Reset-State
         switch ($scenario) {
             healthy { $script:httpReplies.Clear(); $script:httpReplies.Enqueue($true) }
@@ -128,6 +128,7 @@ try {
             updating { }
             'rust-updating' { $script:processRows = @($rows[0], $rows[1], $pacote[2]) }
             migrating { $script:processRows = @($rows[0], $rows[1], (Row 51 1 'hangar-server.exe' 'C:\Users\u\.hangar\migrate\hangar-server.exe migrate-package')) }
+            'dev-mode' { $script:processRows = @($rows[0], $rows[1], (Row 52 1 'hangar-server.exe' 'C:\Users\u\.hangar\current\bin\hangar-server.exe dev-mode off')) }
             installing { $script:processRows = @($rows[0], $rows[1], (Row 50 1 'powershell.exe' 'powershell -File install.ps1 -Update')) }
         }
         Repair-HangarTask 'hangar-backend' 8765 'C:\repo\backend'

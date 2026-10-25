@@ -196,7 +196,7 @@ function Repair-HangarTask([string]$name, [int]$port, [string]$directory) {
     # Instalacao e atualizacao controlam a propria parada, inclusive quando a API nao responde.
     if ($rows | Where-Object {
         ($_.Name -match '^python.*\.exe$' -and $_.CommandLine -match '(?:^|\s)-m\s+app\.atualizar(?:\s|$)') -or
-        ($_.Name -eq 'hangar-server.exe' -and $_.CommandLine -match '(?:^|\s)(?:update|migrate-package)(?:\s|$)') -or
+        ($_.Name -eq 'hangar-server.exe' -and $_.CommandLine -match '(?:^|\s)(?:update|migrate-package|dev-mode)(?:\s|$)') -or
         ($_.Name -match '^(powershell|pwsh)\.exe$' -and $_.CommandLine -match '(?:^|[\s\\/])install\.ps1(?:["\s]|$)')
     }) { return }
     $candidates = @(Get-HangarTaskProcesses $rows $name $directory)

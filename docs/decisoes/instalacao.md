@@ -260,7 +260,9 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
 - **Modo desenvolvedor: o `current` aponta para um checkout sem `manifest.json`.** Atualizar é
   `git pull --ff-only` na branch dele e reiniciar, sem recompilar; árvore editada, sem upstream ou à
   frente recusa com o motivo. O laço automático do Python segue no motor `git` ali, e o executor do
-  Rust recusa rodar junto (`OtherEngine`).
+  Rust recusa rodar junto (`OtherEngine`). Depois da migração, `hangar-server dev-mode on <checkout>`
+  liga e `off` volta para a versão instalada mais nova deste sistema (sem nenhuma, recusa), com a troca,
+  o reinício e a prova do atualizador; servidor que não sobe faz o `current` voltar.
 - **A migração (`hangar-server migrate-package`) roda uma vez, fora do serviço, e se desfaz.**
   Checkout editado, com arquivo novo, fora da `main`, sem upstream, à frente ou servido pelo `vite`
   (`SERVE=preview`) vira modo desenvolvedor; o resto vira pacote. Ela para o backend antes de mover os

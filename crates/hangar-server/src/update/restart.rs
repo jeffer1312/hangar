@@ -69,10 +69,13 @@ impl SystemRestarter {
 }
 
 /// `CP_FRONT_PORT` do `.env` dos dados do usuário; 0 sem a tarefa do front.
-fn front_port(home: &Path, root: &Path) -> u16 {
-    let Some(env) = crate::user_data::path(home, Some(&root.join("backend")), ".env") else { return 0 };
-    std::fs::read_to_string(env).ok().and_then(|text| text.lines()
-        .find_map(|line| line.strip_prefix("CP_FRONT_PORT=")).and_then(|port| port.trim().parse().ok())).unwrap_or(0)
+fn front_port(home: &Path, root: &Path) -> u16 { env_port(home, root, "CP_FRONT_PORT").unwrap_or(0) }
+
+/// Uma porta (`CP_PORT`, `CP_FRONT_PORT`) do `.env` dos dados do usuário.
+pub(crate) fn env_port(home: &Path, root: &Path, key: &str) -> Option<u16> {
+    let env = crate::user_data::path(home, Some(&root.join("backend")), ".env")?;
+    std::fs::read_to_string(env).ok()?.lines()
+        .find_map(|line| line.strip_prefix(key)?.strip_prefix('=')).and_then(|port| port.trim().parse().ok())
 }
 
 /// As últimas linhas da saída: o motivo da recusa (mutex ocupado, unit negada) vai ao estado.
