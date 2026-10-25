@@ -139,13 +139,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
         assert_ne!(root(home), Some(current(home)), "sem o current a raiz é a cópia do Hangar");
-        let real = home.join(".hangar/versions/1.0.0.5");
+        let real = home.join(".hangar").join("versions").join("1.0.0.5");
         std::fs::create_dir_all(&real).unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(&real, current(home)).unwrap();
         #[cfg(windows)]
-        assert!(std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(current(home)).arg(&real)
-            .output().unwrap().status.success(), "junction não criada");
+        crate::update::make_link(&real, &current(home)).unwrap();
         assert_eq!(root(home), Some(home.join(".hangar").join("current")));
     }
 

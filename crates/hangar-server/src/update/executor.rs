@@ -580,6 +580,10 @@ mod tests {
         assert_eq!((state["fase"].clone(), state["ok"].clone(), state["request_id"].clone(), state["pid"].clone()),
             (json!("pronto"), json!(true), json!("r1"), json!(std::process::id())));
 
+        // Outra pasta, outra trava: um filho que outro teste lança herda a descrição do arquivo da
+        // trava até o exec, e a segunda chamada na mesma pasta podia achá-la ocupada.
+        let dir = tempfile::tempdir().unwrap();
+        let parts = Parts::new(&env(dir.path(), None), &args, "x");
         let same = Restart(AtomicUsize::new(0));
         assert!(!restart_only(&parts, "r2", &same, &Health(&same.0, true), &fast()).await);
         let state = StateFile::new(&parts.state_dir).read();

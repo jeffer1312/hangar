@@ -16,9 +16,14 @@ fn link_current(real: &Path, home: &Path) {
 fn link_dir(link: &Path, target: &Path) {
     #[cfg(unix)]
     std::os::unix::fs::symlink(target, link).unwrap();
+    // O cmd não entende as aspas que o `arg` do Rust gera: a linha vai crua, como no `update::make_link`.
     #[cfg(windows)]
-    assert!(std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target)
-        .output().unwrap().status.success(), "junction não criada");
+    {
+        use std::os::windows::process::CommandExt;
+        let out = std::process::Command::new("cmd.exe")
+            .raw_arg(format!("/c mklink /J \"{}\" \"{}\"", link.display(), target.display())).output().unwrap();
+        assert!(out.status.success(), "junction não criada: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    }
 }
 
 #[test]
@@ -58,7 +63,7 @@ fn launch_backend_runs_the_real_version_python() {
 fn launch_without_the_version_python_refuses() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
-    let real = home.join(".hangar/versions/v1");
+    let real = home.join(".hangar").join("versions").join("v1");
     std::fs::create_dir_all(real.join("backend")).unwrap();
     link_current(&real, home);
     let out = launch(home, &["backend"]);

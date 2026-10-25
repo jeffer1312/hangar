@@ -308,7 +308,7 @@ fn replace_link(fresh: &Path, current: &Path) -> std::io::Result<()> { std::fs::
 
 /// Junction (não precisa de administrador, ao contrário do symlink de pasta).
 #[cfg(windows)]
-fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
+pub(crate) fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
     let out = std::process::Command::new(std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into()))
         .raw_arg(format!("/c mklink /J \"{}\" \"{}\"", link.display(), target.display()))
