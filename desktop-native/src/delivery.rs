@@ -33,6 +33,7 @@ struct SendRecord {
     /// O que saiu do campo no Enter: a bolha mostra isso enquanto o envio não responde e, se falhar, volta ao campo.
     /// Com anexo é a legenda; o `text` leva também os caminhos.
     field: Option<String>,
+    history: Option<String>,
 }
 
 #[derive(Default)]
@@ -68,20 +69,30 @@ impl SendTiming {
     }
 }
 
-pub type Held = (String, SendTiming, Option<Vec<String>>);
+pub type Held = (String, String, SendTiming, Option<Vec<String>>);
 
 impl DeliveryTracker {
     pub fn begin(&mut self, key: SessionKey, text: String, known: HashSet<String>) -> bool {
         if self.pending(&key) { return false; }
         // A pergunta lateral nunca vira mensagem da conversa: a resposta do backend já é a confirmação.
         let confirmed = crate::composer::side_question(&text);
-        self.records.insert(key, SendRecord { text, known, pending: true, confirmed, outcome: None, field: None });
+        self.records.insert(key, SendRecord { text, known, pending: true, confirmed, outcome: None, field: None, history: None });
         true
     }
 
     /// O envio em voo saiu do campo: o texto dele fica à vista e, se falhar, volta para lá.
     pub fn mark_typed(&mut self, key: &SessionKey, field: String) {
+        self.mark_history(key, field.clone());
         if let Some(record) = self.records.get_mut(key).filter(|record| record.pending) { record.field = Some(field); }
+    }
+
+    /// Comando escolhido pela sugestão: o histórico usa o comando completo, e a limpeza conserva o rascunho original.
+    pub fn mark_history(&mut self, key: &SessionKey, text: String) {
+        if let Some(record) = self.records.get_mut(key).filter(|record| record.pending) { record.history = Some(text); }
+    }
+
+    pub fn history(&self, key: &SessionKey, text: &str) -> Option<String> {
+        self.records.get(key).filter(|record| record.pending && record.text == text).and_then(|record| record.history.clone())
     }
 
     pub fn typed(&self, key: &SessionKey, text: &str) -> Option<String> {
@@ -89,8 +100,8 @@ impl DeliveryTracker {
     }
 
     /// Enter com outro envio em voo: o texto espera a vez em vez de se perder.
-    pub fn hold(&mut self, key: SessionKey, text: String, timing: impl Into<SendTiming>, group: Option<Vec<String>>) {
-        self.held.entry(key).or_default().push_back((text, timing.into(), group));
+    pub fn hold(&mut self, key: SessionKey, text: String, field: String, timing: impl Into<SendTiming>, group: Option<Vec<String>>) {
+        self.held.entry(key).or_default().push_back((text, field, timing.into(), group));
     }
 
     pub fn next_held(&mut self, key: &SessionKey) -> Option<Held> {
@@ -102,7 +113,7 @@ impl DeliveryTracker {
 
     /// O envio falhou: o que esperava atrás dele sai da espera e volta para o campo.
     pub fn take_held(&mut self, key: &SessionKey) -> Vec<String> {
-        self.held.remove(key).map(|queue| queue.into_iter().map(|(text, ..)| text).collect()).unwrap_or_default()
+        self.held.remove(key).map(|queue| queue.into_iter().map(|(_, field, ..)| field).collect()).unwrap_or_default()
     }
 
     /// O que saiu do campo e o backend ainda não respondeu, na ordem do envio.
@@ -110,7 +121,7 @@ impl DeliveryTracker {
         // Já confirmado pela conversa: a mensagem real está à vista e a bolha seria a segunda.
         let flying = self.records.get(key).filter(|record| record.pending && !record.confirmed).and_then(|record| record.field.as_deref())
             .filter(|field| !field.is_empty());
-        flying.into_iter().chain(self.held.get(key).into_iter().flatten().map(|(text, ..)| text.as_str())).collect()
+        flying.into_iter().chain(self.held.get(key).into_iter().flatten().map(|(_, field, ..)| field.as_str())).collect()
     }
 
     /// O transcript da sessão trocou sem ela deixar de existir: envio em voo e espera seguem com ela.
@@ -192,6 +203,35 @@ mod tests {
 
     fn key(jsonl: &str) -> SessionKey {
         SessionKey { server: "http://fixture/".into(), name: "same-name".into(), jsonl: jsonl.into() }
+    }
+
+    #[test]
+    fn input_history_belongs_to_the_current_delivery_even_with_equal_held_text() {
+        let mut tracker = DeliveryTracker::default();
+        let key = key("one");
+        assert!(tracker.begin(key.clone(), "mensagem".into(), HashSet::new()));
+        tracker.hold(key.clone(), "mensagem".into(), "texto do campo".into(), false, None);
+        assert_eq!(tracker.history(&key, "mensagem"), None);
+        assert!(tracker.complete(&key, "mensagem", SendOutcome::Delivered));
+        let (wire, field, _, _) = tracker.next_held(&key).unwrap();
+        assert!(tracker.begin(key.clone(), wire.clone(), HashSet::new()));
+        tracker.mark_typed(&key, field);
+        assert_eq!(tracker.history(&key, &wire).as_deref(), Some("texto do campo"));
+        assert!(tracker.complete(&key, &wire, SendOutcome::Rejected("recusada".into())));
+        assert_eq!(tracker.history(&key, &wire), None);
+        assert!(tracker.begin(key.clone(), wire.clone(), HashSet::new()));
+        assert_eq!(tracker.history(&key, &wire), None);
+    }
+
+    #[test]
+    fn input_history_keeps_the_full_inline_command_without_marking_a_cleared_field() {
+        let mut tracker = DeliveryTracker::default();
+        let key = key("one");
+        assert!(tracker.begin(key.clone(), "/compact".into(), HashSet::new()));
+        tracker.mark_history(&key, "/compact".into());
+        assert_eq!(tracker.history(&key, "/compact").as_deref(), Some("/compact"));
+        assert_eq!(tracker.history(&key, "/co"), None);
+        assert_eq!(tracker.typed(&key, "/compact"), None);
     }
 
     #[test]
@@ -299,16 +339,16 @@ mod tests {
         let mut tracker = DeliveryTracker::default();
         tracker.begin(key("one"), "first".into(), HashSet::new());
         tracker.mark_typed(&key("one"), "first".into());
-        tracker.hold(key("one"), "second".into(), false, None);
-        tracker.hold(key("one"), "third".into(), true, None);
+        tracker.hold(key("one"), "second".into(), "second".into(), false, None);
+        tracker.hold(key("one"), "third".into(), "third".into(), true, None);
         assert_eq!(tracker.outgoing(&key("one")), vec!["first", "second", "third"]);
         assert!(tracker.outgoing(&key("other")).is_empty());
         assert_eq!(tracker.typed(&key("one"), "first").as_deref(), Some("first"));
         tracker.complete(&key("one"), "first", SendOutcome::Queued);
         assert_eq!(tracker.typed(&key("one"), "first"), None);
-        assert_eq!(tracker.next_held(&key("one")), Some(("second".into(), SendTiming::Queued, None)));
+        assert_eq!(tracker.next_held(&key("one")), Some(("second".into(), "second".into(), SendTiming::Queued, None)));
         assert_eq!(tracker.outgoing(&key("one")), vec!["third"]);
-        assert_eq!(tracker.next_held(&key("one")), Some(("third".into(), SendTiming::Direct, None)));
+        assert_eq!(tracker.next_held(&key("one")), Some(("third".into(), "third".into(), SendTiming::Direct, None)));
         assert_eq!(tracker.next_held(&key("one")), None);
     }
 
@@ -316,8 +356,8 @@ mod tests {
     fn a_held_jev_send_keeps_the_task_and_message_from_enter() {
         let mut tracker = DeliveryTracker::default();
         let timing = SendTiming::Jev { task: "Criar a tela".into(), message: "Use azul".into() };
-        tracker.hold(key("one"), "Use azul".into(), timing.clone(), None);
-        assert_eq!(tracker.next_held(&key("one")), Some(("Use azul".into(), timing, None)));
+        tracker.hold(key("one"), "Use azul".into(), "Use azul".into(), timing.clone(), None);
+        assert_eq!(tracker.next_held(&key("one")), Some(("Use azul".into(), "Use azul".into(), timing, None)));
     }
 
     #[test]
@@ -332,8 +372,8 @@ mod tests {
     fn failed_send_gives_back_everything_that_waited_behind_it() {
         let mut tracker = DeliveryTracker::default();
         tracker.begin(key("one"), "first".into(), HashSet::new());
-        tracker.hold(key("one"), "second".into(), false, None);
-        tracker.hold(key("one"), "third".into(), false, None);
+        tracker.hold(key("one"), "second".into(), "second".into(), false, None);
+        tracker.hold(key("one"), "third".into(), "third".into(), false, None);
         // Envio que não saiu do campo (anexo, comando do painel) não aparece como bolha de espera.
         assert_eq!(tracker.outgoing(&key("one")), vec!["second", "third"]);
         tracker.complete(&key("one"), "first", SendOutcome::Rejected("HTTP 400".into()));
@@ -347,7 +387,7 @@ mod tests {
         let mut tracker = DeliveryTracker::default();
         tracker.begin(key("before-clear"), "first".into(), HashSet::new());
         tracker.mark_typed(&key("before-clear"), "first".into());
-        tracker.hold(key("before-clear"), "second".into(), false, None);
+        tracker.hold(key("before-clear"), "second".into(), "second".into(), false, None);
         tracker.rekey(&key("before-clear"), &key("after-clear"));
         // Ainda "Enviando…" na chave nova: outro Enter espera em vez de sair em paralelo.
         assert_eq!(tracker.outgoing(&key("after-clear")), vec!["first", "second"]);
@@ -364,9 +404,9 @@ mod tests {
     fn held_text_keeps_the_group_chosen_on_enter() {
         let mut tracker = DeliveryTracker::default();
         tracker.begin(key("one"), "first".into(), HashSet::new());
-        tracker.hold(key("one"), "to all".into(), false, Some(vec!["same-name".into(), "peer".into()]));
+        tracker.hold(key("one"), "to all".into(), "to all".into(), false, Some(vec!["same-name".into(), "peer".into()]));
         tracker.complete(&key("one"), "first", SendOutcome::Delivered);
-        assert_eq!(tracker.next_held(&key("one")), Some(("to all".into(), SendTiming::Queued, Some(vec!["same-name".into(), "peer".into()]))));
+        assert_eq!(tracker.next_held(&key("one")), Some(("to all".into(), "to all".into(), SendTiming::Queued, Some(vec!["same-name".into(), "peer".into()]))));
     }
 
     #[test]

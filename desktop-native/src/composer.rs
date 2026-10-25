@@ -6,6 +6,56 @@ pub const IMAGE_MARK: &str = "📎 imagem: ";
 pub const FILE_MARK: &str = "📎 arquivo: ";
 const SUGGEST_MAX: usize = 8;
 
+/// Últimos envios do campo; os rascunhos da navegação não alteram o que foi enviado.
+#[derive(Default)]
+pub struct InputHistory {
+    entries: Vec<(u64, String)>,
+    edits: std::collections::HashMap<u64, String>,
+    position: Option<u64>,
+    draft: String,
+    next_id: u64,
+}
+
+impl InputHistory {
+    pub fn reset_navigation(&mut self) {
+        self.edits.clear();
+        self.position = None;
+        self.draft.clear();
+    }
+
+    pub fn record(&mut self, text: &str) {
+        if text.trim().is_empty() { return; }
+        self.next_id += 1;
+        self.entries.push((self.next_id, text.to_owned()));
+        if self.entries.len() > 10 { self.entries.remove(0); }
+        self.edits.retain(|id, _| Some(*id) == self.position || self.entries.iter().any(|(entry, _)| entry == id));
+    }
+
+    pub fn navigate(&mut self, previous: bool, current: &str) -> Option<String> {
+        if self.entries.is_empty() { return None; }
+        if let Some(id) = self.position { self.edits.insert(id, current.to_owned()); }
+        else { self.draft = current.to_owned(); }
+        let index = self.position.and_then(|id| self.entries.iter().position(|(entry, _)| *entry == id));
+        let next = match (previous, self.position, index) {
+            (true, None, _) => Some(self.entries.len() - 1),
+            (true, Some(_), Some(index)) => Some(index.saturating_sub(1)),
+            // O aceite pode remover a entrada que está no campo: ↑ a conserva e ↓ segue para a mais antiga restante.
+            (true, Some(_), None) => return Some(current.to_owned()),
+            (false, None, _) => return None,
+            (false, Some(_), Some(index)) => (index + 1 < self.entries.len()).then_some(index + 1),
+            (false, Some(_), None) => Some(0),
+        };
+        self.position = next.map(|index| self.entries[index].0);
+        Some(match next {
+            Some(index) => {
+                let (id, text) = &self.entries[index];
+                self.edits.get(id).unwrap_or(text).clone()
+            }
+            None => self.draft.clone(),
+        })
+    }
+}
+
 /// `encodeURIComponent`: o backend decodifica o X-Filename com a mesma regra.
 pub fn encode_component(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -590,6 +640,68 @@ mod tests {
     use super::*;
     // O glob pode trazer o `test` da gpui, que colide com o atributo padrão; o nome explícito vence o glob.
     use core::prelude::v1::test;
+
+    #[test]
+    fn input_history_keeps_ten_sends_and_restores_the_draft() {
+        let mut history = InputHistory::default();
+        assert_eq!(history.navigate(true, "rascunho"), None);
+        for n in 1..=12 { history.record(&format!("Mensagem {n}")); }
+        let mut text = "rascunho com acentuação".to_owned();
+        for expected in (3..=12).rev() {
+            text = history.navigate(true, &text).unwrap();
+            assert_eq!(text, format!("Mensagem {expected}"));
+        }
+        assert_eq!(history.navigate(true, &text).as_deref(), Some("Mensagem 3"));
+        for expected in 4..=12 {
+            text = history.navigate(false, &text).unwrap();
+            assert_eq!(text, format!("Mensagem {expected}"));
+        }
+        assert_eq!(history.navigate(false, &text).as_deref(), Some("rascunho com acentuação"));
+    }
+
+    #[test]
+    fn input_history_edits_do_not_change_sends_or_lose_the_draft() {
+        let mut history = InputHistory::default();
+        history.record("primeira\nsegunda linha");
+        history.record("última");
+        assert_eq!(history.navigate(false, "rascunho"), None);
+        assert_eq!(history.navigate(true, "rascunho").as_deref(), Some("última"));
+        assert_eq!(history.navigate(true, "última editada").as_deref(), Some("primeira\nsegunda linha"));
+        assert_eq!(history.navigate(false, "primeira\nsegunda linha").as_deref(), Some("última editada"));
+        assert_eq!(history.navigate(false, "última editada").as_deref(), Some("rascunho"));
+        history.reset_navigation();
+        history.record("nova");
+        assert_eq!(history.navigate(true, "").as_deref(), Some("nova"));
+        assert_eq!(history.navigate(true, "nova").as_deref(), Some("última"));
+        history.reset_navigation();
+        history.record(" \n ");
+        assert_eq!(history.navigate(true, "").as_deref(), Some("nova"));
+    }
+
+    #[test]
+    fn input_history_acknowledgment_preserves_an_active_draft() {
+        let mut history = InputHistory::default();
+        history.record("anterior");
+        assert_eq!(history.navigate(true, "rascunho novo").as_deref(), Some("anterior"));
+        history.record("envio aceito");
+        assert_eq!(history.navigate(false, "anterior editada").as_deref(), Some("envio aceito"));
+        assert_eq!(history.navigate(false, "envio aceito").as_deref(), Some("rascunho novo"));
+        assert_eq!(history.navigate(true, "rascunho novo").as_deref(), Some("envio aceito"));
+        assert_eq!(history.navigate(true, "envio aceito").as_deref(), Some("anterior editada"));
+    }
+
+    #[test]
+    fn input_history_eviction_keeps_the_active_draft_and_moves_to_the_oldest_remaining_entry() {
+        let mut history = InputHistory::default();
+        for n in 1..=10 { history.record(&format!("Mensagem {n}")); }
+        let mut text = "rascunho".to_owned();
+        for _ in 0..10 { text = history.navigate(true, &text).unwrap(); }
+        assert_eq!(text, "Mensagem 1");
+        history.record("Mensagem 11");
+        assert_eq!(history.navigate(false, "Mensagem 1 editada").as_deref(), Some("Mensagem 2"));
+        for expected in 3..=11 { assert_eq!(history.navigate(false, &format!("Mensagem {}", expected - 1)).as_deref(), Some(format!("Mensagem {expected}").as_str())); }
+        assert_eq!(history.navigate(false, "Mensagem 11").as_deref(), Some("rascunho"));
+    }
 
     #[test]
     fn citations_preserve_web_boundaries_lines_and_markdown() {
