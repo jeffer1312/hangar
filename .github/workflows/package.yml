@@ -105,12 +105,19 @@ jobs:
           if [ "$BRANCH" = main ]; then stag=server-latest; else stag="server-${BRANCH//[^A-Za-z0-9._-]/-}"; fi
           mapfile -t caminhos < <(yq -r '.on.push.paths[]' .github/workflows/server.yml | sed 's/^/:(glob)/')
           [ "${#caminhos[@]}" -gt 0 ] || { echo "::error::não li on.push.paths do server.yml"; exit 1; }
-          gh release download "$stag" --repo "$GITHUB_REPOSITORY" --pattern server-latest.json --dir srv \
-            || nao "sem run do server.yml e sem $stag/server-latest.json"
+          # Só a release inexistente é "não pronto"; rede, token ou limite da API derrubam o passo.
+          if ! gh release view "$stag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>rel.err; then
+            grep -qi 'release not found' rel.err && nao "sem run do server.yml e sem a release $stag"
+            cat rel.err >&2; exit 1
+          fi
+          gh release download "$stag" --repo "$GITHUB_REPOSITORY" --pattern server-latest.json --dir srv
           de=$(jq -r --arg p "$PLATFORM" '.platforms[$p].commit // empty' srv/server-latest.json)
           [ -n "$de" ] && git cat-file -e "$de^{commit}" 2>/dev/null || nao "binário de $stag sem commit conhecido"
-          git diff --quiet "$de" "$SHA" -- "${caminhos[@]}" \
-            || nao "sem run do server.yml e algum caminho que ele testa mudou desde $de, o commit do binário de $stag"
+          rc=0; git diff --quiet "$de" "$SHA" -- "${caminhos[@]}" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            [ "$rc" -eq 1 ] && nao "sem run do server.yml e algum caminho que ele testa mudou desde $de, o commit do binário de $stag"
+            exit "$rc"
+          fi
           exe=; [ "$PLATFORM" = windows-x86_64 ] && exe=.exe
           gh release download "$stag" --repo "$GITHUB_REPOSITORY" --dir bins \
             --pattern "hangar-server-$PLATFORM$exe" --pattern "hangar-cano-$PLATFORM$exe"
@@ -298,7 +305,8 @@ jobs:
                                key=lambda a: a["createdAt"], reverse=True)
           for a in mine_assets[5:]:
               if a["name"] != mine["asset"]:
-                  subprocess.run(["gh", "release", "delete-asset", tag, a["name"], "--repo", repo, "-y"])
+                  if subprocess.run(["gh", "release", "delete-asset", tag, a["name"], "--repo", repo, "-y"]).returncode:
+                      print(f"::warning::não apaguei {a['name']} de {tag}; a release se aproxima do teto de assets")
           subprocess.run(["gh", "api", "-X", "PATCH", f"repos/{repo}/git/refs/tags/{tag}", "-f",
                           f"sha={mine['commit']}", "-F", "force=true"], check=True, stdout=subprocess.DEVNULL)
           EOF
