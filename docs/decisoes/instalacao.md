@@ -217,6 +217,108 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   marcadores.** O app desktop reescreve o arquivo sem comentários; quem só procura `# >>> hangar`
   anexa de novo, e o TOML com chave duplicada derruba o ChatGPT e o Codex juntos.
 
+### Pacote por versão
+
+Máquina migrada roda de um pacote; as regras do motor `git` acima valem só para o modo
+desenvolvedor e para a máquina ainda não migrada. Evidência em
+[Pacote por versão em vez de `git pull`](#pacote-por-versão-em-vez-de-git-pull-24102026).
+
+- **Uma versão é uma pasta que nunca muda depois de extraída.** `~/.hangar/versions/<versao>/`
+  com `manifest.json` (`version`, `commit`, `channel`, `protocol`, `api`, `os`, `dist_key`, sha256
+  por arquivo); `~/.hangar/current` aponta para a versão em uso. O bytecode vai para
+  `~/.hangar/cache/pycache/`, e o pacote leva os `.pyc` em `unchecked-hash`: um `__pycache__` dentro
+  da versão faz a reextração recusar a pasta (`package_existing_differs`).
+- **Dados do usuário moram em `~/.hangar/config/`** (`.env`, `peers.json`, `projects.json`,
+  `launchers/`). Quem lê procura lá primeiro e só então em `backend/` (máquina não migrada);
+  quem grava grava no caminho que leu. Instaladores e `services-setup.sh` seguem a mesma regra.
+- **Serviço e processo longo rodam do caminho real da versão; o que é gravado fora do Hangar
+  aponta para o `current`.** Unit e tarefa chamam o lançador estável
+  (`~/.hangar/bin/hangar-launcher launch backend`), que lê o `current` uma vez; o `rust_bins` e todo
+  `sys.executable` gravado usam o caminho real. Hooks, atalhos, `plugin-dir`, skills e `⟦HANGAR⟧`
+  gravam `~/.hangar/current` sem resolver o link, e toleram a pasta ausente por um instante.
+- **Script do Hangar roda o Python pelo atalho `hangar-python`**: o embutido do pacote, senão o venv
+  do backend, senão o `python3` da máquina. O pacote não leva Node nem pip; Node é dependência da
+  máquina, garantida por passo de máquina.
+- **O pacote só sai de commit com o `ci.yml` (job `backend`) e os testes do `server.yml` daquele
+  sistema verdes.** O `package.yml` publica em `package-latest` (main) ou `package-<branch>`, com o
+  índice `package-<canal>.json` por último; sistema não pronto fica com a entrada anterior.
+  Dependência sem wheel vira wheel no CI, a partir do sdist conferido por hash.
+- **Extração conferida.** O extrator (`crates/hangar-package`) extrai em `versions/<versao>.tmp/`,
+  confere o sha256 de cada arquivo e só então renomeia para o nome final, com novas tentativas
+  enquanto o sistema diz "em uso"; pasta incompleta nunca tem o nome de versão. Manifesto acima de
+  4 MiB é recusado. Pasta existente que não confere é refeita, menos a do `current`.
+- **Na máquina migrada, atualizar é do Rust (`crates/hangar-server/src/update/`).** Índice →
+  download com sha → extração → tela web da `dist_key` (falha é aviso) → só os passos
+  `tipo: maquina` → executor destacado → troca do `current` → reinício → prova de vida → poda.
+  Falha antes da troca não muda nada; depois dela, o `current` volta e o servidor reinicia. A prova
+  é o `/__hangar_server/health` com o `protocol` e o `commit` do manifesto novo e pid diferente:
+  o Python sozinho na porta reprova. Ficam a versão em uso e a anterior; a poda pula pasta com
+  processo vivo e apaga por `rename` para `versions/.trash-*`. A verificação automática roda de hora
+  em hora, sem `git`.
+- **Passo de máquina tem de funcionar com a versão anterior**: a volta não o desfaz. Script,
+  skill, hook e atalho chegam com o pacote e deixam de ser passo.
+- **Modo desenvolvedor: o `current` aponta para um checkout sem `manifest.json`.** Atualizar é
+  `git pull --ff-only` na branch dele e reiniciar, sem recompilar; árvore editada, sem upstream ou à
+  frente recusa com o motivo. O laço automático do Python segue no motor `git` ali, e o executor do
+  Rust recusa rodar junto (`OtherEngine`).
+- **A migração (`hangar-server migrate-package`) roda uma vez, fora do serviço, e se desfaz.**
+  Checkout editado, com arquivo novo, fora da `main`, sem upstream, à frente ou servido pelo `vite`
+  (`SERVE=preview`) vira modo desenvolvedor; o resto vira pacote. Ela para o backend antes de mover os
+  dados, registra cada efeito (`~/.hangar/migration.partial.json`, depois `migration.json`), desfaz
+  tudo se falhar antes da prova e recusa rodar dentro do cgroup ou do Job do backend. `--undo`
+  reaponta tudo para o checkout, que nunca é apagado.
+- **A tela web é opcional, ligada por padrão, e servida pelo Rust** de `~/.hangar/ui/<dist_key>/`
+  (checkout: `frontend/dist`). `GET`/`PUT /api/web-ui` (só o dono) grava `~/.hangar/web-ui.json`;
+  desligada, a raiz responde 404 `web_ui_disabled` e o atualizador não baixa a tela. O interruptor
+  fica no nativo e no Expo: desligar pelo PWA desligaria o próprio PWA.
+
+## Pacote por versão em vez de `git pull` (24/10/2026)
+
+Motivo: em 24/10 a DELPHI-02 e o PC do Rafael pararam com versão misturada, código Python de um
+commit com binário Rust de outro. Com o pacote, código, Python e binários saem juntos do mesmo commit
+testado, e a troca é um apontador. Decisões do Jefferson no mesmo dia: Python embutido; Linux e
+Windows juntos, macOS depois; tela web opcional; quem desenvolve continua editando (modo
+desenvolvedor); atualizador no Rust; versão `VERSION` + número de commits. Plano:
+`docs/superpowers/plans/2026-10-24-pacote-por-versao.md`.
+
+Medido nas provas de base (Task 1, Linux e DELPHI-02):
+
+- **Python embutido.** `python-build-standalone` `20261021`, CPython 3.14.9: no Linux exige no
+  máximo `GLIBC_2.17`, dentro do alvo 2.28 (`manylinux_2_28`, o mesmo do `hangar-server`). Das 55
+  dependências do `backend/uv.lock`, só `http-ece==1.2.1` não tem wheel; é Python puro, e o CI gera o
+  `py3-none-any` uma vez. `import app.main, app.api` sobe no Python embutido com `HOME` vazio.
+- **Pasta por link.** No Windows um processo vivo carrega pela junction o código da versão nova; no
+  Linux o prefixo do Python é resolvido, mas `PYTHONPATH` e filhos lançados por `sys.executable`
+  seguem o link. Por isso serviço, lançador e todo `sys.executable` gravado usam o caminho real.
+- **`resources/` vai na raiz do pacote**: `transcribe.py` o lê na importação.
+- **Node fica na máquina** (statusline do Claude, `hangar-preview`, `folha`); a aceitação "sem `git`,
+  `uv`, `npm` ou `winget`" não inclui o Node. Máquinas em `SERVE=preview` (esta e a VPS) viram modo
+  desenvolvedor, sem mudar endereço nem o que o navegador guardou; a VPS segue no `deploy.sh`.
+
+Medido ao montar o pacote (Task 6):
+
+- **Tamanho do pacote de Linux: 123 MB** com o Python `install_only_stripped`, contra 216 MB com
+  símbolos. O de Windows também monta no Linux (`uv pip install --python-platform`).
+- **Teto do manifesto (4 MiB).** Só a `terminfo` do standalone eram 2871 arquivos e levavam o
+  manifesto acima do teto; `include/` e `share/` do Python saem do pacote, porque o backend não os usa.
+- **pip fora.** O pacote não instala nada em tempo de execução; o pip do standalone é removido.
+- **`.pyc` em `unchecked-hash`.** Rodando o pacote, o Python gravou `__pycache__` dentro de
+  `versions/<v>/`, e a reextração caiu em `package_existing_differs`. O lançador põe
+  `PYTHONPYCACHEPREFIX` fora da versão, mas hooks (`preview_hook.py` importa `app.atomico`) rodam o
+  Python do pacote sem ele; com os `.pyc` prontos e listados no manifesto, o Python só os lê.
+- O extrator aceita o pacote montado, e `import app.main, app.api, http_ece` sobe com `HOME` vazio.
+
+Atualizador (Task 7): `cargo test -p hangar-server update` com 61 testes da lib, 1 e 9 de integração;
+tela web, 11. No Windows o comportamento foi só raciocinado.
+
+**Medição da Task 11 pendente.** Faltam as provas reais: atualizar pelo app esta máquina (modo
+desenvolvedor) e uma máquina Linux em pacote; migrar e atualizar a DELPHI-02 em pacote, com falha
+forçada no reinício (volta inteira, Rust de pé, sessões com e sem terminal reportando); máquina sem
+tela web atualizando sem baixar o `dist`, com Expo e nativo funcionando. Também falta o Step 3 da
+Task 6 (`gh workflow run package.yml` publicar os dois sistemas e o pacote de Linux subir num
+contêiner sem Python, uv e Node). O passo `docs/atualizacoes/2026-10-24-pacote-por-versao.md` só
+entra na `main` depois dessa prova: um passo na `main` roda em toda máquina no próximo Atualizar.
+
 ## App nativo na atualização do servidor (21/10/2026)
 
 Atualizar várias máquinas precisa trocar também o arquivo do app nativo em cada uma: o botão do

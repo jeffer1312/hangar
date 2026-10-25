@@ -385,8 +385,10 @@ vigentes" de `docs/decisoes/windows.md`**.
   `systemctl --user restart`.
 
 **Antes de mexer em** `install.sh`/`install.ps1`, `scripts/install-*`, `atualizar.py`,
-`atualizacoes.py`, `docs/atualizacoes/`, `VERSION`, `frontend/dist` servido pelo backend ou na
-criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/decisoes/instalacao.md`**.
+`atualizacoes.py`, `docs/atualizacoes/`, `VERSION`, `frontend/dist` servido pelo backend, na
+criação de sessão sob escopo do systemd ou no pacote por versão (`crates/hangar-package`,
+`crates/hangar-server/src/update/`, `scripts/montar-pacote.py`, `scripts/migrar-pacote.*`,
+`scripts/hangar-python`, `~/.hangar/config`): **leia "Regras vigentes" de `docs/decisoes/instalacao.md`**.
 
 ### Plataforma — nomes, pareamento, planos, ditado → [`docs/decisoes/plataforma.md`](docs/decisoes/plataforma.md)
 
@@ -623,10 +625,15 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
     `transcription/config`, `costs/scopes`, `migration/status`, `diag` e `ping`.
   - Partes inteiras ainda no Python: Pi, omp e Kimi; Arquivo; orquestração (lista, timeline,
     lançamento); transferência Claude→Codex; navegador (`navegador`, `nav-remoto`); peers;
-    workflows e runners; atualização; login de convidado. O Connect (8768) está inativo.
+    workflows e runners; login de convidado. O Connect (8768) está inativo.
+  - Atualização: na máquina migrada (pacote ou modo desenvolvedor) as rotas `/api/atualizacao*`
+    são do Rust (`update/http.rs`); na não migrada, ao motor `git` do Python (`atualizar.py`). No
+    pacote, `_fetch_loop` e `_auto_update_loop` (`api.py`) saem na subida e a verificação de hora em
+    hora é do Rust (`update/periodic.rs`); no modo desenvolvedor o automático segue no motor `git`.
+    O `rust_bins.py` lança o Rust pelo caminho real da versão.
   - Tarefas próprias do Python em modo `rust`: `hook_state.watch` (estado de Pi/omp/Kimi; não reage
     a sessão do Rust), `watch_sessions` do Codex a cada 2 s (desligada quando todo Codex é do Rust),
-    índice do Arquivo, `git fetch`, atualização automática. Travada, limite e queda são avisados
+    índice do Arquivo, `git fetch` e atualização automática (fora do pacote). Travada, limite e queda são avisados
     pelo Rust (`push/watch.rs`); o vigia Python foi apagado e, no modo `python`, esses avisos não
     saem. A retomada dos loops ativos na subida também é só do Rust (`loops/watch.rs`): no modo
     `python` eles não voltam depois do reinício.
@@ -649,7 +656,7 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   (`transfer:`) segue no Python. Evidência em
   [accounts-uploads-rust.md](docs/decisoes/accounts-uploads-rust.md#anexos). O resto, convidado
   incluído, é repassado com `X-Forwarded-For`. A 8766 é do Rust e a 8768 fica no Python. Sem binário
-  (`CP_RUST_SERVER_BIN`, `crates/target/release`, `~/.hangar/bin`), com `CP_RUST_SERVER=0`, com
+  (`CP_RUST_SERVER_BIN`, `bin/` da versão do pacote, `crates/target/release`, `~/.hangar/bin`), com `CP_RUST_SERVER=0`, com
   `protocol` da saúde diferente de `RUST_SERVER_PROTOCOL`, sem endereço privado válido ou com 3
   quedas em 60 s, um segundo `uvicorn.Server` com `lifespan="off"` assume a porta: nunca um segundo
   lifespan. O processo tem um modo só (`pending`/`rust`/`python`): queda 1–2 deixa as sessões

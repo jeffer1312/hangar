@@ -122,6 +122,32 @@ falha:
 - Resurrect/continuum (sessões sobreviverem a reboot): são plugins de tmux em bash, e o
   psmux não roda plugin de tmux. Fechou o Windows, as sessões se foram.
 
+### Atualizar, dados e modo desenvolvedor
+
+Máquina migrada para o **pacote por versão** não usa mais `git pull` para atualizar. O botão
+**Atualizar** baixa o pacote do seu sistema (código, Python próprio e servidor Rust do mesmo
+commit), confere, instala ao lado do que está rodando em `~/.hangar/versions/<versão>`, troca o
+apontador `~/.hangar/current` e reinicia. Se o servidor novo não subir, volta sozinho para a versão
+anterior e mostra o motivo. Com as automações ligadas, ele procura versão nova de hora em hora. Não
+precisa de `git`, `uv` nem `npm` na máquina; o Node continua necessário.
+
+**Seus dados ficam em `~/.hangar/config/`** (no Windows, `%USERPROFILE%\.hangar\config\`): o
+`.env` com o token, `peers.json`, `projects.json` e `launchers/`. As pastas de versão podem ser
+trocadas e apagadas sem perder nada disso. Máquina ainda não migrada continua com esses arquivos em
+`backend/`.
+
+**Modo desenvolvedor** é a máquina que roda de um checkout git que você edita: o
+`~/.hangar/current` aponta para o checkout, e o Atualizar faz `git pull --ff-only` na branch dele e
+reinicia, sem recompilar nada. Com edição local ou commit à frente, ele recusa e diz o motivo. A
+migração escolhe esse modo sozinha quando o checkout tem edição, arquivo novo, commit à frente, está
+fora da `main` ou serve a tela pelo `vite`. Para voltar tudo ao checkout:
+`hangar-server migrate-package --undo` (o checkout nunca é apagado).
+
+**Tela web neste servidor** (nas configurações do servidor, no app nativo e no app do celular)
+liga ou desliga a página do Hangar no navegador por esta máquina. Vem ligada. Desligada, o
+navegador e o PWA deixam de abrir por ela e a atualização não baixa os arquivos da tela; o app
+nativo e o do celular continuam funcionando.
+
 ## 2. Subir na mão
 
 O instalador já deixa tudo rodando como serviço (systemd de usuário no Linux, Agendador no
