@@ -54,11 +54,14 @@ def test_listar_devolve_so_conta_carimbada_e_real(casa):
     fora = casa / "fora"
     fora.mkdir()
     (fora / contas.MARCADOR).write_text("", encoding="utf-8")
-    (casa / ".claude-evil").symlink_to(fora, target_is_directory=True)
-    (_carimbada(casa, "pendente") / ".hangar-account-pending").write_text("", encoding="utf-8")
     marcador_link = casa / ".claude-marcador-link"
     marcador_link.mkdir()
-    (marcador_link / contas.MARCADOR).symlink_to(fora / contas.MARCADOR)
+    try:
+        (casa / ".claude-evil").symlink_to(fora, target_is_directory=True)
+        (marcador_link / contas.MARCADOR).symlink_to(fora / contas.MARCADOR)
+    except OSError as exc:
+        pytest.skip(f"Symlink indisponível nesta máquina: {exc}")
+    (_carimbada(casa, "pendente") / ".hangar-account-pending").write_text("", encoding="utf-8")
     assert contas.listar() == ["a", "b"]
 
 
