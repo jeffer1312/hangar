@@ -967,7 +967,21 @@ pub fn cli(args: &[String]) -> std::process::ExitCode {
     let _ = tracing_subscriber::fmt().with_writer(io::stderr).with_max_level(tracing::Level::WARN)
         .without_time().with_target(false).with_ansi(false).try_init();
     // `vars()` derrubaria o comando com uma variável qualquer fora do UTF-8 no ambiente de quem chama.
-    let vars = std::env::vars_os().map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned())).collect();
+    // As que viram caminho não passam pela conversão com perda: apontariam para outra pasta, calado.
+    const PATH_VARS: [&str; 7] = ["HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "CP_CLAUDE_CONFIG_DIRS"];
+    let mut vars = std::collections::BTreeMap::new();
+    for (key, value) in std::env::vars_os() {
+        let key = key.to_string_lossy().into_owned();
+        let value = match value.into_string() {
+            Ok(value) => value,
+            Err(_) if PATH_VARS.contains(&key.as_str()) => {
+                let _ = writeln!(io::stderr(), "hangar-conta: a variável {key} tem bytes fora do UTF-8; o caminho dela não pode ser usado");
+                return std::process::ExitCode::from(126);
+            }
+            Err(value) => value.to_string_lossy().into_owned(),
+        };
+        vars.insert(key, value);
+    }
     let env = AccountEnvironment::from_map(vars);
     std::process::ExitCode::from(run(args, &env, &mut io::stdout().lock(), &mut io::stderr().lock()))
 }

@@ -1488,6 +1488,23 @@ fn a_non_utf8_environment_variable_does_not_crash_the_command() {
     assert_eq!((out.status.code(), String::from_utf8_lossy(&out.stdout).trim()), (Some(0), "conta2"), "{}", String::from_utf8_lossy(&out.stderr));
 }
 
+/// Variável de caminho fora do UTF-8 (aqui o HOME) não vira outro caminho pela conversão com perda: o
+/// comando recusa com a frase dele e sai com 126.
+#[test]
+fn a_non_utf8_path_variable_refuses_the_command() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    casa(&home);
+    conta(&home, "conta2");
+    let bad = [home.as_os_str().as_bytes(), b"/\xff"].concat();
+    let out = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[]).env("HOME", std::ffi::OsStr::from_bytes(&bad)).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(126), "{stderr}");
+    assert!(stderr.lines().any(|l| l.starts_with("hangar-conta: ") && l.contains("HOME")), "{stderr}");
+    assert!(out.stdout.is_empty());
+}
+
 /// D22: o aviso interno do comando chega ao stderr dele, sem mudar a saída nem o código.
 #[test]
 fn the_account_command_prints_internal_warnings_to_stderr() {
