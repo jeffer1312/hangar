@@ -25,9 +25,9 @@ como PWA e operar o chat. Site: [hangar.dev.br](https://hangar.dev.br). Pra arqu
 Numa máquina sem Hangar ele oferece instalar o servidor em poucas telas, sem terminal. Detalhes
 em [App de desktop](#app-de-desktop-nativo).
 
-**Pelo terminal, é uma linha só.** No Linux ela instala o **pacote pronto** do Hangar (código,
-Python próprio e servidor Rust do mesmo commit) em `~/.hangar`, sem `git`, `uv` nem build da tela,
-e roda o instalador que vem nele:
+**Pelo terminal, é uma linha só.** No Linux e no Windows ela instala o **pacote pronto** do Hangar
+(código, Python próprio e servidor Rust do mesmo commit) em `~/.hangar`, sem `git`, `uv` nem build
+da tela, e roda o instalador que vem nele:
 
 ```bash
 # Linux/macOS
@@ -44,6 +44,8 @@ instalador dela; atualizar é pelo botão Atualizar do app.
 ```powershell
 # Windows
 irm https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.ps1 | iex
+$env:CP_CANAL = 'beta'; irm …/bootstrap.ps1 | iex   # canal de teste
+$env:CP_DEV = '1'; irm …/bootstrap.ps1 | iex        # pelo git, para editar o código (modo desenvolvedor)
 ```
 
 Outra pasta de destino, ou flags do `install.sh`, vão **depois de `-s --`** (sob `curl | bash` é
@@ -54,10 +56,11 @@ curl -fsSL …/bootstrap.sh | bash -s -- --dev ~/apps/hangar --no-frontend
 curl -fsSL …/bootstrap.sh | bash -s -- --check      # só confere uma instalação existente e sai
 ```
 
-No Windows, defina `$env:CP_DESTINO = 'D:\hangar'` **antes** da linha do `irm` — sob
-`irm | iex` o script chega como texto e não recebe argumento nenhum. Rodar de novo é seguro: se a
-pasta já for este repositório ele faz `git pull` em vez de clonar; se for outra coisa, ele **para**
-em vez de mexer no que é seu.
+No Windows as opções são variáveis definidas **antes** da linha do `irm` — sob `irm | iex` o script
+chega como texto e não recebe argumento nenhum. `$env:CP_DESTINO = 'D:\hangar'` escolhe a pasta do
+checkout e, como o `CP_DEV`, instala pelo git. Rodar de novo é seguro: pelo git, se a pasta já for
+este repositório ele faz `git pull` em vez de clonar; se for outra coisa, ele **para** em vez de
+mexer no que é seu.
 
 Prefere ver o que está rodando antes? Clone na mão — dá no mesmo:
 

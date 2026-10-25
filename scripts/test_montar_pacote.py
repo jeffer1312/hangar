@@ -128,8 +128,10 @@ def test_pacote_tem_exatamente_os_arquivos_do_manifesto(tmp_path, monkeypatch, o
     for b in ("hangar-server", "hangar-cano"):
         data, mode = members[f"bin/{b}{exe}"]
         assert data == f"bin {b}".encode() and mode & 0o111
-    # O instalador vai no pacote: a instalação nova roda o install.sh do `current`, em modo pacote.
-    for must in ("VERSION", "install.sh", "backend/app/main.py", "backend/hooks", "resources/", "skills/", "plugins/hangar/",
+    # Os instaladores vão no pacote: a instalação nova roda o do `current`, em modo pacote; o install.ps1
+    # carrega os dois .ps1 de scripts/ na primeira linha.
+    for must in ("VERSION", "install.sh", "install.ps1", "scripts/windows-tasks.ps1", "scripts/windows-wrappers.ps1",
+                 "backend/app/main.py", "backend/hooks", "resources/", "skills/", "plugins/hangar/",
                  "messages/pt.json", "docs/atualizacoes/README.md", "shell/preview_fmt.cjs",
                  "scripts/hangar-send", "scripts/hangar-preview"):
         assert any(n == must or n.startswith(must.rstrip("/") + "/") for n in members), must

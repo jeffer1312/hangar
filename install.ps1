@@ -71,6 +71,13 @@ if ($Agentes) {
 
 $ErrorActionPreference = 'Stop'
 $raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
+# Modo pacote: esta pasta e uma versao extraida (manifest.json sem .git, o criterio do install_root).
+# Python, dependencias, binarios e tela vieram prontos: nada de git, uv, venv nem build da tela.
+$pacote = (Test-Path -LiteralPath "$raiz\manifest.json") -and -not (Test-Path -LiteralPath "$raiz\.git")
+# O Python do backend: o embutido do pacote ou o venv do checkout.
+$pyBackend = if ($pacote) { Join-Path $raiz 'python\python.exe' } else { Join-Path $raiz 'backend\.venv\Scripts\python.exe' }
+# Bytecode fora da pasta da versao, como no lancador: um __pycache__ la dentro faz a reextracao recusar a pasta.
+if ($pacote -and -not $env:PYTHONPYCACHEPREFIX) { $env:PYTHONPYCACHEPREFIX = Join-Path $HOME '.hangar\cache\pycache' }
 . "$raiz\scripts\windows-tasks.ps1"
 . "$raiz\scripts\windows-wrappers.ps1"
 $installMutex = $null
@@ -618,9 +625,9 @@ if (-not $Update) {
 
 # As funcoes do .env vem ANTES do passo 0 porque o token e gravado la: no PowerShell uma funcao so
 # existe depois que a linha que a define executou.
-# Depois da migracao para o pacote o .env mora em ~\.hangar\config (o do checkout fica como copia
+# No pacote (e depois da migracao) o .env mora em ~\.hangar\config (o do checkout fica como copia
 # velha): gravar no antigo criaria um token que o novo esconde.
-$envFile = if (Test-Path -LiteralPath "$HOME\.hangar\config\.env") { "$HOME\.hangar\config\.env" } else { "$raiz\backend\.env" }
+$envFile = if ($pacote -or (Test-Path -LiteralPath "$HOME\.hangar\config\.env")) { "$HOME\.hangar\config\.env" } else { "$raiz\backend\.env" }
 function Porta-Do-Env {
     param([string]$Chave, [int]$Default)
     if (Test-Path $envFile) {
@@ -897,12 +904,21 @@ if ($listaAgentes.Count) {
 } else {
     Instale-ClaudeCode 'nenhum agente de codigo encontrado; o Claude Code e o padrao' | Out-Null
 }
+if ($pacote) {
+    Ok 'Python e dependencias do backend: vieram no pacote'
+    Mark-Item 'py' 'ok' 'Python (do pacote)'
+} else {
 Instale 'Python'                'py'     'Python.Python.3.14'   'o backend e Python'        | Out-Null
+}
 # 3.14, nao 3.13: backend/pyproject.toml exige >=3.14 (e .python-version = 3.14). Com o 3.13 o
 # `uv sync` ate funcionava - baixava um 3.14 gerenciado por conta propria - mas o Python do winget
 # virava peso morto, servindo so ao shim python3 do hangar-send. Um Python so pros dois papeis.
-Instale 'Node LTS (minimo 20)'  'node'   'OpenJS.NodeJS.LTS'    'o frontend e Svelte'       | Out-Null
+# No pacote a tela vem pronta; o Node segue servindo a statusline do Claude e ao hangar-preview.
+$praQueNode = if ($pacote) { 'statusline do Claude e hangar-preview' } else { 'o frontend e Svelte' }
+Instale 'Node LTS (minimo 20)'  'node'   'OpenJS.NodeJS.LTS'    $praQueNode                 | Out-Null
+if (-not $pacote) {
 Instale 'uv'                    'uv'     'astral-sh.uv'         'gerencia o venv do backend' | Out-Null
+}
 
 # O backend chama o multiplexador por `tmux`. O psmux publica esse alias; se um dia parar,
 # isso vira erro claro AQUI em vez de "falha ao criar sessao" dentro do app.
@@ -1035,7 +1051,7 @@ if ($script:psmuxConsole -eq 'pular') {
 }
 
 if ($SoChecar) {
-    $pyVenvCheck = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
+    $pyVenvCheck = $pyBackend
     if (Test-Path $pyVenvCheck) {
         Titulo 'Diagnostico'
         Push-Location (Join-Path $raiz 'backend'); & $pyVenvCheck -m app.doctor; $rcDoctor = $LASTEXITCODE; Pop-Location
@@ -1061,6 +1077,9 @@ Mark-Step 'preparar' 'ok'
 Mark-Step 'instalar' 'fazendo'
 Titulo '2/8 Backend'
 Push-Location "$raiz\backend"
+if ($pacote) {
+    Ok 'dependencias: vieram no pacote'
+} else {
 $rcSync = Nativo uv sync --quiet
 if ($rcSync -ne 0) {
     Pop-Location
@@ -1069,9 +1088,10 @@ if ($rcSync -ne 0) {
     Pare 'uv sync falhou - o backend ficou sem as dependencias' @('rodar na mao:  cd backend ; uv sync') $codigoSync
 }
 Ok 'dependencias instaladas'
-Mark-Item 'backend' 'ok' 'servidor do Hangar'
 Nota 'psutil entra aqui: no Windows nao ha /proc pra ler informacao de processo'
-$pyVenvAgentes = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
+}
+Mark-Item 'backend' 'ok' 'servidor do Hangar'
+$pyVenvAgentes = $pyBackend
 foreach ($a in $script:agentesNovos) {
     $nome = $nomesAgentes[$a]
     Write-Host "  .. instalando $nome"
@@ -1157,6 +1177,23 @@ if ((Test-Path $dist) -and (Test-Path $modulos)) {
     } elseif (-not $marca) {
         # Sem git nao da pra saber o que mudou; rebuildar e a escolha segura.
         $precisa = $true
+    }
+}
+if ($pacote) {
+    $precisa = $false
+    # O install-package baixa a tela da chave do pacote (~\.hangar\ui\<dist_key>), e o backend a serve;
+    # a falha do download la e so nota, entao a prova e a pasta.
+    # Regex e nao ConvertFrom-Json: no 5.1 ele recusa JSON acima de 2 MB, e o manifesto vai a 4 MiB.
+    $distKey = ''
+    if ((Ler-Texto "$raiz\manifest.json") -match '"dist_key"\s*:\s*"([0-9a-f]{64})"') { $distKey = $Matches[1] }
+    $webUi = Join-Path $HOME '.hangar\web-ui.json'
+    if ((Test-Path -LiteralPath $webUi) -and ((Ler-Texto $webUi) -match '"web_ui"\s*:\s*false')) {
+        Ok 'tela web desligada nesta maquina (~\.hangar\web-ui.json)'
+    } elseif ($distKey -and (Test-Path -LiteralPath (Join-Path $HOME ".hangar\ui\$distKey\index.html"))) {
+        Ok 'a tela vem pronta com o pacote (nada a compilar)'
+    } else {
+        if (-not $distKey) { $distKey = '<sem dist_key no manifest.json>' }
+        Falha 'tela web' "nao esta em ~\.hangar\ui\$distKey - use o app nativo, ou o Atualizar do app para baixa-la"
     }
 }
 
@@ -1553,7 +1590,7 @@ if ($precisa -and $Update) {
         if ($marca) { Escrever-Texto $marcaArq $marca }
         Ok 'buildado em frontend\dist\'
     }
-} else {
+} elseif (-not $pacote) {
     Ok 'frontend ja buildado e atualizado (nada mudou no git desde o ultimo build)'
 }
 Mark-ItemSince 'frontend' $antesFront 'tela do Hangar'
@@ -1588,14 +1625,19 @@ if ($SemNativo -and -not $SoChecar) {
 if (-not $SoChecar) {
     Titulo 'Binarios Rust'
     $pyRust = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
-    if (-not (Test-Path $pyRust)) {
+    if ($pacote) {
+        $rcRust = 'pacote'
+    } elseif (-not (Test-Path $pyRust)) {
         $rcRust = -1
     } else {
         Push-Location (Join-Path $raiz 'backend')
         $rcRust = Nativo $pyRust -m app.rust_release
         Pop-Location
     }
-    if ($rcRust -eq 0) {
+    if ("$rcRust" -eq 'pacote') {
+        Ok 'hangar-server e hangar-cano: vieram no pacote'
+        Mark-Item 'rust' 'ok' 'servidor rapido'
+    } elseif ($rcRust -eq 0) {
         Ok 'hangar-server e hangar-cano em ~\.hangar\bin'
         Mark-Item 'rust' 'ok' 'servidor rapido'
     } elseif ($rcRust -eq 2) {
@@ -1841,10 +1883,10 @@ function Publica-Tailscale {
                     $jaTinhaEsseValor = (Test-Path $envFile) -and (Select-String -Path $envFile `
                         -Pattern "^CP_PUBLIC_URL=$([regex]::Escape($script:cpPublicUrl))\s*$" -Quiet)
                     if ($jaTinhaEsseValor) {
-                        Ok "CP_PUBLIC_URL=$($script:cpPublicUrl) ja registrado em backend\.env"
+                        Ok "CP_PUBLIC_URL=$($script:cpPublicUrl) ja registrado em $envFile"
                     } else {
                         Set-EnvKey -Chave 'CP_PUBLIC_URL' -Valor $script:cpPublicUrl
-                        Ok "CP_PUBLIC_URL=$($script:cpPublicUrl) gravado em backend\.env"
+                        Ok "CP_PUBLIC_URL=$($script:cpPublicUrl) gravado em $envFile"
                     }
                 }
             }
@@ -1967,10 +2009,10 @@ if (-not $script:cpPublicUrl) {
             $jaTinhaEsseValor = (Test-Path $envFile) -and (Select-String -Path $envFile `
                 -Pattern "^CP_PUBLIC_URL=$([regex]::Escape($novaUrl))\s*$" -Quiet)
             if ($jaTinhaEsseValor) {
-                Ok "CP_PUBLIC_URL=$novaUrl ja registrado em backend\.env"
+                Ok "CP_PUBLIC_URL=$novaUrl ja registrado em $envFile"
             } else {
                 Set-EnvKey -Chave 'CP_PUBLIC_URL' -Valor $novaUrl
-                Ok "CP_PUBLIC_URL=$novaUrl gravado em backend\.env"
+                Ok "CP_PUBLIC_URL=$novaUrl gravado em $envFile"
             }
             $script:cpPublicUrl = $novaUrl
             Nota 'ATENCAO: esse endereco e o IP que o seu roteador deu a esta maquina, e ele PODE MUDAR'
@@ -2047,6 +2089,9 @@ else { Remove-EnvKey -Chave 'CP_FRONT_PORT' }
 # a versao em uso pelo ~\.hangar\current. Sem isto um -Update voltaria a tarefa para o venv do checkout.
 $lancadorPacote = Join-Path $HOME '.hangar\bin\hangar-launcher.exe'
 if (-not ((Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) -and (Test-Path -LiteralPath $lancadorPacote))) { $lancadorPacote = $null }
+if ($pacote -and -not $lancadorPacote) {
+    Falha 'tarefas agendadas' "pacote sem o lancador $(Join-Path $HOME '.hangar\bin\hangar-launcher.exe') (ou sem ~\.hangar\current): rode o hangar-server install-package"
+}
 $tarefas = @(
     # Padrao ANCORADO no caminho deste checkout. 'app\.main' cru casava com QUALQUER processo cuja
     # linha de comando contivesse app.main - e este repo tem worktrees em .claude/worktrees/ com
@@ -2408,7 +2453,10 @@ if (-not $bash) {
     # da Microsoft Store ("Python nao foi encontrado"), que e o que ha no PATH de um Windows tipico.
     $pyExe = $null
     $atalhos = @()
+    # No pacote e o embutido, pelo current: o da maquina pode faltar ou nao ter as dependencias (websockets).
+    if ($pacote) { $pyExe = Join-Path $HOME '.hangar\current\python\python.exe' }
     foreach ($cand in 'py', 'python') {
+        if ($pyExe) { break }
         $c = Get-Command $cand -CommandType Application -ErrorAction SilentlyContinue |
              Select-Object -First 1
         if (-not $c) { continue }
@@ -2509,9 +2557,11 @@ if (-not $bash) {
 
     # hangar-doctor.cmd: Python do VENV do backend (importa app.*), com cd para backend\ (o .env e lido pelo cwd).
     $pyVenv = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
-    if (Test-Path $pyVenv) {
+    if ($pacote -or (Test-Path $pyVenv)) {
         $lancadorDoctor = Join-Path $binUsuario 'hangar-doctor.cmd'
-        $conteudoDoctor = "@echo off`r`ncd /d `"$raiz\backend`"`r`n`"$pyVenv`" -m app.doctor %*`r`n"
+        # No pacote pelo hangar-python.cmd e pelo current: o caminho real da versao seria podado.
+        $conteudoDoctor = if ($pacote) { "@echo off`r`ncd /d `"$raizAtalhos\backend`"`r`ncall `"%~dp0hangar-python.cmd`" -m app.doctor %*`r`n" }
+                          else { "@echo off`r`ncd /d `"$raiz\backend`"`r`n`"$pyVenv`" -m app.doctor %*`r`n" }
         if (Escrever-Lancador $lancadorDoctor $conteudoDoctor 'cmd') { Ok "lancador hangar-doctor.cmd criado em $binUsuario" }
         else { Ok 'lancador hangar-doctor.cmd ja atualizado' }
     } else {
@@ -2692,8 +2742,9 @@ else {
 # Uma instalacao do ZERO ja satisfaz todo passo de docs\atualizacoes\ -- eles existem pra levar uma
 # maquina ANTIGA ate aqui. Sem esta marca, o primeiro Atualizar no app rodaria a historia inteira de
 # passos, todos ja cumpridos por este instalador. No -Update NAO se marca nada: ali a maquina e
-# justamente a antiga, e os passos precisam rodar.
-if (-not $Update) {
+# justamente a antiga, e os passos precisam rodar. No pacote quem marca e o hangar-server, depois da
+# checagem de fumaca (so com a instalacao no fim).
+if (-not $Update -and -not $pacote) {
     Titulo 'Passos de atualizacao'
     $marcou = $false
     try {
@@ -2721,6 +2772,8 @@ $hookMarca = 'hangar-post-merge-hook'
 if ($Update) {
     # O proprio hook pode ser quem esta chamando: nao se reinstala no meio da propria execucao.
     Nota 'pulado no -Update (o hook pode ser o proprio chamador)'
+} elseif ($pacote) {
+    Ok 'o pacote se atualiza pelo Atualizar do app, sem git pull'
 } elseif (-not (Test-Path "$raiz\.git")) {
     Falta 'sem .git (copia sem historico?) - hook de atualizacao indisponivel'
 } elseif (-not (Test-Path $hookFonte)) {
@@ -2777,12 +2830,14 @@ Mark-Step 'instalar' 'ok'
 Mark-Step 'final' 'fazendo'
 Titulo '8/8 Checagem de fumaca'
 Push-Location "$raiz\backend"
-$rc = Nativo uv run python -c "from app import api, registry, procinfo, projects"
+# O Python do backend: o embutido do pacote, ou o do uv no checkout.
+$pyFumaca = if ($pacote) { @($pyBackend) } else { @('uv', 'run', 'python') }
+$rc = Nativo @pyFumaca -c "from app import api, registry, procinfo, projects"
 if ($rc -ne 0) { Erro 'o backend nao importa neste Windows'; Pop-Location; exit 1 }
 Ok 'o backend importa'
 Mark-Item 'backend-importa' 'ok' 'o servidor abre'
 
-$rc = Nativo uv run python -c "from app import procinfo; assert not procinfo._TEM_PROC; import psutil; assert psutil.Process().cwd()"
+$rc = Nativo @pyFumaca -c "from app import procinfo; assert not procinfo._TEM_PROC; import psutil; assert psutil.Process().cwd()"
 if ($rc -ne 0) { Erro 'leitura de processo via psutil falhou'; Pop-Location; exit 1 }
 Ok 'leitura de processo (psutil) funcionando'
 Pop-Location
@@ -2831,6 +2886,17 @@ if ($morreu) {
     # o sintoma no uso e sessao apagada que reaparece na lista.
     Falta "a sessao de teste '$sessao' nao morreu em 15s - apagar sessao pelo app pode deixar zumbi"
     Nota "limpar na mao:  tmux kill-session -t '=$sessao'"
+}
+
+# Instalacao do zero pelo pacote ja cumpre todo passo de docs\atualizacoes\: o hangar-server os
+# registra como aplicados, so agora que a instalacao chegou ao fim. A saida fica visivel: ela avisa
+# passo malformado.
+if ($pacote -and -not $Update) {
+    $saidaPassos = & { $ErrorActionPreference = 'Continue'; & "$raiz\bin\hangar-server.exe" install-package --mark-steps 2>&1 } | ForEach-Object { "$_" }
+    $rcPassos = $LASTEXITCODE
+    foreach ($l in $saidaPassos) { Nota $l }
+    if ($rcPassos -eq 0) { Ok 'passos de atualizacao marcados como ja aplicados (instalacao nova)' }
+    else { Falha 'passos de atualizacao' 'nao foram marcados como aplicados - rode:  ~\.hangar\current\bin\hangar-server.exe install-package --mark-steps' }
 }
 
 # -- Confere e entrega o acesso -----------------------------------------------
@@ -2930,7 +2996,7 @@ Titulo 'Pronto'
 Mark-Step 'final' 'ok'
 # O passo 7b tambem define $pyVenv, mas ele pode nao ter rodado (-Update parcial, venv ausente):
 # a tela final nao pode depender de um ramo anterior ter executado.
-$pyVenv = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
+$pyVenv = $pyBackend
 $qrMostrado = $false
 if ($script:Interativo -and -not $Update -and (Test-Path $pyVenv)) {
     Pausa-Log   # a URL do QR carrega o token (a legenda quem escreve e o proprio app.doctor)
@@ -2993,16 +3059,16 @@ Write-Host "  ---------------------------------------------------------------" -
 Write-Host "   RESUMO" -ForegroundColor Cyan
 if ($tokenFim -and $App) {
     # O app ja conectou com ele; a saida vai para um arquivo que o relatorio de falha le.
-    Write-Host "   token   : (em backend\.env)"
+    Write-Host "   token   : (em $envFile)"
 } elseif ($tokenFim) {
     Pausa-Log   # o token nao entra no install.log; la fica so a linha mascarada abaixo
     Write-Host "   token   : " -NoNewline; Write-Host $tokenFim -ForegroundColor Yellow
-    Write-Host "             (e o que voce digita no celular; fica em backend\.env)"
+    Write-Host "             (e o que voce digita no celular; fica em $envFile)"
     # Enquanto o transcript esta PAUSADO: com ele rodando o arquivo esta aberto pelo PowerShell.
-    if ($script:temLog) { Add-Content -Path $logInstall -Value '   token   : (em backend\.env)' }
+    if ($script:temLog) { Add-Content -Path $logInstall -Value "   token   : (em $envFile)" }
     Retoma-Log
 } else {
-    Write-Host "   token   : nao consegui ler de backend\.env - veja o passo 3/8 acima" -ForegroundColor Red
+    Write-Host "   token   : nao consegui ler de $envFile - veja o passo 3/8 acima" -ForegroundColor Red
 }
 Write-Host "   local   : http://127.0.0.1:$portaBack"
 if ($script:cpPublicUrl) { Write-Host "   celular : $($script:cpPublicUrl)" }

@@ -162,6 +162,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `migrate-package`, além do `python -m app.atualizar`.
 - **A migração no Windows deixa `.env`, `peers.json`, `projects.json` e `launchers` antigos como
   cópia**, não como link: link de arquivo pede administrador.
+- **Instalação nova é pelo pacote: o `bootstrap.ps1` baixa o `hangar-server.exe`, confere o sha256 e
+  roda o `install.ps1` do `current` em modo pacote** (`manifest.json` sem `.git`); `CP_DEV`,
+  `CP_DESTINO` e `-Destino` seguem pelo git. No pacote, o Python dos lançadores é o
+  `%USERPROFILE%\.hangar\current\python\python.exe` (o `hangar-codex-tui` precisa do `websockets`
+  dele), e o manifesto se lê por regex: o `ConvertFrom-Json` do 5.1 recusa JSON acima de 2 MB. Regras
+  e recusas em [instalacao.md](instalacao.md#pacote-por-versão). Só raciocinado até a prova na VM.
 
 ## Pacote por versão no Windows (24/10/2026)
 

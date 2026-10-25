@@ -6,8 +6,8 @@
 //! Baixa e extrai o pacote mais novo do canal pelo mesmo download conferido da migração (índice,
 //! sha256, extração e a tela web da chave), copia o lançador do pacote para
 //! `~/.hangar/bin/hangar-launcher`, grava a marca `~/.hangar/migration.json` (pacote, sem checkout) e
-//! só então aponta o `current`. Serviço, hooks, skills e agentes são do `install.sh` que vem dentro do
-//! pacote; o `bootstrap.sh` o roda depois, e ele chama o `--mark-steps` quando chega ao fim: só então
+//! só então aponta o `current`. Serviço, hooks, skills e agentes são do `install.sh`/`install.ps1` que
+//! vem dentro do pacote; o bootstrap o roda depois, e ele chama o `--mark-steps` quando chega ao fim: só então
 //! os passos de `docs/atualizacoes/` do `current` ficam registrados como aplicados.
 //!
 //! Saída: 0 instalado, 1 falhou (o `current` não foi criado), 2 uso errado, 3 o índice não tem
@@ -38,6 +38,8 @@ pub struct Machine<'a> {
     pub home: PathBuf,
     /// `~/.config/systemd/user`.
     pub systemd_dir: PathBuf,
+    /// `%LOCALAPPDATA%\hangar`, onde moram os `.vbs` das tarefas; `None` fora do Windows.
+    pub tasks_dir: Option<PathBuf>,
     pub windows: bool,
     pub fetcher: &'a dyn Fetcher,
 }
@@ -59,8 +61,10 @@ fn existing(m: &Machine<'_>) -> Option<String> {
         return Some(format!("o Hangar já está instalado pelo git em {}; ele passa para o pacote pelo Atualizar do app, ou siga nele com --dev",
             checkout.display()));
     }
-    let unit = m.systemd_dir.join("hangar-backend.service");
-    unit.exists().then(|| format!("já existe o serviço do Hangar ({}); confira a instalação que ele sobe antes de instalar outra", unit.display()))
+    // A unit (Linux) ou o `.vbs` da tarefa (Windows), como no `service_file` da migração.
+    let service = if m.windows { m.tasks_dir.as_ref().map(|d| d.join("hangar-backend.vbs")) } else { Some(m.systemd_dir.join("hangar-backend.service")) };
+    service.filter(|f| f.exists())
+        .map(|f| format!("já existe o serviço do Hangar ({}); confira a instalação que ele sobe antes de instalar outra", f.display()))
 }
 
 /// Instala o pacote mais novo de `channel`.
@@ -143,7 +147,8 @@ pub fn cli(args: &[String]) -> ExitCode {
     };
     let fetcher = migrate::ReleaseFetcher { client, platform: super::platform(), home: home.clone(), deadline: Duration::from_secs(900),
         base_url: base_url.trim_end_matches('/').to_owned() };
-    let machine = Machine { home: home.clone(), systemd_dir: config.join("systemd").join("user"),
+    let tasks_dir = cfg!(windows).then(|| env.base.get("LOCALAPPDATA").filter(|v| !v.is_empty()).map(|d| PathBuf::from(d).join("hangar"))).flatten();
+    let machine = Machine { home: home.clone(), systemd_dir: config.join("systemd").join("user"), tasks_dir,
         windows: cfg!(windows), fetcher: &fetcher };
     let runtime = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
         Ok(runtime) => runtime,

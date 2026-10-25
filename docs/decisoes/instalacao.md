@@ -285,6 +285,15 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   `dist_key` em `~/.hangar/ui` (ausente com a tela web ligada é pendência) e, só ao chegar ao fim,
   registra os passos como aplicados (`install-package --mark-steps`, malformado vira aviso). O
   `--dev` grava `~/.hangar/dev-requested`; a migração lê isso como modo desenvolvedor e o apaga.
+- **No Windows é o mesmo fluxo, pelo `bootstrap.ps1`, com as opções por variável** (`irm | iex` não
+  tem argumento): `$env:CP_CANAL='beta'` é o `--beta`; `$env:CP_DEV='1'`, `$env:CP_DESTINO` e o
+  `-Destino` do app são o git. O sha256 do `hangar-server.exe` vem do `server-latest.json` e é
+  conferido por `Get-FileHash`; https nunca segue redirecionamento para http. O `install-package`
+  recusa (4) também com a tarefa já gravada (`%LOCALAPPDATA%\hangar\hangar-backend.vbs`). O
+  `install.ps1` do pacote pula Python, `uv`, `uv sync`, build da tela, `rust_release` e o hook de
+  `git pull`; roda o backend pelo `python\python.exe` do pacote e os lançadores pelo Python do
+  `current`; marca os passos com `install-package --mark-steps` depois da fumaça. A barra de status do
+  Claude grava o caminho pelo `current` (`configure-statusline.cjs`), nos dois sistemas.
 - **A tela web é opcional, ligada por padrão, e servida pelo Rust** de `~/.hangar/ui/<dist_key>/`
   (checkout: `frontend/dist`). `GET`/`PUT /api/web-ui` (só o dono) grava `~/.hangar/web-ui.json`;
   desligada, a raiz responde 404 `web_ui_disabled` e o atualizador não baixa a tela. O interruptor

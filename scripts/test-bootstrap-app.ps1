@@ -6,8 +6,10 @@ $bootstrap = Join-Path (Split-Path -Parent $PSScriptRoot) 'bootstrap.ps1'
 $ps = Join-Path $PSHOME 'powershell.exe'
 $raiz = Join-Path $env:TEMP ('hangar-bootstrap-teste-' + [guid]::NewGuid().ToString('N'))
 $fakeBin = Join-Path $raiz 'bin'
-New-Item -ItemType Directory -Force -Path $fakeBin | Out-Null
+$perfil = Join-Path $raiz 'perfil'
+New-Item -ItemType Directory -Force -Path $fakeBin, $perfil | Out-Null
 $pathOriginal = $env:Path
+$perfilOriginal = $env:USERPROFILE
 $script:falhas = 0
 function Assert($condition, $message) { if ($condition) { Write-Host "ok   $message" } else { Write-Host "FAIL $message"; $script:falhas++ } }
 
@@ -41,8 +43,10 @@ function Run-Bootstrap([string[]]$argumentos, [int]$pull = 0, [int]$dirty = 0, [
     $env:FAKE_LOG = Join-Path $raiz 'git.log'
     $env:FAKE_PULL_RC = "$pull"; $env:FAKE_DIRTY = "$dirty"; $env:FAKE_CLONE_RC = "$clone"
     $env:Path = "$fakeBin;$pathOriginal"
+    # Perfil vazio: o ~\.hangar\current de verdade (maquina no pacote) faria o bootstrap recusar o git.
+    $env:USERPROFILE = $perfil
     $saida = @(& $ps -NoProfile -ExecutionPolicy Bypass -File $bootstrap @argumentos 2>&1 | ForEach-Object { "$_" })
-    $env:Path = $pathOriginal
+    $env:Path = $pathOriginal; $env:USERPROFILE = $perfilOriginal
     return ,$saida
 }
 function Last-Line($linhas) { return (@($linhas | Where-Object { "$_".Trim() }) | Select-Object -Last 1) }
@@ -87,10 +91,10 @@ Assert ((Last-Line $out) -eq '##HANGAR-FIM## falhou') 'clone: FIM falhou por ult
 # --- Caso: irm | iex continua funcionando (param() no padrao, destino do CP_DESTINO) ---
 $d = New-Destino 'iex'
 $env:Path = "$fakeBin;$pathOriginal"; $env:FAKE_PULL_RC = '0'; $env:FAKE_DIRTY = '0'; $env:FAKE_CLONE_RC = '0'
-$env:CP_DESTINO = $d
+$env:CP_DESTINO = $d; $env:USERPROFILE = $perfil
 & $ps -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Raw '$bootstrap' | iex" *> $null
 Remove-Item Env:CP_DESTINO
-$env:Path = $pathOriginal
+$env:Path = $pathOriginal; $env:USERPROFILE = $perfilOriginal
 Assert ((Get-Content (Join-Path $d 'args.txt')) -eq 'App=False Tailscale= SemNativo=False Agentes= SoChecar=False ConsertarRoda=False') 'iex: roda com tudo no padrao'
 
 # --- Caso: arquivo ASCII e sem BOM ---

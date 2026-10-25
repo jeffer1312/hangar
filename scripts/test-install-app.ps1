@@ -241,6 +241,7 @@ function Pausa-Log { }
 function Pausa-Fim { }
 function FakePowerShell { $global:LASTEXITCODE = 1 }
 $PowerShellExe = 'FakePowerShell'; $raiz = 'C:\hangar-falso'; $script:psmuxSessoes = 2
+$pyBackend = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
 '@
 function Run-Gate($caso, $corpo, $depois) {
     $child = Join-Path $env:TEMP ("hangar-test-" + [guid]::NewGuid().ToString('N') + '.ps1')

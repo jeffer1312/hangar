@@ -79,7 +79,8 @@ impl Release {
 async fn install(home: &Path, args: &[&str]) -> std::process::Output {
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_hangar-server"));
     command.arg("install-package").args(args)
-        .env_clear().env("HOME", home).env("USERPROFILE", home).env("PATH", std::env::var_os("PATH").unwrap_or_default());
+        .env_clear().env("HOME", home).env("USERPROFILE", home).env("LOCALAPPDATA", home.join("AppData").join("Local"))
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default());
     // Sem o SystemRoot o Winsock não inicializa e nenhuma conexão sai, nem para o 127.0.0.1.
     if let Some(root) = std::env::var_os("SystemRoot") { command.env("SystemRoot", root); }
     command.output().await.unwrap()
@@ -143,13 +144,17 @@ async fn install_package_refuses_an_existing_installation() {
     let unit = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(unit.path().join(".config/systemd/user")).unwrap();
     std::fs::write(unit.path().join(".config/systemd/user/hangar-backend.service"), "[Service]\n").unwrap();
+    // No Windows o serviço é a tarefa, achada pelo `.vbs` em %LOCALAPPDATA%\hangar.
+    std::fs::create_dir_all(unit.path().join("AppData/Local/hangar")).unwrap();
+    std::fs::write(unit.path().join("AppData/Local/hangar/hangar-backend.vbs"), "WScript.Quit 0\n").unwrap();
     let git = tempfile::tempdir().unwrap();
     let checkout = git.path().join("hangar");
     std::fs::create_dir_all(checkout.join(".git")).unwrap();
     std::fs::create_dir_all(checkout.join("backend/app")).unwrap();
     std::fs::create_dir_all(git.path().join(".hangar")).unwrap();
     std::fs::write(git.path().join(".hangar/backend-dir"), checkout.join("backend").to_string_lossy().as_bytes()).unwrap();
-    for (home, says) in [(&current, "current"), (&unit, "hangar-backend.service"), (&git, checkout.to_str().unwrap())] {
+    let service = if cfg!(windows) { "hangar-backend.vbs" } else { "hangar-backend.service" };
+    for (home, says) in [(&current, "current"), (&unit, service), (&git, checkout.to_str().unwrap())] {
         let out = install(home.path(), &["--release-base", &release.base]).await;
         assert_eq!(out.status.code(), Some(4), "{}", text(&out));
         assert!(text(&out).contains(says), "o motivo cita {says}: {}", text(&out));

@@ -14,6 +14,15 @@ function objeto(raw) {
   return valor;
 }
 
+// Pacote: o Node resolve o link do `current` no __dirname, e a pasta da versão a poda apaga.
+function pastaScripts() {
+  const current = path.join(os.homedir(), '.hangar', 'current');
+  try {
+    if (fs.realpathSync(current) === fs.realpathSync(path.join(__dirname, '..'))) return path.join(current, 'scripts');
+  } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  return __dirname;
+}
+
 function configurar() {
   const dir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
   const preferencias = objeto(ler(path.join(dir, 'runtime-config.json')));
@@ -28,7 +37,7 @@ function configurar() {
   const anterior = ler(arquivo);
   const config = objeto(anterior);
   const quote = process.platform === 'win32' ? (s) => `"${s}"` : (s) => `'${s.replaceAll("'", "'\"'\"'")}'`;
-  const comando = `${quote(process.execPath)} ${quote(path.join(__dirname, 'omniroute-statusline.js'))}`;
+  const comando = `${quote(process.execPath)} ${quote(path.join(pastaScripts(), 'omniroute-statusline.js'))}`;
   if (config.statusLine?.type === 'command' && config.statusLine.command === comando) {
     console.log('Barra de status já configurada.');
     return;

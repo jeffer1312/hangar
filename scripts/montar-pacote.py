@@ -32,9 +32,9 @@ MANIFEST_MAX = 4 << 20
 # Sistema → plataforma do `uv pip install` e sufixo dos executáveis. manylinux_2_28 = a glibc que o
 # hangar-server também exige.
 OSES = {"linux-x86_64": ("x86_64-manylinux_2_28", ""), "windows-x86_64": ("x86_64-pc-windows-msvc", ".exe")}
-# O install.sh vai junto: a instalação nova roda o do `current`, em modo pacote (sem git, uv nem build).
+# Os instaladores vão juntos: a instalação nova roda o do `current`, em modo pacote (sem git, uv nem build).
 TREES = ["backend/app", "backend/hooks", "resources", "scripts", "skills", "plugins", "shell", "messages",
-         "docs/atualizacoes", "VERSION", "install.sh"]
+         "docs/atualizacoes", "VERSION", "install.sh", "install.ps1"]
 # Testes, provas, medições e ferramentas de quem desenvolve: rodam do checkout (modo desenvolvedor).
 EXCLUDE = [
     "*__pycache__*", "*.pyc", "*node_modules*", "*/tests/*", "*/test_*", "*/test-*", "*.test.*",
