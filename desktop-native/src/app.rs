@@ -246,7 +246,7 @@ enum Payload {
     // `None` marca o início do envio daquele anexo.
     UploadStep(SessionKey, u64, Option<Result<Uploaded, Failure>>),
     /// A legenda e as referências do Enter vão com os uploads até a mensagem sair.
-    UploadsDone(SessionKey, String, Vec<crate::context_refs::ContextRef>, SendTiming, HashSet<String>, Option<Vec<String>>),
+    UploadsDone(SessionKey, String, String, Vec<crate::context_refs::ContextRef>, SendTiming, HashSet<String>, Option<Vec<String>>),
     QueueJev(String, u64, Result<bool, String>),
     Commands(String, u64, Result<Vec<CommandInfo>, Failure>),
     Recent(SessionKey, Result<Vec<UploadFile>, Failure>),
@@ -1633,9 +1633,9 @@ impl Hangar {
             Payload::VoiceModels(seq, result) => { self.receive_organizer_models(seq, result, window, cx); return; }
             Payload::Files(key, owner, generation, files) => { self.receive_files(key, owner, generation, files, cx); cx.notify(); return; }
             Payload::UploadStep(key, id, result) => { let key = self.delivery.current(key); self.receive_upload(key, id, result); cx.notify(); return; }
-            Payload::UploadsDone(key, draft, refs, steer, known, group) => {
+            Payload::UploadsDone(key, draft, field, refs, steer, known, group) => {
                 let key = self.delivery.current(key);
-                self.finish_uploads(key, draft, refs, steer, known, group, window, cx);
+                self.finish_uploads(key, draft, field, refs, steer, known, group, window, cx);
                 cx.notify();
                 return;
             }
@@ -2003,6 +2003,7 @@ impl Hangar {
             Err(error) => SendOutcome::Rejected(Self::failure(error)),
         };
         let typed = self.delivery.typed(&key, &text);
+        let history = self.delivery.history(&key, &text);
         if !self.delivery.complete(&key, &text, outcome) { return; }
         if let Some(note) = result.as_ref().ok().and_then(|d| d.timing_note.as_deref()) {
             let (message, warning) = match note {
@@ -2023,6 +2024,7 @@ impl Hangar {
         let current = self.selected_key().as_ref() == Some(&key);
         let confirmed = self.delivery.outcome(&key).is_none();
         if result.is_ok() || confirmed {
+            if let Some(field) = history { self.input_history.entry(key.clone()).or_default().record(&field); }
             // O que saiu do campo no Enter já não está nele: o que estiver lá agora é texto novo, mesmo que igual.
             if typed.is_none() {
                 if self.drafts.get(&key).is_some_and(|saved| saved == &draft) { self.drafts.remove(&key); }
@@ -2043,14 +2045,14 @@ impl Hangar {
             }
             self.sent_context_refs(&key, &text);
             // Quem esperava este envio sai agora, na ordem em que foi mandado.
-            if let Some((next, steer, group)) = self.delivery.next_held(&key) {
+            if let Some((next, field, steer, group)) = self.delivery.next_held(&key) {
                 let known = if current { self.known_user_ids() } else { HashSet::new() };
-                if self.post(key.clone(), next.clone(), next.clone(), steer, known, group, cx) {
-                    self.delivery.mark_typed(&key, next);
+                if self.post(key.clone(), next, field.clone(), steer, known, group, cx) {
+                    self.delivery.mark_typed(&key, field);
                     self.sync_working_row(cx);
                 } else {
                     let mut back = self.delivery.take_held(&key);
-                    back.insert(0, next);
+                    back.insert(0, field);
                     self.return_to_field(&key, back, current, window, cx);
                 }
             }
@@ -2681,10 +2683,11 @@ impl Hangar {
             cx.notify();
             return;
         }
+        let field = text.clone();
         let text = if surface_btw { composer::surface_side_question(&text) } else { text };
         // Enter com um envio em voo não se perde: o texto sai do campo e vai na vez dele.
         if flying {
-            self.delivery.hold(key.clone(), text, steer, group);
+            self.delivery.hold(key.clone(), text, field, steer, group);
             self.clear_sent_field(&key, window, cx);
             return;
         }
@@ -2692,21 +2695,21 @@ impl Hangar {
         // O campo esvazia no Enter, sem esperar o backend: o que for digitado depois é outra mensagem. Com anexo também;
         // a legenda viaja com os uploads e volta ao campo se o envio não sair.
         if attached {
-            self.start_uploads(key.clone(), text, refs, steer, known, group, cx);
+            self.start_uploads(key.clone(), text, field, refs, steer, known, group, cx);
             if self.uploading.contains_key(&key) { self.clear_sent_field(&key, window, cx); }
             return;
         }
         // As referências da bandeja vão antes do digitado; o que volta ao campo numa falha é só o digitado.
         let message = quotes::compose_refs(&refs, &text);
-        if self.deliver(key.clone(), message, text.clone(), steer, known, group, cx) {
-            self.delivery.mark_typed(&key, text);
+        if self.deliver(key.clone(), message, field.clone(), steer, known, group, cx) {
+            self.delivery.mark_typed(&key, field);
             self.clear_sent_field(&key, window, cx);
         }
     }
 
     /// Texto que saiu do campo no Enter não fica nele nem no rascunho guardado da conversa.
     fn clear_sent_field(&mut self, key: &SessionKey, window: &mut Window, cx: &mut Context<Self>) {
-        self.input_history.entry(key.clone()).or_default().record(&self.composer.read(cx).value());
+        self.input_history.entry(key.clone()).or_default().reset_navigation();
         self.drafts.remove(key);
         self.composer.update(cx, |input, cx| input.set_value("", window, cx));
         cx.notify();
@@ -2765,7 +2768,7 @@ impl Hangar {
     }
 
     // Sobe um por vez; o que já subiu não sobe de novo numa nova tentativa, e falha para a fila sem repetir.
-    fn start_uploads(&mut self, key: SessionKey, draft: String, refs: Vec<crate::context_refs::ContextRef>, steer: SendTiming, known: HashSet<String>, group: Option<Vec<String>>, cx: &mut Context<Self>) {
+    fn start_uploads(&mut self, key: SessionKey, draft: String, field: String, refs: Vec<crate::context_refs::ContextRef>, steer: SendTiming, known: HashSet<String>, group: Option<Vec<String>>, cx: &mut Context<Self>) {
         let Some(api) = self.api_for(&key.server) else { return; };
         let Some(list) = self.attachments.get_mut(&key) else { return; };
         let mut jobs = Vec::new();
@@ -2795,7 +2798,7 @@ impl Hangar {
                 if tx.send(Envelope { connection, selection: None, payload: Payload::UploadStep(key.clone(), id, Some(result)) }).await.is_err() { return; }
                 if failed { break; }
             }
-            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::UploadsDone(key, draft, refs, steer, known, group) }).await;
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::UploadsDone(key, draft, field, refs, steer, known, group) }).await;
         });
         cx.notify();
     }
@@ -2811,7 +2814,7 @@ impl Hangar {
         };
     }
 
-    fn finish_uploads(&mut self, key: SessionKey, draft: String, refs: Vec<crate::context_refs::ContextRef>, steer: SendTiming, known: HashSet<String>, group: Option<Vec<String>>, window: &mut Window, cx: &mut Context<Self>) {
+    fn finish_uploads(&mut self, key: SessionKey, draft: String, field: String, refs: Vec<crate::context_refs::ContextRef>, steer: SendTiming, known: HashSet<String>, group: Option<Vec<String>>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(batch) = self.uploading.remove(&key) else { return; };
         let uploads: Option<Vec<_>> = self.attachments.get(&key).and_then(|list| list.iter().filter(|a| batch.contains(&a.id))
             .map(|attachment| match &attachment.state {
@@ -2822,13 +2825,13 @@ impl Hangar {
         let Some(uploads) = uploads else {
             self.action_feedback.insert(key.clone(), (tr("attach_not_sent"), true));
             // A legenda saiu do campo no Enter: sem envio, ela volta.
-            if !draft.is_empty() { self.return_to_field(&key, vec![draft], current, window, cx); }
+            if !field.is_empty() { self.return_to_field(&key, vec![field], current, window, cx); }
             return;
         };
         let caption = quotes::compose_refs(&refs, &draft);
         let message = composer::compose_prompt(&caption, &uploads, |speech| tr("attach_video_speech").replace("{texto}", speech));
-        if self.deliver(key.clone(), message, draft.clone(), steer, known, group, cx) { self.delivery.mark_typed(&key, draft); }
-        else if !draft.is_empty() { self.return_to_field(&key, vec![draft], current, window, cx); }
+        if self.deliver(key.clone(), message, field.clone(), steer, known, group, cx) { self.delivery.mark_typed(&key, field); }
+        else if !field.is_empty() { self.return_to_field(&key, vec![field], current, window, cx); }
     }
 
     fn add_attachment(&mut self, key: &SessionKey, name: String, bytes: Vec<u8>) -> Result<(), String> {
@@ -3162,7 +3165,11 @@ impl Hangar {
         if !self.can_send() || self.delivery.pending(&key) || self.uploading.contains_key(&key) { return; }
         let draft = if from_panel { String::new() } else { self.composer.read(cx).value().to_string() };
         let known = self.known_user_ids();
-        self.deliver(key, format!("/{}", command.name), draft, false, known, None, cx);
+        let text = format!("/{}", command.name);
+        if self.deliver(key.clone(), text.clone(), draft, false, known, None, cx) {
+            self.delivery.mark_history(&key, text);
+            self.input_history.entry(key).or_default().reset_navigation();
+        }
     }
 
     fn visible_suggestions(&self, cx: &App) -> Vec<CommandInfo> {

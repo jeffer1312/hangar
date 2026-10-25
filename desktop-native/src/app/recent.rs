@@ -315,7 +315,7 @@ impl Hangar {
         let readable = session.readable();
         match SessionKey::new(&identity, &session) {
             Some(key) => {
-                self.input_history.entry(key.clone()).or_default().record(&text);
+                if sent.is_ok() { self.input_history.entry(key.clone()).or_default().record(&text); }
                 self.drafts.entry(key.clone()).or_insert_with(|| text.clone());
                 self.delivery.begin(key.clone(), text.clone(), HashSet::new());
                 self.receive_sent(key, text.clone(), text.clone(), sent.clone(), window, cx);
