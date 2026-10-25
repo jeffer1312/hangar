@@ -598,7 +598,8 @@ fn drawer_with(dir: &Path, destination: &Path, rename: &dyn Fn(&Path, &Path) -> 
     mkdir(&drift).at(&drift)?;
     let name = name_of(destination);
     let mut n = 1;
-    while exists(&drift.join(format!("{name}.{n}"))) { n += 1; }
+    // Link morto ocupa a vaga: dado como livre, a pasta não entrava nele e o arquivo o sobrescrevia.
+    while fs::symlink_metadata(drift.join(format!("{name}.{n}"))).is_ok() { n += 1; }
     let slot = drift.join(format!("{name}.{n}"));
     move_entry(destination, &slot, rename)?;
     // Teto por nome de origem: pela gaveta inteira, três `skills` levavam o único `hooks.1`.

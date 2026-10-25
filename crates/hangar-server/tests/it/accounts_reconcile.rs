@@ -674,8 +674,8 @@ fn scenario(name: &str) -> Scenario {
 }
 
 /// D12 e D13: o gerador grava o Python, e o teste confere o Rust contra o que foi aceito.
-const ACCEPTED: [&str; 5] = ["new_fixed_dirs", "list_pending_dead_link", "prep_pending_dead_link", "b1_runtime_not_listed",
-    "drift_just_moved_pruned"];
+const ACCEPTED: [&str; 7] = ["new_fixed_dirs", "list_pending_dead_link", "prep_pending_dead_link", "b1_runtime_not_listed",
+    "drift_just_moved_pruned", "drift_slot_dead_link_file", "drift_slot_dead_link_dir"];
 
 macro_rules! scenarios {
     ($($name:ident),* $(,)?) => {
@@ -704,7 +704,7 @@ scenarios!(
     plugins_registry_unreadable, plugins_registry_invalid, plugins_registry_not_object, plugins_entry_not_dict,
     plugins_install_path_number, plugins_install_path_shapes, plugins_enabled_shapes, plugins_list_truthy,
     plugins_list_falsy, plugins_seeded_not_object, shared_dead_link, user_dead_link_pruned, drift_slot_reuse,
-    drift_slot_dead_link_file, drift_slot_dead_link_dir, drift_unicode_digit, top_order,
+    drift_unicode_digit, top_order,
     fifo_goes_to_drift, memory_cases, memory_local_project_is_file, shared_pending_marker, relative_link_kept,
     link_loop_drawer, never_link_names, b3_memory_shared_bucket, prep_ignores_claude_config_dir,
     drift_prunes_link_entry, prep_absent_guard_busy, prep_shared_link_and_modes, prep_shared_readonly_collision,
@@ -1095,6 +1095,34 @@ fn drift_just_moved_pruned() {
         "a recém-movida foi podada");
     let kept = tree.keys().filter(|k| k.starts_with("<HOME>/.claude-conta2/.drift/hooks.")).count();
     assert_eq!(kept, 3, "teto de três por nome de origem");
+}
+
+/// U9(a): a vaga da gaveta ocupada por link morto conta como ocupada. O Python a dava por livre: a pasta
+/// não entrava (toda abertura da conta falhava) e o arquivo sobrescrevia o link sem aviso.
+#[test]
+fn drift_slot_dead_link_dir() {
+    let python = fixture("drift_slot_dead_link_dir");
+    assert_eq!(python["steps"][0]["exit"], 126, "o Python falhava na vaga ocupada pelo link morto");
+    let got = run("drift_slot_dead_link_dir", &Side::Rust);
+    assert_eq!((got.steps[0]["exit"].clone(), got.steps[0]["stderr"].clone()),
+        (json!(0), json!(["hangar-conta: 'skills' era local nesta conta; movido pra .drift/skills.2"])));
+    let tree = got.tree.as_object().unwrap();
+    assert_eq!(tree["<HOME>/.claude-conta2/.drift/skills.1"], json!({"kind": "symlink", "target": "<HOME>/nada"}), "o link morto fica");
+    assert_eq!(tree["<HOME>/.claude-conta2/.drift/skills.2/a.md"]["text"], "meu");
+    assert_eq!(tree["<HOME>/.claude-conta2/skills"], json!({"kind": "symlink", "target": "<HOME>/.claude/skills"}));
+}
+
+#[test]
+fn drift_slot_dead_link_file() {
+    let python = fixture("drift_slot_dead_link_file");
+    assert_eq!(python["tree"]["<HOME>/.claude-conta2/.drift/hooks.1"]["kind"], "file", "o Python sobrescrevia o link morto");
+    let got = run("drift_slot_dead_link_file", &Side::Rust);
+    assert_eq!((got.steps[0]["exit"].clone(), got.steps[0]["stderr"].clone()),
+        (json!(0), json!(["hangar-conta: 'hooks' era local nesta conta; movido pra .drift/hooks.2"])));
+    let tree = got.tree.as_object().unwrap();
+    assert_eq!(tree["<HOME>/.claude-conta2/.drift/hooks.1"], json!({"kind": "symlink", "target": "<HOME>/nada"}), "o link morto fica");
+    assert_eq!(tree["<HOME>/.claude-conta2/.drift/hooks.2"]["text"], "meu");
+    assert_eq!(tree["<HOME>/.claude-conta2/hooks"], json!({"kind": "symlink", "target": "<HOME>/.claude/hooks"}));
 }
 
 /// B1: o link antigo desses dois para o `~/.claude` é desfeito, como o dos outros arquivos de runtime.
