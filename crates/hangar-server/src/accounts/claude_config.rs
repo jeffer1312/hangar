@@ -250,8 +250,9 @@ fn py_order(a: &str, b: &str) -> std::cmp::Ordering { a.chars().map(py::py_code)
 
 /// `json.loads(path.read_text("utf-8"))`: ausente é `None`; surrogate solto é aceito.
 fn read_json(path: &Path) -> std::result::Result<Option<Value>, String> {
-    // A leitura que atravessa a troca tmp+rename do Windows (o CLI vivo regrava estes arquivos).
-    let bytes = match crate::runtime::queue::read_replaced(path) {
+    // Leitura simples, como a do Python: a que atravessa a troca do Windows espera em todo arquivo
+    // ausente, e a reconciliação lê vários que costumam faltar.
+    let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("{}: {error}", path.display())),
