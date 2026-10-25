@@ -14,6 +14,9 @@ const METER_MS = 100;
 const METER_TIMEOUT_MS = 10_000;
 const OPENING_MS = 60_000;
 const DISCONNECT_GRACE_MS = 5_000;
+/** Conexão que cai antes disso ao vivo encerra: evita laço de ofertas quando a sessão de áudio morre logo ao abrir. */
+const STABLE_LIVE_MS = 10_000;
+const RESUME_WITHIN_MS = 30_000;
 
 type Attempt = {
   closed: boolean;
@@ -21,6 +24,8 @@ type Attempt = {
   live: boolean;
   /** A conexão WebRTC atual chegou a conectar; `live` é da chamada, que sobrevive à troca dela. */
   pcLive: boolean;
+  liveAt?: number;
+  resumeBy?: number;
   answered: boolean;
   terminal?: 'failed' | 'taken' | 'closed';
   media?: MediaStream;
@@ -201,6 +206,8 @@ export class LiveVoiceCall {
         if (call.pcLive) return;
         if (!this.send(call, { type: 'live' })) return;
         call.pcLive = call.live = true;
+        call.liveAt = Date.now();
+        call.resumeBy = undefined;
         clearTimeout(call.openingTimer);
         call.lastInput = call.lastMeter = Date.now();
         this.handlers.phase('live');
@@ -211,7 +218,9 @@ export class LiveVoiceCall {
       }
     };
     // O Realtime exige esta linha na oferta, mesmo sem tráfego do cliente no canal.
-    call.channel = pc.createDataChannel('oai-events');
+    const channel = call.channel = pc.createDataChannel('oai-events');
+    // O fim da linha de dados é o fim da sessão de áudio, mesmo com o ICE ainda conectado.
+    channel.onclose = () => this.dropped(call, pc);
     const offer = await pc.createOffer();
     if (!mine()) return null;
     if (!offer.sdp?.trim()) throw new Error('empty_offer');
@@ -222,8 +231,10 @@ export class LiveVoiceCall {
   /** A OpenAI encerra a sessão de áudio por tempo; o servidor guarda a conversa e espera outra oferta pelo mesmo socket. */
   private dropped(call: Attempt, pc: RTCPeerConnection): void {
     if (!this.current(call) || call.pc !== pc) return;
-    if (!call.pcLive || !call.media) { this.fail(call, 'connection_lost'); return; }
+    if (!call.pcLive || !call.media || Date.now() - (call.liveAt ?? 0) < STABLE_LIVE_MS) { this.fail(call, 'connection_lost'); return; }
     pc.onconnectionstatechange = null;
+    if (call.channel) call.channel.onclose = null;
+    call.resumeBy = Date.now() + RESUME_WITHIN_MS;
     try { call.channel?.close(); pc.close(); } catch { /* a conexão velha já caiu */ }
     this.updateTracks(call);
     this.handlers.phase('connecting');
@@ -372,6 +383,7 @@ export class LiveVoiceCall {
   private tick(call: Attempt): void {
     if (!this.current(call)) return;
     const now = Date.now();
+    if (call.resumeBy !== undefined && now >= call.resumeBy) { this.fail(call, 'connection_lost'); return; }
     if (call.disconnectedAt !== undefined && now - call.disconnectedAt >= DISCONNECT_GRACE_MS) {
       if (call.pc) this.dropped(call, call.pc);
       else this.fail(call, 'connection_lost');

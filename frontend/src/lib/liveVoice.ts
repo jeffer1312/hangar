@@ -43,6 +43,10 @@ export interface LiveVoiceHandlers {
 
 export interface LiveVoiceAction { id: string; label: string; description: string }
 
+/** Conexão que cai antes disso ao vivo encerra: evita laço de ofertas quando a sessão de áudio morre logo ao abrir. */
+const STABLE_LIVE_MS = 10000;
+const RESUME_WITHIN_MS = 30000;
+
 export class LiveVoiceCall {
   private pc: RTCPeerConnection | null = null;
   private ws: WebSocket | null = null;
@@ -55,6 +59,7 @@ export class LiveVoiceCall {
   private meterContext: AudioContext | null = null;
   private meterTimer: ReturnType<typeof setInterval> | undefined;
   private levelTimer: ReturnType<typeof setInterval> | undefined;
+  private resumeTimer: ReturnType<typeof setTimeout> | undefined;
   private meters: Partial<Record<'input' | 'output', { source: MediaStreamAudioSourceNode; analyser: AnalyserNode; samples: Uint8Array<ArrayBuffer> }>> = {};
 
   constructor(private audio: HTMLAudioElement, private handlers: LiveVoiceHandlers) {}
@@ -127,19 +132,19 @@ export class LiveVoiceCall {
   private async connect(media: MediaStream, current: () => boolean): Promise<RTCSessionDescriptionInit | null> {
     const pc = this.pc = new RTCPeerConnection();
     media.getTracks().forEach(track => pc.addTrack(track, media));
-    let live = false;
+    let liveAt = 0;
     // A OpenAI encerra a sessão de áudio por tempo; o servidor guarda a conversa e espera outra oferta pelo mesmo socket.
     const dropped = () => {
       if (!current() || pc !== this.pc) return;
-      if (!live) { this.fail('connection_lost'); return; }
-      live = false;
+      if (!liveAt || Date.now() - liveAt < STABLE_LIVE_MS) { this.fail('connection_lost'); return; }
       pc.ontrack = pc.onconnectionstatechange = channel.onclose = null;
       pc.close();
       clearInterval(this.levelTimer);
       this.handlers.phase('connecting');
+      this.resumeTimer = setTimeout(() => { if (current()) this.fail('connection_lost'); }, RESUME_WITHIN_MS);
       void this.connect(media, current).then(offer => {
         if (offer) this.send({ type: 'offer', sdp: offer.sdp });
-      }).catch(() => { if (current()) this.end('failed'); });
+      }).catch(e => { if (current()) this.end('failed', e instanceof Error ? e.message : undefined); });
     };
     pc.ontrack = event => {
       if (!current()) return;
@@ -150,7 +155,8 @@ export class LiveVoiceCall {
     pc.onconnectionstatechange = () => {
       if (!current()) return;
       if (pc.connectionState === 'connected') {
-        live = true;
+        liveAt = Date.now();
+        clearTimeout(this.resumeTimer);
         this.setMuted(this.muted);
         this.send({ type: 'live' });
         this.handlers.phase('live');
@@ -258,6 +264,7 @@ export class LiveVoiceCall {
     clearInterval(this.heartbeat);
     clearInterval(this.meterTimer);
     clearInterval(this.levelTimer);
+    clearTimeout(this.resumeTimer);
     for (const meter of Object.values(this.meters)) { meter.source.disconnect(); meter.analyser.disconnect(); }
     this.meters = {};
     void this.meterContext?.close().catch(() => {});

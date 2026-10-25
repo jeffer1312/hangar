@@ -160,9 +160,11 @@ describe('LiveVoiceCall', () => {
   });
 
   it('audio that drops after live offers again on the same socket and keeps the call', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
     const failed = vi.fn(), phase = vi.fn();
     const { ws, pc } = await started({ failed, phase });
     pc.connect();
+    vi.setSystemTime(Date.now() + 10000);
     pc.channel.onclose?.();
     await vi.waitFor(() => expect(ws.sent.filter(m => m.type === 'offer')).toHaveLength(2));
     const second = FakePc.last;
@@ -176,6 +178,33 @@ describe('LiveVoiceCall', () => {
     expect(ws.sent.some(m => m.type === 'stop')).toBe(false);
     expect(failed).not.toHaveBeenCalled();
     expect(FakeWs.opened).toBe(1);
+  });
+
+  it('audio that drops right after going live ends instead of looping offers', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const failed = vi.fn();
+    const { ws, pc } = await started({ failed });
+    pc.connect();
+    vi.setSystemTime(Date.now() + 9000);
+    pc.channel.onclose?.();
+    expect(failed).toHaveBeenCalledWith('connection_lost', undefined);
+    expect(ws.sent.filter(m => m.type === 'offer')).toHaveLength(1);
+  });
+
+  it('a reconnection that does not go live within 30 s reports a lost connection', async () => {
+    vi.useFakeTimers();
+    const failed = vi.fn();
+    const { ws, pc } = await started({ failed });
+    pc.connect();
+    vi.advanceTimersByTime(10000);
+    ws.receive({ type: 'pong' });
+    pc.channel.onclose?.();
+    await vi.waitFor(() => expect(ws.sent.filter(m => m.type === 'offer')).toHaveLength(2));
+    ws.receive({ type: 'pong' });
+    vi.advanceTimersByTime(29000);
+    expect(failed).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1000);
+    expect(failed).toHaveBeenCalledWith('connection_lost', undefined);
   });
 
   it('audio that fails before ever going live reports a lost connection', async () => {
