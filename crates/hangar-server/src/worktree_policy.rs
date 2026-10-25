@@ -219,9 +219,7 @@ pub async fn cleanup_once(st: Arc<AppState>) -> Result<Vec<String>> {
         );
         let mut candidates = Vec::<Candidate>::new();
         for repo in repos.as_array().into_iter().flatten() {
-            if repo["discovery_partial"] == true {
-                continue;
-            }
+            // A descoberta parcial pode omitir outros repos; a segurança deste é individual.
             for wt in repo["worktrees"].as_array().into_iter().flatten() {
                 let Some(path) = wt["path"].as_str() else {
                     continue;

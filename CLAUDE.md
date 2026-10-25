@@ -436,6 +436,8 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   seu upstream ou o único remoto correspondente. Ambiguidade e falha de leitura impedem marcar
   mesclada; upstream apagado nunca comprova merge. Pontas iguais continuam protegidas. Evidência
   e limites em [plataforma.md](docs/decisoes/plataforma.md#worktrees-mescladas-usam-a-origem-e-a-base-publicada).
+  Descoberta global incompleta avisa sobre repositórios ainda não encontrados; não bloqueia a
+  limpeza de worktrees conhecidas, cuja identidade, arquivos, locks e uso são reconferidos.
 - **Plan progress lê o `.md` do plano**, sem arquivo de estado: blocos cercados são removidos
   preservando offsets, e a decoração do Python roda dentro do `to_thread` do git. As rotas de
   plano e a prévia do plano nativo são do Rust e usam o mesmo rastreador da lista, para o
