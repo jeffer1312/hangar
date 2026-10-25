@@ -19,9 +19,10 @@ fn exe(name: &str) -> String { if cfg!(windows) { format!("{name}.exe") } else {
 fn package(channel: &str) -> Vec<u8> {
     let step = "---\nid: 2026-01-01-maquina\ntitulo: Um passo de máquina\ncomando: false\nprova: ~/nunca\ntipo: maquina\n---\ntexto\n";
     let note = "---\ntitulo: Só texto\n---\nnada a rodar\n";
+    let broken = "---\ncomando: true\n---\nsem título nem prova\n";
     let bin = format!("bin/{}", exe("hangar-server"));
     let files = [(bin.as_str(), LAUNCHER), ("docs/atualizacoes/2026-01-01-maquina.md", step), ("docs/atualizacoes/2026-01-02-texto.md", note),
-        ("install.sh", "#!/bin/sh\n")];
+        ("docs/atualizacoes/2026-01-03-torto.md", broken), ("install.sh", "#!/bin/sh\n")];
     let manifest = Manifest {
         version: VERSION.into(), commit: "c0ffee".into(), channel: channel.into(), protocol: 7, api: 1,
         os: hangar_server::update::platform(), dist_key: None,
@@ -105,10 +106,28 @@ async fn install_package_installs_the_channel_package_from_scratch() {
     let marker = read_json(&hangar.join("migration.json"));
     assert_eq!((marker["mode"].as_str(), marker["version"].as_str()), (Some("package"), Some(VERSION)), "{marker}");
     assert_eq!(marker["checkout"], "");
-    // Instalação do zero já cumpre todo passo: todos registrados, nenhum rodou.
+    // Os passos só são marcados pelo install.sh, quando ele chega ao fim (`--mark-steps`).
+    assert!(!home.path().join(".claude/.hangar-update/aplicados.json").exists(), "nenhum passo marcado antes do install.sh");
+    assert!(!home.path().join("nunca").exists());
+}
+
+#[tokio::test]
+async fn install_package_mark_steps_marks_every_step_of_current_and_warns_on_malformed() {
+    let release = Release::new().await;
+    release.publish("latest", &hangar_server::update::platform(), None);
+    let home = tempfile::tempdir().unwrap();
+    let out = install(home.path(), &["--mark-steps"]).await;
+    assert_eq!(out.status.code(), Some(1), "sem current, nada a marcar: {}", text(&out));
+    assert!(text(&out).contains("current"), "{}", text(&out));
+    assert_eq!(install(home.path(), &["--release-base", &release.base]).await.status.code(), Some(0));
+    let out = install(home.path(), &["--mark-steps"]).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    // Instalação do zero já cumpre todo passo: todos registrados, nenhum rodou; o malformado aparece.
     let applied = read_json(&home.path().join(".claude/.hangar-update/aplicados.json"));
     assert_eq!(applied, serde_json::json!(["2026-01-01-maquina", "2026-01-02-texto"]));
     assert!(!home.path().join("nunca").exists());
+    assert!(text(&out).contains("aviso:") && text(&out).contains("2026-01-03-torto.md"), "{}", text(&out));
+    assert_eq!(install(home.path(), &["--mark-steps", "--channel", "beta"]).await.status.code(), Some(2), "--mark-steps não se mistura");
 }
 
 #[tokio::test]

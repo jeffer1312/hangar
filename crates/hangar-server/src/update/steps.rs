@@ -212,13 +212,14 @@ fn record(state_dir: &Path, new: impl IntoIterator<Item = String>) -> std::io::R
 }
 
 /// Registra todo passo válido de `root/docs/atualizacoes` sem rodar nenhum, como o `marcar_todos`
-/// do Python: a instalação do zero já cumpre o que eles levam às máquinas antigas.
-pub fn mark_all(root: &Path, state_dir: &Path) -> Result<usize, UpdateError> {
-    let (steps, _) = read_steps(&root.join("docs").join("atualizacoes"), cfg!(windows));
+/// do Python: a instalação do zero já cumpre o que eles levam às máquinas antigas. Devolve quantos
+/// marcou e os arquivos malformados, que ficaram de fora.
+pub fn mark_all(root: &Path, state_dir: &Path) -> Result<(usize, Vec<String>), UpdateError> {
+    let (steps, invalid) = read_steps(&root.join("docs").join("atualizacoes"), cfg!(windows));
     let count = steps.len();
     record(state_dir, steps.into_iter().map(|s| s.id))
         .map_err(|e| UpdateError::Step(format!("não consegui registrar os passos como aplicados: {e}")))?;
-    Ok(count)
+    Ok((count, invalid))
 }
 
 /// Caminho da prova: absoluto, com `~`, ou relativo à raiz da versão.

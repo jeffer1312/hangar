@@ -710,8 +710,16 @@ baixar_dist() { # 0 = frontend/dist agora tem o build publicado pelo CI
 }
 say "4/8 Frontend"
 if [ "$PACOTE" = 1 ]; then
-  # O install-package já baixou a tela da chave do pacote (~/.hangar/ui), e o backend a serve.
-  ok "a tela vem pronta com o pacote (nada a compilar)"
+  # O install-package baixa a tela da chave do pacote (~/.hangar/ui/<dist_key>), e o backend a serve;
+  # a falha do download lá é só nota, então a prova é a pasta.
+  DIST_KEY=$(sed -n 's/.*"dist_key"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{64\}\)".*/\1/p' manifest.json | head -1)
+  if grep -q '"web_ui"[[:space:]]*:[[:space:]]*false' "$HOME/.hangar/web-ui.json" 2>/dev/null; then
+    ok "tela web desligada nesta máquina (~/.hangar/web-ui.json)"
+  elif [ -n "$DIST_KEY" ] && [ -f "$HOME/.hangar/ui/$DIST_KEY/index.html" ]; then
+    ok "a tela vem pronta com o pacote (nada a compilar)"
+  else
+    anota_problema "a tela web do pacote não está em ~/.hangar/ui/${DIST_KEY:-<sem dist_key no manifest.json>} — use o app nativo, ou o Atualizar do app para baixá-la"
+  fi
 elif [ "$FRONTEND" = 0 ]; then
   ok "pulado (--no-frontend)"
   nota "UM frontend atende VÁRIOS backends: ele guarda a lista de servidores no próprio"
@@ -1022,7 +1030,7 @@ fi
 # uma máquina ANTIGA até aqui. Sem esta marca, a primeira vez que essa máquina apertasse Atualizar
 # no app, ela rodaria a história inteira de passos, todos já cumpridos por este instalador.
 # No --update NÃO se marca nada: ali a máquina é justamente a antiga, e os passos precisam rodar.
-# No pacote quem marcou foi o install-package, antes de criar o `current`.
+# No pacote quem marca é o hangar-server, depois da checagem de fumaça (só com a instalação no fim).
 if [ "$UPDATE" = 1 ] || [ "$PACOTE" = 1 ]; then
   :
 else
@@ -1092,6 +1100,11 @@ if tmux new-session -d -s "$S" -c /tmp 'sh' 2>/dev/null; then
   mark_item multiplexador ok "sessões abrem e fecham"
 else
   fail "o tmux não criou uma sessão de teste — o app não vai abrir sessão"
+fi
+
+if [ "$PACOTE" = 1 ] && [ "$UPDATE" = 0 ]; then
+  bin/hangar-server install-package --mark-steps \
+    || anota_problema "os passos de atualização não foram marcados como aplicados — rode: ~/.hangar/current/bin/hangar-server install-package --mark-steps"
 fi
 
 # ── Portão final: extra que a pessoa pediu e falhou NÃO passa em branco ────────────────────

@@ -37,6 +37,8 @@ set -euo pipefail
 REPO_URL="https://github.com/jeffer1312/hangar.git"
 # HANGAR_RELEASE_BASE só existe para o teste servir releases falsas.
 RELEASES=${HANGAR_RELEASE_BASE:-https://github.com/jeffer1312/hangar/releases/download}
+# Endereço https só baixa por https, nem por redirecionamento; o teste serve as releases por file://.
+PROTO=''; case $RELEASES in https://*) PROTO='--proto =https' ;; esac
 RAMO="main"
 CANAL=latest
 APP=0; DEV=0; CHECK=0
@@ -72,7 +74,7 @@ fail_with() { # fail_with <código ou vazio> <mensagem>
 # Vazio quando a internet responde: aí a falha é de outra coisa.
 net_code() {
   command -v curl >/dev/null || return 0
-  curl -fsS --max-time 10 -o /dev/null https://github.com 2>/dev/null || echo sem-internet
+  curl --proto '=https' -fsS --max-time 10 -o /dev/null https://github.com 2>/dev/null || echo sem-internet
 }
 
 DEST="$HOME/hangar"
@@ -140,9 +142,9 @@ clona() {
 
 # O caminho pelo git: clona (ou atualiza) o checkout e roda o install.sh dele. Não volta.
 pelo_git() {
-  if [ "$DEV" = 1 ] && [ -f "$PACOTE/manifest.json" ]; then
-    # O serviço segue chamando o pacote: um checkout novo ao lado não seria o que roda.
-    fail "esta máquina já roda o Hangar pelo pacote; para o modo desenvolvedor: hangar-server dev-mode on <checkout>"
+  if [ -f "$PACOTE/manifest.json" ]; then
+    # O serviço segue chamando o pacote: o install.sh de um checkout por cima misturaria as versões.
+    fail "esta máquina já roda o Hangar pelo pacote; para usar um checkout: hangar-server dev-mode on <checkout>"
   fi
   if ! command -v git >/dev/null; then
     cmd=$(sugere_git)
@@ -201,6 +203,8 @@ sha256_de() {
   else shasum -a 256 "$1" | awk '{print $1}'; fi
 }
 
+JA_INSTALADO="já há uma instalação do Hangar nesta máquina: para atualizar, use o Atualizar do app; para seguir pelo git, rode com --dev"
+
 TMP=''
 limpa_tmp() { [ -z "$TMP" ] || rm -rf "$TMP"; TMP=''; }
 
@@ -213,25 +217,32 @@ pelo_pacote() {
     roda_instalador "$PACOTE" "$@"
   fi
   [ "$CHECK" = 0 ] || fail "não há instalação pelo pacote para conferir — rode sem --check para instalar"
+  # Checkout instalado e nunca iniciado (--no-services) não deixa unit nem anotação para o install-package ver.
+  if [ -d "$DEST" ] && mesma_origem "$DEST"; then fail "o Hangar está em $DEST, pelo git; $JA_INSTALADO"; fi
   plat=$(plataforma)
   [ -n "$plat" ] || sem_pacote "sem pacote para $(uname -s) $(uname -m)" "$@"
   command -v curl >/dev/null || fail "curl é obrigatório para baixar o pacote"
 
   say "Baixando o Hangar (canal $CANAL)"
   url="$RELEASES/server-$CANAL"
-  manifesto=$(curl -fsSL --max-time 60 "$url/server-latest.json") \
+  # shellcheck disable=SC2086  # PROTO vazio some, cheio vira dois argumentos
+  manifesto=$(curl $PROTO -fsSL --max-time 60 "$url/server-latest.json") \
     || fail_with "$(net_code)" "não consegui ler $url/server-latest.json"
   # O manifesto é JSON indentado com objetos rasos por arquivo: sem espaço e quebra, cada entrada é `"<sistema>/<nome>":{…}`.
   entrada=$(printf '%s' "$manifesto" | tr -d ' \t\r\n' | grep -o "\"$plat/hangar-server\":{[^}]*}" || true)
   nome=$(printf '%s' "$entrada" | sed -n 's/.*"name":"\([A-Za-z0-9._-]*\)".*/\1/p')
   sha=$(printf '%s' "$entrada" | sed -n 's/.*"sha256":"\([0-9a-fA-F]\{64\}\)".*/\1/p' | tr 'A-F' 'a-f')
-  if [ -z "$nome" ] || [ -z "$sha" ]; then sem_pacote "a release server-$CANAL não publica o hangar-server para $plat" "$@"; fi
+  [ -n "$entrada" ] || sem_pacote "a release server-$CANAL não publica o hangar-server para $plat" "$@"
+  if [ -z "$nome" ] || [ -z "$sha" ]; then
+    fail "a release server-$CANAL tem o hangar-server para $plat, mas não consegui ler o nome e o sha256 da entrada: $entrada"
+  fi
 
   # Em ~/.hangar e não no /tmp: o /tmp montado com noexec não roda o binário.
   mkdir -p "$HOME/.hangar/cache"
   TMP=$(mktemp -d "$HOME/.hangar/cache/bootstrap.XXXXXX")
   trap limpa_tmp EXIT
-  curl -fsSL --max-time 600 -o "$TMP/hangar-server" "$url/$nome" || fail_with "$(net_code)" "o download de $nome falhou"
+  # shellcheck disable=SC2086
+  curl $PROTO -fsSL --max-time 600 -o "$TMP/hangar-server" "$url/$nome" || fail_with "$(net_code)" "o download de $nome falhou"
   recebido=$(sha256_de "$TMP/hangar-server")
   [ "$recebido" = "$sha" ] || fail "o hangar-server baixado não confere com o publicado (sha256 $recebido, esperado $sha)"
   chmod +x "$TMP/hangar-server"
@@ -246,6 +257,7 @@ pelo_pacote() {
     0) ;;
     # 3 = o índice não tem pacote para este sistema; a última linha é o motivo.
     3) local motivo; motivo=$(tail -n 1 "$TMP/saida"); limpa_tmp; sem_pacote "$motivo" "$@" ;;
+    4) fail "$JA_INSTALADO" ;;
     *) fail "a instalação do pacote parou (motivo acima)" ;;
   esac
   limpa_tmp

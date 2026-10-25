@@ -1,12 +1,14 @@
 //! Instalação nova direto pelo pacote, sem git:
 //!
 //!   hangar-server install-package [--channel <canal>] [--release-base <url>]
+//!   hangar-server install-package --mark-steps
 //!
 //! Baixa e extrai o pacote mais novo do canal pelo mesmo download conferido da migração (índice,
 //! sha256, extração e a tela web da chave), copia o lançador do pacote para
-//! `~/.hangar/bin/hangar-launcher`, registra os passos de `docs/atualizacoes/` como aplicados, grava a
-//! marca `~/.hangar/migration.json` (pacote, sem checkout) e só então aponta o `current`. Serviço,
-//! hooks, skills e agentes são do `install.sh` que vem dentro do pacote; o `bootstrap.sh` o roda depois.
+//! `~/.hangar/bin/hangar-launcher`, grava a marca `~/.hangar/migration.json` (pacote, sem checkout) e
+//! só então aponta o `current`. Serviço, hooks, skills e agentes são do `install.sh` que vem dentro do
+//! pacote; o `bootstrap.sh` o roda depois, e ele chama o `--mark-steps` quando chega ao fim: só então
+//! os passos de `docs/atualizacoes/` do `current` ficam registrados como aplicados.
 //!
 //! Saída: 0 instalado, 1 falhou (o `current` não foi criado), 2 uso errado, 3 o índice não tem
 //! pacote para este sistema (o bootstrap segue pelo git), 4 já há uma instalação aqui.
@@ -34,8 +36,6 @@ pub enum Error {
 /// A máquina como a instalação a vê; os caminhos vêm de fora para o teste.
 pub struct Machine<'a> {
     pub home: PathBuf,
-    /// `<config do Claude>/.hangar-update`, onde mora o registro dos passos.
-    pub state_dir: PathBuf,
     /// `~/.config/systemd/user`.
     pub systemd_dir: PathBuf,
     pub windows: bool,
@@ -79,7 +79,6 @@ pub async fn install(m: &Machine<'_>, channel: &str) -> Result<Outcome, Error> {
     std::fs::create_dir_all(launcher.parent().expect("bin")).map_err(|e| Error::Failed(format!("{}: {e}", launcher.display())))?;
     let packaged = dir.join("bin").join(if m.windows { "hangar-server.exe" } else { "hangar-server" });
     migrate::write_launcher(&packaged, &launcher).map_err(Error::Failed)?;
-    super::steps::mark_all(&dir, &m.state_dir).map_err(|e| Error::Failed(e.to_string()))?;
     // A marca vem antes do `current`: com ela, o passo de migração e o `migrate-package` não rodam aqui.
     let marker = layout.hangar.join(migrate::MARKER);
     migrate::save(&marker, &Record { mode: Mode::Package, date: migrate::now(), checkout: PathBuf::new(), version: Some(manifest.version.clone()),
@@ -96,9 +95,31 @@ fn valid_channel(channel: &str) -> bool {
     !channel.is_empty() && !channel.starts_with('.') && channel.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
+/// Registra como aplicados os passos do `current`; os malformados saem como aviso.
+fn mark_steps() -> ExitCode {
+    let env = crate::accounts::environment::AccountEnvironment::capture();
+    let current = Layout::new(&env.home).current();
+    if !current.join(hangar_package::MANIFEST_FILE).is_file() {
+        eprintln!("{} não é um pacote instalado; nada a marcar", current.display());
+        return ExitCode::from(1);
+    }
+    match super::steps::mark_all(&current, &super::state_dir(&env.claude_base)) {
+        Ok((count, invalid)) => {
+            for file in invalid { println!("aviso: passo malformado ignorado: {file} (docs/atualizacoes)"); }
+            println!("passos de atualização marcados como aplicados: {count}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => { eprintln!("{e}"); ExitCode::from(1) }
+    }
+}
+
 /// `hangar-server install-package …`: `args` sem o nome do programa nem o subcomando.
 pub fn cli(args: &[String]) -> ExitCode {
-    let usage = "uso: hangar-server install-package [--channel <canal>] [--release-base <url>]";
+    let usage = "uso: hangar-server install-package [--channel <canal>] [--release-base <url>] | --mark-steps";
+    if args.first().map(String::as_str) == Some("--mark-steps") {
+        if args.len() > 1 { eprintln!("{usage}"); return ExitCode::from(2); }
+        return mark_steps();
+    }
     let (mut channel, mut base_url) = ("latest".to_owned(), super::RELEASE_BASE.to_owned());
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -122,7 +143,7 @@ pub fn cli(args: &[String]) -> ExitCode {
     };
     let fetcher = migrate::ReleaseFetcher { client, platform: super::platform(), home: home.clone(), deadline: Duration::from_secs(900),
         base_url: base_url.trim_end_matches('/').to_owned() };
-    let machine = Machine { home: home.clone(), state_dir: super::state_dir(&env.claude_base), systemd_dir: config.join("systemd").join("user"),
+    let machine = Machine { home: home.clone(), systemd_dir: config.join("systemd").join("user"),
         windows: cfg!(windows), fetcher: &fetcher };
     let runtime = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
         Ok(runtime) => runtime,

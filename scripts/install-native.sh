@@ -73,11 +73,16 @@ esac
 # Primeira abertura já conectada ao backend desta máquina. Só quando o app ainda não tem conexão:
 # a que a pessoa escolheu depois nunca é sobrescrita.
 CFG="${XDG_CONFIG_HOME:-$HOME/.config}/hangar-native"
-TOKEN=$(grep '^CP_AUTH_TOKEN=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+# Dados do usuário: `~/.hangar/config/` quando o arquivo está lá; senão a `backend/` (não migrada).
+ENV_FILE="$HOME/.hangar/config/.env"
+[ -e "$ENV_FILE" ] || ENV_FILE=backend/.env
+TOKEN=$(grep '^CP_AUTH_TOKEN=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
 if [ ! -f "$CFG/connection.json" ] && [ -n "$TOKEN" ]; then
-  PORTA=$(grep '^CP_PORT=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+  PORTA=$(grep '^CP_PORT=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
   mkdir -p "$CFG" && chmod 700 "$CFG"
   (umask 077; printf '{"address": "http://127.0.0.1:%s", "token": "%s"}\n' "${PORTA:-8765}" "$TOKEN" > "$CFG/connection.json")
+elif [ ! -f "$CFG/connection.json" ]; then
+  echo "app nativo: sem a senha do backend (CP_AUTH_TOKEN) em $ENV_FILE; na primeira abertura o app pede o endereço e a senha" >&2
 fi
 
 marca "$(cat "$TMP/manifesto.json")"

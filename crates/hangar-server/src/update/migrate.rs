@@ -742,6 +742,8 @@ pub async fn migrate<H: HealthProbe>(m: &Machine<'_>, health: &H, dry_run: bool)
     record.date = now();
     save(&m.marker(), &record)?;
     let _ = std::fs::remove_file(m.partial());
+    // Já decidiu o modo; ficando, ela voltaria a valer numa migração depois de um `--undo`.
+    let _ = std::fs::remove_file(m.hangar().join(DEV_REQUESTED));
     Ok(Outcome::Migrated(mode))
 }
 

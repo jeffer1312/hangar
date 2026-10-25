@@ -6,4 +6,5 @@
 #   CP_AUTH_TOKEN=... CP_PUBLIC_URL=https://you.ts.net ./scripts/show-qr.sh
 set -euo pipefail
 cd "$(dirname "$0")/../backend"
-exec uv run python -c "from app.config import settings; from app.main import print_pairing; print_pairing(settings)"
+# The package's Python or the checkout's venv: a package has no uv.
+exec ../scripts/hangar-python -c "from app.config import settings; from app.main import print_pairing; print_pairing(settings)"

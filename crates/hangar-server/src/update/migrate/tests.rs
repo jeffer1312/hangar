@@ -255,13 +255,14 @@ async fn migrate_clean_beta_checkout_becomes_package_of_the_beta_channel() {
 
 #[tokio::test]
 async fn migrate_dirty_branch_or_preview_checkout_is_developer_mode_without_download() {
-    for case in ["dirty", "untracked", "branch", "preview"] {
+    for case in ["dirty", "untracked", "branch", "preview", "dev-requested"] {
         let b = Box_::new();
         match case {
             "dirty" => sh(&b.checkout, "echo mudou > a"),
             "untracked" => sh(&b.checkout, "echo novo > novo.txt"),
             "branch" => sh(&b.checkout, "git checkout -q -b PM-1"),
-            _ => std::fs::write(b.home.join(".config/systemd/user/hangar-frontend.service"), "[Service]\n").unwrap(),
+            "preview" => std::fs::write(b.home.join(".config/systemd/user/hangar-frontend.service"), "[Service]\n").unwrap(),
+            _ => std::fs::write(b.home.join(".hangar").join(DEV_REQUESTED), "").unwrap(),
         }
         let (service, fetcher) = (FakeService::default(), FakeFetcher::default());
         let outcome = migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap();
@@ -271,6 +272,7 @@ async fn migrate_dirty_branch_or_preview_checkout_is_developer_mode_without_down
         assert_eq!(std::fs::canonicalize(b.current()).unwrap(), std::fs::canonicalize(&b.checkout).unwrap(), "{case}");
         assert!(b.unit().contains("launch backend"), "{case}");
         assert_eq!(b.marker().unwrap()["mode"], "developer", "{case}");
+        assert!(!b.home.join(".hangar").join(DEV_REQUESTED).exists(), "{case}: a marca do --dev some depois de usada");
     }
 }
 

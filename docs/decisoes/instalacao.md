@@ -275,13 +275,16 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
 - **Instalação nova no Linux é pelo pacote; `--dev` é pelo git.** O `bootstrap.sh` baixa o
   `hangar-server` da `server-<canal>` (sha256 do `server-latest.json`), roda `hangar-server
   install-package --channel <canal>` e depois o `install.sh` do `current`. O `install-package` reusa o
-  download da migração, copia o `bin/hangar-server` do pacote para o lançador, registra todo passo
-  como aplicado e grava a marca `migration.json` (pacote, sem checkout) antes do `current`; recusa
-  (4) com `current`, migração, checkout anotado ou unit já no lugar, e sai 3 sem pacote para o
-  sistema, quando o bootstrap segue pelo git. O `install.sh` com `manifest.json` e sem `.git` pula
-  git, `uv`, venv, build da tela e binários Rust, grava o `.env` em `~/.hangar/config` e põe um
-  `python3` que é o `hangar-python` à frente do PATH dos sub-scripts. O `--dev` grava
-  `~/.hangar/dev-requested`, e a migração lê isso como modo desenvolvedor.
+  download da migração, copia o `bin/hangar-server` do pacote para o lançador e grava a marca
+  `migration.json` (pacote, sem checkout) antes do `current`; recusa (4) com `current`, migração,
+  checkout anotado ou unit já no lugar, e sai 3 sem pacote para o sistema, quando o bootstrap segue
+  pelo git. O bootstrap também recusa checkout do Hangar na pasta padrão e, com o pacote no lugar,
+  qualquer entrada pelo git (o caminho é o `dev-mode on`). O `install.sh` com `manifest.json` e sem
+  `.git` pula git, `uv`, venv, build da tela e binários Rust, grava o `.env` em `~/.hangar/config`,
+  põe um `python3` que é o `hangar-python` à frente do PATH dos sub-scripts, confere a tela da
+  `dist_key` em `~/.hangar/ui` (ausente com a tela web ligada é pendência) e, só ao chegar ao fim,
+  registra os passos como aplicados (`install-package --mark-steps`, malformado vira aviso). O
+  `--dev` grava `~/.hangar/dev-requested`; a migração lê isso como modo desenvolvedor e o apaga.
 - **A tela web é opcional, ligada por padrão, e servida pelo Rust** de `~/.hangar/ui/<dist_key>/`
   (checkout: `frontend/dist`). `GET`/`PUT /api/web-ui` (só o dono) grava `~/.hangar/web-ui.json`;
   desligada, a raiz responde 404 `web_ui_disabled` e o atualizador não baixa a tela. O interruptor

@@ -45,6 +45,20 @@ ln -s "$real" "$HOME_T/.hangar/current"
 checa "atalho com o pacote: o Python dele, cache fora da versão" \
     "pacote|arg|$HOME_T/.hangar/cache/pycache/0.1.0.9" "$(hp)"
 
+# O `python3` do install.sh no pacote é um atalho para o hangar-python: sem o Python embutido, ele não
+# pode cair no próprio atalho em laço.
+LACO="$TMP/laco"
+mkdir -p "$LACO/home/.hangar/current" "$LACO/inst/scripts" "$LACO/shim" "$LACO/sys"
+for t in sh realpath dirname basename grep cat; do ln -s "$(command -v "$t")" "$LACO/sys/$t"; done
+cp "$REPO/scripts/hangar-python" "$LACO/inst/scripts/"
+printf '#!/bin/sh\nexec "%s/inst/scripts/hangar-python" "$@"\n' "$LACO" > "$LACO/shim/python3"
+chmod +x "$LACO/shim/python3"
+TIMEOUT=$(command -v timeout)
+laco() { env -i HOME="$LACO/home" PATH="$1" "$TIMEOUT" 5 "$LACO/inst/scripts/hangar-python" arg 2>&1; echo "rc=$?"; }
+checa "atalho no PATH, sem outro python3: erro, sem laço" \
+    "hangar-python: nenhum Python encontrado (embutido, venv ou python3 da máquina)|rc=127" "$(laco "$LACO/shim:$LACO/sys" | paste -sd'|')"
+checa "atalho no PATH antes do da máquina: o da máquina" "sistema|arg||rc=0" "$(laco "$LACO/shim:$BASE_PATH" | paste -sd'|')"
+
 # --- o Python cravado no atalho do Codex (install-claude-wrapper.sh) ---------------------------
 funcao=$(sed -n '/^py_do_venv() {/,/^}/p' "$REPO/scripts/install-claude-wrapper.sh")
 [[ -n "$funcao" ]] || { echo "FALHA py_do_venv não encontrado"; falhas=$((falhas + 1)); }

@@ -36,6 +36,7 @@ EOF
 echo "git $*" >> "$FAKE_LOG"
 case "$*" in
   --version) echo "git version 2.50.0" ;;
+  "-C "*" remote get-url origin") cat "$2/.git/origin" 2>/dev/null || exit 2 ;;
   clone*) for a in "$@"; do dest=$a; done; mkdir -p "$dest/.git" && cp "$FAKE_INSTALL" "$dest/install.sh" ;;
 esac
 exit 0
@@ -88,7 +89,7 @@ EOF
 run_boot() {
   local out=$1; shift
   ( env -i HOME="$S/home" PATH="$B:$S/sys" FAKE_LOG="$S/git.log" FAKE_INSTALL="$S/install-fake.sh" \
-      HANGAR_RELEASE_BASE="file://$REL" ${TEST_TOKEN:+HANGAR_TOKEN=$TEST_TOKEN} \
+      HANGAR_RELEASE_BASE="${TEST_RELEASE_BASE-file://$REL}" ${TEST_TOKEN:+HANGAR_TOKEN=$TEST_TOKEN} \
       ${FAKE_RC:+FAKE_RC=$FAKE_RC} ${FAKE_OS:+FAKE_OS=$FAKE_OS} ${FAKE_ARCH:+FAKE_ARCH=$FAKE_ARCH} \
       timeout 60 setsid -w "$BASH_BIN" "$REPO/bootstrap.sh" "$@" </dev/null 2>&1 ) > "$out"
 }
@@ -145,6 +146,14 @@ expect_line "sem-build: motivo na tela" "$S/out" 'não publica o hangar-server p
 expect_absent "sem-build: hangar-server não rodou" "$S/server.log"
 expect_eq "sem-build: install.sh do checkout" "$(paste -sd' ' "$S/home/hangar/args" 2>/dev/null)" '--yes' "$S/out"
 
+# --- Entrada deste sistema ilegível: falha visível, sem cair no git com motivo falso ---
+new_box entrada-torta; publish latest linux-x86_64 nao-e-um-sha
+run_boot "$S/out" --app
+expect_line "entrada-torta: diz que não leu a entrada" "$S/out" 'não consegui ler o nome e o sha256'
+expect_no "entrada-torta: sem o motivo de sistema sem pacote" "$S/out" 'não publica o hangar-server'
+expect_absent "entrada-torta: nada de git" "$S/git.log"
+expect_eq "entrada-torta: FIM falhou" "$(last_line "$S/out")" '##HANGAR-FIM## falhou'
+
 # --- Sistema sem pacote (Linux arm): git direto ---
 new_box arm; publish latest
 FAKE_ARCH=aarch64 run_boot "$S/out" --yes
@@ -171,6 +180,15 @@ expect_line "dev-pacote: aponta o dev-mode" "$S/out" 'dev-mode on'
 expect_absent "dev-pacote: nada de git clone" "$S/home/hangar"
 expect_eq "dev-pacote: FIM falhou" "$(last_line "$S/out")" '##HANGAR-FIM## falhou'
 
+# --- Pasta explícita numa máquina já no pacote: a mesma recusa, sem clonar por cima ---
+new_box pasta-pacote
+mkdir -p "$S/home/.hangar/current"; echo '{}' > "$S/home/.hangar/current/manifest.json"
+run_boot "$S/out" "$S/home/apps/hangar" --app
+expect_line "pasta-pacote: aponta o dev-mode" "$S/out" 'dev-mode on'
+expect_absent "pasta-pacote: nada de git" "$S/git.log"
+expect_absent "pasta-pacote: nada clonado" "$S/home/apps/hangar"
+expect_eq "pasta-pacote: FIM falhou" "$(last_line "$S/out")" '##HANGAR-FIM## falhou'
+
 # --- Já instalado pelo pacote: roda o install.sh dele de novo, sem baixar ---
 new_box de-novo; publish latest
 mkdir -p "$S/home/.hangar/current"; echo '{}' > "$S/home/.hangar/current/manifest.json"
@@ -185,6 +203,22 @@ FAKE_RC=4 run_boot "$S/out" --app
 expect_line "recusa: motivo na tela" "$S/out" 'já está instalado pelo git'
 expect_eq "recusa: FIM falhou" "$(last_line "$S/out")" '##HANGAR-FIM## falhou'
 expect_absent "recusa: nada de git" "$S/git.log"
+expect_line "recusa: aponta o Atualizar e o --dev" "$S/out" 'use o Atualizar do app.*--dev'
+expect_no "recusa: não é 'parou'" "$S/out" 'instalação do pacote parou'
+
+# --- Checkout do Hangar na pasta padrão (instalado com --no-services): para antes do install-package ---
+new_box checkout; publish latest
+mkdir -p "$S/home/hangar/.git"; echo "https://github.com/jeffer1312/hangar.git" > "$S/home/hangar/.git/origin"
+run_boot "$S/out" --app
+expect_absent "checkout: hangar-server não rodou" "$S/server.log" "$S/out"
+expect_line "checkout: aponta o Atualizar e o --dev" "$S/out" "$S/home/hangar.*use o Atualizar do app.*--dev"
+expect_eq "checkout: FIM falhou" "$(last_line "$S/out")" '##HANGAR-FIM## falhou'
+
+# --- Release por https: o curl só aceita https ---
+new_box https
+printf '#!/bin/sh\necho "curl $*" >> "%s/curl.log"\nexit 22\n' "$S" > "$B/curl"; chmod +x "$B/curl"
+TEST_RELEASE_BASE='' run_boot "$S/out" --app
+expect_line "https: manifesto com --proto =https" "$S/curl.log" "^curl --proto =https .*https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json"
 
 # --- --check sem instalação pelo pacote: não instala nada ---
 new_box check; publish latest
