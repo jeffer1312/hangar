@@ -99,7 +99,8 @@ def test_binario_do_pacote_vence(home, monkeypatch):
     exe.parent.mkdir()
     exe.write_text("#!/bin/sh\n", encoding="utf-8")
     exe.chmod(0o755)
-    assert rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN") == exe
+    # Pelo caminho real da versão: processo longo não pode seguir o `current` que a troca move.
+    assert rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN") == exe.resolve()
 
 
 def test_marcador_hangar_reconhece_current_e_versao(home):

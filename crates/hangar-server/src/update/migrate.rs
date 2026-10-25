@@ -966,5 +966,6 @@ impl Fetcher for Unused {
     }
 }
 
-#[cfg(test)]
+// A caixa de teste monta a máquina Linux (unit do systemd, links em ~/.local/bin); o Windows se prova na VM.
+#[cfg(all(test, unix))]
 mod tests;
