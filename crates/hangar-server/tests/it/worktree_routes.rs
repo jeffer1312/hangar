@@ -6,9 +6,12 @@ use workspace_fixture::{fixture, refusal};
 
 fn git(dir: &std::path::Path, args: &[&str]) {
     let out = std::process::Command::new("git")
+        .args(["-c", "core.hooksPath=", "-c", "commit.gpgSign=false"])
         .arg("-C")
         .arg(dir)
         .args(args)
+        .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .unwrap();
     assert!(
@@ -48,6 +51,82 @@ fn scene() -> tempfile::TempDir {
         ],
     );
     dir
+}
+
+#[tokio::test]
+async fn cleanup_known_repo_is_safe_when_another_discovery_root_is_missing() {
+    use std::{sync::Arc, time::Duration};
+    use hangar_server::{list::{bridge::{ListBridge, ListEnv}, facts::FactsClient, mux::Mux}, worktree_policy};
+    let dir = scene();
+    let root = hangar_workspace::real(dir.path());
+    let repo = root.join("repo");
+    let home = root.join("home");
+    std::fs::create_dir(&home).unwrap();
+    let dirty = root.join("dirty");
+    let residual = root.join("residual");
+    for (branch, path) in [("dirty", &dirty), ("residual", &residual)] {
+        git(&repo, &["worktree", "add", "-b", branch, path.to_str().unwrap()]);
+        std::fs::write(path.join("work.txt"), "trabalho local").unwrap();
+    }
+    std::fs::remove_file(residual.join(".git")).unwrap();
+    let context = serde_json::json!({"roots":[root, root.join("unavailable")], "cwds":[repo],
+        "sessions":[], "activities":[], "project_bases":[]});
+    let app = axum::Router::new().route("/internal/worktrees/context", axum::routing::get(move || {
+        let body = context.clone(); async move { ([("content-type", "application/json")], body.to_string()) }
+    })).fallback(|| async { "{}" });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
+    state.origins_home = home.clone();
+    let mux = home.join(if cfg!(windows) { "mux.cmd" } else { "mux" });
+    std::fs::write(&mux, if cfg!(windows) { "@echo off\r\nexit /b 0\r\n" } else { "#!/bin/sh\nexit 0\n" }).unwrap();
+    #[cfg(unix)] {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&mux, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut env = ListEnv::from_env();
+    env.dirs = None;
+    env.mux = Mux::with_program(&mux, Duration::from_secs(5));
+    state.list = Arc::new(ListBridge::new(env, FactsClient::new(upstream, fake::SECRET.into())));
+    hangar_workspace::worktree_settings::WorktreeSettings { delete_unchanged: true, ..Default::default() }
+        .save_at(&home.join(".hangar/worktree-settings.json"), &home).unwrap();
+    let rows = hangar_workspace::worktrees::list_all(&[repo.to_string_lossy().into()], &[],
+        Some(&[root.to_string_lossy().into(), root.join("unavailable").to_string_lossy().into()]), None, false, &[]);
+    assert_eq!(rows[0]["discovery_partial"], true);
+    let result = worktree_policy::cleanup_once(Arc::new(state)).await;
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    assert_eq!(result.unwrap(), [root.join("repo-wt").to_string_lossy().into_owned()]);
+    assert_eq!(std::fs::read_to_string(dirty.join("work.txt")).unwrap(), "trabalho local");
+    assert_eq!(std::fs::read_to_string(residual.join("work.txt")).unwrap(), "trabalho local");
+    git(&repo, &["show-ref", "--verify", "refs/heads/wt"]);
+}
+
+#[tokio::test]
+async fn ready_only_batch_keeps_new_local_work_even_when_ignored_loss_was_confirmed() {
+    let dir = scene();
+    let root = hangar_workspace::real(dir.path());
+    let repo = root.join("repo");
+    let path = root.join("bulk");
+    git(&repo, &["worktree", "add", "-b", "bulk", path.to_str().unwrap()]);
+    std::fs::write(path.join(".gitignore"), "cache\n").unwrap();
+    git(&path, &["add", ".gitignore"]);
+    git(&path, &["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "-m", "ignore"]);
+    git(&repo, &["merge", "bulk"]);
+    git(&repo, &["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "--allow-empty", "-m", "next"]);
+    std::fs::write(path.join("cache"), "descartável confirmado").unwrap();
+    std::fs::write(path.join("new.txt"), "trabalho novo").unwrap();
+    let f = fixture(&root, true).await;
+    let response = client().post(format!("http://{}/api/worktrees/delete-merged", f.addr))
+        .bearer_auth(OWNER).header("content-type", "application/json")
+        .body(serde_json::json!({"repo":repo, "paths":[path], "lossy":[path], "confirm":true, "ready_only":true}).to_string())
+        .send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    let result: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+    assert_eq!(result["removed"], serde_json::json!([]));
+    assert_eq!(std::fs::read_to_string(path.join("new.txt")).unwrap(), "trabalho novo");
+    assert_eq!(std::fs::read_to_string(path.join("cache")).unwrap(), "descartável confirmado");
 }
 
 #[tokio::test]

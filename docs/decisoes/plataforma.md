@@ -2286,6 +2286,23 @@ e cache, para não depender apenas de conversas dos últimos 30 dias; varredura 
 aviso. A limpeza automática é opcional, conserva branches e conversas e reconfere identidade,
 uso e arquivos antes de remover. Leitura incerta conserva a worktree.
 
+**Descoberta e limpeza (25/10/2026):** a busca conta pastas, visita em largura e continua
+procurando repositórios aninhados, inclusive com nome de artefato. Um diretório com 20.001
+arquivos de build esgotava o limite de entradas e marcava todos os repositórios como parciais;
+a reprodução agora termina sem aviso e encontra o repositório aninhado. O prazo de busca e
+o teto de pastas continuam limitados. Uma raiz ausente ainda produz o aviso global, mas não
+impede limpar uma worktree conhecida: a política e a remoção reconferem os fatos individuais,
+inclusive arquivos, locks, identidade Git e sessões/terminais. Pasta existente sem `.git`
+continua protegida como leitura incerta; registro Git residual não autoriza descartar fontes.
+
+No nativo, “Apagar todas” usa o conjunto de máquinas do contador, independentemente da busca
+de texto da lista. A confirmação congela os itens, mostra origem, quantidade e espaço; cada
+pedido usa o repositório e a conexão da sua origem. O progresso e as falhas por item usam a
+mesma fila em segundo plano das exclusões individuais, sem interromper os demais itens.
+O pedido global leva `ready_only`: confirmar arquivos ignorados não autoriza apagar alterações
+não commitadas que apareçam enquanto o item espera. A rota e a admissão final exigem que ele
+continue limpo, mesmo com confirmação de descarte dos ignorados.
+
 **Prova:** consulta das worktrees reais com o Python corrigido e o contrato Rust compilado:
 os dois reconheceram as cinco mescladas e mantiveram a sexta em andamento, contra suas bases
 remotas. A consulta Python ficou próxima de 0,66 s, ante 0,68 s antes da mudança. Casos de

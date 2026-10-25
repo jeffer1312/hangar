@@ -95,6 +95,7 @@ pub struct RemoveOptions {
     pub delete_branch: bool,
     pub keep_branch: bool,
     pub merged_only: bool,
+    pub require_clean: bool,
 }
 pub fn remove_merged(
     repo: &str,
@@ -141,6 +142,7 @@ pub fn remove_with_guard(
         delete_branch,
         keep_branch,
         merged_only: require_merged,
+        require_clean,
     } = options;
     let root =
         worktrees::repo_root_of(repo).ok_or_else(|| error(404, "repositório não encontrado"))?;
@@ -170,6 +172,9 @@ pub fn remove_with_guard(
     if st["degraded"] != false || st["head"].as_str().is_none() {
         return Err(error(409, "não consegui ler a worktree; tente de novo"));
     }
+    if require_clean && st["dirty"].as_u64() != Some(0) {
+        return Err(error(409, "a worktree deixou de estar limpa"));
+    }
     if !confirm
         && (st["dirty"].as_u64().unwrap_or(1) > 0
             || st["ignored"].as_array().is_none_or(|a| !a.is_empty()))
@@ -188,6 +193,9 @@ pub fn remove_with_guard(
     {
         return Err(error(409, "a worktree mudou durante a remoção"));
     }
+    if require_clean && latest["dirty"].as_u64() != Some(0) {
+        return Err(error(409, "a worktree deixou de estar limpa"));
+    }
     if !confirm
         && (latest["dirty"].as_u64().unwrap_or(1) > 0
             || latest["ignored"].as_array().is_none_or(|a| !a.is_empty()))
@@ -197,8 +205,13 @@ pub fn remove_with_guard(
     if require_merged && latest["merged"] != true {
         return Err(error(409, "a worktree deixou de estar mesclada"));
     }
+    let keep = if require_clean { KeepWhen::UncommittedChanges } else { KeepWhen::TrackedChanges };
     let manual_stamp = if Path::new(&path).is_dir() {
-        Some(fingerprint(&path, &latest, &KeepWhen::TrackedChanges)?.0)
+        let (stamp, _, protected) = fingerprint(&path, &latest, &keep)?;
+        if require_clean && protected {
+            return Err(error(409, "a worktree deixou de estar limpa"));
+        }
+        Some(stamp)
     } else {
         None
     };
@@ -211,7 +224,7 @@ pub fn remove_with_guard(
         registered(&main, &path)?;
         guard(&path)?;
         if let Some(stamp) = &manual_stamp
-            && (&fingerprint(&path, &latest, &KeepWhen::TrackedChanges)?.0 != stamp
+            && (&fingerprint(&path, &latest, &keep)?.0 != stamp
                 || reference_head(&path, "HEAD")? != latest["head"].as_str().unwrap().trim()
                 || git::head_info(Some(&path)).0.as_deref() != latest["branch"].as_str()
                 || git_config(&main)? != config

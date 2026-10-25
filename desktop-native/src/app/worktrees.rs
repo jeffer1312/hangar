@@ -280,11 +280,25 @@ pub(super) enum WtDialog { Delete(String), Batch, Create }
 
 /// A confirmação do lote congela o que a pessoa viu: o lote apaga essas e só essas.
 /// `ready` sai sempre; de `with_changes` (alteração não commitada) só as marcadas em `picked`.
-pub(super) struct Batch { repo: String, ready: Vec<WorktreeStatus>, with_changes: Vec<WorktreeStatus>, picked: HashSet<String>, blocked: Vec<WorktreeStatus> }
+pub(super) struct Batch { global: bool, ready: Vec<WorktreeStatus>, with_changes: Vec<WorktreeStatus>, picked: HashSet<String>, blocked: Vec<WorktreeStatus> }
 
 impl Batch {
+    fn all_ready(repos: &[WorktreeRepo], server: Option<&str>) -> Self {
+        let ready = repos.iter().filter(|r| server.is_none_or(|key| key == r.server))
+            .flat_map(|r| &r.worktrees).filter(|w| ready(w)).cloned().collect();
+        Self { global: true, ready, with_changes: Vec::new(), picked: HashSet::new(), blocked: Vec::new() }
+    }
+
     fn chosen(&self) -> Vec<&WorktreeStatus> {
         self.ready.iter().chain(self.with_changes.iter().filter(|w| self.picked.contains(&w.path))).collect()
+    }
+
+    fn queue(&self) -> Vec<(WorktreeStatus, &'static str, Value)> {
+        self.chosen().into_iter().map(|w| {
+            let mut body = one_path_body(&w.repo, w);
+            if self.global { body["ready_only"] = json!(true); }
+            (w.clone(), "delete-merged", body)
+        }).collect()
     }
 }
 
@@ -301,8 +315,8 @@ fn one_path_body(repo: &str, w: &WorktreeStatus) -> Value {
 /// A limpeza em andamento: uma worktree por pedido, para o progresso ser o que o servidor confirmou.
 #[derive(Debug, Default)]
 pub(super) struct BatchRun {
-    id: u64, server: String, machine: String, total: usize, done: usize,
-    current: Option<String>, removed: Vec<WorktreeStatus>, failed: Vec<(String, Option<String>)>,
+    id: u64, machine: String, total: usize, done: usize,
+    current: Option<String>, removed: Vec<WorktreeStatus>, failed: Vec<(WorktreeStatus, Option<String>)>,
 }
 
 impl BatchRun {
@@ -320,8 +334,8 @@ impl BatchRun {
         self.current = None;
         match outcome {
             Ok(removed) if removed.contains(&w.path) => { self.removed.push(w); true }
-            Ok(_) => { self.failed.push((base_name(&w.path), None)); false }
-            Err(error) => { self.failed.push((base_name(&w.path), Some(error))); false }
+            Ok(_) => { self.failed.push((w, None)); false }
+            Err(error) => { self.failed.push((w, Some(error))); false }
         }
     }
 }
@@ -799,14 +813,38 @@ impl Hangar {
         let (deletable, blocked) = merged_batch(&repo.worktrees);
         if deletable.is_empty() { return; }
         let (ready_ones, with_changes) = deletable.into_iter().partition(ready);
-        self.worktrees.batch = Some(Batch { repo: repo.repo.clone(), ready: ready_ones, with_changes, picked: HashSet::new(), blocked });
+        self.worktrees.batch = Some(Batch { global: false, ready: ready_ones, with_changes, picked: HashSet::new(), blocked });
         self.open_wt_dialog(WtDialog::Batch, 520., Hangar::render_batch_dialog, window, cx);
+    }
+
+    fn open_all_ready(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.cleanup_available(cx) { return; }
+        let Some(repos) = self.worktrees.repos.ok() else { return };
+        let batch = Batch::all_ready(repos, self.worktrees.server_filter.as_deref());
+        if batch.ready.is_empty() { return; }
+        self.worktrees.batch = Some(batch);
+        self.open_wt_dialog(WtDialog::Batch, 580., Hangar::render_batch_dialog, window, cx);
+    }
+
+    fn cleanup_item_label(&self, w: &WorktreeStatus) -> String {
+        let machine = self.worktrees.machines.get(&w.server).map(|m| m.label.as_str()).unwrap_or(&w.server);
+        format!("{machine} · {} · {}", w.repo, title(w))
+    }
+
+    fn open_cleanup_connection(&mut self, server: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_popups();
+        if let Some(entry) = self.server_entry(server).cloned() {
+            self.worktrees.cleanup_connection = Some((self.address.read(cx).value().to_string(), self.token.read(cx).value().to_string()));
+            self.address.update(cx, |input, cx| input.set_value(entry.address, window, cx));
+            self.token.update(cx, |input, cx| input.set_value(entry.token, window, cx));
+        }
+        self.open_connection(window, cx);
     }
 
     /// Manda só as que a confirmação mostrou, uma por pedido e em ordem: o progresso é real e um lote longo não estoura o prazo.
     fn delete_batch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(batch) = self.worktrees.batch.as_ref() else { return };
-        let queue = batch.chosen().into_iter().map(|w| (w.clone(), "delete-merged", one_path_body(&batch.repo, w))).collect();
+        let queue = batch.queue();
         self.start_worktree_cleanup(queue, window, cx);
     }
 
@@ -823,28 +861,34 @@ impl Hangar {
 
     fn start_worktree_cleanup(&mut self, queue: Vec<(WorktreeStatus, &'static str, Value)>, window: &mut Window, cx: &mut Context<Self>) {
         if queue.is_empty() || !self.cleanup_available(cx) { return; }
-        let server = queue[0].0.server.clone();
-        let api = self.worktree_api(&server);
-        let unavailable = self.machine_error(&server);
-        let machine = self.worktrees.machines.get(&server).map(|m| m.label.clone()).unwrap_or_else(|| server.clone());
+        let mut machines = Vec::new();
+        let queue: Vec<_> = queue.into_iter().map(|(w, action, body)| {
+            let machine = self.worktrees.machines.get(&w.server).map(|m| m.label.clone()).unwrap_or_else(|| w.server.clone());
+            if !machines.contains(&machine) { machines.push(machine); }
+            let api = self.worktree_api(&w.server);
+            let unavailable = self.machine_error(&w.server);
+            let label = self.cleanup_item_label(&w);
+            (w, action, body, api, unavailable, label)
+        }).collect();
+        let machine = machines.join(" · ");
         let runtime = self.runtime.clone();
         self.worktrees.batch_seq += 1;
         let id = self.worktrees.batch_seq;
-        self.worktrees.batch_run = Some(BatchRun { id, server, machine, ..BatchRun::new(queue.len()) });
+        self.worktrees.batch_run = Some(BatchRun { id, machine, ..BatchRun::new(queue.len()) });
         self.worktrees.batch = None;
         if let Some(kind) = self.worktrees.dialog.clone() { self.finish_wt_dialog(&kind, window, cx); }
         self.close_popups();
         cx.spawn(async move |this, cx| {
-            for (w, action, body) in queue {
+            for (w, action, body, api, unavailable, label) in queue {
                 let go = this.update(cx, |this, cx| {
                     let Some(run) = this.worktrees.batch_run.as_mut().filter(|r| r.id == id) else { return false };
-                    run.current = Some(base_name(&w.path));
+                    run.current = Some(label);
                     cx.notify();
                     true
                 });
                 if !matches!(go, Ok(true)) { break; }
                 // A API capturada é da origem, mesmo depois de trocar a máquina ativa.
-                let outcome = if let Some(api) = api.clone() {
+                let outcome = if let Some(api) = api {
                     let joined = runtime.spawn(async move { api.server_send(reqwest::Method::POST, &["worktrees", action], Some(body), 150).await }).await;
                     match joined {
                         Ok(Ok(_)) if action == "delete" => Ok(vec![w.path.clone()]),
@@ -1121,6 +1165,10 @@ impl Hangar {
                     .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::muted()).child(tr_shared(key, &[]))))
                 .child(div().text_size(px(26.)).font_weight(FontWeight::SEMIBOLD).child(count(f).to_string()))
                 .child(div().min_w_0().truncate().text_size(px(12.)).text_color(theme::muted()).child(hint))
+                .when(f == Filter::Ready, |el| el.child(Button::new("worktrees-delete-all-ready").outline().small()
+                    .label(tr_shared("worktree_all_ready_action", &[("n", &count(f).to_string())]))
+                    .disabled(count(f) == 0 || self.worktrees.cleanup_running() || self.worktrees.repos.loading)
+                    .on_click(cx.listener(|this, _, window, cx| { cx.stop_propagation(); this.open_all_ready(window, cx); }))))
                 .on_click(cx.listener(move |this, _, _, cx| this.set_filter(f, cx)))
         }))
     }
@@ -1515,7 +1563,9 @@ impl Hangar {
         let n = batch.chosen().len().to_string();
         // Prontas entram sempre; a que tem arquivo ignorado mostra o que ele perde.
         let ready_rows = batch.ready.iter().map(|w| div().flex().flex_col().gap(px(2.))
-            .child(div().font_weight(FontWeight::MEDIUM).child(title(w))).child(loss_lines(w)));
+            .child(div().font_weight(FontWeight::MEDIUM).child(title(w)))
+            .when(batch.global, |el| el.child(muted(self.cleanup_item_label(w))))
+            .child(loss_lines(w)));
         // Com alteração não commitada: só saem marcadas, e começam desmarcadas.
         let change_rows: Vec<Div> = batch.with_changes.iter().map(|w| {
             let path = w.path.clone();
@@ -1529,8 +1579,11 @@ impl Hangar {
                 .child(loss_lines(w))
         }).collect();
         div().flex().flex_col().gap(px(12.)).text_size(px(13.)).whitespace_normal()
-            .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).child(tr_shared("worktree_lote_titulo", &[("n", &n)])))
-            .child(div().id("worktree-batch-list").max_h(px(360.)).overflow_y_scroll().flex().flex_col().gap(px(10.))
+            .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).child(tr_shared(
+                if batch.global { "worktree_all_ready_title" } else { "worktree_lote_titulo" }, &[("n", &n)])))
+            .when(batch.global, |el| el.child(muted(tr_shared("worktree_all_ready_scope", &[]))))
+            .child(muted(tr_shared("worktree_all_ready_space", &[("tamanho", &sum_label(batch.chosen()))])))
+            .child(div().id("worktree-batch-list").relative().max_h(px(360.)).overflow_y_scroll().flex().flex_col().gap(px(10.))
                 .children(ready_rows)
                 .when(!change_rows.is_empty(), |el| el.child(div().text_color(theme::warning_text()).child(tr_shared("worktree_lote_com_arquivos", &[])))
                     .children(change_rows))
@@ -1574,7 +1627,7 @@ impl Hangar {
 
     pub(super) fn render_worktree_cleanup_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let run = self.worktrees.batch_run.as_ref()?;
-        let (finished, id, server) = (run.finished(), run.id, run.server.clone());
+        let (finished, id) = (run.finished(), run.id);
         Some(div().w_full().p(px(16.)).flex().flex_col().gap(px(12.)).text_size(px(13.)).whitespace_normal()
             .child(div().flex().items_center().gap(px(10.))
                 .child(div().flex_1().font_weight(FontWeight::SEMIBOLD).child(tr_shared("worktree_cleanup_title", &[])))
@@ -1590,20 +1643,15 @@ impl Hangar {
                 .relative().max_h(px(200.)).overflow_y_scroll()
                 .text_color(theme::danger())
                 .child(tr_shared("worktree_lote_falhas", &[("n", &run.failed.len().to_string())]))
-                .children(run.failed.iter().map(|(name, error)| div().pl(px(10.)).child(match error {
-                    None => tr_shared("worktree_lote_mudou", &[("nome", name)]),
-                    Some(motivo) => tr_shared("worktree_lote_erro_item", &[("nome", name), ("motivo", motivo)]),
-                })))))
-            .when(!run.failed.is_empty(), |el| el.child(Button::new("worktree-cleanup-connection").outline().small()
-                .label(tr_shared("worktree_cleanup_connection", &[]))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.close_popups();
-                    if let Some(entry) = this.server_entry(&server).cloned() {
-                        this.worktrees.cleanup_connection = Some((this.address.read(cx).value().to_string(), this.token.read(cx).value().to_string()));
-                        this.address.update(cx, |input, cx| input.set_value(entry.address, window, cx));
-                        this.token.update(cx, |input, cx| input.set_value(entry.token, window, cx));
-                    }
-                    this.open_connection(window, cx);
+                .children(run.failed.iter().map(|(w, error)| {
+                    let name = self.cleanup_item_label(w);
+                    let server = w.server.clone();
+                    div().pl(px(10.)).flex().flex_col().gap(px(4.)).child(match error {
+                        None => tr_shared("worktree_lote_mudou", &[("nome", &name)]),
+                        Some(motivo) => tr_shared("worktree_lote_erro_item", &[("nome", &name), ("motivo", motivo)]),
+                    }).when(error.is_some(), |el| el.child(Button::new(SharedString::from(format!("worktree-cleanup-connection-{}", w.id()))).outline().small()
+                        .label(tr_shared("worktree_cleanup_connection", &[]))
+                        .on_click(cx.listener(move |this, _, window, cx| this.open_cleanup_connection(&server, window, cx)))))
                 }))))
             .when(finished, |el| el.child(div().flex().justify_end()
                 .child(Button::new("worktree-cleanup-dismiss").primary().small().label(tr_shared("worktree_cleanup_dismiss", &[]))
@@ -1763,7 +1811,7 @@ const COL_SIZE: f32 = 76.;
 
 #[cfg(test)]
 mod tests {
-    use super::{fmt_size, lost_files, merged_batch, one_path_body, ready, slug, state_of, sum_label, title, tr_shared, is_agent, merge_notice, WorktreeSnapshot, BatchRun, WorktreeRepo, WorktreeStatus, Worktrees, WtState};
+    use super::{fmt_size, lost_files, merged_batch, one_path_body, ready, slug, state_of, sum_label, title, tr_shared, is_agent, merge_notice, WorktreeSnapshot, Batch, BatchRun, WorktreeRepo, WorktreeStatus, Worktrees, WtState};
     use serde_json::json;
 
     fn st(v: serde_json::Value) -> WorktreeStatus { serde_json::from_value(v).unwrap() }
@@ -1997,6 +2045,34 @@ mod tests {
     }
 
     #[test]
+    fn global_ready_batch_uses_counter_scope_and_keeps_each_origin() {
+        let row = |server: &str, repo: &str, path: &str| {
+            let mut w = st(base(path));
+            w.server = server.into(); w.repo = repo.into(); w.merged = true;
+            w
+        };
+        let a = row("desktop", "/r", "/shared/path");
+        let b = row("notebook", "/r", "/shared/path");
+        let c = row("desktop", "/other", "/other/ready");
+        let mut dirty = row("desktop", "/r", "/r/dirty"); dirty.dirty = 1;
+        let mut live = row("desktop", "/r", "/r/live"); live.sessions.push("active".into());
+        let mut degraded = row("desktop", "/r", "/r/uncertain"); degraded.degraded = true;
+        let repos = vec![
+            WorktreeRepo { server: "desktop".into(), repo: "/r".into(), worktrees: vec![a.clone(), dirty, live, degraded] },
+            WorktreeRepo { server: "notebook".into(), repo: "/r".into(), worktrees: vec![b.clone()] },
+            WorktreeRepo { server: "desktop".into(), repo: "/other".into(), worktrees: vec![c.clone()] },
+        ];
+        let batch = Batch::all_ready(&repos, None);
+        assert_eq!(batch.chosen(), [&a, &b, &c]);
+        assert_eq!(Batch::all_ready(&repos, Some("desktop")).chosen(), [&a, &c]);
+        assert!(Batch::all_ready(&repos, Some("missing")).chosen().is_empty());
+        let jobs = batch.queue();
+        assert!(jobs.iter().all(|(_, _, body)| body["ready_only"] == true));
+        assert_eq!(jobs.iter().map(|(w, _, body)| (w.server.as_str(), body["repo"].as_str().unwrap(), body["paths"][0].as_str().unwrap())).collect::<Vec<_>>(),
+            [("desktop", "/r", "/shared/path"), ("notebook", "/r", "/shared/path"), ("desktop", "/other", "/other/ready")]);
+    }
+
+    #[test]
     fn one_path_body_marks_lossy_only_when_it_loses_files() {
         let clean = st(base("/r/a"));
         assert_eq!(one_path_body("/r", &clean), json!({"repo": "/r", "confirm": true, "paths": ["/r/a"], "lossy": []}));
@@ -2017,7 +2093,7 @@ mod tests {
         assert!(run.record(st(d), Ok(vec!["/r/d".into()])));
         assert!(run.finished());
         assert_eq!(run.removed.iter().map(|w| w.path.as_str()).collect::<Vec<_>>(), ["/r/a", "/r/d"]);
-        assert_eq!(run.failed, [("b".to_owned(), None), ("c".to_owned(), Some("boom".to_owned()))]);
+        assert_eq!(run.failed, [(st(base("/r/b")), None), (st(base("/r/c")), Some("boom".to_owned()))]);
         assert_eq!(sum_label(&run.removed), tr_shared("worktree_tamanho_parcial", &[("tamanho", &fmt_size(2048))]));
     }
 

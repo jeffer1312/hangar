@@ -7,7 +7,7 @@ use crate::{Result, error, git, real};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     path::{Component, Path, PathBuf},
     sync::{
         LazyLock, Mutex,
@@ -775,11 +775,11 @@ fn scan_repositories(locations: &[String], roots: &[String]) -> Discovery {
     let mut pending = locations
         .iter()
         .map(|p| real(Path::new(p)))
-        .collect::<Vec<_>>();
+        .collect::<VecDeque<_>>();
     let mut visited = HashSet::new();
     let mut repos = HashSet::new();
     let mut inspected = 0;
-    'scan: while let Some(path) = pending.pop() {
+    'scan: while let Some(path) = pending.pop_front() {
         if !visited.insert(path.clone()) {
             continue;
         }
@@ -802,8 +802,7 @@ fn scan_repositories(locations: &[String], roots: &[String]) -> Discovery {
             }
         };
         for entry in entries {
-            inspected += 1;
-            if inspected > DISCOVERY_LIMIT || start.elapsed() > DISCOVERY_BUDGET {
+            if start.elapsed() > DISCOVERY_BUDGET {
                 scan.partial = true;
                 break 'scan;
             }
@@ -845,7 +844,12 @@ fn scan_repositories(locations: &[String], roots: &[String]) -> Discovery {
             {
                 continue;
             }
-            pending.push(child);
+            // O limite é de pastas: arquivos de um build não disputam a descoberta dos repos.
+            if visited.len() + pending.len() >= DISCOVERY_LIMIT {
+                scan.partial = true;
+                continue;
+            }
+            pending.push_back(child);
         }
     }
     scan.repos = repos.into_iter().collect();
@@ -1284,6 +1288,35 @@ mod tests {
             40,
             "Identidade do commit não pode levar quebra de linha"
         );
+    }
+
+    #[test]
+    fn discovery_large_asset_directory_keeps_nested_repositories_and_artifact_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("projects");
+        let parent = root.join("project");
+        let assets = parent.join("apps/web/dist/assets");
+        let nested = parent.join("tools/target");
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+        for repo in [&parent, &nested] {
+            let out = std::process::Command::new("git")
+                .args(["init", "-b", "main"])
+                .arg(repo)
+                .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", dir.path())
+                .output().unwrap();
+            assert!(out.status.success());
+        }
+        for i in 0..20_001 {
+            std::fs::write(assets.join(format!("asset-{i}.js")), "").unwrap();
+        }
+        let scan = discover_repositories(&[text(&root), text(&parent)]);
+        assert!(!scan.partial, "arquivos comuns não podem esgotar a descoberta de pastas");
+        let mut expected = vec![text(&real(&parent)), text(&real(&nested))];
+        expected.sort();
+        assert_eq!(scan.repos, expected);
     }
 
     #[test]
