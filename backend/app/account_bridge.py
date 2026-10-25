@@ -46,7 +46,7 @@ class PreparationJobs:
 
     @staticmethod
     def validate(body):
-        from app import runtime_coordinator, account_lifecycle, contas, codex_contas
+        from app import runtime_coordinator, account_lifecycle, codex_contas
         coordinator = runtime_coordinator.current()
         if coordinator is None or coordinator.instance != body["instance"]:
             raise ValueError("instância de preparo encerrada")
@@ -54,25 +54,17 @@ class PreparationJobs:
         name = body["account_id"]
         if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", name):
             raise ValueError("conta inválida")
-        expected = (codex_contas.resolve_account(name).home if key.provider.value == "codex" and name == "default"
-                    else Path.home() / f".{key.provider.value}-{name}")
+        expected = codex_contas.resolve_account(name).home if name == "default" else Path.home() / f".codex-{name}"
         if key != account_lifecycle.AccountKey.new(key.provider, expected) or expected.is_symlink() or not expected.is_dir():
             raise ValueError("destino inválido")
         record = account_lifecycle.default_lock_root() / (key.digest + ".prepare.json")
         if record.is_symlink() or json.loads(record.read_text(encoding="utf-8")) != body:
             raise ValueError("operação de preparo substituída")
-        if body["seed"]:
-            if key.provider.value != "claude" or not (expected / ".hangar-account-pending").is_file() or (expected / contas.MARCADOR).exists():
-                raise ValueError("semeadura sem cadastro pendente")
-        elif key.provider.value == "claude":
-            if not contas.e_conta(expected):
-                raise ValueError("conta Claude inválida")
-        elif codex_contas.resolve_account(name).home.resolve() != expected.resolve():
+        if codex_contas.resolve_account(name).home.resolve() != expected.resolve():
             raise ValueError("conta Codex inválida")
         cwd = body["cwd"]
         if cwd is not None and (not isinstance(cwd, str) or not Path(cwd).is_absolute() or not Path(cwd).is_dir()):
             raise ValueError("pasta de trabalho inválida")
-        return key, expected
 
     async def start(self, body):
         import asyncio
@@ -115,21 +107,13 @@ class PreparationJobs:
 
     async def run(self, body):
         import asyncio
-        from app import account_lifecycle, codex_contas, codex_contas_sync, contas
+        from app import account_lifecycle, codex_contas, codex_contas_sync
         key = account_lifecycle.AccountKey.new(body["key"]["provider"], Path(body["key"]["canonical_home"]))
 
         async def owned():
             guard = await asyncio.to_thread(account_lifecycle.acquire, key, account_lifecycle.GuardMode.SHARED)
             with guard:
-                _, target = self.validate(body)
-                if key.provider.value == "claude":
-                    def reconcile():
-                        contas.compartilhado().mkdir(parents=True, exist_ok=True)
-                        lock_file = ".hangar-account-pending" if body["seed"] else contas.MARCADOR
-                        with contas._trava_compartilhada(), contas._trava(target, lock_file):
-                            self.validate(body)
-                            return contas.prepare_configuration(target, seed=body["seed"])
-                    return await account_lifecycle.complete_on_cancel(asyncio.to_thread(reconcile))
+                self.validate(body)
                 account = codex_contas.resolve_account(body["account_id"])
                 if body["cwd"] is not None:
                     result = codex_contas_sync.preparation_status(account)
@@ -171,8 +155,7 @@ class PreparationJobs:
                     "issues": [{"code": "account_prepare_cancelled", "params": {}}]}
         except Exception as exc:
             return {"status": "error", "trust_pending": False,
-                    "issues": [{"code": "codex_account_prepare_failed" if key.provider.value == "codex" else "account_prepare_failed",
-                                "params": {"error": type(exc).__name__}}]}
+                    "issues": [{"code": "codex_account_prepare_failed", "params": {"error": type(exc).__name__}}]}
 
 _preparation_transport = None
 

@@ -202,12 +202,7 @@ impl Launcher for ServerLauncher {
             use crate::session_open::open::OpenHost;
             let host = self.host().await;
             let spec = &planned.spec;
-            // Como a abertura: o modelo de motor deixado no `settings.json` faria a reserva nascer nele.
-            for warning in claude::drop_foreign_model(host.home(), spec.account.config_dir()) {
-                tracing::warn!(code = "prewarm_aviso", "{warning}");
-            }
-            let (guard, warnings) = crate::session_open::open::prepare_account(host, spec, None).await?;
-            for warning in warnings { tracing::warn!(code = "prewarm_aviso", "{warning}"); }
+            let guard = prepare(host, spec).await?;
             if let Err(error) = claude::pretrust_async(claude::claude_json(host.terminal(), host.home(), spec.account.config_dir()), spec.cwd.clone(),
                 host.terminal().windows).await {
                 tracing::warn!(code = "prewarm_confiar_pasta", "{error}");
@@ -225,6 +220,18 @@ impl Launcher for ServerLauncher {
             Ok(Spawned { cano, guard })
         })
     }
+}
+
+/// O começo da abertura para a reserva: o modelo de motor sai do `settings.json` (a reserva nasceria nele)
+/// e a conta é preparada como na abertura (login, guarda, reconciliação no processo); os avisos vão ao log.
+async fn prepare(host: &dyn crate::session_open::open::OpenHost, spec: &SessionSpec)
+    -> Result<Option<crate::accounts::AccountGuard>, OpenError> {
+    for warning in crate::session_open::claude::drop_foreign_model(host.home(), spec.account.config_dir()) {
+        tracing::warn!(code = "prewarm_aviso", "{warning}");
+    }
+    let (guard, warnings) = crate::session_open::open::prepare_account(host, spec, None).await?;
+    for warning in warnings { tracing::warn!(code = "prewarm_aviso", "{warning}"); }
+    Ok(guard)
 }
 
 /// O evento do diário (`sessao.prewarm`): etapa e motivo, nunca conversa.

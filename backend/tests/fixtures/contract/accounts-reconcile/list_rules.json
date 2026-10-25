@@ -1,0 +1,189 @@
+{
+  "origin_commit": "b2832ee04",
+  "command": "HANGAR_FIXTURE_PY_ROOT=<checkout com scripts/hangar-conta e backend/app de b2832ee04> cargo test -p hangar-server --test it accounts_reconcile::generate_fixtures -- --ignored --exact",
+  "scenario": "list_rules",
+  "steps": [
+    {
+      "args": [
+        "--list"
+      ],
+      "exit": 0,
+      "stdout": "10\nMaiuscula\na\nb\n",
+      "stderr": []
+    }
+  ],
+  "tree": {
+    "<HOME>/.claude": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-10": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-10/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude-10/.hangar-conta": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    },
+    "<HOME>/.claude-10/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-Maiuscula": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-Maiuscula/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude-Maiuscula/.hangar-conta": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    },
+    "<HOME>/.claude-Maiuscula/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-a": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-a/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude-a/.hangar-conta": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    },
+    "<HOME>/.claude-a/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-arquivo": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    },
+    "<HOME>/.claude-b": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-b/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude-b/.hangar-conta": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    },
+    "<HOME>/.claude-b/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-backup": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-evil": {
+      "kind": "symlink",
+      "target": "<HOME>/fora"
+    },
+    "<HOME>/.claude-markdir": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-markdir/.hangar-conta": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-marklink": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-marklink/.hangar-conta": {
+      "kind": "symlink",
+      "target": "<HOME>/marcador"
+    },
+    "<HOME>/.claude-pend": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-pend/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude-pend/.hangar-account-pending": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    },
+    "<HOME>/.claude-pend/.hangar-conta": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    },
+    "<HOME>/.claude-pend/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"oauthAccount\": {\"emailAddress\": \"um@exemplo.com\"}, \"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude/.credentials.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"claudeAiOauth\":{}}"
+    },
+    "<HOME>/.claude/CLAUDE.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "# regras"
+    },
+    "<HOME>/.claude/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x/memory": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x/memory/MEMORY.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "m"
+    },
+    "<HOME>/.claude/settings.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"theme\":\"dark\"}"
+    },
+    "<HOME>/.claude/skills": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/skills/falar": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/skills/falar/SKILL.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "oi"
+    },
+    "<HOME>/fora": {
+      "kind": "dir"
+    },
+    "<HOME>/fora/.hangar-conta": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    },
+    "<HOME>/marcador": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    }
+  },
+  "diary": []
+}

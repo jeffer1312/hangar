@@ -1,0 +1,154 @@
+{
+  "origin_commit": "b2832ee04",
+  "command": "HANGAR_FIXTURE_PY_ROOT=<checkout com scripts/hangar-conta e backend/app de b2832ee04> cargo test -p hangar-server --test it accounts_reconcile::generate_fixtures -- --ignored --exact",
+  "scenario": "plugins_seeded_not_object",
+  "steps": [
+    {
+      "args": [
+        "--prep",
+        "conta2"
+      ],
+      "exit": 1,
+      "stdout": "",
+      "stderr": [
+        "Traceback (most recent call last):",
+        "  File \"<PY_ROOT>/scripts/hangar-conta\", line 53, in <module>",
+        "    sys.exit(main(sys.argv))",
+        "             ~~~~^^^^^^^^^^",
+        "  File \"<PY_ROOT>/scripts/hangar-conta\", line 39, in main",
+        "    for aviso in contas.reconciliar(nome, argv[3] if len(argv) == 4 else None):",
+        "                 ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "  File \"<PY_ROOT>/backend/app/contas.py\", line 551, in reconciliar",
+        "    return cycle.reconciliar(projeto)",
+        "           ~~~~~~~~~~~~~~~~~^^^^^^^^^",
+        "  File \"<PY_ROOT>/backend/app/contas.py\", line 564, in reconciliar",
+        "    return _reconciliar(self.dir_conta, projeto)",
+        "  File \"<PY_ROOT>/backend/app/diag.py\", line 177, in run",
+        "    return fn(*args, **kwargs)",
+        "  File \"<PY_ROOT>/backend/app/contas.py\", line 522, in _reconciliar",
+        "    avisos.extend(_conferir_plugins(dir_conta))",
+        "                  ~~~~~~~~~~~~~~~~~^^^^^^^^^^^",
+        "  File \"<PY_ROOT>/backend/app/contas.py\", line 454, in _conferir_plugins",
+        "    ligados = json.loads((dir_conta / \"settings.json\").read_text(encoding=\"utf-8\")).get(",
+        "              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "AttributeError: 'list' object has no attribute 'get'"
+      ]
+    }
+  ],
+  "tree": {
+    "<HOME>/.claude": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-conta2": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-conta2/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude-conta2/.hangar-conta": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    },
+    "<HOME>/.claude-conta2/CLAUDE.md": {
+      "kind": "symlink",
+      "target": "<HOME>/.claude/CLAUDE.md"
+    },
+    "<HOME>/.claude-conta2/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-conta2/settings.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "[1]"
+    },
+    "<HOME>/.claude-conta2/skills": {
+      "kind": "symlink",
+      "target": "<HOME>/.claude/skills"
+    },
+    "<HOME>/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"oauthAccount\": {\"emailAddress\": \"um@exemplo.com\"}, \"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude/.credentials.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"claudeAiOauth\":{}}"
+    },
+    "<HOME>/.claude/CLAUDE.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "# regras"
+    },
+    "<HOME>/.claude/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x/memory": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x/memory/MEMORY.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "m"
+    },
+    "<HOME>/.claude/settings.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "[1]"
+    },
+    "<HOME>/.claude/skills": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/skills/falar": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/skills/falar/SKILL.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "oi"
+    },
+    "<HOME>/.hangar-contas.lock": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    }
+  },
+  "diary": [
+    {
+      "evento": "conta.reconciliar.inicio",
+      "nivel": "ok",
+      "provider": "claude"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "ligar_arquivos",
+      "conta_id": "<CONTA_ID>"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "espelhar_settings"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "conferir_plugins"
+    },
+    {
+      "evento": "conta.reconciliar.fim",
+      "nivel": "erro",
+      "provider": "claude",
+      "codigo": "excecao"
+    }
+  ]
+}

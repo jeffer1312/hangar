@@ -1,0 +1,147 @@
+{
+  "origin_commit": "b2832ee04",
+  "command": "HANGAR_FIXTURE_PY_ROOT=<checkout com scripts/hangar-conta e backend/app de b2832ee04> cargo test -p hangar-server --test it accounts_reconcile::generate_fixtures -- --ignored --exact",
+  "scenario": "usage_errors",
+  "steps": [
+    {
+      "args": [],
+      "exit": 2,
+      "stdout": "",
+      "stderr": [
+        "CLI de contas Claude, para o wrapper de shell chamar.",
+        "",
+        "Mesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas",
+        "direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.",
+        "",
+        "  hangar-conta --list                    -> um nome de conta por linha",
+        "  hangar-conta --prep <nome> [<projeto>] -> refaz os atalhos e imprime o caminho do config dir;",
+        "                                            com o projeto (a pasta já saneada), liga a memória dele",
+        "  hangar-conta --new <nome>              -> cria a conta e imprime o caminho",
+        ""
+      ]
+    },
+    {
+      "args": [
+        "--list",
+        "x"
+      ],
+      "exit": 2,
+      "stdout": "",
+      "stderr": [
+        "CLI de contas Claude, para o wrapper de shell chamar.",
+        "",
+        "Mesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas",
+        "direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.",
+        "",
+        "  hangar-conta --list                    -> um nome de conta por linha",
+        "  hangar-conta --prep <nome> [<projeto>] -> refaz os atalhos e imprime o caminho do config dir;",
+        "                                            com o projeto (a pasta já saneada), liga a memória dele",
+        "  hangar-conta --new <nome>              -> cria a conta e imprime o caminho",
+        ""
+      ]
+    },
+    {
+      "args": [
+        "--prep"
+      ],
+      "exit": 2,
+      "stdout": "",
+      "stderr": [
+        "CLI de contas Claude, para o wrapper de shell chamar.",
+        "",
+        "Mesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas",
+        "direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.",
+        "",
+        "  hangar-conta --list                    -> um nome de conta por linha",
+        "  hangar-conta --prep <nome> [<projeto>] -> refaz os atalhos e imprime o caminho do config dir;",
+        "                                            com o projeto (a pasta já saneada), liga a memória dele",
+        "  hangar-conta --new <nome>              -> cria a conta e imprime o caminho",
+        ""
+      ]
+    },
+    {
+      "args": [
+        "--prep",
+        "a",
+        "b",
+        "c"
+      ],
+      "exit": 2,
+      "stdout": "",
+      "stderr": [
+        "CLI de contas Claude, para o wrapper de shell chamar.",
+        "",
+        "Mesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas",
+        "direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.",
+        "",
+        "  hangar-conta --list                    -> um nome de conta por linha",
+        "  hangar-conta --prep <nome> [<projeto>] -> refaz os atalhos e imprime o caminho do config dir;",
+        "                                            com o projeto (a pasta já saneada), liga a memória dele",
+        "  hangar-conta --new <nome>              -> cria a conta e imprime o caminho",
+        ""
+      ]
+    },
+    {
+      "args": [
+        "--new",
+        "a",
+        "b"
+      ],
+      "exit": 2,
+      "stdout": "",
+      "stderr": [
+        "CLI de contas Claude, para o wrapper de shell chamar.",
+        "",
+        "Mesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas",
+        "direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.",
+        "",
+        "  hangar-conta --list                    -> um nome de conta por linha",
+        "  hangar-conta --prep <nome> [<projeto>] -> refaz os atalhos e imprime o caminho do config dir;",
+        "                                            com o projeto (a pasta já saneada), liga a memória dele",
+        "  hangar-conta --new <nome>              -> cria a conta e imprime o caminho",
+        ""
+      ]
+    },
+    {
+      "args": [
+        "--bogus"
+      ],
+      "exit": 2,
+      "stdout": "",
+      "stderr": [
+        "CLI de contas Claude, para o wrapper de shell chamar.",
+        "",
+        "Mesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas",
+        "direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.",
+        "",
+        "  hangar-conta --list                    -> um nome de conta por linha",
+        "  hangar-conta --prep <nome> [<projeto>] -> refaz os atalhos e imprime o caminho do config dir;",
+        "                                            com o projeto (a pasta já saneada), liga a memória dele",
+        "  hangar-conta --new <nome>              -> cria a conta e imprime o caminho",
+        ""
+      ]
+    },
+    {
+      "args": [
+        "--help",
+        "x"
+      ],
+      "exit": 2,
+      "stdout": "",
+      "stderr": [
+        "CLI de contas Claude, para o wrapper de shell chamar.",
+        "",
+        "Mesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas",
+        "direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.",
+        "",
+        "  hangar-conta --list                    -> um nome de conta por linha",
+        "  hangar-conta --prep <nome> [<projeto>] -> refaz os atalhos e imprime o caminho do config dir;",
+        "                                            com o projeto (a pasta já saneada), liga a memória dele",
+        "  hangar-conta --new <nome>              -> cria a conta e imprime o caminho",
+        ""
+      ]
+    }
+  ],
+  "tree": {},
+  "diary": []
+}

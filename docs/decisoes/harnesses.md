@@ -391,8 +391,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Pensamento no Claude sem terminal só com `--thinking-display summarized`**: com `-p` a CLI
   ignora `showThinkingSummaries`. Pensamento e ferramenta em voo têm fonte e evento SSE próprios,
   nunca a prévia da resposta.
-- **Runtime por conta não vira atalho** (`telemetry/`, `feedback/`, `image-cache/`, caches por
-  config dir) — senão cada reconciliação acha "deriva" e gaveta de novo.
+- **Runtime por conta não vira atalho** (`sessions/`, `telemetry/`, `feedback/`, `image-cache/`,
+  `.claude.json.lock`, `mcp-needs-auth-cache.json`, caches por config dir; lista em
+  `ACCOUNT_RUNTIME` de `accounts/claude_config.rs`) — senão cada reconciliação acha "deriva" e
+  gaveta de novo.
 - **O diálogo de confiança do Claude Code derruba três coisas**: a chave do pre-trust usa barra
   normal no Windows, `is_overlay` tem que ignorar as linhas em branco do fim do pane, e o Enter
   às cegas cai em "No, exit".
@@ -2400,12 +2402,16 @@ isolada: `plugin_accepted`, marca ainda presente), então com algo guardado o es
 
 ## Runtime por conta não vira atalho
 
-(`contas._RUNTIME_DA_CONTA`, 04/09/2026): `telemetry/`,
+(`contas._RUNTIME_DA_CONTA` do Python na época, 04/09/2026): `telemetry/`,
   `feedback/`, `image-cache/`, `.last-update-result.json` (o Claude Code regrava por config dir com
   tmp+rename, que troca o symlink por arquivo real) e `.hangar-models.json` (cache do picker, por
   config dir). Ligados, cada `--prep` achava a "deriva" de novo, gavetava e disparava o toast
   "CONTA" — a gaveta desta máquina chegou a `telemetry.3`. A reconciliação desfaz o atalho antigo
   desses nomes, senão a conta seguia gravando o runtime dela dentro do `~/.claude`.
+  Depois entraram `sessions/` (08/10) e, em 24/10, `.claude.json.lock` (pasta de trava do CLI) e
+  `mcp-needs-auth-cache.json` (cache do CLI por conta): no uso real o primeiro foi para a gaveta e
+  o segundo subiu para o `~/.claude`. A lista hoje é `ACCOUNT_RUNTIME` em
+  `crates/hangar-server/src/accounts/claude_config.rs` (a reconciliação é do Rust desde 24/10).
 
 ## Statusline por sidecar, não pelo pane
 

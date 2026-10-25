@@ -1,51 +1,30 @@
 #!/usr/bin/env python3
-"""CLI de contas Claude, para o wrapper de shell chamar.
-
-Mesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas
-direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.
+"""CLI de contas Claude, para o wrapper de shell chamar. A regra mora no `hangar-server conta`;
+este script só acha o binário desta cópia e repassa os argumentos, a saída e o código.
 
   hangar-conta --list                    -> um nome de conta por linha
   hangar-conta --prep <nome> [<projeto>] -> refaz os atalhos e imprime o caminho do config dir;
                                             com o projeto (a pasta já saneada), liga a memória dele
   hangar-conta --new <nome>              -> cria a conta e imprime o caminho
 """
+import subprocess
 import sys
 from pathlib import Path
 
-# app.contas é stdlib pura (garantido por teste): importável sem instalar o backend.
+# app.rust_bins é stdlib pura: importável com o python3 do sistema, sem o backend instalado.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
-from app import contas  # noqa: E402
+from app import rust_bins  # noqa: E402
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) == 2 and argv[1] in ("--help", "-h"):
-        print(__doc__)
-        return 0
-
-    if len(argv) == 2 and argv[1] == "--list":
-        for nome in contas.listar():
-            print(nome)
-        return 0
-
-    if (len(argv) == 3 and argv[1] in ("--prep", "--new")) or (len(argv) == 4 and argv[1] == "--prep"):
-        nome = argv[2]
-        try:
-            if argv[1] == "--new":
-                print(contas.criar(nome))
-            else:
-                # O projeto vem saneado de quem chama (o lançador do Rust): a regra do
-                # sanitize_cwd fica num lugar só. Sem ele, a varredura cobre os projetos conhecidos.
-                for aviso in contas.reconciliar(nome, argv[3] if len(argv) == 4 else None):
-                    print(f"hangar-conta: {aviso}", file=sys.stderr)
-                print(contas.caminho(nome))
-        except contas.ContaError as e:
-            print(f"hangar-conta: {e.detail}", file=sys.stderr)
-            return 1
-        return 0
-
-    print(__doc__, file=sys.stderr)
-    return 2
+    exe = rust_bins.find_bin("hangar-server", "CP_RUST_SERVER_BIN")
+    if exe is None:
+        print("hangar-conta: hangar-server não encontrado; instale o Hangar ou aponte CP_RUST_SERVER_BIN para o binário",
+              file=sys.stderr)
+        return 126
+    # Filho e não exec: no Windows o exec troca o processo e o .cmd perde o código de saída.
+    return subprocess.run([str(exe), "conta", *argv[1:]]).returncode
 
 
 if __name__ == "__main__":

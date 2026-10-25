@@ -62,7 +62,7 @@ impl Launcher for Fake {
     fn spawn<'a>(&'a self, planned: &'a Planned, _sidecar_dir: &'a Path) -> BoxFuture<'a, Result<Spawned, OpenError>> {
         Box::pin(async move {
             let guard = match &self.host {
-                Some(host) => crate::session_open::open::prepare_account(host, &planned.spec, None).await?.0,
+                Some(host) => super::prepare(host, &planned.spec).await?,
                 None => None,
             };
             self.spawns.lock().unwrap().push((planned.spec.key.clone(), planned.session_id.clone()));
@@ -439,6 +439,38 @@ async fn an_account_without_login_is_refused_like_the_opening() {
     let error = w.store.reserve(&w.fake, &request, "tela").await.unwrap_err();
     assert_eq!((error.status, error.code), (409, Some("erro_conta_sem_login")));
     assert!(w.store.is_empty() && w.fake.spawned().is_empty());
+}
+
+/// K09: a reserva reconcilia a conta do Hangar no próprio processo (o atalho aparece) e os avisos vão ao
+/// log dela.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn the_reserve_reconciles_the_hangar_account_and_logs_its_warnings() {
+    #[derive(Clone)] struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> { self.0.lock().unwrap().extend_from_slice(data); Ok(data.len()) }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let capture = Capture(output.clone());
+    let subscriber = tracing_subscriber::fmt().without_time().with_ansi(false).with_writer(move || capture.clone()).finish();
+    let _log = tracing::subscriber::set_default(subscriber);
+    let mut w = world();
+    w.write(&w.root.join(".claude/CLAUDE.md"), "# regras");
+    w.write(&w.root.join(".claude/skills/falar/SKILL.md"), "oi");
+    let account = w.root.join(".claude-conta2");
+    w.write(&account.join(crate::accounts::storage::CLAUDE_MARKER), "");
+    w.write(&account.join(".credentials.json"), r#"{"claudeAiOauth": {"accessToken": "a", "refreshToken": "r"}}"#);
+    w.write(&account.join("CLAUDE.md"), "# editado na conta");
+    std::fs::create_dir_all(w.root.join("proj")).unwrap();
+    let env = BTreeMap::from([("HOME".to_owned(), w.root.display().to_string()), ("PATH".to_owned(), "/usr/bin:/bin".to_owned())]);
+    w.fake.host = Some(crate::session_open::local::LocalHost::new(env, None));
+    let request = SessionOpenRequest { config_dir: Some(account.display().to_string()), ..w.request("opus") };
+    w.store.reserve(&w.fake, &request, "tela").await.unwrap();
+    assert_eq!(std::fs::read_link(account.join("skills")).unwrap(), w.root.join(".claude/skills"), "a conta foi reconciliada");
+    let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert!(text.lines().any(|l| l.contains("prewarm_aviso") && l.contains("'CLAUDE.md' foi alterado dentro desta conta")),
+        "o aviso da reconciliação não foi ao log da reserva: {text}");
 }
 
 #[tokio::test]

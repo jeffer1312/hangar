@@ -316,30 +316,15 @@ impl AccountService {
         .await
         .map_err(|_| AccountError::io())?
     }
-    pub async fn seed_claude(
-        &self,
-        path: &Path,
-        name: &str,
-        bridge: &AccountsBridge,
-    ) -> Result<(), AccountError> {
-        let account = Account {
-            id: name.into(),
-            home: path.into(),
-            is_default: false,
-        };
-        let result = self
-            .run_preparation(Provider::Claude, &account, bridge, true, false, None)
-            .await?;
-        if matches!(result["status"].as_str(), Some("ready" | "partial")) {
-            Ok(())
-        } else {
-            Err(AccountError::new(
-                500,
-                "account_prepare_failed",
-                "não foi possível preparar a conta",
-                json!({}),
-            ))
-        }
+    /// O preparo da pasta pendente de uma conta Claude, aqui mesmo: os eventos vão ao diário do
+    /// servidor, e a resposta e o log levam o motivo de uma falha, o mesmo que o comando mostra. Bloqueante.
+    pub fn seed_claude(&self, path: &Path) -> Result<(), AccountError> {
+        let outcome = super::claude_config::seed(&self.env.home, path);
+        crate::diag::record_blocking(crate::diag::diary_dir_in(&self.env).as_deref(), &outcome.diary, "conta");
+        outcome.result.map(drop).map_err(|error| {
+            tracing::warn!(%error, "o preparo da conta Claude falhou");
+            AccountError::new(500, "account_prepare_failed", format!("não foi possível preparar a conta: {}", error.cause()), json!({}))
+        })
     }
     async fn run_preparation(
         &self,

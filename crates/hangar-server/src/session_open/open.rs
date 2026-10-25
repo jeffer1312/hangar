@@ -49,6 +49,11 @@ pub trait OpenHost: Send + Sync {
     /// abre) e recebe a primeira mensagem. Devolve avisos.
     fn warm_codex<'a>(&'a self, name: &'a str, initial_prompt: Option<&'a str>) -> BoxFuture<'a, Vec<String>>;
     fn diary(&self, events: Vec<Value>);
+    /// Os eventos `conta.reconciliar.*`: o servidor grava no diário dele; o comando de terminal, que não
+    /// grava os da criação, no arquivo dos comandos de conta.
+    fn account_diary(&self, events: Vec<Value>);
+    /// Quanto a abertura espera a reconciliação da conta; os testes encurtam.
+    fn reconcile_limit(&self) -> Duration { RECONCILE_LIMIT }
     /// Id da conversa (`--session-id`) e chave da ponte do plugin, novos a cada vida.
     fn new_session_id(&self) -> String;
     fn new_bridge_key(&self) -> String;
@@ -61,6 +66,10 @@ pub trait OpenHost: Send + Sync {
     /// As reservas pré-aquecidas deste servidor; `None` onde não há (comando de terminal, harness).
     fn prewarm(&self) -> Option<&crate::prewarm::Store>;
 }
+
+/// Leitura presa (FIFO, montagem travada) ou trava que não solta recusa a abertura em vez de segurá-la
+/// para sempre.
+pub(crate) const RECONCILE_LIMIT: Duration = Duration::from_secs(120);
 
 /// UUID v4 de 16 bytes aleatórios em hexadecimal.
 pub fn uuid4(hex: &str) -> String {
@@ -486,7 +495,7 @@ pub(crate) fn account_key(host: &dyn OpenHost, spec: &SessionSpec, codex_home: O
 }
 
 /// O começo de toda abertura e da reserva pré-aquecida: login da conta do Hangar, guarda compartilhada
-/// da conta (vale até quem chamou soltá-la) e a reconciliação `hangar-conta --prep`. Devolve a guarda
+/// da conta (vale até quem chamou soltá-la) e a reconciliação da conta, aqui mesmo. Devolve a guarda
 /// e os avisos da reconciliação.
 pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, codex_home: Option<&str>)
     -> Result<(Option<crate::accounts::AccountGuard>, Vec<String>), OpenError> {
@@ -504,7 +513,7 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         return Err(OpenError { params: json!({"conta": label}),
             ..OpenError::new(409, "erro_conta_sem_login", format!("a conta {label} não está logada; faça login nela antes de abrir uma sessão")) });
     }
-    let guard = match reads_account {
+    let mut guard = match reads_account {
         true => Some(crate::accounts::claude_refresh::acquire_for_session(&locks, &key, Instant::now() + Duration::from_secs(5)).await
             .map_err(|e| match e {
                 crate::accounts::LockError::Busy => OpenError::new(409, "account_busy", "a conta está ocupada por outra operação"),
@@ -519,8 +528,25 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         let account = claude::hangar_account(Path::new(dir))
             .ok_or_else(|| OpenError::plain(404, format!("{dir} não é uma conta criada pelo hangar")))?;
         progress_step(&spec.name, "conta", json!({"conta": account}));
-        let out = host.run(claude::prep_argv(&account, &spec.cwd), Duration::from_secs(120)).await;
-        avisos = claude::prep_result(&account, out.code, &out.stderr)?;
+        use crate::accounts::claude_config::{Outcome, Wait, late_outcome, reconcile_dir, refused};
+        // A pasta conferida acima, não `~/.claude-<nome>`: a conta pode morar fora do HOME.
+        let (home, dir, project) = (host.home().to_owned(), PathBuf::from(dir), hangar_workspace::worktrees::sanitize_cwd(&spec.cwd));
+        let limit = host.reconcile_limit();
+        let wait = Wait::within(limit);
+        // As travas esperam só até o prazo, e a guarda vai com a tarefa: a recusa no limite não deixa
+        // reconciliação rodando sem ela (a exclusão da conta esperaria) nem segurando o runtime.
+        let held = guard.take();
+        let task = tokio::task::spawn_blocking(move || (held, reconcile_dir(&home, &dir, Some(&project), wait)));
+        let outcome = match tokio::time::timeout(limit, task).await {
+            Ok(Ok((held, outcome))) => {
+                guard = held;
+                outcome
+            }
+            Ok(Err(e)) => Outcome::failed(refused(format!("a reconciliação parou no meio: {e}"))),
+            Err(_) => late_outcome(limit),
+        };
+        host.account_diary(outcome.diary);
+        avisos = claude::account_result(&account, outcome.result)?;
     }
     Ok((guard, avisos))
 }

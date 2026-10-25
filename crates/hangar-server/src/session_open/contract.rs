@@ -30,7 +30,7 @@ fn proc_root(root: &Path) -> PathBuf { root.join(".harness").join("proc-rust") }
 fn fake_backend(root: &Path) -> PathBuf { root.join(".harness").join("backend") }
 
 /// O que o lado Python não monta e o Rust lê do disco: os panes do cenário (um `tmux` que só lista e
-/// o `/proc` deles), o `plugin-dir` que o servidor publica ao subir e o `hangar-conta` desta árvore.
+/// o `/proc` deles) e o `plugin-dir` que o servidor publica ao subir.
 pub fn prepare(scenario: &Value, root: &Path, repo: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let bin = root.join("bin");
@@ -59,7 +59,6 @@ pub fn prepare(scenario: &Value, root: &Path, repo: &Path) -> std::io::Result<()
     crate::write_test_executable(&bin.join("tmux"), b"#!/bin/sh\n[ \"$1\" = list-panes ] || exit 1\ncat \"$(dirname \"$0\")/panes.txt\"\n");
     let roots: String = ["hangar", "github-actions"].iter().map(|m| format!("{}\n", repo.join("plugins").join(m).display())).collect();
     write(&root.join("home/.hangar/plugin-dir"), roots.as_bytes())?;
-    crate::write_test_executable(&bin.join("hangar-conta"), format!("#!/bin/sh\nexec python3 '{}' \"$@\"\n", repo.join("scripts/hangar-conta").display()));
     Ok(())
 }
 
@@ -69,12 +68,14 @@ struct Record { subprocesses: Vec<Value>, probes: Vec<Value>, rust_bridge: Vec<V
     /// Os nomes que a abertura limpou (grupo antigo, fila, `then`): só o restore mostra, porque o Python não grava.
     cleaned: Vec<String>,
     /// O passo da criação visto pelo aquecimento do Codex; só aparece com a criação acompanhada.
-    progress_seen: Vec<Value> }
+    progress_seen: Vec<Value>,
+    /// `fakes.guard_probe`: a guarda da conta estava presa (exclusiva recusada) quando o pane nasceu.
+    guard_at_new_session: Option<bool> }
 
 /// O tmux em memória do harness: o estado inicial do cenário, os `new-session` gravados e as consultas
 /// respondidas pelo estado.
 struct FakeTmux { sessions: Mutex<BTreeMap<String, Value>>, force: Value, record: std::sync::Arc<Mutex<Record>>,
-    silenced: std::sync::atomic::AtomicBool }
+    silenced: std::sync::atomic::AtomicBool, guard_probe: Option<std::path::PathBuf> }
 
 impl Mux for FakeTmux {
     fn scope(&self) -> BoxFuture<'_, Vec<String>> { Box::pin(async { SCOPE.map(str::to_owned).into() }) }
@@ -97,6 +98,10 @@ impl Mux for FakeTmux {
         let mut sessions = self.sessions.lock().unwrap();
         let (code, stdout, stderr) = match args.first().map(String::as_str) {
             Some("new-session") => {
+                if let Some(lock) = &self.guard_probe {
+                    let busy = std::fs::OpenOptions::new().read(true).write(true).open(lock).is_ok_and(|f| f.try_lock().is_err());
+                    self.record.lock().unwrap().guard_at_new_session = Some(busy);
+                }
                 let name = opt("-s").unwrap_or_default();
                 let (code, stderr) = if !self.force.is_null() {
                     (self.force["rc"].as_i64().unwrap_or(1) as i32, self.force["stderr"].as_str().unwrap_or("").to_owned())
@@ -213,9 +218,8 @@ impl OpenHost for Host {
     fn run(&self, argv: Vec<String>, timeout: Duration) -> BoxFuture<'_, MuxOutput> {
         Box::pin(async move {
             let prog = Path::new(&argv[0]).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            // `git` e o `hangar-conta` rodam de verdade, dentro da raiz, como no lado Python (lá o
-            // `contas.reconciliar` roda no próprio processo).
-            if matches!(prog.as_str(), "git" | "hangar-conta") { return super::server::run_program(&self.env, argv, timeout).await; }
+            // `git` roda de verdade, dentro da raiz, como no lado Python.
+            if prog == "git" { return super::server::run_program(&self.env, argv, timeout).await; }
             let args = &argv[1..];
             let found = rule(&self.fakes, &prog, args);
             let code = found.map_or(0, |r| r["rc"].as_i64().unwrap_or(0) as i32);
@@ -271,6 +275,11 @@ impl OpenHost for Host {
     }
 
     fn diary(&self, events: Vec<Value>) { self.record.lock().unwrap().diary.extend(events); }
+    fn account_diary(&self, events: Vec<Value>) { self.record.lock().unwrap().diary.extend(events); }
+    /// `fakes.reconcile_limit_ms`: só os testes do Rust o pedem.
+    fn reconcile_limit(&self) -> Duration {
+        self.fakes["reconcile_limit_ms"].as_u64().map_or(super::open::RECONCILE_LIMIT, Duration::from_millis)
+    }
     fn new_session_id(&self) -> String { super::open::uuid4(&crate::mods::state::random_hex(16)) }
     fn new_bridge_key(&self) -> String { crate::mods::state::random_hex(16) }
     fn wake(&self, name: &str) {
@@ -329,7 +338,9 @@ pub async fn run_with(scenario: &Value, root: &Path, env: BTreeMap<String, Strin
     let home = root.join("home");
     let terminal = TerminalEnv { birth: Duration::from_millis(100), ..TerminalEnv::local(&home, &env) };
     let host = Host { home: home.clone(), env: env.clone(), terminal,
-        mux: FakeTmux { sessions: Mutex::new(sessions), force: fakes["tmux_new_session"].clone(), record: record.clone(), silenced: Default::default() },
+        mux: FakeTmux { sessions: Mutex::new(sessions), force: fakes["tmux_new_session"].clone(), record: record.clone(), silenced: Default::default(),
+            guard_probe: fakes["guard_probe"].as_str().and_then(|dir| crate::accounts::AccountKey::new(crate::accounts::Provider::Claude, Path::new(dir)).ok())
+                .and_then(|key| crate::accounts::AccountLocks::new(home.join(".hangar/account-locks")).path(&key).ok()) },
         fakes: fakes.clone(), record: record.clone(), prewarm };
     let mut steps = Vec::new();
     let mut restored = false;
@@ -409,5 +420,6 @@ pub async fn run_with(scenario: &Value, root: &Path, env: BTreeMap<String, Strin
         "runtime_requests": record.runtime_requests, "signals": [], "network": [], "tmux_sessions": tmux_sessions, "diary": record.diary});
     if restored { out["cleaned"] = json!(record.cleaned); }
     if !record.progress_seen.is_empty() { out["progress_seen"] = json!(record.progress_seen); }
+    if let Some(busy) = record.guard_at_new_session { out["guard_at_new_session"] = json!(busy); }
     out
 }

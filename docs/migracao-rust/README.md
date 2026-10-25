@@ -112,8 +112,8 @@ completa em [plataforma.md](../decisoes/plataforma.md#perguntas-permissões-e-ci
   entrada deles; contagem, conta e atividade do Codex e transferências
   (`em_troca`) nos fatos da lista.
 - **#115 (o que fica no Python):** admissão do convidado, fatos de sessão e de configuração que o
-  Rust pede, transcrição do áudio e preparo de configuração das contas. Contas, login, cotas e
-  anexos de sessão são do Rust.
+  Rust pede, transcrição do áudio e preparo de configuração das contas Codex. Contas, login,
+  cotas, anexos de sessão e a reconciliação das contas Claude (24/10) são do Rust.
 - **Parte 6:** convidados, pareamento, MCP, push, atualização, ditado; contas/cotas
   dos outros provedores, stats, criação/troca de conta da sessão e mutações de worktree.
 - **Parte 7:** o Supervisor que sobe o Rust e a reserva do processo inteiro (modo `python`). Essa

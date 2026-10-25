@@ -1,0 +1,66 @@
+{
+  "origin_commit": "b2832ee04",
+  "command": "HANGAR_FIXTURE_PY_ROOT=<checkout com scripts/hangar-conta e backend/app de b2832ee04> cargo test -p hangar-server --test it accounts_reconcile::generate_fixtures -- --ignored --exact",
+  "scenario": "prep_shared_is_file",
+  "steps": [
+    {
+      "args": [
+        "--prep",
+        "conta2"
+      ],
+      "exit": 126,
+      "stdout": "",
+      "stderr": [
+        "hangar-conta: falha ao executar: [Errno 20] Not a directory: '<HOME>/.claude'"
+      ]
+    }
+  ],
+  "tree": {
+    "<HOME>/.claude": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "arquivo"
+    },
+    "<HOME>/.claude-conta2": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-conta2/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude-conta2/.hangar-conta": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    },
+    "<HOME>/.claude-conta2/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.hangar-contas.lock": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    }
+  },
+  "diary": [
+    {
+      "evento": "conta.reconciliar.inicio",
+      "nivel": "ok",
+      "provider": "claude"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "ligar_arquivos",
+      "conta_id": "<CONTA_ID>"
+    },
+    {
+      "evento": "conta.reconciliar.fim",
+      "nivel": "erro",
+      "provider": "claude",
+      "codigo": "excecao"
+    }
+  ]
+}

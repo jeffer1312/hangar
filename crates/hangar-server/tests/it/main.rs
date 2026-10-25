@@ -27,6 +27,10 @@ mod mods_support;
 mod voice_support;
 mod workspace_fixture;
 
+/// Pedido de uma rota do app num servidor falso. Qualquer processo da máquina pode sondar uma porta de
+/// loopback nova (um detector de servidor local manda `HEAD /`): o falso não conta o que não é rota.
+pub fn app_route(path: &str) -> bool { path.starts_with("/api/") || path.starts_with("/internal/") }
+
 /// O `hangar-cano` de `target/<perfil>/`, ao lado de `deps/` (o binário de outro crate não tem
 /// `CARGO_BIN_EXE_*`), fixado no servidor sem mexer no ambiente do processo.
 pub fn use_cano_bin() {
@@ -139,6 +143,8 @@ mod accounts_claude_login;
 mod accounts_codex_login;
 mod accounts_lifecycle;
 mod accounts_preparation;
+#[cfg(target_os = "linux")]
+mod accounts_reconcile;
 mod client_api;
 mod contract_codex_routes;
 mod contract_costs_areas;
