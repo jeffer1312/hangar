@@ -3,8 +3,8 @@
 //!   hangar-server migrate-package [--dry-run] [--undo] [--checkout <pasta>]
 //!
 //! Modo desenvolvedor (o `current` aponta para o próprio checkout, nada é baixado) quando o checkout
-//! tem edição local, commit à frente do upstream, está fora da `main` ou a máquina serve a tela pelo
-//! `vite` (`SERVE=preview`); senão pacote (baixa o primeiro). Para o backend, copia os dados do
+//! tem edição local, commit à frente do upstream, está fora da `main` e da `beta` ou a máquina serve a
+//! tela pelo `vite` (`SERVE=preview`); senão pacote (baixa o primeiro, do canal da branch). Para o backend, copia os dados do
 //! usuário para `~/.hangar/config/`, cria o `current`, regrava o serviço, os hooks do Kimi e do
 //! Codex, os atalhos e os apontadores, sobe e prova. Falha antes da prova desfaz tudo e sobe o
 //! backend de antes. `--undo` reaponta tudo para o checkout, que nunca é apagado.
@@ -41,18 +41,21 @@ pub enum Mode { Package, Developer, NotMigrated }
 #[derive(Debug, Clone, Default)]
 pub struct Facts { pub dirty: usize, pub untracked: usize, pub ahead: u64, pub branch: String, pub upstream: bool, pub preview: bool }
 
-/// Pacote só com o checkout limpo, na `main`, sem nada à frente do upstream e sem o `vite`; senão
-/// desenvolvedor, com o motivo.
+/// Pacote só com o checkout limpo, na `main` ou na `beta`, sem nada à frente do upstream e sem o
+/// `vite`; senão desenvolvedor, com o motivo.
 pub fn decide(f: &Facts) -> (Mode, Option<String>) {
     let why = if f.preview { Some("a máquina serve a tela pelo vite (SERVE=preview)".to_owned()) }
         else if f.dirty > 0 { Some(format!("o checkout tem {} arquivo(s) com edição", f.dirty)) }
         else if f.untracked > 0 { Some(format!("o checkout tem {} arquivo(s) novo(s) fora do git", f.untracked)) }
-        else if f.branch != "main" { Some(format!("o checkout está na branch {}, fora da main", f.branch)) }
-        else if !f.upstream { Some("a main do checkout não tem upstream para comparar".to_owned()) }
-        else if f.ahead > 0 { Some(format!("a main tem {} commit(s) à frente do upstream", f.ahead)) }
+        else if f.branch != "main" && f.branch != "beta" { Some(format!("o checkout está na branch {}, fora da main e da beta", f.branch)) }
+        else if !f.upstream { Some(format!("a {} do checkout não tem upstream para comparar", f.branch)) }
+        else if f.ahead > 0 { Some(format!("a {} tem {} commit(s) à frente do upstream", f.branch, f.ahead)) }
         else { None };
     (if why.is_some() { Mode::Developer } else { Mode::Package }, why)
 }
+
+/// Canal do pacote: a `beta` baixa `package-beta`; a `main`, `package-latest`.
+fn channel(f: &Facts) -> &'static str { if f.branch == "beta" { "beta" } else { "latest" } }
 
 /// Para e sobe o backend desta máquina (unit do systemd ou tarefa agendada).
 pub trait Service: Sync {
@@ -66,9 +69,9 @@ pub enum Fetched {
     NoPlatform(String),
 }
 
-/// Baixa e extrai o primeiro pacote; o real é o [`ReleaseFetcher`].
+/// Baixa e extrai o primeiro pacote do canal; o real é o [`ReleaseFetcher`].
 pub trait Fetcher: Sync {
-    fn fetch<'a>(&'a self, layout: &'a Layout) -> Pin<Box<dyn Future<Output = Result<Fetched, String>> + Send + 'a>>;
+    fn fetch<'a>(&'a self, layout: &'a Layout, channel: &'a str) -> Pin<Box<dyn Future<Output = Result<Fetched, String>> + Send + 'a>>;
 }
 
 /// A máquina como a migração a vê; os caminhos vêm de fora para o teste.
@@ -156,7 +159,7 @@ fn facts(m: &Machine<'_>) -> Result<Facts, String> {
     Ok(Facts { dirty: checkout.dirty, untracked: checkout.untracked,ahead: checkout.ahead, branch: checkout.branch, upstream: checkout.upstream.is_some(), preview: m.preview()? })
 }
 
-fn read_record(path: &Path) -> Option<Record> { serde_json::from_slice(&std::fs::read(path).ok()?).ok() }
+pub(super) fn read_record(path: &Path) -> Option<Record> { serde_json::from_slice(&std::fs::read(path).ok()?).ok() }
 
 fn save(path: &Path, record: &Record) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(record).map_err(|e| e.to_string())?;
@@ -341,10 +344,10 @@ fn preflight(m: &Machine<'_>, service: &Path) -> Result<(), String> {
 }
 
 /// As frases do plano, para o `--dry-run` e o registro.
-fn plan(m: &Machine<'_>, mode: Mode, why: Option<&str>, service: &Path) -> Vec<String> {
+fn plan(m: &Machine<'_>, mode: Mode, why: Option<&str>, channel: &str, service: &Path) -> Vec<String> {
     let target = if mode == Mode::Package { "a versão baixada".to_owned() } else { m.checkout.display().to_string() };
     let mut lines = vec![match mode {
-        Mode::Package => "modo: pacote; baixar o pacote mais novo do canal latest".to_owned(),
+        Mode::Package => format!("modo: pacote; baixar o pacote mais novo do canal {channel}"),
         _ => format!("modo: desenvolvedor ({}); nada é baixado", why.unwrap_or("")),
     }];
     lines.push(format!("parar o backend ({})", service.display()));
@@ -685,13 +688,15 @@ pub async fn migrate<H: HealthProbe>(m: &Machine<'_>, health: &H, dry_run: bool)
     let Some(service) = m.service_file() else {
         return not_migrated("sem a unit nem a tarefa do backend, não há como parar e subir o servidor; a máquina segue no motor git".into());
     };
-    let (mode, why) = decide(&facts(m)?);
+    let facts = facts(m)?;
+    let (mode, why) = decide(&facts);
+    let channel = channel(&facts);
     preflight(m, &service)?;
-    if dry_run { return Ok(Outcome::DryRun(plan(m, mode, why.as_deref(), &service))); }
+    if dry_run { return Ok(Outcome::DryRun(plan(m, mode, why.as_deref(), channel, &service))); }
     refuse_inside_service(m)?;
     let _lock = lock(m)?;
     let (target, manifest, notes) = match mode {
-        Mode::Package => match m.fetcher.fetch(&m.layout()).await? {
+        Mode::Package => match m.fetcher.fetch(&m.layout(), channel).await? {
             Fetched::Version { dir, manifest, notes } => (dir, Some(manifest), notes),
             Fetched::NoPlatform(reason) => return not_migrated(reason),
         },
@@ -783,22 +788,22 @@ impl Service for SystemService {
 /// O primeiro pacote, da release, e a tela web da chave dele quando ela está ligada.
 pub struct ReleaseFetcher {
     pub client: reqwest::Client,
-    pub release: Release,
     pub platform: String,
     pub home: PathBuf,
     pub deadline: Duration,
 }
 
 impl Fetcher for ReleaseFetcher {
-    fn fetch<'a>(&'a self, layout: &'a Layout) -> Pin<Box<dyn Future<Output = Result<Fetched, String>> + Send + 'a>> {
+    fn fetch<'a>(&'a self, layout: &'a Layout, channel: &'a str) -> Pin<Box<dyn Future<Output = Result<Fetched, String>> + Send + 'a>> {
         Box::pin(async move {
-            let entry = match super::check(&self.client, &self.release, &self.platform, None).await {
+            let release = Release::github(channel);
+            let entry = match super::check(&self.client, &release, &self.platform, None).await {
                 Ok(Some(entry)) => entry,
                 Ok(None) => return Err("o índice não trouxe pacote".into()),
                 Err(UpdateError::NoPlatform(p)) => return Ok(Fetched::NoPlatform(format!("o índice não tem pacote para {p}; a máquina segue no motor git"))),
                 Err(e) => return Err(e.to_string()),
             };
-            let dir = super::prepare(&self.client, &self.release, &entry, layout, self.deadline).await.map_err(|e| e.to_string())?;
+            let dir = super::prepare(&self.client, &release, &entry, layout, self.deadline).await.map_err(|e| e.to_string())?;
             let manifest = Manifest::parse(&std::fs::read(dir.join(hangar_package::MANIFEST_FILE)).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
             let mut notes = Vec::new();
@@ -949,7 +954,7 @@ pub fn cli(args: &[String]) -> ExitCode {
         Ok(client) => client,
         Err(e) => { eprintln!("##HANGAR-FALHA## cliente http: {e}"); return ExitCode::from(1); }
     };
-    let fetcher = ReleaseFetcher { client, release: Release { base_url: super::RELEASE_BASE.to_owned(), channel: "latest".into() },
+    let fetcher = ReleaseFetcher { client,
         platform: super::platform(), home: home.clone(), deadline: probe.settings.download_deadline };
     let machine = Machine { service: &service, fetcher: &fetcher, ..probe };
     let health = super::HttpHealth::new(&format!("http://127.0.0.1:{port}"));
@@ -985,7 +990,7 @@ impl Service for Unused {
 }
 
 impl Fetcher for Unused {
-    fn fetch<'a>(&'a self, _layout: &'a Layout) -> Pin<Box<dyn Future<Output = Result<Fetched, String>> + Send + 'a>> {
+    fn fetch<'a>(&'a self, _layout: &'a Layout, _channel: &'a str) -> Pin<Box<dyn Future<Output = Result<Fetched, String>> + Send + 'a>> {
         Box::pin(async { Err("sem download".into()) })
     }
 }

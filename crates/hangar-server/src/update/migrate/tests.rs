@@ -47,12 +47,14 @@ impl Service for FakeService {
 #[derive(Default)]
 struct FakeFetcher {
     calls: AtomicUsize,
+    channels: Mutex<Vec<String>>,
 }
 
 impl Fetcher for FakeFetcher {
-    fn fetch<'a>(&'a self, layout: &'a Layout) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Fetched, String>> + Send + 'a>> {
+    fn fetch<'a>(&'a self, layout: &'a Layout, channel: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Fetched, String>> + Send + 'a>> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            self.channels.lock().unwrap().push(channel.to_owned());
             let dir = layout.versions().join(VERSION);
             std::fs::create_dir_all(dir.join("backend/hooks")).unwrap();
             std::fs::create_dir_all(dir.join("scripts")).unwrap();
@@ -170,6 +172,7 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, String> {
 fn migrate_decides_developer_by_edits_ahead_branch_and_preview() {
     let clean = Facts { dirty: 0, untracked: 0, ahead: 0, branch: "main".into(), upstream: true, preview: false };
     assert_eq!(decide(&clean).0, Mode::Package);
+    assert_eq!(decide(&Facts { branch: "beta".into(), ..clean.clone() }), (Mode::Package, None), "beta é o canal de teste");
     for facts in [Facts { dirty: 2, ..clean.clone() }, Facts { untracked: 1, ..clean.clone() },Facts { ahead: 1, ..clean.clone() }, Facts { branch: "PM-1".into(), ..clean.clone() },
                   Facts { preview: true, ..clean.clone() }, Facts { upstream: false, ..clean.clone() }] {
         let (mode, why) = decide(&facts);
@@ -185,6 +188,7 @@ async fn migrate_clean_checkout_becomes_package() {
     let outcome = migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap();
     assert_eq!(outcome, Outcome::Migrated(Mode::Package));
     assert_eq!(fetcher.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(*fetcher.channels.lock().unwrap(), ["latest"]);
     assert_eq!(*service.calls.lock().unwrap(), ["stop", "start"]);
 
     // Dados do usuário no lugar novo, com um link no antigo.
@@ -234,6 +238,19 @@ async fn migrate_drops_old_kimi_and_codex_hook_entries() {
     assert!(toml::from_str::<toml::Table>(&kimi).is_ok(), "continua TOML válido: {kimi}");
     let codex: serde_json::Value = serde_json::from_slice(&std::fs::read(b.home.join(".codex/hooks.json")).unwrap()).unwrap();
     assert_eq!(codex["hooks"]["Stop"], serde_json::json!([{"hooks": [{"type": "command", "command": "alheio.sh"}]}]));
+}
+
+#[tokio::test]
+async fn migrate_clean_beta_checkout_becomes_package_of_the_beta_channel() {
+    let b = Box_::new();
+    sh(&b.checkout, "git checkout -q -b beta && git branch -q -u origin/main");
+    let (service, fetcher) = (FakeService::default(), FakeFetcher::default());
+    let machine = b.machine(&service, &fetcher);
+    let Outcome::DryRun(lines) = migrate(&machine, &health(&service, true), true).await.unwrap() else { panic!("dry-run") };
+    assert!(lines[0].contains("canal beta"), "{lines:?}");
+    let outcome = migrate(&machine, &health(&service, true), false).await.unwrap();
+    assert_eq!(outcome, Outcome::Migrated(Mode::Package));
+    assert_eq!(*fetcher.channels.lock().unwrap(), ["beta"]);
 }
 
 #[tokio::test]

@@ -264,8 +264,9 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   liga e `off` volta para a versão instalada mais nova deste sistema (sem nenhuma, recusa), com a troca,
   o reinício e a prova do atualizador; servidor que não sobe faz o `current` voltar.
 - **A migração (`hangar-server migrate-package`) roda uma vez, fora do serviço, e se desfaz.**
-  Checkout editado, com arquivo novo, fora da `main`, sem upstream, à frente ou servido pelo `vite`
-  (`SERVE=preview`) vira modo desenvolvedor; o resto vira pacote. Ela para o backend antes de mover os
+  Checkout editado, com arquivo novo, fora da `main` e da `beta`, sem upstream, à frente ou servido
+  pelo `vite` (`SERVE=preview`) vira modo desenvolvedor; o resto vira pacote do canal da branch
+  (`beta` → `package-beta`, `main` → `package-latest`). Ela para o backend antes de mover os
   dados, registra cada efeito (`~/.hangar/migration.partial.json`, depois `migration.json`), desfaz
   tudo se falhar antes da prova e recusa rodar dentro do cgroup ou do Job do backend. `--undo`
   reaponta tudo para o checkout, que nunca é apagado.
