@@ -1667,8 +1667,14 @@ async fn check_http(name: &str) {
                 "active": false})), "{name}[{i}]"),
             (_, Some(detail)) if detail.starts_with("já existe ") => assert_eq!((status, body), (409, json!({"detail": detail})), "{name}[{i}]"),
             (_, Some(detail)) if detail.starts_with("nome:") => assert_eq!(status, 422, "{name}[{i}] {body}"),
-            _ => assert_eq!((status, body), (500, json!({"detail": {"code": "account_prepare_failed", "params": {},
-                "msg": "não foi possível preparar a conta"}})), "{name}[{i}] Python: {stderr}"),
+            // U9(b): a mensagem leva o motivo que o comando mostraria no mesmo cenário.
+            _ => {
+                let cli = run(name, &Side::Rust);
+                let reason = cli.steps[i]["stderr"].as_array().and_then(|l| l.last()).and_then(Value::as_str)
+                    .and_then(|l| l.strip_prefix("hangar-conta: ")).unwrap_or_else(|| panic!("{name}[{i}]: o comando não recusou"));
+                assert_eq!((status, body), (500, json!({"detail": {"code": "account_prepare_failed", "params": {},
+                    "msg": format!("não foi possível preparar a conta: {reason}")}})), "{name}[{i}] Python: {stderr}");
+            }
         }
     }
     let python: Vec<String> = app.python_paths.lock().unwrap().iter().filter(|p| crate::app_route(p)).cloned().collect();
