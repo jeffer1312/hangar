@@ -383,7 +383,8 @@ mod tests {
         let runner = Arc::new(super::super::ShellRunner { timeout: Duration::from_secs(20) });
         assert_eq!(fetch_rust(runner, &checkout).await, None);
         let ran = std::fs::read_to_string(python.with_extension("ran")).unwrap();
-        assert_eq!(ran.trim(), format!("{} -m app.rust_release", checkout.join("backend").display()));
+        // Canônico: no macOS o temporário fica sob /var, link para /private/var, e o $PWD vem resolvido.
+        assert_eq!(ran.trim(), format!("{} -m app.rust_release", checkout.join("backend").canonicalize().unwrap().display()));
     }
 
     #[tokio::test]
