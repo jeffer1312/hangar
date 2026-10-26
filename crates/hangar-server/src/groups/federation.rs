@@ -209,6 +209,7 @@ impl Sender {
     /// senão a entrada some calada do outro lado.
     async fn push(&self, server: &str, gid: &str, joining: &[String]) -> Result<(), PeerError> {
         let path = format!("/api/groups/{}", segment(gid));
+        let behind = || PeerError::Refused { status: 409, detail: json!({"code": VERSION_BEHIND}) };
         for attempt in 0..2 {
             let (dir, g) = (self.dir.clone(), gid.to_owned());
             let record = tokio::task::spawn_blocking(move || dir.record(&g)).await
@@ -217,11 +218,13 @@ impl Sender {
             // Sem registro o grupo acabou aqui: o `Dissolved` que segue é quem avisa.
             let Some(record) = record else { return Ok(()) };
             let answer = self.peers.call_group(server, reqwest::Method::PUT, &path, Some(&push_body(&record, server, joining))).await?;
-            let seen = answer.get("version").and_then(Value::as_u64).unwrap_or(0);
-            if answer.get("ignored") != Some(&Value::Bool(true)) || seen <= record.version { return Ok(()); }
-            if attempt == 0 { self.skip_to(gid, seen + 1).await?; }
+            if answer.get("ignored") != Some(&Value::Bool(true)) { return Ok(()); }
+            // Ignorado sem dizer a versão que guarda: não há para onde pular.
+            let Some(seen) = answer.get("version").and_then(Value::as_u64) else { return Err(behind()) };
+            if seen <= record.version { return Ok(()); }
+            if attempt == 0 { self.skip_to(gid, seen.checked_add(1).ok_or_else(behind)?).await?; }
         }
-        Err(PeerError::Refused { status: 409, detail: json!({"code": VERSION_BEHIND}) })
+        Err(behind())
     }
 
     /// Registro e sidecars daqui de `gid` na versão `to`, sob o lock de grupo.
@@ -727,7 +730,7 @@ async fn undo_owner(groups: &GroupService, fed: &Federation, plan: &OwnerPlan) -
         let mut items = Vec::new();
         // A fila pode ter pulado a versão do registro durante a espera (`Sender::skip_to`).
         let current = dir.record(&record.gid).map_err(store_refusal)?.map_or(0, |r| r.version);
-        let bump = record.version.max(current) + 1;
+        let bump = record.version.max(current).saturating_add(1);
         for (gid, old) in &before_records {
             match old {
                 Some(r) => {
