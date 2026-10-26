@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import io
 import os
+import shlex
 import shutil
 import socket
 import sys
 import unicodedata
 from collections import namedtuple
+from pathlib import Path
 
 from app.config import pairing_url, settings
 
@@ -138,7 +140,8 @@ def _conserto_backend() -> str:
     if _WIN:
         return "Start-ScheduledTask hangar-backend  (log: %LOCALAPPDATA%\\hangar\\logs\\privado\\backend.log)"
     if sys.platform == "darwin":
-        return "./scripts/services-launchd.sh --restart  (log: ~/.hangar/logs/privado/backend.log)"
+        script = Path(__file__).resolve().parents[2] / "scripts" / "services-launchd.sh"
+        return f"{shlex.quote(str(script))} --restart  (log: ~/.hangar/logs/privado/backend.log)"
     return "systemctl --user restart hangar-backend  (log: ~/.hangar/logs/privado/backend.log; journalctl --user -u hangar-backend -n 50)"
 
 

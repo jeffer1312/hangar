@@ -404,11 +404,14 @@ fi
 TS_MAC_BIN=/Applications/Tailscale.app/Contents/MacOS/Tailscale
 if [ "$CHECK" = 0 ] && [ "$(uname -s)" = Darwin ] && ! command -v tailscale >/dev/null && [ -x "$TS_MAC_BIN" ]; then
   mkdir -p "$HOME/.local/bin"
-  printf '#!/bin/sh\nexec %s "$@"\n' "$TS_MAC_BIN" > "$HOME/.local/bin/tailscale"
+  # Sem TAILSCALE_BE_CLI o executável do app decide pelo ambiente e pode abrir a janela em vez do CLI.
+  printf '#!/bin/sh\nTAILSCALE_BE_CLI=1 exec %s "$@"\n' "$TS_MAC_BIN" > "$HOME/.local/bin/tailscale"
   chmod 755 "$HOME/.local/bin/tailscale"
   export PATH="$HOME/.local/bin:$PATH"
   ok "Tailscale: comando tailscale ligado ao app (~/.local/bin/tailscale)"
 fi
+# O sudo pode trocar o PATH (secure_path) e perder o ~/.local/bin: chamada com sudo leva o caminho inteiro.
+ts_bin() { command -v tailscale || echo tailscale; }
 
 QUER_TAILSCALE=0
 if [ "$TAILSCALE" = nao ]; then
@@ -609,7 +612,7 @@ ts_install() {
 }
 # O link do login sai no stderr do `tailscale up`; no --app ele vira marca e o app abre o navegador.
 tailscale_up() {
-  app_sudo "entrar na conta Tailscale" $PRAZO 300 tailscale up 2>&1 | while IFS= read -r linha; do
+  app_sudo "entrar na conta Tailscale" $PRAZO 300 "$(ts_bin)" up 2>&1 | while IFS= read -r linha; do
     printf '%s\n' "$linha"
     case $linha in
       *https://login.tailscale.com/*)
@@ -927,7 +930,7 @@ publica_tailscale() { # grava CP_PUBLIC_URL com o https do tailnet; o serve prec
   # No --app ninguém responde ao convite que o serve imprime com o HTTPS desligado: o teto devolve a
   # vez ao app, que mostra a pendência com "Conferir de novo".
   [ "$APP" = 1 ] && teto="$PRAZO 60"
-  if saida_serve=$(app_sudo "publicar o Hangar na Tailscale" $teto tailscale serve --bg "$PORTA_FIM" 2>&1) \
+  if saida_serve=$(app_sudo "publicar o Hangar na Tailscale" $teto "$(ts_bin)" serve --bg "$PORTA_FIM" 2>&1) \
      && tailscale serve status --json 2>/dev/null | grep -q '"443"'; then
     grep -q '^CP_PUBLIC_URL=' backend/.env 2>/dev/null && sed -i.bak '/^CP_PUBLIC_URL=/d' backend/.env && rm -f backend/.env.bak
     printf 'CP_PUBLIC_URL=https://%s\n' "$nome" >> backend/.env
@@ -947,7 +950,7 @@ operador_tailscale() {
   command -v tailscale >/dev/null || return 0
   sudo -n true 2>/dev/null || ask_senha "Liberar o Funnel para compartilhar sessão (vai pedir a senha)?" \
     || { nota "pulado — para compartilhar sessão: sudo tailscale set --operator=$u"; return 0; }
-  if app_sudo "liberar o compartilhamento de sessão" tailscale set --operator="$u" >/dev/null 2>&1; then ok "Tailscale: $u pode ligar o Funnel (compartilhar sessão)"
+  if app_sudo "liberar o compartilhamento de sessão" "$(ts_bin)" set --operator="$u" >/dev/null 2>&1; then ok "Tailscale: $u pode ligar o Funnel (compartilhar sessão)"
   else anota_problema "tailscale set --operator falhou — compartilhar sessão vai pedir: sudo tailscale set --operator=$u"; TS_STATE=pendente; fi
 }
 if [ -n "$TS_STATE" ]; then

@@ -105,26 +105,35 @@ mkdir -p "$(dirname "$PLIST")" "$LOG_DIR"
 NOVO="$(plist)"
 plutil -lint - <<<"$NOVO" >/dev/null || { echo "plist gerado inválido" >&2; exit 1; }
 
+# Backend rodando na mão segura a porta: o serviço entraria em ciclo de queda sem dizer por quê.
+# A espera cobre o backend que o bootout acabou de parar, que ainda solta a porta.
+porta_livre() {
+  local dono='' _
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    dono="$(lsof -nP -tiTCP:"$PORTA" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
+    [ -z "$dono" ] && return 0
+    sleep 1
+  done
+  echo "a porta $PORTA já está em uso (pid $dono) — pare o backend aberto na mão e rode de novo" >&2
+  exit 1
+}
+
 # Reiniciar sem necessidade derruba as conexões do celular: só mexe no que mudou.
 if [ -f "$PLIST" ] && [ "$(cat "$PLIST")" = "$NOVO" ]; then
-  if carregado; then log "$LABEL sem mudança"; exit 0; fi
+  if carregado; then
+    # Saída com código 0 não volta pelo KeepAlive: carregado sem processo é backend parado.
+    if [ -z "$(pid_atual)" ]; then
+      porta_livre
+      launchctl kickstart "$ALVO"; log "$LABEL estava parado: iniciado"
+    else log "$LABEL sem mudança"; fi
+    exit 0
+  fi
 else
   printf '%s\n' "$NOVO" > "$PLIST"
   log "Gravado $PLIST"
   launchctl bootout "$ALVO" 2>/dev/null || true
 fi
 
-# Backend rodando na mão segura a porta: o serviço entraria em ciclo de queda sem dizer por quê.
-# A espera cobre o backend que o bootout acabou de parar, que ainda solta a porta.
-DONO=''
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  DONO="$(lsof -nP -tiTCP:"$PORTA" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
-  [ -z "$DONO" ] && break
-  sleep 1
-done
-if [ -n "$DONO" ]; then
-  echo "a porta $PORTA já está em uso (pid $DONO) — pare o backend aberto na mão e rode de novo" >&2
-  exit 1
-fi
+porta_livre
 launchctl bootstrap "$DOMINIO" "$PLIST"
 log "$LABEL carregado"
