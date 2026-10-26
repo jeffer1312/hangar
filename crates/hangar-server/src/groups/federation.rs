@@ -233,7 +233,7 @@ impl Sender {
             if record.version >= to { return Ok(()) }
             // Sidecars antes do registro: falha no meio deixa o registro velho e a fila refaz tudo.
             for m in record.members.iter().filter(|m| m.server == record.owner) {
-                if let Some(mut s) = read(&dir, &m.name).filter(|s| s.gid == gid) {
+                if let Some(mut s) = dir.sidecar(&m.name).map_err(std::io::Error::other)?.filter(|s| s.gid == gid) {
                     s.fed = Some(Fed { owner: record.owner.clone(), local: true, version: to });
                     dir.write_sidecar(&m.name, &s).map_err(std::io::Error::other)?;
                 }
