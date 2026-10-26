@@ -137,6 +137,8 @@ def _lan_responde(s) -> bool:
 def _conserto_backend() -> str:
     if _WIN:
         return "Start-ScheduledTask hangar-backend  (log: %LOCALAPPDATA%\\hangar\\logs\\privado\\backend.log)"
+    if sys.platform == "darwin":
+        return "./scripts/services-launchd.sh --restart  (log: ~/.hangar/logs/privado/backend.log)"
     return "systemctl --user restart hangar-backend  (log: ~/.hangar/logs/privado/backend.log; journalctl --user -u hangar-backend -n 50)"
 
 
