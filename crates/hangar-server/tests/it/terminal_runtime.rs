@@ -1414,7 +1414,12 @@ async fn terminal_runtime_windows_line_breaks_are_typed_as_plain_newlines() {
     let reply=h.command(f.command("pasted","Pessoal:\r\nlinha dois\rtrês")).await.unwrap();
     assert_eq!(reply.disposition,hangar_server::runtime::protocol::Disposition::Accepted,"{}",reply.payload);
     assert_eq!(f.state()["rows"][0]["text"],"Pessoal:\nlinha dois\ntrês");
-    assert!(f.io.calls.lock().unwrap().iter().all(|r|r.args.iter().all(|a|!a.contains('\r') || a=="\r")),"nenhum \\r dentro do texto digitado");
+    h.drain().await.unwrap();
+    {
+        let calls=f.io.calls.lock().unwrap();
+        assert!(calls.iter().all(|r|r.args.iter().all(|a|!a.contains('\r') || a=="\r")),"nenhum \\r dentro do texto digitado");
+        assert!(calls.iter().any(|r|r.args[0]=="load-buffer" && r.stdin=="Pessoal:\nlinha dois\ntrês".as_bytes()),"texto normalizado no stdin do load-buffer");
+    }
     h.stop().await.unwrap();
 }
 
