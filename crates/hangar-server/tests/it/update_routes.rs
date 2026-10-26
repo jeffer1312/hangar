@@ -295,6 +295,19 @@ async fn update_notes_package_mode_unreadable_index_is_unavailable() {
     }
 }
 
+/// Registro dos passos ilegível: não se sabe o que já rodou, então 503, não todos os avisos de novo.
+#[tokio::test]
+async fn update_notes_package_mode_unreadable_registry_is_unavailable() {
+    let fixture = Fixture::with_entry(Some(with_notes("0.1.0.8207"))).await;
+    fixture.package("0.1.0.8200");
+    let state_dir = fixture.home.path().join(".claude/.hangar-update");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(state_dir.join("aplicados.json"), "[").unwrap();
+    let response = fixture.call(reqwest::Method::GET, "/api/update/notes", true).await;
+    assert_eq!(response.status(), 503);
+    assert_eq!(body(response).await["detail"]["code"], "update_notes_unavailable");
+}
+
 /// Modo desenvolvedor segue o motor git, nunca o índice.
 #[tokio::test]
 async fn update_notes_developer_mode_keeps_the_git_engine() {

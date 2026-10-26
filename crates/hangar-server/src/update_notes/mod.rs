@@ -28,7 +28,7 @@ pub async fn route(State(state): State<Arc<AppState>>, ConnectInfo(peer): Connec
     let base = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| state.accounts.env.home.join(".claude"));
     let cwd = std::env::current_dir().unwrap_or_default();
     let branch = update_branch(std::env::var("CP_UPDATE_BRANCH").ok(), tokio::fs::read_to_string(cwd.join(".env")).await.ok().as_deref());
-    match collect(&cwd, &format!("origin/{branch}"), &base.join(".hangar-update").join("aplicados.json")).await {
+    match collect(&cwd, &format!("origin/{branch}"), &crate::update::state_dir(&base)).await {
         Ok(notes) => json_response(StatusCode::OK, notes),
         Err(()) => { tracing::warn!(branch = %branch, cwd = %cwd.display(), "leitura dos avisos da atualização falhou no git"); unavailable() }
     }
@@ -53,7 +53,7 @@ async fn package(state: &AppState) -> Result<Value, String> {
     };
     if !newer { return Ok(json!({"target": entry.version, "warnings": [], "news": []})); }
     let notes = entry.notes.ok_or_else(|| format!("o índice não traz os avisos de {}", entry.version))?;
-    let done = crate::update::steps::applied(&crate::update::state_dir(&state.accounts.env.claude_base));
+    let done = crate::update::steps::applied(&crate::update::state_dir(&state.accounts.env.claude_base))?;
     let shipped = layout.current().join("docs").join("novidades");
     let id = |v: &Value| v["id"].as_str().unwrap_or_default().to_owned();
     let warnings: Vec<Value> = notes.warnings.into_iter().filter(|w| !done.contains(&id(w))).collect();
@@ -115,11 +115,6 @@ pub(crate) fn update_branch(env: Option<String>, dotenv: Option<&str>) -> String
     if valid { value.to_owned() } else { "main".to_owned() }
 }
 
-async fn applied(path: &Path) -> HashSet<String> {
-    let raw = tokio::fs::read(path).await.ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
-    raw.and_then(|v| v.as_array().cloned()).unwrap_or_default().into_iter()
-        .filter_map(|v| v.as_str().map(str::to_owned)).collect()
-}
 
 fn news_item(id: &str, text: &str) -> Option<(u8, Value)> {
     let (f, body) = frontmatter(text);
@@ -132,8 +127,11 @@ fn news_item(id: &str, text: &str) -> Option<(u8, Value)> {
     Some((rank, json!({"id": id, "title": title, "kind": kind, "text": body, "platforms": platforms, "try_it": opt("experimente"), "animation": animation})))
 }
 
-async fn warnings(repo: &Path, target: &str, applied_path: &Path) -> Result<Vec<Value>, ()> {
-    let done = applied(applied_path).await;
+/// `state_dir`: a pasta do `aplicados.json`; ilegível é erro, ausente é nada aplicado.
+async fn warnings(repo: &Path, target: &str, state_dir: &Path) -> Result<Vec<Value>, ()> {
+    let dir = state_dir.to_owned();
+    let done = tokio::task::spawn_blocking(move || crate::update::steps::applied(&dir)).await.map_err(|_| ())?
+        .map_err(|e| tracing::warn!("avisos da atualização: {e}"))?;
     let mut warnings = Vec::new();
     // Um `git grep` acha os candidatos de uma vez: um `git show` por passo custa caro no Windows.
     // Sem resultado (ou se ele falhar), lê todos, como antes.
@@ -189,9 +187,9 @@ async fn news(repo: &Path, target: &str) -> Result<Vec<Value>, ()> {
     Ok(order_news(news))
 }
 
-pub(crate) async fn collect(cwd: &Path, target: &str, applied_path: &Path) -> Result<Value, ()> {
+pub(crate) async fn collect(cwd: &Path, target: &str, state_dir: &Path) -> Result<Value, ()> {
     let repo = PathBuf::from(git(cwd, &["rev-parse", "--show-toplevel"]).await?.trim());
-    let (warnings, news) = tokio::join!(warnings(&repo, target, applied_path), news(&repo, target));
+    let (warnings, news) = tokio::join!(warnings(&repo, target, state_dir), news(&repo, target));
     Ok(json!({"target": target, "warnings": warnings?, "news": news?}))
 }
 

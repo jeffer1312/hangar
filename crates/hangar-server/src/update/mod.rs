@@ -115,6 +115,9 @@ impl std::fmt::Display for UpdateError {
 
 impl std::error::Error for UpdateError {}
 
+/// Quanto a trava pode seguir ocupada por um fork em andamento antes de valer como outra rodada.
+const LOCK_GRACE: Duration = Duration::from_millis(500);
+
 /// Uma atualização por vez na máquina: trava de arquivo em `~/.hangar/update.lock`, solta sozinha
 /// quando o processo morre.
 pub struct UpdateLock {
@@ -126,10 +129,16 @@ impl UpdateLock {
         let io = |e: std::io::Error| UpdateError::Io(format!("trava da atualização ({}): {e}", layout.lock_file().display()));
         std::fs::create_dir_all(&layout.hangar).map_err(io)?;
         let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(layout.lock_file()).map_err(io)?;
-        match file.try_lock() {
-            Ok(()) => Ok(UpdateLock { _file: file }),
-            Err(std::fs::TryLockError::WouldBlock) => Err(UpdateError::Locked),
-            Err(std::fs::TryLockError::Error(e)) => Err(io(e)),
+        // O `flock` é do arquivo aberto: um filho que este processo cria entre o fork e o exec leva a
+        // trava junto por um instante. Ocupada por mais que isso é outra rodada.
+        let deadline = Instant::now() + LOCK_GRACE;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(UpdateLock { _file: file }),
+                Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+                Err(std::fs::TryLockError::WouldBlock) => return Err(UpdateError::Locked),
+                Err(std::fs::TryLockError::Error(e)) => return Err(io(e)),
+            }
         }
     }
 }

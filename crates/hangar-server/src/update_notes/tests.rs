@@ -47,7 +47,7 @@ fn repo() -> tempfile::TempDir {
 async fn news_only_from_target_and_destructive_warning_until_applied() {
     let tmp = repo();
     let applied = tmp.path().join("aplicados.json");
-    let notes = collect(&tmp.path().join("docs"), "origin/main", &applied).await.unwrap();
+    let notes = collect(&tmp.path().join("docs"), "origin/main", tmp.path()).await.unwrap();
     assert_eq!(notes["target"], "origin/main");
     assert_eq!(notes["news"], json!([
         {"id": "2026-02-02-nova", "title": "T novo", "kind": "new", "text": "Corpo novo.", "platforms": "mobile",
@@ -58,14 +58,22 @@ async fn news_only_from_target_and_destructive_warning_until_applied() {
     assert_eq!(notes["warnings"], json!([{"id": "2026-02-01-apaga", "title": "Apaga algo", "text": "Vai apagar."}]));
 
     std::fs::write(&applied, r#"["2026-02-01-apaga"]"#).unwrap();
-    let notes = collect(tmp.path(), "origin/main", &applied).await.unwrap();
+    let notes = collect(tmp.path(), "origin/main", tmp.path()).await.unwrap();
     assert_eq!(notes["warnings"], json!([]));
+}
+
+/// Registro ilegível: não se sabe o que já rodou; erro (503), nunca todos os avisos de novo.
+#[tokio::test]
+async fn unreadable_registry_is_an_error() {
+    let tmp = repo();
+    std::fs::write(tmp.path().join("aplicados.json"), "[").unwrap();
+    assert!(collect(tmp.path(), "origin/main", tmp.path()).await.is_err());
 }
 
 #[tokio::test]
 async fn not_a_repo_is_an_error() {
     let tmp = tempfile::tempdir().unwrap();
-    assert!(collect(tmp.path(), "origin/main", &tmp.path().join("x.json")).await.is_err());
+    assert!(collect(tmp.path(), "origin/main", tmp.path()).await.is_err());
 }
 
 /// Os mesmos casos do `scripts/test_montar_pacote.py`: o índice do pacote, montado em Python, traz as

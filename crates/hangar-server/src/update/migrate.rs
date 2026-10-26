@@ -685,7 +685,14 @@ pub async fn migrate_until<H: HealthProbe>(m: &Machine<'_>, health: &H, dry_run:
 
 /// Migra. `dry_run` só devolve o plano, sem mudar nada.
 pub async fn migrate<H: HealthProbe>(m: &Machine<'_>, health: &H, dry_run: bool) -> Result<Outcome, String> {
-    if let Some(record) = read_record(&m.marker()) { return Ok(Outcome::AlreadyMigrated(record.mode)); }
+    if let Some(record) = read_record(&m.marker()) {
+        // O registro do passo pode ter falhado na rodada que migrou: refaz, e a falha agora para aqui.
+        if record.mode != Mode::NotMigrated && !dry_run
+            && !super::steps::applied(&m.state_dir).map_err(|e| format!("já migrada, mas {e}"))?.contains(STEP_ID) {
+            super::steps::mark(&m.state_dir, STEP_ID).map_err(|e| format!("já migrada, mas {e}"))?;
+        }
+        return Ok(Outcome::AlreadyMigrated(record.mode));
+    }
     // Uma tentativa morta no meio (SIGKILL, queda de energia) é desfeita antes de começar de novo.
     if m.partial().exists() {
         if dry_run {

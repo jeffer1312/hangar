@@ -520,6 +520,16 @@ async fn update_second_run_is_refused_by_the_lock() {
     assert!(UpdateLock::try_acquire(&machine.layout).is_ok(), "solta ao sair");
 }
 
+/// Um filho no meio do fork leva a trava junto até o exec: trava que solta logo não é "outra rodada".
+#[test]
+fn update_lock_held_for_an_instant_is_not_busy() {
+    let machine = Machine::new();
+    let held = UpdateLock::try_acquire(&machine.layout).unwrap();
+    let release = std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(100)); drop(held); });
+    assert!(UpdateLock::try_acquire(&machine.layout).is_ok());
+    release.join().unwrap();
+}
+
 #[tokio::test]
 async fn update_state_fields_match_the_python_engine() {
     let fake = FakeRelease::new().await;
@@ -663,7 +673,26 @@ fn update_steps_read_like_python_and_register_after_the_proof() {
     std::fs::write(docs.join("2026-01-07-c.md"), step_doc("2026-01-07-c", "maquina", "touch ARQ", "nao-existe")).unwrap();
     let error = apply_machine_steps(&root, home.path(), &state_dir, &runner, &state).unwrap_err();
     assert!(error.to_string().contains("nao-existe"), "{error}");
-    assert!(!steps::applied(&state_dir).contains("2026-01-07-c"));
+    assert!(!steps::applied(&state_dir).unwrap().contains("2026-01-07-c"));
+}
+
+/// Registro ilegível é erro, nunca "nada aplicado": nem some o histórico nem se roda tudo de novo.
+#[test]
+fn update_steps_unreadable_registry_is_an_error_and_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+    assert!(steps::applied(&state_dir).unwrap().is_empty(), "arquivo ausente = nada aplicado");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(state_dir.join("aplicados.json"), "[\"antigo\", ").unwrap();
+    assert!(steps::applied(&state_dir).is_err());
+    assert!(steps::mark(&state_dir, "novo").is_err());
+    let root = dir.path().join("root");
+    std::fs::create_dir_all(root.join("docs/atualizacoes")).unwrap();
+    struct Never;
+    impl StepRunner for Never { fn run(&self, _: &str, _: &Path) -> StepRun { panic!("não roda passo sem saber o que já rodou") } }
+    assert!(apply_machine_steps(&root, dir.path(), &state_dir, &Never, &StateFile::new(&state_dir)).is_err());
+    assert!(steps::mark_all(&root, &state_dir).is_err());
+    assert_eq!(std::fs::read_to_string(state_dir.join("aplicados.json")).unwrap(), "[\"antigo\", ");
 }
 
 #[test]

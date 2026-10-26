@@ -191,12 +191,17 @@ pub fn read_steps(dir: &Path, windows: bool) -> (Vec<Step>, Vec<String>) {
 
 pub fn registry_path(state_dir: &Path) -> PathBuf { state_dir.join("aplicados.json") }
 
-/// Ids já aplicados nesta máquina; arquivo ausente ou ilegível = nenhum.
-pub fn applied(state_dir: &Path) -> BTreeSet<String> {
-    std::fs::read(registry_path(state_dir)).ok()
-        .and_then(|bytes| serde_json::from_slice::<Vec<serde_json::Value>>(&bytes).ok())
-        .map(|ids| ids.into_iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
-        .unwrap_or_default()
+/// Ids já aplicados nesta máquina; arquivo ausente = nenhum.
+pub fn applied(state_dir: &Path) -> Result<BTreeSet<String>, String> {
+    let path = registry_path(state_dir);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
+        Err(e) => return Err(format!("não consegui ler {}: {e}", path.display())),
+    };
+    let ids = serde_json::from_slice::<Vec<serde_json::Value>>(&bytes)
+        .map_err(|e| format!("{} ilegível ({e}); conserte ou apague o arquivo", path.display()))?;
+    Ok(ids.into_iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
 }
 
 /// Lista ordenada de strings, como o `_gravar` do Python.
@@ -205,7 +210,8 @@ pub(crate) fn mark(state_dir: &Path, id: &str) -> Result<(), UpdateError> {
 }
 
 fn record(state_dir: &Path, new: impl IntoIterator<Item = String>) -> std::io::Result<()> {
-    let mut ids = applied(state_dir);
+    // Registro ilegível não é sobrescrito: levaria o histórico junto.
+    let mut ids = applied(state_dir).map_err(std::io::Error::other)?;
     ids.extend(new);
     std::fs::create_dir_all(state_dir)
         .and_then(|()| crate::runtime::queue::atomic_write(&registry_path(state_dir), &serde_json::to_vec(&ids).unwrap_or_default()))
@@ -242,7 +248,7 @@ pub fn apply_machine_steps(root: &Path, home: &Path, state_dir: &Path, runner: &
     if !invalid.is_empty() {
         state.write(serde_json::json!({"passos_invalidos": invalid}));
     }
-    let done_before = applied(state_dir);
+    let done_before = applied(state_dir).map_err(UpdateError::Step)?;
     let execute = |step: &Step| -> Result<(), UpdateError> {
         state.log(&format!("$ {}", step.command));
         let run = runner.run(&step.command, root);

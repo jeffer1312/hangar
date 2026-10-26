@@ -145,7 +145,7 @@ impl Box_ {
     fn unit(&self) -> String { std::fs::read_to_string(self.home.join(".config/systemd/user/hangar-backend.service")).unwrap() }
     fn current(&self) -> PathBuf { self.home.join(".hangar/current") }
     fn state_dir(&self) -> PathBuf { self.home.join(".claude/.hangar-update") }
-    fn step_applied(&self) -> bool { crate::update::steps::applied(&self.state_dir()).contains(STEP_ID) }
+    fn step_applied(&self) -> bool { crate::update::steps::applied(&self.state_dir()).unwrap().contains(STEP_ID) }
     fn marker(&self) -> Option<serde_json::Value> {
         std::fs::read(self.home.join(".hangar/migration.json")).ok().map(|b| serde_json::from_slice(&b).unwrap())
     }
@@ -235,6 +235,15 @@ async fn migrate_clean_checkout_becomes_package() {
     let before = snapshot(&b.home);
     assert_eq!(migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap(), Outcome::AlreadyMigrated(Mode::Package));
     assert_eq!(snapshot(&b.home), before);
+
+    // Registro do passo perdido: a próxima rodada o refaz; ilegível, a rodada falha e não o apaga.
+    std::fs::remove_file(b.state_dir().join("aplicados.json")).unwrap();
+    assert_eq!(migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap(), Outcome::AlreadyMigrated(Mode::Package));
+    assert!(b.step_applied());
+    std::fs::write(b.state_dir().join("aplicados.json"), "{").unwrap();
+    let error = migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap_err();
+    assert!(error.contains("aplicados.json"), "{error}");
+    assert_eq!(std::fs::read_to_string(b.state_dir().join("aplicados.json")).unwrap(), "{");
 }
 
 #[tokio::test]
