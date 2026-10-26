@@ -14,7 +14,9 @@ case "${1:-}" in
 esac
 intervalo="$1"
 
-git log --no-merges --format=%B "$intervalo" | grep -qE '(^|[^A-Za-z_])HANGAR_SEM_NOVIDADE: *[^ ]' && exit 0
+# Sem pipe: com pipefail, o `grep -q` sai cedo e o SIGPIPE do `git log` daria falha mesmo achando o escape.
+mensagens="$(git log --no-merges --format=%B "$intervalo")"
+grep -qE '(^|[^A-Za-z_])HANGAR_SEM_NOVIDADE: *[^ ]' <<<"$mensagens" && exit 0
 
 # Merges ficam de fora: trazem o que já foi conferido na branch de origem.
 arquivos="$(git log --no-merges --name-only --format= "$intervalo" | sort -u)"

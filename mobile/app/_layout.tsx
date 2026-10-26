@@ -120,12 +120,15 @@ export default function Layout() {
     const server = servers.find((s) => s.id === id);
     if (!id || !server) return;
     const from = pendingFrom(id);
-    if (!from) { router.push(whatsNewHref(id)); return; }
+    // Sem a versão de quando confirmou não dá para saber se a atualização terminou: descarta.
+    if (!from) { clearPendingNews(id); return; }
+    let alive = true;
     // Mesma versão de quando confirmou: a atualização não terminou, e a lista não vale mais.
     getAtualizacaoEm(server).then(({ versao_legivel: v }) => {
       if (v?.backend === from) clearPendingNews(id);
-      else router.push(whatsNewHref(id));
+      else if (alive) router.push(whatsNewHref(id));
     }).catch(() => { /* servidor fora: confere na próxima abertura */ });
+    return () => { alive = false; };
   }, [ready, withoutServer]);
 
   useNotificationNavigation();

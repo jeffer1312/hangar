@@ -24,7 +24,7 @@ pub async fn route(State(state): State<Arc<AppState>>, ConnectInfo(peer): Connec
     let branch = update_branch(std::env::var("CP_UPDATE_BRANCH").ok(), tokio::fs::read_to_string(cwd.join(".env")).await.ok().as_deref());
     match collect(&cwd, &format!("origin/{branch}"), &base.join(".hangar-update").join("aplicados.json")).await {
         Ok(notes) => json_response(StatusCode::OK, notes),
-        Err(()) => json_response(StatusCode::SERVICE_UNAVAILABLE, detail_body("update_notes_unavailable", "não deu para ler os avisos desta atualização", json!({}))),
+        Err(()) => { tracing::warn!(branch = %branch, cwd = %cwd.display(), "leitura dos avisos da atualização falhou no git"); json_response(StatusCode::SERVICE_UNAVAILABLE, detail_body("update_notes_unavailable", "não deu para ler os avisos desta atualização", json!({}))) }
     }
 }
 

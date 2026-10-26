@@ -50,6 +50,8 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
   const candidates = ownUpdatableServers(servers);
   const [open, setOpen] = useState(false);
   const newsAfterClose = useRef<string | null>(null);
+  const openRef = useRef(open);
+  openRef.current = open;
   const router = useRouter();
   const activeId = useServers((s) => s.activeId);
   const { busy, count, rows, error } = useSyncExternalStore(subscribe, () => round);
@@ -77,7 +79,8 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
       const done = results.find((row) => row.server.id === notesServer.id);
       // Abre ao fechar a folha de resultados: por cima dela, no iOS, ficaria escondida e a lista se perderia.
       if (done && (done.state.status === 'atualizado' || done.state.status === 'atualizado_manual') && firstPendingServer([notesServer.id])) {
-        newsAfterClose.current = notesServer.id;
+        if (openRef.current) newsAfterClose.current = notesServer.id;
+        else router.push(whatsNewHref(notesServer.id));
       }
     } catch (cause) {
       setRound({ error: m.update_all_failed({ erro: cause instanceof Error ? cause.message : String(cause) }) });

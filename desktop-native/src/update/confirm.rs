@@ -62,7 +62,8 @@ pub(crate) fn load_then_open<T: 'static>(api: Api, runtime: &tokio::runtime::Run
     let task = runtime.spawn(load(api));
     let handle = window.window_handle();
     cx.spawn(async move |this, cx| {
-        let (state, notes) = task.await.unwrap_or_default();
+        // A leitura que morreu no meio não pode virar "sem avisos": abre com a linha de falha.
+        let (state, notes) = task.await.unwrap_or_else(|_| (None, Notes { failed: true, ..Notes::default() }));
         let _ = handle.update(cx, |_, window, cx| { let _ = this.update(cx, |this, cx| loaded(this, state, notes, window, cx)); });
     }).detach();
 }
