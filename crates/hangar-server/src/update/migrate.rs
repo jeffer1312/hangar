@@ -768,6 +768,7 @@ pub async fn undo<H: HealthProbe>(m: &Machine<'_>, health: &H) -> Result<(), Str
     if record.mode == Mode::NotMigrated {
         return std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()));
     }
+    refuse_inside_service(m)?;
     let _lock = lock(m)?;
     let before = match health.read().await { Reading::Rust { pid, .. } => pid, _ => None };
     m.service.stop().map_err(|e| format!("o backend não parou: {e}; nada foi desfeito"))?;

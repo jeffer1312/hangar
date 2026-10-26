@@ -1,7 +1,7 @@
 //! Atualizador por pacote: lê o índice da release, baixa e confere o pacote, extrai lado a lado
-//! em `~/.hangar/versions/<versao>`, roda os passos de máquina, troca o `current`, reinicia e só dá
-//! por feito com o servidor de pé em modo `rust`. Falha antes da troca não muda nada; depois da
-//! troca, o `current` volta e o servidor anterior reinicia.
+//! em `~/.hangar/versions/<versao>`, troca o `current`, roda os passos de máquina, reinicia e só dá
+//! por feito com o servidor de pé em modo `rust`. Falha antes do reinício só devolve o `current`;
+//! depois dele, o `current` volta e o servidor anterior reinicia.
 //!
 //! Biblioteca sem rota: quem reinicia (`Restarter`), quem prova (`HealthProbe`), quem roda passo
 //! (`StepRunner`) e quem diz se uma pasta está em uso (`InUse`) entram de fora.
@@ -535,12 +535,14 @@ pub enum Outcome {
 pub struct PackageId {
     pub version: String,
     pub commit: String,
+    /// A tela web desta versão: a que este processo serve, mesmo com o `current` já em outra.
+    pub dist_key: Option<String>,
 }
 
 /// O pacote cujo `bin/` guarda `exe`: o `manifest.json` da raiz acima. `None` fora de pacote.
 pub fn package_of(exe: &Path) -> Option<PackageId> {
     let manifest = read_manifest(exe.parent()?.parent()?)?;
-    Some(PackageId { version: manifest.version, commit: manifest.commit })
+    Some(PackageId { version: manifest.version, commit: manifest.commit, dist_key: manifest.dist_key })
 }
 
 /// O pacote deste processo, lido uma vez (o servidor lê na subida, antes de qualquer troca).
@@ -591,7 +593,35 @@ pub(crate) async fn wait_new<H: HealthProbe>(health: &H, before: Option<u32>, se
     }
 }
 
-/// Falha sem troca: nada mudou, e `no_ar` é medido.
+/// O `current` volta para `previous`, como estava antes da troca.
+async fn put_back(layout: &Layout, previous: Option<PathBuf>) -> Result<(), UpdateError> {
+    let layout = layout.clone();
+    blocking(move || match previous {
+        Some(previous) => swap(&layout, &previous).map(|_| ()),
+        // Não havia `current` antes desta rodada: voltar é tirá-lo.
+        None => remove_link(&layout.current()).map_err(|e| UpdateError::Swap(format!("{} não saiu: {e}", layout.current().display()))),
+    }).await
+}
+
+/// O processo que reprovou: quem responder depois da volta tem que ser outro. O da versão anterior
+/// (`expected`) que nunca caiu (reinício recusado) já é a volta.
+async fn failed_pid<H: HealthProbe>(health: &H, expected: Option<&Manifest>) -> Option<u32> {
+    match health.read().await {
+        Reading::Rust { pid, commit, .. } if commit.as_deref() != expected.map(|m| m.commit.as_str()) => pid,
+        _ => None,
+    }
+}
+
+/// A versão anterior de pé depois da volta, com outro pid que o de `failed_pid`.
+async fn wait_previous<H: HealthProbe>(health: &H, expected: Option<&Manifest>, failed_pid: Option<u32>, settings: &Settings) -> Result<(), String> {
+    match expected {
+        Some(manifest) => wait_version(health, manifest, failed_pid, settings, "a versão anterior").await,
+        // Sem pacote antes não há commit a conferir: basta o Rust com outro pid.
+        None => wait_new(health, failed_pid, settings).await,
+    }
+}
+
+/// Falha antes do reinício, com o `current` como estava: `no_ar` é medido.
 async fn failed_before<H: HealthProbe>(state: &StateFile, health: &H, error: UpdateError) -> Outcome {
     tracing::warn!(code = error.code(), "update: {error}");
     let no_ar = !matches!(health.read().await, Reading::Down(_));
@@ -613,19 +643,8 @@ async fn roll_back<R: Restarter, H: HealthProbe>(job: &Job<'_>, state: &StateFil
     if !applied_now.is_empty() {
         state.warn(&format!("passos de máquina aplicados nesta rodada continuam valendo na versão anterior: {}", applied_now.join(", ")));
     }
-    // O processo que reprovou: quem responder depois da volta tem que ser outro. O da versão anterior
-    // que nunca caiu (reinício recusado) já é a volta.
-    let failed_pid = match health.read().await {
-        Reading::Rust { pid, commit, .. } if commit.as_deref() != expected.map(|m| m.commit.as_str()) => pid,
-        _ => None,
-    };
-    let layout = job.layout.clone();
-    let back = blocking(move || match previous {
-        Some(previous) => swap(&layout, &previous).map(|_| ()),
-        // Não havia `current` antes desta rodada: voltar é tirá-lo.
-        None => remove_link(&layout.current()).map_err(|e| UpdateError::Swap(format!("{} não saiu: {e}", layout.current().display()))),
-    }).await;
-    let failure = match back {
+    let failed_pid = failed_pid(health, expected).await;
+    let failure = match put_back(job.layout, previous).await {
         Err(e) => Some(format!("{why}; e não consegui voltar para a versão anterior: {e}")),
         Ok(()) => restarter.restart().await.err().map(|e| format!("{why}; e a volta para a versão anterior também falhou: {e}")),
     };
@@ -634,12 +653,7 @@ async fn roll_back<R: Restarter, H: HealthProbe>(job: &Job<'_>, state: &StateFil
         state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": no_ar}));
         return Outcome::Failed { voltou: false, no_ar, erro };
     }
-    let confirmed = match expected {
-        Some(manifest) => wait_version(health, manifest, failed_pid, &job.settings, "a versão anterior").await,
-        // Sem pacote antes desta rodada não há commit a conferir: basta o Rust com outro pid.
-        None => wait_new(health, failed_pid, &job.settings).await,
-    };
-    if let Err(unconfirmed) = confirmed {
+    if let Err(unconfirmed) = wait_previous(health, expected, failed_pid, &job.settings).await {
         let no_ar = !matches!(health.read().await, Reading::Down(_));
         let erro = format!("{why}; o current voltou para a versão anterior e o servidor reiniciou, mas a versão anterior não se confirmou no ar: {unconfirmed}");
         state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": no_ar}));
@@ -710,7 +724,7 @@ pub fn for_screen(state_dir: &Path, layout: &Layout, running: Option<&str>) -> s
     state.read()
 }
 
-/// Uma atualização inteira: trava → índice → pacote → passos → troca → reinício → prova → poda.
+/// Uma atualização inteira: trava → índice → pacote → troca → passos → reinício → prova → poda.
 ///
 /// Roda no runtime próprio do executor destacado (processo só disso, nunca o do servidor); mesmo
 /// assim o trabalho de bloqueio vai para `spawn_blocking`, para não segurar fio do runtime.
@@ -780,15 +794,6 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
         }
     }
 
-    state.step("passos");
-    let applied_now = {
-        let (dir, home, state_dir, log) = (dir.clone(), job.home.to_path_buf(), job.state_dir.to_path_buf(), state.clone());
-        match blocking(move || apply_machine_steps(&dir, &home, &state_dir, &*steps, &log)).await {
-            Ok(ids) => ids,
-            Err(e) => return failed_before(&state, health, e).await,
-        }
-    };
-
     state.step("trocar");
     let pid_before = match health.read().await { Reading::Rust { pid, .. } => pid, _ => None };
     let previous = {
@@ -796,6 +801,24 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
         match blocking(move || swap(&layout, &dir)).await {
             Ok(previous) => previous,
             Err(e) => return failed_before(&state, health, e).await,
+        }
+    };
+
+    // Depois da troca: o instalador que um passo chama só grava links pelo `current` quando ele já é
+    // a versão dele; antes, os prenderia à pasta da versão, que a poda apaga.
+    state.step("passos");
+    let applied_now = {
+        let (dir, home, state_dir, log) = (dir.clone(), job.home.to_path_buf(), job.state_dir.to_path_buf(), state.clone());
+        match blocking(move || apply_machine_steps(&dir, &home, &state_dir, &*steps, &log)).await {
+            Ok(ids) => ids,
+            // Sem reinício ainda: basta o `current` voltar.
+            Err(e) => {
+                let e = match put_back(job.layout, previous).await {
+                    Ok(()) => e,
+                    Err(back) => UpdateError::Step(format!("{e}; e o current não voltou para a versão anterior: {back}")),
+                };
+                return failed_before(&state, health, e).await;
+            }
         }
     };
 

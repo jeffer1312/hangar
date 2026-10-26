@@ -107,8 +107,12 @@ pub fn refusal(checkout: &Checkout) -> Option<String> {
     (checkout.ahead > 0).then(|| format!("a branch {branch} tem {} commit(s) à frente de {upstream}; envie ou descarte antes de atualizar", checkout.ahead))
 }
 
-/// `git pull --ff-only` na branch do checkout; a saída vai ao log da tela.
-pub fn pull(root: &Path) -> Result<String, String> { git(root, &["pull", "--ff-only"]) }
+/// `git pull --ff-only` na branch do checkout; a saída vai ao log da tela. Sem hooks: o `post-merge`
+/// do checkout roda o instalador inteiro (e reinicia) dentro do prazo do `git`, que só mata o `git`.
+pub fn pull(root: &Path) -> Result<String, String> {
+    let hooks = format!("core.hooksPath={}", if cfg!(windows) { "nul" } else { "/dev/null" });
+    git(root, &["-c", &hooks, "pull", "--ff-only"])
+}
 
 /// O commit em que o checkout estava quando este servidor subiu (o `VERSAO_EM_EXECUCAO` do Python).
 pub fn boot_head() -> Option<&'static str> { BOOT.get().and_then(Option::as_deref) }
@@ -208,5 +212,21 @@ pub(crate) mod tests {
         pull(&clone).unwrap();
         assert!(clone.join("b").exists());
         assert_eq!(read(&clone, false).unwrap().behind, 0);
+    }
+
+    /// O `post-merge` do checkout roda o instalador inteiro; o pull do modo desenvolvedor não o dispara.
+    #[cfg(unix)]
+    #[test]
+    fn update_dev_pull_does_not_run_the_checkout_hooks() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let clone = behind_clone(dir.path());
+        let marker = dir.path().join("hook-rodou");
+        let hook = clone.join(".git/hooks/post-merge");
+        std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        pull(&clone).unwrap();
+        assert!(clone.join("b").exists());
+        assert!(!marker.exists(), "o post-merge rodou dentro do pull");
     }
 }

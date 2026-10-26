@@ -225,9 +225,10 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
 
 - **Uma versão é uma pasta que nunca muda depois de extraída.** `~/.hangar/versions/<versao>/`
   com `manifest.json` (`version`, `commit`, `channel`, `protocol`, `api`, `os`, `dist_key`, sha256
-  por arquivo); `~/.hangar/current` aponta para a versão em uso. O bytecode vai para
-  `~/.hangar/cache/pycache/`, e o pacote leva os `.pyc` em `unchecked-hash`: um `__pycache__` dentro
-  da versão faz a reextração recusar a pasta (`package_existing_differs`).
+  por arquivo); `~/.hangar/current` aponta para a versão em uso. O pacote leva os `.pyc` de todo
+  `.py` em `unchecked-hash`, e o Python só os lê: um `__pycache__` dentro da versão faz a
+  reextração recusar a pasta (`package_existing_differs`). Nada define `PYTHONPYCACHEPREFIX`: com
+  ele o Python ignora esses `.pyc` e recompila tudo no cache a cada versão.
 - **Dados do usuário moram em `~/.hangar/config/`** (`.env`, `peers.json`, `projects.json`,
   `launchers/`). Quem lê procura lá primeiro e só então em `backend/` (máquina não migrada);
   quem grava grava no caminho que leu. Instaladores e `services-setup.sh` seguem a mesma regra.
@@ -248,9 +249,13 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   enquanto o sistema diz "em uso"; pasta incompleta nunca tem o nome de versão. Manifesto acima de
   4 MiB é recusado. Pasta existente que não confere é refeita, menos a do `current`.
 - **Na máquina migrada, atualizar é do Rust (`crates/hangar-server/src/update/`).** Índice →
-  download com sha → extração → tela web da `dist_key` (falha é aviso) → só os passos
-  `tipo: maquina` → executor destacado → troca do `current` → reinício → prova de vida → poda.
-  Falha antes da troca não muda nada; depois dela, o `current` volta e o servidor reinicia. A prova
+  download com sha → extração → tela web da `dist_key` (falha é aviso) → executor destacado →
+  troca do `current` → só os passos `tipo: maquina` → reinício → prova de vida → poda. Os passos
+  rodam depois da troca porque os scripts que criam links (`install-hangar-send.sh`,
+  `instalar-agentes.py`) só apontam para o `current` quando ele já é a pasta deles. Falha antes da
+  troca não muda nada; passo que falha devolve o `current` sem reiniciar; falha no reinício
+  devolve o `current` e reinicia. O servidor em execução serve a tela web da `dist_key` com que
+  subiu, nunca a do `current`. A prova
   é o `/__hangar_server/health` com o `protocol` e o `commit` do manifesto novo e pid diferente:
   o Python sozinho na porta reprova. Ficam a versão em uso e a anterior; a poda pula pasta com
   processo vivo e apaga por `rename` para `versions/.trash-*`. A verificação automática roda de hora
@@ -338,9 +343,9 @@ Medido ao montar o pacote (Task 6):
   manifesto acima do teto; `include/` e `share/` do Python saem do pacote, porque o backend não os usa.
 - **pip fora.** O pacote não instala nada em tempo de execução; o pip do standalone é removido.
 - **`.pyc` em `unchecked-hash`.** Rodando o pacote, o Python gravou `__pycache__` dentro de
-  `versions/<v>/`, e a reextração caiu em `package_existing_differs`. O lançador põe
-  `PYTHONPYCACHEPREFIX` fora da versão, mas hooks (`preview_hook.py` importa `app.atomico`) rodam o
-  Python do pacote sem ele; com os `.pyc` prontos e listados no manifesto, o Python só os lê.
+  `versions/<v>/`, e a reextração caiu em `package_existing_differs`. Com os `.pyc` prontos e
+  listados no manifesto, o Python só os lê. O `PYTHONPYCACHEPREFIX` que o lançador punha saiu: com
+  ele, o Python ignorava esses `.pyc` e recompilava o backend e a biblioteca padrão no cache.
 - O extrator aceita o pacote montado, e `import app.main, app.api, http_ece` sobe com `HOME` vazio.
 
 Atualizador (Task 7): `cargo test -p hangar-server update` com 61 testes da lib, 1 e 9 de integração;

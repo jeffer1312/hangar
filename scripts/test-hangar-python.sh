@@ -42,8 +42,8 @@ checa "atalho no checkout: o venv" "venv|arg|" "$(hp)"
 real="$HOME_T/.hangar/versions/0.1.0.9"
 falso "$real/python/bin/python3" pacote
 ln -s "$real" "$HOME_T/.hangar/current"
-checa "atalho com o pacote: o Python dele, cache fora da versão" \
-    "pacote|arg|$HOME_T/.hangar/cache/pycache/0.1.0.9" "$(hp)"
+checa "atalho com o pacote: o Python dele, com os .pyc do pacote (sem PYTHONPYCACHEPREFIX)" \
+    "pacote|arg|" "$(hp)"
 
 # O `python3` do install.sh no pacote é um atalho para o hangar-python: sem o Python embutido, ele não
 # pode cair no próprio atalho em laço.

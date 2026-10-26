@@ -86,7 +86,7 @@ impl std::fmt::Display for Failure {
 
 /// A trava ocupada: o estado é de quem a segura.
 pub const BUSY: &str = "erro_atualizacao_ja_rodando";
-/// O servidor novo não provou estar de pé, e o `current` voltou para onde estava.
+/// O servidor novo não provou estar de pé, o `current` voltou para onde estava e o de antes provou estar de pé.
 pub const ROLLED_BACK: &str = "erro_dev_mode_voltou";
 
 /// O que o pedido faria, conferido sem tocar em nada.
@@ -184,23 +184,30 @@ pub async fn switch<R: Restarter, H: HealthProbe>(home: &Path, state_dir: &Path,
     };
     match proved {
         Ok(()) => Ok(Outcome::Switched(target)),
-        Err(why) => Err(roll_back(&layout, previous, why, restarter).await),
+        Err(why) => Err(roll_back(&layout, previous, why, restarter, health, settings).await),
     }
 }
 
 /// O `current` volta para onde apontava e o servidor reinicia de novo; devolve o motivo com o
-/// desfecho da volta.
-async fn roll_back<R: Restarter>(layout: &Layout, previous: Option<PathBuf>, why: String, restarter: &R) -> Failure {
+/// desfecho da volta. `ROLLED_BACK` só com o servidor de antes provado de pé, como na atualização.
+async fn roll_back<R: Restarter, H: HealthProbe>(layout: &Layout, previous: Option<PathBuf>, why: String, restarter: &R, health: &H,
+    settings: &Settings) -> Failure {
     let failed = |text: String| Failure::new("erro_dev_mode_falhou", text);
     let Some(previous) = previous else { return failed(format!("{why}; o current de antes estava quebrado e não há para onde voltar")) };
+    // O checkout não tem manifesto: a prova da volta para ele é o Rust com outro pid.
+    let expected = super::read_manifest(&previous);
+    let failed_pid = super::failed_pid(health, expected.as_ref()).await;
     let layout = layout.clone();
     if let Err(e) = super::blocking(move || super::swap(&layout, &previous)).await {
         return failed(format!("{why}; e o current não voltou para onde estava: {e}"));
     }
-    match restarter.restart().await {
-        Ok(()) => Failure::new(ROLLED_BACK, format!("{why}; o current voltou para onde estava e o servidor reiniciou")),
-        Err(e) => Failure::new(ROLLED_BACK, format!("{why}; o current voltou para onde estava, mas o reinício falhou: {e}")),
+    if let Err(e) = restarter.restart().await {
+        return failed(format!("{why}; o current voltou para onde estava, mas o reinício falhou: {e}"));
     }
+    if let Err(e) = super::wait_previous(health, expected.as_ref(), failed_pid, settings).await {
+        return failed(format!("{why}; o current voltou para onde estava e o servidor reiniciou, mas o de antes não se confirmou no ar: {e}"));
+    }
+    Failure::new(ROLLED_BACK, format!("{why}; o current voltou para onde estava e o servidor reiniciou"))
 }
 
 /// `on <checkout>` ou `off`; o resto é uso errado.
@@ -474,6 +481,60 @@ mod tests {
         assert!(error.contains("não voltou depois de reiniciar") && error.contains("voltou para onde estava"), "{error}");
         assert_eq!(m.current(), before);
         assert_eq!(m.restarts.load(Ordering::SeqCst), 2, "o reinício da troca e o da volta");
+    }
+
+    /// O reinício de número `fails` (1 = o da troca) falha.
+    struct FailingRestart { count: Arc<AtomicUsize>, fails: usize }
+    impl Restarter for FailingRestart {
+        async fn restart(&self) -> Result<(), String> {
+            let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
+            if n == self.fails { Err("systemctl saiu com 1".into()) } else { Ok(()) }
+        }
+    }
+
+    /// A leitura depende de quantos reinícios já houve.
+    struct ByRestart { restarts: Arc<AtomicUsize>, reading: fn(usize) -> Reading }
+    impl HealthProbe for ByRestart {
+        async fn read(&self) -> Reading { (self.reading)(self.restarts.load(Ordering::SeqCst)) }
+    }
+
+    /// Antes: o pacote `0.1.0.5` (pid 10); depois do 1º reinício, ninguém; depois do 2º, o pacote de novo.
+    fn old_comes_back(n: usize) -> Reading {
+        match n {
+            1 => Reading::Down("connection refused".into()),
+            n => Reading::Rust { protocol: 1, pid: Some(10 + n as u32), commit: Some("c5".into()) },
+        }
+    }
+
+    /// Depois do 1º reinício, ninguém responde mais.
+    fn never_back(n: usize) -> Reading {
+        if n == 0 { Reading::Rust { protocol: 1, pid: Some(10), commit: Some("c5".into()) } } else { Reading::Down("connection refused".into()) }
+    }
+
+    async fn failed_on(m: &Machine, restart: &impl Restarter, reading: fn(usize) -> Reading) -> Failure {
+        let health = ByRestart { restarts: m.restarts.clone(), reading };
+        switch(&m.home, &m.state_dir(), &Request::On(m.checkout.clone()), false, restart, &health, &fast(), m.runner(Some(0)), &|_| (), &|_| ())
+            .await.unwrap_err()
+    }
+
+    /// `ROLLED_BACK` (e o `voltou: true` da tela) só com a versão anterior provada de pé de novo.
+    #[tokio::test]
+    async fn dev_mode_rolled_back_only_when_the_previous_server_is_proven_up() {
+        let m = Machine::new();
+        let back = failed_on(&m, &m.restart(), old_comes_back).await;
+        assert_eq!(back.code, ROLLED_BACK, "{back}");
+        assert_eq!(m.restarts.load(Ordering::SeqCst), 2);
+
+        let m = Machine::new();
+        let restart = FailingRestart { count: m.restarts.clone(), fails: 2 };
+        let refused = failed_on(&m, &restart, old_comes_back).await;
+        assert_ne!(refused.code, ROLLED_BACK, "o reinício da volta falhou: {refused}");
+        assert!(refused.message.contains("systemctl saiu com 1"), "{refused}");
+
+        let m = Machine::new();
+        let down = failed_on(&m, &m.restart(), never_back).await;
+        assert_ne!(down.code, ROLLED_BACK, "a versão anterior não voltou: {down}");
+        assert_eq!(m.current(), real(&m.layout().versions().join("0.1.0.5")), "o current voltou mesmo assim");
     }
 
     struct Manual;

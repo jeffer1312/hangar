@@ -21,13 +21,21 @@ pub fn root(home: &Path) -> Option<PathBuf> {
 
 /// O checkout de onde este binário roda, ou o anotado em `~/.hangar/backend-dir` (binário em `~/.hangar/bin`).
 fn checkout(home: &Path) -> Option<PathBuf> {
+    checkout_from(std::env::current_exe().ok().and_then(|exe| exe.canonicalize().ok()), home)
+}
+
+/// Cópia acima do binário com `.env` vence a anotada; sem `.env` (worktree de desenvolvimento) vale a
+/// anotada, que é a do servidor e tem o token; sem nenhuma das duas, a cópia acima do binário.
+fn checkout_from(exe: Option<PathBuf>, home: &Path) -> Option<PathBuf> {
     use crate::session_open::cli::is_backend;
-    let exe = std::env::current_exe().ok().and_then(|exe| exe.canonicalize().ok());
-    let backend = exe.and_then(|exe| exe.ancestors().skip(1).map(|dir| dir.join("backend")).find(|dir| is_backend(dir)))
+    let above = |found: fn(&Path) -> bool| exe.as_deref()
+        .and_then(|exe| exe.ancestors().skip(1).map(|dir| dir.join("backend")).find(|dir| found(dir)));
+    let backend = above(|dir| dir.join(".env").is_file())
         .or_else(|| {
             let noted = PathBuf::from(std::fs::read_to_string(crate::session_open::cli::pointer(home)).ok()?.trim());
             is_backend(&noted).then_some(noted)
-        })?;
+        })
+        .or_else(|| above(is_backend))?;
     backend.parent().map(Path::to_path_buf)
 }
 
@@ -76,13 +84,12 @@ pub fn backend_command(home: &Path, args: &[String], windows: bool) -> Result<st
     let real = std::fs::canonicalize(current(home)).map_err(|_| no_current())?;
     // O Python não entende o `\\?\` que o `canonicalize` do Windows devolve.
     let real = crate::list::links::without_verbatim(real);
-    let version = real.file_name().ok_or_else(no_current)?.to_owned();
     let python = python_exe(&real, windows);
     if !python.is_file() { return Err(("launch_no_python", python)); }
     let mut command = std::process::Command::new(python);
-    // Bytecode fora da pasta da versão: ela nunca muda depois de extraída.
-    command.args(["-m", "app.main"]).args(args).current_dir(real.join("backend"))
-        .env("PYTHONPYCACHEPREFIX", home.join(".hangar").join("cache").join("pycache").join(version));
+    // Sem `PYTHONPYCACHEPREFIX`: o pacote leva os `.pyc` em `unchecked-hash`, que o Python só lê, e o
+    // prefixo os faria ignorar e recompilar tudo fora da versão.
+    command.args(["-m", "app.main"]).args(args).current_dir(real.join("backend"));
     Ok(command)
 }
 
@@ -146,7 +153,44 @@ fn die_with_the_launcher() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{current, python_exe, root};
+    use super::{checkout_from, current, python_exe, root};
+
+    /// Binário de uma worktree sem `.env` (máquina não migrada): vale a cópia que o servidor anotou,
+    /// que tem o token, e não a worktree.
+    #[test]
+    fn a_worktree_binary_without_env_uses_the_noted_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let (home, worktree, main) = (dir.path().join("home"), dir.path().join("wt"), dir.path().join("main"));
+        let exe = worktree.join("crates/target/release/hangar-server");
+        std::fs::create_dir_all(worktree.join("backend/app")).unwrap();
+        std::fs::write(worktree.join("backend/app/rust_server.py"), "").unwrap();
+        std::fs::create_dir_all(main.join("backend")).unwrap();
+        std::fs::write(main.join("backend/.env"), "CP_AUTH_TOKEN=t\n").unwrap();
+        std::fs::create_dir_all(home.join(".hangar")).unwrap();
+        std::fs::write(crate::session_open::cli::pointer(&home), main.join("backend").to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(checkout_from(Some(exe.clone()), &home), Some(main.clone()));
+        // A worktree com `.env` próprio é a do binário, como antes.
+        std::fs::write(worktree.join("backend/.env"), "CP_AUTH_TOKEN=w\n").unwrap();
+        assert_eq!(checkout_from(Some(exe.clone()), &home), Some(worktree.clone()));
+        // Sem nada anotado, a cópia acima do binário ainda vale sem `.env`.
+        std::fs::remove_file(worktree.join("backend/.env")).unwrap();
+        std::fs::remove_file(crate::session_open::cli::pointer(&home)).unwrap();
+        assert_eq!(checkout_from(Some(exe), &home), Some(worktree));
+    }
+
+    /// O pacote leva os `.pyc` prontos: com `PYTHONPYCACHEPREFIX` o Python os ignora e recompila tudo.
+    #[cfg(unix)]
+    #[test]
+    fn the_launcher_uses_the_shipped_bytecode() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let real = home.join(".hangar/versions/1.0.0.5");
+        std::fs::create_dir_all(real.join("python/bin")).unwrap();
+        std::fs::write(real.join("python/bin/python3"), "").unwrap();
+        std::os::unix::fs::symlink(&real, current(home)).unwrap();
+        let command = super::backend_command(home, &[], false).unwrap();
+        assert!(command.get_envs().all(|(key, _)| key != "PYTHONPYCACHEPREFIX"), "{command:?}");
+    }
 
     #[test]
     fn install_root_is_the_unresolved_current_when_it_exists() {

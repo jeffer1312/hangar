@@ -9,4 +9,4 @@ _BACKEND = Path(__file__).resolve().parent.parent
 
 def path(name: str) -> Path:
     new = Path.home() / ".hangar" / "config" / name
-    return new if new.exists() or (_BACKEND.parent / "manifest.json").exists() else _BACKEND / name
+    return new if new.exists() or (_BACKEND.parent / "manifest.json").exists() or (Path.home() / ".hangar" / "current").exists() else _BACKEND / name

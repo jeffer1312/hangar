@@ -1,8 +1,9 @@
 //! Tela web (`frontend/dist`) servida pelo Rust na porta do dono, a chave que a liga e a busca da
 //! tela pela chave das fontes na release `dist-commits`.
 //!
-//! Pasta servida: `~/.hangar/ui/<dist_key>/` quando o `manifest.json` da raiz da instalação diz a
-//! chave (modo pacote); senão `<raiz>/frontend/dist` (checkout e máquina ainda não migrada).
+//! Pasta servida: `~/.hangar/ui/<dist_key>/` quando o `manifest.json` do pacote deste processo (ou,
+//! fora de pacote, o da raiz da instalação) diz a chave; senão `<raiz>/frontend/dist` (checkout e
+//! máquina ainda não migrada).
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Component, Path, PathBuf};
@@ -55,7 +56,14 @@ pub fn enabled(home: &Path) -> io::Result<bool> {
 }
 
 /// A pasta da tela desta instalação, exista ou não; `None` sem raiz conhecida.
-pub fn dist_dir(home: &Path) -> Option<PathBuf> {
+pub fn dist_dir(home: &Path) -> Option<PathBuf> { dist_dir_in(home, crate::update::running_package()) }
+
+/// A chave do pacote deste processo vence a do `current`: depois da troca, o `current` já é a versão
+/// nova enquanto o servidor de pé ainda é o de antes.
+fn dist_dir_in(home: &Path, running: Option<&crate::update::PackageId>) -> Option<PathBuf> {
+    if let Some(key) = running.and_then(|p| p.dist_key.as_deref()).filter(|k| valid_key(k)) {
+        return Some(home.join(".hangar").join("ui").join(key));
+    }
     let root = crate::install_root::root(home)?;
     Some(match manifest_key(&root) {
         Some(key) => home.join(".hangar").join("ui").join(key),
@@ -314,5 +322,28 @@ fn prune(ui_dir: &Path, keep: &str) {
         if let Err(e) = std::fs::remove_dir_all(&dir) {
             tracing::warn!(dir = %dir.display(), "tela web antiga não saiu: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RUNNING: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const ON_DISK: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    /// Depois da troca sem reinício (instalação na mão, a janela até o reinício, volta que falhou) o
+    /// `current` já é a versão nova; o servidor de pé serve a tela da versão dele.
+    #[test]
+    fn ui_serves_the_key_of_the_running_package_not_of_current() {
+        let home = tempfile::tempdir().unwrap();
+        let current = home.path().join(".hangar/current");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(current.join("manifest.json"), json!({"version": "0.1.0.2", "commit": "c2", "channel": "main", "dist_key": ON_DISK}).to_string()).unwrap();
+        let ui = home.path().join(".hangar/ui");
+        let running = crate::update::PackageId { version: "0.1.0.1".into(), commit: "c1".into(), dist_key: Some(RUNNING.into()) };
+
+        assert_eq!(dist_dir_in(home.path(), Some(&running)), Some(ui.join(RUNNING)));
+        assert_eq!(dist_dir_in(home.path(), None), Some(ui.join(ON_DISK)), "fora de pacote vale o current");
     }
 }

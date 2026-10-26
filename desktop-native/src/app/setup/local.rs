@@ -78,8 +78,12 @@ pub(crate) fn default_dir() -> Option<PathBuf> { std::env::home_dir().map(|home|
 pub(crate) fn pick(forced: Option<PathBuf>, service: Option<PathBuf>, home: Option<&Path>) -> Option<(Mode, PathBuf)> {
     if let Some(dir) = forced { return Some((Mode::Git, dir)); }
     let package = home.map(|h| h.join(".hangar")).filter(|d| is_package(&d.join("current")));
+    // Modo desenvolvedor: o `current` aponta para o checkout que o serviço roda (a unit fica em `~/.hangar`).
+    let developer = || home.and_then(|h| std::fs::canonicalize(h.join(".hangar").join("current")).ok())
+        .map(|d| PathBuf::from(crate::app::disk::plain_path(&d.to_string_lossy())));
     pick_dir(service, None).map(|d| (Mode::Git, d))
         .or_else(|| package.map(|d| (Mode::Package, d)))
+        .or_else(|| pick_dir(developer(), None).map(|d| (Mode::Git, d)))
         .or_else(|| pick_dir(None, home.map(|h| h.join("hangar"))).map(|d| (Mode::Git, d)))
 }
 
@@ -233,8 +237,10 @@ mod tests {
         std::fs::create_dir_all(service.join("backend")).unwrap();
         assert_eq!(pick(None, Some(service.clone()), Some(&home)), Some((Mode::Git, service)));
         assert_eq!(pick(Some(root.join("prova")), None, Some(&home)), Some((Mode::Git, root.join("prova"))));
-        // Modo desenvolvedor: `current` num checkout (`.git`) não é pacote.
+        // Modo desenvolvedor: `current` num checkout (`.git`) não é pacote; é o clone, e vence a sobra de `~/hangar`.
         std::fs::create_dir_all(package.join("current/.git")).unwrap();
+        assert_eq!(pick(None, None, Some(&home)), Some((Mode::Git, package.join("current"))));
+        std::fs::remove_dir_all(package.join("current/backend")).unwrap();
         assert_eq!(pick(None, None, Some(&home)), Some((Mode::Git, checkout.clone())));
         std::fs::remove_dir_all(checkout.join("backend")).unwrap();
         assert_eq!(pick(None, None, Some(&home)), None);
@@ -243,6 +249,26 @@ mod tests {
         std::fs::write(package.join("config/.env"), "CP_AUTH_TOKEN=pac\n").unwrap();
         assert_eq!(read_install_in(Some(&home), &package).token.as_deref(), Some("pac"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Modo desenvolvedor migrado: a unit roda em `~/.hangar` e o `current` aponta para um checkout fora de
+    /// `~/hangar`. A instalação é esse checkout, e o token vem de `~/.hangar/config/.env`.
+    #[cfg(unix)]
+    #[test]
+    fn developer_mode_current_is_the_checkout_it_points_to() {
+        let root = std::env::temp_dir().join(format!("hangar-local-dev-{}", std::process::id()));
+        let (home, checkout) = (root.join("home"), root.join("Projetos/hangar"));
+        let hangar = home.join(".hangar");
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        std::fs::create_dir_all(checkout.join("backend")).unwrap();
+        std::fs::create_dir_all(hangar.join("config")).unwrap();
+        std::fs::write(hangar.join("config/.env"), "CP_AUTH_TOKEN=dev\n").unwrap();
+        std::os::unix::fs::symlink(&checkout, hangar.join("current")).unwrap();
+        let picked = pick(None, repo_from_backend_dir(&hangar.to_string_lossy()), Some(&home));
+        let token = read_install_in(Some(&home), &checkout).token;
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(picked, Some((Mode::Git, checkout)));
+        assert_eq!(token.as_deref(), Some("dev"));
     }
 
     #[test]

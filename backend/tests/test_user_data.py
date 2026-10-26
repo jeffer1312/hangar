@@ -43,6 +43,19 @@ def test_on_a_package_the_first_write_goes_to_config_not_into_the_version(monkey
     assert user_data.path("peers.json") == home / ".hangar" / "config" / "peers.json"
 
 
+def test_on_developer_mode_the_first_write_goes_to_config_not_into_the_checkout(monkeypatch, tmp_path):
+    # Modo desenvolvedor: o `current` aponta para o checkout; o que nascer na `backend/` dele some
+    # quando o modo desliga.
+    home = _home(monkeypatch, tmp_path)
+    checkout = tmp_path / "checkout"
+    (checkout / ".git").mkdir(parents=True)
+    (checkout / "backend").mkdir()
+    (home / ".hangar").mkdir()
+    (home / ".hangar" / "current").symlink_to(checkout, target_is_directory=True)
+    monkeypatch.setattr(user_data, "_BACKEND", checkout / "backend")
+    assert user_data.path("peers.json") == home / ".hangar" / "config" / "peers.json"
+
+
 def _child(home: Path, code: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
     return subprocess.run([sys.executable, "-c", code], cwd=BACKEND, env=env, capture_output=True,

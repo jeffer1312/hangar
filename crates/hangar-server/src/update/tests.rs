@@ -248,6 +248,41 @@ async fn update_happy_path_swaps_restarts_proves_and_prunes() {
     assert!(!machine.layout.downloads().join(format!("hangar-{NEW}-{PLATFORM}.tar.gz")).exists(), "o download não fica");
 }
 
+/// Para onde o `current` apontava quando cada passo rodou.
+struct SeesCurrent {
+    current: PathBuf,
+    seen: Mutex<Vec<PathBuf>>,
+    inner: FakeSteps,
+}
+
+impl StepRunner for SeesCurrent {
+    fn run(&self, command: &str, cwd: &Path) -> StepRun {
+        self.seen.lock().unwrap().push(real(&self.current));
+        self.inner.run(command, cwd)
+    }
+}
+
+/// O instalador chamado pelo passo grava links pelo `current` só quando ele já é a versão dele (a
+/// conferência do `install-hangar-send.sh`); antes da troca, os links ficariam na pasta da versão,
+/// que a poda apaga duas atualizações depois.
+#[tokio::test]
+async fn update_machine_steps_run_with_current_already_on_the_new_version() {
+    let fake = FakeRelease::new().await;
+    let machine = Machine::new();
+    let (bytes, proof) = new_package(&machine, "touch {proof}");
+    fake.publish(NEW, &bytes, None);
+    let release = fake.release();
+    let restart = FakeRestart::default();
+    let health = FakeHealth { restarts: restart.count.clone(), reading: Box::new(served) };
+    let steps = Arc::new(SeesCurrent { current: machine.layout.current(), seen: Mutex::default(), inner: FakeSteps::default() });
+
+    let outcome = run(&machine.job(&release), steps.clone(), &restart, &health, Arc::new(NeverInUse)).await;
+
+    assert_eq!(outcome, Outcome::Updated { version: NEW.into() });
+    assert!(proof.exists());
+    assert_eq!(*steps.seen.lock().unwrap(), vec![real(&machine.layout.versions().join(NEW))]);
+}
+
 #[tokio::test]
 async fn update_sha_mismatch_changes_nothing() {
     let fake = FakeRelease::new().await;
@@ -396,7 +431,7 @@ fn update_running_package_comes_from_the_root_above_the_binary() {
     assert_eq!(package_of(&exe), None, "sem manifesto = modo desenvolvedor");
     let root = version_dir(&Layout::new(dir.path()), NEW);
     assert_eq!(package_of(&root.join("bin").join("hangar-server")),
-        Some(PackageId { version: NEW.into(), commit: format!("commit-{NEW}") }));
+        Some(PackageId { version: NEW.into(), commit: format!("commit-{NEW}"), dist_key: None }));
 }
 
 #[tokio::test]

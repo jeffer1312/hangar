@@ -456,6 +456,22 @@ async fn migrate_refuses_inside_the_backend_service_before_stopping_it() {
 }
 
 #[tokio::test]
+async fn migrate_undo_refuses_inside_the_backend_service_before_stopping_it() {
+    let b = Box_::new();
+    let (service, fetcher) = (FakeService::default(), FakeFetcher::default());
+    migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap();
+    let before = restorable(&b);
+
+    let service = FakeService::default();
+    let mut machine = b.machine(&service, &fetcher);
+    machine.in_service_group = true;
+    let error = undo(&machine, &health(&service, true)).await.unwrap_err();
+    assert!(error.contains("serviço do backend"), "{error}");
+    assert!(service.calls.lock().unwrap().is_empty(), "o backend não para");
+    assert_eq!(restorable(&b), before, "nada foi desfeito");
+}
+
+#[tokio::test]
 async fn migrate_after_a_killed_run_undoes_it_and_migrates_again() {
     let b = Box_::new();
     let (service, fetcher) = (FakeService::default(), FakeFetcher::default());

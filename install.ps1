@@ -79,8 +79,6 @@ $raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
 $pacote = (Test-Path -LiteralPath "$raiz\manifest.json") -and -not (Test-Path -LiteralPath "$raiz\.git")
 # O Python do backend: o embutido do pacote ou o venv do checkout.
 $pyBackend = if ($pacote) { Join-Path $raiz 'python\python.exe' } else { Join-Path $raiz 'backend\.venv\Scripts\python.exe' }
-# Bytecode fora da pasta da versao, como no lancador: um __pycache__ la dentro faz a reextracao recusar a pasta.
-if ($pacote -and -not $env:PYTHONPYCACHEPREFIX) { $env:PYTHONPYCACHEPREFIX = Join-Path $HOME '.hangar\cache\pycache' }
 . "$raiz\scripts\windows-tasks.ps1"
 . "$raiz\scripts\windows-wrappers.ps1"
 $installMutex = $null
@@ -2525,7 +2523,6 @@ if (-not $bash) {
                "if exist `"%HP%`" goto rodar`r`n" +
                $pyFallback +
                ":pacote`r`n" +
-               "if not defined PYTHONPYCACHEPREFIX set `"PYTHONPYCACHEPREFIX=%USERPROFILE%\.hangar\cache\pycache`"`r`n" +
                ":rodar`r`n" +
                "`"%HP%`" %*`r`n" +
                "exit /b %ERRORLEVEL%`r`n"

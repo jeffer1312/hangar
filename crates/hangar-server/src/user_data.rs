@@ -1,17 +1,18 @@
 //! Dados do usuário (`.env`, `peers.json`, `projects.json`) em `~/.hangar/config/`, fora da pasta da
 //! versão. Máquina ainda não migrada os tem na `backend/`: vale o lugar novo quando o arquivo está lá;
-//! senão, o antigo. A mesma regra do `app/user_data.py`, mais uma: instalação em pacote usa sempre o
-//! lugar novo, porque a `backend/` dela é da versão e some na troca seguinte.
+//! senão, o antigo. A mesma regra do `app/user_data.py`, mais uma: máquina migrada (`~/.hangar/current`)
+//! usa sempre o lugar novo, porque a `backend/` do pacote é da versão e some na troca seguinte, e a do
+//! checkout do modo desenvolvedor deixa de ser lida quando o modo desliga.
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::accounts::environment::AccountEnvironment;
 
-/// `None` só quando o arquivo não está no lugar novo, a instalação não é pacote e não há `backend/`
+/// `None` só quando o arquivo não está no lugar novo, a máquina não migrou e não há `backend/`
 /// conhecida. Disco que não deixa conferir o lugar novo é erro, nunca "não existe".
 pub fn path(home: &Path, backend: Option<&Path>, name: &str) -> io::Result<Option<PathBuf>> {
     let new = home.join(".hangar").join("config").join(name);
-    if new.try_exists()? || matches!(crate::update::http::mode(home), crate::update::http::Mode::Package(_)) {
+    if new.try_exists()? || crate::install_root::current(home).try_exists()? {
         return Ok(Some(new));
     }
     Ok(backend.map(|dir| dir.join(name)))
@@ -84,6 +85,20 @@ mod tests {
         package_home(&home);
         assert_eq!(path(&home, Some(&backend), "peers.json").unwrap(), Some(home.join(".hangar/config/peers.json")));
         assert_eq!(path(&home, None, "projects.json").unwrap(), Some(home.join(".hangar/config/projects.json")));
+    }
+
+    /// Modo desenvolvedor: o arquivo que não existia na migração nasce no lugar novo, não no checkout,
+    /// senão some quando o modo desenvolvedor desliga.
+    #[cfg(unix)]
+    #[test]
+    fn a_developer_mode_machine_uses_the_new_place_even_without_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (home, checkout) = (dir.path().join("home"), dir.path().join("checkout"));
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        std::fs::create_dir_all(checkout.join("backend")).unwrap();
+        std::fs::create_dir_all(home.join(".hangar")).unwrap();
+        std::os::unix::fs::symlink(&checkout, home.join(".hangar/current")).unwrap();
+        assert_eq!(path(&home, Some(&checkout.join("backend")), "peers.json").unwrap(), Some(home.join(".hangar/config/peers.json")));
     }
 
     #[cfg(unix)]
