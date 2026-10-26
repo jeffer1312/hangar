@@ -60,7 +60,10 @@ try {
   let alvo = 'origin/main';
   try { alvo = git(raiz, 'rev-parse', '--abbrev-ref', 'origin/HEAD'); } catch {}
   if (base) alvo = `origin/${base}`;
-  ponta = git(raiz, 'rev-parse', '--verify', `${head ? `origin/${head}` : 'HEAD'}^{commit}`);
+  // `--head usuario:branch` (fork) vira só o branch; o branch do checkout atual é o próprio HEAD.
+  const branch = head?.split(':').pop();
+  const atual = git(raiz, 'rev-parse', '--abbrev-ref', 'HEAD');
+  ponta = git(raiz, 'rev-parse', '--verify', `${branch && branch !== atual ? `origin/${branch}` : 'HEAD'}^{commit}`);
   origem = git(raiz, 'merge-base', alvo, ponta);
 } catch {
   // Sem base resolvível o lembrete se cala; quem barra PR sem base é o hook-pr-verificado.

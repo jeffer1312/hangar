@@ -1,4 +1,4 @@
-import { useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { InteractionManager, Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { ownUpdatableServers, updateAll } from '@hangar/core';
@@ -51,7 +51,7 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
   const [open, setOpen] = useState(false);
   const newsAfterClose = useRef<string | null>(null);
   const openRef = useRef(open);
-  openRef.current = open;
+  useEffect(() => { openRef.current = open; }, [open]);
   const router = useRouter();
   const activeId = useServers((s) => s.activeId);
   const { busy, count, rows, error } = useSyncExternalStore(subscribe, () => round);

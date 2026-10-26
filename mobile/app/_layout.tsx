@@ -125,7 +125,9 @@ export default function Layout() {
     let alive = true;
     // Mesma versão de quando confirmou: a atualização não terminou, e a lista não vale mais.
     getAtualizacaoEm(server).then(({ versao_legivel: v }) => {
-      if (v?.backend === from) clearPendingNews(id);
+      // Sem versão na resposta não há como saber: guarda para conferir na próxima abertura.
+      if (!v?.backend) return;
+      if (v.backend === from) clearPendingNews(id);
       else if (alive) router.push(whatsNewHref(id));
     }).catch(() => { /* servidor fora: confere na próxima abertura */ });
     return () => { alive = false; };
