@@ -21,6 +21,7 @@ mod effects;
 mod electron;
 mod mend;
 mod motion;
+mod news;
 mod plugin_ui;
 mod queue_panel;
 mod single_instance;

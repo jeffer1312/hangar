@@ -52,6 +52,7 @@ vi.mock('../../stores/aparencia', () => {
     useAparencia: Object.assign((select: (s: typeof state) => unknown) => select(state), { getState: () => state }) };
 });
 vi.mock('react-native-url-polyfill/auto', () => ({}));
+vi.mock('../updates/pending', () => ({ firstPendingServer: () => null, pendingFrom: () => '', clearPendingNews: () => {}, whatsNewHref: () => '' }));
 vi.mock('../../theme/unistyles', () => ({}));
 vi.mock('../../theme/aplicarMaterial', () => ({ aplicarMaterial: () => {} }));
 vi.mock('../../net/configureCore', () => ({ configureCore: () => {} }));

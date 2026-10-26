@@ -64,6 +64,7 @@ mod thumbnail;
 pub mod terminal_routes;
 pub mod transcript;
 pub mod transcription;
+pub mod update_notes;
 pub mod dictation;
 pub mod workspace_routes;
 pub mod uploads;

@@ -31,6 +31,15 @@ jobs:
             echo "sem base comparável (primeiro push da branch); nada a conferir"; exit 0
           fi
           bash scripts/check-client-api.sh "$de..HEAD"
+      # Mudança visível no app sem novidade em docs/novidades/: só avisa, nunca falha o build.
+      - name: novidade
+        continue-on-error: true
+        run: |
+          de="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$de" ] || ! git cat-file -e "$de" 2>/dev/null; then
+            echo "sem base comparável (primeiro push da branch); nada a conferir"; exit 0
+          fi
+          bash scripts/check-novidade.sh "$de..HEAD" || true
 
   statusline:
     strategy:

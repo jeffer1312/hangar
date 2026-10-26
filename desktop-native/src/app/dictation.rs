@@ -1176,7 +1176,7 @@ impl Hangar {
         let mic = if recording {
             Button::new("dictation-toggle").ghost().size_7().rounded_md()
                 .child(div().size_3().rounded_sm().bg(theme::danger()))
-        } else { chrome::icon_button("dictation-toggle", IconName::Mic, label.clone(), cx) };
+        } else { super::composer_mic(label.clone(), cx) };
         let mic = mic.accessibility_label(label.clone())
             .disabled(in_flight || (!recording && (!readable || !self.dictation_ready(cx))))
             .loading(transcribing)
@@ -1190,11 +1190,9 @@ impl Hangar {
         let organized=options.map(|options|options.mode!="none");
         let entity = cx.entity().downgrade();
         // Gravando, some: trocar no meio não muda nada (o backend lê o estilo no fim) e o espaço é do botão de parar.
-        let pill = (!recording&&organized==Some(true)).then(|| chrome::pill_button("dictation-style", cx).pl(px(10.)).gap(px(6.))
+        let pill = (!recording&&organized==Some(true)).then(|| super::menu_pill("dictation-style", style_label(style), false, cx)
             .tooltip(tr("dictation_style")).accessibility_label(format!("{}: {}", tr("dictation_style"), style_label(style)))
             .disabled(in_flight || !readable)
-            .child(div().text_xs().text_color(theme::muted()).child(style_label(style)))
-            .child(chrome::small_icon(IconName::ChevronDown, 12., theme::faint()))
             .dropdown_menu(move |menu, _, cx| {
                 let _ = entity.update(cx, |this, cx| this.load_dictation_style(cx));
                 STYLES.into_iter().fold(menu, |menu, next| {

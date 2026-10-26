@@ -1,5 +1,5 @@
 // Peças visuais repetidas entre compositor, lista e painel: a medida de cada uma é a do web.
-use gpui_kit::{component::{ActiveTheme, Icon, Sizable, StyledExt, button::*}, prelude::FluentBuilder, *};
+use gpui_kit::{component::{ActiveTheme, Disableable, Icon, Sizable, StyledExt, button::*}, prelude::FluentBuilder, *};
 use gpui_kit::assets::IconName;
 use crate::theme;
 use crate::appearance::{self, SurfaceMaterial};
@@ -669,7 +669,37 @@ pub fn confirm_alert(window: &mut Window, cx: &mut App, title: String, descripti
 #[allow(clippy::too_many_arguments)]
 pub fn confirm_alert_with(window: &mut Window, cx: &mut App, title: String, description: String, check: Option<(String, Rc<Cell<bool>>)>,
     ok: String, variant: ButtonVariant, act: impl Fn(&mut Window, &mut App) -> bool + 'static) {
-    use gpui_kit::{base::actions::{Cancel, Confirm}, component::{WindowExt, checkbox::Checkbox, dialog::DialogFooter}};
+    let body = move |_: &mut Window, _: &mut App| div()
+        .child(div().text_size(px(13.)).line_height(px(19.)).text_color(theme::muted()).whitespace_normal().child(description.clone()))
+        .when_some(check.clone(), |el, (label, value)| el.child(confirm_check("confirm-check", label, value)))
+        .into_any_element();
+    confirm_dialog(window, cx, px(360.), px(150.), Some(title), Rc::new(body), Rc::new(|| true), ok, Some(variant), |d| d, act)
+}
+
+/// Botão claro de tinta escura (o inverso do texto), como o Enviar colado; apagado, o cinza do Enviar parado.
+pub fn light_button(id: impl Into<ElementId>, enabled: bool, cx: &App) -> Button {
+    let (fill, ink) = if enabled { (theme::text(), theme::background()) } else { (theme::raised(), theme::faint()) };
+    Button::new(id).custom(ButtonCustomVariant::new(cx).color(fill).foreground(ink).hover(fill.opacity(0.88)).active(fill.opacity(0.8)))
+        .bg(fill).disabled(!enabled)
+}
+
+/// Caixa de marcar dos alertas. A borda do kit some no vidro: a opção ganha caixa própria para ser vista.
+pub fn confirm_check(id: &'static str, label: String, value: Rc<Cell<bool>>) -> Div {
+    use gpui_kit::component::checkbox::Checkbox;
+    div().mt(px(12.)).px(px(10.)).py(px(8.)).rounded(px(8.)).border_1().border_color(theme::border_strong()).bg(theme::inset())
+        .child(Checkbox::new(id).label(label).checked(value.get())
+            .on_click(move |checked: &bool, window, _| { value.set(*checked); window.refresh(); }))
+}
+
+/// O alerta com corpo livre, redesenhado a cada quadro. `enabled` trava o confirmar; `height` é a altura esperada,
+/// para centrar. Sem `title`, o corpo traz o próprio cabeçalho; sem `variant`, o confirmar é o `light_button`;
+/// `restyle` ajusta a superfície.
+#[allow(clippy::too_many_arguments)]
+pub fn confirm_dialog(window: &mut Window, cx: &mut App, width: Pixels, height: Pixels, title: Option<String>,
+    body: Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>, enabled: Rc<dyn Fn() -> bool>,
+    ok: String, variant: Option<ButtonVariant>, restyle: fn(gpui_kit::component::dialog::Dialog) -> gpui_kit::component::dialog::Dialog,
+    act: impl Fn(&mut Window, &mut App) -> bool + 'static) {
+    use gpui_kit::{base::actions::{Cancel, Confirm}, component::{WindowExt, dialog::DialogFooter}};
     let act = Rc::new(act);
     let pressed = Rc::new(Cell::new(false));
     // Cada botão despacha a partir de um nó dentro dele, como o rodapé do kit: pelo foco, uma superfície que o
@@ -677,26 +707,22 @@ pub fn confirm_alert_with(window: &mut Window, cx: &mut App, title: String, desc
     let (cancel_from, ok_from) = (cx.focus_handle(), cx.focus_handle());
     let (cancel_focus, ok_focus) = (cx.focus_handle(), cx.focus_handle());
     let initial_focus = cancel_focus.clone();
-    window.open_dialog(cx, move |dialog, window, _| {
-        let (act, confirm) = (act.clone(), pressed.clone());
+    window.open_dialog(cx, move |dialog, window, cx| {
+        let (act, confirm, enabled) = (act.clone(), pressed.clone(), enabled.clone());
         let (press, cancel_from, ok_from) = (pressed.clone(), cancel_from.clone(), ok_from.clone());
         let anchor = |from: &FocusHandle| div().absolute().size_0().track_focus(from);
-        let top = super::popup::centered_top(window.viewport_size().height, px(150.));
-        super::popup::dialog(dialog).w(px(360.)).close_button(false).margin_top(top)
-            .title(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(title.clone()))
-            .child(div().text_size(px(13.)).line_height(px(19.)).text_color(theme::muted()).whitespace_normal().child(description.clone()))
-            // A borda do kit some no vidro: a opção ganha caixa própria para ser vista.
-            .when_some(check.clone(), |el, (label, value)| el.child(div().mt(px(12.)).px(px(10.)).py(px(8.))
-                .rounded(px(8.)).border_1().border_color(theme::border_strong()).bg(theme::inset()).child(
-                Checkbox::new("confirm-check").label(label).checked(value.get())
-                    .on_click(move |checked: &bool, window, _| { value.set(*checked); window.refresh(); }))))
+        let top = super::popup::centered_top(window.viewport_size().height, height);
+        restyle(super::popup::dialog(dialog)).w(width).close_button(false).margin_top(top)
+            .when_some(title.clone(), |d, title| d.title(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(title)))
+            .child(body(window, cx))
             .footer(DialogFooter::new()
                 .child(OwnFocus { id: "cancel".into(), focus: Some(cancel_focus.clone()),
                     button: Button::new("cancel").label(crate::i18n::tr("cancel")).child(anchor(&cancel_from))
                         .on_key_down(swap_on_arrows(cancel_focus.clone(), ok_focus.clone()))
                         .on_click(move |_, window, cx| cancel_from.dispatch_action(&Cancel, window, cx)) })
                 .child(OwnFocus { id: "ok".into(), focus: Some(ok_focus.clone()),
-                    button: Button::new("ok").label(ok.clone()).with_variant(variant).child(anchor(&ok_from))
+                    button: match variant { Some(variant) => Button::new("ok").with_variant(variant).disabled(!enabled()),
+                        None => light_button("ok", enabled(), cx) }.label(ok.clone()).child(anchor(&ok_from))
                         .on_key_down(swap_on_arrows(cancel_focus.clone(), ok_focus.clone()))
                         .on_click(move |_, window, cx| {
                             press.set(true);
@@ -704,7 +730,7 @@ pub fn confirm_alert_with(window: &mut Window, cx: &mut App, title: String, desc
                             press.set(false);
                         }) }))
             .on_ok(move |event, window, cx| {
-                if confirm.take() { act(window, cx) } else { super::machines::enter_to_focused(event, window, cx) }
+                if confirm.take() { enabled() && act(window, cx) } else { super::machines::enter_to_focused(event, window, cx) }
             })
     });
     window.on_next_frame(move |window, cx| initial_focus.focus(window, cx));
