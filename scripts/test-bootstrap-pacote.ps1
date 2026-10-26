@@ -231,11 +231,46 @@ $out = Run-Bootstrap @()
 Assert (($out -join "`n") -match 'pelo git; ja ha uma instalacao') 'checkout na pasta padrao: recusa'
 Assert (-not ((Calls) | Where-Object { $_ -like 'server *' })) 'checkout na pasta padrao: nada baixado'
 
-# --- -SoChecar sem instalacao pelo pacote: nao instala nada ---
+# --- -SoChecar sem instalacao: baixa e abre o pacote, confere pelo instalador dele e deixa o marcador ---
+$marcador = Join-Path $perfil '.hangar\fresh-package'
 Reset-Machine; Publish 'latest'
+$out = Run-Bootstrap @('-App', '-SoChecar')
+Assert ((Calls) -contains "server install-package --channel latest --release-base file:///$($releases -replace '\\', '/')") 'check sem pacote: install-package do latest'
+Assert ((Calls) -contains "install $current App=True Tailscale= SoChecar=True tok=") 'check sem pacote: instalador do pacote com -SoChecar'
+Assert (Test-Path -LiteralPath $marcador) 'check sem pacote: marcador de instalacao nova'
+# A instalacao seguinte acha o pacote e o marcador: o instalador sabe que a instalacao e nova.
+Remove-Item $log -ErrorAction SilentlyContinue
+$out = Run-Bootstrap @('-App')
+Assert (-not ((Calls) | Where-Object { $_ -like 'server *' })) 'check sem pacote: a instalacao seguinte nao baixa de novo'
+Assert ((Calls) -contains 'fresh=1') 'check sem pacote: a instalacao seguinte sabe que e nova'
+
+# --- Instalacao direta que parou antes de marcar os passos (o install.ps1 falso nao apaga o marcador): a seguinte marca ---
+Reset-Machine; Publish 'latest'
+$out = Run-Bootstrap @('-App')
+Assert (Test-Path -LiteralPath $marcador) 'direto-retenta: marcador fica'
+Remove-Item $log -ErrorAction SilentlyContinue
+$out = Run-Bootstrap @('-App')
+Assert (-not ((Calls) | Where-Object { $_ -like 'server *' })) 'direto-retenta: a seguinte nao baixa de novo'
+Assert ((Calls) -contains 'fresh=1') 'direto-retenta: a seguinte sabe que e nova'
+
+# --- Pacote ja instalado com o marcador: o instalador sabe que a instalacao e nova ---
+Reset-Machine
+New-Item -ItemType Directory -Force -Path $current | Out-Null
+'{}' | Set-Content -Encoding ASCII (Join-Path $current 'manifest.json')
+Copy-Item $fakeInstall (Join-Path $current 'install.ps1')
+[IO.File]::WriteAllText($marcador, '')
+$out = Run-Bootstrap @('-App')
+Assert (-not ((Calls) | Where-Object { $_ -like 'server *' })) 'marcador: nada baixado'
+Assert ((Calls) -contains 'fresh=1') 'marcador: install.ps1 sabe que a instalacao e nova'
+
+# --- -SoChecar com o pacote ja instalado: confere sem criar o marcador ---
+Reset-Machine
+New-Item -ItemType Directory -Force -Path $current | Out-Null
+'{}' | Set-Content -Encoding ASCII (Join-Path $current 'manifest.json')
+Copy-Item $fakeInstall (Join-Path $current 'install.ps1')
 $out = Run-Bootstrap @('-SoChecar')
-Assert (($out -join "`n") -match 'nao ha instalacao pelo pacote para conferir') 'check sem pacote: recusa'
-Assert (-not (Test-Path $current)) 'check sem pacote: nada instalado'
+Assert ((Calls) -contains "install $current App=False Tailscale= SoChecar=True tok=") 'check com pacote: instalador dele com -SoChecar'
+Assert (-not (Test-Path -LiteralPath $marcador)) 'check com pacote: sem marcador'
 
 # --- irm | iex: o pacote pelo padrao, sem argumento nenhum ---
 Reset-Machine; Publish 'latest'

@@ -71,6 +71,7 @@ $dev = ($env:CP_DEV -eq '1')
 # O USERPROFILE, e nao o $HOME: e a pasta que o hangar-server le.
 $perfil = $env:USERPROFILE
 $pacote = Join-Path $perfil '.hangar\current'
+$marcadorNovo = Join-Path $perfil '.hangar\fresh-package'
 
 function Titulo($m) { Write-Host "`n$m" -ForegroundColor Cyan }
 function Ok($m)     { Write-Host "  ok  $m" -ForegroundColor Green }
@@ -161,6 +162,13 @@ function Invoke-Installer($pasta) {
     foreach ($nome in $appEnv.Keys) { Set-Item "Env:$nome" $appEnv[$nome] }
     & $ps -NoProfile -ExecutionPolicy Bypass -File $instalador @repasse
     exit $LASTEXITCODE
+}
+
+# O instalador do pacote; com o marcador presente, a instalacao ainda nao marcou os passos de atualizacao
+# (a conferencia nunca marca, e uma instalacao pode ter parado antes). Nao volta.
+function Invoke-PackageInstaller {
+    if (Test-Path -LiteralPath $marcadorNovo) { $env:HANGAR_FRESH_PACKAGE = '1' }
+    Invoke-Installer $pacote
 }
 
 # O caminho pelo git: clona (ou atualiza) o checkout e roda o install.ps1 dele. Nao volta.
@@ -277,9 +285,8 @@ function Install-FromPackage {
     # Re-rodar continua de onde parou: o pacote ja instalado roda o instalador dele de novo.
     if ((Test-Path -LiteralPath (Join-Path $pacote 'manifest.json')) -and -not (Test-Path -LiteralPath (Join-Path $pacote '.git'))) {
         Ok 'o Hangar ja esta instalado pelo pacote - rodando o instalador dele de novo (atualizar e pelo app)'
-        Invoke-Installer $pacote
+        Invoke-PackageInstaller
     }
-    if ($SoChecar) { Stop-Bootstrap 'nao ha instalacao pelo pacote para conferir - rode sem -SoChecar para instalar' }
     # Checkout instalado e nunca iniciado nao deixa tarefa nem anotacao para o install-package ver.
     if (EhEsteRepo $destino) { Stop-Bootstrap "o Hangar esta em $destino, pelo git; $jaInstalado" }
     if ("$env:PROCESSOR_ARCHITEW6432$env:PROCESSOR_ARCHITECTURE" -notmatch 'AMD64') {
@@ -343,9 +350,9 @@ function Install-FromPackage {
         4 { Stop-Bootstrap $jaInstalado }
         default { Stop-Bootstrap 'a instalacao do pacote parou (motivo acima)' }
     }
-    # Instalacao criada agora: o install.ps1 marca os passos de atualizacao como ja aplicados.
-    $env:HANGAR_FRESH_PACKAGE = '1'
-    Invoke-Installer $pacote
+    # Instalacao criada agora: o marcador fica ate o install.ps1 marcar os passos como ja aplicados.
+    [IO.File]::WriteAllText($marcadorNovo, '')
+    Invoke-PackageInstaller
 }
 
 Titulo 'hangar - instalacao em uma linha'

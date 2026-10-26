@@ -86,6 +86,7 @@ case "${1-}" in
   *)     DEST=$1; PASTA=1; shift ;;
 esac
 PACOTE="$HOME/.hangar/current"
+FRESH_MARK="$HOME/.hangar/fresh-package"
 
 # Roda o install.sh de <pasta> com as opções do usuário; não volta.
 roda_instalador() {
@@ -104,6 +105,13 @@ roda_instalador() {
   else
     exec ./install.sh "$@"
   fi
+}
+
+# O instalador do pacote; com o marcador presente, a instalação ainda não marcou os passos de atualização
+# (a conferência nunca marca, e uma instalação pode ter parado antes). Não volta.
+roda_instalador_do_pacote() {
+  [ ! -e "$FRESH_MARK" ] || export HANGAR_FRESH_PACKAGE=1
+  roda_instalador "$PACOTE" "$@"
 }
 
 # Mesma detecção do `detecta_pkg` do install.sh, e duplicada de propósito: aqui o repositório
@@ -221,9 +229,8 @@ pelo_pacote() {
     # Não há troca de canal: o atualizador segue o canal do manifesto instalado.
     [ -z "$instalado" ] || [ "$instalado" = "$CANAL" ] \
       || nota "instalado no canal $instalado (pedido: $CANAL); o canal instalado é mantido"
-    roda_instalador "$PACOTE" "$@"
+    roda_instalador_do_pacote "$@"
   fi
-  [ "$CHECK" = 0 ] || fail "não há instalação pelo pacote para conferir — rode sem --check para instalar"
   # Checkout instalado e nunca iniciado (--no-services) não deixa unit nem anotação para o install-package ver.
   if [ -d "$DEST" ] && mesma_origem "$DEST"; then fail "o Hangar está em $DEST, pelo git; $JA_INSTALADO"; fi
   plat=$(plataforma)
@@ -281,9 +288,9 @@ pelo_pacote() {
     *) fail "a instalação do pacote parou (motivo acima)" ;;
   esac
   limpa_tmp
-  # Instalação criada agora: o install.sh marca os passos de atualização como já aplicados.
-  export HANGAR_FRESH_PACKAGE=1
-  roda_instalador "$PACOTE" "$@"
+  # Instalação criada agora: o marcador fica até o install.sh marcar os passos como já aplicados.
+  : > "$FRESH_MARK"
+  roda_instalador_do_pacote "$@"
 }
 
 say "hangar — instalação em uma linha"

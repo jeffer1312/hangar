@@ -287,11 +287,46 @@ TEST_RELEASE_BASE='' run_boot "$S/out" --app
 expect_line "https: índice com --proto =https" "$S/curl.log" "^curl --proto =https .*https://github.com/jeffer1312/hangar/releases/download/package-latest/package-latest.json"
 expect_line "https: manifesto com --proto =https" "$S/curl.log" "^curl --proto =https .*https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json"
 
-# --- --check sem instalação pelo pacote: não instala nada ---
+# --- --check sem instalação: baixa e abre o pacote, confere pelo instalador dele e deixa o marcador ---
 new_box check; publish latest
+run_boot "$S/out" --app --check
+version_dir
+expect_eq "check: install-package do latest" "$(head -1 "$S/server.log" 2>/dev/null)" "install-package --channel latest --release-base file://$REL" "$S/out"
+expect_eq "check: install.sh do pacote com --check" "$(paste -sd' ' "$V/args" 2>/dev/null)" '--app --check' "$S/out"
+[ -e "$S/home/.hangar/fresh-package" ] && pass "check: marcador de instalação nova" || flunk "check: marcador de instalação nova" "$S/out"
+# A instalação seguinte acha o pacote e o marcador: o instalador sabe que a instalação é nova.
+rm -f "$V/fresh"
+run_boot "$S/out2" --app
+expect_eq "check: só um install-package" "$(grep -c install-package "$S/server.log")" 1 "$S/out2"
+expect_eq "check: instalação seguinte sabe que é nova" "$(cat "$V/fresh" 2>/dev/null)" 1 "$S/out2"
+
+# --- Instalação direta que parou antes de marcar os passos (o install.sh falso não apaga o marcador): a seguinte marca ---
+new_box direto-retenta; publish latest
+run_boot "$S/out" --app
+version_dir
+[ -e "$S/home/.hangar/fresh-package" ] && pass "direto-retenta: marcador fica" || flunk "direto-retenta: marcador fica" "$S/out"
+rm -f "$V/fresh"
+run_boot "$S/out2" --app
+expect_eq "direto-retenta: só um install-package" "$(grep -c install-package "$S/server.log")" 1 "$S/out2"
+expect_eq "direto-retenta: a seguinte sabe que é nova" "$(cat "$V/fresh" 2>/dev/null)" 1 "$S/out2"
+
+# --- Pacote já instalado com o marcador de instalação nova: o instalador sabe que a instalação é nova ---
+new_box marcador; publish latest
+mkdir -p "$S/home/.hangar/current"; echo '{}' > "$S/home/.hangar/current/manifest.json"
+cp "$S/install-fake.sh" "$S/home/.hangar/current/install.sh"
+: > "$S/home/.hangar/fresh-package"
+run_boot "$S/out" --app
+expect_absent "marcador: nada baixado" "$S/server.log" "$S/out"
+expect_eq "marcador: install.sh sabe que a instalação é nova" "$(cat "$S/home/.hangar/current/fresh" 2>/dev/null)" 1 "$S/out"
+
+# --- --check com o pacote já instalado: confere sem criar o marcador ---
+new_box check-instalado; publish latest
+mkdir -p "$S/home/.hangar/current"; echo '{}' > "$S/home/.hangar/current/manifest.json"
+cp "$S/install-fake.sh" "$S/home/.hangar/current/install.sh"
 run_boot "$S/out" --check
-expect_absent "check: nada baixado" "$S/server.log"
-expect_line "check: diz o que fazer" "$S/out" 'rode sem --check'
+expect_absent "check-instalado: nada baixado" "$S/server.log" "$S/out"
+expect_eq "check-instalado: install.sh do current com --check" "$(paste -sd' ' "$S/home/.hangar/current/args" 2>/dev/null)" '--check' "$S/out"
+expect_absent "check-instalado: sem marcador" "$S/home/.hangar/fresh-package"
 
 if [ "$fail" = 0 ]; then echo "tudo ok"; else echo "houve falha"; fi
 exit "$fail"

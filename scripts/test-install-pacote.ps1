@@ -94,13 +94,19 @@ public static class FakeMark {
     $env:FAKE_LOG = $log
     $passos = Trecho 'if ($pacote -and -not $Update' 'install-package --mark-steps'
     $raiz = $versao; $pacote = $true; $Update = $false; $pacoteNovo = $true
+    $marcador = Join-Path $casa '.hangar\fresh-package'
+    [IO.File]::WriteAllText($marcador, '')
     Limpa; . $passos
     Assert ((Get-Content $log) -eq 'install-package --mark-steps') 'passos: --mark-steps pelo hangar-server do pacote'
     Assert ((Saida) -match 'nota aviso: passo malformado ignorado: torto.md') 'passos: passo malformado aparece'
     Assert ((Saida) -match 'ok passos de atualizacao marcados') 'passos: ok'
+    Assert (-not (Test-Path -LiteralPath $marcador)) 'passos: marcador de instalacao nova apagado'
     $env:FAKE_RC = '1'
+    [IO.File]::WriteAllText($marcador, '')
     Limpa; . $passos
     Assert ((Saida) -match 'falha passos de atualizacao: .*--mark-steps') 'passos: falha vira pendencia com o comando'
+    Assert (Test-Path -LiteralPath $marcador) 'passos: falha deixa o marcador para a proxima'
+    Remove-Item -LiteralPath $marcador
     Remove-Item Env:FAKE_RC
     Remove-Item $log
     $Update = $true
@@ -128,6 +134,8 @@ public static class FakeMark {
     $marca = $texto.IndexOf('install-package --mark-steps 2>&1')
     $fim = $texto.IndexOf('# -- Confere e entrega o acesso')
     Assert ($fumaca -gt 0 -and $marca -gt $fumaca -and $fim -gt $marca) 'pacote: passos marcados depois da fumaca'
+    $saiChecar = $texto.IndexOf("if (`$SoChecar) {`n    `$pyVenvCheck")
+    Assert ($saiChecar -gt 0 -and $saiChecar -lt $marca) 'pacote: -SoChecar sai antes de marcar passos'
     $bytes = [IO.File]::ReadAllBytes($installer)
     Assert ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) 'install.ps1 continua UTF-8 com BOM'
 } finally {

@@ -49,7 +49,7 @@ if ($App) {
 $tokenDoApp = ''
 if ($App) { $tokenDoApp = "$env:HANGAR_TOKEN" }
 Remove-Item Env:HANGAR_TOKEN -ErrorAction SilentlyContinue
-# So o bootstrap que acabou de criar a instalacao pelo pacote manda isto: rodar de novo nao marca passo.
+# So o bootstrap manda isto, enquanto ha o marcador da instalacao nova: depois de marcar, rodar de novo nao marca passo.
 $pacoteNovo = ($env:HANGAR_FRESH_PACKAGE -eq '1')
 Remove-Item Env:HANGAR_FRESH_PACKAGE -ErrorAction SilentlyContinue
 
@@ -2902,7 +2902,11 @@ if ($pacote -and -not $Update -and -not $pacoteNovo) {
     $saidaPassos = & { $ErrorActionPreference = 'Continue'; & "$raiz\bin\hangar-server.exe" install-package --mark-steps 2>&1 } | ForEach-Object { "$_" }
     $rcPassos = $LASTEXITCODE
     foreach ($l in $saidaPassos) { Nota $l }
-    if ($rcPassos -eq 0) { Ok 'passos de atualizacao marcados como ja aplicados (instalacao nova)' }
+    if ($rcPassos -eq 0) {
+        Ok 'passos de atualizacao marcados como ja aplicados (instalacao nova)'
+        # O marcador do bootstrap so sai com os passos marcados: falhou, a proxima execucao tenta de novo.
+        Remove-Item -LiteralPath (Join-Path $HOME '.hangar\fresh-package') -Force -ErrorAction SilentlyContinue
+    }
     else { Falha 'passos de atualizacao' 'nao foram marcados como aplicados - rode:  ~\.hangar\current\bin\hangar-server.exe install-package --mark-steps' }
 }
 

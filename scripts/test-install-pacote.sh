@@ -31,6 +31,7 @@ pacote_sandbox() {
 
 # --- Caso: instalação nova pelo assistente, sem git, uv, npm nem python3 na máquina ---
 pacote_sandbox novo
+mkdir -p "$S/home/.hangar" && : > "$S/home/.hangar/fresh-package"
 TEST_FRESH=1 TEST_TOKEN='segredo-do-app-123' run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
 expect_eq "novo: sai 0" "$rc" 0
 expect_eq "novo: FIM ok" "$(last_line "$S/out")" '##HANGAR-FIM## ok'
@@ -49,6 +50,7 @@ expect_line "novo: hangar-send e skills" "$S/log/scripts" '^\./scripts/install-h
 expect_eq "novo: passos marcados no fim, pelo hangar-server do pacote" "$(cat "$S/log/server" 2>/dev/null)" 'install-package --mark-steps'
 expect_line "novo: passo malformado aparece" "$S/out" 'passo malformado ignorado: torto.md'
 before "$S/out" 'o backend importa' 'passo malformado' && pass "novo: marca depois da fumaça" || flunk "novo: marca depois da fumaça" "$S/out"
+[ -e "$S/home/.hangar/fresh-package" ] && flunk "novo: marcador de instalação nova apagado" "$S/out" || pass "novo: marcador de instalação nova apagado"
 expect_no "novo: sem hook de git pull" "$S/out" 'sem .git|hook de atualização'
 SHIM="$S/home/.hangar/cache/install-bin/python3"
 expect_line "novo: python3 dos sub-scripts é o do pacote" "$SHIM" "exec \"$R/scripts/hangar-python\""
@@ -156,8 +158,10 @@ expect_no "tela-desligada: sem pendência" "$S/out" '^##HANGAR-PENDENCIA##'
 # --- Caso: a marca dos passos falhou: pendência ---
 pacote_sandbox marca-falha
 : > "$S/mark-fails"
+mkdir -p "$S/home/.hangar" && : > "$S/home/.hangar/fresh-package"
 TEST_FRESH=1 run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
 expect_eq "marca-falha: sai 1" "$rc" 1
+[ -e "$S/home/.hangar/fresh-package" ] && pass "marca-falha: marcador fica para a próxima" || flunk "marca-falha: marcador fica para a próxima" "$S/out"
 expect_line "marca-falha: pendência" "$S/out" '^##HANGAR-PENDENCIA## .*passos de atualização'
 
 # --- Caso: a instalação parou antes do fim: nenhum passo marcado ---
@@ -203,12 +207,15 @@ env -i HOME="$S/home" PATH="$S/sys" "$R/scripts/show-qr.sh" >> "$S/out" 2>&1
 expect_line "doctor: pelo hangar-python" "$S/log/python" "^$R/backend -m app.doctor --qr$"
 expect_line "show-qr: pelo hangar-python" "$S/log/python" "^$R/backend -c from app.config import settings"
 
-# --- Caso: --check no pacote confere sem uv e sem gravar ---
+# --- Caso: --check no pacote confere sem uv e sem gravar, nem marcar passos (mesmo em instalação nova) ---
 pacote_sandbox check
-run_install "$S/out" --check --no-frontend; rc=$?
+mkdir -p "$S/home/.hangar" && : > "$S/home/.hangar/fresh-package"
+TEST_FRESH=1 run_install "$S/out" --check --no-frontend; rc=$?
 expect_eq "check: sai 0" "$rc" 0
 expect_line "check: diagnóstico pelo Python do pacote" "$S/log/python" "^$R/backend -m app.doctor$"
 [ -e "$S/home/.hangar/config" ] && flunk "check: não grava nada" || pass "check: não grava nada"
+[ -e "$S/log/server" ] && flunk "check: nada marcado" "$S/out" || pass "check: nada marcado"
+[ -e "$S/home/.hangar/fresh-package" ] && pass "check: marcador fica" || flunk "check: marcador fica" "$S/out"
 
 if [ "$fail" = 0 ]; then echo "tudo ok"; else echo "houve falha"; fi
 exit "$fail"
