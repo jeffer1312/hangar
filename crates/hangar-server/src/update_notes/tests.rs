@@ -68,6 +68,28 @@ async fn not_a_repo_is_an_error() {
     assert!(collect(tmp.path(), "origin/main", &tmp.path().join("x.json")).await.is_err());
 }
 
+/// Os mesmos casos do `scripts/test_montar_pacote.py`: o índice do pacote, montado em Python, traz as
+/// notas que esta leitura daria.
+#[test]
+fn package_fixtures_match_the_python_builder() {
+    let cases: Value = serde_json::from_str(include_str!("fixtures.json")).unwrap();
+    let files = |dir: &str| {
+        let mut files: Vec<(String, String)> = cases[dir].as_object().unwrap().iter()
+            .map(|(name, text)| (name.clone(), text.as_str().unwrap().to_owned())).filter(|(name, _)| is_note_file(name)).collect();
+        files.sort();
+        files
+    };
+    let news = order_news(files("novidades").iter().filter_map(|(name, text)| {
+        let id = name.trim_end_matches(".md");
+        news_item(id, text).map(|(rank, item)| (rank, id.to_owned(), item))
+    }).collect());
+    assert_eq!(json!(news), cases["notes"]["news"]);
+    for (os, windows) in [("linux-x86_64", false), ("windows-x86_64", true)] {
+        let warnings: Vec<Value> = files("atualizacoes").iter().filter_map(|(name, text)| package_warning(name, text, windows)).map(|w| w.1).collect();
+        assert_eq!(json!(warnings), cases["notes"][os], "{os}");
+    }
+}
+
 #[test]
 fn update_branch_follows_env_then_dotenv_then_main() {
     assert_eq!(update_branch(Some("feat/x".into()), Some("CP_UPDATE_BRANCH=outra")), "feat/x");

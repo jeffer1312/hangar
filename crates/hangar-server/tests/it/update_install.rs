@@ -70,7 +70,7 @@ impl Release {
         let asset = format!("hangar-{VERSION}.tar.gz");
         std::fs::write(dir.join(&asset), &bytes).unwrap();
         let entry = PlatformEntry { version: VERSION.into(), asset, sha256: sha_override.map_or_else(|| sha(&bytes), str::to_owned),
-            protocol: 7, api: 1, commit: "c0ffee".into(), dist_key: None };
+            protocol: 7, api: 1, commit: "c0ffee".into(), dist_key: None, notes: None };
         let index = PackageIndex { platforms: BTreeMap::from([(platform.to_owned(), entry)]) };
         std::fs::write(dir.join(format!("package-{channel}.json")), serde_json::to_vec(&index).unwrap()).unwrap();
     }

@@ -151,7 +151,7 @@ pub fn frontmatter(text: &str) -> (BTreeMap<String, String>, String) {
     (fields, lines[end + 1..].join("\n").trim().to_owned())
 }
 
-fn step(fields: &BTreeMap<String, String>, stem: &str, windows: bool) -> Option<Step> {
+pub(crate) fn step(fields: &BTreeMap<String, String>, stem: &str, windows: bool) -> Option<Step> {
     let get = |k: &str| fields.get(k).map(String::as_str).unwrap_or("");
     if get("titulo").is_empty() { return None; }
     let has_command = ["comando", "comando_posix", "comando_windows"].iter().any(|k| !get(k).is_empty());
@@ -200,7 +200,7 @@ pub fn applied(state_dir: &Path) -> BTreeSet<String> {
 }
 
 /// Lista ordenada de strings, como o `_gravar` do Python.
-fn mark(state_dir: &Path, id: &str) -> Result<(), UpdateError> {
+pub(crate) fn mark(state_dir: &Path, id: &str) -> Result<(), UpdateError> {
     record(state_dir, [id.to_owned()]).map_err(|e| UpdateError::Step(format!("não consegui registrar o passo {id}: {e}")))
 }
 

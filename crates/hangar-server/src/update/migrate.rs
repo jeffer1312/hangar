@@ -26,6 +26,9 @@ use serde_json::Value;
 use super::{HealthProbe, Layout, Reading, Release, Settings, UpdateError, UpdateLock};
 
 pub const MARKER: &str = "migration.json";
+/// O passo de `docs/atualizacoes` que roda esta migração: ela para o backend antes de o motor `git`
+/// registrá-lo, então quem o registra é ela, ao terminar.
+pub const STEP_ID: &str = "2026-10-24-pacote-por-versao";
 pub(super) const PARTIAL: &str = "migration.partial.json";
 /// Dados do usuário, em `backend/` antes e em `~/.hangar/config/` depois.
 const DATA: [&str; 4] = [".env", "peers.json", "projects.json", "launchers"];
@@ -94,6 +97,8 @@ pub struct Machine<'a> {
     pub launcher_source: PathBuf,
     /// Este processo morre junto com o backend (cgroup da unit; Job da tarefa que mata ao fechar).
     pub in_service_group: bool,
+    /// `<config do Claude>/.hangar-update`, onde mora o `aplicados.json` dos passos.
+    pub state_dir: PathBuf,
     pub service: &'a dyn Service,
     pub fetcher: &'a dyn Fetcher,
     pub settings: Settings,
@@ -739,6 +744,8 @@ pub async fn migrate<H: HealthProbe>(m: &Machine<'_>, health: &H, dry_run: bool)
         None => super::wait_new(health, before, &m.settings).await,
     };
     if let Err(why) = proved { return Err(roll_back(m, &record, true, why)); }
+    // A migração já valeu: registro que falha vira aviso, e a tela anuncia o passo de novo.
+    if let Err(e) = super::steps::mark(&m.state_dir, STEP_ID) { record.notes.push(e.to_string()); }
     record.date = now();
     save(&m.marker(), &record)?;
     let _ = std::fs::remove_file(m.partial());
@@ -960,7 +967,7 @@ pub fn cli(args: &[String]) -> ExitCode {
         systemd_dir: var("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config")).join("systemd").join("user"),
         tasks_dir: windows.then(|| var("LOCALAPPDATA").map(|d| d.join("hangar"))).flatten(),
         kimi_home: var("KIMI_CODE_HOME").unwrap_or_else(|| home.join(".kimi-code")),
-        codex_homes, launcher_source, in_service_group: in_service_group(),
+        codex_homes, launcher_source, in_service_group: in_service_group(), state_dir: super::state_dir(&env.claude_base),
         service: &Unused, fetcher: &Unused,
         // A prova cabe no prazo do passo do motor `git` (600 s), com o download antes dela.
         settings: Settings { download_deadline: Duration::from_secs(300), ..Settings::default() },

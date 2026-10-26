@@ -137,9 +137,10 @@ def test_pacote_tem_exatamente_os_arquivos_do_manifesto(tmp_path, monkeypatch, o
                  # O setup-windows-tmux.ps1 (passo 5b do install.ps1) copia o modelo de docs/.
                  "docs/tmux.conf.windows.example", "docs/tmux.conf.example"):
         assert any(n == must or n.startswith(must.rstrip("/") + "/") for n in members), must
-    # De docs/ só os passos e os dois modelos de tmux, não a pasta inteira.
-    assert {n for n in members if n.startswith("docs/") and not n.startswith("docs/atualizacoes/")} == {
+    # De docs/ só os passos, as novidades e os dois modelos de tmux, não a pasta inteira.
+    assert {n for n in members if n.startswith("docs/") and not n.startswith(("docs/atualizacoes/", "docs/novidades/"))} == {
         "docs/tmux.conf.windows.example", "docs/tmux.conf.example"}
+    assert "docs/novidades/2026-10-26-historico-do-compositor.md" in members
     for name in members:
         assert not name.startswith(("crates/", "frontend/", "backend/tests/", ".git")), name
         assert "node_modules" not in name, name
@@ -177,11 +178,28 @@ def test_pacote_tem_exatamente_os_arquivos_do_manifesto(tmp_path, monkeypatch, o
         assert not any(n.startswith(("python/include/", "python/share/")) for n in members)
 
     entry = json.loads((out / f"package-entry-{os_name}.json").read_text())
+    notes = entry.pop("notes")
     assert entry == {
         "version": version, "asset": archive.name, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
         "protocol": manifest["protocol"], "api": manifest["api"], "commit": manifest["commit"],
         "dist_key": manifest["dist_key"],
     }
+    # Avisos e novidades da versão no índice: passo destrutivo de máquina sim, destrutivo de conteúdo não.
+    warnings = {w["id"] for w in notes["warnings"]}
+    assert "2026-10-24-pacote-por-versao" in warnings
+    assert "2026-09-14-headless-cli-preview" not in warnings
+    assert "2026-10-26-historico-do-compositor" in {n["id"] for n in notes["news"]}
+
+
+def test_notas_iguais_as_do_rust(tmp_path):
+    """Os casos que o update_notes/tests.rs também lê: as duas leituras dão as mesmas notas."""
+    cases = json.loads((REPO / "crates/hangar-server/src/update_notes/fixtures.json").read_text(encoding="utf-8"))
+    for pasta in ("atualizacoes", "novidades"):
+        (tmp_path / "docs" / pasta).mkdir(parents=True)
+        for name, text in cases[pasta].items():
+            (tmp_path / "docs" / pasta / name).write_bytes(text.encode())
+    for os_name in ("linux-x86_64", "windows-x86_64"):
+        assert mp.notes(tmp_path, os_name) == {"warnings": cases["notes"][os_name], "news": cases["notes"]["news"]}, os_name
 
 
 def test_manifesto_acima_do_teto_do_extrator_falha_no_build(tmp_path, monkeypatch):

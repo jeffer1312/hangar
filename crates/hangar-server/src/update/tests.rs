@@ -79,7 +79,7 @@ impl FakeRelease {
         let asset = format!("hangar-{version}-{PLATFORM}.tar.gz");
         std::fs::write(self.root.path().join("package-latest").join(&asset), bytes).unwrap();
         let entry = PlatformEntry { version: version.into(), asset, sha256: sha_override.map_or_else(|| sha(bytes), str::to_owned),
-            protocol: PROTOCOL, api: 1, commit: format!("commit-{version}"), dist_key: None };
+            protocol: PROTOCOL, api: 1, commit: format!("commit-{version}"), dist_key: None, notes: None };
         let index = PackageIndex { platforms: BTreeMap::from([(PLATFORM.to_owned(), entry.clone())]) };
         std::fs::write(self.root.path().join("package-latest/package-latest.json"), serde_json::to_vec(&index).unwrap()).unwrap();
         entry

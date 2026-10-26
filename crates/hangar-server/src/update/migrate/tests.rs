@@ -137,13 +137,15 @@ impl Box_ {
             home: self.home.clone(), checkout: self.checkout.clone(), windows: false,
             systemd_dir: self.home.join(".config/systemd/user"), tasks_dir: None,
             kimi_home: self.home.join(".kimi-code"), codex_homes: vec![self.home.join(".codex")],
-            launcher_source: self.launcher.clone(), in_service_group: false, service, fetcher,
+            launcher_source: self.launcher.clone(), in_service_group: false, state_dir: self.state_dir(), service, fetcher,
             settings: Settings { download_deadline: Duration::from_secs(5), health_deadline: Duration::from_millis(300), health_interval: Duration::from_millis(10) },
         }
     }
 
     fn unit(&self) -> String { std::fs::read_to_string(self.home.join(".config/systemd/user/hangar-backend.service")).unwrap() }
     fn current(&self) -> PathBuf { self.home.join(".hangar/current") }
+    fn state_dir(&self) -> PathBuf { self.home.join(".claude/.hangar-update") }
+    fn step_applied(&self) -> bool { crate::update::steps::applied(&self.state_dir()).contains(STEP_ID) }
     fn marker(&self) -> Option<serde_json::Value> {
         std::fs::read(self.home.join(".hangar/migration.json")).ok().map(|b| serde_json::from_slice(&b).unwrap())
     }
@@ -169,6 +171,13 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, String> {
 }
 
 #[test]
+fn migrate_step_id_is_the_step_file() {
+    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/atualizacoes").join(format!("{STEP_ID}.md"));
+    let (fields, _) = crate::update::steps::frontmatter(&std::fs::read_to_string(&file).unwrap());
+    assert_eq!(fields.get("id").map(String::as_str), Some(STEP_ID));
+}
+
+#[test]
 fn migrate_decides_developer_by_edits_ahead_branch_and_preview() {
     let clean = Facts { dirty: 0, untracked: 0, ahead: 0, branch: "main".into(), upstream: true, preview: false, dev_requested: false };
     assert_eq!(decide(&clean).0, Mode::Package);
@@ -187,6 +196,7 @@ async fn migrate_clean_checkout_becomes_package() {
     let (service, fetcher) = (FakeService::default(), FakeFetcher::default());
     let outcome = migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap();
     assert_eq!(outcome, Outcome::Migrated(Mode::Package));
+    assert!(b.step_applied(), "o passo que roda a migração fica registrado: a tela não o anuncia de novo");
     assert_eq!(fetcher.calls.load(Ordering::SeqCst), 1);
     assert_eq!(*fetcher.channels.lock().unwrap(), ["latest"]);
     assert_eq!(*service.calls.lock().unwrap(), ["stop", "start"]);
@@ -267,6 +277,7 @@ async fn migrate_dirty_branch_or_preview_checkout_is_developer_mode_without_down
         let (service, fetcher) = (FakeService::default(), FakeFetcher::default());
         let outcome = migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap();
         assert_eq!(outcome, Outcome::Migrated(Mode::Developer), "{case}");
+        assert!(b.step_applied(), "{case}");
         assert_eq!(fetcher.calls.load(Ordering::SeqCst), 0, "{case}: nada baixado");
         assert!(!b.home.join(".hangar/versions").exists(), "{case}");
         assert_eq!(std::fs::canonicalize(b.current()).unwrap(), std::fs::canonicalize(&b.checkout).unwrap(), "{case}");

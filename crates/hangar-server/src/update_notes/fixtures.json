@@ -1,0 +1,44 @@
+{
+  "_": "Casos do pacote: os mesmos arquivos lidos pelo Rust (update_notes/tests.rs) e pelo scripts/montar-pacote.py (scripts/test_montar_pacote.py) têm que dar as mesmas notas. Aviso no pacote = passo destrutivo de máquina que o steps.rs roda neste sistema: válido (comando com prova) e com comando para ele.",
+  "atualizacoes": {
+    "2026-02-01-apaga.md": "---\ntitulo: Apaga algo\ncomando: rm algo\nprova: ~/x\ndestrutivo: Sim\ntipo: maquina\n---\n\nVai apagar.\n",
+    "2026-02-02-conteudo.md": "---\ntitulo: Só conteúdo\ncomando: rm algo\nprova: x\ndestrutivo: true\n---\n\nNão roda no pacote.\n",
+    "2026-02-03-com-id.md": "---\nid: 2026-02-03-x\n# comentário\ntitulo:  Com id: dois pontos \ncomando_posix: rm a\nprova: a b\ndestrutivo: 1\ntipo: maquina\n---\nLinha um.\n\nLinha dois.\n",
+    "2026-02-04-leve.md": "---\ntitulo: Leve\ncomando: echo\nprova: x\ntipo: maquina\n---\n\nNada.\n",
+    "2026-02-05-sem-titulo.md": "---\ncomando: rm algo\nprova: x\ndestrutivo: true\ntipo: maquina\n---\n\nSem título.\n",
+    "2026-02-06-crlf.md": "---\r\ntitulo: Com CRLF\r\ncomando: rm c\r\nprova: c\r\ndestrutivo: TRUE\r\ntipo: maquina\r\n---\r\n\r\nCorpo CRLF.\r\n",
+    "2026-02-07-so-windows.md": "---\ntitulo: Só Windows\ncomando_windows: del x\nprova: x\ndestrutivo: true\ntipo: maquina\n---\n\nNo Windows.\n",
+    "2026-02-08-sem-prova.md": "---\ntitulo: Sem prova\ncomando: rm x\ndestrutivo: true\ntipo: maquina\n---\n\nO steps.rs ignora.\n",
+    "2026-02-09-so-texto.md": "---\ntitulo: Só texto\ndestrutivo: true\ntipo: maquina\n---\n\nSem comando.\n",
+    "README.md": "---\ntitulo: Não é passo\ncomando: rm x\nprova: x\ndestrutivo: true\ntipo: maquina\n---\n"
+  },
+  "novidades": {
+    "2026-02-01-conserto.md": "---\ntitulo: T correcao\ntipo: correcao\nonde: desktop\nanimacao: x\n---\n\nCorpo correcao.\n",
+    "2026-02-02-nova.md": "---\ntitulo: T novo\ntipo: novo\nonde: celular\nexperimente: aperte ↑\nanimacao: historico-compositor\n---\n\nCorpo novo.\n",
+    "2026-02-03-ruim.md": "---\ntitulo: T outro\ntipo: outro\nonde: todos\n---\n\nIgnorada.\n",
+    "2026-02-04-melhor.md": "---\r\ntitulo: T melhoria\r\n# nota\r\ntipo: melhoria\r\nonde: todos\r\nexperimente:\r\n---\r\n\r\nCorpo melhoria.\r\n",
+    "2026-02-05-sem-titulo.md": "---\ntipo: novo\nonde: todos\n---\n\nSem título.\n",
+    "2026-02-06-onde-ruim.md": "---\ntitulo: T onde\ntipo: novo\nonde: tablet\n---\n",
+    "README.md": "formato"
+  },
+  "notes": {
+    "linux-x86_64": [
+      {"id": "2026-02-01-apaga", "title": "Apaga algo", "text": "Vai apagar."},
+      {"id": "2026-02-03-x", "title": "Com id: dois pontos", "text": "Linha um.\n\nLinha dois."},
+      {"id": "2026-02-06-crlf", "title": "Com CRLF", "text": "Corpo CRLF."}
+    ],
+    "windows-x86_64": [
+      {"id": "2026-02-01-apaga", "title": "Apaga algo", "text": "Vai apagar."},
+      {"id": "2026-02-06-crlf", "title": "Com CRLF", "text": "Corpo CRLF."},
+      {"id": "2026-02-07-so-windows", "title": "Só Windows", "text": "No Windows."}
+    ],
+    "news": [
+      {"id": "2026-02-02-nova", "title": "T novo", "kind": "new", "text": "Corpo novo.", "platforms": "mobile",
+       "try_it": "aperte ↑", "animation": "historico-compositor"},
+      {"id": "2026-02-04-melhor", "title": "T melhoria", "kind": "improvement", "text": "Corpo melhoria.", "platforms": "all",
+       "try_it": null, "animation": null},
+      {"id": "2026-02-01-conserto", "title": "T correcao", "kind": "fix", "text": "Corpo correcao.", "platforms": "desktop",
+       "try_it": null, "animation": null}
+    ]
+  }
+}

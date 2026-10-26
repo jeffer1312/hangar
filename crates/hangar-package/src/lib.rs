@@ -65,6 +65,16 @@ pub struct PlatformEntry {
     pub api: u32,
     pub commit: String,
     pub dist_key: Option<String>,
+    /// Avisos e novidades da versão, no formato do `GET /api/update/notes`; ausente em índice antigo.
+    #[serde(default)]
+    pub notes: Option<Notes>,
+}
+
+/// Montado pelo `scripts/montar-pacote.py` a partir de `docs/atualizacoes` e `docs/novidades`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Notes {
+    pub warnings: Vec<serde_json::Value>,
+    pub news: Vec<serde_json::Value>,
 }
 
 /// `VERSION` + número de commits: quatro números separados por ponto (`0.1.0.8207`).

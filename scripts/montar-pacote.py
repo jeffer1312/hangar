@@ -34,7 +34,7 @@ MANIFEST_MAX = 4 << 20
 OSES = {"linux-x86_64": ("x86_64-manylinux_2_28", ""), "windows-x86_64": ("x86_64-pc-windows-msvc", ".exe")}
 # Os instaladores vão juntos: a instalação nova roda o do `current`, em modo pacote (sem git, uv nem build).
 TREES = ["backend/app", "backend/hooks", "resources", "scripts", "skills", "plugins", "shell", "messages",
-         "docs/atualizacoes", "docs/tmux.conf.windows.example", "docs/tmux.conf.example",
+         "docs/atualizacoes", "docs/novidades", "docs/tmux.conf.windows.example", "docs/tmux.conf.example",
          "VERSION", "install.sh", "install.ps1"]
 # Testes, provas, medições e ferramentas de quem desenvolve: rodam do checkout (modo desenvolvedor).
 EXCLUDE = [
@@ -222,6 +222,64 @@ def file_shas(root: Path) -> dict[str, str]:
     return files
 
 
+def frontmatter(text: str) -> tuple[dict, str]:
+    """O `frontmatter` do crates/hangar-server/src/update_notes: linhas como o `str::lines` do Rust."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    lines = [line.removesuffix("\r") for line in lines]
+    if not lines or lines[0].strip() != "---" or "---" not in lines[1:]:
+        return {}, text
+    end = lines.index("---", 1)
+    fields = {}
+    for line in lines[1:end]:
+        if line.strip() and not line.lstrip().startswith("#") and ":" in line:
+            key, value = line.split(":", 1)
+            fields[key.strip()] = value.strip()
+    return fields, "\n".join(lines[end + 1:]).strip()
+
+
+def _note_files(folder: Path) -> list[tuple[str, str]]:
+    names = sorted(p.name for p in folder.glob("*.md") if p.is_file() and not p.name.upper().startswith("README"))
+    return [(n, (folder / n).read_text(encoding="utf-8")) for n in names]
+
+
+def _stem(name: str) -> str:
+    while name.endswith(".md"):  # o `trim_end_matches(".md")` do Rust
+        name = name[:-3]
+    return name
+
+
+def notes(root: Path, os_name: str) -> dict:
+    """Avisos e novidades da versão, no formato do `GET /api/update/notes`. As regras são as do
+    crates/hangar-server/src/update_notes (casos comuns em fixtures.json); aviso só de passo destrutivo
+    de máquina que o steps.rs roda neste sistema: comando com prova, e comando para este sistema."""
+    own = "comando_windows" if os_name.startswith("windows") else "comando_posix"
+    warnings = []
+    for name, text in _note_files(root / "docs/atualizacoes"):
+        f, body = frontmatter(text)
+        commands = [f.get(k) for k in ("comando", "comando_posix", "comando_windows")]
+        if any(commands) and not f.get("prova"):
+            continue  # o steps.rs ignora o arquivo
+        command = (f.get(own) or f.get("comando") or "").strip()
+        if f.get("titulo") and f.get("destrutivo", "").lower() in ("true", "sim", "1") and f.get("tipo") == "maquina" and command:
+            warnings.append({"id": f.get("id") or name.removesuffix(".md"), "title": f["titulo"], "text": body})
+    kinds = {"novo": "new", "melhoria": "improvement", "correcao": "fix"}
+    places = {"desktop": "desktop", "celular": "mobile", "todos": "all"}
+    news = []
+    for name, text in _note_files(root / "docs/novidades"):
+        f, body = frontmatter(text)
+        kind, platforms = kinds.get(f.get("tipo")), places.get(f.get("onde"))
+        if not (f.get("titulo") and kind and platforms):
+            continue
+        news.append({"id": _stem(name), "title": f["titulo"], "kind": kind, "text": body, "platforms": platforms,
+                     "try_it": f.get("experimente") or None,
+                     "animation": None if kind == "fix" else f.get("animacao") or None})
+    order = list(kinds.values())
+    news.sort(key=lambda n: (order.index(n["kind"]), n["id"]))
+    return {"warnings": warnings, "news": news}
+
+
 def pack(root: Path, files: list[str], dest: Path):
     part = dest.with_name(dest.name + ".part")
     with tarfile.open(part, "w:gz", format=tarfile.PAX_FORMAT, compresslevel=6) as tar:
@@ -303,6 +361,7 @@ def main(argv=None) -> int:
             # O artefato do Actions perde o bit de execução.
             (root / "bin" / f"{name}{exe}").chmod(0o755)
         copy_repo(root)
+        version_notes = notes(root, a.os)
         compile_pyc(root, a.os, py_version)
 
         files = file_shas(root)
@@ -315,7 +374,7 @@ def main(argv=None) -> int:
         pack(root, sorted(files), asset)
 
     entry = {k: manifest[k] for k in ("version", "protocol", "api", "commit", "dist_key")}
-    entry.update(asset=asset.name, sha256=sha256(asset))
+    entry.update(asset=asset.name, sha256=sha256(asset), notes=version_notes)
     (a.out / f"package-entry-{a.os}.json").write_text(json.dumps(entry, indent=2, sort_keys=True),
                                                       encoding="utf-8")
     print(f"{asset}: {len(files)} arquivos, {asset.stat().st_size} bytes, versão {version}")

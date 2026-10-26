@@ -70,9 +70,9 @@ const PUBLISHED_TTL: Duration = Duration::from_secs(300);
 
 /// O que se sabe do índice: a última entrada lida e o erro da leitura mais recente, se falhou.
 #[derive(Debug, Clone, Default)]
-struct Published {
-    entry: Option<PlatformEntry>,
-    error: Option<String>,
+pub(crate) struct Published {
+    pub(crate) entry: Option<PlatformEntry>,
+    pub(crate) error: Option<String>,
 }
 
 impl Published {
@@ -87,7 +87,7 @@ impl Published {
 
 /// A entrada deste sistema no índice, guardada por índice; `procurar` relê. A falha também fica
 /// guardada pelo prazo: a tela não bate na rede a cada 2 s sem rede.
-async fn published(release: &Release, refresh: bool) -> Published {
+pub(crate) async fn published(release: &Release, refresh: bool) -> Published {
     static CACHE: LazyLock<Mutex<std::collections::HashMap<String, (Instant, Published)>>> = LazyLock::new(Default::default);
     static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| crate::http_client().build().unwrap_or_default());
     let url = release.index_url();
@@ -339,7 +339,7 @@ mod tests {
     }
 
     fn entry(version: &str, api: u32) -> PlatformEntry {
-        PlatformEntry { version: version.into(), asset: "a.tar.gz".into(), sha256: "0".repeat(64), protocol: 89, api, commit: "def".into(), dist_key: None }
+        PlatformEntry { version: version.into(), asset: "a.tar.gz".into(), sha256: "0".repeat(64), protocol: 89, api, commit: "def".into(), dist_key: None, notes: None }
     }
 
     /// Todos os campos que algum cliente lê (`packages/core/src/types.ts` `Atualizacao`,

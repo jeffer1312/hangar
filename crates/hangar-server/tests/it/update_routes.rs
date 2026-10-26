@@ -22,12 +22,17 @@ async fn serve(router: axum::Router) -> (std::net::SocketAddr, tokio::task::Join
 
 impl Fixture {
     /// O Python falso responde `python` a tudo; o índice falso publica `remote` para este sistema.
-    async fn start(remote: &str) -> Self {
+    async fn start(remote: &str) -> Self { Self::with_entry(Some(entry(remote))).await }
+
+    /// `entry` é a entrada deste sistema no índice falso; `None` = o índice responde 503.
+    async fn with_entry(entry: Option<Value>) -> Self {
         let home = tempfile::tempdir().unwrap();
         let (upstream, python) = serve(axum::Router::new().fallback(|| async { "python" })).await;
-        let index = json!({"platforms": {hangar_server::update::platform(): {"version": remote, "asset": "a.tar.gz",
-            "sha256": "0".repeat(64), "protocol": 1, "api": 7, "commit": "novo", "dist_key": null}}}).to_string();
-        let (release, index_task) = serve(axum::Router::new().fallback(move || { let index = index.clone(); async move { index } })).await;
+        let index = entry.map(|entry| json!({"platforms": {hangar_server::update::platform(): entry}}).to_string());
+        let (release, index_task) = serve(axum::Router::new().fallback(move || {
+            let index = index.clone();
+            async move { index.ok_or(axum::http::StatusCode::SERVICE_UNAVAILABLE) }
+        })).await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let mut state = AppState::new(Config {
@@ -65,6 +70,10 @@ impl Fixture {
         let request = if owner { request.bearer_auth("fixture-owner") } else { request };
         request.send().await.unwrap()
     }
+}
+
+fn entry(remote: &str) -> Value {
+    json!({"version": remote, "asset": "a.tar.gz", "sha256": "0".repeat(64), "protocol": 1, "api": 7, "commit": "novo", "dist_key": null})
 }
 
 async fn body(response: reqwest::Response) -> Value { serde_json::from_slice(&response.bytes().await.unwrap()).unwrap() }
@@ -232,4 +241,67 @@ async fn update_routes_dev_mode_off_without_a_package_refuses() {
     assert_eq!(refused.status(), 409);
     assert_eq!(body(refused).await["detail"]["code"], "erro_dev_mode_sem_pacote");
     assert!(!fixture.state().exists(), "nada lançado");
+}
+
+fn warning(id: &str) -> Value { json!({"id": id, "title": format!("T {id}"), "text": "Vai apagar."}) }
+
+fn news(id: &str) -> Value {
+    json!({"id": id, "title": format!("T {id}"), "kind": "new", "text": "Corpo.", "platforms": "all", "try_it": null, "animation": null})
+}
+
+fn with_notes(remote: &str) -> Value {
+    let mut entry = entry(remote);
+    entry["notes"] = json!({"warnings": [warning("2026-02-01-aplicado"), warning("2026-02-02-pendente")],
+        "news": [news("2026-02-01-instalada"), news("2026-02-02-nova")]});
+    entry
+}
+
+/// No pacote os avisos e as novidades vêm do índice da versão nova, menos o que esta máquina já tem.
+#[tokio::test]
+async fn update_notes_package_mode_answers_from_the_index_minus_what_is_here() {
+    let fixture = Fixture::with_entry(Some(with_notes("0.1.0.8207"))).await;
+    fixture.package("0.1.0.8200");
+    let current = fixture.home.path().join(".hangar/current");
+    std::fs::create_dir_all(current.join("docs/novidades")).unwrap();
+    std::fs::write(current.join("docs/novidades/2026-02-01-instalada.md"), "---\ntitulo: x\n---\n").unwrap();
+    let state_dir = fixture.home.path().join(".claude/.hangar-update");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(state_dir.join("aplicados.json"), r#"["2026-02-01-aplicado"]"#).unwrap();
+
+    let response = fixture.call(reqwest::Method::GET, "/api/update/notes", true).await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(body(response).await, json!({"target": "0.1.0.8207", "warnings": [warning("2026-02-02-pendente")],
+        "news": [news("2026-02-02-nova")]}));
+}
+
+#[tokio::test]
+async fn update_notes_package_mode_same_version_is_empty() {
+    let fixture = Fixture::with_entry(Some(with_notes("0.1.0.8200"))).await;
+    fixture.package("0.1.0.8200");
+    let response = fixture.call(reqwest::Method::GET, "/api/update/notes", true).await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(body(response).await, json!({"target": "0.1.0.8200", "warnings": [], "news": []}));
+}
+
+/// Índice que não responde, ou versão nova sem os textos no índice: 503, nunca lista vazia calada.
+#[tokio::test]
+async fn update_notes_package_mode_unreadable_index_is_unavailable() {
+    for entry in [None, Some(entry("0.1.0.8207"))] {
+        let fixture = Fixture::with_entry(entry.clone()).await;
+        fixture.package("0.1.0.8200");
+        let response = fixture.call(reqwest::Method::GET, "/api/update/notes", true).await;
+        assert_eq!(response.status(), 503, "{entry:?}");
+        assert_eq!(body(response).await["detail"]["code"], "update_notes_unavailable", "{entry:?}");
+    }
+}
+
+/// Modo desenvolvedor segue o motor git, nunca o índice.
+#[tokio::test]
+async fn update_notes_developer_mode_keeps_the_git_engine() {
+    let fixture = Fixture::with_entry(Some(with_notes("0.1.0.8207"))).await;
+    fixture.point_current(&fixture.checkout());
+    let response = fixture.call(reqwest::Method::GET, "/api/update/notes", true).await;
+    let status = response.status();
+    let value = body(response).await;
+    assert!(status == 503 || value["target"].as_str().is_some_and(|t| t.starts_with("origin/")), "{status} {value}");
 }
