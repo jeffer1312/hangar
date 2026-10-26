@@ -125,7 +125,7 @@ async fn nobody_confirmed_is_502_and_undone() {
     assert!(sidecar(&n.casa, "s0").is_none());
     assert!(std::fs::read_dir(n.casa.pair.join("groups")).unwrap().all(|e| {
         let name = e.unwrap().file_name().into_string().unwrap();
-        name.starts_with("outbox") || name.starts_with("self")
+        name.starts_with("outbox") || name.starts_with("self") || name == "issued.versions"
     }), "registro apagado");
 }
 
@@ -190,6 +190,66 @@ async fn rejoin_after_dissolve_skips_the_version_the_machine_remembers() {
     assert_eq!(remote["fed"], json!({"owner": "casa", "local": false, "version": 4}));
     assert_eq!(record(&n.casa, &gid).unwrap()["version"], 4);
     assert_eq!(sidecar(&n.casa, "s0").unwrap()["fed"]["version"], 4);
+}
+
+/// Máquina que ignora todo envio dizendo lembrar cinco versões à frente; guarda cada corpo recebido.
+async fn always_ahead() -> (SocketAddr, std::sync::Arc<std::sync::Mutex<Vec<Value>>>) {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let app = Router::new().route("/api/groups/{gid}", axum::routing::put(move |raw: axum::body::Bytes| {
+        let log = log.clone();
+        async move {
+            let body: Value = serde_json::from_slice(&raw).unwrap();
+            let version = body["version"].as_u64().unwrap();
+            let ignored = body["dissolved"] != json!(true);
+            log.lock().unwrap().push(body);
+            let answer = json!({"protocol": 1, "server_id": "lab", "ignored": ignored, "version": version + 5, "members": []});
+            ([(axum::http::header::CONTENT_TYPE, "application/json")], answer.to_string())
+        }
+    })).route("/api/sessions/{name}/group", axum::routing::get(|| async {
+        let loose = json!({"detail": {"code": "erro_sessao_sem_grupo"}}).to_string();
+        (axum::http::StatusCode::NOT_FOUND, [(axum::http::header::CONTENT_TYPE, "application/json")], loose)
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (addr, seen)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn machine_that_keeps_ignoring_refuses_the_join_and_the_undo_goes_past_the_skip() {
+    let n = net().await;
+    let (lab, seen) = always_ahead().await;
+    peers(&n.casa, &[("lab", lab), ("vm", n.vm.addr)]);
+    let (status, body) = pair(&n.casa, "s0", json!({"peers": ["lab::s3"]})).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (502, json!("erro_grupo_membro_nao_confirmado")), "{body}");
+    assert!(sidecar(&n.casa, "s0").is_none(), "o grupo volta ao que era");
+    let log = seen.clone();
+    fake::wait_until(move || log.lock().unwrap().iter().any(|b| b["dissolved"] == json!(true))).await;
+    let sent: Vec<(u64, bool)> = seen.lock().unwrap().iter().map(|b| (b["version"].as_u64().unwrap(), b["dissolved"] == json!(true))).collect();
+    // Envio na 1, pulo para 7 depois do "lembro a 6", recusa; o desfazer sai acima do pulo.
+    assert_eq!(sent, [(1, false), (7, false), (8, true)]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn group_federated_again_starts_after_the_last_version_it_gave() {
+    let n = net().await;
+    let (status, body) = pair(&n.casa, "s0", json!({"peers": ["s1", "lab::s3"], "task": "t"})).await;
+    assert_eq!(status, 200, "{body}");
+    let gid = body["gid"].as_str().unwrap().to_owned();
+    // lab sai: na dona só sobram membros daqui, o registro sai e o grupo segue local com o mesmo gid.
+    let (status, body) = call(n.lab.addr, "DELETE", "/api/sessions/s3/pair", None).await;
+    assert_eq!(status, 200, "{body}");
+    let path = n.casa.pair.join("groups").join(format!("{gid}.json"));
+    fake::wait_until(move || !path.exists()).await;
+    assert_eq!(sidecar(&n.casa, "s0").unwrap()["gid"], gid.as_str());
+    let issued = read_json(n.casa.pair.join("groups/issued.versions")).unwrap()[&gid].as_u64().unwrap();
+    let (status, body) = pair(&n.casa, "s0", json!({"peers": ["lab::s3"]})).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["gid"], gid.as_str());
+    // Sem precisar do pulo: a primeira versão da vida nova já passa da que lab guardou.
+    assert_eq!(record(&n.casa, &gid).unwrap()["version"], issued + 2);
+    assert_eq!(sidecar(&n.lab, "s3").unwrap()["fed"]["version"], issued + 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]

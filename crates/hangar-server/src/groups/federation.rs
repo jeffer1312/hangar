@@ -452,7 +452,10 @@ fn base_record(dir: &PairDir, me: &str, gid: &str, outside: &HashSet<String>, al
     if locals.iter().any(|(_, s)| s.fed.as_ref().is_some_and(|f| f.owner != me)) { return Err(missing(gid)); }
     for (_, s) in &locals { legacy_refusal(s, outside)?; }
     let Some((_, first)) = locals.first() else { return Ok(None) };
-    let mut record = GroupRecord { protocol: PROTOCOL, gid: gid.into(), owner: me.into(), version: 0,
+    // Acima da última versão dada ao gid: a dissolução sai uma acima do registro, e quem a recebeu a
+    // guarda; abaixo disso a vida nova seria descartada como envio atrasado.
+    let issued = dir.issued(gid).map_err(store_refusal)?;
+    let mut record = GroupRecord { protocol: PROTOCOL, gid: gid.into(), owner: me.into(), version: if issued == 0 { 0 } else { issued + 1 },
         task: first.task.clone().unwrap_or_default(), members: Vec::new(), outside: Vec::new() };
     for (name, s) in &locals {
         record.members.push(Member::new(me, name, s.harness.get(name).map_or("", String::as_str)));
@@ -687,6 +690,9 @@ pub async fn owner_join(st: &Arc<AppState>, groups: &Arc<GroupService>, mut ask:
         }
     }
     let mut record = plan.record.clone();
+    // A fila pode ter pulado a versão durante a espera (`Sender::skip_to`).
+    let (d, g) = (dir.clone(), gid.clone());
+    if let Ok(Ok(Some(now))) = blocking(move || d.record(&g)).await { record.version = record.version.max(now.version); }
     if !unconfirmed.is_empty() {
         // Todos de uma vez; o aviso de saída a quem ficou sozinho sai depois da resposta.
         if let Some((r, dropped)) = super::fed_exit::remove_and_dissolve(st, groups, &gid, &unconfirmed).await? {
