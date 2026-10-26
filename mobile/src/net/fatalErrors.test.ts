@@ -161,6 +161,17 @@ it('preserva posições do bytecode Hermes sem nome de arquivo', async () => {
   expect(app.errors.readFatalError()?.stack).toBe('SubagentLive@1:9234\nglobal code@1:4567');
 });
 
+it('preserva a pilha do bundle de OTA, que no iOS mora em Application Support', async () => {
+  const app = await boot();
+  const ota = '/var/mobile/Containers/Data/Application/AB12/Library/Application Support/.expo-internal/01a1748f.hbc';
+  const error = Error('Out of memory');
+  error.stack = `Error: private-text\n    at Chat (address at ${ota}:1:9234)\nSubagentLive@${ota}:1:4567\n    at Activity (file://${ota}:1:45)`;
+  app.report(error);
+  const report = app.errors.readFatalError();
+  expect(report?.stack).toBe('    at Chat (address at 01a1748f.hbc:1:9234)\nSubagentLive@01a1748f.hbc:1:4567\n    at Activity (01a1748f.hbc:1:45)');
+  expect(JSON.stringify(report)).not.toContain('Containers');
+});
+
 it.each(['Rendered more hooks texto da conversa.', "Couldn't find the header height texto da conversa.", 'Invalid hook call texto da conversa.'])('não aceita texto livre depois de um prefixo conhecido: %s', async message => {
   const app = await boot();
   app.report(Error(message));
