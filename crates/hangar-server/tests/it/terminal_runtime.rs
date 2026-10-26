@@ -1409,6 +1409,16 @@ async fn terminal_runtime_native_receipt_matches_queue_append_without_submit_roo
 }
 
 #[tokio::test]
+async fn terminal_runtime_windows_line_breaks_are_typed_as_plain_newlines() {
+    let f=Fixture::new().await; let h=f.start();
+    let reply=h.command(f.command("pasted","Pessoal:\r\nlinha dois\rtrês")).await.unwrap();
+    assert_eq!(reply.disposition,hangar_server::runtime::protocol::Disposition::Accepted,"{}",reply.payload);
+    assert_eq!(f.state()["rows"][0]["text"],"Pessoal:\nlinha dois\ntrês");
+    assert!(f.io.calls.lock().unwrap().iter().all(|r|r.args.iter().all(|a|!a.contains('\r') || a=="\r")),"nenhum \\r dentro do texto digitado");
+    h.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn terminal_runtime_input_primitive_payload_is_rejected_without_stopping_actor() {
     let f=Fixture::new().await; let h=f.start();
     for payload in [Value::Null,json!(false),json!([]),json!("")] {
