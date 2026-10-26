@@ -4,6 +4,8 @@ import { getAtualizacaoEm, iniciarAtualizacaoEm, reiniciarServidorEm, matchesRes
 import { MachineGroup, MachineRow } from './MachineRows';
 import { ensureActive, reason } from './api';
 import { Notice, styles, useMachineAction } from './parts';
+import { useRouter } from 'expo-router';
+import { firstPendingServer, requestUpdateConfirm, whatsNewHref } from '../updates/pending';
 import * as m from '../../paraglide/messages';
 
 type Operation = 'restart' | 'update';
@@ -70,6 +72,7 @@ export function MachineOperations({ server }: { server: Server }) {
 }
 function OperationControls({ server }: { server: Server }) {
   const action = useMachineAction();
+  const router = useRouter();
   const alive = useRef(true);
   const confirmation = useRef<{ started: boolean } | null>(null);
   const [asking, setAsking] = useState(false);
@@ -88,9 +91,8 @@ function OperationControls({ server }: { server: Server }) {
       if (confirmation.current !== ticket || ticket.started || !alive.current) return;
       confirmation.current = null; setAsking(false);
     };
-    Alert.alert(m.mobile_machines_confirm_operation({ action: label, name: server.label }), m.mobile_machines_confirm_operation_body(), [
-      { text: m.comum_cancelar(), style: 'cancel', onPress: cancel },
-      { text: label, onPress: () => {
+    let updated = false;
+    const start = () => {
         if (confirmation.current !== ticket || ticket.started || !alive.current) return;
         ticket.started = true; setAsking(false); setResult(null);
         void action.run(async (signal) => {
@@ -104,11 +106,20 @@ function OperationControls({ server }: { server: Server }) {
           if (state.ok !== true || state.reinicio_erro || state.erro) {
             throw new Error(m.mobile_machines_operation_failed({ reason: state.reinicio_erro || state.erro || m.mobile_machines_unconfirmed_reason() }));
           }
+          updated = operation === 'update';
           return state;
         }, setResult, m.mobile_machines_operation_ready()).finally(() => {
           if (alive.current && confirmation.current === ticket) { confirmation.current = null; setAsking(false); }
+          if (updated && alive.current && firstPendingServer([server.id])) router.push(whatsNewHref(server.id));
         });
-      } },
+    };
+    if (operation === 'update') {
+      void requestUpdateConfirm(server, () => router.push('/update-confirm' as never)).then((ok) => { if (ok) start(); else cancel(); });
+      return;
+    }
+    Alert.alert(m.mobile_machines_confirm_operation({ action: label, name: server.label }), m.mobile_machines_confirm_operation_body(), [
+      { text: m.comum_cancelar(), style: 'cancel', onPress: cancel },
+      { text: label, onPress: start },
     ], { cancelable: true, onDismiss: cancel });
   };
   const busy = asking || action.busy;

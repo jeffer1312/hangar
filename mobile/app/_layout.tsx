@@ -1,6 +1,6 @@
 import 'react-native-url-polyfill/auto';
 import '../src/theme/unistyles';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { AppState, Dimensions, Platform, type AppStateStatus } from 'react-native';
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider, useGlobalSearchParams, usePathname, useRouter, useSegments } from 'expo-router';
 import { useUnistyles } from 'react-native-unistyles';
@@ -24,7 +24,8 @@ import { setFatalErrorRoute, takeFatalErrorNotice } from '../src/net/fatalErrors
 import * as m from '../src/paraglide/messages';
 import { installNotificationHandler, pushRegistrationKey, registerExpoPush, retryExpoPushIfDenied, useNotificationNavigation } from '../src/features/push/expoPush';
 import { getLocale } from '../src/paraglide/runtime';
-import { registrarDiag } from '@hangar/core';
+import { getAtualizacaoEm, registrarDiag } from '@hangar/core';
+import { clearPendingNews, firstPendingServer, pendingFrom, whatsNewHref } from '../src/features/updates/pending';
 
 configureCore();
 aplicarTemaSalvo();
@@ -110,6 +111,28 @@ export default function Layout() {
     return () => subscription.remove();
   }, []);
 
+  // Atualização confirmada antes de o app fechar: "O que chegou para você" aparece na volta, uma vez.
+  const whatsNewChecked = useRef(false);
+  useEffect(() => {
+    if (!ready || withoutServer || whatsNewChecked.current) return;
+    whatsNewChecked.current = true;
+    const id = firstPendingServer(servers.map((s) => s.id));
+    const server = servers.find((s) => s.id === id);
+    if (!id || !server) return;
+    const from = pendingFrom(id);
+    // Sem a versão de quando confirmou não dá para saber se a atualização terminou: descarta.
+    if (!from) { clearPendingNews(id); return; }
+    let alive = true;
+    // Mesma versão de quando confirmou: a atualização não terminou, e a lista não vale mais.
+    getAtualizacaoEm(server).then(({ versao_legivel: v }) => {
+      // Sem versão na resposta não há como saber: guarda para conferir na próxima abertura.
+      if (!v?.backend) return;
+      if (v.backend === from) clearPendingNews(id);
+      else if (alive) router.push(whatsNewHref(id));
+    }).catch(() => { /* servidor fora: confere na próxima abertura */ });
+    return () => { alive = false; };
+  }, [ready, withoutServer]);
+
   useNotificationNavigation();
   // A lista se regrava por outros motivos (rede local aprendida); só servidor, nome ou idioma refazem o registro.
   useAparencia((s) => s.idioma); // re-renderiza para o getLocale abaixo ler o idioma novo
@@ -179,6 +202,8 @@ export default function Layout() {
           <Stack.Screen name="s/[server]/[name]/attachments" options={sheetOptions} />
           <Stack.Screen name="s/[server]/[name]/codex-limits" options={sheetOptions} />
           <Stack.Screen name="s/[server]/[name]/bastao" options={sheetOptions} />
+          <Stack.Screen name="update-confirm" options={sheetOptions} />
+          <Stack.Screen name="whats-new" options={sheetOptions} />
         </Stack>
         </ThemeProvider>
         </TabletShell>

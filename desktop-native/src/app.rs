@@ -140,14 +140,14 @@ thread_local! {
 /// Chat.svelte, Composer.svelte): teto por degrau da janela, maior com o painel direito aberto, e a escala da Aparência
 /// sobre o menor entre o teto e o espaço, sem passar do espaço.
 /// O cartão do compositor (borda que acende com o foco, fundo e sombra), o mesmo na conversa e no subagente.
-fn composer_card(focused: bool) -> Div {
+pub(crate) fn composer_card(focused: bool) -> Div {
     div().relative().flex().flex_col().gap(px(10.)).pt(px(12.)).pr(px(12.)).pb(px(10.)).pl(px(16.)).rounded(px(18.)).border_1()
         .border_color(if focused { theme::accent_focus() } else { theme::border_strong() }).bg(theme::boxed()).shadow(theme::card_shadow())
 }
 
 /// Botão na cor do Enviar, e a cor do conteúdo dele. Colado: botão claro com a tinta na cor do fundo; caixa solta:
 /// destaque, como nos mocks.
-fn send_colored<T: 'static>(id: &'static str, enabled: bool, cx: &mut Context<T>) -> (Button, Hsla) {
+fn send_colored(id: &'static str, enabled: bool, cx: &App) -> (Button, Hsla) {
     let (fill, ink) = match (enabled, theme::is_floating()) {
         (false, _) => (theme::raised(), theme::faint()),
         (true, true) => (theme::accent(), theme::on_accent()),
@@ -159,9 +159,49 @@ fn send_colored<T: 'static>(id: &'static str, enabled: bool, cx: &mut Context<T>
 }
 
 /// O Enviar redondo do compositor.
-fn send_button<T: 'static>(id: &'static str, enabled: bool, label: String, cx: &mut Context<T>) -> Button {
+pub(crate) fn send_button(id: &'static str, enabled: bool, label: String, cx: &App) -> Button {
     let (button, ink) = send_colored(id, enabled, cx);
     button.icon(chrome::small_icon(IconName::ArrowUp, 16., ink)).size(px(30.)).rounded_full().tooltip(tr("send_hint")).accessibility_label(label)
+}
+
+// Partes do compositor desenhadas por dado simples, sem estado nem clique: o compositor ao vivo põe os dois, e a
+// miniatura das novidades (`crate::news`) usa as mesmas sem nenhum.
+
+/// Botões de ícone da esquerda do compositor: comandos, anexar e recentes.
+pub(crate) fn composer_icons(cx: &App) -> [Button; 3] {
+    [chrome::icon_button("commands", IconName::SquareSlash, tr("commands"), cx),
+        chrome::icon_button("attach", IconName::Paperclip, tr("attach"), cx),
+        chrome::icon_button("attach-recent", IconName::RotateCcwClock, tr("attach_recent"), cx)]
+}
+
+/// O microfone parado do compositor.
+pub(crate) fn composer_mic(label: String, cx: &App) -> Button { chrome::icon_button("dictation-toggle", IconName::Mic, label, cx) }
+
+/// Pílula do modelo com o esforço e o Fast ao lado.
+pub(crate) fn model_pill(id: impl Into<ElementId>, text: String, effort: Option<String>, fast: Option<String>, cx: &App) -> Button {
+    chrome::pill_button(id, cx).gap(px(6.))
+        .child(div().max_w(px(150.)).truncate().text_xs().font_weight(FontWeight::SEMIBOLD).child(text))
+        .when_some(effort, |el, effort| el.child(div().flex_shrink_0().text_xs().text_color(theme::muted()).child(effort)))
+        .when_some(fast, |el, fast| el.child(div().id("ctl-fast-active").flex_shrink_0().text_xs().text_color(theme::muted()).child(fast)))
+}
+
+/// Pílula com seta de menu (modo de permissão, estilo do ditado); `accent` realça o valor (modo plano).
+pub(crate) fn menu_pill(id: impl Into<ElementId>, text: String, accent: bool, cx: &App) -> Button {
+    chrome::pill_button(id, cx).pl(px(10.)).gap(px(6.))
+        .child(div().max_w(px(160.)).truncate().text_xs().text_color(if accent { theme::accent() } else { theme::muted() })
+            .when(accent, |el| el.font_weight(FontWeight::SEMIBOLD)).child(text))
+        .child(chrome::small_icon(IconName::ChevronDown, 12., theme::faint()))
+}
+
+/// Linha de baixo do cartão: ícones à esquerda; seletores e a ação à direita. Coluna estreita (painel direito aberto):
+/// os seletores e o Enviar descem para a linha de baixo, e entre si quebram de novo se ainda não couberem, em vez de
+/// passar da borda do cartão por cima do painel.
+pub(crate) fn composer_control_row(left: impl IntoIterator<Item = AnyElement>, right: impl IntoIterator<Item = AnyElement>, action: impl IntoElement) -> Div {
+    div().w_full().flex().flex_wrap().items_center().gap_1().gap_y(px(4.))
+        .child(div().flex_shrink_0().flex().items_center().gap_1().children(left))
+        .child(div().ml_auto().max_w_full().min_w_0().flex().flex_wrap().justify_end().items_center().gap_1().gap_y(px(4.))
+            .children(right)
+            .child(div().ml(px(6.)).child(action)))
 }
 
 fn column_box(composer: bool) -> Div {
@@ -962,6 +1002,21 @@ impl Hangar {
                     });
                     if alive.is_err() { break; }
                 }
+            }).detach();
+        }
+        // "O que chegou para você" depois de o app ser trocado pela atualização.
+        cx.defer_in(window, |_, window, cx| crate::update::confirm::show_pending(true, window, cx));
+        // Só para ver e fotografar no build de debug: HANGAR_NATIVE_PREVIEW=update-confirm, whats-new ou o nome de uma
+        // animação das novidades. Espera a subida para abrir por cima do diálogo de primeira execução de um perfil vazio.
+        #[cfg(debug_assertions)]
+        if let Ok(name) = std::env::var("HANGAR_NATIVE_PREVIEW") {
+            cx.spawn_in(window, async move |_, cx| {
+                cx.background_executor().timer(Duration::from_secs(3)).await;
+                let _ = cx.update(|window, cx| match name.as_str() {
+                    "update-confirm" => crate::update::confirm::open_preview(false, window, cx),
+                    "whats-new" => crate::update::confirm::open_preview(true, window, cx),
+                    _ => crate::news::open_preview(name, window, cx),
+                });
             }).detach();
         }
         #[cfg(not(target_os = "macos"))]
@@ -4856,7 +4911,8 @@ impl Hangar {
             send_button("send", !blocked && has_input, send_label, cx)
                 .on_click(cx.listener(|this, _, window, cx| this.submit(false, false, window, cx)))
         };
-        let commands = chrome::icon_button("commands", IconName::SquareSlash, tr("commands"), cx).disabled(!readable).selected(self.command_panel)
+        let [commands, attach, recent] = composer_icons(cx);
+        let commands = commands.disabled(!readable).selected(self.command_panel)
             .on_click(cx.listener(|this, _, window, cx| {
                 this.command_panel = !this.command_panel;
                 if this.command_panel {
@@ -4867,22 +4923,16 @@ impl Hangar {
                 }
                 cx.notify();
             }));
-        let attach = chrome::icon_button("attach", IconName::Paperclip, tr("attach"), cx).disabled(!attachable || uploading.is_some())
+        let attach = attach.disabled(!attachable || uploading.is_some())
             .on_click(cx.listener(|this, _, _, cx| this.pick_files(cx)));
-        let recent_btn = popup::anchor(div(), "attach-recent").child(chrome::icon_button("attach-recent", IconName::RotateCcwClock, tr("attach_recent"), cx)
+        let recent_btn = popup::anchor(div(), "attach-recent").child(recent
             .disabled(!readable || uploading.is_some()).selected(self.recent.is_some()).on_click(cx.listener(|this, _, _, cx| this.open_recent(cx))));
         let (microphone, dictation_style, dictation_strip) = self.render_dictation(attachable, cx);
-        // Coluna estreita (painel direito aberto): os seletores e o Enviar descem para a linha de baixo, e entre si quebram
-        // de novo se ainda não couberem, em vez de passar da borda do cartão por cima do painel.
-        let control_row = div().w_full().flex().flex_wrap().items_center().gap_1().gap_y(px(4.))
-            .child(div().flex_shrink_0().flex().items_center().gap_1()
-                .child(commands).child(attach).child(recent_btn).child(microphone).children(dictation_style))
-            .child(div().ml_auto().max_w_full().min_w_0().flex().flex_wrap().justify_end().items_center().gap_1().gap_y(px(4.))
-                .when(steer_text, |el| el.child(chrome::pill_button("steer-text", cx).label(tr("steer_text")).disabled(blocked)
-                    .on_click(cx.listener(|this, _, window, cx| this.submit(true, false, window, cx)))))
-                .children(pills)
-                .children(mode)
-                .child(div().ml(px(6.)).child(action)));
+        let steer_pill = steer_text.then(|| chrome::pill_button("steer-text", cx).label(tr("steer_text")).disabled(blocked)
+            .on_click(cx.listener(|this, _, window, cx| this.submit(true, false, window, cx))).into_any_element());
+        let control_row = composer_control_row(
+            [commands.into_any_element(), attach.into_any_element(), recent_btn.into_any_element(), microphone.into_any_element()].into_iter().chain(dictation_style),
+            steer_pill.into_iter().chain(pills).chain(mode), action);
         let card = composer_card(focused)
             .children(refs_tray)
             .when_some(tray, |el, tray| el.child(tray))

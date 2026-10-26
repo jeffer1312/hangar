@@ -974,11 +974,7 @@ impl Hangar {
     }
 
     fn confirm_upgrade(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let this = cx.entity().downgrade();
-        let server = self.server_label(cx);
-        chrome::confirm_alert(window, cx, tr("update_confirm_title").replace("{server}", &server), tr("update_confirm_desc"),
-            tr("update_confirm_ok"), ButtonVariant::Primary,
-            move |_, cx| { let _ = this.update(cx, |this, cx| this.start_upgrade(cx)); true });
+        self.confirm_server_update(Self::start_upgrade, window, cx);
     }
 
     fn start_upgrade(&mut self, cx: &mut Context<Self>) {
@@ -1165,6 +1161,8 @@ impl Hangar {
                 (u.waiting, u.task, u.step) = (false, None, None);
                 if let UpgradeEnd::Done { warnings, .. } = &end { u.warnings.clone_from(warnings); }
                 let failed = if track == Track::DevMode { "dev_mode_failed" } else { "update_failed" };
+                // Trocar o modo desenvolvedor não traz versão nova: nada a mostrar em "O que chegou para você".
+                let done = track != Track::DevMode && matches!(end, UpgradeEnd::Done { .. });
                 match end {
                     UpgradeEnd::Done { manual: true, .. } => u.manual = true,
                     UpgradeEnd::Done { ts, .. } => {
@@ -1178,6 +1176,7 @@ impl Hangar {
                 }
                 if track == Track::DevMode { self.load_dev_mode(cx); }
                 self.sync_updater(cx);
+                if done { crate::update::confirm::show_pending(false, window, cx); }
             }
             MachinesReply::Peers(seq, result) => {
                 let parsed = result.map_err(|e| Self::failure(&e)).and_then(|v| parse_peers(&v).ok_or_else(|| tr("invalid_response")));
@@ -2002,7 +2001,7 @@ impl Hangar {
                     .disabled(busy)
                     .on_click(cx.listener(|this, _, _, cx| this.restart_service(cx))))
                 .child(Button::new("machines-update").outline().small().icon(IconName::Download)
-                    .label(tr(if u.busy() { "update_running" } else { "update_confirm_ok" })).loading(u.busy()).disabled(busy)
+                    .label(tr(if u.busy() { "update_running" } else { "update_confirm_ok" })).loading(u.busy() || self.device.notes_loading).disabled(busy)
                     .on_click(cx.listener(|this, _, window, cx| this.confirm_upgrade(window, cx))))
                 .when(r.waiting, |el| el.child(div().id("machines-restart-waiting").role(Role::Status).text_size(px(12.5))
                     .text_color(theme::muted()).child(tr("machines_restart_waiting"))))

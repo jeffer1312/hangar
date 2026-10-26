@@ -944,8 +944,11 @@ impl Executor {
     }
 
     /// `steer`: o "Orientar" de uma entrada, que passa pelo turno em curso em vez de esperar o Claude parar.
-    async fn execute(&mut self,id:&str,kind:&str,payload:Value,entry:Option<String>,steer:bool)->Result<RuntimeReply,RuntimeError> {
+    async fn execute(&mut self,id:&str,kind:&str,mut payload:Value,entry:Option<String>,steer:bool)->Result<RuntimeReply,RuntimeError> {
         if !valid_operation_id(id) {return Err(error("operation_id"));}
+        // Texto colado no Windows chega com `\r\n`; o `\r` é controle e o Claude Code só entende `\n`.
+        let unix=payload["text"].as_str().filter(|t|kind=="input" && t.contains('\r')).map(|t|t.replace("\r\n","\n").replace('\r',"\n"));
+        if let Some(text)=unix {payload["text"]=json!(text);}
         if kind=="lifecycle_guard" {
             if self.loaned() || self.held() || self.last_error.is_some() || !self.uncertain.is_empty() || self.unprovable || self.mode_unproved {return Err(error("lifecycle_busy"));}
             let state=self.queue.snapshot().await.map_err(|_|error("queue_io"))?;
