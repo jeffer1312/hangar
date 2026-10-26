@@ -93,7 +93,7 @@ pub fn forget(root: &Path) { ALL.lock().unwrap_or_else(|e| e.into_inner()).remov
 pub async fn of(st: &AppState, groups: &GroupService) -> Result<Arc<Federation>, Refusal> {
     let root = groups.pair_root().to_path_buf();
     if let Some(found) = existing(&root) { return Ok(found); }
-    let sender = Arc::new(Sender { peers: st.peers.clone(), dir: groups.dir(), diag: st.diag.clone() });
+    let sender = Arc::new(Sender { peers: st.peers.clone(), dir: groups.dir(), diag: st.diag.clone(), lock: groups.lock_handle() });
     let opened = tokio::task::spawn_blocking(move || -> std::io::Result<Arc<Federation>> {
         let mut all = ALL.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(found) = all.get(&root) { return Ok(found.clone()); }
@@ -198,7 +198,52 @@ pub(super) fn members_from_sidecar(me: &str, name: &str, s: &Sidecar, outside: &
 
 // --- fila: o pedido HTTP de cada item --------------------------------------------------------
 
-struct Sender { peers: Arc<PeerClient>, dir: Arc<PairDir>, diag: crate::diag::DiagClient }
+struct Sender { peers: Arc<PeerClient>, dir: Arc<PairDir>, diag: crate::diag::DiagClient, lock: Arc<tokio::sync::Mutex<()>> }
+
+/// A máquina continuou ignorando o grupo mesmo depois de a dona pular a versão que ela lembra.
+pub const VERSION_BEHIND: &str = "erro_grupo_versao_atrasada";
+
+impl Sender {
+    /// Envia o registro atual. `ignored` com versão maior que a enviada = a máquina lembra uma vida
+    /// anterior deste gid (grupo desfeito e refeito daqui): a dona pula para depois dela e reenvia,
+    /// senão a entrada some calada do outro lado.
+    async fn push(&self, server: &str, gid: &str, joining: &[String]) -> Result<(), PeerError> {
+        let path = format!("/api/groups/{}", segment(gid));
+        for attempt in 0..2 {
+            let (dir, g) = (self.dir.clone(), gid.to_owned());
+            let record = tokio::task::spawn_blocking(move || dir.record(&g)).await
+                .map_err(|e| PeerError::Transport(e.to_string()))?
+                .map_err(|e| PeerError::Transport(format!("registro ilegível: {e}")))?;
+            // Sem registro o grupo acabou aqui: o `Dissolved` que segue é quem avisa.
+            let Some(record) = record else { return Ok(()) };
+            let answer = self.peers.call_group(server, reqwest::Method::PUT, &path, Some(&push_body(&record, server, joining))).await?;
+            let seen = answer.get("version").and_then(Value::as_u64).unwrap_or(0);
+            if answer.get("ignored") != Some(&Value::Bool(true)) || seen <= record.version { return Ok(()); }
+            if attempt == 0 { self.skip_to(gid, seen + 1).await?; }
+        }
+        Err(PeerError::Refused { status: 409, detail: json!({"code": VERSION_BEHIND}) })
+    }
+
+    /// Registro e sidecars daqui de `gid` na versão `to`, sob o lock de grupo.
+    async fn skip_to(&self, gid: &str, to: u64) -> Result<(), PeerError> {
+        let _guard = self.lock.lock().await;
+        let (dir, gid) = (self.dir.clone(), gid.to_owned());
+        let written = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            let Some(mut record) = dir.record(&gid).map_err(std::io::Error::other)? else { return Ok(()) };
+            if record.version >= to { return Ok(()) }
+            record.version = to;
+            dir.write_record(&record).map_err(std::io::Error::other)?;
+            for m in record.members.iter().filter(|m| m.server == record.owner) {
+                if let Some(mut s) = read(&dir, &m.name).filter(|s| s.gid == gid) {
+                    s.fed = Some(Fed { owner: record.owner.clone(), local: true, version: to });
+                    dir.write_sidecar(&m.name, &s).map_err(std::io::Error::other)?;
+                }
+            }
+            Ok(())
+        }).await.map_err(|e| PeerError::Transport(e.to_string()))?;
+        written.map_err(|e| PeerError::Transport(format!("versão nova do grupo não gravada: {e}")))
+    }
+}
 
 /// Corpo do `PUT /api/groups/{gid}` montado do registro na hora do envio: a versão que sai é
 /// sempre a atual, e só entra em `joining` quem ainda é membro naquela máquina.
@@ -212,15 +257,7 @@ impl OutboxSend for Sender {
     fn send<'a>(&'a self, item: &'a OutboxItem) -> BoxFuture<'a, Result<(), PeerError>> {
         Box::pin(async move {
             let (server, method, path, body) = match item {
-                OutboxItem::Push { server, gid, joining, .. } => {
-                    let (dir, g) = (self.dir.clone(), gid.clone());
-                    let record = tokio::task::spawn_blocking(move || dir.record(&g)).await
-                        .map_err(|e| PeerError::Transport(e.to_string()))?
-                        .map_err(|e| PeerError::Transport(format!("registro ilegível: {e}")))?;
-                    // Sem registro o grupo acabou aqui: o `Dissolved` que segue é quem avisa.
-                    let Some(record) = record else { return Ok(()) };
-                    (server, reqwest::Method::PUT, format!("/api/groups/{}", segment(gid)), push_body(&record, server, joining))
-                }
+                OutboxItem::Push { server, gid, joining, .. } => return self.push(server, gid, joining).await,
                 OutboxItem::Dissolved { server, gid, version, origin } => (server, reqwest::Method::PUT, format!("/api/groups/{}", segment(gid)),
                     json!({"protocol": PROTOCOL, "owner": origin, "version": version, "dissolved": true})),
                 OutboxItem::Leave { owner, gid, member, origin } => (owner, reqwest::Method::POST, format!("/api/groups/{}/ops", segment(gid)),
@@ -682,7 +719,9 @@ async fn undo_owner(groups: &GroupService, fed: &Federation, plan: &OwnerPlan) -
         }
         restore_logged(&dir, &before);
         let mut items = Vec::new();
-        let bump = record.version + 1;
+        // A fila pode ter pulado a versão do registro durante a espera (`Sender::skip_to`).
+        let current = dir.record(&record.gid).map_err(store_refusal)?.map_or(0, |r| r.version);
+        let bump = record.version.max(current) + 1;
         for (gid, old) in &before_records {
             match old {
                 Some(r) => {

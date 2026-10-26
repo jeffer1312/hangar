@@ -175,6 +175,24 @@ async fn stale_push_after_dissolve_is_ignored() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn rejoin_after_dissolve_skips_the_version_the_machine_remembers() {
+    let n = net().await;
+    let (status, body) = pair(&n.casa, "s0", json!({"peers": ["s1"], "task": "t"})).await;
+    assert_eq!(status, 200, "{body}");
+    let gid = body["gid"].as_str().unwrap().to_owned();
+    // lab já esteve neste grupo até a versão 3 e o deixou: lembra a versão, sem sidecar.
+    std::fs::create_dir_all(n.lab.pair.join("groups")).unwrap();
+    std::fs::write(n.lab.pair.join("groups/applied.versions"), json!({format!("casa::{gid}"): 3}).to_string()).unwrap();
+    let (status, body) = pair(&n.casa, "s0", json!({"peers": ["lab::s3"]})).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["gid"], gid.as_str());
+    let remote = sidecar(&n.lab, "s3").expect("lab grava o membro novo");
+    assert_eq!(remote["fed"], json!({"owner": "casa", "local": false, "version": 4}));
+    assert_eq!(record(&n.casa, &gid).unwrap()["version"], 4);
+    assert_eq!(sidecar(&n.casa, "s0").unwrap()["fed"]["version"], 4);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn older_version_is_ignored() {
     let n = net().await;
     let all = json!([member("casa", "s0"), member("lab", "s1")]);
