@@ -16,7 +16,8 @@ use std::{
 
 pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut ticks = tokio::time::interval(Duration::from_secs(60));
+        // Cada rodada relê as worktrees inteiras (node_modules incluído); os prazos da limpeza são em dias.
+        let mut ticks = tokio::time::interval(Duration::from_secs(15 * 60));
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             ticks.tick().await;
