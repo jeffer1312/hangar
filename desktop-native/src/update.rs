@@ -13,6 +13,7 @@ use std::{collections::HashMap, ffi::OsString, path::{Path, PathBuf}, sync::Arc,
 use tokio::runtime::Runtime;
 
 mod all;
+pub(crate) mod confirm;
 
 const RELEASES: &str = "https://github.com/jeffer1312/hangar/releases/download";
 /// Branch que o CI compilou (native.yml). Build local não sabe a dele: só versão mais nova o troca.
@@ -870,11 +871,24 @@ impl Updater {
     fn run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.batch.is_some() { return self.open_batch(window, cx); }
         if self.busy() { return; }
-        if self.update_all_count() >= 2 { return self.confirm_all(window, cx); }
-        self.run_local(window, cx);
+        // Só o modal do servidor mostra avisos e novidades: com ele, busca no remoto e lê a rota antes de abrir.
+        let modal = self.update_all_count() >= 2 || matches!(self.plan().server, ServerStep::Update);
+        let Some(api) = self.local.clone().filter(|_| modal) else { return self.confirm(confirm::Notes::default(), window, cx) };
+        self.run = Run::Searching;
+        cx.notify();
+        confirm::load_then_open(api, &self.runtime, window, cx, |this, state, notes, window, cx| {
+            this.run = Run::Idle;
+            if state.is_some() { this.receive_server(state, cx); }
+            cx.notify();
+            this.confirm(notes, window, cx);
+        });
     }
 
-    fn run_local(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn confirm(&mut self, notes: confirm::Notes, window: &mut Window, cx: &mut Context<Self>) {
+        if self.update_all_count() >= 2 { self.confirm_all(notes, window, cx) } else { self.run_local(notes, window, cx) }
+    }
+
+    fn run_local(&mut self, notes: confirm::Notes, window: &mut Window, cx: &mut Context<Self>) {
         let plan = self.plan();
         match &plan.server {
             ServerStep::Held(hold) if hold.stops() => self.fail(hold.text(), cx),
@@ -882,8 +896,8 @@ impl Updater {
                 let this = cx.entity().downgrade();
                 let (title, desc) = if plan.app { ("app_update_confirm_title", "app_update_confirm_desc") }
                     else { ("app_update_confirm_server_title", "app_update_confirm_server_desc") };
-                crate::app::chrome::confirm_alert(window, cx, tr(title), tr(desc), tr("update_confirm_ok"), ButtonVariant::Primary,
-                    move |window, cx| { let _ = this.update(cx, |this, cx| this.search_server(window, cx)); true });
+                confirm::open(window, cx, tr(title), tr(desc), notes, None,
+                    move |window, cx| { let _ = this.update(cx, |this, cx| this.search_server(window, cx)); });
             }
             _ if plan.app => self.confirm_channel(window, cx),
             _ => {}
@@ -1064,6 +1078,7 @@ impl Updater {
         let version = self.server.as_ref().and_then(|s| s["versao_legivel"]["backend"].as_str()).unwrap_or("?").to_owned();
         let text = if manual { tr("update_done_manual") } else { tr("update_done").replace("{version}", &version) };
         window.push_notification(Notification::success(text).id::<Updater>(), cx);
+        confirm::show_pending(false, window, cx);
         self.end_intent();
         cx.notify();
         self.refresh_server(cx);

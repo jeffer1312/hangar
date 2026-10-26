@@ -32,6 +32,7 @@ export const Animated = {
   timing: animacao, sequence: animacao, loop: animacao,
 };
 export const Linking = { openURL: (_url: string) => Promise.resolve() };
+export const InteractionManager = { runAfterInteractions: (task: () => void) => { const t = setTimeout(task, 0); return { cancel: () => clearTimeout(t) }; } };
 export const Platform = { OS: 'android', select: (x: any) => x.android ?? x.default };
 export const BackHandler = { addEventListener: () => ({ remove() {} }), exitApp() {} };
 export const TextInput = (props: any) => React.createElement('textarea', domProps(props));

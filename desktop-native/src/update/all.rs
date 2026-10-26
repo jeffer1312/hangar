@@ -377,7 +377,7 @@ impl Updater {
 
     pub(super) fn idle_visible(&self, plan: &Plan) -> bool { idle_visible(plan, self.update_all_count(), &self.survey.rows) }
 
-    pub(super) fn confirm_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn confirm_all(&mut self, notes: super::confirm::Notes, window: &mut Window, cx: &mut Context<Self>) {
         let all = Rc::new(Cell::new(true));
         let selected = all.clone();
         let this = cx.entity().downgrade();
@@ -386,9 +386,8 @@ impl Updater {
             if plan.app { (tr("app_update_confirm_title"), tr("app_update_confirm_desc")) }
             else { (tr("app_update_confirm_server_title"), tr("app_update_confirm_server_desc")) }
         } else { (tr_shared("update_all_title", &[]), tr("update_confirm_desc")) };
-        crate::app::chrome::confirm_alert_with(window, cx, title, description,
-            Some((tr_shared("update_all_button", &[("n", &self.update_all_count().to_string())]), all)),
-            tr("update_confirm_ok"), ButtonVariant::Primary, move |window, _| {
+        super::confirm::open(window, cx, title, description, notes,
+            Some((tr_shared("update_all_button", &[("n", &self.update_all_count().to_string())]), all)), move |window, _| {
                 let this = this.clone();
                 let all = selected.get();
                 // O alerta fecha antes de o modal de progresso abrir.
@@ -397,10 +396,9 @@ impl Updater {
                     if all { this.start_all(window, cx); }
                     else { match this.plan().server {
                         ServerStep::Update => this.search_server(window, cx),
-                        _ => this.run_local(window, cx),
+                        _ => this.run_local(super::confirm::Notes::default(), window, cx),
                     } }
                 }); });
-                true
             });
     }
 
@@ -470,6 +468,9 @@ impl Updater {
         self.all_running = batch.progress.read(cx).busy();
         cx.notify();
         if install { self.install_app(window, cx); }
+        else if !self.all_running && self.survey.rows.iter().any(|r| r.local && matches!(r.status, Status::Updated | Status::UpdatedManual)) {
+            super::confirm::show_pending(false, window, cx);
+        }
     }
 
     pub(super) fn local_batch_status(&mut self, status: Status, cx: &mut Context<Self>) {

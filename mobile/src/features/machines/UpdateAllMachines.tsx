@@ -1,5 +1,5 @@
-import { useState, useSyncExternalStore } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { useRef, useState, useSyncExternalStore } from 'react';
+import { InteractionManager, Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { ownUpdatableServers, updateAll } from '@hangar/core';
 import type { Server, UpdateAllResult, UpdateAllState } from '@hangar/core';
@@ -9,6 +9,9 @@ import { useSettingsColors } from '../config/colors';
 import { MachineSheet, Notice } from './parts';
 import { MachineRow } from './MachineRows';
 import { haptic } from '../../ui/haptics';
+import { useRouter } from 'expo-router';
+import { useServers } from '../../stores/servers';
+import { firstPendingServer, requestUpdateConfirm, whatsNewHref } from '../updates/pending';
 import * as m from '../../paraglide/messages';
 
 function statusText(value: UpdateAllState): string {
@@ -46,9 +49,16 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
   const c = useSettingsColors();
   const candidates = ownUpdatableServers(servers);
   const [open, setOpen] = useState(false);
+  const newsAfterClose = useRef<string | null>(null);
+  const router = useRouter();
+  const activeId = useServers((s) => s.activeId);
   const { busy, count, rows, error } = useSyncExternalStore(subscribe, () => round);
 
   const start = async () => {
+    if (round.busy) { setOpen(true); return; }
+    // Os avisos e novidades são os do servidor ativo: a versão nova é a mesma em todas as máquinas.
+    const notesServer = candidates.find((s) => s.id === activeId) ?? candidates[0];
+    if (!notesServer || !await requestUpdateConfirm(notesServer, () => router.push('/update-confirm' as never), candidates.length)) return;
     setOpen(true);
     if (round.busy) return;
     setRound({ busy: true, count: candidates.length, rows: [], error: '' });
@@ -64,6 +74,11 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
       setRound({ rows: results });
       if (!results.length || results.some((row) => needsAttention(row.state))) haptic.error();
       else haptic.success();
+      const done = results.find((row) => row.server.id === notesServer.id);
+      // Abre ao fechar a folha de resultados: por cima dela, no iOS, ficaria escondida e a lista se perderia.
+      if (done && (done.state.status === 'atualizado' || done.state.status === 'atualizado_manual') && firstPendingServer([notesServer.id])) {
+        newsAfterClose.current = notesServer.id;
+      }
     } catch (cause) {
       setRound({ error: m.update_all_failed({ erro: cause instanceof Error ? cause.message : String(cause) }) });
       haptic.error();
@@ -79,7 +94,12 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
       onPress={() => void start()} style={({ pressed }) => [styles.button, { borderColor: c.borderStrong }, pressed && { backgroundColor: c.hover }]}>
       <Text style={[styles.label, { color: c.text }]}>{buttonLabel}</Text>
     </Pressable> : null}
-    {open ? <MachineSheet title={m.update_all_title()} onClose={() => setOpen(false)}>
+    {open ? <MachineSheet title={m.update_all_title()} onClose={() => {
+      setOpen(false);
+      const id = newsAfterClose.current;
+      newsAfterClose.current = null;
+      if (id) InteractionManager.runAfterInteractions(() => router.push(whatsNewHref(id)));
+    }}>
       {busy && rows.length === 0 ? <Notice text={m.update_all_checking()} /> : null}
       <Notice text={error} error />
       {!busy && !error && rows.length === 0 ? <Notice text={m.maquinas_vazio()} /> : null}

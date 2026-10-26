@@ -1123,3 +1123,18 @@ export interface MigrationStatus {
   areas: MigrationArea[] | null;
   private: { key: string; rust: number }[] | null;
 }
+
+/** `GET /api/update/notes`: o que a próxima atualização traz, lido antes de atualizar. */
+export interface UpdateWarning { id: string; title: string; text: string }
+export type UpdateNewsKind = 'new' | 'improvement' | 'fix';
+export type UpdateNewsPlatforms = 'desktop' | 'mobile' | 'all';
+export interface UpdateNews {
+  id: string;
+  title: string;
+  kind: UpdateNewsKind;
+  text: string;
+  platforms: UpdateNewsPlatforms;
+  try_it: string | null;
+  animation: string | null;
+}
+export interface UpdateNotes { target: string; warnings: UpdateWarning[]; news: UpdateNews[] }

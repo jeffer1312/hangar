@@ -4,7 +4,19 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-const mocks = vi.hoisted(() => ({ updateAll: vi.fn(), notification: vi.fn() }));
+const mocks = vi.hoisted(() => ({ updateAll: vi.fn(), notification: vi.fn(), push: vi.fn(), confirm: true, store: new Map<string, string>() }));
+// A folha "Atualizar?" é rota: abrir responde na hora com a escolha do teste.
+vi.mock('expo-router', async () => {
+  const pending = await import('../updates/pending');
+  return { useRouter: () => ({ push: (href: unknown) => {
+    mocks.push(href);
+    if (href === '/update-confirm') pending.currentConfirmRequest()?.resolve(mocks.confirm);
+  } }) };
+});
+vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({
+  getString: (k: string) => mocks.store.get(k), set: (k: string, v: string) => { mocks.store.set(k, v); }, remove: (k: string) => { mocks.store.delete(k); },
+}) }));
+vi.mock('../../stores/servers', () => ({ useServers: (select: (state: { activeId: string | null }) => unknown) => select({ activeId: 'b' }) }));
 vi.mock('@hangar/core', async (original) => ({ ...await original<typeof import('@hangar/core')>(), updateAll: mocks.updateAll }));
 vi.mock('react-native', async (original) => ({ ...await original<typeof import('react-native')>(), Platform: { OS: 'ios' } }));
 vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
@@ -27,6 +39,7 @@ async function click(label: string) {
 }
 beforeEach(() => {
   mocks.updateAll.mockReset(); mocks.notification.mockReset(); mocks.notification.mockResolvedValue(undefined);
+  mocks.push.mockReset(); mocks.confirm = true; mocks.store.clear();
   el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
 });
 afterEach(async () => { await act(async () => root.unmount()); el.remove(); });
@@ -119,6 +132,25 @@ describe('atualizar todas as máquinas', () => {
     await render(); await click(m.update_all_button({ n: '2' }));
     expect(el.textContent).toContain(expected());
     expect(el.textContent).not.toContain('fixture-transient-network');
+  });
+
+  it('confirma pela folha com os avisos do servidor ativo; cancelar não começa a rodada', async () => {
+    mocks.confirm = false;
+    await render(); await click(m.update_all_button({ n: '2' }));
+    expect(mocks.push).toHaveBeenCalledWith('/update-confirm');
+    expect(mocks.updateAll).not.toHaveBeenCalled();
+    expect(el.querySelector(`[aria-label="${m.sessao_fechar()}"]`)).toBeNull();
+  });
+
+  it('servidor ativo atualizado abre "O que chegou para você" ao fechar os resultados', async () => {
+    const { savePendingNews, whatsNewHref } = await import('../updates/pending');
+    savePendingNews(second.id, { cards: [{ id: 'n1', title: 'fixture-news', kind: 'new', text: '', platforms: 'all', try_it: null, animation: null }], fixes: [] });
+    mocks.updateAll.mockImplementation(async () => [{ server: second, state: { status: 'atualizado', warnings: [] } }]);
+    await render(); await click(m.update_all_button({ n: '2' }));
+    expect(mocks.push).not.toHaveBeenCalledWith(whatsNewHref(second.id));
+    await click(m.sessao_fechar());
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(mocks.push).toHaveBeenLastCalledWith(whatsNewHref(second.id));
   });
 
   it('vibra sucesso no resultado concluído', async () => {

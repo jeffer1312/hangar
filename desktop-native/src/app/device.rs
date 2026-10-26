@@ -118,6 +118,8 @@ pub(super) struct Device {
     /// Resultado da última procura: quantas mudanças há (0 = em dia).
     search: Option<Result<usize, String>>,
     searching: bool,
+    /// Lendo avisos e novidades antes do "Atualizar?" (Sobre e Servidores).
+    pub(super) notes_loading: bool,
     run: Option<Run>,
     run_seq: u64,
     run_task: Option<JoinHandle<()>>,
@@ -391,11 +393,23 @@ impl Hangar {
     }
 
     fn open_update_confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let this = cx.entity().downgrade();
-        let server = self.server_label(cx);
-        chrome::confirm_alert(window, cx, tr("update_confirm_title").replace("{server}", &server), tr("update_confirm_desc"),
-            tr("update_confirm_ok"), ButtonVariant::Primary,
-            move |_, cx| { let _ = this.update(cx, |this, cx| this.start_update(cx)); true });
+        self.confirm_server_update(Self::start_update, window, cx);
+    }
+
+    /// "Atualizar {server}?" do servidor ativo, com os avisos e as novidades lidos antes de abrir; `start` roda ao confirmar.
+    pub(super) fn confirm_server_update(&mut self, start: fn(&mut Self, &mut Context<Self>), window: &mut Window, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        if self.device.notes_loading { return; }
+        self.device.notes_loading = true;
+        cx.notify();
+        crate::update::confirm::load_then_open(api, &self.runtime, window, cx, move |this, _, notes, window, cx| {
+            this.device.notes_loading = false;
+            cx.notify();
+            let weak = cx.entity().downgrade();
+            let server = this.server_label(cx);
+            crate::update::confirm::open(window, cx, tr("update_confirm_title").replace("{server}", &server), tr("update_confirm_desc"),
+                notes, None, move |_, cx| { let _ = weak.update(cx, |this, cx| start(this, cx)); });
+        });
     }
 
     fn start_update(&mut self, cx: &mut Context<Self>) {
@@ -549,6 +563,7 @@ impl Hangar {
                                     tr("update_done").replace("{version}", &parse_version(&value).version)
                                 };
                                 self.finish_update(ok, message, cx);
+                                if ok { crate::update::confirm::show_pending(false, window, cx); }
                             }
                             _ => {}
                         }
@@ -783,7 +798,8 @@ impl Hangar {
         };
         let available = matches!(self.device.search, Some(Ok(n)) if n > 0) && !searching;
         let control = if available {
-            Button::new("update-start").primary().small().label(tr("settings_about_update_now")).disabled(active || self.device.channel.blocks_update())
+            Button::new("update-start").primary().small().label(tr("settings_about_update_now")).loading(self.device.notes_loading)
+                .disabled(active || self.device.channel.blocks_update())
                 .on_click(cx.listener(|this, _, window, cx| this.open_update_confirm(window, cx)))
         } else {
             Button::new("update-search").outline().small().icon(IconName::RefreshCw)
@@ -852,6 +868,7 @@ impl Hangar {
             .when(failed, |el| el.child(Button::new("update-channel-retry").outline().small().label(tr("settings_channel_reload"))
                 .disabled(busy || self.api.is_none()).on_click(cx.listener(|this, _, _, cx| this.load_channel(cx)))))
             .when(channel.applied && !channel.blocks_update(), |el| el.child(Button::new("update-channel-update").primary().small()
+                .loading(self.device.notes_loading)
                 .label(tr("settings_about_update_now")).disabled(busy || self.api.is_none())
                 .on_click(cx.listener(|this, _, window, cx| this.open_update_confirm(window, cx)))));
         let content = div().p_4().flex().flex_col().gap_3()

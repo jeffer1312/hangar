@@ -22,6 +22,7 @@ import type { ConfigSyncItem, ConfigSyncManifest, ConfigSyncProgress, ConfigSync
 import type {
   Atualizacao,
   AtualizacaoEstado,
+  UpdateNotes,
   MigrationStatus,
   SessionInfo,
   Provider,
@@ -2222,6 +2223,17 @@ export function getAtualizacaoEm(s: Server | null, procurar = false, fetcher?: t
   // O acompanhamento é explícito: a espera da lista não pode esconder a volta do servidor.
   return s ? apiFetchForServer(s, `/api/atualizacao${procurar ? '?procurar=1' : ''}`, undefined, procurar ? 120000 : 20000, true, fetcher)
            : getAtualizacao(procurar, fetcher);
+}
+
+/** Avisos e novidades da próxima atualização. 404 = servidor antigo, sem a rota: `null`. */
+export async function getUpdateNotesEm(s: Server | null, fetcher?: typeof fetch): Promise<UpdateNotes | null> {
+  try {
+    return await (s ? apiFetchForServer<UpdateNotes>(s, '/api/update/notes', undefined, 20000, true, fetcher)
+                    : apiFetch<UpdateNotes>('/api/update/notes', { signal: AbortSignal.timeout(20000) }, fetcher));
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) return null;
+    throw e;
+  }
 }
 
 export function getIdentificadorEm(s: Server, fetcher?: typeof fetch): Promise<{ identificador: string; lan_url?: string }> {

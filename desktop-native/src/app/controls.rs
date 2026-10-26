@@ -837,11 +837,9 @@ impl Hangar {
                 let aria = [Some(format!("{name}: {text}")), effort.clone().map(|e| format!("{}: {e}", tr("ctl_effort"))), fast.then(|| tr("ctl_fast"))]
                     .into_iter().flatten().collect::<Vec<_>>().join(" · ");
                 let id = SharedString::from(format!("ctl-{}", ctl.key()));
-                pills.push(popup::anchor(div(), id.clone()).child(chrome::pill_button(id, cx).gap(px(6.)).selected(open == Some(ctl)).disabled(!self.chat_online)
+                pills.push(popup::anchor(div(), id.clone()).child(super::model_pill(id, text, effort.filter(|_| busy.is_none()), (fast && busy.is_none()).then(|| tr("ctl_fast")), cx)
+                    .selected(open == Some(ctl)).disabled(!self.chat_online)
                     .tooltip(format!("{name} · {}", tr("ctl_effort"))).accessibility_label(aria)
-                    .child(div().max_w(px(150.)).truncate().text_xs().font_weight(FontWeight::SEMIBOLD).child(text))
-                    .when_some(effort.filter(|_| busy.is_none()), |el, effort| el.child(div().flex_shrink_0().text_xs().text_color(theme::muted()).child(effort)))
-                    .when(fast && busy.is_none(), |el| el.child(div().id("ctl-fast-active").flex_shrink_0().text_xs().text_color(theme::muted()).child(tr("ctl_fast"))))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_ctl(ctl, false, cx);
                         this.focus_ctl_panel(window, cx);
@@ -858,11 +856,9 @@ impl Hangar {
             });
             if ctl == Ctl::Mode {
                 let plan = self.ctl_label(ctl).as_deref() == Some("plan");
-                mode = Some(popup::anchor(div(), id.clone()).child(chrome::pill_button(id, cx).pl(px(10.)).gap(px(6.)).selected(open == Some(ctl)).disabled(!self.chat_online)
-                    .tooltip(name.clone()).accessibility_label(format!("{name}: {text}"))
-                    .child(div().max_w(px(160.)).truncate().text_xs().text_color(if plan { theme::accent() } else { theme::muted() })
-                        .when(plan, |el| el.font_weight(FontWeight::SEMIBOLD)).child(text))
-                    .child(chrome::small_icon(IconName::ChevronDown, 12., theme::faint()))
+                let aria = format!("{name}: {text}");
+                mode = Some(popup::anchor(div(), id.clone()).child(super::menu_pill(id, text, plan, cx).selected(open == Some(ctl)).disabled(!self.chat_online)
+                    .tooltip(name.clone()).accessibility_label(aria)
                     .on_click(listener)).into_any_element());
                 continue;
             }
