@@ -230,6 +230,16 @@ fn unreadable_orq_keeps_the_last_good_row_and_says_so() {
 }
 
 #[test]
+fn loose_file_in_orq_dir_is_not_a_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".hangar/orq");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("2026-09-05-plano.md"), "# plano").unwrap();
+    let (rows, failed) = orq_rows(dir.path(), now());
+    assert!(rows.is_empty() && !failed, "arquivo solto não é execução nem leitura falha");
+}
+
+#[test]
 fn headless_problem_is_the_first_sidecar_entry() {
     let dir = tempfile::tempdir().unwrap();
     let path = crate::state::parked::sidecar_path("hl", dir.path());
