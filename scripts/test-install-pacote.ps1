@@ -121,7 +121,8 @@ public static class FakeMark {
     Assert ($texto.Contains("    if (`$pacote) {`n        `$rcRust = 'pacote'`n    } elseif")) 'pacote: sem rust_release'
     Assert ($texto.Contains("if (-not `$Update -and -not `$pacote) {`n    Titulo 'Passos de atualizacao'")) 'pacote: marcar_todos do uv fica de fora'
     Assert ($texto.Contains("} elseif (`$pacote) {`n    Ok 'o pacote se atualiza pelo Atualizar do app, sem git pull'")) 'pacote: sem hook de git pull'
-    Assert ($texto.Contains("`$pyFumaca = if (`$pacote) { @(`$pyBackend) }")) 'pacote: fumaca pelo Python do pacote'
+    Assert ($texto.Contains("if (`$pacote) { `$pyFumaca = @(`$pyBackend) }")) 'pacote: fumaca pelo Python do pacote'
+    Assert (-not ($texto -match '\$pyFumaca = if')) 'pacote: fumaca nunca pelo valor de um if (desembrulha o array de um item)'
     Assert ($texto.Contains("if (`$pacote) { `$pyExe = Join-Path `$HOME '.hangar\current\python\python.exe' }")) 'pacote: lancadores pelo Python do pacote, via current'
     $fumaca = $texto.IndexOf("Ok 'o multiplexador mata sessao'")
     $marca = $texto.IndexOf('install-package --mark-steps 2>&1')

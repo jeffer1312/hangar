@@ -2834,7 +2834,9 @@ Mark-Step 'final' 'fazendo'
 Titulo '8/8 Checagem de fumaca'
 Push-Location "$raiz\backend"
 # O Python do backend: o embutido do pacote, ou o do uv no checkout.
-$pyFumaca = if ($pacote) { @($pyBackend) } else { @('uv', 'run', 'python') }
+# Atribuicao direta pelo mesmo motivo do $quieto do npm: o `if` desembrulharia o array de um item.
+$pyFumaca = @('uv', 'run', 'python')
+if ($pacote) { $pyFumaca = @($pyBackend) }
 $rc = Nativo @pyFumaca -c "from app import api, registry, procinfo, projects"
 if ($rc -ne 0) { Erro 'o backend nao importa neste Windows'; Pop-Location; exit 1 }
 Ok 'o backend importa'
