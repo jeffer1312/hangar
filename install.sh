@@ -1139,8 +1139,12 @@ fi
 if [ "$PACOTE" = 1 ] && [ "$UPDATE" = 0 ]; then
   if [ "$FRESH" = 1 ]; then
     # O marcador do bootstrap só sai com os passos marcados: falhou, a próxima execução tenta de novo.
-    { bin/hangar-server install-package --mark-steps && rm -f "$HOME/.hangar/fresh-package"; } \
-      || anota_problema "os passos de atualização não foram marcados como aplicados — rode: ~/.hangar/current/bin/hangar-server install-package --mark-steps"
+    if ! bin/hangar-server install-package --mark-steps; then
+      anota_problema "os passos de atualização não foram marcados como aplicados — rode: ~/.hangar/current/bin/hangar-server install-package --mark-steps"
+    elif ! rm -f "$HOME/.hangar/fresh-package"; then
+      # Sobrando, a próxima execução marcaria como aplicados passos que ainda estão pendentes.
+      anota_problema "não consegui apagar $HOME/.hangar/fresh-package — apague-o antes de rodar o instalador de novo"
+    fi
   else
     nota "instalação que já existia: nenhum passo de atualização marcado; os pendentes rodam no Atualizar do app"
   fi

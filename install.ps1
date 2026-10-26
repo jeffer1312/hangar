@@ -2905,7 +2905,10 @@ if ($pacote -and -not $Update -and -not $pacoteNovo) {
     if ($rcPassos -eq 0) {
         Ok 'passos de atualizacao marcados como ja aplicados (instalacao nova)'
         # O marcador do bootstrap so sai com os passos marcados: falhou, a proxima execucao tenta de novo.
-        Remove-Item -LiteralPath (Join-Path $HOME '.hangar\fresh-package') -Force -ErrorAction SilentlyContinue
+        $marcadorNovo = Join-Path $HOME '.hangar\fresh-package'
+        # Sobrando, a proxima execucao marcaria como aplicados passos que ainda estao pendentes.
+        try { if (Test-Path -LiteralPath $marcadorNovo) { Remove-Item -LiteralPath $marcadorNovo -Force -ErrorAction Stop } }
+        catch { Falha 'marcador de instalacao nova' "nao consegui apagar $marcadorNovo - apague-o antes de rodar o instalador de novo" }
     }
     else { Falha 'passos de atualizacao' 'nao foram marcados como aplicados - rode:  ~\.hangar\current\bin\hangar-server.exe install-package --mark-steps' }
 }
