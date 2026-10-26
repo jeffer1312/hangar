@@ -184,9 +184,16 @@ pub(crate) fn descendants(root: i64, children: &ChildrenMap) -> Vec<i64> {
 /// Processo da árvore que não é o REPL dono: `claude daemon`, host de pty (`--bg-*`) e subagente
 /// (`--agent`). Por argumento inteiro: o prompt inicial é um argumento só e pode citar essas palavras.
 pub(crate) fn is_aux(argv: &[String]) -> bool {
-    argv.first().is_some_and(|a| basename(a).contains("daemon"))
-        || argv.get(1).is_some_and(|a| a == "daemon")
-        || argv.iter().skip(1).any(|a| a.starts_with("--bg-") || a.starts_with("--agent"))
+    // Título de processo reescrito chega num elemento só: aí as palavras são os argumentos.
+    let words: Vec<&str> = match argv {
+        [one] => one.split_whitespace().collect(),
+        _ => argv.iter().map(String::as_str).collect(),
+    };
+    let Some((argv0, rest)) = words.split_first() else { return false };
+    basename(argv0).contains("daemon")
+        // Subcomando vem antes da primeira flag (`node cli.js daemon` incluído); o prompt, depois.
+        || rest.iter().take_while(|a| !a.starts_with('-')).any(|a| *a == "daemon")
+        || rest.iter().any(|a| a.starts_with("--bg-") || a.starts_with("--agent"))
 }
 
 fn split(cmd: &str) -> Vec<String> { cmd.split_whitespace().map(String::from).collect() }
@@ -917,6 +924,8 @@ mod tests {
         assert!(is_aux(&v(&["/usr/bin/claude", "daemon", "start"])));
         assert!(is_aux(&v(&["claude", "--bg-pty-host", "/tmp/cc-daemon-1/s"])));
         assert!(is_aux(&v(&["claude", "--agent", "x"])));
+        assert!(is_aux(&v(&["node", "/n/@anthropic-ai/claude-code/cli.js", "daemon"])));
+        assert!(is_aux(&v(&["claude --bg-pty-host /tmp/cc-daemon-1/s"])), "título reescrito num elemento só");
         let prompt = "prefira um daemon isolado; gnome-keyring-daemon --unlock e --agent x";
         assert!(!is_aux(&v(&["claude", "--session-id", "a", "--permission-mode", "bypassPermissions", prompt])));
         assert!(!is_aux(&v(&["claude", "--session-id", "a", "daemon"])), "prompt `daemon` no fim não é subcomando");

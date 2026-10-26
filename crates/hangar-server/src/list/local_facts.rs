@@ -243,7 +243,10 @@ pub fn orq_rows(home: &Path, now: f64) -> (Vec<SessionRow>, bool) {
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
     let mut dirs: Vec<PathBuf> = match std::fs::read_dir(&root) {
         // A pasta também guarda o plano `.md` de cada execução; só subpasta é execução.
-        Ok(entries) => entries.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir() || t.is_symlink())).map(|e| e.path()).collect(),
+        // Tipo ilegível segue para a leitura, que reporta a falha e guarda a última linha boa.
+        Ok(entries) => entries.flatten()
+            .filter(|e| e.file_type().map_or(true, |t| t.is_dir() || t.is_symlink() && e.path().is_dir()))
+            .map(|e| e.path()).collect(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => { last.retain(|d, _| !d.starts_with(&root)); return (Vec::new(), false); }
         Err(_) => {
             let mut kept: Vec<(&PathBuf, &SessionRow)> = last.iter().filter(|(d, _)| d.starts_with(&root)).collect();
