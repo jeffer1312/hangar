@@ -1,5 +1,5 @@
 use super::{
-    AccountKey, AccountLocks, GuardMode, Provider,
+    AccountKey, AccountLocks, GuardMode, LockError, Provider,
     environment::{AccountEnvironment, expand},
     storage,
 };
@@ -420,8 +420,15 @@ impl AccountService {
         let _guard = self
             .locks
             .try_acquire(&key, GuardMode::Shared)
-            .map_err(|_| {
-                AccountError::new(409, "account_busy", "a conta está ocupada", json!({}))
+            .map_err(|error| match error {
+                // Erro de disco na trava não é conta ocupada: "tente de novo" nunca resolveria.
+                LockError::Io(error) if provider == Provider::Claude => AccountError::new(
+                    500,
+                    "account_prepare_failed",
+                    format!("não foi possível travar a conta {}: {error}", displayed(&path)),
+                    json!({}),
+                ),
+                _ => AccountError::new(409, "account_busy", "a conta está ocupada", json!({})),
             })?;
         if provider == Provider::Codex
             && key.canonical_home == canonical(provider, &self.env.codex_default)?
@@ -444,6 +451,13 @@ impl AccountService {
                 } else {
                     AccountError::codex(409, "codex_account_exists", Some(name))
                 }
+            } else if provider == Provider::Claude {
+                AccountError::new(
+                    500,
+                    "account_prepare_failed",
+                    format!("não foi possível criar {}: {error}", displayed(&path)),
+                    json!({}),
+                )
             } else {
                 AccountError::codex(500, "codex_account_create_failed", Some(name))
             }

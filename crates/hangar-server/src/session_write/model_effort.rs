@@ -53,6 +53,8 @@ pub(super) async fn serve(st: &Arc<AppState>, runtime: Arc<RuntimeRegistry>, nam
     let found = match enter_then_find(&runtime, &name, st.write_gate_wait).await {
         Ok(None) => match runtime.adopt_now(&name).await {
             Some(Ok(())) => enter_then_find(&runtime, &name, st.write_gate_wait).await,
+            // Codex abrindo a conversa: esta rota é do Claude, e segue como antes.
+            Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING => Ok(None),
             Some(Err(error)) => return Some(answer(headers, StatusCode::CONFLICT, detail_body(&error.code, &error.message, json!({})))),
             None => Ok(None),
         },

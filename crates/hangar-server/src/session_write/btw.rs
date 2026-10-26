@@ -298,7 +298,7 @@ pub async fn ask(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo
         Ok(Some(found)) => Some(found),
         Ok(None) => match runtime.adopt_now(&name).await {
             Some(Ok(())) => match enter_then_find(&runtime, &name, st.write_gate_wait).await { Err(_) => return answer(StatusCode::CONFLICT, busy_body()), Ok(found) => found },
-            Some(Err(error)) => return answer(StatusCode::SERVICE_UNAVAILABLE, super::detail_body(&error.code, &error.message, json!({}))),
+            Some(Err(error)) => return answer(super::failed_status(&error), super::detail_body(&error.code, &error.message, json!({}))),
             None => None,
         },
     };

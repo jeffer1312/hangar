@@ -58,7 +58,7 @@ fn gone() -> RuntimeError { refuse("A sessão Codex não está mais aberta aqui.
 fn job() -> RuntimeError { RuntimeError::new("relaunch_job","etapa da troca de modo interrompida") }
 /// O terminal recém-criado ainda abre a conversa: trocar de modo espera ele.
 pub const STARTING:&str = "codex_terminal_starting";
-fn starting() -> RuntimeError { RuntimeError::new(STARTING,"Espere o terminal abrir a conversa antes de trocar de modo.") }
+pub fn starting() -> RuntimeError { RuntimeError::new(STARTING,"Espere o terminal abrir a conversa antes de trocar de modo.") }
 /// Sem sidecar, só o pane do Codex é a TUI abrindo; pane de outro agente com o nome é dele.
 fn codex_opening(panes:&[crate::list::mux::Pane],name:&str) -> bool {
     terminal::pane_of(panes,name).is_some_and(|pane|pane.provider.as_deref() == Some("codex"))

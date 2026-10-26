@@ -1,0 +1,17 @@
+{
+  "origin_commit": "b2832ee04",
+  "command": "HANGAR_FIXTURE_PY_ROOT=<checkout com scripts/hangar-conta e backend/app de b2832ee04> cargo test -p hangar-server --test it accounts_reconcile::generate_fixtures -- --ignored --exact",
+  "scenario": "list_empty",
+  "steps": [
+    {
+      "args": [
+        "--list"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": []
+    }
+  ],
+  "tree": {},
+  "diary": []
+}

@@ -282,6 +282,8 @@ struct DeleteMerged {
     confirm: bool,
     #[serde(default)]
     lossy: Option<Vec<String>>,
+    #[serde(default)]
+    ready_only: bool,
 }
 
 pub(crate) async fn fresh_context(st: &AppState) -> hangar_workspace::Result<Context> {
@@ -524,6 +526,7 @@ async fn mutation(st: Arc<AppState>, req: Request) -> Response {
                 let status = worktrees::status_of(&path, &ctx.sessions, false, &ctx.project_bases);
                 if status["merged"] != true
                     || status["degraded"] != false
+                    || (b.ready_only && status["dirty"].as_u64() != Some(0))
                     || hangar_workspace::worktree_cleanup::in_use(&path, &ctx.sessions)
                 {
                     return Ok(None);
@@ -543,6 +546,7 @@ async fn mutation(st: Arc<AppState>, req: Request) -> Response {
                     hangar_workspace::worktree_cleanup::RemoveOptions {
                         confirm: loses,
                         merged_only: true,
+                        require_clean: b.ready_only,
                         ..Default::default()
                     },
                     &guard,

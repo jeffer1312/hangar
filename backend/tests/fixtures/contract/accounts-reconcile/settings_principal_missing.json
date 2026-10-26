@@ -1,0 +1,148 @@
+{
+  "origin_commit": "b2832ee04",
+  "command": "HANGAR_FIXTURE_PY_ROOT=<checkout com scripts/hangar-conta e backend/app de b2832ee04> cargo test -p hangar-server --test it accounts_reconcile::generate_fixtures -- --ignored --exact",
+  "scenario": "settings_principal_missing",
+  "steps": [
+    {
+      "args": [
+        "--prep",
+        "conta2"
+      ],
+      "exit": 0,
+      "stdout": "<HOME>/.claude-conta2\n",
+      "stderr": []
+    }
+  ],
+  "tree": {
+    "<HOME>/.claude": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-conta2": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-conta2/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude-conta2/.hangar-conta": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    },
+    "<HOME>/.claude-conta2/CLAUDE.md": {
+      "kind": "symlink",
+      "target": "<HOME>/.claude/CLAUDE.md"
+    },
+    "<HOME>/.claude-conta2/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-conta2/projects/-tmp-x": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-conta2/projects/-tmp-x/memory": {
+      "kind": "symlink",
+      "target": "<HOME>/.claude/projects/-tmp-x/memory"
+    },
+    "<HOME>/.claude-conta2/skills": {
+      "kind": "symlink",
+      "target": "<HOME>/.claude/skills"
+    },
+    "<HOME>/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"oauthAccount\": {\"emailAddress\": \"um@exemplo.com\"}, \"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude/.credentials.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"claudeAiOauth\":{}}"
+    },
+    "<HOME>/.claude/CLAUDE.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "# regras"
+    },
+    "<HOME>/.claude/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x/memory": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x/memory/MEMORY.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "m"
+    },
+    "<HOME>/.claude/skills": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/skills/falar": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/skills/falar/SKILL.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "oi"
+    },
+    "<HOME>/.hangar-contas.lock": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    }
+  },
+  "diary": [
+    {
+      "evento": "conta.reconciliar.inicio",
+      "nivel": "ok",
+      "provider": "claude"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "ligar_arquivos",
+      "conta_id": "<CONTA_ID>"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "espelhar_settings"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "conferir_plugins"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "espelhar_config"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "ligar_memoria"
+    },
+    {
+      "evento": "conta.reconciliar.concluiu",
+      "nivel": "ok",
+      "provider": "claude",
+      "codigo": "ok",
+      "quantidade": 0
+    },
+    {
+      "evento": "conta.reconciliar.fim",
+      "nivel": "ok",
+      "provider": "claude",
+      "codigo": "retornou"
+    }
+  ]
+}

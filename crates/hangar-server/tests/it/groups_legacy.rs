@@ -69,6 +69,9 @@ async fn recorder(target: SocketAddr, label: &'static str, calls: Calls) -> Sock
         let calls = calls.clone();
         async move {
             let (parts, body) = req.into_parts();
+            if !crate::app_route(parts.uri.path()) {
+                return Response::builder().status(404).body(axum::body::Body::empty()).unwrap();
+            }
             let bytes = axum::body::to_bytes(body, 1 << 20).await.unwrap();
             calls.lock().unwrap().push(json!({"to": label, "method": parts.method.as_str(), "path": parts.uri.path(),
                 "body": serde_json::from_slice::<Value>(&bytes).ok()}));
@@ -114,8 +117,10 @@ async fn dropper(label: &'static str, calls: Calls) -> SocketAddr {
                 }
                 let mut line = head.lines().next().unwrap_or_default().split(' ');
                 let (method, path) = (line.next().unwrap_or_default().to_owned(), line.next().unwrap_or_default().to_owned());
-                calls.lock().unwrap().push(json!({"to": label, "method": method, "path": path,
-                    "body": serde_json::from_slice::<Value>(&buf[head_end..]).ok()}));
+                if crate::app_route(&path) {
+                    calls.lock().unwrap().push(json!({"to": label, "method": method, "path": path,
+                        "body": serde_json::from_slice::<Value>(&buf[head_end..]).ok()}));
+                }
                 let _ = sock.shutdown().await;
             });
         }

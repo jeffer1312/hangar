@@ -989,9 +989,15 @@ mod tests {
         let (counted, snapped) = (hits.clone(), snapshots.clone());
         tokio::spawn(async move {
             while let Ok((mut s, _)) = listener.accept().await {
-                let n = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let mut buf = [0u8; 4096];
                 let read = s.read(&mut buf).await.unwrap_or(0);
+                // Qualquer processo da máquina pode sondar a porta nova (`HEAD /`): só rota do app conta.
+                let path = std::str::from_utf8(&buf[..read]).ok().and_then(|r| r.split(' ').nth(1)).unwrap_or("");
+                if !(path.starts_with("/internal/") || path.starts_with("/api/")) {
+                    let _ = s.write_all(b"HTTP/1.1 404 X\r\ncontent-length: 0\r\n\r\n").await;
+                    continue;
+                }
+                let n = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 // Retrato é GET; o relatório de diagnóstico é POST.
                 if buf[..read].starts_with(b"GET") {
                     snapped.fetch_add(1, std::sync::atomic::Ordering::SeqCst);

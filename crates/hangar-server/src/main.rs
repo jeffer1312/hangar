@@ -29,6 +29,10 @@ fn main() -> std::process::ExitCode {
     if args.first().map(String::as_str) == Some("update") {
         return hangar_server::update::executor::cli(&args[1..]);
     }
+    // `conta`: a reconciliação das contas Claude que o `hangar-conta` do shell chama, sem o servidor.
+    if args.first().map(String::as_str) == Some("conta") {
+        return hangar_server::accounts::claude_config::cli(&args[1..]);
+    }
     // Hook de SessionStart: só disco, nunca sobe o servidor.
     if args.first().map(String::as_str) == Some("pair-context") {
         return hangar_server::groups::context_cmd::run(&args);

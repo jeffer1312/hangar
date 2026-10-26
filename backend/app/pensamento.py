@@ -10,7 +10,7 @@ Medido em 29/08/2026 (claude 2.1.246, opus-5): sem a chave, o CLI pede o pensame
 vem o resumo em texto, e ele cai no `.jsonl` como qualquer bloco. Vale so pra sessao NOVA: a forma
 de exibicao e decidida na largada.
 
-Escreve no settings.json COMPARTILHADO (`~/.claude`), nao no da conta: `contas._espelhar_do_principal`
+Escreve no settings.json COMPARTILHADO (`~/.claude`), nao no da conta: a reconciliação (`claude_config.rs`)
 copia as chaves do principal pra cada conta na proxima abertura dela, entao gravar aqui e o unico
 jeito de a escolha valer pra todas sem escrever em N arquivos que podem estar sendo lidos agora.
 """
@@ -70,7 +70,7 @@ def definido() -> bool:
 def gravar(valor: bool) -> None:
     """Grava a chave preservando todo o resto do arquivo.
 
-    tmp+replace com pid+uuid no nome, como o `contas._espelhar_do_principal`: um `claude` vivo lendo
+    tmp+replace com pid+uuid no nome, como o espelho da reconciliação: um `claude` vivo lendo
     o settings.json no meio da escrita pegaria JSON truncado, e o nome fixo ainda deixaria duas
     gravacoes simultaneas se atropelarem.
 

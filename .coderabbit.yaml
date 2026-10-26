@@ -7,3 +7,4 @@ reviews:
     - "!**/package-lock.json"
     - "!**/Cargo.lock"
     - "!desktop-native/vendor/gpui-*/**"
+    - "!backend/tests/fixtures/contract/**/*.json"

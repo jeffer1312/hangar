@@ -69,6 +69,17 @@ def test_account_write_goes_to_the_rust_owner(rust, monkeypatch):
     assert json.loads(seen["body"]) == {"name": "via-connect"}
 
 
+def test_claude_account_creation_goes_to_the_rust_owner(rust, monkeypatch):
+    """T66: o cadastro Claude pelas portas do Python também vai ao Rust; o `contas.criar` não roda."""
+    monkeypatch.setattr(contas, "criar", lambda *a, **k: pytest.fail("escritor Python com o Rust de pé"))
+    _Rust.reply = (200, {"path": "/x/.claude-nova", "label": "nova", "active": False})
+    response = TestClient(app).post("/api/claude-configs", headers=AUTH, json={"nome": "nova"})
+    assert (response.status_code, response.json()) == (200, {"path": "/x/.claude-nova", "label": "nova", "active": False})
+    [seen] = _Rust.seen
+    assert (seen["method"], seen["path"], seen["account_path"]) == ("POST", "/__hangar_server/accounts/public", "/api/claude-configs")
+    assert json.loads(seen["body"]) == {"nome": "nova"}
+
+
 def test_owner_refusal_reaches_the_caller_unchanged(rust):
     _Rust.reply = (409, {"detail": {"code": "erro_processos_usam_conta", "params": {"pids": [7]}}})
     response = TestClient(app).delete("/api/claude-configs/conta2", headers=AUTH)

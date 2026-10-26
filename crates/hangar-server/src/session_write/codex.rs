@@ -261,7 +261,7 @@ async fn admit_codex_as(st: &Arc<AppState>, peer: SocketAddr, req: Request, rout
         Ok(true) => admit(st, peer, req, route).await,
         Ok(false) => Err(pass(st, req, &fwd).await),
         Err(error) => {
-            let mut response = json_response(StatusCode::SERVICE_UNAVAILABLE, detail_body(&error.code, &error.message, json!({})));
+            let mut response = json_response(super::failed_status(&error), detail_body(&error.code, &error.message, json!({})));
             cors(req.headers(), response.headers_mut());
             Err(response)
         }
@@ -330,6 +330,8 @@ pub async fn limits(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     match ours(&st, Some(&name)).await {
         Ok(true) => {}
         Ok(false) => return pass(&st, req, &fwd).await,
+        // Conversa ainda abrindo: ainda não há cota a ler, e a resposta é a neutra.
+        Err(error) if error.code == crate::runtime::codex_relaunch::STARTING => {}
         // Do Rust e não abriu: o código da falha, como nas outras rotas do Codex, nunca a resposta neutra.
         Err(error) => {
             let mut response = json_response(StatusCode::SERVICE_UNAVAILABLE, detail_body(&error.code, &error.message, json!({})));

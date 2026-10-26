@@ -5,7 +5,7 @@ fn preparation_routes_belong_to_rust() {
     use hangar_server::migration_status::rust_route;
     assert!(
         rust_route(&Method::POST, "/api/claude-configs"),
-        "cadastro Claude ainda passa pelo Python"
+        "o cadastro Claude, preparo incluído, é do Rust; voltou a passar pelo Python"
     );
     assert!(
         rust_route(&Method::GET, "/api/codex-contas"),

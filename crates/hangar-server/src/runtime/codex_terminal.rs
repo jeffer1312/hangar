@@ -245,7 +245,7 @@ pub(super) fn pane_of<'a>(panes:&'a [Pane],name:&str) -> Option<&'a Pane> {
     panes.iter().filter(|p|p.session == name).max_by_key(|p|(p.provider.as_deref() == Some("codex"),p.active))
 }
 
-/// Quanto um sidecar pode ficar `launching` antes de a escrita parar de ir ao Python.
+/// Quanto a conversa pode ficar abrindo (sidecar `launching` ou pane sem sidecar) antes de virar erro.
 const LAUNCH_WAIT:Duration = Duration::from_secs(120);
 
 pub(super) fn queue_files(queue_dir:&Path,key:&str) -> (PathBuf,PathBuf) {
@@ -313,6 +313,32 @@ pub(super) fn io_failure(error:std::io::Error) -> RuntimeError {
     RuntimeError::new("queue_io",&format!("fila da adoção inacessível: {:?}",error.kind()))
 }
 
+/// A conversa foi adotada entre a decisão e a gravação: a fila agora é do ator, e o texto vai por ele.
+pub const ADOPTED_MEANWHILE:&str = "codex_terminal_adopted_meanwhile";
+
+fn launch_stuck() -> RuntimeError {
+    RuntimeError::new("codex_terminal_launch_stuck","o terminal do Codex está abrindo há tempo demais; feche e abra a sessão de novo")
+}
+
+/// Texto para a conversa que ainda abre, na fila da chave dela, como o kick-off (`pre_transcript`): a
+/// adoção (`prepare`) mantém as linhas e o ator as entrega pelo app-server. Bloqueante.
+fn queue_before_adoption(queue_dir:&Path,key:&str,name:&str,text:&str) -> Result<(),RuntimeError> {
+    let (state_path,lease_path) = queue_files(queue_dir,key);
+    if let Some(dir) = state_path.parent() { std::fs::create_dir_all(dir).map_err(io_failure)?; }
+    let _lease = lease_blocking(&lease_path).map_err(io_failure)?;
+    let mut store = Store::open(&state_path,queue_dir,QueueState::new(key,1,name,Vec::new())).map_err(io_failure)?;
+    // Escrever ao lado do ator duplicaria o dono da fila.
+    if !store.state().runtime_state[CODEX_LIFE].is_null() {
+        return Err(RuntimeError::new(ADOPTED_MEANWHILE,"a fila desta sessão já é de uma conversa aberta; feche e abra a sessão se o erro continuar"));
+    }
+    let epoch_s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
+    let id = crate::mods::state::random_hex(16);
+    let generation = store.state().generation;
+    store.exec(generation,&format!("append:{id}"),ClockSample { monotonic_s:0.0,epoch_s },
+        Action::Append { text:text.into(),delivered:false,ts:Some(epoch_s),pre_transcript:true,entry_id:Some(id) }).map_err(io_failure)?;
+    Ok(())
+}
+
 /// A trava solta pelo ator que acabou de parar pode demorar um pouco (as tarefas de E/S dele).
 pub(super) fn lease_blocking(path:&Path) -> std::io::Result<Arc<super::queue::Lease>> {
     super::queue::acquire_lease_within(path,Duration::from_secs(3))
@@ -325,8 +351,8 @@ pub(super) fn lease_blocking(path:&Path) -> std::io::Result<Arc<super::queue::Le
 fn prepare(sidecar_dir:&Path,queue_dir:&Path,c:&Candidate,life:&Value) -> Result<(String,u64),RuntimeError> {
     let changed = ||RuntimeError::new("codex_sidecar_changed","o sidecar mudou de vida durante a adoção");
     let mut expected = c.key.clone();
-    // Mensagem digitada antes da adoção (TUI ainda abrindo, sem sidecar pronto) foi para o Python, que a
-    // gravou na projeção pelo nome; abrir a fila regrava a projeção e a apagaria calada. Lida antes.
+    // Mensagem gravada só na projeção pelo nome (o Python, com o Rust fora) antes da adoção: abrir a fila
+    // regrava a projeção e a apagaria calada. Lida antes.
     let projected = pending_projection(queue_dir,&c.name)?;
     let mut foreign:Option<Vec<Value>> = None;
     for _ in 0..2 {
@@ -499,10 +525,48 @@ impl Watcher {
         // Subir o sem terminal pode levar segundos: fora da exclusão da vigia.
         let adopted = { let _round = self.misses.lock().await; self.adopt_locked(registry,name).await };
         match adopted {
-            None => self.open_parked(registry,name).await,
+            None => match self.open_parked(registry,name).await {
+                // A conversa ainda abre: é do Rust, e quem não é texto espera por ela.
+                None => self.opening(name).await.map(|opening|opening.and(Err(super::codex_relaunch::starting()))),
+                parked => parked,
+            },
             Some(Err(error)) if error.code == LEGACY_SIDECAR => self.relaunch_legacy(registry,name).await,
             adopted => adopted,
         }
+    }
+
+    /// O Codex com terminal que ainda abre a conversa: pane Codex sem sidecar (o lançador o grava no
+    /// `thread/started`) ou sidecar `launching`. `Some(Ok)` = a chave da fila dessa vida (a `CP_SESSION_KEY`
+    /// do pane, que o lançador copia no sidecar); `None` = não está abrindo.
+    pub async fn opening(&self,name:&str) -> Option<Result<String,RuntimeError>> {
+        let no_key = ||RuntimeError::new("codex_terminal_not_ready","o terminal do Codex abriu sem a chave da sessão");
+        let file = codex_sidecar::path(&codex_sidecar::dir(&self.cfg.home),name);
+        let read = tokio::task::spawn_blocking(move||codex_sidecar::read(&file)).await
+            .unwrap_or_else(|error|Err(std::io::Error::other(error.to_string())));
+        // Sidecar que existe e não se lê não prova que a conversa ainda abre: erro, nunca a chave do pane.
+        let meta = match read {
+            Ok(meta) => meta,
+            Err(error) => return Some(Err(RuntimeError::new("codex_sidecar_unreadable",&format!("o arquivo da sessão não pôde ser lido ({:?})",error.kind())))),
+        };
+        if let Some(meta) = meta {
+            if meta.get("headless").is_some_and(truthy) || !meta.get("launching").is_some_and(truthy) { return None; }
+            return Some(text(&meta,"key").filter(|key|valid_key(key)).map(str::to_owned).ok_or_else(no_key));
+        }
+        let panes = self.cfg.mux.list_panes().await.ok()?;
+        let pane = pane_of(&panes,name).filter(|pane|pane.provider.as_deref() == Some("codex"))?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0,|d|d.as_secs());
+        if pane.session_created.is_some_and(|born|now.saturating_sub(born) > LAUNCH_WAIT.as_secs()) { return Some(Err(launch_stuck())); }
+        let Some(shown) = self.mux_text(&["show-environment","-t",&super::claude_terminal::session_target(name),"CP_SESSION_KEY"]).await else {
+            return Some(Err(RuntimeError::new("codex_terminal_mux","o multiplexador não disse a chave da sessão")));
+        };
+        Some(super::claude_terminal::session_key(&shown).ok_or_else(no_key))
+    }
+
+    /// Guarda o texto na fila da conversa que ainda abre (`key` vem de `opening`).
+    pub async fn queue_opening(&self,name:&str,key:&str,text:&str) -> Result<(),RuntimeError> {
+        let (queue_dir,key,name,text) = (self.cfg.queue_dir.clone(),key.to_owned(),name.to_owned(),text.to_owned());
+        tokio::task::spawn_blocking(move||queue_before_adoption(&queue_dir,&key,&name,&text)).await
+            .unwrap_or_else(|_|Err(RuntimeError::new("queue_io","a gravação da fila foi interrompida")))
     }
 
     /// `adopt_now` para quem já segura a exclusão da vigia (a troca de modo).
@@ -512,14 +576,14 @@ impl Watcher {
         if meta.get("headless").is_some_and(truthy) { return None; }
         if let Err(error) = self.retire_other_life(registry,name).await { return Some(Err(error)); }
         if registry.has_entry(None,name).await { return Some(Ok(())); }
-        // TUI ainda subindo: a mensagem fica na fila pelo nome (o Python a grava) e a adoção a assume,
-        // como antes de existir o sidecar. Presa abrindo além do prazo, a escrita para de ir ao Python.
+        // TUI ainda subindo: o texto espera na fila da chave (`opening`) e a adoção o assume. Presa
+        // abrindo além do prazo, é erro com código.
         if meta.get("launching").is_some_and(truthy) {
             let file = codex_sidecar::path(&codex_sidecar::dir(&self.cfg.home),name);
             let age = tokio::task::spawn_blocking(move||std::fs::metadata(file).and_then(|m|m.modified()).ok()
                 .and_then(|at|at.elapsed().ok())).await.ok().flatten();
             if age.is_none_or(|age|age < LAUNCH_WAIT) { return None; }
-            return Some(Err(RuntimeError::new("codex_terminal_launch_stuck","o terminal do Codex está abrindo há tempo demais; feche e abra a sessão de novo")));
+            return Some(Err(launch_stuck()));
         }
         if text(&meta,"endpoint").is_none() {
             return Some(Err(RuntimeError::new(LEGACY_SIDECAR,"o arquivo da sessão é do desenho antigo, sem o endereço do app-server")));

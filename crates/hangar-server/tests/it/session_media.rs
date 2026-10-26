@@ -349,7 +349,10 @@ impl Speech {
         let seen = python_paths.clone();
         let (upstream, upstream_task) = serve_router(axum::Router::new()
             .route("/internal/transcription/config", axum::routing::get(move || { let c = config.clone(); async move { ([("content-type", "application/json")], c) } }))
-            .fallback(move |uri: axum::http::Uri| { seen.lock().unwrap().push(uri.path().to_owned()); async { StatusCode::NOT_FOUND } })).await;
+            .fallback(move |uri: axum::http::Uri| {
+                if crate::app_route(uri.path()) { seen.lock().unwrap().push(uri.path().to_owned()); }
+                async { StatusCode::NOT_FOUND }
+            })).await;
         let mut scene = Scene::new().await;
         scene.task.abort();
         let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream, auth_token: OWNER.into(), internal_secret: "isolated".into(),

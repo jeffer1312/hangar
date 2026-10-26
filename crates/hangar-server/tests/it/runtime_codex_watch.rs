@@ -29,6 +29,7 @@ pub(crate) fn fixture() -> Fixture {
         kill-session) n=\"${{3#=}}\"; grep -v \"^$n\t\" \"$P\" > \"$P.new\"; mv \"$P.new\" \"$P\";;\n  \
         display-message) printf 'cx-proof\t%%7\t1700000000\\n';;\n  \
         capture-pane) cat \"$P.screen\";;\n  \
+        show-environment) [ -f \"$P.env\" ] && cat \"$P.env\" || exit 1;;\n  \
         send-keys) echo \"$@\" >> \"$P.keys\"; if [ -f \"$P.after\" ]; then cp \"$P.after\" \"$P.screen\"; fi;;\n  *) exit 1;;\nesac\n"));
     Fixture { _dir:dir,home,queue,panes,tmux,root }
 }
@@ -58,6 +59,8 @@ impl Fixture {
         let lines:String = panes.iter().map(|(name,id,born)|format!("{name}\t1\t4242\t/w\t{id}\t\tcodex\t{born}\t0\t0\n")).collect();
         std::fs::write(&self.panes,lines).unwrap();
     }
+    /// A `CP_SESSION_KEY` que o lançador põe no ambiente da sessão do multiplexador.
+    fn pane_key(&self,key:&str) { std::fs::write(self.panes.with_extension("env"),format!("CP_SESSION_KEY={key}\n")).unwrap(); }
     fn queue_json(&self,key:&str) -> Value { serde_json::from_slice(&std::fs::read(self.queue_state(key)).unwrap()).unwrap() }
     fn queue_state(&self,key:&str) -> PathBuf { self.queue.join("runtime").join(format!("{key}.json")) }
     pub(crate) fn meta(&self,name:&str,endpoint:&str,app_pid:Option<u32>,tui:&Child) -> Value {
@@ -207,11 +210,145 @@ async fn a_terminal_stuck_launching_stops_going_to_python() {
     fx.put_sidecar("cx-proof",json!({"name":"cx-proof","provider":"codex","launching":true,"key":"k-l","cwd":fx.root}));
     let registry = registry().await;
     let watcher = fx.watcher();
-    assert!(watcher.adopt_now(&registry,"cx-proof").await.is_none(),"recém-aberto: o Python enfileira");
+    let young = watcher.adopt_now(&registry,"cx-proof").await;
+    assert_eq!(young.map(|r|r.map_err(|e|e.code)),Some(Err("codex_terminal_starting".into())),"recém-aberto: o Rust pede para esperar");
     let old = std::time::SystemTime::now() - Duration::from_secs(600);
     std::fs::File::options().write(true).open(fx.sidecar_path("cx-proof")).unwrap().set_modified(old).unwrap();
     let stuck = watcher.adopt_now(&registry,"cx-proof").await;
     assert_eq!(stuck.map(|r|r.map_err(|e|e.code)),Some(Err("codex_terminal_launch_stuck".into())));
+}
+
+fn now_s() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }
+
+async fn post_owner(server:std::net::SocketAddr,name:&str,route:&str,body:&str) -> (u16,Value) {
+    let response = crate::fake::client().post(format!("http://{server}/api/sessions/{name}/{route}"))
+        .header("authorization",format!("Bearer {}",crate::fake::OWNER)).header("content-type","application/json")
+        .body(body.to_owned()).send().await.unwrap();
+    let status = response.status().as_u16();
+    (status,serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null))
+}
+
+fn queued(fx:&Fixture,key:&str,text:&str) -> bool {
+    fx.queue_state(key).exists() && fx.queue_json(key)["rows"].as_array().unwrap().iter()
+        .any(|row|row["text"] == text && row["delivered"] == false && row["pre_transcript"] == true)
+}
+
+/// Conversa Codex nova: o pane abriu e o lançador ainda não gravou o sidecar. O texto fica na fila do Rust
+/// na hora (sem esperar a TUI nem digitar no pane) e a adoção o entrega pelo app-server.
+#[tokio::test]
+async fn text_to_a_codex_terminal_still_opening_waits_in_the_rust_queue() {
+    let fx = fixture();
+    fx.panes_born(&[("cx-new","%7",now_s())]);
+    fx.pane_key("k-new");
+    let registry = registry().await;
+    let watcher = fx.watcher();
+    registry.bind_watcher(watcher.clone());
+    let (python,server) = serve_owner(registry.clone()).await;
+    let started = Instant::now();
+    let (status,body) = post_owner(server,"cx-new","input",r#"{"text":"oi antes da TUI","steer":true}"#).await;
+    assert_eq!((status,body["ok"].clone(),body["delivered"].clone()),(200,json!(true),json!(false)),"{body}");
+    assert!(started.elapsed() < Duration::from_secs(3),"responde sem esperar a TUI: {:?}",started.elapsed());
+    assert_eq!(python.hits_to("/api/sessions/cx-new/input"),0,"nada vai ao Python");
+    assert!(!fx.panes.with_extension("keys").exists(),"nenhuma tecla no pane");
+    assert!(queued(&fx,"k-new","oi antes da TUI"),"{}",fx.queue_json("k-new"));
+    let app_server = fake_app_server(true).await;
+    let (mut app,mut tui) = (app_server_process(&app_server.endpoint),tui());
+    let mut meta = fx.meta("cx-new",&app_server.endpoint,Some(app.id()),&tui);
+    meta["key"] = json!("k-new");
+    fx.put_sidecar("cx-new",meta);
+    watcher.round(&registry).await;
+    assert!(registry.owns_codex_terminal("cx-new"));
+    let turn = app_server.wait_method(1,"turn/start").await;
+    assert!(turn.to_string().contains("oi antes da TUI"),"{turn}");
+    finish(&mut [&mut app,&mut tui]);
+}
+
+/// Sidecar `launching` (transferência importando): o texto vai à fila da chave do sidecar, no Rust.
+#[tokio::test]
+async fn text_to_a_launching_codex_terminal_waits_in_the_rust_queue() {
+    let fx = fixture();
+    fx.panes_born(&[("cx-l","%7",now_s())]);
+    fx.put_sidecar("cx-l",json!({"name":"cx-l","provider":"codex","launching":true,"key":"k-l","cwd":fx.root}));
+    let registry = registry().await;
+    registry.bind_watcher(fx.watcher());
+    let (python,server) = serve_owner(registry).await;
+    let (status,body) = post_owner(server,"cx-l","input",r#"{"text":"durante a importação"}"#).await;
+    assert_eq!((status,body["delivered"].clone()),(200,json!(false)),"{body}");
+    assert_eq!(python.hits_to("/api/sessions/cx-l/input"),0);
+    assert!(queued(&fx,"k-l","durante a importação"),"{}",fx.queue_json("k-l"));
+}
+
+/// O que não é texto, com a conversa abrindo, pede para esperar; abertura presa é erro com código. Nenhum
+/// dos dois vai ao Python, e comando de barra não vira texto de turno.
+#[tokio::test]
+async fn a_codex_terminal_still_opening_refuses_what_is_not_text_and_reports_a_stuck_launch() {
+    let fx = fixture();
+    fx.panes_born(&[("cx-new","%7",now_s()),("cx-old","%8",now_s() - 600)]);
+    fx.pane_key("k-new");
+    let registry = registry().await;
+    registry.bind_watcher(fx.watcher());
+    let (python,server) = serve_owner(registry).await;
+    for (route,body) in [("interrupt","{}"),("input",r#"{"text":"/compact"}"#)] {
+        let (status,reply) = post_owner(server,"cx-new",route,body).await;
+        assert_eq!((status,reply["detail"]["code"].as_str()),(409,Some("codex_terminal_starting")),"{route}: {reply}");
+        assert_eq!(python.hits_to(&format!("/api/sessions/cx-new/{route}")),0,"{route}");
+    }
+    assert!(!fx.queue_state("k-new").exists(),"nada entrou na fila");
+    let (status,reply) = post_owner(server,"cx-old","input",r#"{"text":"oi"}"#).await;
+    assert_eq!((status,reply["detail"]["code"].as_str()),(503,Some("codex_terminal_launch_stuck")),"{reply}");
+    assert_eq!(python.hits_to("/api/sessions/cx-old/input"),0);
+}
+
+/// A fila da chave guarda a vida de outra conversa (o Rust caiu antes de limpá-la) e não há ator: o texto
+/// não entra nela (a adoção a descartaria) e a resposta é um erro com código, sem laço de reenvio.
+#[tokio::test]
+async fn text_to_an_opening_codex_whose_queue_belongs_to_an_old_life_is_a_coded_error() {
+    let fx = fixture();
+    fx.panes_born(&[("cx-new","%7",now_s())]);
+    fx.pane_key("k-old");
+    {
+        let path = fx.queue_state("k-old");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let lease = hangar_server::runtime::queue::acquire_lease(&path.with_extension("lock")).unwrap();
+        let mut store = hangar_server::runtime::queue::Store::open(&path,&fx.queue,
+            hangar_server::runtime::queue::State::new("k-old",3,"cx-new",Vec::new())).unwrap();
+        store.exec(3,"life",CLOCK,Action::AdvanceLifecycle { generation:3,
+            state:json!({"codex_life":{"created":1,"tui_pid":1,"endpoint":"ws://127.0.0.1:1","app_pid":1},"name":"cx-new"}) }).unwrap();
+        drop(lease);
+    }
+    let registry = registry().await;
+    registry.bind_watcher(fx.watcher());
+    let (python,server) = serve_owner(registry).await;
+    let answered = tokio::time::timeout(Duration::from_secs(10),post_owner(server,"cx-new","input",r#"{"text":"oi"}"#)).await
+        .expect("responde sem laço");
+    assert_eq!((answered.0,answered.1["detail"]["code"].as_str()),(503,Some("codex_terminal_adopted_meanwhile")),"{}",answered.1);
+    assert_eq!(python.hits_to("/api/sessions/cx-new/input"),0);
+    assert!(fx.queue_json("k-old")["rows"].as_array().unwrap().is_empty(),"nada gravado na fila da vida antiga");
+}
+
+/// Texto que nasce no Python (grupo, broadcast, recibo) entra pela ponte do Claude, porque sem sidecar o
+/// Python não sabe que é Codex: o Rust o guarda igual, sem repasse de volta (421).
+#[tokio::test]
+async fn text_from_python_to_a_codex_terminal_still_opening_is_queued_by_the_bridge() {
+    let fx = fixture();
+    fx.panes_born(&[("cx-new","%7",now_s())]);
+    fx.pane_key("k-new");
+    let registry = registry().await;
+    registry.bind_watcher(fx.watcher());
+    let (_python,upstream) = crate::fake::spawn_fake().await;
+    let state = hangar_server::routes::AppState::new(crate::fake::config(upstream,"127.0.0.1"));
+    assert!(state.state.runtime.set(registry).is_ok());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let private = listener.local_addr().unwrap();
+    let router = hangar_server::routes::terminal_router(Arc::new(state));
+    tokio::spawn(async move { axum::serve(listener,router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
+    let response = crate::fake::client().post(format!("http://{private}/__hangar_server/claude/cx-new/input"))
+        .header("content-type","application/json").header("x-hangar-internal",crate::fake::SECRET)
+        .body(r#"{"text":"aviso do grupo","steer":false}"#).send().await.unwrap();
+    let status = response.status().as_u16();
+    let body:Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
+    assert_eq!((status,body["delivered"].clone()),(200,json!(false)),"{body}");
+    assert!(queued(&fx,"k-new","aviso do grupo"),"{}",fx.queue_json("k-new"));
 }
 
 /// Trocar de modo logo depois de criar com terminal (a TUI ainda abrindo a conversa, com ou sem

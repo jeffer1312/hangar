@@ -328,6 +328,7 @@ impl OpenHost for ServerHost {
     }
 
     fn diary(&self, events: Vec<Value>) { crate::diag::record(crate::diag::diary_dir(), events, "criação"); }
+    fn account_diary(&self, events: Vec<Value>) { crate::diag::record(crate::diag::diary_dir(), events, "conta"); }
 
     fn new_session_id(&self) -> String { super::open::uuid4(&crate::mods::state::random_hex(16)) }
     fn new_bridge_key(&self) -> String { crate::mods::state::random_hex(16) }

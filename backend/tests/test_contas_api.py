@@ -33,7 +33,7 @@ def casa(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_conta_sem_credencial_ainda_aparece_na_lista(casa):
+def test_conta_sem_credencial_ainda_aparece_na_lista(casa, hangar_server_bin):
     """Impasse que isto evita: sem credencial a pasta não passava no filtro, então a conta sumia
     justamente entre criar e logar — e o /login só pode ser rodado DENTRO de uma sessão dela."""
     contas.criar("conta2")
@@ -64,13 +64,12 @@ def test_marcador_por_symlink_nao_entra_na_lista(casa):
     assert str(conta) not in {c.path for c in list_config_dirs()}
 
 
-def test_codex_com_config_dir_nao_reconcilia(casa, monkeypatch):
+def test_codex_com_config_dir_nao_reconcilia(casa, monkeypatch, hangar_server_bin):
     """A abertura é do Rust: no modo python o pedido é recusado com código, e a reconciliação
     (efeito no disco) não roda antes da recusa."""
     contas.criar("conta2")
     reconciliou = []
-    monkeypatch.setattr(contas._Ciclo, "reconciliar",
-                        lambda self, projeto=None: reconciliou.append(1) or [])
+    monkeypatch.setattr(contas, "reconciliar", lambda nome, projeto=None: reconciliou.append(1) or [])
     r = TestClient(app).post("/api/sessions", json={
         "name": "s1", "cwd": str(casa), "config_dir": str(casa / ".claude-conta2"),
         "provider": "codex"}, headers=AUTH)

@@ -1,0 +1,106 @@
+{
+  "origin_commit": "b2832ee04",
+  "command": "HANGAR_FIXTURE_PY_ROOT=<checkout com scripts/hangar-conta e backend/app de b2832ee04> cargo test -p hangar-server --test it accounts_reconcile::generate_fixtures -- --ignored --exact",
+  "scenario": "new_symlink_refused",
+  "steps": [
+    {
+      "args": [
+        "--new",
+        "conta2"
+      ],
+      "exit": 1,
+      "stdout": "",
+      "stderr": [
+        "hangar-conta: não consegui criar o atalho llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll.md: [Errno 36] File name too long: '<HOME>/.claude/llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll.md' -> '<HOME>/.claude-conta2/llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll.md.hangar-novo.<PID>.<HEX>'. No Windows isso exige o Modo Desenvolvedor ligado (Configurações → Sistema → Para desenvolvedores). Sem ele a conta ficaria com uma CÓPIA, que passa a divergir do original sem ninguém perceber."
+      ]
+    },
+    {
+      "args": [
+        "--list"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": []
+    }
+  ],
+  "tree": {
+    "<HOME>/.claude": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"oauthAccount\": {\"emailAddress\": \"um@exemplo.com\"}, \"mcpServers\": {\"tavily\": {}}, \"projects\": {\"/tmp/x\": {\"allowedTools\": [\"Bash\"]}}}"
+    },
+    "<HOME>/.claude/.credentials.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"claudeAiOauth\":{}}"
+    },
+    "<HOME>/.claude/CLAUDE.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "# regras"
+    },
+    "<HOME>/.claude/llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "longo"
+    },
+    "<HOME>/.claude/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x/memory": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/projects/-tmp-x/memory/MEMORY.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "m"
+    },
+    "<HOME>/.claude/settings.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"theme\":\"dark\"}"
+    },
+    "<HOME>/.claude/skills": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/skills/falar": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude/skills/falar/SKILL.md": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "oi"
+    },
+    "<HOME>/.hangar-contas.lock": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    }
+  },
+  "diary": [
+    {
+      "evento": "conta.reconciliar.inicio",
+      "nivel": "ok",
+      "provider": "claude"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "ligar_arquivos",
+      "conta_id": "<CONTA_ID>"
+    },
+    {
+      "evento": "conta.reconciliar.fim",
+      "nivel": "erro",
+      "provider": "claude",
+      "codigo": "excecao"
+    }
+  ]
+}

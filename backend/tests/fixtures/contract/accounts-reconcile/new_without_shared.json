@@ -1,0 +1,109 @@
+{
+  "origin_commit": "b2832ee04",
+  "command": "HANGAR_FIXTURE_PY_ROOT=<checkout com scripts/hangar-conta e backend/app de b2832ee04> cargo test -p hangar-server --test it accounts_reconcile::generate_fixtures -- --ignored --exact",
+  "scenario": "new_without_shared",
+  "steps": [
+    {
+      "args": [
+        "--new",
+        "nova"
+      ],
+      "exit": 0,
+      "stdout": "<HOME>/.claude-nova\n",
+      "stderr": []
+    },
+    {
+      "args": [
+        "--list"
+      ],
+      "exit": 0,
+      "stdout": "nova\n",
+      "stderr": []
+    }
+  ],
+  "tree": {
+    "<HOME>/.claude": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-nova": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude-nova/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\n  \"mcpServers\": {\n    \"tavily\": {}\n  }\n}"
+    },
+    "<HOME>/.claude-nova/.hangar-conta": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    },
+    "<HOME>/.claude-nova/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.claude.json": {
+      "kind": "file",
+      "mode": "0644",
+      "text": "{\"mcpServers\": {\"tavily\": {}}}"
+    },
+    "<HOME>/.claude/projects": {
+      "kind": "dir"
+    },
+    "<HOME>/.hangar-contas.lock": {
+      "kind": "file",
+      "mode": "0644",
+      "text": ""
+    }
+  },
+  "diary": [
+    {
+      "evento": "conta.reconciliar.inicio",
+      "nivel": "ok",
+      "provider": "claude"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "ligar_arquivos",
+      "conta_id": "<CONTA_ID>"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "espelhar_settings"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "conferir_plugins"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "espelhar_config"
+    },
+    {
+      "evento": "conta.reconciliar.etapa",
+      "nivel": "ok",
+      "provider": "claude",
+      "etapa": "ligar_memoria"
+    },
+    {
+      "evento": "conta.reconciliar.concluiu",
+      "nivel": "ok",
+      "provider": "claude",
+      "codigo": "ok",
+      "quantidade": 0
+    },
+    {
+      "evento": "conta.reconciliar.fim",
+      "nivel": "ok",
+      "provider": "claude",
+      "codigo": "retornou"
+    }
+  ]
+}

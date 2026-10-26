@@ -1,0 +1,25 @@
+{
+  "origin_commit": "b2832ee04",
+  "command": "HANGAR_FIXTURE_PY_ROOT=<checkout com scripts/hangar-conta e backend/app de b2832ee04> cargo test -p hangar-server --test it accounts_reconcile::generate_fixtures -- --ignored --exact",
+  "scenario": "help_flags",
+  "steps": [
+    {
+      "args": [
+        "--help"
+      ],
+      "exit": 0,
+      "stdout": "CLI de contas Claude, para o wrapper de shell chamar.\n\nMesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas\ndireto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.\n\n  hangar-conta --list                    -> um nome de conta por linha\n  hangar-conta --prep <nome> [<projeto>] -> refaz os atalhos e imprime o caminho do config dir;\n                                            com o projeto (a pasta já saneada), liga a memória dele\n  hangar-conta --new <nome>              -> cria a conta e imprime o caminho\n\n",
+      "stderr": []
+    },
+    {
+      "args": [
+        "-h"
+      ],
+      "exit": 0,
+      "stdout": "CLI de contas Claude, para o wrapper de shell chamar.\n\nMesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas\ndireto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.\n\n  hangar-conta --list                    -> um nome de conta por linha\n  hangar-conta --prep <nome> [<projeto>] -> refaz os atalhos e imprime o caminho do config dir;\n                                            com o projeto (a pasta já saneada), liga a memória dele\n  hangar-conta --new <nome>              -> cria a conta e imprime o caminho\n\n",
+      "stderr": []
+    }
+  ],
+  "tree": {},
+  "diary": []
+}

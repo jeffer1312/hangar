@@ -43,6 +43,10 @@ export interface LiveVoiceHandlers {
 
 export interface LiveVoiceAction { id: string; label: string; description: string }
 
+/** Conexão que cai antes disso ao vivo encerra: evita laço de ofertas quando a sessão de áudio morre logo ao abrir. */
+const STABLE_LIVE_MS = 10000;
+const RESUME_WITHIN_MS = 30000;
+
 export class LiveVoiceCall {
   private pc: RTCPeerConnection | null = null;
   private ws: WebSocket | null = null;
@@ -55,6 +59,7 @@ export class LiveVoiceCall {
   private meterContext: AudioContext | null = null;
   private meterTimer: ReturnType<typeof setInterval> | undefined;
   private levelTimer: ReturnType<typeof setInterval> | undefined;
+  private resumeTimer: ReturnType<typeof setTimeout> | undefined;
   private meters: Partial<Record<'input' | 'output', { source: MediaStreamAudioSourceNode; analyser: AnalyserNode; samples: Uint8Array<ArrayBuffer> }>> = {};
 
   constructor(private audio: HTMLAudioElement, private handlers: LiveVoiceHandlers) {}
@@ -101,32 +106,9 @@ export class LiveVoiceCall {
       if (!current()) { media.getTracks().forEach(track => track.stop()); return; }
       this.media = media;
       media.getTracks().forEach(track => { track.enabled = false; });
-      const pc = this.pc = new RTCPeerConnection();
-      media.getTracks().forEach(track => pc.addTrack(track, media));
       this.meter('input', media);
-      pc.ontrack = event => {
-        if (!current()) return;
-        this.audio.srcObject = event.streams[0] ?? new MediaStream([event.track]);
-        this.meter('output', this.audio.srcObject as MediaStream);
-        this.audio.play().catch(() => { if (current()) this.end('playback'); });
-      };
-      pc.onconnectionstatechange = () => {
-        if (!current()) return;
-        if (pc.connectionState === 'connected') {
-          this.setMuted(this.muted);
-          this.send({ type: 'live' });
-          this.handlers.phase('live');
-          clearInterval(this.levelTimer);
-          // RMS cru: o limiar de fala do servidor foi medido sem o ganho da barra.
-          this.levelTimer = setInterval(() => { if (this.meters.input) this.send({ type: 'level', input: this.rms('input') }); }, 100);
-        } else if (pc.connectionState === 'failed') this.fail('connection_lost');
-      };
-      // O Realtime exige a linha de dados na oferta, mesmo sem uso aqui.
-      pc.createDataChannel('oai-events');
-      const offer = await pc.createOffer();
-      if (!current()) return;
-      await pc.setLocalDescription(offer);
-      if (!current()) return;
+      const offer = await this.connect(media, current);
+      if (!offer) return;
       const ws = this.ws = new WebSocket(liveVoiceUrlForServer(server, location.origin));
       // Também vale para a conexão que nunca abre: rede de VPN pendura em vez de recusar.
       this.lastPong = Date.now();
@@ -139,21 +121,70 @@ export class LiveVoiceCall {
           actions: this.handlers.actions() });
         this.send({ type: 'offer', sdp: offer.sdp });
       };
-      ws.onmessage = event => { void this.receive(event.data, pc); };
+      ws.onmessage = event => { void this.receive(event.data); };
       ws.onclose = () => this.fail('connection_lost');
     } catch {
       if (current()) this.end(this.media ? 'failed' : 'microphone');
     }
   }
 
-  private async receive(raw: string, pc: RTCPeerConnection) {
+  /** Conexão WebRTC com o microfone já aberto; `null` = a chamada mudou no meio. */
+  private async connect(media: MediaStream, current: () => boolean): Promise<RTCSessionDescriptionInit | null> {
+    const pc = this.pc = new RTCPeerConnection();
+    media.getTracks().forEach(track => pc.addTrack(track, media));
+    let liveAt = 0;
+    // A OpenAI encerra a sessão de áudio por tempo; o servidor guarda a conversa e espera outra oferta pelo mesmo socket.
+    const dropped = () => {
+      if (!current() || pc !== this.pc) return;
+      if (!liveAt || Date.now() - liveAt < STABLE_LIVE_MS) { this.fail('connection_lost'); return; }
+      pc.ontrack = pc.onconnectionstatechange = channel.onclose = null;
+      pc.close();
+      clearInterval(this.levelTimer);
+      this.handlers.phase('connecting');
+      this.resumeTimer = setTimeout(() => { if (current()) this.fail('connection_lost'); }, RESUME_WITHIN_MS);
+      void this.connect(media, current).then(offer => {
+        if (offer) this.send({ type: 'offer', sdp: offer.sdp });
+      }).catch(e => { if (current()) this.end('failed', e instanceof Error ? e.message : undefined); });
+    };
+    pc.ontrack = event => {
+      if (!current()) return;
+      this.audio.srcObject = event.streams[0] ?? new MediaStream([event.track]);
+      this.meter('output', this.audio.srcObject as MediaStream);
+      this.audio.play().catch(() => { if (current()) this.end('playback'); });
+    };
+    pc.onconnectionstatechange = () => {
+      if (!current()) return;
+      if (pc.connectionState === 'connected') {
+        liveAt = Date.now();
+        clearTimeout(this.resumeTimer);
+        this.setMuted(this.muted);
+        this.send({ type: 'live' });
+        this.handlers.phase('live');
+        clearInterval(this.levelTimer);
+        // RMS cru: o limiar de fala do servidor foi medido sem o ganho da barra.
+        this.levelTimer = setInterval(() => { if (this.meters.input) this.send({ type: 'level', input: this.rms('input') }); }, 100);
+      } else if (pc.connectionState === 'failed') dropped();
+    };
+    // O Realtime exige a linha de dados na oferta, mesmo sem uso aqui; o fim dela é o fim da sessão de áudio.
+    const channel = pc.createDataChannel('oai-events');
+    channel.onclose = dropped;
+    const offer = await pc.createOffer();
+    if (!current()) return null;
+    await pc.setLocalDescription(offer);
+    return current() ? offer : null;
+  }
+
+  private async receive(raw: string) {
     let msg;
     try { msg = JSON.parse(raw); } catch { console.warn('live voice: unreadable server message'); return; }
     switch (msg.type) {
-      case 'answer':
+      case 'answer': {
+        const pc = this.pc;
+        if (!pc) break;
         try { await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp }); }
         catch (e) { if (pc === this.pc) this.end('failed', e instanceof Error ? e.message : undefined); }
         break;
+      }
       case 'state': this.handlers.state(msg.state); break;
       case 'tool': this.tool(msg.call, msg.name, msg.args ?? {}); break;
       case 'pong': this.lastPong = Date.now(); break;
@@ -233,6 +264,7 @@ export class LiveVoiceCall {
     clearInterval(this.heartbeat);
     clearInterval(this.meterTimer);
     clearInterval(this.levelTimer);
+    clearTimeout(this.resumeTimer);
     for (const meter of Object.values(this.meters)) { meter.source.disconnect(); meter.analyser.disconnect(); }
     this.meters = {};
     void this.meterContext?.close().catch(() => {});

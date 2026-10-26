@@ -3,54 +3,14 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-from app import account_lifecycle, internal_api, runtime_coordinator
+from app import runtime_coordinator
 
 
 from test_codex_contas_sync import isolated, fake_writer
 
 import pytest
 import codex_contas_apoio
-
-def test_prepare_callback_requires_current_operation_and_seeds_pending_account(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / ".claude"))
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(instance="current"))
-    shared = tmp_path / ".claude"
-    shared.mkdir()
-    (shared / "settings.json").write_text('{"permissions":{"allow":["Read"]}}', encoding="utf-8")
-    (shared / ".credentials.json").write_text('{"synthetic":"private"}', encoding="utf-8")
-    target = tmp_path / ".claude-fresh"
-    target.mkdir()
-    (target / ".hangar-account-pending").write_text("", encoding="utf-8")
-    key = account_lifecycle.AccountKey.new("claude", target)
-    body = {"operation": "a" * 32, "instance": "current", "key": {
-        "provider": "claude", "canonical_home": str(key.canonical_home)},
-        "account_id": "fresh", "seed": True, "force": False, "cwd": None}
-    root = account_lifecycle.default_lock_root()
-    root.mkdir(parents=True)
-    (root / (key.digest + ".prepare.json")).write_text(json.dumps(body), encoding="utf-8")
-    app = FastAPI()
-    internal_api.set_secret("synthetic-internal")
-    app.include_router(internal_api.router)
-    headers = {"x-hangar-internal": "synthetic-internal", "x-hangar-runtime-instance": "current"}
-    with TestClient(app, client=("127.0.0.1", 31000)) as client:
-        response = client.post("/internal/accounts/prepare", json=body, headers=headers)
-        assert response.status_code == 200, response.text
-        result = response.json()
-        assert result["status"] in {"running", "ready"}
-        if result["status"] == "running":
-            result = client.post("/internal/accounts/prepare/wait", json={"operation": body["operation"]}, headers=headers).json()
-        assert result["status"] == "ready", result
-    assert (target / "settings.json").is_file()
-    assert not (target / "settings.json").is_symlink()
-    assert not (target / ".credentials.json").exists()
-    assert not (target / "projects").is_symlink()
-    assert not (target / ".hangar-conta").exists()
-    assert (target / ".hangar-account-pending").exists()
 
 @pytest.mark.parametrize("force_pending", [False, True])
 def test_http_python_worker_blocks_delete_after_rust_restart(tmp_path, force_pending):
@@ -156,94 +116,6 @@ def test_http_invalid_main_configuration_does_not_publish_claude_account(tmp_pat
     finally:
         rust.close()
         reference.close()
-
-def test_worker_keeps_own_descriptor_through_two_cancellations(tmp_path, monkeypatch):
-    import asyncio
-    import threading
-    import pytest
-    from app import account_bridge, contas
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    instance = SimpleNamespace(instance="current")
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: instance)
-    target = tmp_path / ".claude-fresh"
-    target.mkdir()
-    (target / ".hangar-account-pending").touch()
-    key = account_lifecycle.AccountKey.new("claude", target)
-    body = {"operation": "c" * 32, "instance": "current", "key": {
-        "provider": "claude", "canonical_home": str(key.canonical_home)},
-        "account_id": "fresh", "seed": True, "force": False, "cwd": None}
-    root = account_lifecycle.default_lock_root()
-    root.mkdir(parents=True)
-    (root / (key.digest + ".prepare.json")).write_text(json.dumps(body), encoding="utf-8")
-    entered, release = threading.Event(), threading.Event()
-    original = contas.prepare_configuration
-    def blocked(*args, **kwargs):
-        entered.set()
-        assert release.wait(10)
-        return original(*args, **kwargs)
-    monkeypatch.setattr(contas, "prepare_configuration", blocked)
-    async def scenario():
-        jobs = account_bridge.PreparationJobs()
-        await jobs.start(body)
-        task = jobs.jobs[body["operation"]][1]
-        try:
-            assert await asyncio.to_thread(entered.wait, 5)
-            for _ in range(2):
-                task.cancel()
-                turn = asyncio.get_running_loop().create_future()
-                asyncio.get_running_loop().call_soon(turn.set_result, None)
-                await turn
-                with pytest.raises(account_lifecycle.AccountLockError):
-                    account_lifecycle.acquire(key, account_lifecycle.GuardMode.EXCLUSIVE, deadline=0)
-            instance.instance = "replacement"
-            with pytest.raises(ValueError):
-                await jobs.start(body)
-        finally:
-            release.set()
-        result = await task
-        assert result["status"] == "error"
-        with account_lifecycle.acquire(key, account_lifecycle.GuardMode.EXCLUSIVE, deadline=0):
-            assert (target / ".claude.json").is_file()
-    asyncio.run(scenario())
-
-
-def test_worker_revalidates_instance_after_acquiring_its_descriptor(tmp_path, monkeypatch):
-    import asyncio
-    import threading
-    from app import account_bridge
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    instance = SimpleNamespace(instance="current")
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: instance)
-    target = tmp_path / ".claude-fresh"
-    target.mkdir()
-    (target / ".hangar-account-pending").touch()
-    key = account_lifecycle.AccountKey.new("claude", target)
-    body = {"operation": "d" * 32, "instance": "current", "key": {
-        "provider": "claude", "canonical_home": str(key.canonical_home)},
-        "account_id": "fresh", "seed": True, "force": False, "cwd": None}
-    root = account_lifecycle.default_lock_root()
-    root.mkdir(parents=True)
-    (root / (key.digest + ".prepare.json")).write_text(json.dumps(body), encoding="utf-8")
-    entered, release = threading.Event(), threading.Event()
-    original = account_lifecycle.acquire
-    def acquire(*args, **kwargs):
-        entered.set()
-        assert release.wait(10)
-        return original(*args, **kwargs)
-    monkeypatch.setattr(account_lifecycle, "acquire", acquire)
-    async def scenario():
-        jobs = account_bridge.PreparationJobs()
-        await jobs.start(body)
-        try:
-            assert await asyncio.to_thread(entered.wait, 5)
-            instance.instance = "replacement"
-        finally:
-            release.set()
-        assert (await jobs.jobs[body["operation"]][1])["status"] == "error"
-        assert list(target.iterdir()) == [target / ".hangar-account-pending"]
-    asyncio.run(scenario())
 
 def test_http_claude_validation_preserves_real_python_envelopes(tmp_path):
     from tests.accounts_contract import FIXTURES, PythonReference, normalize

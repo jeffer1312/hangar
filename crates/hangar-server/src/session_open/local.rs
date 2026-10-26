@@ -25,7 +25,8 @@ pub fn dotenv(text: &str) -> BTreeMap<String, String> {
     }).collect()
 }
 
-pub struct LocalHost { home: PathBuf, env: BTreeMap<String, String>, terminal: TerminalEnv, mux: ProcessMux, bridge: Option<PluginBridge> }
+pub struct LocalHost { home: PathBuf, env: BTreeMap<String, String>, terminal: TerminalEnv, mux: ProcessMux, bridge: Option<PluginBridge>,
+    reconcile_limit: Duration }
 
 impl LocalHost {
     /// `env`: o ambiente que o servidor teria; `bridge`: a porta e o token do `.env` dele, para a
@@ -33,8 +34,11 @@ impl LocalHost {
     pub fn new(env: BTreeMap<String, String>, bridge: Option<PluginBridge>) -> Self {
         let accounts = crate::accounts::environment::AccountEnvironment::from_map(env.clone());
         let terminal = TerminalEnv::local(&accounts.home, &env);
-        Self { home: accounts.home, env, terminal, mux: ProcessMux::default(), bridge }
+        Self { home: accounts.home, env, terminal, mux: ProcessMux::default(), bridge, reconcile_limit: super::open::RECONCILE_LIMIT }
     }
+
+    #[cfg(test)]
+    pub(crate) fn with_reconcile_limit(self, reconcile_limit: Duration) -> Self { Self { reconcile_limit, ..self } }
 }
 
 impl OpenHost for LocalHost {
@@ -78,6 +82,13 @@ impl OpenHost for LocalHost {
         })
     }
     fn diary(&self, _events: Vec<Value>) {}
+    /// No arquivo dos comandos de conta, fora do runtime: a trava do diário pode esperar até 5 s. O runtime
+    /// espera a tarefa ao terminar, então o evento chega ao disco antes de o comando sair.
+    fn account_diary(&self, events: Vec<Value>) {
+        let env = crate::accounts::environment::AccountEnvironment::from_map(self.env.clone());
+        tokio::task::spawn_blocking(move || crate::accounts::claude_config::write_cli_diary(&env, &events));
+    }
+    fn reconcile_limit(&self) -> Duration { self.reconcile_limit }
     fn new_session_id(&self) -> String { super::open::uuid4(&crate::mods::state::random_hex(16)) }
     fn new_bridge_key(&self) -> String { crate::mods::state::random_hex(16) }
     // O comando local só abre sessão com terminal.

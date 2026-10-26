@@ -6,6 +6,52 @@ from pathlib import Path
 from app import harness_saude as h
 
 
+def test_plugin_ligado_sem_instalacao_aparece_no_painel(tmp_path, monkeypatch):
+    """`enabledPlugins` e `installed_plugins.json` desalinham calados (o clobber de 2026-08-19, a
+    limpeza de cache do CLI): o painel aponta o plugin que não consta e o que perdeu a pasta."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    pasta = tmp_path / ".claude" / "plugins" / "cache" / "oficial" / "ecc" / "1.0"
+    pasta.mkdir(parents=True)
+    (tmp_path / ".claude" / "plugins" / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {
+        "ecc@oficial": [{"scope": "user", "installPath": str(pasta)}],
+        "sumiu@oficial": [{"scope": "user", "installPath": str(pasta.parent / "nada")}]}}), encoding="utf-8")
+    (tmp_path / ".claude" / "settings.json").write_text(json.dumps({"enabledPlugins": {
+        "ecc@oficial": True, "sumiu@oficial": True, "superpowers@oficial": True, "desligado@oficial": False}}),
+        encoding="utf-8")
+    item = h._plugins_claude()
+    assert (item["ok"], item["codigo"]) == (False, "plugins_com_problema")
+    avisos = item["params"]["lista"]
+    assert "superpowers@oficial está ligado" in avisos and "não consta" in avisos
+    assert "sumiu@oficial consta instalado mas a pasta sumiu" in avisos
+    assert "ecc@oficial" not in avisos and "desligado" not in avisos
+
+
+def test_sem_registro_de_plugins_e_sem_plugin_ligado_o_painel_fica_ok(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    assert (h._plugins_claude()["ok"], h._plugins_claude()["codigo"]) == (True, "plugins_ok")
+
+
+def test_conserto_das_contas_junta_os_avisos_de_cada_conta(tmp_path, monkeypatch, hangar_server_bin):
+    """C198/K19/K20: o conserto "Contas" reconcilia cada conta pelo `hangar-server conta` e junta os avisos
+    com o nome dela; sem aviso, a frase de tudo no lugar."""
+    from app import contas
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "CLAUDE.md").write_text("# regras", encoding="utf-8")
+    (tmp_path / ".claude" / "settings.json").write_text('{"theme": "dark"}', encoding="utf-8")
+    for nome in ("b", "a"):
+        (tmp_path / f".claude-{nome}").mkdir()
+        (tmp_path / f".claude-{nome}" / contas.MARCADOR).write_text("", encoding="utf-8")
+    (tmp_path / ".claude-a" / "CLAUDE.md").write_text("# editado na a", encoding="utf-8")
+    (tmp_path / ".claude-b" / "settings.json").write_text('{"theme": "light"}', encoding="utf-8")
+    assert h.consertar("contas") == (
+        "a: 'CLAUDE.md' foi alterado dentro desta conta; a mudança subiu pro ~/.claude; "
+        "b: settings.json: o principal sobrescreveu theme na cópia desta conta")
+    assert h.consertar("contas") == "contas reconciliadas, nada fora do lugar"
+
+
 def test_extensoes_faltando_e_o_conserto_liga(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     (repo / "scripts" / "pi" / "lib").mkdir(parents=True)

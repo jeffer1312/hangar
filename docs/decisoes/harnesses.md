@@ -245,6 +245,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   cartão fecha sem autoria e o app recebe 409 `erro_sem_confirmacao_resposta`. Pedido sem
   resposta do app fica para a TUI; nunca recusar automaticamente como no sem terminal. Ver
   [Codex com terminal no Rust](#codex-com-terminal-no-rust-adoção-e-dono-único).
+- **Codex com terminal abrindo a conversa (pane Codex sem sidecar, ou sidecar `launching`) é do
+  Rust.** Texto (`/input`, pontes do Python, broadcast) entra na fila da chave da vida
+  (`CP_SESSION_KEY` do pane ou `key` do sidecar) como `pre_transcript` e responde
+  `delivered:false` na hora; a adoção o entrega pelo app-server. Nunca tecla no pane. O resto
+  responde 409 `codex_terminal_starting` (`/limits`, a resposta neutra); mais de 120 s abrindo,
+  503 `codex_terminal_launch_stuck`. Ver
+  [Primeira mensagem do Codex abrindo](#primeira-mensagem-do-codex-com-terminal-abrindo-25102026).
 - **Claude e Codex sem terminal religam ao MESMO cano vivo quando só o socket cai.** Nada é
   encerrado: sem `cano_saiu`, sem `claude_exit`, sem erro no ator, sem `problema`. Uma tarefa por
   ator (`runtime/cano_reconnect.rs`, `CanoReconnect`) tenta com as esperas `RECONNECT_WAITS`
@@ -384,8 +391,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Pensamento no Claude sem terminal só com `--thinking-display summarized`**: com `-p` a CLI
   ignora `showThinkingSummaries`. Pensamento e ferramenta em voo têm fonte e evento SSE próprios,
   nunca a prévia da resposta.
-- **Runtime por conta não vira atalho** (`telemetry/`, `feedback/`, `image-cache/`, caches por
-  config dir) — senão cada reconciliação acha "deriva" e gaveta de novo.
+- **Runtime por conta não vira atalho** (`sessions/`, `telemetry/`, `feedback/`, `image-cache/`,
+  `.claude.json.lock`, `mcp-needs-auth-cache.json`, caches por config dir; lista em
+  `ACCOUNT_RUNTIME` de `accounts/claude_config.rs`) — senão cada reconciliação acha "deriva" e
+  gaveta de novo.
 - **O diálogo de confiança do Claude Code derruba três coisas**: a chave do pre-trust usa barra
   normal no Windows, `is_overlay` tem que ignorar as linhas em branco do fim do pane, e o Enter
   às cegas cai em "No, exit".
@@ -1144,6 +1153,21 @@ primeiro envio pelo app antes de qualquer turno, disputa nas duas ordens, `/perm
 rascunho (composer = última linha `›` com sugestão esmaecida), queda e volta do Rust sem matar TUI,
 e DELPHI-02 (psmux, painel aberto, duas sessões com pane `%1`, `app_pid` do shim npm). Nada desta
 entrada foi compilado nem testado ainda.
+
+## Primeira mensagem do Codex com terminal abrindo (25/10/2026)
+
+O lançador `hangar-codex-tui` só grava o sidecar no `thread/started`. Até lá o Rust não achava a
+sessão e repassava a escrita ao Python, que, sem sidecar, a tomava por Claude e digitava no pane
+depois de 12 s esperando um marcador de TUI que o Codex não tem (`_READY_MARKERS_BY_PROVIDER`). Caso
+real (`hangar-2`, 09:07): o app criou a conversa e mandou a primeira mensagem; o `POST /input`
+levou mais de 12 s, a conexão do celular caiu nesse meio e o app ficou com "não deu para confirmar"
+para uma mensagem entregue. Agora `Watcher::opening` reconhece a abertura pelo pane
+(`CP_PROVIDER=codex`) e a chave pelo ambiente da sessão; a fila é a mesma que o `prepare` da adoção
+mantém (sidecar com a mesma chave, geração +1, linhas preservadas). Se a adoção acontecer entre a
+decisão e a gravação, a gravação recusa (`codex_terminal_adopted_meanwhile`) e o texto segue pela
+entrada do ator. Com o Rust fora (modo `python`) o Python continua digitando, por decisão do usuário.
+Prova: `tests/it/runtime_codex_watch.rs` (`text_to_a_codex_terminal_still_opening_waits_in_the_rust_queue`
+e vizinhos).
 
 ## O /clear e o rodapé do Claude Code
 
@@ -2378,12 +2402,16 @@ isolada: `plugin_accepted`, marca ainda presente), então com algo guardado o es
 
 ## Runtime por conta não vira atalho
 
-(`contas._RUNTIME_DA_CONTA`, 04/09/2026): `telemetry/`,
+(`contas._RUNTIME_DA_CONTA` do Python na época, 04/09/2026): `telemetry/`,
   `feedback/`, `image-cache/`, `.last-update-result.json` (o Claude Code regrava por config dir com
   tmp+rename, que troca o symlink por arquivo real) e `.hangar-models.json` (cache do picker, por
   config dir). Ligados, cada `--prep` achava a "deriva" de novo, gavetava e disparava o toast
   "CONTA" — a gaveta desta máquina chegou a `telemetry.3`. A reconciliação desfaz o atalho antigo
   desses nomes, senão a conta seguia gravando o runtime dela dentro do `~/.claude`.
+  Depois entraram `sessions/` (08/10) e, em 24/10, `.claude.json.lock` (pasta de trava do CLI) e
+  `mcp-needs-auth-cache.json` (cache do CLI por conta): no uso real o primeiro foi para a gaveta e
+  o segundo subiu para o `~/.claude`. A lista hoje é `ACCOUNT_RUNTIME` em
+  `crates/hangar-server/src/accounts/claude_config.rs` (a reconciliação é do Rust desde 24/10).
 
 ## Statusline por sidecar, não pelo pane
 

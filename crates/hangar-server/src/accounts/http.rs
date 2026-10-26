@@ -238,15 +238,9 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
         }
         let name = body[name_field].as_str().unwrap().to_owned();
         if claude {
-            let bridge = match bridge(&state) {
-                Ok(bridge) => bridge,
-                Err(err) => return error(err),
-            };
-            let handle = tokio::runtime::Handle::current();
+            // A semeadura roda inteira mesmo com o pedido cancelado: a guarda da criação vive até o fim dela.
             return match tokio::task::spawn_blocking(move || {
-                service.create(Provider::Claude, &name, |path| {
-                    handle.block_on(service.seed_claude(path, &name, &bridge))
-                })
+                service.create(Provider::Claude, &name, |path| service.seed_claude(path))
             })
             .await
             {

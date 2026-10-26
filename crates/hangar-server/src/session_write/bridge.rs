@@ -84,7 +84,12 @@ pub async fn claude(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     if matches!(rest.as_str(), "input" | "model-effort") && !runtime.has_entry(None, &name).await {
         match runtime.adopt_now(&name).await {
             None => return not_ours(),
-            Some(Err(error)) => return super::detail(StatusCode::SERVICE_UNAVAILABLE, &error.code, &error.message, json!({})),
+            // Sem sidecar o Python toma o Codex que ainda abre por Claude: o `/input` o guarda na fila dele.
+            Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING && rest == "input" => {
+                if !as_owner(&mut req, &name, &rest) { return not_ours(); }
+                return input::input(State(st), ConnectInfo(peer), req).await;
+            }
+            Some(Err(error)) => return super::detail(super::failed_status(&error), &error.code, &error.message, json!({})),
             Some(Ok(())) => {}
         }
     }
@@ -117,7 +122,9 @@ pub async fn codex(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
             if !runtime.owns_codex_terminal(&name) && !runtime.owns_codex_headless(&name).await {
                 match runtime.adopt_now(&name).await {
                     None => return not_ours(),
-                    Some(Err(error)) => return super::detail(StatusCode::SERVICE_UNAVAILABLE, &error.code, &error.message, json!({})),
+                    // Conversa ainda abrindo: a rota decide (texto vai à fila, o resto espera).
+                    Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING => {}
+                    Some(Err(error)) => return super::detail(super::failed_status(&error), &error.code, &error.message, json!({})),
                     Some(Ok(())) => {}
                 }
             }

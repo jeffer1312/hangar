@@ -111,12 +111,18 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
             cors(&parts.headers, response.headers_mut());
             Err(response)
         }
+        Write::Opening(key) => Err(input::opening_response(st, &name, &key, &parts.headers, &bytes).await),
         Write::Failed(error) => {
-            let mut response = detail(StatusCode::SERVICE_UNAVAILABLE, &error.code, &error.message, json!({}));
+            let mut response = detail(failed_status(&error), &error.code, &error.message, json!({}));
             cors(&parts.headers, response.headers_mut());
             Err(response)
         }
     }
+}
+
+/// Recusa do Rust a uma sessão dele: esperar a conversa abrir é 409; o resto, 503.
+pub(crate) fn failed_status(error: &crate::runtime::protocol::RuntimeError) -> StatusCode {
+    if error.code == crate::runtime::codex_relaunch::STARTING { StatusCode::CONFLICT } else { StatusCode::SERVICE_UNAVAILABLE }
 }
 
 /// Igual ao `_BodySizeLimitMiddleware`: texto puro, e o CORS por fora dele.
@@ -128,11 +134,13 @@ pub(crate) fn too_large(headers: &axum::http::HeaderMap) -> Response {
 
 /// Quem atende uma escrita. `Failed`: a sessão é do Rust e não pôde ser atendida (entrada doente,
 /// Codex com terminal que não deu para adotar); a escrita nunca cai no Python.
-pub(crate) enum Write { Rust(IngressPass, WriteTarget), Python, Busy, Failed(crate::runtime::protocol::RuntimeError) }
+/// `Opening`: texto para o Codex com terminal que ainda abre a conversa, com a chave da fila dela.
+pub(crate) enum Write { Rust(IngressPass, WriteTarget), Python, Busy, Opening(String), Failed(crate::runtime::protocol::RuntimeError) }
 
 /// Porta, entrada e tabela, nessa ordem. O passe só volta com `Rust`: repasse nunca o segura. Sem
 /// entrada, o Codex com terminal do Rust é adotado na hora (`adopt_now`) e a entrada procurada de novo;
-/// sem entrada nem Codex com terminal (abertura, Pi/omp/Kimi), segue ao Python.
+/// Codex com terminal ainda abrindo a conversa: texto vira `Opening`, o resto espera (`codex_terminal_starting`);
+/// sem entrada nem Codex com terminal (Pi/omp/Kimi), segue ao Python.
 pub(crate) async fn route_write(runtime: &RuntimeRegistry, name: &str, route: WriteRoute, wait: Duration) -> Write {
     use crate::runtime::protocol::RuntimeError;
     let (pass_in, target) = match enter_then_find(runtime, name, wait).await {
@@ -140,6 +148,13 @@ pub(crate) async fn route_write(runtime: &RuntimeRegistry, name: &str, route: Wr
         Ok(Some(found)) => found,
         Ok(None) => match runtime.adopt_now(name).await {
             None => return Write::Python,
+            Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING && route == WriteRoute::Input => {
+                return match runtime.codex_opening(name).await {
+                    Some(Ok(key)) => Write::Opening(key),
+                    Some(Err(other)) => Write::Failed(other),
+                    None => Write::Failed(error),
+                };
+            }
             Some(Err(error)) => return Write::Failed(error),
             Some(Ok(())) => match enter_then_find(runtime, name, wait).await {
                 Err(GateClosed) => return Write::Busy,

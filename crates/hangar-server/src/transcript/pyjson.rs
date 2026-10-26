@@ -23,6 +23,46 @@ pub fn dumps_unicode(v: &Value, sort_keys: bool) -> String {
     out
 }
 
+/// `json.dumps(v, indent=indent, ensure_ascii=ascii)`: um item por linha, separadores "," e ": ", `{}` e
+/// `[]` vazios compactos.
+pub fn dumps_indent(v: &Value, indent: usize, ascii: bool) -> String {
+    let mut out = String::new();
+    write_indented(&mut out, v, indent, 0, ascii);
+    out
+}
+
+fn write_indented(out: &mut String, v: &Value, indent: usize, level: usize, ascii: bool) {
+    let open = |out: &mut String, first: bool| {
+        out.push_str(if first { "\n" } else { ",\n" });
+        out.push_str(&" ".repeat(indent * (level + 1)));
+    };
+    match v {
+        Value::Array(items) if !items.is_empty() => {
+            out.push('[');
+            for (i, x) in items.iter().enumerate() {
+                open(out, i == 0);
+                write_indented(out, x, indent, level + 1, ascii);
+            }
+            out.push('\n');
+            out.push_str(&" ".repeat(indent * level));
+            out.push(']');
+        }
+        Value::Object(m) if !m.is_empty() => {
+            out.push('{');
+            for (i, (k, x)) in m.iter().enumerate() {
+                open(out, i == 0);
+                write_str(out, k, ascii);
+                out.push_str(": ");
+                write_indented(out, x, indent, level + 1, ascii);
+            }
+            out.push('\n');
+            out.push_str(&" ".repeat(indent * level));
+            out.push('}');
+        }
+        other => write_value(out, other, false, ascii),
+    }
+}
+
 /// `json.loads` que aceita surrogate solto como o Python. O valor guarda o surrogate como marcador;
 /// para o valor final, sem marcador, use `transcript::decode_line`.
 // ponytail: inteiro além de u64 vira f64 e NaN/Infinity não são aceitos (o Python aceita os dois);

@@ -450,6 +450,15 @@ impl RuntimeRegistry {
         if let Some(adopted) = watcher.adopt_now(self,name).await { return Some(adopted); }
         watcher.adopt_claude(self,name).await
     }
+    /// A chave da fila do Codex com terminal que ainda abre a conversa (`Watcher::opening`).
+    pub async fn codex_opening(&self,name:&str) -> Option<Result<String,RuntimeError>> { self.watcher.get()?.opening(name).await }
+    /// Texto guardado para a conversa que ainda abre; a adoção o entrega.
+    pub async fn queue_codex_opening(&self,name:&str,key:&str,text:&str) -> Result<(),RuntimeError> {
+        match self.watcher.get() {
+            Some(watcher) => watcher.queue_opening(name,key,text).await,
+            None => Err(RuntimeError::new("runtime_watcher","a vigia do Codex com terminal não está ligada")),
+        }
+    }
     pub(super) fn report(&self,event:&'static str,name:&str,code:&str,reason:&'static str) { self.diag.report(event,name,code,reason); }
     pub(super) fn watcher_ref(&self) -> Option<Arc<super::codex_terminal::Watcher>> { self.watcher.get().cloned() }
     pub(super) fn policy_plugin_bridge(&self) -> Option<crate::session_open::claude::PluginBridge> { self.policy.plugin_bridge() }
