@@ -78,12 +78,13 @@ function safeFrames(value: unknown): string {
   return value.split('\n').filter((line) => /^\s*at\s/.test(line) || /^[\w.$<> -]+@/.test(line))
     .slice(0, 80).map((line) => {
       const cleaned = line
-        .replace(/(?:https?|file):\/\/[^\s)]+/g, (url) => {
+        // Pasta com espaço é real: o OTA do iOS fica em "Library/Application Support".
+        .replace(/(?:https?|file):\/\/[^)\n]+/g, (url) => {
           const position = url.match(/:\d+:\d+$/)?.[0] ?? '';
           const file = url.replace(/:\d+:\d+$/, '').split(/[?#]/)[0].split('/').pop() ?? 'bundle';
           return `${file}${position}`;
         })
-        .replace(/(?:\/(?:[^\s():]+\/)+)([^\s():]+)/g, '$1');
+        .replace(/\/(?:[^():\/\n]+\/)+([^\s():\/]+)/g, '$1');
       return cleaned.match(/^\s*at [\w.$<> -]{1,120} \((?:address at )?[\w.-]+:\d+:\d+\)/)?.[0]
         ?? cleaned.match(/^[\w.$<> -]{1,120}@[\w.-]+:\d+:\d+/)?.[0]
         ?? cleaned.match(/^[\w.$<> -]{1,120}@\d+:\d+/)?.[0]
