@@ -231,15 +231,15 @@ impl Sender {
         let written = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
             let Some(mut record) = dir.record(&gid).map_err(std::io::Error::other)? else { return Ok(()) };
             if record.version >= to { return Ok(()) }
-            record.version = to;
-            dir.write_record(&record).map_err(std::io::Error::other)?;
+            // Sidecars antes do registro: falha no meio deixa o registro velho e a fila refaz tudo.
             for m in record.members.iter().filter(|m| m.server == record.owner) {
                 if let Some(mut s) = read(&dir, &m.name).filter(|s| s.gid == gid) {
                     s.fed = Some(Fed { owner: record.owner.clone(), local: true, version: to });
                     dir.write_sidecar(&m.name, &s).map_err(std::io::Error::other)?;
                 }
             }
-            Ok(())
+            record.version = to;
+            dir.write_record(&record).map_err(std::io::Error::other)
         }).await.map_err(|e| PeerError::Transport(e.to_string()))?;
         written.map_err(|e| PeerError::Transport(format!("versão nova do grupo não gravada: {e}")))
     }
