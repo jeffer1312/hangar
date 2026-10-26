@@ -470,8 +470,15 @@ def _motivo_da_falha(p: subprocess.CompletedProcess) -> str:
 
 # ─── Pré-voo ───────────────────────────────────────────────────────────────────────────────────
 
+_LAUNCHD_LABEL = "br.dev.hangar.backend"   # o LaunchAgent do scripts/services-launchd.sh
+
+
+def _launchd_alvo() -> str:
+    return f"gui/{os.getuid()}/{_LAUNCHD_LABEL}"
+
+
 def _topologia() -> str:
-    """Como esta máquina roda o servidor: `systemd`, `windows` ou `manual`.
+    """Como esta máquina roda o servidor: `systemd`, `launchd`, `windows` ou `manual`.
 
     O terceiro caso **não é erro** — há instalação rodando na mão, e tratá-la como defeito seria
     recusar atualizar uma máquina que funciona. `systemctl list-unit-files` é consultado pelo exit
@@ -480,6 +487,10 @@ def _topologia() -> str:
     """
     if _E_WINDOWS:
         return "windows"
+    if sys.platform == "darwin":
+        if _rodar(["launchctl", "print", _launchd_alvo()], timeout=15).returncode == 0:
+            return "launchd"
+        return "manual"
     if shutil.which("systemctl"):
         p = _rodar(["systemctl", "--user", "list-unit-files", "hangar-backend.service"], timeout=15)
         if p.returncode == 0:
@@ -1141,6 +1152,11 @@ def _reiniciar(topologia: str, porta: int = 8765) -> None:
                    timeout=180)
         if p.returncode != 0:
             raise RuntimeError(f"nao consegui reiniciar as tarefas: {_cauda(p, 6)}")
+    elif topologia == "launchd":
+        # O launchd mata o grupo de processos do backend; este nasceu com setsid e fica de pé.
+        p = _rodar(["launchctl", "kickstart", "-k", _launchd_alvo()], timeout=120)
+        if p.returncode != 0:
+            raise RuntimeError(f"nao consegui reiniciar o servico: {_cauda(p)}")
     else:
         # Instalação na mão: não há serviço para reiniciar, e inventar um `kill` no processo de
         # alguém seria pior que não reiniciar. A tela avisa que falta reiniciar à mão.
@@ -1311,6 +1327,11 @@ def _pid_do_servidor(topologia: str, porta: int) -> int | None:
             p = _rodar(["systemctl", "--user", "show", "-p", "MainPID", "--value",
                         "hangar-backend.service"], timeout=15)
             return int(p.stdout.strip() or 0) or None
+        if topologia == "launchd":
+            # Pela porta não dá: no macOS o psutil.net_connections() do sistema exige root.
+            m = re.search(r"^\s*pid = (\d+)", _rodar(["launchctl", "print", _launchd_alvo()],
+                                                     timeout=15).stdout, re.M)
+            return int(m.group(1)) if m else None
         if topologia == "windows":
             import psutil
             for c in psutil.net_connections(kind="tcp"):
@@ -1540,7 +1561,7 @@ def reiniciar_agora(porta: int = 8765) -> dict:
     `systemctl --user restart` mata o cgroup da unit, e quem deu o comando de dentro dele morre
     antes de o comando terminar.
 
-    `systemd` e `windows` (tarefa agendada, pelo mesmo `Restart-HangarTasks` da atualização). Na
+    `systemd`, `launchd` e `windows` (tarefa agendada, pelo mesmo `Restart-HangarTasks` da atualização). Na
     instalação `manual` não há serviço, e inventar um `kill` no processo de alguém seria pior que
     recusar.
     """

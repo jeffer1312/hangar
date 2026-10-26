@@ -114,6 +114,10 @@ jobs:
             platform: macos-aarch64
             exe: ""
             experimental: true
+          - os: macos-15-intel
+            platform: macos-x86_64
+            exe: ""
+            experimental: true
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.experimental }}
     concurrency:
@@ -150,10 +154,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             desktop-native/target
-          key: &chave-native native-${{ runner.os }}-${{ env.PERFIL }}-${{ hashFiles('desktop-native/Cargo.lock', 'desktop-native/rust-toolchain.toml') }}-${{ hashFiles('desktop-native/vendor/**') }}
+          key: &chave-native native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-${{ hashFiles('desktop-native/Cargo.lock', 'desktop-native/rust-toolchain.toml') }}-${{ hashFiles('desktop-native/vendor/**') }}
           restore-keys: &chave-native-parcial |
-            native-${{ runner.os }}-${{ env.PERFIL }}-${{ hashFiles('desktop-native/Cargo.lock', 'desktop-native/rust-toolchain.toml') }}-
-            native-${{ runner.os }}-${{ env.PERFIL }}-
+            native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-${{ hashFiles('desktop-native/Cargo.lock', 'desktop-native/rust-toolchain.toml') }}-
+            native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
       # O cargo julga crate de caminho pela data dos arquivos, e o checkout novo data tudo de agora: o GPUI
       # vendorizado recompilava inteiro a cada push, com o cache achado. Só com a chave exata (vendor igual ao
       # compilado no cache) a data antiga é verdade.
@@ -207,7 +211,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          PREFIXO: native-${{ runner.os }}-${{ env.PERFIL }}-
+          PREFIXO: native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
           CHAVE: ${{ steps.cache-rust.outputs.cache-primary-key }}
         run: *apagar-antigos
 
@@ -218,7 +222,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
     runs-on: ${{ matrix.os }}
     continue-on-error: true
     concurrency:
@@ -264,7 +268,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          PREFIXO: native-${{ runner.os }}-${{ env.PERFIL }}-
+          PREFIXO: native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
           CHAVE: ${{ steps.consulta.outputs.cache-primary-key }}
         run: *apagar-antigos
 
@@ -343,6 +347,7 @@ jobs:
           |---|---|
           | Windows (x64) | `Hangar-windows-x86_64.zip` |
           | macOS (Apple Silicon) | `Hangar-macos-aarch64.zip` |
+          | macOS (Intel) | `Hangar-macos-x86_64.zip` |
           | Linux (x64) | `Hangar-linux-x86_64.deb` (Ubuntu 24.04+, Debian 13+, Mint 22+), `Hangar-linux-x86_64.rpm` (Fedora 40+, openSUSE Tumbleweed) ou `Hangar-linux-x86_64.tar.gz` (glibc 2.39 ou mais nova) |
 
           ### Como instalar
@@ -361,7 +366,7 @@ jobs:
             notes+=$'\n\n'"### Canal de testes"$'\n\n'"Reescrita a cada push na branch $GITHUB_REF_NAME. O app troca para esta release quando o servidor da máquina está no canal de testes dessa branch; a versão estável é a native-latest."
           fi
           notes+=$'\n\n'"### Esta versão"$'\n\n'"Versão $version ($GITHUB_SHA). Linux: arquivo desta versão."
-          for spec in 'Windows:Hangar-windows-x86_64.exe' 'macOS:Hangar-macos-aarch64'; do
+          for spec in 'Windows:Hangar-windows-x86_64.exe' 'macOS:Hangar-macos-aarch64' 'macOS Intel:Hangar-macos-x86_64'; do
             platform=${spec%%:*}
             file=${spec#*:}
             if test -f "out/$file"; then
