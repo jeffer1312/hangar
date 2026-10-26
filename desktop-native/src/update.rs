@@ -17,6 +17,9 @@ mod all;
 const RELEASES: &str = "https://github.com/jeffer1312/hangar/releases/download";
 /// Branch que o CI compilou (native.yml). Build local não sabe a dele: só versão mais nova o troca.
 const BUILT_CHANNEL: Option<&str> = option_env!("HANGAR_NATIVE_CHANNEL");
+
+/// O assistente de instalação escolhe o canal do pacote por ele.
+pub(crate) fn built_channel() -> Option<&'static str> { BUILT_CHANNEL }
 const EVERY: Duration = Duration::from_secs(6 * 3600);
 /// Janela GPUI fria num disco lento leva segundos; 30 s cobre com folga sem deixar o usuário esperando à toa.
 const ALIVE_WAIT: Duration = Duration::from_secs(30);

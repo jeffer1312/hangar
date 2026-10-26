@@ -127,7 +127,8 @@ pub(crate) fn args(agent: Agent, home: &Path, dest: &Path, work: &Path) -> Vec<S
 /// não recebe `HANGAR_TOKEN`): aí ele só confere (`--check` não escreve nada).
 pub(crate) fn recheck_command(dest: &Path, options: &run::Options, token_saved: bool, windows: bool) -> String {
     let kind = if token_saved { run::Kind::Install } else { run::Kind::Check };
-    let args = run::script_args(kind, options, dest, windows);
+    // O agente só existe no clone (`detect_agents`).
+    let args = run::script_args(kind, options, super::local::Mode::Git, dest, windows, false);
     if windows {
         format!("powershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" {}", dest.join("install.ps1").display(), args.join(" "))
     } else {
