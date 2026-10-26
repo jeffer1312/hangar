@@ -42,6 +42,7 @@ fn asset() -> Option<&'static str> {
         ("linux", "x86_64") => Some("Hangar-linux-x86_64"),
         ("windows", "x86_64") => Some("Hangar-windows-x86_64.exe"),
         ("macos", "aarch64") => Some("Hangar-macos-aarch64"),
+        ("macos", "x86_64") => Some("Hangar-macos-x86_64"),
         _ => None,
     }
 }
