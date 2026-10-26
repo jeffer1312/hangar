@@ -155,8 +155,11 @@ app_sudo() { # app_sudo <motivo> <comando…>
   fi
   err=$(mktemp)
   # Sudo recusado é resposta, não erro do instalador: sem isto o `set -e` sairia antes de ler a causa
-  # quando a app_sudo roda dentro de um cano (subshell). O `local -` devolve o -e na saída.
-  local -; set +e
+  # quando a app_sudo roda dentro de um cano (subshell). O -e volta só na saída, depois do último
+  # comando: guardado à mão porque o `local -` não existe no bash 3.2 do macOS.
+  local tinha_e=0 rc
+  case $- in *e*) tinha_e=1 ;; esac
+  set +e
   # A senha só autentica (-v); o comando roda depois pelo -n. Com `sudo -S <comando>` uma regra
   # NOPASSWD deixaria a senha na entrada do comando, e a saída dele se confundiria com a do sudo.
   for try in 1 2 3; do
@@ -173,10 +176,13 @@ app_sudo() { # app_sudo <motivo> <comando…>
     retry=--retry
   done
   rm -f "$err"
-  [ "${st[1]}" = 0 ] || return "${st[1]}"
+  if [ "${st[1]}" != 0 ]; then rc=${st[1]}
   # Sem credencial guardada, a única via seria a senha no stdin do comando: para aqui.
-  sudo -n true 2>/dev/null || { echo "$SUDO_NO_CACHE" >&2; return 1; }
-  sudo -n "$@"
+  elif ! sudo -n true 2>/dev/null; then echo "$SUDO_NO_CACHE" >&2; rc=1
+  else sudo -n "$@"; rc=$?
+  fi
+  [ "$tinha_e" = 1 ] && set -e
+  return "$rc"
 }
 # Causa de uma falha com sudo, pela saída do comando; vazio = desconhecida.
 sudo_error_code() { # sudo_error_code <arquivo com a saída>
