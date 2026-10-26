@@ -964,11 +964,32 @@ fi
 mark_step instalar fazendo
 say "7/8 Serviços, hangar-send e painel"
 # No --app ninguém vai subir o backend na mão: sem systemd de usuário o assistente não termina.
-if [ "$APP" = 1 ] && ! systemctl --user show-environment >/dev/null 2>&1; then
+if [ "$APP" = 1 ] && [ "$(uname -s)" != Darwin ] && ! systemctl --user show-environment >/dev/null 2>&1; then
   fail_with sem-systemd "sem systemd de usuário nesta máquina — o Hangar não tem como iniciar sozinho"
 fi
 SERV_N=${#PROBLEMAS[@]}
-if ! command -v systemctl >/dev/null; then
+# macOS: o serviço é um LaunchAgent (scripts/services-launchd.sh); o backend serve a interface.
+if [ "$(uname -s)" = Darwin ]; then
+  if [ -f "$HOME/Library/LaunchAgents/br.dev.hangar.backend.plist" ]; then
+    # O caminho do uv e do node ficam cravados no plist: re-rodar o grava de novo, e o script só
+    # reinicia quando ele mudou.
+    SETUP_RC=0
+    ./scripts/services-launchd.sh >/dev/null || SETUP_RC=$?
+    [ "$SETUP_RC" != 0 ] && anota_problema "services-launchd.sh falhou (exit $SETUP_RC)"
+    ./scripts/services-launchd.sh --ativo \
+      && ok "serviço atualizado (rodando)" \
+      || anota_problema "serviço atualizado mas o backend não está rodando"
+  elif [ "$UPDATE" = 1 ]; then
+    :   # não instala coisa nova num --update; isso é decisão, não atualização
+  elif [ "$SERVICES" = 1 ] && ask "Rodar o backend como serviço (sobe no login e volta sozinho se cair)?"; then
+    SETUP_RC=0
+    ./scripts/services-launchd.sh || SETUP_RC=$?
+    [ "$SETUP_RC" != 0 ] && anota_problema "services-launchd.sh falhou (exit $SETUP_RC)"
+    ./scripts/services-launchd.sh --ativo || anota_problema "serviço instalado mas o backend não está rodando"
+  else
+    nota "pulado — rodando na mão, fechar o terminal derruba o backend"
+  fi
+elif ! command -v systemctl >/dev/null; then
   nota "serviços: sem systemd nesta máquina — rode backend e frontend na mão"
 elif systemctl --user list-unit-files hangar-backend.service >/dev/null 2>&1 &&
      systemctl --user cat hangar-backend.service >/dev/null 2>&1; then
@@ -1113,9 +1134,16 @@ say "8/8 Checagem de fumaça"
   && { ok "o backend importa"; mark_item backend-importa ok "o servidor abre"; } \
   || fail "o backend não importa nesta máquina"
 
-(cd backend && uv run python -c "from app import procinfo; assert procinfo._TEM_PROC, 'sem /proc'") \
-  && ok "leitura de processo via /proc funcionando" \
-  || nota "sem /proc (macOS?) — o backend usa psutil, confira se ele foi instalado"
+if [ "$(uname -s)" = Linux ]; then
+  (cd backend && uv run python -c "from app import procinfo; assert procinfo._TEM_PROC, 'sem /proc'") \
+    && ok "leitura de processo via /proc funcionando" \
+    || nota "sem /proc — a leitura de processo do backend não vai funcionar"
+else
+  # Sem /proc (macOS) o backend lê processo pelo psutil: a prova é ele ler o próprio.
+  (cd backend && uv run python -c "import os, psutil; psutil.Process(os.getpid()).cmdline()") \
+    && ok "leitura de processo via psutil funcionando" \
+    || nota "o psutil não lê processo nesta máquina — rode: cd backend && uv sync"
+fi
 
 S="cp-fumaca-$$"
 if tmux new-session -d -s "$S" -c /tmp 'sh' 2>/dev/null; then
