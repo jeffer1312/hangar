@@ -77,7 +77,8 @@ function safeFrames(value: unknown): string {
   if (typeof value !== 'string') return '';
   return value.split('\n').filter((line) => /^\s*at\s/.test(line) || /^[\w.$<> -]+@/.test(line))
     .slice(0, 80).map((line) => {
-      const cleaned = line
+      // Linha longa (mensagem embutida na pilha) faria a busca de caminho custar segundos no handler fatal.
+      const cleaned = line.slice(0, 1000)
         // Pasta com espaço é real: o OTA do iOS fica em "Library/Application Support".
         .replace(/(?:https?|file):\/\/[^)\n]+/g, (url) => {
           const position = url.match(/:\d+:\d+$/)?.[0] ?? '';
