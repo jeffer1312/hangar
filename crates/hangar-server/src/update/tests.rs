@@ -283,6 +283,47 @@ async fn update_machine_steps_run_with_current_already_on_the_new_version() {
     assert_eq!(*steps.seen.lock().unwrap(), vec![real(&machine.layout.versions().join(NEW))]);
 }
 
+/// Segura o passo até o teste soltar: o executor "morre" com o passo no meio.
+struct Hangs(Mutex<std::sync::mpsc::Receiver<()>>);
+impl StepRunner for Hangs {
+    fn run(&self, _command: &str, _cwd: &Path) -> StepRun {
+        let _ = self.0.lock().unwrap().recv_timeout(Duration::from_secs(10));
+        StepRun { code: Some(1), output: String::new() }
+    }
+}
+
+/// O executor morto no meio dos passos deixa o `current` na versão nova sem prova: a recuperação o
+/// devolve à anterior, e o servidor de pé (o de antes) mostra que voltou.
+#[tokio::test]
+async fn update_killed_during_the_machine_steps_is_put_back_by_the_recovery() {
+    let fake = FakeRelease::new().await;
+    let machine = Machine::new();
+    let old = machine.current();
+    let (bytes, _) = new_package(&machine, "touch {proof}");
+    fake.publish(NEW, &bytes, None);
+    let release = fake.release();
+    let restart = FakeRestart::default();
+    let health = FakeHealth { restarts: restart.count.clone(), reading: Box::new(served) };
+    let (release_step, held) = std::sync::mpsc::channel();
+    let job = machine.job(&release);
+    let killed = tokio::time::timeout(Duration::from_millis(1500),
+        run(&job, Arc::new(Hangs(Mutex::new(held))), &restart, &health, Arc::new(NeverInUse))).await;
+    assert!(killed.is_err(), "a rodada parou no passo");
+    assert_eq!(machine.current(), real(&machine.layout.versions().join(NEW)), "a troca já aconteceu");
+    let _ = release_step.send(());
+
+    // O dono da rodada não existe mais.
+    let state = StateFile::new(&machine.state_dir);
+    state.write(serde_json::json!({"pid": 0x7fff_fff0u32, "ts": "2000-01-01T00:00:00+00:00"}));
+    let screen = for_screen(&machine.state_dir, &machine.layout, Some(OLD));
+
+    assert_eq!(machine.current(), old, "o current volta para a versão anterior");
+    assert_eq!(screen["fase"], "pronto");
+    assert!(screen["erro"].as_str().is_some_and(|e| e.contains(OLD)), "{screen:?}");
+    assert_eq!(recover(&machine.layout).unwrap(), false, "nada mais a recuperar");
+    assert_eq!(restart.count.load(Ordering::SeqCst), 0);
+}
+
 #[tokio::test]
 async fn update_sha_mismatch_changes_nothing() {
     let fake = FakeRelease::new().await;

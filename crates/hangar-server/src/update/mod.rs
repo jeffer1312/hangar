@@ -44,6 +44,8 @@ impl Layout {
     pub fn aside(&self) -> PathBuf { self.hangar.join("current.old") }
     pub fn downloads(&self) -> PathBuf { self.hangar.join("downloads") }
     pub fn lock_file(&self) -> PathBuf { self.hangar.join("update.lock") }
+    /// A troca feita e ainda sem prova (`Unproven`).
+    pub fn unproven(&self) -> PathBuf { self.hangar.join("update-swap.json") }
 }
 
 /// A release do pacote: `<base>/package-<canal>/package-<canal>.json` e os `.tar.gz` ao lado.
@@ -269,7 +271,7 @@ fn to_trash(layout: &Layout, dir: &Path) -> std::io::Result<PathBuf> {
 pub fn swap(layout: &Layout, target: &Path) -> Result<Option<PathBuf>, UpdateError> {
     let fail = |e: &dyn std::fmt::Display| UpdateError::Swap(e.to_string());
     let target = real(target).map_err(|e| fail(&format!("{}: {e}", target.display())))?;
-    recover(layout).map_err(|e| fail(&e))?;
+    recover_aside(layout).map_err(|e| fail(&e))?;
     let current = layout.current();
     let previous = real(&current).ok();
     let fresh = layout.hangar.join("current.new");
@@ -288,15 +290,54 @@ pub fn swap(layout: &Layout, target: &Path) -> Result<Option<PathBuf>, UpdateErr
     Ok(previous)
 }
 
-/// Troca do Windows interrompida entre os dois `rename`: sem `current` e com o link de antes ao
-/// lado. Devolve o link ao lugar; `true` quando havia o que recuperar.
+/// Rodada interrompida no meio: a troca do Windows entre os dois `rename` (o link de antes volta
+/// ao lugar) ou a troca feita e nunca provada (o `current` volta para a versão anterior, como a
+/// volta da rodada faria). `true` quando havia o que recuperar.
 pub fn recover(layout: &Layout) -> std::io::Result<bool> {
+    let aside = recover_aside(layout)?;
+    let bytes = match std::fs::read(layout.unproven()) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(aside),
+        Err(e) => return Err(e),
+    };
+    let record: Unproven = serde_json::from_slice(&bytes)
+        .map_err(|e| std::io::Error::other(format!("{} ilegível ({e}); confira o current à mão e apague o arquivo", layout.unproven().display())))?;
+    // O `current` em outra versão: a troca não chegou a acontecer, ou alguém já a desfez.
+    if real(&layout.current()).ok() != Some(record.target) {
+        clear_unproven(layout)?;
+        return Ok(aside);
+    }
+    match &record.previous {
+        Some(previous) => { swap(layout, previous).map_err(|e| std::io::Error::other(e.to_string()))?; }
+        None => remove_link(&layout.current())?,
+    }
+    clear_unproven(layout)?;
+    Ok(true)
+}
+
+fn recover_aside(layout: &Layout) -> std::io::Result<bool> {
     if std::fs::symlink_metadata(layout.current()).is_ok() || std::fs::symlink_metadata(layout.aside()).is_err() {
         return Ok(false);
     }
     std::fs::rename(layout.aside(), layout.current())?;
     Ok(true)
 }
+
+/// A troca que a rodada fez e ainda não provou, gravada antes dela: a rodada que morre (executor
+/// morto, queda de energia, passo travado) deixa o que desfazer.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Unproven {
+    previous: Option<PathBuf>,
+    target: PathBuf,
+}
+
+fn note_unproven(layout: &Layout, target: &Path) -> Result<(), UpdateError> {
+    let io = |e: &dyn std::fmt::Display| UpdateError::Io(format!("não consegui gravar {}: {e}", layout.unproven().display()));
+    let record = Unproven { previous: real(&layout.current()).ok(), target: real(target).map_err(|e| io(&e))? };
+    crate::runtime::queue::atomic_write(&layout.unproven(), &serde_json::to_vec(&record).map_err(|e| io(&e))?).map_err(|e| io(&e))
+}
+
+fn clear_unproven(layout: &Layout) -> std::io::Result<()> { absent_ok(std::fs::remove_file(layout.unproven())) }
 
 #[cfg(unix)]
 fn make_link(target: &Path, link: &Path) -> std::io::Result<()> { std::os::unix::fs::symlink(target, link) }
@@ -596,11 +637,23 @@ pub(crate) async fn wait_new<H: HealthProbe>(health: &H, before: Option<u32>, se
 /// O `current` volta para `previous`, como estava antes da troca.
 async fn put_back(layout: &Layout, previous: Option<PathBuf>) -> Result<(), UpdateError> {
     let layout = layout.clone();
-    blocking(move || match previous {
-        Some(previous) => swap(&layout, &previous).map(|_| ()),
-        // Não havia `current` antes desta rodada: voltar é tirá-lo.
-        None => remove_link(&layout.current()).map_err(|e| UpdateError::Swap(format!("{} não saiu: {e}", layout.current().display()))),
+    blocking(move || {
+        match previous {
+            Some(previous) => { swap(&layout, &previous)?; }
+            // Não havia `current` antes desta rodada: voltar é tirá-lo.
+            None => remove_link(&layout.current()).map_err(|e| UpdateError::Swap(format!("{} não saiu: {e}", layout.current().display())))?,
+        }
+        // Sobra com o `current` fora do alvo é apagada pela próxima recuperação.
+        let _ = clear_unproven(&layout);
+        Ok(())
     }).await
+}
+
+/// A troca vale: a recuperação não a desfaz mais. Registro que fica a desfaria na próxima rodada.
+fn keep_swap(layout: &Layout, state: &StateFile) {
+    if let Err(e) = clear_unproven(layout) {
+        state.warn(&format!("apague {} à mão: com ele, a próxima atualização volta o current para a versão anterior ({e})", layout.unproven().display()));
+    }
 }
 
 /// O processo que reprovou: quem responder depois da volta tem que ser outro. O da versão anterior
@@ -707,9 +760,20 @@ pub fn for_screen(state_dir: &Path, layout: &Layout, running: Option<&str>) -> s
         && installed(layout).map(|m| m.version).as_deref() == target && running == target;
     if reached {
         tracing::info!(pid = ?owner, "update: concluída pelo servidor novo; o executor morreu no reinício que pediu");
+        // A versão nova de pé é a prova que faltou.
+        keep_swap(layout, &state);
         state.write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado"}));
     } else {
         tracing::warn!(pid = ?owner, "update: atualização abandonada, o processo que a executava não existe mais");
+        // A troca sem prova volta; com outra rodada segurando a trava, ela é que decide.
+        let undone = match UpdateLock::try_acquire(layout) {
+            Ok(_lock) => recover(layout).unwrap_or_else(|e| {
+                tracing::warn!(code = "update_recover_failed", "update: a troca interrompida não voltou: {e}");
+                state.warn(&format!("a troca interrompida não voltou para a versão anterior: {e}"));
+                false
+            }),
+            Err(_) => false,
+        };
         let disk = installed(layout).map(|m| m.version);
         let place = match (target, disk.as_deref()) {
             (Some(target), Some(disk)) if target == disk => format!("o current já aponta para a versão {target}, que sobe no próximo reinício"),
@@ -718,8 +782,11 @@ pub fn for_screen(state_dir: &Path, layout: &Layout, running: Option<&str>) -> s
         };
         let up = running.map_or_else(|| "de fora de pacote (versão desconhecida)".to_owned(), |v| format!("o da versão {v}"));
         // Só o servidor de pé chama esta função: `no_ar` é ele mesmo respondendo.
-        state.write(json!({"fase": "pronto", "ok": false, "voltou": false, "no_ar": true,
-            "erro": format!("a atualização foi interrompida, o processo que a executava não existe mais; {place}, e o servidor de pé é {up}")}));
+        let undone_text = if undone { "a troca sem prova foi desfeita, " } else { "" };
+        // Desfeita com a versão nova já de pé (reinício no meio dos passos): a anterior sobe no próximo reinício.
+        let restart = undone && running.is_some() && running != disk.as_deref();
+        state.write(json!({"fase": "pronto", "ok": false, "voltou": false, "no_ar": true, "reiniciar_manual": restart,
+            "erro": format!("a atualização foi interrompida, o processo que a executava não existe mais; {undone_text}{place}, e o servidor de pé é {up}")}));
     }
     state.read()
 }
@@ -746,7 +813,7 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
         Ok(true) => {
             tracing::warn!("update: current recuperado de uma troca interrompida");
             crate::diag::record_blocking(job.diary_dir.as_deref(), &[json!({"evento": "rust.update_swap_recovered", "nivel": "aviso",
-                "detalhe": format!("{} voltou para {}", job.layout.aside().display(), job.layout.current().display())})], "update");
+                "detalhe": format!("{} voltou a apontar para a versão de antes da troca interrompida", job.layout.current().display())})], "update");
         }
         Ok(false) => {}
         Err(e) => return failed_before(&state, health, UpdateError::Swap(format!("troca interrompida não recuperada: {e}"))).await,
@@ -798,7 +865,7 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     let pid_before = match health.read().await { Reading::Rust { pid, .. } => pid, _ => None };
     let previous = {
         let (layout, dir) = (job.layout.clone(), dir.clone());
-        match blocking(move || swap(&layout, &dir)).await {
+        match blocking(move || note_unproven(&layout, &dir).and_then(|()| swap(&layout, &dir).inspect_err(|_| { let _ = recover(&layout); }))).await {
             Ok(previous) => previous,
             Err(e) => return failed_before(&state, health, e).await,
         }
@@ -824,6 +891,7 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
 
     // Na mão não há reinício nem prova: o servidor de antes segue no ar até alguém reiniciá-lo.
     if restarter.manual() {
+        keep_swap(job.layout, &state);
         state.write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado", "reiniciar_manual": true}));
         return Outcome::UpdatedManual { version: manifest.version };
     }
@@ -836,6 +904,7 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     if let Err(why) = proved {
         return roll_back(job, &state, previous, before.as_ref(), &applied_now, why, restarter, health).await;
     }
+    keep_swap(job.layout, &state);
 
     let layout = job.layout.clone();
     let pruned = blocking(move || Ok(prune(&layout, previous.as_deref(), &*in_use))).await;
