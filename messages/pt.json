@@ -1,7 +1,7 @@
 {
   "$schema": "https://inlang.com/schema/inlang-message-format",
   "keyring_locked_title": "{label}: chaveiro trancado",
-  "keyring_locked_hint": "Chrome, Slack e outros apps dessa máquina ficam esperando o chaveiro. Digite a senha de login dela.",
+  "keyring_locked_hint": "Chrome, Slack e outros apps dessa máquina ficam esperando o chaveiro. Digite a senha do chaveiro dela (em geral, a mesma do login).",
   "keyring_password_placeholder": "Senha do chaveiro",
   "keyring_unlock": "Destrancar",
   "keyring_unlocking": "Destrancando…",

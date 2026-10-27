@@ -1,7 +1,7 @@
 {
   "$schema": "https://inlang.com/schema/inlang-message-format",
   "keyring_locked_title": "{label}: keyring locked",
-  "keyring_locked_hint": "Chrome, Slack and other apps on that machine are waiting for the keyring. Type its login password.",
+  "keyring_locked_hint": "Chrome, Slack and other apps on that machine are waiting for the keyring. Type its keyring password (usually the same as the login one).",
   "keyring_password_placeholder": "Keyring password",
   "keyring_unlock": "Unlock",
   "keyring_unlocking": "Unlocking…",
