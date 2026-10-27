@@ -280,11 +280,14 @@ pub fn live(role: &Role, rows: &[Value]) -> Option<String> {
     if let Some(prefix) = name.strip_suffix('*') {
         rows.iter()
             .filter(|r| super::text(&r["name"]).starts_with(prefix))
-            .max_by(|a, b| {
-                a["last_activity"]
-                    .as_f64()
-                    .unwrap_or(0.)
-                    .total_cmp(&b["last_activity"].as_f64().unwrap_or(0.))
+            .reduce(|a, b| {
+                if b["last_activity"].as_f64().unwrap_or(0.)
+                    > a["last_activity"].as_f64().unwrap_or(0.)
+                {
+                    b
+                } else {
+                    a
+                }
             })
             .map(|r| super::text(&r["name"]).to_owned())
     } else {

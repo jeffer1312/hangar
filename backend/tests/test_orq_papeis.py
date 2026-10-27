@@ -1,5 +1,8 @@
 """orq_papeis: tabela de papéis do regras-<gid>.md, casamento com sessão viva, e a faxina do
 regras- no pair (leave/merge)."""
+import json
+from pathlib import Path
+
 import pytest
 
 from app import pair
@@ -162,3 +165,10 @@ def test_session_mode_preserves_omission_and_explicit_terminal():
         role = op.Papel("executor", "test", "claude", "default", "", "", headless=mode)
         assert op.abertura_texto(role) == flag
         assert op._ler_abertura(flag)["headless"] is mode
+
+
+@pytest.mark.parametrize("case", json.loads((Path(__file__).parent / "fixtures/contract/orq/role-live-ties.json").read_text())["cases"])
+def test_live_glob_preserves_first_candidate_when_activity_ties(case):
+    role = op.Papel("executor", "worker-*", "claude", "default", "", "")
+    rows = [SessionInfo(**row) for row in case["rows"]]
+    assert op.casar_viva(role, rows) == case["expected"]
