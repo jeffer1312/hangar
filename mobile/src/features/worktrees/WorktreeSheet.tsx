@@ -100,6 +100,7 @@ export function WorktreeSheet({ server, path, onClose, onDeleted }: Props) {
               </Pressable>
             </View>
             <Text style={styles.text}>{veredito(k, st)}</Text>
+            {st.residual && st.residual_entries == null ? <Text style={styles.aviso}>{m.worktree_residual_inventory_incomplete()}</Text> : null}
             {st.degraded && !st.residual ? <Text style={styles.aviso}>{m.worktree_leitura_incompleta()}</Text> : null}
 
             {st.sessions.length && server ? (
@@ -155,6 +156,7 @@ export function WorktreeSheet({ server, path, onClose, onDeleted }: Props) {
             {st.size ? <Text style={styles.ok}>{m.worktree_libera({ tamanho: sizeLabel(st) })}</Text> : null}
             {st.residual ? <View style={styles.perdaCaixa}>
               <Text style={styles.aviso}>{m.worktree_residual_warning()}</Text>
+              {st.residual_entries == null ? <Text style={styles.aviso}>{m.worktree_residual_inventory_incomplete()}</Text> : null}
               {st.residual_entries != null ? <Text style={styles.text}>{m.worktree_residual_entries({ n: st.residual_entries })}</Text> : null}
               {st.residual_files?.map((file) => <Arquivo key={file} code="" path={file} />)}
             </View> : null}

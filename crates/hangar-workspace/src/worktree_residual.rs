@@ -8,7 +8,7 @@ use std::{
 
 const REMOVAL_LOCK: &str = "hangar-removal\n";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct Registration {
     pub admin: PathBuf,
     pub path: PathBuf,
@@ -18,6 +18,20 @@ pub(crate) struct Registration {
     gitdir: String,
     commondir: String,
 }
+
+impl PartialEq for Registration {
+    fn eq(&self, other: &Self) -> bool {
+        worktrees::same_path(&self.admin, &other.admin)
+            && worktrees::same_path(&self.path, &other.path)
+            && worktrees::same_path(&self.common, &other.common)
+            && self.branch == other.branch
+            && self.head == other.head
+            && self.gitdir == other.gitdir
+            && self.commondir == other.commondir
+    }
+}
+
+impl Eq for Registration {}
 
 fn plain_file(path: &Path) -> Result<String> {
     if !fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && !m.is_symlink()) {
@@ -36,7 +50,7 @@ pub(crate) fn registration(main: &str, path: &str) -> Result<Registration> {
     if fs::symlink_metadata(path).is_ok_and(|m| m.is_symlink() || !m.is_dir()) {
         return Err(error(409, "a pasta residual foi substituída"));
     }
-    let path = real(path);
+    let path = worktrees::registration_path(path);
     if main.starts_with(&path) || path.starts_with(main.join(".git")) {
         return Err(error(409, "o checkout principal é protegido"));
     }
@@ -55,12 +69,16 @@ pub(crate) fn registration(main: &str, path: &str) -> Result<Registration> {
         let admin = entry.path();
         let gitdir = plain_file(&admin.join("gitdir"))?;
         let target = worktrees::normpath(&admin.join(gitdir.trim()));
-        if target.file_name().is_none_or(|n| n != ".git") || real(target.parent().unwrap()) != path
+        if target.file_name().is_none_or(|n| n != ".git")
+            || !worktrees::same_path(
+                &worktrees::registration_path(target.parent().unwrap()),
+                &path,
+            )
         {
             continue;
         }
         let commondir = plain_file(&admin.join("commondir"))?;
-        if real(&admin.join(commondir.trim())) != common {
+        if !worktrees::same_path(&real(&admin.join(commondir.trim())), &common) {
             return Err(error(409, "vínculo administrativo da worktree inválido"));
         }
         let head = plain_file(&admin.join("HEAD"))?;
@@ -140,13 +158,66 @@ pub(crate) struct Inventory {
     stamp: u64,
 }
 
-pub(crate) fn inventory(root: &Path) -> Result<Inventory> {
-    let mut stack = vec![root.to_path_buf()];
-    let mut records = Vec::new();
-    let mut files = Vec::new();
-    while let Some(path) = stack.pop() {
+fn walk(root: &Path, mut visit: impl FnMut(&Path, &fs::Metadata) -> Result<()>) -> Result<()> {
+    let mut directories: Vec<fs::ReadDir> = Vec::new();
+    let mut next = Some(root.to_path_buf());
+    loop {
+        let path = if let Some(path) = next.take() {
+            path
+        } else if let Some(directory) = directories.last_mut() {
+            let Some(entry) = directory.next() else {
+                directories.pop();
+                continue;
+            };
+            entry
+                .map_err(|_| error(409, "pasta residual ilegível"))?
+                .path()
+        } else {
+            break;
+        };
         let meta = fs::symlink_metadata(&path)
             .map_err(|_| error(409, "arquivo residual ilegível; confira a pasta"))?;
+        visit(&path, &meta)?;
+        if meta.is_dir() && !meta.is_symlink() {
+            directories.push(
+                fs::read_dir(&path)
+                    .map_err(|_| error(409, "pasta residual ilegível; confira a pasta"))?,
+            );
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Summary {
+    pub files: Vec<String>,
+    pub entries: u64,
+}
+
+pub(crate) fn summary(root: &Path) -> Result<Summary> {
+    let mut files = std::collections::BinaryHeap::new();
+    let mut entries = 0;
+    walk(root, |path, _| {
+        let rel = path.strip_prefix(root).unwrap();
+        if !rel.as_os_str().is_empty() {
+            entries += 1;
+            files.push(rel.to_string_lossy().into_owned());
+            if files.len() > 50 {
+                files.pop();
+            }
+        }
+        Ok(())
+    })?;
+    Ok(Summary {
+        files: files.into_sorted_vec(),
+        entries,
+    })
+}
+
+pub(crate) fn inventory(root: &Path) -> Result<Inventory> {
+    let mut records = Vec::new();
+    let mut files = Vec::new();
+    walk(root, |path, meta| {
         let rel = path.strip_prefix(root).unwrap().to_path_buf();
         if !rel.as_os_str().is_empty() {
             files.push(rel.to_string_lossy().into_owned());
@@ -167,18 +238,8 @@ pub(crate) fn inventory(root: &Path) -> Result<Inventory> {
             meta.is_symlink(),
             identity,
         ));
-        if meta.is_dir() && !meta.is_symlink() {
-            for entry in fs::read_dir(&path)
-                .map_err(|_| error(409, "pasta residual ilegível; confira a pasta"))?
-            {
-                stack.push(
-                    entry
-                        .map_err(|_| error(409, "pasta residual ilegível"))?
-                        .path(),
-                );
-            }
-        }
-    }
+        Ok(())
+    })?;
     records.sort();
     files.sort();
     let entries = files.len() as u64;
@@ -190,6 +251,18 @@ pub(crate) fn inventory(root: &Path) -> Result<Inventory> {
         entries,
         stamp: hash.finish(),
     })
+}
+
+struct NewMarker(Option<PathBuf>);
+
+impl Drop for NewMarker {
+    fn drop(&mut self) {
+        if let Some(path) = &self.0 {
+            if plain_file(path).is_ok_and(|content| content == REMOVAL_LOCK) {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
 }
 
 /// O lock do Git impede o prune; o lock do sistema distingue execução viva de retomada.
@@ -210,14 +283,20 @@ pub(crate) fn remove(main: &str, path: &str, guard: &dyn Fn(&str) -> Result<()>)
         .try_lock()
         .map_err(|_| error(409, "remoção da worktree em andamento"))?;
     let marker = before.admin.join("locked");
+    let mut cleanup = NewMarker(None);
     match fs::OpenOptions::new()
         .create_new(true)
         .write(true)
         .open(&marker)
     {
-        Ok(mut file) => file
-            .write_all(REMOVAL_LOCK.as_bytes())
-            .map_err(|_| error(409, "não consegui proteger o registro"))?,
+        Ok(mut file) => {
+            cleanup.0 = Some(marker.clone());
+            if file.write_all(REMOVAL_LOCK.as_bytes()).is_err() {
+                drop(file);
+                let _ = fs::remove_file(&marker);
+                return Err(error(409, "não consegui proteger o registro"));
+            }
+        }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && !before.locked()? => {}
         Err(_) => return Err(error(409, "worktree bloqueada")),
     }
@@ -239,6 +318,7 @@ pub(crate) fn remove(main: &str, path: &str, guard: &dyn Fn(&str) -> Result<()>)
         return Err(error(409, "a pasta residual mudou durante a remoção"));
     }
     before.check_git_locks()?;
+    cleanup.0 = None;
     // Não há subprocesso com prazo que possa matar a remoção no meio; o registro sai por último.
     if files.is_some() {
         // A biblioteca remove por handles e não segue uma troca concorrente por link.
@@ -260,4 +340,26 @@ pub(crate) fn remove(main: &str, path: &str, guard: &dyn Fn(&str) -> Result<()>)
     fs::remove_file(marker).map_err(|_| error(409, "não consegui concluir a remoção"))?;
     git::remove_worktree(Path::new(main), path, false)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn summary_counts_every_entry_and_keeps_the_same_bounded_sample() {
+        let dir = tempfile::tempdir().unwrap();
+        for n in (0..120).rev() {
+            std::fs::write(dir.path().join(format!("file-{n:03}")), "conteúdo").unwrap();
+        }
+        std::fs::create_dir(dir.path().join("nested")).unwrap();
+        let source = dir.path().join("nested/source.rs");
+        std::fs::write(&source, "fn main() {}").unwrap();
+        let summary = super::summary(dir.path()).unwrap();
+        let before = super::inventory(dir.path()).unwrap();
+        assert_eq!(summary.entries, 122);
+        assert_eq!(summary.entries, before.entries);
+        assert_eq!(summary.files.len(), 50);
+        assert_eq!(summary.files, before.files);
+        std::fs::write(source, "fn main() { panic!() }").unwrap();
+        assert_ne!(super::inventory(dir.path()).unwrap().stamp, before.stamp);
+    }
 }

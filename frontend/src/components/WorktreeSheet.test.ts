@@ -18,6 +18,19 @@ afterEach(() => {
 });
 
 describe('releitura do tamanho', () => {
+  it('avisa que o inventário residual não foi lido no detalhe e na confirmação', async () => {
+    vi.spyOn(api, 'getWorktreeForServer').mockResolvedValue({ ...st, size_pending: false, degraded: true,
+      residual: true, residual_files: [], residual_entries: null } as api.WorktreeStatus);
+    comp = mount(WorktreeSheet, { target: document.body.appendChild(document.createElement('div')),
+      props: { open: true, server: { id: 's' } as never, path: st.path, onClose: () => {} } });
+    await tick(); await tick(); flushSync();
+    expect(document.body.textContent).toContain(m.worktree_residual_inventory_incomplete());
+    [...document.querySelectorAll('button')].find((b) => b.textContent?.includes(m.worktree_apagar_reticencias()))!.click();
+    flushSync();
+    expect(document.body.textContent).toContain(m.worktree_residual_inventory_incomplete());
+    expect(document.body.textContent).toContain(m.worktree_residual_warning());
+    expect(document.body.textContent).not.toContain(m.worktree_residual_entries({ n: 0 }));
+  });
   it('resíduo informa os arquivos remanescentes e confirma preservando a branch', async () => {
     vi.spyOn(api, 'getWorktreeForServer').mockResolvedValue({ ...st, size_pending: false, residual: true,
       residual_files: ['source.rs', 'node_modules/cache'], residual_entries: 2 } as api.WorktreeStatus);

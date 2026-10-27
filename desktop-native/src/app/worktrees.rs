@@ -184,6 +184,18 @@ pub(super) fn merged_batch(list: &[WorktreeStatus]) -> (Vec<WorktreeStatus>, Vec
     list.iter().filter(|w| w.merged).cloned().partition(|w| w.sessions.is_empty() && !w.degraded && !w.residual)
 }
 
+fn batch_block_reason(w: &WorktreeStatus) -> String {
+    if !w.sessions.is_empty() { tr_shared("worktree_sessao_aberta", &[("nomes", &w.sessions.join(", "))]) }
+    else if w.residual { tr_shared("worktree_residual_warning", &[]) }
+    else { tr_shared("worktree_lote_leitura_falhou", &[]) }
+}
+
+fn inventory_warning(w: &WorktreeStatus) -> Option<String> {
+    if w.residual && w.residual_entries.is_none() { Some(tr_shared("worktree_residual_inventory_incomplete", &[])) }
+    else if w.degraded && !w.residual { Some(tr_shared("worktree_leitura_incompleta", &[])) }
+    else { None }
+}
+
 /// O que se perde ao apagar: a contagem de não commitados e os ignorados pelo nome.
 pub(super) fn lost_files(s: &WorktreeStatus) -> Vec<String> {
     let mut out = Vec::new();
@@ -1431,7 +1443,7 @@ impl Hangar {
                     .accessibility_label(tr_shared("worktree_copiar_caminho", &[]))
                     .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())))))
             .child(div().p(px(10.)).rounded(px(8.)).bg(theme::inset()).text_color(state.color()).child(state.verdict(&st)))
-            .when(st.degraded && !st.residual, |el| el.child(note_box(tr_shared("worktree_leitura_incompleta", &[]), theme::warning())))
+            .when_some(inventory_warning(&st), |el, warning| el.child(note_box(warning, theme::warning())))
             .when_some(merge_notice(&st), |el, notice| el.child(note_box(notice, theme::warning()).id("worktree-merge-warning").role(Role::Status)))
             .when_some(detail_error, |el, error| el.child(note_box(error, theme::warning()).id("worktree-detail-error").role(Role::Alert)));
         let me = self.current_session(&st.server);
@@ -1551,6 +1563,7 @@ impl Hangar {
                 .child(note_box(tr_shared("worktree_residual_warning", &[]), theme::warning()))
                 .when_some(st.residual_entries, |el, n| el.child(muted(tr_shared("worktree_residual_entries", &[("n", &n.to_string())]))))
                 .children(st.residual_files.iter().map(|file| div().font_family(theme::MONO).text_size(px(12.)).child(file.clone())))))
+            .when_some(inventory_warning(&st), |el, warning| el.child(note_box(warning, theme::warning())))
             .when(lost, |el| el.child(div().flex().flex_col().gap(px(6.))
                 .child(section(tr_shared("worktree_apagar_perde", &[])).text_color(theme::warning_text()))
                 .child(div().p(px(10.)).rounded(px(8.)).border_1().border_color(theme::warning().alpha(0.35)).bg(theme::warning().alpha(0.06))
@@ -1610,8 +1623,7 @@ impl Hangar {
                 .when(!batch.blocked.is_empty(), |el| el.child(div().text_color(theme::warning_text()).child(tr_shared("worktree_lote_ficam", &[])))
                     .children(batch.blocked.iter().map(|w| div().flex().flex_col().gap(px(2.))
                         .child(div().font_weight(FontWeight::MEDIUM).child(title(w)))
-                        .child(muted(if w.sessions.is_empty() { tr_shared("worktree_lote_leitura_falhou", &[]) }
-                            else { tr_shared("worktree_sessao_aberta", &[("nomes", &w.sessions.join(", "))]) }))))))
+                        .child(muted(batch_block_reason(w)))))))
             .child(div().flex().justify_end().gap_2()
                 .child(Button::new("worktree-batch-cancel").outline().label(tr_shared("worktree_nova_cancelar", &[])).disabled(deleting)
                     .on_click(cx.listener(|this, _, window, cx| this.cancel_wt_dialog(window, cx))))
@@ -1831,6 +1843,26 @@ const COL_SIZE: f32 = 76.;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn residual_without_inventory_warns_and_has_its_own_batch_reason() {
+        let mut value = base("/r/residual");
+        value["residual"] = json!(true);
+        value["degraded"] = json!(true);
+        value["merged"] = json!(true);
+        let mut row = st(value);
+        assert_eq!(super::inventory_warning(&row), Some(tr_shared("worktree_residual_inventory_incomplete", &[])));
+        let mut eligible = base("/r/eligible");
+        eligible["merged"] = json!(true);
+        let (deletable, blocked) = merged_batch(&[st(eligible), row.clone()]);
+        assert_eq!(deletable.len(), 1);
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(super::batch_block_reason(&blocked[0]), tr_shared("worktree_residual_warning", &[]));
+        row.residual_entries = Some(0);
+        assert!(super::inventory_warning(&row).is_none());
+        row.residual = false;
+        assert_eq!(super::inventory_warning(&row), Some(tr_shared("worktree_leitura_incompleta", &[])));
+    }
+
     #[test]
     fn residual_state_never_enters_ready_and_always_informs_loss() {
         let mut value = base("/r/residual");

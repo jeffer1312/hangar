@@ -117,6 +117,7 @@
       {#if tamanho}<p class="libera">{m.worktree_libera({ tamanho })}</p>{/if}
       {#if st.residual}
         <p class="aviso">{m.worktree_residual_warning()}</p>
+        {#if st.residual_entries == null}<p class="aviso" role="note">{m.worktree_residual_inventory_incomplete()}</p>{/if}
         {#if st.residual_entries != null}<p>{m.worktree_residual_entries({ n: st.residual_entries })}</p>{/if}
         <ul class="arquivos">{#each st.residual_files ?? [] as file (file)}<li>{file}</li>{/each}</ul>
       {/if}
@@ -168,7 +169,9 @@
       {#if erroCopia}<p class="erro" role="alert">{m.toast_copiar_falhou()}</p>{/if}
       <p class="veredito">{veredito}</p>
       {#if erro}<p class="erro" role="alert">{m.worktrees_erro({ motivo: erro })}</p>{/if}
-      {#if st.degraded && !st.residual}<p class="aviso" role="note">{m.worktree_leitura_incompleta()}</p>{/if}
+      {#if st.residual && st.residual_entries == null}
+        <p class="aviso" role="note">{m.worktree_residual_inventory_incomplete()}</p>
+      {:else if st.degraded && !st.residual}<p class="aviso" role="note">{m.worktree_leitura_incompleta()}</p>{/if}
 
       {#if sessoes.length}
         <p class="secao">{m.worktree_sessoes_aqui()}</p>

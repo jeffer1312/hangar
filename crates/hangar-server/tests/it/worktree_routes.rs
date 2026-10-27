@@ -77,7 +77,8 @@ async fn residual_detail_and_manual_delete_keep_identity_files_and_branch_until_
     assert_eq!(detail["merged"], false);
     assert_eq!(detail["degraded"], true);
     assert!(detail["residual_files"].as_array().unwrap().iter().any(|v| v == "source.rs"));
-    assert!(detail["residual_files"].as_array().unwrap().iter().any(|v| v == "node_modules/cache"));
+    let ignored = std::path::Path::new("node_modules").join("cache");
+    assert!(detail["residual_files"].as_array().unwrap().iter().any(|v| v == ignored.to_string_lossy().as_ref()));
     for confirm in [false, true] {
         let r = c.post(format!("http://{}/api/worktrees/delete", f.addr)).bearer_auth(OWNER)
             .header("content-type", "application/json")

@@ -57,12 +57,25 @@ fn text(path: &Path) -> String {
 }
 
 /// Caminhos iguais: no Windows sem distinguir maiúsculas, como o `normcase` do Python.
-fn same_path(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
     if cfg!(windows) {
         a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
     } else {
         a == b
     }
+}
+
+/// A pasta ausente ainda pode ter ancestrais com nome curto ou caixa diferente no Windows.
+pub(crate) fn registration_path(path: &Path) -> PathBuf {
+    let path = real(path);
+    for ancestor in path.ancestors() {
+        if let Ok(resolved) = std::fs::canonicalize(ancestor) {
+            let suffix = path.strip_prefix(ancestor).unwrap();
+            let resolved = crate::simplify(resolved);
+            return if suffix.as_os_str().is_empty() { resolved } else { resolved.join(suffix) };
+        }
+    }
+    path
 }
 
 /// `target` dentro de `root`, os dois pelo mesmo `real`: a caixa que o macOS devolve no
@@ -616,7 +629,7 @@ pub fn status(
     let exists = is_dir(path);
     if exists && worktree_residual::missing_git(Path::new(path)) {
         let registration = worktree_residual::registration(main, path).ok();
-        let inventory = worktree_residual::inventory(Path::new(path)).ok();
+        let inventory = worktree_residual::summary(Path::new(path)).ok();
         let names = sessions.iter().filter(|s| session_inside(s, Path::new(path)))
             .map(|s| s.name.clone()).collect::<Vec<_>>();
         let live = sessions.iter().filter(|s| session_inside(s, Path::new(path)))
@@ -1412,6 +1425,17 @@ mod tests {
         assert_eq!(sanitize_cwd("/home/x/ação/"), "-home-x-a--o");
         assert_eq!(sanitize_cwd("/"), "-");
         assert_eq!(sanitize_cwd("C:\\x\\"), "C--x");
+    }
+
+    #[test]
+    fn registration_path_is_stable_after_the_folder_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktree");
+        std::fs::create_dir(&path).unwrap();
+        let before = super::registration_path(&path);
+        std::fs::remove_dir(&path).unwrap();
+        let after = super::registration_path(&path);
+        assert_eq!(before.as_os_str(), after.as_os_str());
     }
 
     #[test]

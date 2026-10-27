@@ -32,16 +32,16 @@ fn registration(repo: &str, path: &str) -> Result<Registration> {
     if out.stdout.contains('\u{fffd}') {
         return Err(error(409, "registro de worktrees ilegível"));
     }
-    let real_path = real(Path::new(path));
+    let real_path = worktrees::registration_path(Path::new(path));
     for record in out.stdout.split("\0\0") {
         let fields = record.split('\0').collect::<Vec<_>>();
         let Some(p) = fields.first().and_then(|f| f.strip_prefix("worktree ")) else {
             continue;
         };
-        if real(Path::new(p)) != real_path {
+        if !worktrees::same_path(&worktrees::registration_path(Path::new(p)), &real_path) {
             continue;
         }
-        if real(Path::new(repo)) == real_path {
+        if worktrees::same_path(&real(Path::new(repo)), &real_path) {
             return Err(error(409, "o checkout principal é protegido"));
         }
         if fields
@@ -716,11 +716,47 @@ mod tests {
     }
 
     #[test]
+    fn residual_preflight_failure_releases_only_its_new_marker() {
+        let (_dir, repo, wt) = policy_fixture();
+        std::fs::remove_file(wt.join(".git")).unwrap();
+        let (repo, path) = (repo.to_str().unwrap(), wt.to_str().unwrap());
+        let admin = worktree_residual::registration(repo, path).unwrap().admin;
+        let marker = admin.join("locked");
+        let refuse = |_: &str| Err(error(409, "sessão ficou ativa"));
+        assert!(worktree_residual::remove(repo, path, &refuse).is_err());
+        assert!(!marker.exists());
+        assert!(wt.exists());
+        std::fs::write(&marker, "hangar-removal\n").unwrap();
+        assert!(worktree_residual::remove(repo, path, &refuse).is_err());
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "hangar-removal\n");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn residual_resume_accepts_different_path_case_after_the_folder_is_gone() {
+        let (dir, repo, wt) = policy_fixture();
+        std::fs::remove_file(wt.join(".git")).unwrap();
+        let path = wt.to_string_lossy().to_uppercase();
+        let repo = repo.to_str().unwrap();
+        let calls = std::cell::Cell::new(0);
+        let guard = |_: &str| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 2 { Err(error(503, "interrupção após apagar os arquivos")) } else { Ok(()) }
+        };
+        assert!(worktree_residual::remove(repo, &path, &guard).is_err());
+        assert!(!wt.exists());
+        let removed = remove(repo, &path, &[], &[], dir.path(), RemoveOptions { confirm: true, ..Default::default() }).unwrap();
+        assert_eq!(removed["branch_deleted"], false);
+        assert!(worktrees::worktree_paths(repo).iter().all(|p| !worktrees::same_path(Path::new(p), &wt)));
+    }
+
+    #[test]
     fn residual_removal_can_resume_after_files_are_gone_and_repeat_after_success() {
         let (dir, repo, wt) = policy_fixture();
         let (repo, path) = (repo.to_str().unwrap(), wt.to_str().unwrap());
         std::fs::write(wt.join("source.rs"), "trabalho").unwrap();
         std::fs::remove_file(wt.join(".git")).unwrap();
+        let admin = worktree_residual::registration(repo, path).unwrap().admin;
         let calls = std::cell::Cell::new(0);
         let guard = |_: &str| {
             calls.set(calls.get() + 1);
@@ -729,6 +765,7 @@ mod tests {
         let options = RemoveOptions { confirm: true, ..Default::default() };
         assert!(remove_with_guard(repo, path, &[], &[], dir.path(), options, &guard).is_err());
         assert!(!wt.exists());
+        assert_eq!(std::fs::read_to_string(admin.join("locked")).unwrap(), "hangar-removal\n");
         assert!(worktrees::worktree_paths(repo).contains(&path.to_owned()));
         let removed = remove(repo, path, &[], &[], dir.path(), options).unwrap();
         assert_eq!(removed["branch_deleted"], false);
@@ -754,6 +791,7 @@ mod tests {
             std::fs::write(&lock, "outro Git").unwrap();
             assert_eq!(remove(repo, path, &[], &[], dir.path(), options).unwrap_err().status, 409);
             assert!(wt.join("source.rs").exists());
+            assert!(!admin.join("locked").exists());
             std::fs::remove_file(lock).unwrap();
         }
         assert!(remove(repo, repo, &[], &[], dir.path(), options).is_err());
@@ -798,7 +836,12 @@ mod tests {
         std::fs::create_dir(&unreadable).unwrap();
         std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
         let status = worktrees::status_of(wt.to_str().unwrap(), &[], false, &[]);
+        let (repo_path, path) = (repo.to_str().unwrap(), wt.to_str().unwrap());
+        let admin = worktree_residual::registration(repo_path, path).unwrap().admin;
+        let result = worktree_residual::remove(repo_path, path, &|_| Ok(()));
         std::fs::set_permissions(unreadable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.is_err());
+        assert!(!admin.join("locked").exists());
         assert_eq!(status["repo"], repo.to_string_lossy().as_ref());
         assert_eq!(status["residual"], true);
         assert_eq!(status["residual_entries"], Value::Null);

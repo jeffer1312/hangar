@@ -32,6 +32,7 @@ vi.mock('../../paraglide/messages', () => Object.fromEntries([
   'worktree_apagar_branch_perde', 'worktree_copiar_caminho', 'toast_copiado',
   'worktree_tamanho_falhou', 'worktree_tamanho_parcial', 'worktree_leitura_incompleta',
   'worktree_estado_residual', 'worktree_residual_warning', 'worktree_residual_entries',
+  'worktree_residual_inventory_incomplete',
 ].map((k) => [k, (p?: Record<string, unknown>) => (p ? `${k}:${Object.values(p).join(',')}` : k)])));
 vi.mock('@hangar/core', async (original) => ({ ...await original<typeof import('@hangar/core')>(), ...api }));
 import { WorktreeSheet } from './WorktreeSheet';
@@ -53,6 +54,16 @@ const clicar = async (el: HTMLElement, label: string) =>
   act(async () => { (el.querySelector(`[aria-label="${label}"]`) as HTMLElement).click(); });
 
 describe('WorktreeSheet', () => {
+  it('avisa que o inventário residual não foi lido no detalhe e na confirmação', async () => {
+    api.getWorktreeForServer.mockResolvedValue({ ...st, residual: true, degraded: true, dirty: 0, ignored: [], ahead: 0,
+      residual_files: [], residual_entries: null });
+    const el = await montar();
+    expect(el.textContent).toContain('worktree_residual_inventory_incomplete');
+    await clicar(el, 'worktree_apagar_reticencias');
+    expect(el.textContent).toContain('worktree_residual_inventory_incomplete');
+    expect(el.textContent).toContain('worktree_residual_warning');
+    expect(el.textContent).not.toContain('worktree_residual_entries:0');
+  });
   it('resíduo mostra fontes e ignorados e confirma preservando a branch', async () => {
     api.getWorktreeForServer.mockResolvedValue({ ...st, residual: true, dirty: 0, ignored: [], ahead: 0,
       residual_files: ['source.rs', 'node_modules/cache'], residual_entries: 2 });
