@@ -182,16 +182,20 @@ def _sem_endereco_do_plugin_real():
 
 @pytest.fixture(scope="session", autouse=True)
 def _sem_orquestracoes_reais(tmp_path_factory):
-    # A lista de sessões lê ~/.hangar/orq: uma orquestração `auto` viva na máquina viraria linha
-    # extra em todo teste que conta sessões.
-    from app.adapters.orq import runs
-    original = runs.root
-    pasta = tmp_path_factory.mktemp("orq")
-    runs.root = lambda: pasta
+    # O Rust resolve o cofre pela casa do processo; um patch no módulo Python não o isolaria.
+    pasta = tmp_path_factory.mktemp("rust-home")
+    nomes = ("HOME", "USERPROFILE")
+    anteriores = {nome: os.environ.get(nome) for nome in nomes}
+    for nome in nomes:
+        os.environ[nome] = str(pasta)
     try:
         yield
     finally:
-        runs.root = original
+        for nome, valor in anteriores.items():
+            if valor is None:
+                os.environ.pop(nome, None)
+            else:
+                os.environ[nome] = valor
 
 
 @pytest.fixture(scope="session", autouse=True)
