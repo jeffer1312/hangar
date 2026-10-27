@@ -10,7 +10,6 @@ import logging
 import os
 import re
 import shutil
-import sys
 import tempfile
 import time
 import tomllib
@@ -26,9 +25,11 @@ from app.codex_compat import adaptar_hooks_plugin, normalizar_hooks, remover_ins
 from app.codex_instrucoes import limite_instrucoes, preparar_instrucoes
 from app.codex_importador import CodexNativo, CodexNativoErro
 from app.codex_msgs import msg, serializar
+from app import install_root
 
 _log = logging.getLogger("hangar.codex.integracao")
-_REPO = Path(__file__).resolve().parents[2]
+# Raiz da instalação (o `current` com o pacote): os caminhos daqui vão para os hooks do Codex.
+_REPO = install_root.root()
 _INTERVALO = 6 * 60 * 60
 _IMPORTAVEIS = {"CONFIG", "HOOKS", "MCP_SERVER_CONFIG", "COMMANDS", "SUBAGENTS"}
 _ID = re.compile(r"^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$")
@@ -383,7 +384,7 @@ class IntegracaoCodex:
             registry['phases'][name] = result
 
     def _normalizar(self, data: dict, wrapper: tuple[str, str] | None = None) -> dict:
-        python, script = wrapper or (sys.executable, str(_REPO / "scripts" / "codex-hook-allow.py"))
+        python, script = wrapper or (install_root.interpreter(), str(_REPO / "scripts" / "codex-hook-allow.py"))
         return normalizar_hooks(data, python, Path(script), windows=os.name == "nt")
 
     def _etapa(self, texto: str) -> None:

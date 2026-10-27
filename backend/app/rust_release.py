@@ -70,6 +70,8 @@ def release_tag() -> str:
     Fora delas, cair na `server-latest` é desvio e vai ao diário: senão a máquina roda o binário
     da main achando que roda o da branch.
     """
+    if m := diag.install_manifest():
+        return _tag_of_branch(m["channel"])
     try:
         p = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=REPO, capture_output=True,
                            text=True, timeout=5, encoding="utf-8", errors="replace",
@@ -81,6 +83,10 @@ def release_tag() -> str:
     if p.returncode != 0 or not branch:
         diag.registrar(_EVENT, "aviso", codigo="branch_ilegivel", retorno=p.returncode)
         return MAIN_TAG
+    return _tag_of_branch(branch)
+
+
+def _tag_of_branch(branch: str) -> str:
     if branch in ("main", "master"):
         return MAIN_TAG
     if branch == "HEAD":

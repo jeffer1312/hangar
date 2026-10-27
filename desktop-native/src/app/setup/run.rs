@@ -1,8 +1,9 @@
 //! O script de instalação roda destacado do app e escreve num arquivo que o app acompanha (spec "Destacado do app"):
 //! fechar o app não mata a instalação, e reabrir lê o arquivo do começo e retoma. O `state.json` guarda a pasta, as escolhas
 //! e as execuções; nunca senha.
-use std::{path::{Path, PathBuf}, process::{Command, Stdio}, time::Duration};
+use std::{ffi::OsString, path::{Path, PathBuf}, process::{Command, Stdio}, time::Duration};
 use serde::{Deserialize, Serialize};
+use super::local::Mode;
 use super::system::refreshed_path;
 
 pub(crate) const REPO: &str = "jeffer1312/hangar";
@@ -36,6 +37,9 @@ pub(crate) struct RunRecord {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SetupState {
+    /// Decidido no começo e nunca mudado na retomada.
+    #[serde(default)]
+    pub mode: Mode,
     pub dest: PathBuf,
     pub options: Options,
     /// O script que ainda roda pede senha com este código; reabrir o app tem de aceitá-lo.
@@ -47,6 +51,7 @@ pub(crate) struct SetupState {
 pub(crate) struct Launch {
     pub kind: Kind,
     pub bootstrap: PathBuf,
+    pub mode: Mode,
     pub dest: PathBuf,
     pub options: Options,
     pub log: PathBuf,
@@ -60,18 +65,33 @@ pub(crate) fn bootstrap_url(commit: &str, windows: bool) -> String {
     format!("https://raw.githubusercontent.com/{REPO}/{commit}/{}", bootstrap_name(windows))
 }
 
+/// O app da `beta` instala o pacote da `beta`; qualquer outro canal, o `latest`.
+pub(crate) fn is_beta(built: Option<&str>) -> bool { built == Some("beta") }
+
 /// Spec "Opções novas". A conferência leva as mesmas escolhas: ela lista os agentes escolhidos na tela 2.
-pub(crate) fn script_args(kind: Kind, options: &Options, dest: &Path, windows: bool) -> Vec<String> {
+/// Pasta no bootstrap = clone: o pacote não leva pasta nenhuma.
+pub(crate) fn script_args(kind: Kind, options: &Options, mode: Mode, dest: &Path, windows: bool, beta: bool) -> Vec<String> {
     let agents = options.agents.join(",");
     let tailscale = if options.outside { "sim" } else { "nao" };
     let mut args = if windows {
         vec!["-App".to_owned(), "-Agentes".into(), agents, "-Tailscale".into(), tailscale.into(), "-SemNativo".into()]
     } else {
-        vec![dest.to_string_lossy().into_owned(), "--app".into(), format!("--agentes={agents}"), format!("--tailscale={tailscale}"), "--sem-nativo".into()]
+        let folder = (mode == Mode::Git).then(|| dest.to_string_lossy().into_owned());
+        folder.into_iter().chain(["--app".into(), format!("--agentes={agents}"), format!("--tailscale={tailscale}"), "--sem-nativo".into()]).collect()
     };
     if kind == Kind::Check { args.push(if windows { "-SoChecar" } else { "--check" }.into()); }
     if windows && kind == Kind::Install && options.fix_mouse_wheel { args.push("-ConsertarRoda".into()); }
+    if !windows && mode == Mode::Package && beta { args.push("--beta".into()); }
     args
+}
+
+/// Ambiente do script que depende do modo. No Windows a pasta do clone vai em `CP_DESTINO` e o canal do pacote em `CP_CANAL`.
+pub(crate) fn script_env(mode: Mode, dest: &Path, windows: bool, beta: bool) -> Vec<(&'static str, OsString)> {
+    match (windows, mode) {
+        (false, _) => Vec::new(),
+        (true, Mode::Git) => vec![("CP_DESTINO", dest.as_os_str().to_owned())],
+        (true, Mode::Package) => if beta { vec![("CP_CANAL", "beta".into())] } else { Vec::new() },
+    }
 }
 
 /// O ambiente que só o script recebe. O agente do plano 3 nunca recebe `HANGAR_TOKEN` nem o askpass.
@@ -104,15 +124,23 @@ pub(crate) fn spawn(launch: &Launch) -> Result<u32, String> {
 #[cfg(windows)]
 fn command_for(launch: &Launch) -> Command {
     let mut command = Command::new(super::system::powershell_exe());
-    command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]).arg(&launch.bootstrap)
-        .args(script_args(launch.kind, &launch.options, &launch.dest, true)).env("CP_DESTINO", &launch.dest);
-    command
+    command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]).arg(&launch.bootstrap);
+    with_script(command, launch, true)
 }
 
 #[cfg(not(windows))]
 fn command_for(launch: &Launch) -> Command {
     let mut command = Command::new("bash");
-    command.arg(&launch.bootstrap).args(script_args(launch.kind, &launch.options, &launch.dest, false));
+    command.arg(&launch.bootstrap);
+    with_script(command, launch, false)
+}
+
+fn with_script(mut command: Command, launch: &Launch, windows: bool) -> Command {
+    let beta = is_beta(crate::update::built_channel());
+    command.args(script_args(launch.kind, &launch.options, launch.mode, &launch.dest, windows, beta));
+    // Herdados do ambiente do app: `CP_DESTINO`/`CP_DEV` mandariam o bootstrap para o clone, e `CP_CANAL` trocaria o canal.
+    if launch.mode == Mode::Package { for key in ["CP_DESTINO", "CP_DEV", "CP_CANAL"] { command.env_remove(key); } }
+    command.envs(script_env(launch.mode, &launch.dest, windows, beta));
     command
 }
 
@@ -281,10 +309,10 @@ mod tests {
     fn mouse_wheel_fix_only_on_the_windows_install() {
         let on = Options { fix_mouse_wheel: true, ..options() };
         let dest = Path::new(r"C:\Users\dev\hangar");
-        assert_eq!(script_args(Kind::Install, &on, dest, true).last().map(String::as_str), Some("-ConsertarRoda"));
-        assert!(!script_args(Kind::Check, &on, dest, true).contains(&"-ConsertarRoda".to_owned()));
-        assert!(!script_args(Kind::Install, &on, dest, false).contains(&"-ConsertarRoda".to_owned()));
-        assert!(!script_args(Kind::Install, &options(), dest, true).contains(&"-ConsertarRoda".to_owned()));
+        assert_eq!(script_args(Kind::Install, &on, Mode::Git, dest, true, false).last().map(String::as_str), Some("-ConsertarRoda"));
+        assert!(!script_args(Kind::Check, &on, Mode::Git, dest, true, false).contains(&"-ConsertarRoda".to_owned()));
+        assert!(!script_args(Kind::Install, &on, Mode::Git, dest, false, false).contains(&"-ConsertarRoda".to_owned()));
+        assert!(!script_args(Kind::Install, &options(), Mode::Git, dest, true, false).contains(&"-ConsertarRoda".to_owned()));
         // `state.json` de antes da opção continua lendo.
         let old: Options = serde_json::from_str(r#"{"agents":["claude"],"outside":false}"#).unwrap();
         assert!(!old.fix_mouse_wheel);
@@ -299,17 +327,68 @@ mod tests {
     #[test]
     fn linux_args_put_the_folder_first() {
         let dest = Path::new("/home/dev/Projetos/hangar");
-        assert_eq!(script_args(Kind::Install, &options(), dest, false),
+        assert_eq!(script_args(Kind::Install, &options(), Mode::Git, dest, false, false),
             vec!["/home/dev/Projetos/hangar", "--app", "--agentes=claude,codex", "--tailscale=sim", "--sem-nativo"]);
-        assert_eq!(script_args(Kind::Check, &Options { outside: false, ..options() }, dest, false).last().map(String::as_str), Some("--check"));
-        assert!(script_args(Kind::Check, &Options { outside: false, ..options() }, dest, false).contains(&"--tailscale=nao".to_owned()));
+        assert_eq!(script_args(Kind::Check, &Options { outside: false, ..options() }, Mode::Git, dest, false, false).last().map(String::as_str), Some("--check"));
+        assert!(script_args(Kind::Check, &Options { outside: false, ..options() }, Mode::Git, dest, false, false).contains(&"--tailscale=nao".to_owned()));
+        // O clone fica como hoje: o canal não entra.
+        assert_eq!(script_args(Kind::Install, &options(), Mode::Git, dest, false, true), script_args(Kind::Install, &options(), Mode::Git, dest, false, false));
     }
 
     #[test]
     fn windows_args_use_powershell_switches() {
-        assert_eq!(script_args(Kind::Install, &options(), Path::new(r"C:\Users\dev\hangar"), true),
+        assert_eq!(script_args(Kind::Install, &options(), Mode::Git, Path::new(r"C:\Users\dev\hangar"), true, false),
             vec!["-App", "-Agentes", "claude,codex", "-Tailscale", "sim", "-SemNativo"]);
-        assert_eq!(script_args(Kind::Check, &options(), Path::new(r"C:\Users\dev\hangar"), true).last().map(String::as_str), Some("-SoChecar"));
+        assert_eq!(script_args(Kind::Check, &options(), Mode::Git, Path::new(r"C:\Users\dev\hangar"), true, true).last().map(String::as_str), Some("-SoChecar"));
+    }
+
+    #[test]
+    fn package_args_carry_no_folder_and_the_linux_channel() {
+        let dest = Path::new("/home/dev/.hangar");
+        let base = ["--app", "--agentes=claude,codex", "--tailscale=sim", "--sem-nativo"];
+        assert_eq!(script_args(Kind::Install, &options(), Mode::Package, dest, false, false), base);
+        assert_eq!(script_args(Kind::Install, &options(), Mode::Package, dest, false, true), [&base[..], &["--beta"]].concat());
+        assert_eq!(script_args(Kind::Check, &options(), Mode::Package, dest, false, false), [&base[..], &["--check"]].concat());
+        assert_eq!(script_args(Kind::Check, &options(), Mode::Package, dest, false, true), [&base[..], &["--check", "--beta"]].concat());
+        // Windows: o canal vai no ambiente (`script_env`), não nos argumentos.
+        let win = ["-App", "-Agentes", "claude,codex", "-Tailscale", "sim", "-SemNativo"];
+        let on = Options { fix_mouse_wheel: true, ..options() };
+        assert_eq!(script_args(Kind::Install, &options(), Mode::Package, dest, true, true), win);
+        assert_eq!(script_args(Kind::Install, &on, Mode::Package, dest, true, false), [&win[..], &["-ConsertarRoda"]].concat());
+        assert_eq!(script_args(Kind::Check, &on, Mode::Package, dest, true, true), [&win[..], &["-SoChecar"]].concat());
+    }
+
+    #[test]
+    fn script_env_folder_only_for_the_windows_clone_and_channel_only_for_the_beta_package() {
+        let dest = Path::new(r"C:\Users\dev\hangar");
+        assert_eq!(script_env(Mode::Git, dest, true, true), vec![("CP_DESTINO", OsString::from(dest))]);
+        assert_eq!(script_env(Mode::Git, dest, false, true), vec![]);
+        assert_eq!(script_env(Mode::Package, dest, true, true), vec![("CP_CANAL", OsString::from("beta"))]);
+        assert_eq!(script_env(Mode::Package, dest, true, false), vec![]);
+        assert_eq!(script_env(Mode::Package, dest, false, true), vec![]);
+    }
+
+    #[test]
+    fn package_never_inherits_the_variables_that_send_bootstrap_to_git() {
+        let launch = |mode| Launch { kind: Kind::Install, bootstrap: "/cfg/bootstrap.sh".into(), mode, dest: "/home/dev/.hangar".into(),
+            options: options(), log: "/logs/a.log".into(), token: None, askpass: None };
+        let envs = |mode, windows| -> Vec<(String, Option<String>)> {
+            with_script(Command::new("bash"), &launch(mode), windows).get_envs()
+                .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()))).collect()
+        };
+        let package = envs(Mode::Package, false);
+        for key in ["CP_DESTINO", "CP_DEV", "CP_CANAL"] { assert!(package.contains(&(key.into(), None)), "{key}: {package:?}"); }
+        // O clone fica como hoje: nada removido.
+        assert_eq!(envs(Mode::Git, false), vec![]);
+        assert_eq!(envs(Mode::Git, true), vec![("CP_DESTINO".into(), Some("/home/dev/.hangar".into()))]);
+    }
+
+    #[test]
+    fn only_the_beta_build_installs_the_beta_package() {
+        assert!(is_beta(Some("beta")));
+        assert!(!is_beta(Some("main")));
+        assert!(!is_beta(Some("latest")));
+        assert!(!is_beta(None));
     }
 
     #[test]
@@ -327,7 +406,7 @@ mod tests {
     #[test]
     fn state_round_trip_keeps_runs_and_never_a_password() {
         let dir = std::env::temp_dir().join(format!("hangar-run-state-{}", std::process::id()));
-        let state = SetupState { dest: "/home/dev/hangar".into(), options: options(), askpass_code: "c0de".into(),
+        let state = SetupState { mode: Mode::Package, dest: "/home/dev/.hangar".into(), options: options(), askpass_code: "c0de".into(),
             check: Some(RunRecord { kind: Kind::Check, log: "/logs/a.log".into(), pid: 41, started: "100".into() }),
             install: Some(RunRecord { kind: Kind::Install, log: "/logs/b.log".into(), pid: 42, started: "200".into() }) };
         save_state_at(&dir, &state).unwrap();
@@ -335,12 +414,19 @@ mod tests {
         let text = std::fs::read_to_string(dir.join("state.json")).unwrap();
         let mut keys: Vec<String> = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&text).unwrap().keys().cloned().collect();
         keys.sort();
-        assert_eq!(keys, vec!["askpass_code", "check", "dest", "install", "options"]);
+        assert_eq!(keys, vec!["askpass_code", "check", "dest", "install", "mode", "options"]);
         #[cfg(unix)] {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(dir.join("state.json")).unwrap().permissions().mode() & 0o777, 0o600);
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn state_from_before_the_package_resumes_as_the_clone() {
+        let old: SetupState = serde_json::from_str(r#"{"dest":"/home/dev/hangar","options":{"agents":["claude"],"outside":false},
+            "askpass_code":"c","check":null,"install":null}"#).unwrap();
+        assert_eq!((old.mode, old.dest), (Mode::Git, PathBuf::from("/home/dev/hangar")));
     }
 
     #[test]

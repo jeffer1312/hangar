@@ -130,10 +130,10 @@ pub fn queue_initial_prompt(claude_base: &Path, name: &str, text: &str, now: f64
     Ok(path)
 }
 
-/// `skill_bridge.py --quiet` do backend com o Python da venv dele; sem um dos dois, nada.
+/// `skill_bridge.py --quiet` do backend com o Python da raiz da instalação (`install_root::python_exe`:
+/// o do pacote ou o venv); sem um dos dois, nada.
 pub fn skill_bridge_argv(backend: &Path, windows: bool) -> Option<Vec<String>> {
-    let venv = backend.join(".venv");
-    let python = if windows { venv.join("Scripts").join("python.exe") } else { venv.join("bin").join("python") };
+    let python = crate::install_root::python_exe(backend.parent()?, windows);
     let script = backend.join("app").join("skill_bridge.py");
     (python.is_file() && script.is_file()).then(|| vec![python.to_string_lossy().into_owned(), script.to_string_lossy().into_owned(), "--quiet".into()])
 }

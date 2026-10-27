@@ -212,7 +212,9 @@ def env_tmp(tmp_path, monkeypatch):
     return p
 
 
-def test_identificador_leitura(env_tmp, cli):
+def test_identificador_leitura(env_tmp, cli, monkeypatch):
+    # O bind vem do `.env` da máquina; aberto para a rede, `lan_url` deixaria de ser vazio.
+    monkeypatch.setattr(settings, "lan_bind_ip", "127.0.0.1")
     r = cli.get("/api/peers/identificador", headers=AUTH)
     assert r.status_code == 200
     assert r.json() == {"identificador": "", "lan_url": ""}

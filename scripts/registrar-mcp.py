@@ -23,7 +23,9 @@ INICIO, FIM = "# >>> hangar: mcp", "# <<< hangar: mcp"
 
 def env_backend() -> dict[str, str]:
     out: dict[str, str] = {}
-    for linha in (REPO / "backend" / ".env").read_text(encoding="utf-8").splitlines():
+    # `~/.hangar/config/.env` quando existe; senão o da `backend/` (máquina não migrada).
+    env = HOME / ".hangar" / "config" / ".env"
+    for linha in (env if env.exists() else REPO / "backend" / ".env").read_text(encoding="utf-8").splitlines():
         if "=" in linha and not linha.startswith("#"):
             k, v = linha.split("=", 1)
             out[k.strip()] = v.strip()

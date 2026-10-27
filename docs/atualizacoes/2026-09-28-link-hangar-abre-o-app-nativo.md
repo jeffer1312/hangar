@@ -5,6 +5,7 @@ comando_posix: ./scripts/install-native.sh --forcar
 comando_windows: powershell -ExecutionPolicy Bypass -File scripts/install-native.ps1 -Forcar
 prova: ~/.hangar/native/scheme-hangar
 destrutivo: false
+tipo: maquina
 ---
 
 Clicar num link de convite `hangar://convite/...` agora abre o app nativo já com o convite colado, sem

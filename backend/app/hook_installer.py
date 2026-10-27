@@ -1,14 +1,18 @@
 import json
 import os
 import shlex
-import sys
 from pathlib import Path
 
+from app import install_root
 from app.config import list_config_dirs, _backend_config_base
 
+# Pela raiz da instalação: com o pacote, o `current` sem resolver, para o hook gravado sobreviver à
+# troca e à poda da versão; sem ele, o checkout e o Python deste backend, como antes.
+_HOOKS_DIR = install_root.root() / "backend" / "hooks"
+_PYTHON = install_root.interpreter()
 # Caminho absoluto do script de captura (resolvido uma vez). O command vai literal pro
 # settings.json do Claude, entao precisa ser absoluto — o hook roda com cwd arbitrario.
-HOOK = str((Path(__file__).parent.parent / "hooks" / "askq_capture.py").resolve())
+HOOK = str(_HOOKS_DIR / "askq_capture.py")
 # `python3` nao existe no Windows (la o binario e python.exe; `python3` e um alias da Microsoft
 # Store que ABRE A LOJA em vez de rodar o hook). sys.executable ainda garante o Python do venv do
 # backend em vez de torcer pelo que estiver no PATH quando o Claude dispara o hook. Aspas nos dois
@@ -35,7 +39,7 @@ def _falha_avisa(command: str, event: str) -> str:
             f'estado, pareamento ou navegador. Para ver o erro, rode o comando do hook a mao."')
 
 
-_COMMAND =f'"{sys.executable}" "{HOOK}"{_FALHA_NAO_BLOQUEIA}'
+_COMMAND =f'"{_PYTHON}" "{HOOK}"{_FALHA_NAO_BLOQUEIA}'
 _MATCHER = "AskUserQuestion"
 
 
@@ -188,8 +192,8 @@ def _ensure_settings_file(settings_path: Path) -> bool:
     return True
 
 
-STATE_HOOK = str((Path(__file__).parent.parent / "hooks" / "state_hook.py").resolve())
-_STATE_COMMAND = f'"{sys.executable}" "{STATE_HOOK}"{_FALHA_NAO_BLOQUEIA}'  # mesma razao do _COMMAND acima
+STATE_HOOK = str(_HOOKS_DIR / "state_hook.py")
+_STATE_COMMAND = f'"{_PYTHON}" "{STATE_HOOK}"{_FALHA_NAO_BLOQUEIA}'  # mesma razao do _COMMAND acima
 # SessionStart inclui o caso de abrir ja com --resume/clear (fixa o transcript ativo na hora); os
 # demais eventos cobrem o /resume feito DENTRO da sessao (marca no 1o prompt/tool depois dele).
 _STATE_EVENTS = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "SessionStart"]
@@ -236,8 +240,8 @@ def ensure_state_hooks_installed() -> list[str]:
     return touched
 
 
-PREVIEW_HOOK = str((Path(__file__).parent.parent / "hooks" / "preview_hook.py").resolve())
-_PREVIEW_COMMAND = f'"{sys.executable}" "{PREVIEW_HOOK}"{_FALHA_NAO_BLOQUEIA}'  # mesma razao do _COMMAND acima
+PREVIEW_HOOK = str(_HOOKS_DIR / "preview_hook.py")
+_PREVIEW_COMMAND = f'"{_PYTHON}" "{PREVIEW_HOOK}"{_FALHA_NAO_BLOQUEIA}'  # mesma razao do _COMMAND acima
 # MessageDisplay = os deltas do texto em voo (Claude Code >= 2.1.152); Stop = zera a previa no fim
 # do turno ("" e resposta, nao ausencia — ver o contrato em app/preview.py).
 _PREVIEW_EVENTS = ["MessageDisplay", "Stop"]
@@ -266,8 +270,8 @@ def ensure_preview_hook_installed() -> list[str]:
     return touched
 
 
-SUBAGENT_HOOK = str((Path(__file__).parent.parent / "hooks" / "subagent_hook.py").resolve())
-_SUBAGENT_COMMAND = f'"{sys.executable}" "{SUBAGENT_HOOK}"{_FALHA_NAO_BLOQUEIA}'
+SUBAGENT_HOOK = str(_HOOKS_DIR / "subagent_hook.py")
+_SUBAGENT_COMMAND = f'"{_PYTHON}" "{SUBAGENT_HOOK}"{_FALHA_NAO_BLOQUEIA}'
 # Os DOIS eventos: `Start` é o que faz o subagente aparecer enquanto roda (que é o ponto do painel),
 # e `Stop` é o que traz `agent_transcript_path` e a última mensagem. Só com o Stop, um subagente de
 # 5 minutos ficaria invisível justo enquanto está trabalhando.
@@ -300,7 +304,7 @@ def ensure_subagent_hook_installed() -> list[str]:
     return touched
 
 
-GUARD_HOOK = str((Path(__file__).parent.parent / "hooks" / "guard_tmux.py").resolve())
+GUARD_HOOK = str(_HOOKS_DIR / "guard_tmux.py")
 
 
 def _guard_path(config_dir: Path) -> str:
@@ -363,7 +367,7 @@ def ensure_guard_hooks_installed() -> list[str]:
             if chave in vistos:
                 continue
             vistos.add(chave)
-            comando = f'"{sys.executable}" "{_guard_path(d)}"'
+            comando = f'"{_PYTHON}" "{_guard_path(d)}"'
             if _ensure_event_hook(settings, "PreToolUse", comando, matcher="Bash", por_nome=True):
                 touched.append(str(d))
         except Exception:
@@ -406,8 +410,8 @@ def ensure_pair_hook_installed() -> list[str]:
     return touched
 
 
-NAV_HOOK = str((Path(__file__).parent.parent / "hooks" / "nav_hook.py").resolve())
-_NAV_COMMAND = f'"{sys.executable}" "{NAV_HOOK}"{_FALHA_NAO_BLOQUEIA}'
+NAV_HOOK = str(_HOOKS_DIR / "nav_hook.py")
+_NAV_COMMAND = f'"{_PYTHON}" "{NAV_HOOK}"{_FALHA_NAO_BLOQUEIA}'
 
 
 def ensure_nav_hook_installed() -> list[str]:

@@ -53,7 +53,7 @@ new_sandbox() {
 run_install() {
   local out=$1; shift
   ( cd "$R" && env -i HOME="$S/home" PATH="$B:$S/sys" HANGAR_TOKEN="${TEST_TOKEN-}" \
-      HANGAR_ASKPASS="${TEST_ASKPASS-}" HANGAR_ASKPASS_CODE=c0de-do-teste \
+      HANGAR_ASKPASS="${TEST_ASKPASS-}" HANGAR_ASKPASS_CODE=c0de-do-teste HANGAR_FRESH_PACKAGE="${TEST_FRESH-}" \
       timeout 120 setsid -w "$BASH_BIN" ./install.sh "$@" </dev/null 2>&1 ) | cat > "$out"
   return "${PIPESTATUS[0]}"
 }
@@ -105,6 +105,16 @@ askpass_says() {
 $1"
 }
 
+# local_bin_box: tira o claude do PATH e o põe em ~/.local/bin, com um tmux quebrado ao lado que não
+# pode passar na frente do tmux do sistema.
+local_bin_box() {
+  rm -f "$B/claude"
+  mkdir -p "$S/home/.local/bin"
+  printf '#!/bin/sh\nexit 0\n' > "$S/home/.local/bin/claude"
+  printf '#!/bin/sh\necho "tmux-do-local-bin $*" >> "%s/log/calls"\nexit 1\n' "$S" > "$S/home/.local/bin/tmux"
+  chmod +x "$S/home/.local/bin/claude" "$S/home/.local/bin/tmux"
+}
+
 [ "$LIB_ONLY" = 1 ] && return 0
 
 APP_ARGS=(--app --tailscale=nao --sem-nativo --no-frontend)
@@ -118,6 +128,7 @@ expect_eq "feliz: FIM ok é a última linha" "$(last_line "$S/out")" '##HANGAR-F
 expect_eq "feliz: etapas na ordem" "$(steps "$S/out")" \
   'preparar fazendo|preparar ok|instalar fazendo|celular fazendo|celular ok|instalar fazendo|instalar ok|final fazendo|final ok'
 expect_line "feliz: senha do app gravada" "$R/backend/.env" '^CP_AUTH_TOKEN=segredo-do-app-123$'
+expect_eq "feliz: .env só do dono" "$(stat -c %a "$R/backend/.env")" 600
 expect_no "feliz: senha fora da saída" "$S/out" 'segredo-do-app-123'
 expect_no "feliz: senha fora do log" "$S/home/.hangar/logs/privado/install.log" 'segredo-do-app-123'
 expect_no "feliz: nenhuma pergunta ficou sem resposta" "$S/out" 'assumindo NÃO'
@@ -130,6 +141,20 @@ expect_eq "de novo: FIM ok" "$(last_line "$S/out2")" '##HANGAR-FIM## ok'
 expect_eq "de novo: uma linha de senha só" "$(grep -c '^CP_AUTH_TOKEN=' "$R/backend/.env")" 1
 expect_line "de novo: a senha atual é mantida" "$R/backend/.env" '^CP_AUTH_TOKEN=segredo-do-app-123$'
 expect_no "de novo: a senha nova não vaza" "$S/out2" 'outra-senha-456'
+
+# --- Caso: máquina migrada para o pacote lê e grava os dados em ~/.hangar/config ---
+new_sandbox migrada
+mkdir -p "$S/home/.hangar/config"
+printf 'CP_AUTH_TOKEN=do-pacote-123\nCP_SERVER_ID=casa\nCP_PORT=8799\nCP_LAN_BIND_IP=127.0.0.1\n' > "$S/home/.hangar/config/.env"
+chmod 644 "$S/home/.hangar/config/.env"
+TEST_TOKEN='outra-senha-456' run_install "$S/out" "${APP_ARGS[@]}"; rc=$?
+expect_eq "migrada: sai 0" "$rc" 0
+expect_eq "migrada: .env aberto vira só do dono" "$(stat -c %a "$S/home/.hangar/config/.env")" 600
+expect_line "migrada: o bind reescrito" "$S/home/.hangar/config/.env" '^CP_LAN_BIND_IP=0\.0\.0\.0$'
+expect_eq "migrada: nenhum token novo no backend/.env" "$(cat "$R/backend/.env" 2>/dev/null | grep -c '^CP_AUTH_TOKEN=')" 0
+expect_eq "migrada: uma linha de senha só" "$(grep -c '^CP_AUTH_TOKEN=' "$S/home/.hangar/config/.env")" 1
+expect_line "migrada: a senha do pacote fica" "$S/home/.hangar/config/.env" '^CP_AUTH_TOKEN=do-pacote-123$'
+expect_eq "migrada: nome da máquina não repete" "$(grep -c '^CP_SERVER_ID=' "$S/home/.hangar/config/.env")" 1
 
 # --- Caso: senha com espaço no meio chega ao backend igual ---
 new_sandbox especial
@@ -425,6 +450,36 @@ TEST_ASKPASS="$B/askpass" run_install "$S/out" --app --tailscale=sim --sem-nativ
 expect_line "ts-instala: sh -c pelo sudo -n" "$S/log/calls" '^sudo -n sh -c curl -fsSL https://tailscale\.com/install\.sh \| sh$'
 expect_line "ts-instala: o script rodou" "$S/out" '^instalador-da-tailscale$'
 expect_line "ts-instala: sem o comando, item falhou" "$S/out" '^##HANGAR-ITEM## tailscale falhou Tailscale$'
+
+# --- Caso: --help lista as flags do parser e não instala nada ---
+new_sandbox ajuda
+run_install "$S/out" --help; rc=$?
+expect_eq "ajuda: sai 0" "$rc" 0
+expect_no "ajuda: não é flag desconhecida" "$S/out" 'flag desconhecida'
+for f in '--yes\|-y' '--check' '--agentes=' '--tailscale=sim\|--tailscale=nao' '--no-hangar-send\|--no-cp-send' '--no-frontend' '--help\|-h'; do
+  expect_line "ajuda: lista $f" "$S/out" "^  $f"
+done
+expect_no "ajuda: sem o padrão de erro" "$S/out" '--tailscale=\*'
+[ -e "$S/home/.hangar" ] && flunk "ajuda: nada escrito" || pass "ajuda: nada escrito"
+
+# --- Caso: segunda rodada sem terminal acha o Claude que a primeira pôs em ~/.local/bin ---
+new_sandbox local-bin
+local_bin_box
+run_install "$S/out" --tailscale=nao --sem-nativo --no-frontend
+expect_no "local-bin: acha o claude" "$S/out" 'faltam: Claude Code|Claude Code continua faltando'
+expect_no "local-bin: o tmux do sistema vem antes" "$S/log/calls" '^tmux-do-local-bin'
+
+# --- Caso: linger já ligado: nenhuma dica de enable-linger; resumo numerado em sequência ---
+new_sandbox linger-sim
+fake loginctl 'echo Linger=yes'
+run_install "$S/out" "${APP_ARGS[@]}"
+expect_no "linger-sim: sem dica de linger" "$S/out" 'enable-linger'
+new_sandbox linger-nao
+fake loginctl 'echo Linger=no'
+run_install "$S/out" "${APP_ARGS[@]}"
+expect_line "linger-nao: dica no 7/8" "$S/out" 'Pra sobreviver a logout/reboot também: loginctl enable-linger'
+expect_line "linger-nao: dica é o item 3 do resumo" "$S/out" '^   3\. Para o Hangar subir mesmo sem você logar'
+expect_no "linger-nao: sem item 4" "$S/out" '^   4\. '
 
 # --- fim dos casos ---
 if [ "$fail" = 0 ]; then echo "tudo ok"; else echo "houve falha"; fi

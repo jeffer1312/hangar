@@ -393,3 +393,36 @@ def test_api_publicado_sem_release_lida_vale_1():
          patch("app.api._mudancas_pendentes", return_value=[]):
         d = _client().get("/api/atualizacao", headers=_AUTH).json()
     assert d["api_publicado"] == 1
+
+
+# ─── Modo pacote: o Rust verifica e atualiza; os laços do motor git não rodam ───────────────────
+
+@pytest.mark.parametrize("laco", ["_fetch_loop", "_auto_update_loop"])
+def test_lacos_do_motor_git_nao_rodam_no_modo_pacote(monkeypatch, laco):
+    """Sem `.git` na pasta da versão, o `git fetch` e o motor `git` rodariam sobre o pacote."""
+    import asyncio
+    from app import api
+    monkeypatch.setattr(api.diag, "install_manifest", lambda: {"version": "0.1.0.1", "commit": "c", "channel": "latest"})
+    chamadas = []
+    monkeypatch.setattr(api.atualizar, "_git", lambda *a, **k: chamadas.append(a))
+
+    async def dormir(_s):
+        raise AssertionError("o laço entrou no ciclo")
+    monkeypatch.setattr(api.asyncio, "sleep", dormir)
+    asyncio.run(asyncio.wait_for(getattr(api, laco)(), timeout=5))
+    assert chamadas == []
+
+
+def test_fetch_loop_roda_no_checkout(monkeypatch):
+    import asyncio
+    from app import api
+    monkeypatch.setattr(api.diag, "install_manifest", lambda: None)
+    chamadas = []
+    monkeypatch.setattr(api.atualizar, "_git", lambda *a, **k: chamadas.append(a))
+
+    async def dormir(_s):
+        raise asyncio.CancelledError
+    monkeypatch.setattr(api.asyncio, "sleep", dormir)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(api._fetch_loop())
+    assert chamadas == [("fetch", "origin")]

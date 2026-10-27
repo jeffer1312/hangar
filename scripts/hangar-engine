@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S sh -c 'exec "$(command -v hangar-python || command -v python3)" "$0" "$@"'
 """CLI de motores de modelo, para o wrapper de shell e para o backend chamarem.
 
 Por que existe: a derivação motor->env tem que morar num lugar SÓ. O backend importa app.engines

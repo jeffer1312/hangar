@@ -5,6 +5,7 @@ comando_posix: ./install.sh --update
 comando_windows: powershell -ExecutionPolicy Bypass -File install.ps1 -Update
 prova: backend/.env
 destrutivo: false
+tipo: maquina
 ---
 
 Quando você está na mesma rede de uma máquina (a do trabalho no trabalho, a de casa em casa), o

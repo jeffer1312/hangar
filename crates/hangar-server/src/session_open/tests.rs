@@ -1357,8 +1357,8 @@ fn pi_omp_and_kimi_resume_with_their_own_verb() {
 /// plataformas (o `hangar-skills-sync` é sh, e o `python` solto do Windows pode ser o atalho da Store).
 #[test]
 fn the_skill_bridge_runs_with_the_backend_python() {
-    let backend = tempfile::tempdir().unwrap();
-    let b = backend.path();
+    let root = tempfile::tempdir().unwrap();
+    let b = &root.path().join("backend");
     assert_eq!(agents::skill_bridge_argv(b, false), None, "sem venv não roda");
     for (windows, python) in [(false, ".venv/bin/python"), (true, ".venv/Scripts/python.exe")] {
         std::fs::create_dir_all(b.join(python).parent().unwrap()).unwrap();
@@ -1369,6 +1369,11 @@ fn the_skill_bridge_runs_with_the_backend_python() {
         assert_eq!(agents::skill_bridge_argv(b, windows), Some(vec![python.to_string_lossy().into_owned(),
             b.join("app").join("skill_bridge.py").to_string_lossy().into_owned(), "--quiet".into()]), "windows={windows}");
     }
+    // Pacote: o Python embutido na raiz vence o venv.
+    let embedded = root.path().join("python").join("bin").join("python3");
+    std::fs::create_dir_all(embedded.parent().unwrap()).unwrap();
+    std::fs::write(&embedded, "").unwrap();
+    assert_eq!(agents::skill_bridge_argv(b, false).unwrap()[0], embedded.to_string_lossy());
 }
 
 /// `kimi_sessions.pretrust_cwd` (test_kimi_sessions::test_pretrust_writes_workspace_trust_once): grava

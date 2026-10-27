@@ -701,6 +701,20 @@ def test_normal_shutdown_killing_the_child_is_not_a_crash(fake_bin, tmp_path, ev
     assert _dead(supervisor.proc.pid)
 
 
+def test_stop_during_startup_cutting_the_health_read_is_not_an_error(fake_bin, monkeypatch, events):
+    # Parar no meio da subida corta a leitura da saúde: é parada, não falha da vigia.
+    supervisor = rust_server.Supervisor(fake_bin, "127.0.0.1", _free_port(), 1, "tok", "127.0.0.1", lambda: True)
+
+    async def cut(): raise http.client.IncompleteRead(b"", 195)
+
+    async def nothing(): return None
+
+    monkeypatch.setattr(supervisor, "_start", cut)
+    monkeypatch.setattr(supervisor, "stop", nothing)
+    assert asyncio.run(supervisor.run()) == "parada"
+    assert not [e for e in events if e[0] == "hangar_server.vigia_falhou"]
+
+
 def test_full_disk_in_the_containment_record_keeps_rust_and_the_watcher(fake_bin, tmp_path, monkeypatch, events):
     # ENOSPC ao gravar o registro de contenção não derruba o Rust: avisa uma vez e segue vigiando.
     from app import runtime_process

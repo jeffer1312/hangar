@@ -277,6 +277,7 @@ def test_cli_1a1_pede_steer_e_exibe_resultado(tmp_path, steered, delivered, expe
     tail = source[source.index('\n    msg="$*"') + 1:]
     # O recorte começa dentro do ramo do envio normal (o outro é o aviso de painel) e leva o `fi` dele.
     program = '''set -e
+PY=python3
 sender=origem
 target=dest
 sess=dest
@@ -298,6 +299,7 @@ def test_cli_claude_nativo_entrega_pelo_backend_sem_recusar(tmp_path):
     source = (Path(__file__).parents[2] / "scripts/hangar-send").read_text()
     tail = source[source.index("forcar_tmux=0\n"):]
     program = '''set -e
+PY=python3
 set -- destino recado
 api() { printf '%s\\n' "$1 $2" "$3" > "$BODY_FILE"; printf '%s' '{"ok": true, "delivered": true, "steered": true, "native": true}'; }
 me() { echo origem; }

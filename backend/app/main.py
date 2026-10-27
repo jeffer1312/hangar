@@ -176,7 +176,10 @@ def _passos_pendentes_da_versao(windows: bool = os.name == "nt") -> None:
     ficaria sem app por causa de uma linha errada num arquivo de atualização.
     """
     try:
-        from app import atualizacoes
+        from app import atualizacoes, diag
+        # Pacote: quem aplica os passos de máquina é o atualizador do Rust, fora deste processo.
+        if diag.install_manifest():
+            return
         # O instalador reinicia as tarefas e mataria este backend no meio da subida: fica para o botão.
         if windows and any("install.ps1" in p["comando"] for p in atualizacoes.pendentes(incluir_destrutivos=False)):
             print("[hangar] passos de atualizacao pendentes que chamam o instalador ficam para o botao Atualizar")

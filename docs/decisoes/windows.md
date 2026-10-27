@@ -140,6 +140,56 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   do `ProcessMux` nasce com `CREATE_BREAKAWAY_FROM_JOB`. Sem isso, todo reinício do backend
   (atualização incluída) mata as sessões que o Rust abriu. Medição em
   [Sessão morta no reinício do backend](#sessão-morta-no-reinício-do-backend-19102026).
+- **Pacote por versão: o `current` é junction (`mklink /J`), e a troca são dois `rename`.**
+  Junction não pede administrador. Não há troca atômica: o link velho vai para `current.old`, o novo
+  entra, e o velho volta se o novo não entrar; troca interrompida é recuperada antes da seguinte, e
+  o `rust_bins` espera até 1 s pelo link novo. Junction se tira com `remove_dir`, que nunca apaga o
+  alvo. Pasta de versão com processo vivo não se renomeia nem se apaga: a poda a conta como em uso.
+  Regras gerais do pacote em
+  [instalacao.md](instalacao.md#pacote-por-versão); medição em
+  [Pacote por versão no Windows](#pacote-por-versão-no-windows-24102026).
+- **O lançador do pacote põe o backend num Job `KILL_ON_JOB_CLOSE | BREAKAWAY_OK`, e o executor do
+  atualizador nasce com `CREATE_BREAKAWAY_FROM_JOB`**, em grupo próprio e sem janela. Sem a saída
+  do Job ele morre no reinício que ele mesmo pede. Sem `DETACHED_PROCESS`: o PowerShell do reinício
+  abriria um console visível. Job que recusa a saída (acesso negado) faz o executor subir dentro
+  dele, com aviso no estado.
+- **Atalho `.cmd` em máquina migrada aponta para `%USERPROFILE%\.hangar\current\scripts\…`, nunca
+  para o caminho real da versão**, que a poda apaga. `hangar-python.cmd` escolhe o Python do
+  pacote, senão o venv, senão o real; `hangar-conta.cmd` e `hangar-engine.cmd` passam por ele.
+- **Tarefa e vigia reconhecem o pacote pela linha de comando.** O backend é `hangar-server.exe` ou
+  `hangar-launcher.exe` com `launch backend`, porque o Python roda do caminho real da versão e não
+  da pasta da tarefa; atualização em curso também é `hangar-server.exe` com `update` ou
+  `migrate-package`, além do `python -m app.atualizar`.
+- **A migração no Windows deixa `.env`, `peers.json`, `projects.json` e `launchers` antigos como
+  cópia**, não como link: link de arquivo pede administrador.
+- **Instalação nova é pelo pacote: o `bootstrap.ps1` baixa o `hangar-server.exe`, confere o sha256 e
+  roda o `install.ps1` do `current` em modo pacote** (`manifest.json` sem `.git`); `CP_DEV`,
+  `CP_DESTINO` e `-Destino` seguem pelo git. No pacote, o Python dos lançadores é o
+  `%USERPROFILE%\.hangar\current\python\python.exe` (o `hangar-codex-tui` precisa do `websockets`
+  dele), e o manifesto se lê por regex: o `ConvertFrom-Json` do 5.1 recusa JSON acima de 2 MB. Regras
+  e recusas em [instalacao.md](instalacao.md#pacote-por-versão). Só raciocinado até a prova na VM.
+
+## Pacote por versão no Windows (24/10/2026)
+
+Medido na DELPHI-02 nas provas de base do pacote:
+
+- **Troca com processo vivo.** Remover e recriar a junction e renomeá-la funcionam com o backend
+  rodando de dentro dela; ficou o `rename`. Um processo vivo carrega pela junction o código da
+  versão nova, por isso serviço e lançador rodam do caminho real.
+- **Pasta de versão com processo vivo não renomeia nem apaga** (`Access ... denied`).
+- **Caminho mais longo: 166 caracteres** no site-packages dentro de `versions\<v>.tmp\`, com
+  `LongPathsEnabled=0` (limite 260).
+- **Defender:** o `rename` do `.tmp` passou de primeira, mas a proteção em tempo real estava
+  desligada na VM. As novas tentativas do extrator (20 × 500 ms) ficam.
+
+O Job do lançador e o executor fora dele foram só raciocinados, seguindo o `new-session` do psmux
+e os canos (entrada [Sessão morta no reinício do backend](#sessão-morta-no-reinício-do-backend-19102026)).
+
+**Medição da Task 11 pendente.** Falta provar na VM: migrar e atualizar em pacote; reiniciar pelo
+lançador com uma sessão com terminal e uma sem terminal vivas; falha forçada no reinício voltando a
+versão inteira com o Rust de pé; o `rename` com o Defender ligado; os 3 testes `#[cfg(windows)]` do
+`hangar-package`; e o teste ignorado `launch_killed_takes_the_backend_along` com
+`HANGAR_TEST_PYTHON_DIR`.
 
 ## Sessão morta no reinício do backend (19/10/2026)
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S sh -c 'exec "$(command -v hangar-python || command -v python3)" "$0" "$@"'
 """orq — the orchestration's conductor: transport and bookkeeping without waking the arbiter.
 
 Events, the journal, the commit check, the shared-resource locks, who has the ball and the triage

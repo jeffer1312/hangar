@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S sh -c 'exec "$(command -v hangar-python || command -v python3)" "$0" "$@"'
 """`hangar-open <claude|pi|omp|kimi> [args do CLI]`: chamado pelos wrappers de shell fora do tmux e em
 terminal. Pede a sessão ao lançador do Hangar (`hangar-server open`, o mesmo do app) e anexa o
 terminal a ela. Saída 100 = os argumentos não cabem no pedido, ou não há `hangar-server` que abra (ausente, antigo ou sem token): o wrapper

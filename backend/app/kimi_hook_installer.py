@@ -18,18 +18,16 @@ import logging
 import os
 import shlex
 import shutil
-import sys
 import tomllib
-from pathlib import Path
 
-from app import atomico
+from app import atomico, install_root
 from app.adapters.kimi.sessions import kimi_home
 
 _log = logging.getLogger("hangar.kimi_hook_installer")
 
-HOOK = str((Path(__file__).parent.parent / "hooks" / "kimi_state_hook.py").resolve())
-# sys.executable = o python do venv do backend (mesma razao do hook_installer do Claude).
-_COMMAND = f'"{sys.executable}" "{HOOK}"'
+HOOK = str(install_root.root() / "backend" / "hooks" / "kimi_state_hook.py")
+# Python e pasta pela raiz da instalação (mesma razao do hook_installer do Claude).
+_COMMAND = f'"{install_root.interpreter()}" "{HOOK}"'
 # Entradas (evento, matcher): SessionStart/UserPromptSubmit/TurnStarted/Stop/Interrupt/
 # PermissionRequest cobrem working/idle/awaiting_input + o bilhete pane->sessao; PreToolUse e
 # PostToolUse SOMENTE com matcher AskUserQuestion: a pergunta nativa nao dispara PermissionRequest
@@ -43,8 +41,8 @@ _ENTRIES = [("SessionStart", None), ("UserPromptSubmit", None), ("TurnStarted", 
 # nao so no Claude porque a sessao Kimi roda no MESMO tmux — quem derruba o servidor derruba as
 # sessoes de todo mundo, nao importa o motor. Medido no binario do kimi: `exitCode === 2` ->
 # `action: "block"` com o stderr como motivo, e a ferramenta de shell dele se chama `Bash`.
-GUARD = str((Path(__file__).parent.parent / "hooks" / "guard_tmux.py").resolve())
-_GUARD_COMMAND = f'"{sys.executable}" "{GUARD}"'
+GUARD = str(install_root.root() / "backend" / "hooks" / "guard_tmux.py")
+_GUARD_COMMAND = f'"{install_root.interpreter()}" "{GUARD}"'
 _GUARD_ENTRIES = [("PreToolUse", "Bash")]
 
 

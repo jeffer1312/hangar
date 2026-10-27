@@ -142,6 +142,8 @@
 #   EOF
 #   )"
 set -euo pipefail
+# O Python do Hangar (pacote ou venv); máquina sem o atalho segue no python3 dela.
+PY=$(command -v hangar-python || command -v python3 || echo python3)
 
 # --help imprime o CABEÇALHO deste arquivo, não um texto paralelo: ajuda que vive longe da regra
 # envelhece calada, e foi o que aconteceu — o `--help` não existia, caía no parse de destino e
@@ -152,12 +154,16 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     exit 0
 fi
 
-ENV_FILE="$(dirname "$(realpath "$0")")/../backend/.env"
+# Dados do usuário: `~/.hangar/config/` quando o arquivo está lá; senão a `backend/` (não migrada).
+BACKEND_DIR="$(dirname "$(realpath "$0")")/../backend"
+ENV_FILE="$HOME/.hangar/config/.env"
+[[ -e "$ENV_FILE" ]] || ENV_FILE="$BACKEND_DIR/.env"
 TOKEN=$(grep '^CP_AUTH_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
 PORT=$(grep '^CP_PORT=' "$ENV_FILE" | cut -d= -f2- || true)
 BASE="http://127.0.0.1:${PORT:-8765}"
 AUTH="Authorization: Bearer $TOKEN"
-PEERS_FILE="$(dirname "$ENV_FILE")/peers.json"
+PEERS_FILE="$HOME/.hangar/config/peers.json"
+[[ -e "$PEERS_FILE" ]] || PEERS_FILE="$BACKEND_DIR/peers.json"
 SERVER_ID=$(grep '^CP_SERVER_ID=' "$ENV_FILE" | cut -d= -f2- || true)
 
 # peer_cfg <id> — imprime "base_url token" do servidor remoto no peers.json; erro claro se ausente.
@@ -166,7 +172,7 @@ peer_cfg() {
         echo "erro: servidor '$1' desconhecido — crie $PEERS_FILE (ver peers.json.example)" >&2
         return 1
     fi
-    python3 - "$PEERS_FILE" "$1" <<'PY'
+    "$PY" - "$PEERS_FILE" "$1" <<'PY'
 import json, sys
 try:
     peers = json.load(open(sys.argv[1]))
@@ -209,11 +215,11 @@ api() {
 # delivered=True -> digitou agora na TUI; False -> fila durável (entrega quando a sessão ficar idle).
 relatar_envio() {
     local resp=$1 target=$2
-    if python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("native") else 1)' "$resp" 2>/dev/null; then
+    if "$PY" -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("native") else 1)' "$resp" 2>/dev/null; then
         echo "entregue agora -> $target (no socket do Claude dele, entra no meio do turno; retenção ou recusa pela política de lá chega depois como aviso [painel: entrega de recado])"
-    elif python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("steered") else 1)' "$resp" 2>/dev/null; then
+    elif "$PY" -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("steered") else 1)' "$resp" 2>/dev/null; then
         echo "entregue agora -> $target"
-    elif python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("delivered") else 1)' "$resp" 2>/dev/null; then
+    elif "$PY" -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("delivered") else 1)' "$resp" 2>/dev/null; then
         echo "entregue -> $target (não orientado no turno atual)"
     else
         echo "na fila -> $target (não orientado; entrega no próximo idle)"
@@ -238,7 +244,7 @@ ext_pairs_get() {
 listar() {
     # Colunas: nome, estado, harness (`provider[:motor]/tmux|headless`), cwd. O cartão do app
     # (frontend/src/lib/hangarCmd.ts) lê essas colunas; mudou aqui, muda lá.
-    api GET /api/sessions | python3 -c '
+    api GET /api/sessions | "$PY" -c '
 import json, sys
 sessions = json.load(sys.stdin)
 for s in sessions:
@@ -252,7 +258,7 @@ if eu.get("pair_peers"):
     # Servidores do peers.json: mesmas colunas, nome prefixado servidor::sessao (é o endereço
     # que o hangar-send de envio aceita). Peer fora do ar não derruba a lista local — vira aviso.
     if [[ -f "$PEERS_FILE" ]]; then
-        peers_tsv=$(python3 -c 'import json, sys
+        peers_tsv=$("$PY" -c 'import json, sys
 for k, v in json.load(open(sys.argv[1])).items():
     # Só com "app" (sem base_url) é máquina da lista do app, não peer: fora da varredura, calada.
     if isinstance(v, dict) and "app" in v and not v.get("base_url"):
@@ -277,7 +283,7 @@ for k, v in json.load(open(sys.argv[1])).items():
             (
                 BASE="$pbase" AUTH="Authorization: Bearer $ptok" API_TIMEOUT=8 API_PEER="$pid" \
                     api GET /api/sessions \
-                    | python3 -c 'import json, sys
+                    | "$PY" -c 'import json, sys
 try:
     sessions = json.load(sys.stdin)
 except ValueError:  # api() falhou -> stdin vazio; a linha de aviso já saiu no stderr dela
@@ -296,7 +302,7 @@ for s in sessions:
     # Pares externos (sessão de outra pessoa): o backend devolve o token, que nunca sai na lista.
     ext_pairs_get || echo "⚠ pares externos indisponíveis ($ext_status): a lista pode estar incompleta" >&2
     ext=$ext_body
-    python3 -c 'import json, sys
+    "$PY" -c 'import json, sys
 try:
     pares = json.loads(sys.argv[1])
 except ValueError:
@@ -426,10 +432,10 @@ if [[ "$1" == "--pair" ]]; then
     done
     # peer local (nome cru) OU remoto (servidor::sessao): com remoto, o backend local monta o grupo
     # entre máquinas pela dona (peers.json + CP_SERVER_ID).
-    body=$(python3 -c 'import json,sys; print(json.dumps({"peer": sys.argv[1], "task": sys.argv[2], "replace_task": sys.argv[3] == "true", "orq": sys.argv[4] == "true"}))' "$peer" "$tarefa" "$substituir" "$orq")
+    body=$("$PY" -c 'import json,sys; print(json.dumps({"peer": sys.argv[1], "task": sys.argv[2], "replace_task": sys.argv[3] == "true", "orq": sys.argv[4] == "true"}))' "$peer" "$tarefa" "$substituir" "$orq")
     resp=$(api POST "/api/sessions/$(me)/pair" "$body")
     if [[ -z "$peer" ]]; then
-        gid=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("gid") or "")' "$resp")
+        gid=$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1]).get("gid") or "")' "$resp")
         echo "grupo de orquestração criado: $(me), sozinha, gid $gid (ninguém recebe aviso; o time entra depois)"
     elif $orq; then
         echo "pareado: $(me) <-> $peer (grupo de orquestração: ninguém recebe aviso; o kick-off traz o protocolo)"
@@ -443,9 +449,9 @@ if [[ "$1" == "--aceitar-par" ]]; then
     link="${2:-}"
     [[ -n "$link" ]] || { echo "uso: hangar-send --aceitar-par <link https://….ts.net:8443/par/…>" >&2; exit 2; }
     eu=$(me)
-    body=$(python3 -c 'import json,sys; print(json.dumps({"link": sys.argv[1]}))' "$link")
+    body=$("$PY" -c 'import json,sys; print(json.dumps({"link": sys.argv[1]}))' "$link")
     resp=$(api POST "/api/sessions/$eu/pair-accept" "$body") || exit 1
-    python3 -c 'import json,sys
+    "$PY" -c 'import json,sys
 r = json.loads(sys.argv[1])
 print("pareada com %s (sessão %s) — responda com: hangar-send %s::%s \"…\"" % (r["owner"], r["session"], r["alias"], r["session"]))' "$resp"
     exit 0
@@ -587,7 +593,7 @@ if [[ "$1" == "--new" ]]; then
             provider=""
         else
             providers=$(api GET /api/providers) || exit 1
-            provider=$(python3 -c 'import json,sys
+            provider=$("$PY" -c 'import json,sys
 print(next((p for p, probe in json.load(sys.stdin).items() if probe.get("default")), "claude"))' <<<"$providers") \
                 || { echo "erro: resposta ilegível de /api/providers" >&2; exit 1; }
         fi
@@ -602,7 +608,7 @@ print(next((p for p, probe in json.load(sys.stdin).items() if probe.get("default
         # A home é a mãe da conta `default` (~/.claude); `--conta auto` segue abaixo, já contra lá.
         if [[ -z "$cwd" || ( -n "$conta" && "$conta" != "auto" ) ]]; then
             configs=$(api GET /api/claude-configs) || exit 1
-            IFS=$'\t' read -r home_remota config_dir < <(python3 -c 'import json,sys
+            IFS=$'\t' read -r home_remota config_dir < <("$PY" -c 'import json,sys
 cs = json.loads(sys.argv[1]); conta = sys.argv[2]
 base = next((c["path"] for c in cs if c.get("label") == "default"), "")
 sep = "\\" if "\\" in base else "/"
@@ -615,7 +621,7 @@ if conta and conta != "auto":
             achada = c["path"]
 print(home + "\t" + achada)' "$configs" "$conta")
             if [[ -n "$conta" && "$conta" != "auto" && -z "$config_dir" ]]; then
-                echo "erro: conta '$conta' não existe em '$remoto' — lá há: $(python3 -c 'import json,sys; print(", ".join(c["label"] for c in json.loads(sys.argv[1])))' "$configs")" >&2
+                echo "erro: conta '$conta' não existe em '$remoto' — lá há: $("$PY" -c 'import json,sys; print(", ".join(c["label"] for c in json.loads(sys.argv[1])))' "$configs")" >&2
                 exit 2
             fi
             # Com --resume a pasta vem da conversa, lá.
@@ -632,7 +638,7 @@ print(home + "\t" + achada)' "$configs" "$conta")
         echo "erro: --new-branch pede --branch <nome>; --base só vale com --new-branch" >&2
         exit 2
     fi
-    if [[ -n "$customizations" ]] && ! python3 -c 'import json,sys; sys.exit(0 if isinstance(json.loads(sys.argv[1]), dict) else 1)' "$customizations" 2>/dev/null; then
+    if [[ -n "$customizations" ]] && ! "$PY" -c 'import json,sys; sys.exit(0 if isinstance(json.loads(sys.argv[1]), dict) else 1)' "$customizations" 2>/dev/null; then
         echo "erro: --customizations precisa ser um objeto JSON" >&2
         exit 2
     fi
@@ -651,7 +657,7 @@ print(home + "\t" + achada)' "$configs" "$conta")
             echo "erro: nenhuma conta com leitura de cota — escolha uma: hangar-conta --list" >&2
             exit 2
         }
-        IFS=$'\t' read -r config_dir conta < <(python3 -c 'import json,sys
+        IFS=$'\t' read -r config_dir conta < <("$PY" -c 'import json,sys
 s = json.load(sys.stdin); print(s["path"] + "\t" + s["label"])' <<<"$sugestao")
         if [[ -z "$config_dir" || -z "$conta" ]]; then
             echo "erro: resposta da cota ilegível em $BASE — escolha uma conta: --conta <nome>" >&2
@@ -690,7 +696,7 @@ s = json.load(sys.stdin); print(s["path"] + "\t" + s["label"])' <<<"$sugestao")
                     "--remember-provider:${remember_provider#false}" "--link:$link_child"; do
             [[ -n "${pair#*:}" ]] && { echo "erro: ${pair%%:*} não combina com --resume" >&2; exit 2; }
         done
-        body=$(python3 -c 'import json,sys
+        body=$("$PY" -c 'import json,sys
 d = {"name": sys.argv[1], "provider": sys.argv[2]}
 for key, value in zip(("engine", "config_dir", "model", "codex_account", "engine_account"), sys.argv[3:8]):
     if value:
@@ -700,13 +706,13 @@ if sys.argv[8]:
 print(json.dumps(d))' "$name" "$provider" "$engine" "$config_dir" "$model" "$codex_conta" "$engine_account" "$headless")
         # A rota do Arquivo, com `-` no lugar do projeto: o servidor acha a pasta pela conversa.
         creation_result=$(API_TIMEOUT=120 api POST "/api/archive/-/$resume/resume" "$body") || exit 1
-        IFS=$'\t' read -r name cwd < <(python3 -c 'import json,sys
+        IFS=$'\t' read -r name cwd < <("$PY" -c 'import json,sys
 r = json.load(sys.stdin); print((r.get("name") or sys.argv[1]) + "\t" + (r.get("cwd") or ""))' "$name" <<<"$creation_result") || true
         [[ -n "$remoto" ]] && name="$remoto::$name"
         echo "sessão retomada: $name ($cwd) na conversa $resume — fala com ela via: hangar-send $name \"msg\""
         exit 0
     fi
-    body=$(python3 -c 'import json,sys
+    body=$("$PY" -c 'import json,sys
 d = {"name": sys.argv[1], "cwd": sys.argv[2],
      "engine": sys.argv[3] or None}
 # Ausente, e não vazio: o backend escolhe pela criadora (vazio seria recusado como provider inválido).
@@ -765,8 +771,8 @@ print(json.dumps(d))' \
     # com a sessão ainda nascendo.
     creation_result=$(API_TIMEOUT=120 api POST /api/sessions "$body") || exit 1
     # O nome que vale é o que o servidor deu (ele limpa acento e espaço).
-    name=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("name") or sys.argv[1])' "$name" <<<"$creation_result" || printf '%s' "$name")
-    if ! herdado=$(python3 -c 'import json,sys
+    name=$("$PY" -c 'import json,sys; print(json.load(sys.stdin).get("name") or sys.argv[1])' "$name" <<<"$creation_result" || printf '%s' "$name")
+    if ! herdado=$("$PY" -c 'import json,sys
 result = json.load(sys.stdin)
 for warning in result.get("avisos", []):
     print("aviso: " + warning, file=sys.stderr)
@@ -788,7 +794,7 @@ print("".join(" [%s]" % p for p in partes))' "$headless" <<<"$creation_result");
     [[ "$headless" == "false" ]] && headless=""
     link_failed="" link_unread=""
     # Ligação pedida e resultado ilegível: não dá para dizer que ela vale.
-    if [[ -n "$link_child" ]] && ! link_failed=$(python3 -c 'import json,sys
+    if [[ -n "$link_child" ]] && ! link_failed=$("$PY" -c 'import json,sys
 e = json.load(sys.stdin).get("link_error")
 e and print("%s: %s" % (e.get("code") or "?", e.get("detail") or ""))' <<<"$creation_result" 2>/dev/null); then
         link_unread=1
@@ -822,12 +828,12 @@ if [[ "$1" == "--close" ]]; then
     fi
     # O DELETE responde ok pra nome que não existe: nome errado não pode virar "fechada".
     vivas=$(api GET /api/sessions) || exit 1
-    printf '%s' "$vivas" | python3 -c 'import json,sys; sys.exit(0 if any(s.get("name") == sys.argv[1] for s in json.load(sys.stdin)) else 1)' "$alvo" \
+    printf '%s' "$vivas" | "$PY" -c 'import json,sys; sys.exit(0 if any(s.get("name") == sys.argv[1] for s in json.load(sys.stdin)) else 1)' "$alvo" \
         || { echo "erro: sessão '$alvo' não existe (hangar-send --list)" >&2; exit 1; }
     resp=$(api DELETE "/api/sessions/$alvo") || exit 1
     echo "fechada: $alvo"
     # Fechou, mas desfazer o par remoto dela pode ter falhado: isso não some calado.
-    printf '%s' "$resp" | python3 -c 'import json,sys; w=(json.load(sys.stdin) or {}).get("warning"); w and print("aviso: " + (w.get("msg") or json.dumps(w, ensure_ascii=False)), file=sys.stderr)' || true
+    printf '%s' "$resp" | "$PY" -c 'import json,sys; w=(json.load(sys.stdin) or {}).get("warning"); w and print("aviso: " + (w.get("msg") or json.dumps(w, ensure_ascii=False)), file=sys.stderr)' || true
     exit 0
 fi
 
@@ -847,7 +853,7 @@ if [[ "$1" == "--contrato" ]]; then
         [[ -n "$mtime" ]] && { echo "erro: --mtime só vale com --gravar — $uso_contrato" >&2; exit 2; }
         resp=$(api GET "/api/sessions/$eu/pair/contract") || exit 1
         # Só o conteúdo no stdout: `hangar-send --contrato > c.md` sai pronto para editar e gravar.
-        python3 -c 'import json,sys
+        "$PY" -c 'import json,sys
 r = json.loads(sys.argv[1])
 sys.stdout.write(r.get("content") or "")
 if r.get("owner"):
@@ -860,10 +866,10 @@ if "mtime" in r:
         exit 0
     fi
     [[ -f "$gravar" ]] || { echo "erro: arquivo '$gravar' não existe" >&2; exit 2; }
-    body=$(python3 -c 'import json,sys; print(json.dumps({"content": open(sys.argv[1], encoding="utf-8").read(), "mtime": sys.argv[2] or None}))' "$gravar" "$mtime") \
+    body=$("$PY" -c 'import json,sys; print(json.dumps({"content": open(sys.argv[1], encoding="utf-8").read(), "mtime": sys.argv[2] or None}))' "$gravar" "$mtime") \
         || { echo "erro: '$gravar' não é texto UTF-8" >&2; exit 2; }
     resp=$(api PUT "/api/sessions/$eu/pair/contract" "$body") || exit 1
-    python3 -c 'import json,sys; print("contrato gravado (mtime %s)" % json.loads(sys.argv[1]).get("mtime"))' "$resp"
+    "$PY" -c 'import json,sys; print("contrato gravado (mtime %s)" % json.loads(sys.argv[1]).get("mtime"))' "$resp"
     exit 0
 fi
 
@@ -874,10 +880,10 @@ if [[ "$1" == "--group" ]]; then
     [[ $# -ge 1 ]] || { echo "uso: hangar-send --group [--tmux] <mensagem...>" >&2; exit 2; }
     eu=$(me)
     nativo=false; [[ -n "${CLAUDE_CODE_MESSAGING_SOCKET:-}" ]] && nativo=true
-    body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1], "remetente_nativo": sys.argv[2] == "true", "forcar_tmux": sys.argv[3] == "true"}))' "$*" "$nativo" "$forcar_tmux")
+    body=$("$PY" -c 'import json,sys; print(json.dumps({"text": sys.argv[1], "remetente_nativo": sys.argv[2] == "true", "forcar_tmux": sys.argv[3] == "true"}))' "$*" "$nativo" "$forcar_tmux")
     resp=$(api POST "/api/sessions/$eu/group-message" "$body")
     # `pulados` = membros de máquina que não respondeu: o aviso não fica esperando por eles.
-    python3 -c 'import json,sys
+    "$PY" -c 'import json,sys
 d = json.loads(sys.argv[1])
 pul = d.get("pulados", [])
 entregues = [p for p in d["peers"] if p not in pul]
@@ -926,14 +932,14 @@ else
         # não depende de CP_SERVER_ID. Só cai no peers.json quando o apelido NÃO é de par externo:
         # apelido de par que falha mostra o erro do backend (ex.: remetente que não é o dono do par).
         ext_pairs_get || { echo "erro: não consegui consultar os pares externos ($ext_status)" >&2; exit 1; }
-        if python3 -c 'import json,sys
+        if "$PY" -c 'import json,sys
 try:
     sys.exit(0 if any(r.get("alias") == sys.argv[2] for r in json.loads(sys.argv[1])) else 1)
 except ValueError:
     sys.exit(1)' "$ext_body" "$srv"; then
             msg="$*"
             for p in "$sender" "$curto"; do msg="${msg#"[de: $p] "}"; msg="${msg#"[de: $p]"}"; done
-            body=$(python3 -c 'import json,sys; print(json.dumps({"sender": sys.argv[1], "target": sys.argv[2], "text": sys.argv[3]}))' "$curto" "$target" "$msg")
+            body=$("$PY" -c 'import json,sys; print(json.dumps({"sender": sys.argv[1], "target": sys.argv[2], "text": sys.argv[3]}))' "$curto" "$target" "$msg")
             ext_out=$(curl -s --connect-timeout 3 -m 30 -w $'\n%{http_code}' -X POST -H "$AUTH" \
                 -H "Content-Type: application/json" -d "$body" "$BASE/api/external-pairs/send") || {
                 echo "erro: backend inacessível em $BASE (hangar rodando?)" >&2; exit 1; }
@@ -962,7 +968,7 @@ except ValueError:
     text="[de: $sender] $msg"
 fi
 
-body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1], "steer": True}))' "$text")
+body=$("$PY" -c 'import json,sys; print(json.dumps({"text": sys.argv[1], "steer": True}))' "$text")
 resp=$(api POST "/api/sessions/$sess/input" "$body")
 # Sessão inexistente nem chega aqui (o backend responde 404 e o api() já mostrou o detail).
 relatar_envio "$resp" "$target"

@@ -7,7 +7,7 @@ from pathlib import Path
 from pydantic import AliasChoices, BaseModel, Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app import contas
+from app import contas, user_data
 
 _LOOPBACK = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "auto"}
 _NOME_DE_BRANCH = re.compile(r"[A-Za-z0-9._/-]{1,100}")
@@ -173,7 +173,12 @@ _DEFAULT_SCAN_ROOTS = _default_scan_roots()
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="CP_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="CP_", extra="ignore")
+
+    # A migração leva o `.env` para `~/.hangar/config/`; quem não migrou o tem na `backend/`.
+    def __init__(self, **values):
+        values.setdefault("_env_file", user_data.path(".env"))
+        super().__init__(**values)
 
     # Loopback by default: portable (exists on every machine) and safe (not exposed to
     # the network unless you opt in). Set CP_LAN_BIND_IP to your LAN IP for phone access.

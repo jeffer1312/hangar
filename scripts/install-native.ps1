@@ -95,7 +95,9 @@ try {
     # Primeira abertura ja conectada ao backend desta maquina. So quando o app ainda nao tem conexao:
     # a que a pessoa escolheu depois nunca e sobrescrita.
     $cfg = Join-Path $env:APPDATA 'hangar-native'
-    $env_ = Join-Path $raiz 'backend\.env'
+    # Dados do usuario: ~\.hangar\config quando o arquivo esta la; senao a backend\ (nao migrada).
+    $env_ = Join-Path $HOME '.hangar\config\.env'
+    if (-not (Test-Path -LiteralPath $env_)) { $env_ = Join-Path $raiz 'backend\.env' }
     $token = ''; $porta = '8765'
     if (Test-Path $env_) {
         foreach ($linha in [IO.File]::ReadAllLines($env_)) {
@@ -106,6 +108,8 @@ try {
     if ($token -and -not (Test-Path (Join-Path $cfg 'connection.json'))) {
         New-Item -ItemType Directory -Force -Path $cfg | Out-Null
         [IO.File]::WriteAllText((Join-Path $cfg 'connection.json'), "{`"address`": `"http://127.0.0.1:$porta`", `"token`": `"$token`"}")
+    } elseif (-not (Test-Path (Join-Path $cfg 'connection.json'))) {
+        Write-Host "app nativo: sem a senha do backend (CP_AUTH_TOKEN) em $env_; na primeira abertura o app pede o endereco e a senha"
     }
 
     Marca $bruto

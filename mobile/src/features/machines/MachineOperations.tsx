@@ -10,7 +10,7 @@ import * as m from '../../paraglide/messages';
 
 type Operation = 'restart' | 'update';
 
-function pause(signal: AbortSignal, ms: number): Promise<void> {
+export function pause(signal: AbortSignal, ms: number): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) { reject(new Error('cancelled')); return; }
     const abort = () => { clearTimeout(timer); reject(new Error('cancelled')); };
@@ -33,6 +33,38 @@ function bounded<T>(promise: Promise<T>, signal: AbortSignal, ms: number): Promi
     if (signal.aborted) abort();
     promise.then((value) => finish(() => resolve(value)), (error) => finish(() => reject(error)));
   });
+}
+
+/** Acompanha o executor destacado até ele gravar `pronto`; `matches` diz se o estado é o do pedido. Devolve o estado final, bom ou não. */
+export async function followOperation(server: Server, matches: (state: AtualizacaoEstado) => boolean, timeoutMs: number, signal: AbortSignal,
+  onState: (state: AtualizacaoEstado) => void): Promise<AtualizacaoEstado> {
+  const deadline = Date.now() + timeoutMs;
+  let lastCause: string = m.mobile_machines_unconfirmed_reason();
+  const unconfirmed = () => new Error(m.mobile_machines_operation_unconfirmed({ reason: lastCause }));
+  for (;;) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw unconfirmed();
+    await pause(signal, Math.min(2000, remaining));
+    ensureActive(signal);
+    if (Date.now() >= deadline) throw unconfirmed();
+    let state: AtualizacaoEstado;
+    try {
+      const response = await bounded(getAtualizacaoEm(server), signal, deadline - Date.now());
+      ensureActive(signal);
+      if (!response?.estado || typeof response.estado !== 'object' || Array.isArray(response.estado)) throw new Error(m.mobile_machines_invalid_response());
+      state = response.estado;
+    } catch (error) {
+      ensureActive(signal);
+      if (Date.now() >= deadline) throw unconfirmed();
+      const status = (error as { status?: unknown })?.status;
+      if (status === 401) throw error;
+      lastCause = reason(error);
+      continue;
+    }
+    if (!matches(state)) continue;
+    onState(state);
+    if (state.fase === 'pronto') return state;
+  }
 }
 
 export function MachineOperations({ server }: { server: Server }) {
@@ -68,38 +100,14 @@ function OperationControls({ server }: { server: Server }) {
           const started = await bounded(operation === 'restart' ? reiniciarServidorEm(server) : iniciarAtualizacaoEm(server), signal, 15_000);
           ensureActive(signal);
           if (started?.ok !== true || !Number.isSafeInteger(started.pid) || started.pid <= 0) throw new Error(m.mobile_machines_invalid_response());
-          const deadline = Date.now() + (operation === 'restart' ? 120_000 : 600_000);
-          let lastCause: string = m.mobile_machines_unconfirmed_reason();
-          const unconfirmed = () => new Error(m.mobile_machines_operation_unconfirmed({ reason: lastCause }));
-          for (;;) {
-            const remaining = deadline - Date.now();
-            if (remaining <= 0) throw unconfirmed();
-            await pause(signal, Math.min(2000, remaining));
-            ensureActive(signal);
-            if (Date.now() >= deadline) throw unconfirmed();
-            let state: AtualizacaoEstado;
-            try {
-              const response = await bounded(getAtualizacaoEm(server), signal, deadline - Date.now());
-              ensureActive(signal);
-              if (!response?.estado || typeof response.estado !== 'object' || Array.isArray(response.estado)) throw new Error(m.mobile_machines_invalid_response());
-              state = response.estado;
-            } catch (error) {
-              ensureActive(signal);
-              if (Date.now() >= deadline) throw unconfirmed();
-              const status = (error as { status?: unknown })?.status;
-              if (status === 401) throw error;
-              lastCause = reason(error);
-              continue;
-            }
-            if (operation === 'restart' ? !matchesRestartResult(state, started) : state.pid !== started.pid) continue;
-            setResult(state);
-            if (state.fase !== 'pronto') continue;
-            if (state.ok !== true || state.reinicio_erro || state.erro) {
-              throw new Error(m.mobile_machines_operation_failed({ reason: state.reinicio_erro || state.erro || m.mobile_machines_unconfirmed_reason() }));
-            }
-            updated = operation === 'update';
-            return state;
+          const state = await followOperation(server,
+            (state) => operation === 'restart' ? matchesRestartResult(state, started) : state.pid === started.pid,
+            operation === 'restart' ? 120_000 : 600_000, signal, setResult);
+          if (state.ok !== true || state.reinicio_erro || state.erro) {
+            throw new Error(m.mobile_machines_operation_failed({ reason: state.reinicio_erro || state.erro || m.mobile_machines_unconfirmed_reason() }));
           }
+          updated = operation === 'update';
+          return state;
         }, setResult, m.mobile_machines_operation_ready()).finally(() => {
           if (alive.current && confirmation.current === ticket) { confirmation.current = null; setAsking(false); }
           if (updated && alive.current && firstPendingServer([server.id])) router.push(whatsNewHref(server.id));

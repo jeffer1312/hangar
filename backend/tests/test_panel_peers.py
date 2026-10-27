@@ -123,3 +123,20 @@ def test_set_peer_enabled_nao_deixa_tmp_para_tras(peers_file):
 
     assert not orfao.exists()
     assert list(peers_file.parent.glob(peers_file.name + ".*.tmp")) == []
+
+
+def test_maquina_migrada_le_token_e_peers_de_hangar_config(monkeypatch, tmp_path):
+    """No pacote a `backend/` acima do script é a da versão, sem `.env` nem `peers.json`: os dados do
+    usuário moram em `~/.hangar/config/`, a mesma regra do `user_data` do servidor."""
+    import hangar_panel_common as common
+    home = tmp_path / "home"
+    config = home / ".hangar" / "config"
+    config.mkdir(parents=True)
+    (config / ".env").write_text("CP_AUTH_TOKEN=do-config\n", encoding="utf-8")
+    (home / ".hangar" / "current").symlink_to(tmp_path, target_is_directory=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(common, "BACKEND", tmp_path / "versao" / "backend")
+    assert common.env("CP_AUTH_TOKEN") == "do-config"
+    assert common.peers() == {}
+    (config / "peers.json").write_text('{"pc": {"base_url": "http://pc"}}', encoding="utf-8")
+    assert common.peers() == {"pc": {"base_url": "http://pc"}}

@@ -9,10 +9,11 @@ import subprocess
 
 import yaml
 
-from app import peers
+from app import install_root, peers
 from app.omp_plugin_sync import InventoryError, _run, resolve_omp_directories
 
-RULE_TEMPLATE = Path(__file__).resolve().parents[2] / "scripts/omp/carregar-claude-md-do-projeto.md"
+# O link da regra aponta para o `current` com o pacote: sobrevive à troca de versão.
+RULE_TEMPLATE = install_root.root() / "scripts/omp/carregar-claude-md-do-projeto.md"
 DISABLED_CONTEXT_IDS = ("context-file:project:AGENTS.md", "context-file:user:AGENTS.md")
 
 

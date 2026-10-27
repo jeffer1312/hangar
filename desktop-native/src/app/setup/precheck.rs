@@ -23,6 +23,8 @@ pub(crate) enum Sudo { Ready, Unconfirmed(String), Missing }
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Facts {
     pub windows: bool,
+    /// Instala o pacote: sem clone, o git não entra.
+    pub package: bool,
     pub git: bool,
     pub curl: bool,
     /// Primeiro host que não respondeu e o motivo.
@@ -46,8 +48,9 @@ fn row(check: Check, ok: bool, detail: String, code: Option<&'static str>) -> Ch
 
 pub(crate) fn rows(f: &Facts) -> Vec<CheckRow> {
     if let Some(why) = &f.internal { return vec![row(Check::Internal, false, why.clone(), None)]; }
-    // Falta o git não trava: o app o instala antes de seguir.
-    let mut rows = vec![CheckRow { check: Check::Git, ok: f.git, blocking: false, detail: String::new(), code: None }];
+    // Falta o git não trava: o app o instala antes de seguir. O pacote não usa git.
+    let mut rows: Vec<CheckRow> = (!f.package).then(|| CheckRow { check: Check::Git, ok: f.git, blocking: false, detail: String::new(), code: None })
+        .into_iter().collect();
     if !f.windows { rows.push(row(Check::Curl, f.curl, String::new(), None)); }
     rows.push(match &f.internet {
         Ok(()) => row(Check::Internet, true, String::new(), None),
@@ -81,7 +84,7 @@ pub(crate) fn sudo_from(n_ok: bool, groups: &str) -> Sudo {
 
 pub(crate) fn git_command(pkg: &str) -> Option<&'static [&'static str]> { PKG_MANAGERS.iter().find(|(name, _)| *name == pkg).map(|(_, cmd)| *cmd) }
 
-pub(crate) async fn gather(dest: PathBuf) -> Facts {
+pub(crate) async fn gather(dest: PathBuf, package: bool) -> Facts {
     let internet = internet().await;
     let dest_text = dest.to_string_lossy().into_owned();
     let local = tokio::task::spawn_blocking(move || {
@@ -92,7 +95,7 @@ pub(crate) async fn gather(dest: PathBuf) -> Facts {
     }).await;
     let internal = local.as_ref().err().map(|e| e.to_string());
     let (git, curl, winget, pkg, free, sudo) = local.unwrap_or_else(|e| (false, false, false, None, Err(e.to_string()), Sudo::Missing));
-    Facts { windows: cfg!(windows), git, curl, internet, free, dest: dest_text, winget, pkg, sudo, internal }
+    Facts { windows: cfg!(windows), package, git, curl, internet, free, dest: dest_text, winget, pkg, sudo, internal }
 }
 
 async fn internet() -> Result<(), (String, String)> {
@@ -183,7 +186,7 @@ mod tests {
     use super::*;
 
     fn linux() -> Facts {
-        Facts { windows: false, git: true, curl: true, internet: Ok(()), free: Ok(10 * GB), dest: "/home/dev/hangar".into(),
+        Facts { windows: false, package: false, git: true, curl: true, internet: Ok(()), free: Ok(10 * GB), dest: "/home/dev/hangar".into(),
             winget: false, pkg: Some("apt-get"), sudo: Sudo::Ready, internal: None }
     }
 
@@ -208,6 +211,15 @@ mod tests {
         let rows = rows(&Facts { git: false, ..linux() });
         assert!(needs_git(&rows));
         assert!(!blocked(&rows));
+    }
+
+    #[test]
+    fn package_install_skips_git() {
+        for windows in [false, true] {
+            let rows = rows(&Facts { package: true, git: false, windows, ..linux() });
+            assert!(!rows.iter().any(|r| r.check == Check::Git), "windows={windows}");
+            assert!(!needs_git(&rows));
+        }
     }
 
     #[test]

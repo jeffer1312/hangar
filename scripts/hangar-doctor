@@ -2,4 +2,5 @@
 # hangar-doctor [--qr]: diagnóstico da instalação, uma linha por item, com conserto.
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../backend"
-exec uv run --quiet --no-sync python -m app.doctor "$@"
+# O Python do pacote ou o venv do checkout: no pacote não há uv.
+exec ../scripts/hangar-python -m app.doctor "$@"

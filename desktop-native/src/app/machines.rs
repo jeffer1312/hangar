@@ -380,6 +380,39 @@ fn update_warnings(state: &Value) -> Vec<String> {
         .filter(|w| !w.is_empty()).map(str::to_owned).collect()
 }
 
+/// `GET`/`PUT /api/web-ui`. Servidor anterior à rota (404/405) não oferece a escolha: `Ok(None)`, e a linha some.
+fn web_ui_value(result: Result<Value, Failure>) -> Result<Option<bool>, String> {
+    match result {
+        Err(error) if matches!(error.status, Some(404 | 405)) => Ok(None),
+        Err(error) => Err(Hangar::setting_failure(&error)),
+        Ok(value) => value.get("web_ui").and_then(Value::as_bool).map(Some).ok_or_else(|| tr("invalid_response")),
+    }
+}
+
+/// O modo de uma máquina migrada, do `GET /api/atualizacao`; `checkout` é a pasta que a troca oferece.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DevMode { developer: bool, channel: String, checkout: String }
+
+/// `Ok(None)`: servidor sem a troca pela tela (sem `canal`, 404/405) ou máquina sem migrar (sem `modo` do Rust); a linha some.
+fn dev_mode_value(result: Result<Value, Failure>) -> Result<Option<DevMode>, String> {
+    let value = match result {
+        Err(error) if matches!(error.status, Some(404 | 405)) => return Ok(None),
+        Err(error) => return Err(Hangar::setting_failure(&error)),
+        Ok(value) => value,
+    };
+    let developer = match value["modo"].as_str() { Some("pacote") => false, Some("desenvolvedor") => true, _ => return Ok(None) };
+    let Some(channel) = value["canal"].as_str() else { return Ok(None) };
+    Ok(Some(DevMode { developer, channel: channel.to_owned(), checkout: value["checkout"].as_str().unwrap_or_default().to_owned() }))
+}
+
+fn dev_mode_line(mode: &DevMode) -> String {
+    if mode.developer { tr("dev_mode_developer").replace("{folder}", &mode.checkout) } else { tr("dev_mode_package").replace("{channel}", &mode.channel) }
+}
+
+/// Qual acompanhamento do executor destacado a resposta alimenta: o Atualizar ou a troca de modo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Track { Update, DevMode }
+
 pub(super) enum MachinesReply {
     Reach(u64, Result<Value, Failure>),
     Id(u64, Result<Value, Failure>),
@@ -388,8 +421,10 @@ pub(super) enum MachinesReply {
     Restart(u64, Result<Value, Failure>),
     RestartEnd(u64, RestartEnd),
     Upgrade(u64, Result<Value, Failure>),
-    UpgradeStep(u64, u64, u64, String),
-    UpgradeEnd(u64, UpgradeEnd),
+    UpgradeStep(Track, u64, u64, u64, String),
+    UpgradeEnd(Track, u64, UpgradeEnd),
+    DevMode(u64, Result<Value, Failure>),
+    DevSwitch(u64, Result<Value, Failure>),
     Peers(u64, Result<Value, Failure>),
     /// O identificador que uma entrada deste aparelho respondeu, pela geração da leitura.
     SavedId(u64, String, Result<Value, Failure>),
@@ -403,6 +438,8 @@ pub(super) enum MachinesReply {
     Probed(EntityId, u64, Result<Found, String>),
     Registered(EntityId, u64, Result<(Going, Going), String>),
     Paired(u64, Result<Value, Failure>),
+    WebUi(u64, Result<Value, Failure>),
+    WebUiSaved(u64, Result<Value, Failure>),
 }
 
 #[derive(Default)]
@@ -486,20 +523,65 @@ pub(in crate::app) struct Machines {
     pair: Pair,
     /// Janela estreita: o detalhe fica embaixo da lista, e escolher uma máquina rola até ele.
     stacked: bool,
+    /// Tela web deste servidor; `Ok(None)` = servidor sem a rota. A gravação não mexe no valor até o servidor confirmar.
+    web_ui: Remote<Option<bool>>,
+    web_ui_saving: bool,
+    web_ui_seq: u64,
+    web_ui_error: Option<String>,
+    /// Pacote ou modo desenvolvedor; `Ok(None)` = servidor sem a troca pela tela (só antes de [`Self::dev_mode_seen`]).
+    dev_mode: Remote<Option<DevMode>>,
+    /// Já houve uma leitura boa do modo neste servidor: a linha não some mais.
+    dev_mode_seen: bool,
+    dev_folder: Option<(Entity<InputState>, Subscription)>,
+    /// A troca pedida, acompanhada como o Atualizar.
+    dev_switch: Upgrade,
 }
 
 impl Drop for Machines {
     fn drop(&mut self) {
         if let Some(task) = self.restart.task.take() { task.abort(); }
         if let Some(task) = self.upgrade.task.take() { task.abort(); }
+        if let Some(task) = self.dev_switch.task.take() { task.abort(); }
     }
 }
 
 impl Machines {
+    fn track(&mut self, track: Track) -> &mut Upgrade { match track { Track::Update => &mut self.upgrade, Track::DevMode => &mut self.dev_switch } }
+    /// Um executor por vez no servidor: reiniciar, atualizar e trocar de modo se excluem.
+    fn executor_busy(&self) -> bool { self.restart.asking || self.restart.waiting || self.upgrade.busy() || self.dev_switch.busy() }
+
+    /// Guarda a leitura do modo, se for do último pedido. Depois de uma leitura boa, "sem a troca"
+    /// vira erro: a linha fica, para desligar um checkout de uma versão sem a troca pela tela.
+    fn dev_mode_read(&mut self, seq: u64, result: Result<Value, Failure>) -> bool {
+        let parsed = match dev_mode_value(result) {
+            Ok(None) if self.dev_mode_seen => Err(tr("dev_mode_unknown_reason")),
+            other => other,
+        };
+        let good = matches!(parsed, Ok(Some(_)));
+        if !self.dev_mode.finish(seq, parsed) { return false; }
+        self.dev_mode_seen |= good;
+        true
+    }
+
+    /// Modo desconhecido depois de uma leitura boa: a linha mostra o motivo e oferece desligar.
+    fn dev_mode_lost(&self) -> bool {
+        self.dev_mode_seen && !self.dev_mode.loading && matches!(self.dev_mode.value, Some(Err(_)))
+    }
+
     fn id_value(&self, cx: &App) -> String { self.id_input.as_ref().map(|(i, _)| i.read(cx).value().trim().to_owned()).unwrap_or_default() }
     fn id_changed(&self, cx: &App) -> bool { self.id.ok().is_some_and(|loaded| *loaded != self.id_value(cx)) }
     /// O identificador salvo no servidor (vazio enquanto não leu).
     fn id_loaded(&self) -> &str { self.id.ok().map(String::as_str).unwrap_or_default() }
+
+    /// Falha na gravação deixa o valor de antes e mostra o motivo.
+    fn web_ui_saved(&mut self, seq: u64, result: Result<Value, Failure>) {
+        if seq != self.web_ui_seq { return; }
+        self.web_ui_saving = false;
+        match web_ui_value(result) {
+            Ok(saved) => { self.web_ui.set(Ok(saved)); self.web_ui_error = None; }
+            Err(error) => self.web_ui_error = Some(error),
+        }
+    }
 }
 
 impl Hangar {
@@ -519,6 +601,7 @@ impl Hangar {
         m.restart = Restart { seq: m.restart.seq + 1, ..Restart::default() };
         // Atualização em curso segue na tela; o resultado de uma anterior sai, como o do reinício.
         if !m.upgrade.busy() { m.upgrade = Upgrade { seq: m.upgrade.seq + 1, ..Upgrade::default() }; }
+        if !m.dev_switch.busy() { m.dev_switch = Upgrade { seq: m.dev_switch.seq + 1, ..Upgrade::default() }; }
         (m.id_saved, m.leave_error, m.peer_error, m.adopt_error, m.far_failed) = (false, None, None, None, false);
         m.announced = None;
         // "Não respondem" nasce fechado, como o `<details>` do web remontado; o painel volta a este servidor.
@@ -526,6 +609,8 @@ impl Hangar {
         // Medições só em memória: cada abertura mede de novo, e a resposta de um teste de antes cai pelo `seq`.
         m.checks.clear();
         if !m.id_saving { self.load_machine_id(cx); }
+        if !self.machines.web_ui_saving { self.load_web_ui(cx); }
+        if !self.machines.dev_switch.busy() { self.load_dev_mode(cx); }
         self.load_reach(cx);
         self.load_saved_ids(cx);
         self.load_peers(cx);
@@ -768,6 +853,77 @@ impl Hangar {
         cx.notify();
     }
 
+    fn load_web_ui(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        let seq = self.machines.web_ui.start();
+        self.machines.web_ui_error = None;
+        let done = self.machines_send_later();
+        self.runtime.spawn(async move { done(MachinesReply::WebUi(seq, api.server_read(&["web-ui"], &[], 15).await)).await });
+        cx.notify();
+    }
+
+    fn save_web_ui(&mut self, on: bool, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        let m = &mut self.machines;
+        if m.web_ui_saving || m.web_ui.loading || m.web_ui.ok().copied().flatten().is_none_or(|now| now == on) { return; }
+        m.web_ui_seq += 1;
+        (m.web_ui_saving, m.web_ui_error) = (true, None);
+        let (seq, done) = (m.web_ui_seq, self.machines_send_later());
+        self.runtime.spawn(async move {
+            done(MachinesReply::WebUiSaved(seq, api.server_send(reqwest::Method::PUT, &["web-ui"], Some(json!({"web_ui": on})), 15).await)).await
+        });
+        cx.notify();
+    }
+
+    fn load_dev_mode(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        let seq = self.machines.dev_mode.start();
+        let done = self.machines_send_later();
+        self.runtime.spawn(async move { done(MachinesReply::DevMode(seq, api.server_read(&["atualizacao"], &[], 20).await)).await });
+        cx.notify();
+    }
+
+    /// A pasta sugerida entra no campo só enquanto ele está vazio: o que a pessoa digitou fica.
+    fn show_dev_folder(&mut self, suggested: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.machines.dev_folder.is_none() {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("dev_mode_folder_placeholder")));
+            let sub = cx.subscribe_in(&input, window, |_: &mut Hangar, _, event: &InputEvent, _, cx| if let InputEvent::Change = event { cx.notify() });
+            self.machines.dev_folder = Some((input, sub));
+        }
+        if let Some((input, _)) = &self.machines.dev_folder && input.read(cx).value().trim().is_empty() {
+            let suggested = suggested.to_owned();
+            input.update(cx, |state, cx| state.set_value(suggested, window, cx));
+        }
+    }
+
+    fn dev_folder_value(&self, cx: &App) -> String {
+        self.machines.dev_folder.as_ref().map(|(input, _)| input.read(cx).value().trim().to_owned()).unwrap_or_default()
+    }
+
+    fn confirm_dev_mode(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let this = cx.entity().downgrade();
+        let title = tr(if on { "dev_mode_confirm_on" } else { "dev_mode_confirm_off" }).replace("{server}", &self.server_label(cx));
+        chrome::confirm_alert(window, cx, title, tr("dev_mode_confirm_desc"), tr(if on { "dev_mode_turn_on" } else { "dev_mode_turn_off" }),
+            ButtonVariant::Primary, move |_, cx| { let _ = this.update(cx, |this, cx| this.start_dev_mode(on, cx)); true });
+        // O interruptor volta ao valor lido até o servidor confirmar a troca.
+        cx.notify();
+    }
+
+    fn start_dev_mode(&mut self, on: bool, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        if self.machines.executor_busy() { return; }
+        let body = if on { json!({"on": true, "checkout": self.dev_folder_value(cx)}) } else { json!({"on": false}) };
+        let d = &mut self.machines.dev_switch;
+        d.seq += 1;
+        (d.asking, d.step, d.at, d.manual, d.error) = (true, None, None, false, None);
+        d.warnings.clear();
+        let (seq, done) = (d.seq, self.machines_send_later());
+        self.runtime.spawn(async move {
+            done(MachinesReply::DevSwitch(seq, api.server_send(reqwest::Method::POST, &["atualizacao", "dev-mode"], Some(body), 30).await)).await
+        });
+        cx.notify();
+    }
+
     /// Salvar é um botão, não sair do campo: o nome é como as outras máquinas chegam aqui, e vai para o .env.
     fn save_machine_id(&mut self, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
@@ -834,14 +990,14 @@ impl Hangar {
     }
 
     /// Como o reinício: o desfecho é o que o motor lançado por este pedido (o `pid` da resposta) gravou.
-    fn wait_upgrade(&mut self, pid: Option<i64>) {
+    fn wait_upgrade(&mut self, track: Track, pid: Option<i64>) {
         let Some(api) = self.api.clone() else {
-            let u = &mut self.machines.upgrade;
+            let u = self.machines.track(track);
             (u.waiting, u.error) = (false, Some(tr("update_silent")));
             return;
         };
-        let (seq, done) = (self.machines.upgrade.seq, self.machines_send_later());
-        self.machines.upgrade.task = Some(self.runtime.spawn(async move {
+        let (seq, done) = (self.machines.track(track).seq, self.machines_send_later());
+        self.machines.track(track).task = Some(self.runtime.spawn(async move {
             let deadline = Instant::now() + UPGRADE_WAIT;
             let end = loop {
                 if Instant::now() >= deadline { break UpgradeEnd::Unconfirmed; }
@@ -852,7 +1008,7 @@ impl Hangar {
                 let text = |k: &str| state[k].as_str().filter(|t| !t.is_empty()).map(str::to_owned);
                 if state["fase"].as_str() == Some("rodando") {
                     let number = |k: &str| state[k].as_u64().unwrap_or(0);
-                    done(MachinesReply::UpgradeStep(seq, number("passo"), number("total"), text("texto").unwrap_or_default())).await;
+                    done(MachinesReply::UpgradeStep(track, seq, number("passo"), number("total"), text("texto").unwrap_or_default())).await;
                     continue;
                 }
                 if state["pid"].as_i64() != pid || state["fase"].as_str() != Some("pronto") { continue; }
@@ -861,7 +1017,7 @@ impl Hangar {
                         warnings: update_warnings(state) }
                 } else { UpgradeEnd::Failed(text("erro")) };
             };
-            done(MachinesReply::UpgradeEnd(seq, end)).await
+            done(MachinesReply::UpgradeEnd(track, seq, end)).await
         }));
     }
 
@@ -971,22 +1127,42 @@ impl Hangar {
                     Ok(value) => {
                         if let Some(pid) = crate::update::update_process_id(&value) {
                             u.waiting = true;
-                            self.wait_upgrade(Some(pid));
+                            self.wait_upgrade(Track::Update, Some(pid));
                         } else { u.error = Some(tr("invalid_response")); }
                     }
                     Err(error) => u.error = Some(tr("update_refused").replace("{reason}", &Self::fetch_failure(&error))),
                 }
             }
-            MachinesReply::UpgradeStep(seq, step, total, text) => {
-                let u = &mut self.machines.upgrade;
+            MachinesReply::DevMode(seq, result) => {
+                if !self.machines.dev_mode_read(seq, result) { return; }
+                let suggested = self.machines.dev_mode.ok().cloned().flatten().map(|mode| mode.checkout);
+                if let Some(suggested) = suggested { self.show_dev_folder(&suggested, window, cx); }
+            }
+            MachinesReply::DevSwitch(seq, result) => {
+                if seq != self.machines.dev_switch.seq { return; }
+                self.machines.dev_switch.asking = false;
+                match result {
+                    // Já estava no modo pedido: nada foi lançado, a linha relida mostra o modo.
+                    Ok(value) if value["nada_a_fazer"].as_bool() == Some(true) => self.load_dev_mode(cx),
+                    Ok(value) => match crate::update::update_process_id(&value) {
+                        Some(pid) => { self.machines.dev_switch.waiting = true; self.wait_upgrade(Track::DevMode, Some(pid)); }
+                        None => self.machines.dev_switch.error = Some(tr("invalid_response")),
+                    },
+                    Err(error) => self.machines.dev_switch.error = Some(Self::fetch_failure(&error)),
+                }
+            }
+            MachinesReply::UpgradeStep(track, seq, step, total, text) => {
+                let u = self.machines.track(track);
                 if seq == u.seq && u.waiting { u.step = Some((step, total, text)); }
             }
-            MachinesReply::UpgradeEnd(seq, end) => {
-                let u = &mut self.machines.upgrade;
+            MachinesReply::UpgradeEnd(track, seq, end) => {
+                let u = self.machines.track(track);
                 if seq != u.seq { return; }
                 (u.waiting, u.task, u.step) = (false, None, None);
                 if let UpgradeEnd::Done { warnings, .. } = &end { u.warnings.clone_from(warnings); }
-                let done = matches!(end, UpgradeEnd::Done { .. });
+                let failed = if track == Track::DevMode { "dev_mode_failed" } else { "update_failed" };
+                // Trocar o modo desenvolvedor não traz versão nova: nada a mostrar em "O que chegou para você".
+                let done = track != Track::DevMode && matches!(end, UpgradeEnd::Done { .. });
                 match end {
                     UpgradeEnd::Done { manual: true, .. } => u.manual = true,
                     UpgradeEnd::Done { ts, .. } => {
@@ -994,10 +1170,11 @@ impl Hangar {
                             .unwrap_or_else(chrono::Local::now);
                         u.at = Some(local.format("%H:%M:%S").to_string());
                     }
-                    UpgradeEnd::Failed(error) => u.error = Some(tr("update_failed").replace("{reason}",
+                    UpgradeEnd::Failed(error) => u.error = Some(tr(failed).replace("{reason}",
                         error.as_deref().map(|e| e.trim_end_matches('.')).unwrap_or("?"))),
                     UpgradeEnd::Unconfirmed => u.error = Some(tr("update_silent")),
                 }
+                if track == Track::DevMode { self.load_dev_mode(cx); }
                 self.sync_updater(cx);
                 if done { crate::update::confirm::show_pending(false, window, cx); }
             }
@@ -1092,6 +1269,8 @@ impl Hangar {
                 }
             }
             MachinesReply::Paired(seq, result) => self.paired(seq, result, window),
+            MachinesReply::WebUi(seq, result) => { self.machines.web_ui.finish(seq, web_ui_value(result)); }
+            MachinesReply::WebUiSaved(seq, result) => self.machines.web_ui_saved(seq, result),
         }
         cx.notify();
     }
@@ -1793,7 +1972,7 @@ impl Hangar {
         // Reiniciar não é avançado: é o gesto que faz valer o identificador e as outras chaves do .env.
         let r = &m.restart;
         let u = &m.upgrade;
-        let busy = r.asking || r.waiting || u.busy();
+        let busy = m.executor_busy();
         let outdated = cx.try_global::<crate::update::Handle>().map(|h| h.0.read(cx)).filter(|u| u.server_outdated())
             .map(|u| { let (running, app) = u.outdated_versions(); tr("machines_server_outdated").replace("{running}", &running).replace("{app}", &app) });
         let upgrade_status = if u.waiting {
@@ -1847,6 +2026,71 @@ impl Hangar {
                         .accessibility_label(format!("{}. {desktop_note}", tr("machines_restart_desktop"))))
                     .child(muted(desktop_note.clone())))));
 
+        // Convidado não escolhe; servidor sem a rota (`Ok(None)`) não oferece a escolha.
+        let web_ui = (!self.active_invite() && !matches!(m.web_ui.value, Some(Ok(None)))).then(|| {
+            let on = m.web_ui.ok().copied().flatten();
+            let read_error = m.web_ui.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !m.web_ui.loading).cloned();
+            let status = match on {
+                _ if m.web_ui_saving => tr("server_saving"),
+                Some(on) => format!("{} · {}", tr(if on { "web_ui_on" } else { "web_ui_off" }), tr("web_ui_help")),
+                None if read_error.is_none() => tr("server_loading"),
+                None => tr("web_ui_help"),
+            };
+            let toggle = Switch::new("machines-web-ui").checked(on.unwrap_or(false)).accessibility_label(tr("web_ui_title"))
+                .disabled(on.is_none() || m.web_ui.loading || m.web_ui_saving)
+                .on_click(cx.listener(|this, on: &bool, _, cx| this.save_web_ui(*on, cx)));
+            let alert = |id: &'static str, text: String| div().id(id).role(Role::Alert).flex_1().text_size(px(12.5)).text_color(theme::danger())
+                .whitespace_normal().child(text);
+            settings_box().child(self.row_with(IconName::Globe, "web_ui_title", div().whitespace_normal().child(status), on.is_some(), toggle.into_any_element()))
+                .when_some(read_error, |el, error| el.child(div().flex().items_center().gap(px(10.)).px_4().pb_4()
+                    .child(alert("machines-web-ui-load-error", error))
+                    .child(Button::new("machines-web-ui-retry").outline().small().label(tr("server_retry"))
+                        .on_click(cx.listener(|this, _, _, cx| this.load_web_ui(cx))))))
+                .when_some(m.web_ui_error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert("machines-web-ui-error", error))))
+        });
+
+        // Convidado não troca; servidor sem a troca ou máquina sem migrar (`Ok(None)`) não oferece.
+        let dev_mode = (!self.active_invite() && !matches!(m.dev_mode.value, Some(Ok(None)))).then(|| {
+            let mode = m.dev_mode.ok().cloned().flatten();
+            let read_error = m.dev_mode.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !m.dev_mode.loading).cloned();
+            // Sem o modo depois de uma leitura boa: o interruptor aparece ligado e só desliga.
+            let lost = m.dev_mode_lost();
+            let d = &m.dev_switch;
+            let status = match &mode {
+                _ if d.busy() => d.step.as_ref().filter(|(_, total, _)| *total > 0).map(|(step, total, text)| tr("update_step")
+                    .replace("{step}", &step.to_string()).replace("{total}", &total.to_string()).replace("{text}", text))
+                    .unwrap_or_else(|| tr("dev_mode_switching")),
+                _ if lost => tr("dev_mode_unknown"),
+                Some(mode) => dev_mode_line(mode),
+                None if read_error.is_none() => tr("server_loading"),
+                None => tr("dev_mode_help"),
+            };
+            let developer = mode.as_ref().is_some_and(|mode| mode.developer);
+            // Para ligar é preciso a pasta; desligar volta para o pacote instalado.
+            let folder = (mode.is_some() && !developer).then(|| m.dev_folder.as_ref().map(|(input, _)| input.clone())).flatten();
+            let no_folder = folder.is_some() && self.dev_folder_value(cx).is_empty();
+            let toggle = Switch::new("machines-dev-mode").checked(developer || lost).accessibility_label(tr("dev_mode_title"))
+                .disabled((mode.is_none() && !lost) || m.dev_mode.loading || busy || no_folder)
+                .on_click(cx.listener(|this, on: &bool, window, cx| this.confirm_dev_mode(*on, window, cx)));
+            let done = if d.manual { Some((tr("dev_mode_done_manual"), theme::warning())) }
+                else { d.at.as_ref().map(|_| (tr("dev_mode_done"), theme::success())) };
+            let alert = |id: &'static str, text: String| div().id(id).role(Role::Alert).flex_1().text_size(px(12.5)).text_color(theme::danger())
+                .whitespace_normal().child(text);
+            settings_box().child(self.row_with(IconName::SquareTerminal, "dev_mode_title", div().whitespace_normal().child(status), mode.is_some() || lost,
+                    toggle.into_any_element()))
+                .when_some(folder, |el, input| el.child(div().px_4().pb_4().flex().flex_col().gap(px(6.))
+                    .child(div().text_size(px(12.5)).text_color(theme::muted()).child(tr("dev_mode_folder")))
+                    .child(Input::new(&input).small().disabled(busy).aria_label(tr("dev_mode_folder")))))
+                .when(!d.busy() && mode.is_some(), |el| el.child(div().px_4().pb_4().child(muted(tr("dev_mode_help")))))
+                .when_some(done.filter(|_| !d.busy()), |el, (text, color)| el.child(div().id("machines-dev-mode-done").role(Role::Status)
+                    .px_4().pb_4().text_size(px(12.5)).text_color(color).whitespace_normal().child(text)))
+                .when_some(read_error, |el, error| el.child(div().flex().items_center().gap(px(10.)).px_4().pb_4()
+                    .child(alert("machines-dev-mode-load-error", error))
+                    .child(Button::new("machines-dev-mode-retry").outline().small().label(tr("server_retry"))
+                        .on_click(cx.listener(|this, _, _, cx| this.load_dev_mode(cx))))))
+                .when_some(d.error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert("machines-dev-mode-error", error))))
+        });
+
         let this = cx.entity().downgrade();
         let advanced_open = m.advanced;
         let advanced = div().flex().flex_col().gap(px(10.))
@@ -1893,6 +2137,8 @@ impl Hangar {
             .child(addresses)
             .child(settings_box().child(section_head(IconName::RotateCw, tr("machines_service"), None, None, px(16.)))
                 .child(div().px_4().pb_4().child(service)))
+            .children(web_ui)
+            .children(dev_mode)
             .child(advanced)
             .child(remove)
     }
@@ -1932,9 +2178,81 @@ impl RenderOnce for FocusOnClick {
 #[cfg(test)]
 mod tests {
     use super::{Back, Card, Check, Kind, Light, Line, Peer, Reach, Reason, Row, ServerEntry, card_state, collapsed, host_key, join_lines, parse_going,
-        parse_peers, parse_reach, row_state, update_warnings, valid_id};
+        parse_peers, parse_reach, row_state, update_warnings, valid_id, web_ui_value, Machines};
     use std::collections::HashMap;
-    use crate::i18n::tr;
+    use crate::{api::Failure, i18n::tr};
+
+    fn refused(status: u16, detail: &str) -> Failure {
+        Failure { status: Some(status), detail: detail.into(), retry_after: None, uncertain: false, code: Some("web_ui_unavailable".into()) }
+    }
+
+    #[test]
+    fn dev_mode_reads_the_mode_and_hides_where_the_switch_does_not_exist() {
+        use super::{dev_mode_line, dev_mode_value, DevMode};
+        let package = dev_mode_value(Ok(serde_json::json!({"modo": "pacote", "canal": "beta", "checkout": "/x/hangar"})));
+        assert_eq!(package, Ok(Some(DevMode { developer: false, channel: "beta".into(), checkout: "/x/hangar".into() })));
+        assert_eq!(dev_mode_line(&package.unwrap().unwrap()), tr("dev_mode_package").replace("{channel}", "beta"));
+        let dev = dev_mode_value(Ok(serde_json::json!({"modo": "desenvolvedor", "canal": "main", "checkout": "/x/hangar"}))).unwrap().unwrap();
+        assert!(dev.developer);
+        assert_eq!(dev_mode_line(&dev), tr("dev_mode_developer").replace("{folder}", "/x/hangar"));
+        assert_eq!(dev_mode_value(Ok(serde_json::json!({"modo": "pacote", "canal": "latest", "checkout": null}))).unwrap().unwrap().checkout, "");
+        // Servidor anterior à troca (sem `canal`) e máquina sem migrar (motor `git`, sem `modo`): o interruptor some.
+        assert_eq!(dev_mode_value(Ok(serde_json::json!({"modo": "pacote"}))), Ok(None));
+        assert_eq!(dev_mode_value(Ok(serde_json::json!({"versoes": {}}))), Ok(None));
+        assert_eq!(dev_mode_value(Err(refused(404, "Not Found"))), Ok(None));
+        assert_eq!(dev_mode_value(Err(refused(503, "fixture-unavailable"))), Err("fixture-unavailable".into()), "o motivo do servidor");
+    }
+
+    #[test]
+    fn dev_mode_after_a_good_read_keeps_the_row_with_unknown_mode_and_the_off_switch() {
+        let mut m = Machines::default();
+        let first = m.dev_mode.start();
+        assert!(m.dev_mode_read(first, Ok(serde_json::json!({"modo": "pacote"}))));
+        assert_eq!(m.dev_mode.value, Some(Ok(None)), "primeira leitura sem a troca: a linha some");
+        assert!(!m.dev_mode_lost());
+
+        let good = m.dev_mode.start();
+        m.dev_mode_read(good, Ok(serde_json::json!({"modo": "pacote", "canal": "beta", "checkout": "/x/hangar"})));
+        assert!(!m.dev_mode_lost());
+        // Trocou para um checkout sem a troca (sem `canal`, 404) ou a leitura falhou: a linha fica, com o motivo.
+        for (reply, reason) in [(Ok(serde_json::json!({"modo": "desenvolvedor"})), tr("dev_mode_unknown_reason")),
+                                (Err(refused(404, "Not Found")), tr("dev_mode_unknown_reason")),
+                                (Err(refused(503, "fixture-unavailable")), "fixture-unavailable".to_owned())] {
+            let seq = m.dev_mode.start();
+            assert!(!m.dev_mode_lost(), "lendo de novo");
+            m.dev_mode_read(seq, reply);
+            assert!(m.dev_mode_lost());
+            assert_eq!(m.dev_mode.value, Some(Err(reason)));
+        }
+        let back = m.dev_mode.start();
+        m.dev_mode_read(back, Ok(serde_json::json!({"modo": "desenvolvedor", "canal": "main", "checkout": "/x/hangar"})));
+        assert!(!m.dev_mode_lost());
+    }
+
+    #[test]
+    fn web_ui_reads_the_choice_and_old_servers_hide_the_row() {
+        assert_eq!(web_ui_value(Ok(serde_json::json!({"web_ui": false}))), Ok(Some(false)));
+        assert_eq!(web_ui_value(Ok(serde_json::json!({"web_ui": true}))), Ok(Some(true)));
+        assert_eq!(web_ui_value(Err(refused(404, "Not Found"))), Ok(None), "servidor sem a rota");
+        assert_eq!(web_ui_value(Err(refused(405, "Method Not Allowed"))), Ok(None));
+        assert_eq!(web_ui_value(Err(refused(503, "fixture-unavailable"))), Err("fixture-unavailable".into()), "o motivo do servidor");
+        assert_eq!(web_ui_value(Ok(serde_json::json!({"web_ui": "sim"}))), Err(tr("invalid_response")));
+    }
+
+    #[test]
+    fn web_ui_failed_save_keeps_the_previous_value_and_shows_why() {
+        let mut m = Machines::default();
+        let read = m.web_ui.start();
+        m.web_ui.finish(read, Ok(Some(true)));
+        (m.web_ui_saving, m.web_ui_seq) = (true, 1);
+        m.web_ui_saved(1, Err(refused(503, "fixture-unavailable")));
+        assert_eq!((m.web_ui.ok(), m.web_ui_saving, m.web_ui_error.as_deref()), (Some(&Some(true)), false, Some("fixture-unavailable")));
+        (m.web_ui_saving, m.web_ui_seq) = (true, 2);
+        m.web_ui_saved(1, Ok(serde_json::json!({"web_ui": false})));
+        assert!(m.web_ui_saving && m.web_ui.ok() == Some(&Some(true)), "resposta de pedido velho cai");
+        m.web_ui_saved(2, Ok(serde_json::json!({"web_ui": false})));
+        assert_eq!((m.web_ui.ok(), m.web_ui_saving, m.web_ui_error.as_deref()), (Some(&Some(false)), false, None));
+    }
 
     #[test]
     fn update_warnings_are_the_state_avisos_like_the_web() {

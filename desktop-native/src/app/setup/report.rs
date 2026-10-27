@@ -4,6 +4,7 @@ use std::{sync::{Arc, Mutex, mpsc}, path::{Path, PathBuf}, process::{Command, St
 use serde::Serialize;
 use crate::i18n::tr;
 use super::flow::Screen;
+use super::local::Mode;
 use super::system::{hidden, refreshed_path};
 
 /// O Worker aceita 256 KB de JSON. Os tetos contam bytes já escapados (`json_len`): `"`, `\\` e controle pesam mais no corpo.
@@ -334,17 +335,26 @@ pub(crate) fn restore_notes(head_moved: Option<&(String, String)>, errors: &[Str
     notes
 }
 
-fn venv_python(dest: &Path) -> PathBuf {
-    if cfg!(windows) { dest.join(r"backend\.venv\Scripts\python.exe") } else { dest.join("backend/.venv/bin/python") }
+/// O Python e a pasta `backend` do doctor: no clone, o venv; no pacote, o Python embutido da versão em `current`.
+pub(crate) fn doctor_paths(mode: Mode, dest: &Path, windows: bool) -> (PathBuf, PathBuf) {
+    // Os caminhos do `install_root::python_exe` do `hangar-server`, que este crate não importa.
+    let root = match mode { Mode::Git => dest.to_owned(), Mode::Package => dest.join("current") };
+    let python = match (mode, windows) {
+        (Mode::Git, true) => root.join(r"backend\.venv\Scripts\python.exe"),
+        (Mode::Git, false) => root.join("backend/.venv/bin/python"),
+        (Mode::Package, true) => root.join("python").join("python.exe"),
+        (Mode::Package, false) => root.join("python").join("bin").join("python3"),
+    };
+    (python, root.join("backend"))
 }
 
-/// `python -m app.doctor` pelo Python do venv, com o PATH refeito. Sem venv, o backend ainda não existe: `None`.
-pub(crate) fn doctor(dest: &Path) -> Option<String> {
-    let python = venv_python(dest);
+/// `python -m app.doctor` com o PATH refeito. Sem o Python, o backend ainda não existe: `None`.
+pub(crate) fn doctor(mode: Mode, dest: &Path) -> Option<String> {
+    let (python, backend) = doctor_paths(mode, dest, cfg!(windows));
     if !python.is_file() { return None; }
     // `--qr` imprimiria a URL com o token; sem ele o doctor só lista itens.
     let mut command = Command::new(python);
-    hidden(&mut command).args(["-m", "app.doctor"]).current_dir(dest.join("backend"))
+    hidden(&mut command).args(["-m", "app.doctor"]).current_dir(backend)
         .env("PATH", refreshed_path()).env("PYTHONIOENCODING", "utf-8");
     Some(run_with_timeout(command, DOCTOR_TIMEOUT))
 }
@@ -534,6 +544,16 @@ mod tests {
         let s = Secrets { values: vec![], home: Some(r"C:\Users\Maria".into()), users: vec!["Maria".into()] };
         let out = scrub(r"C:\Users\Maria\hangar e c:/users/maria/x e D:\Dados\maria\y", &s);
         assert_eq!(out, r"~\hangar e ~/x e D:\Dados\<usuario>\y");
+    }
+
+    #[test]
+    fn doctor_runs_the_python_of_each_mode() {
+        let clone = Path::new("/home/dev/hangar");
+        assert_eq!(doctor_paths(Mode::Git, clone, false), (clone.join("backend/.venv/bin/python"), clone.join("backend")));
+        assert_eq!(doctor_paths(Mode::Git, clone, true).0, clone.join(r"backend\.venv\Scripts\python.exe"));
+        let hangar = Path::new("/home/dev/.hangar");
+        assert_eq!(doctor_paths(Mode::Package, hangar, false), (hangar.join("current/python/bin/python3"), hangar.join("current/backend")));
+        assert_eq!(doctor_paths(Mode::Package, hangar, true), (hangar.join("current").join("python").join("python.exe"), hangar.join("current/backend")));
     }
 
     fn facts(log: String) -> Facts {

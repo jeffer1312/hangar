@@ -4,6 +4,7 @@ titulo: No Windows, o Python instalado pelo winget volta a servir aos comandos d
 comando_windows: powershell -ExecutionPolicy Bypass -File install.ps1 -Update
 prova: ~/.local/bin/hangar-conta.cmd ~/.local/bin/python3.cmd
 destrutivo: false
+tipo: maquina
 ---
 
 Com o Python 3.14 instalado pelo winget (Python Install Manager), o instalador não o reconhecia e

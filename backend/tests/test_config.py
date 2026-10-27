@@ -367,3 +367,22 @@ def test_invalid_update_last_branch_reports_correct_variable(monkeypatch, caplog
     assert result.update_last_branch == ""
     assert "CP_UPDATE_LAST_BRANCH" in caplog.text
     assert events[-1]["detalhe"] == "CP_UPDATE_LAST_BRANCH ignorado"
+
+
+def test_settings_read_the_env_from_the_user_data_folder(monkeypatch, tmp_path):
+    """Máquina migrada: o `.env` está só em `~/.hangar/config/` e o token sai de lá."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CP_AUTH_TOKEN", raising=False)
+    config = tmp_path / ".hangar" / "config"
+    config.mkdir(parents=True)
+    (config / ".env").write_text("CP_AUTH_TOKEN=do-lugar-novo\n", encoding="utf-8")
+    # Comparado fora do assert: na falha o pytest imprimiria o token lido, que pode ser o real.
+    veio_do_lugar_novo = Settings().auth_token == "do-lugar-novo"
+    assert veio_do_lugar_novo, "o token não veio de ~/.hangar/config/.env"
+
+
+def test_settings_keep_reading_backend_env_on_an_unmigrated_machine(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from app import user_data
+    assert user_data.path(".env") == Path(__file__).resolve().parent.parent / ".env"
+    assert not (tmp_path / ".hangar").exists()

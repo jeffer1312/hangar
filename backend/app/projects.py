@@ -19,7 +19,7 @@ import threading
 import time
 from pathlib import Path
 
-from app import atomico, runner
+from app import atomico, runner, user_data
 from app.models import ProjectStatus, RunInfo
 from app.procinfo import _TEM_PROC
 
@@ -48,7 +48,7 @@ def _trava_exclusiva(fh) -> None:
     else:
         fcntl.flock(fh, fcntl.LOCK_EX)
 
-_CONFIG = Path(__file__).resolve().parent.parent / "projects.json"
+_CONFIG = user_data.path("projects.json")
 _STOP_TIMEOUT = 30
 
 

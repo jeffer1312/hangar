@@ -25,30 +25,42 @@ como PWA e operar o chat. Site: [hangar.dev.br](https://hangar.dev.br). Pra arqu
 Numa máquina sem Hangar ele oferece instalar o servidor em poucas telas, sem terminal. Detalhes
 em [App de desktop](#app-de-desktop-nativo).
 
-**Pelo terminal, é uma linha só** — ela clona o repositório em `~/hangar` e chama o instalador:
+**Pelo terminal, é uma linha só.** No Linux e no Windows ela instala o **pacote pronto** do Hangar
+(código, Python próprio e servidor Rust do mesmo commit) em `~/.hangar`, sem `git`, `uv` nem build
+da tela, e roda o instalador que vem nele:
 
 ```bash
 # Linux/macOS
 curl -fsSL https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.sh | bash
+curl -fsSL …/bootstrap.sh | bash -s -- --beta   # canal de teste
+curl -fsSL …/bootstrap.sh | bash -s -- --dev    # pelo git, para editar o código (modo desenvolvedor)
 ```
+
+Com `--dev` (ou dando uma pasta) ela clona o repositório em `~/hangar` e chama o instalador do
+checkout, como antes; a máquina fica em modo desenvolvedor. Sistema sem pacote publicado (macOS,
+hoje) segue pelo git e diz o motivo. Rodar de novo numa máquina já instalada pelo pacote só refaz o
+instalador dela; atualizar é pelo botão Atualizar do app.
 
 ```powershell
 # Windows
 irm https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.ps1 | iex
+$env:CP_CANAL = 'beta'; irm …/bootstrap.ps1 | iex   # canal de teste
+$env:CP_DEV = '1'; irm …/bootstrap.ps1 | iex        # pelo git, para editar o código (modo desenvolvedor)
 ```
 
 Outra pasta de destino, ou flags do `install.sh`, vão **depois de `-s --`** (sob `curl | bash` é
 esse separador que impede o próprio bash de comê-las):
 
 ```bash
-curl -fsSL …/bootstrap.sh | bash -s -- ~/apps/hangar --no-frontend
-curl -fsSL …/bootstrap.sh | bash -s -- --check      # só confere dependências e sai
+curl -fsSL …/bootstrap.sh | bash -s -- --dev ~/apps/hangar --no-frontend
+curl -fsSL …/bootstrap.sh | bash -s -- --check      # só confere uma instalação existente e sai
 ```
 
-No Windows, defina `$env:CP_DESTINO = 'D:\hangar'` **antes** da linha do `irm` — sob
-`irm | iex` o script chega como texto e não recebe argumento nenhum. Rodar de novo é seguro: se a
-pasta já for este repositório ele faz `git pull` em vez de clonar; se for outra coisa, ele **para**
-em vez de mexer no que é seu.
+No Windows as opções são variáveis definidas **antes** da linha do `irm` — sob `irm | iex` o script
+chega como texto e não recebe argumento nenhum. `$env:CP_DESTINO = 'D:\hangar'` escolhe a pasta do
+checkout e, como o `CP_DEV`, instala pelo git. Rodar de novo é seguro: pelo git, se a pasta já for
+este repositório ele faz `git pull` em vez de clonar; se for outra coisa, ele **para** em vez de
+mexer no que é seu.
 
 Prefere ver o que está rodando antes? Clone na mão — dá no mesmo:
 
@@ -121,6 +133,34 @@ falha:
   `hangar-engine` roda o comando por subprocess no Windows (o `exec` com env crasha lá).
 - Resurrect/continuum (sessões sobreviverem a reboot): são plugins de tmux em bash, e o
   psmux não roda plugin de tmux. Fechou o Windows, as sessões se foram.
+
+### Atualizar, dados e modo desenvolvedor
+
+Máquina migrada para o **pacote por versão** não usa mais `git pull` para atualizar. O botão
+**Atualizar** baixa o pacote do seu sistema (código, Python próprio e servidor Rust do mesmo
+commit), confere, instala ao lado do que está rodando em `~/.hangar/versions/<versão>`, troca o
+apontador `~/.hangar/current` e reinicia. Se o servidor novo não subir, volta sozinho para a versão
+anterior e mostra o motivo. Com as automações ligadas, ele procura versão nova de hora em hora. Não
+precisa de `git`, `uv` nem `npm` na máquina; o Node continua necessário.
+
+**Seus dados ficam em `~/.hangar/config/`** (no Windows, `%USERPROFILE%\.hangar\config\`): o
+`.env` com o token, `peers.json`, `projects.json` e `launchers/`. As pastas de versão podem ser
+trocadas e apagadas sem perder nada disso. Máquina ainda não migrada continua com esses arquivos em
+`backend/`.
+
+**Modo desenvolvedor** é a máquina que roda de um checkout git que você edita: o
+`~/.hangar/current` aponta para o checkout, e o Atualizar faz `git pull --ff-only` na branch dele e
+reinicia, sem recompilar nada. Com edição local ou commit à frente, ele recusa e diz o motivo. A
+migração escolhe esse modo sozinha quando o checkout tem edição, arquivo novo, commit à frente, está
+fora da `main` ou serve a tela pelo `vite`. Depois, para editar o código de uma máquina em pacote:
+`hangar-server dev-mode on <pasta do checkout>`; para voltar à versão instalada mais nova:
+`hangar-server dev-mode off`. Os dois reiniciam o servidor e, se ele não voltar, desfazem a troca.
+Para voltar tudo ao checkout: `hangar-server migrate-package --undo` (o checkout nunca é apagado).
+
+**Tela web neste servidor** (nas configurações do servidor, no app nativo e no app do celular)
+liga ou desliga a página do Hangar no navegador por esta máquina. Vem ligada. Desligada, o
+navegador e o PWA deixam de abrir por ela e a atualização não baixa os arquivos da tela; o app
+nativo e o do celular continuam funcionando.
 
 ## 2. Subir na mão
 

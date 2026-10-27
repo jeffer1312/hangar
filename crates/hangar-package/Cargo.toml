@@ -1,0 +1,17 @@
+[package]
+name = "hangar-package"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+flate2.workspace = true
+# Sem xattr: o pacote não carrega atributos estendidos.
+tar = { version = "=0.4.46", default-features = false }
+# sha256 dos arquivos; já vem pelo rustls, sem crate novo.
+ring = "=0.17.14"
+
+[dev-dependencies]
+tempfile.workspace = true

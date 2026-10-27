@@ -16,7 +16,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app import alcance, atomico, descoberta, peers, peers_check, runtime_config
+from app import alcance, atomico, descoberta, peers, peers_check, runtime_config, user_data
 from app.auth import require_auth
 from app.config import detect_lan_ip, resolve_bind_ip, settings
 from app.mensagens import erro
@@ -25,9 +25,9 @@ peers_router = APIRouter(prefix="/api/peers")
 
 _log = logging.getLogger("hangar")
 
-# .env do backend (o MESMO que o hangar-send e o .env_file do Settings leem): é o único arquivo que
-# os dois enxergam — o identificador gravado aqui vale pro script e pra próxima subida do serviço.
-_ENV_ARQUIVO = Path(__file__).resolve().parent.parent / ".env"
+# O `.env` (o MESMO que o hangar-send e o Settings leem): é o único arquivo que os dois enxergam —
+# o identificador gravado aqui vale pro script e pra próxima subida do serviço.
+_ENV_ARQUIVO = user_data.path(".env")
 
 
 def _lista() -> list[dict]:

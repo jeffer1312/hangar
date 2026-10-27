@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S sh -c 'exec "$(command -v hangar-python || command -v python3)" "$0" "$@"'
 """Watch a GitHub PR and print one JSON line per event worth waking the agent for.
 
 Run under the Monitor tool: stdout is the event stream. State lives in

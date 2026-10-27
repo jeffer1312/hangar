@@ -19,8 +19,7 @@ on:
   workflow_run:
     workflows: [Server, CI]
     types: [completed]
-    # Só a beta até a prova nas máquinas reais; a main entra junto com o passo de migração.
-    branches: [beta]
+    branches: [main, beta]
   workflow_dispatch:
 
 env:

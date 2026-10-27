@@ -32,7 +32,7 @@ impl Hangar {
         self.entry = Some(Entry::Probing);
         let (done, result) = tokio::sync::oneshot::channel();
         self.runtime.spawn(async move {
-            let install = tokio::task::spawn_blocking(|| local::find_dir().map(|dir| local::read_install(&dir))).await.ok().flatten();
+            let install = tokio::task::spawn_blocking(local::find_install).await.ok().flatten();
             let _ = done.send(local::probe(install).await);
         });
         cx.spawn_in(window, async move |this, cx| {

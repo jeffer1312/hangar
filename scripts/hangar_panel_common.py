@@ -38,9 +38,18 @@ class PanelError(Exception):
     """Erro já legível pro usuário final (sem traceback)."""
 
 
+def user_data(name: str) -> Path:
+    """Dados do usuário: `~/.hangar/config/` quando o arquivo está lá ou a máquina migrou (`current`),
+    senão a `backend/` do checkout. A regra do `app/user_data.py`: no pacote, a `backend/` acima
+    deste script é a da versão, sem `.env` nem `peers.json`."""
+    hangar = Path.home() / ".hangar"
+    new = hangar / "config" / name
+    return new if new.exists() or (hangar / "current").exists() else BACKEND / name
+
+
 def env(key: str) -> str:
     try:
-        for line in (BACKEND / ".env").read_text(encoding="utf-8").splitlines():
+        for line in user_data(".env").read_text(encoding="utf-8").splitlines():
             if line.startswith(f"{key}="):
                 return line.split("=", 1)[1].strip()
     except OSError:
@@ -77,7 +86,7 @@ def enabled(cfg: object) -> bool:
 def peers() -> dict:
     """Mapa id -> {base_url, token, web_url?}. Ausente = máquina só-local (não é erro)."""
     try:
-        data = json.loads((BACKEND / "peers.json").read_text(encoding="utf-8"))
+        data = json.loads(user_data("peers.json").read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as e:
@@ -97,7 +106,7 @@ def set_peer_enabled(pid: str, on: bool, path: Path | None = None) -> None:
     servidor remoto inalcançável — estrago muito maior que os 4s de timeout que o toggle evita.
     Mora aqui, e não no hangar-panel-action, porque este é o módulo que já lê o arquivo — e é
     importável, então dá pra testar a gravação sem mexer no peers.json de verdade."""
-    path = path or (BACKEND / "peers.json")
+    path = path or user_data("peers.json")
     # Lock EXCLUSIVO cobrindo leitura+escrita: isto é read-modify-write do arquivo inteiro, e o
     # painel (Quickshell) e a CLI podem chamar ao mesmo tempo. Sem lock, quem grava por último
     # apaga a mudança do outro — sem erro, sem log. Sidecar e não o próprio peers.json porque o

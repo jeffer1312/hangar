@@ -101,6 +101,8 @@ pub struct AppState {
     pub device_install: Arc<crate::device_install::job::DeviceInstall>,
     /// Reservas pré-aquecidas do Claude sem terminal (tela de nova conversa aberta).
     pub prewarm: Arc<crate::prewarm::Store>,
+    /// Base das releases do pacote que o `GET /api/atualizacao` consulta; o teste troca.
+    pub update_release_base: String,
 }
 
 impl AppState {
@@ -183,6 +185,7 @@ impl AppState {
             costs, fx, reports: Arc::new(crate::costs::ReportCache::default()),
             origins_home: std::path::PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap_or_default()),
             prewarm: Arc::new(crate::prewarm::Store::server(&hangar_dir)),
+            update_release_base: crate::update::RELEASE_BASE.to_owned(),
             hangar_dir, device_install,
             upload_naming: Default::default(),
             origins: std::sync::Mutex::new(indexmap::IndexMap::new()),
@@ -609,7 +612,15 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/device-install/start", axum::routing::post(crate::device_install::routes::start))
         .route("/api/device-install/code", axum::routing::post(crate::device_install::routes::code))
         .route("/api/device-install/certs", axum::routing::post(crate::device_install::routes::certs))
-        .fallback(pass_any)
+        // Tela web ligada ou não: só o dono, nunca repassado.
+        .route("/api/web-ui", get(crate::ui::setting).put(crate::ui::setting))
+        // Atualização: o Rust atende o dono na máquina migrada; o resto segue ao motor `git` do Python.
+        .route("/api/atualizacao", get(crate::update::http::status).fallback(pass_any))
+        .route("/api/atualizacao/iniciar", axum::routing::post(crate::update::http::start).fallback(pass_any))
+        .route("/api/atualizacao/reiniciar", axum::routing::post(crate::update::http::restart).fallback(pass_any))
+        .route("/api/atualizacao/dev-mode", axum::routing::post(crate::update::http::switch_dev_mode).fallback(pass_any))
+        // A tela web é servida aqui; o que não é dela segue ao Python.
+        .fallback(crate::ui::fallback)
         .layer(axum::middleware::from_fn(crate::migration_status::count_public))
         .with_state(state.clone())
         .merge(owner_share_router(&state, pair))
@@ -640,16 +651,23 @@ fn plugin_router(state: Arc<AppState>) -> Router {
 async fn health(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let owns: Vec<_> = crate::session_write::table::owned_modes().into_iter()
         .map(|(provider, headless)| serde_json::json!({"provider": provider.name(), "headless": headless})).collect();
-    let body = serde_json::json!({"ok": true, "version": env!("CARGO_PKG_VERSION"),
+    let mut body = serde_json::json!({"ok": true, "version": env!("CARGO_PKG_VERSION"),
         "protocol": crate::INTERNAL_PROTOCOL,
+        // A prova de vida do atualizador (`update::HttpHealth`): pid novo = processo novo.
+        "pid": std::process::id(),
         "owns": owns,
         // O painel de terminal real é do Rust em todas as plataformas.
         "terminal_panel": true,
         // Sem as pastas da lista não há serviço de grupos: as rotas seguem ao Python, que fica dono.
         "groups": st.groups.is_some(),
         "guest_port_bound": st.guest_bound.load(Ordering::Relaxed),
-        "terminal_address": st.terminal_address.map(|a| a.to_string())}).to_string();
-    let mut resp = ([(header::CONTENT_TYPE, "application/json")], body).into_response();
+        "terminal_address": st.terminal_address.map(|a| a.to_string())});
+    // Versão e commit do pacote de onde este processo subiu; ausentes no modo desenvolvedor.
+    if let Some(package) = crate::update::running_package() {
+        body["package_version"] = package.version.clone().into();
+        body["package_commit"] = package.commit.clone().into();
+    }
+    let mut resp = ([(header::CONTENT_TYPE, "application/json")], body.to_string()).into_response();
     cors(&headers, resp.headers_mut());
     resp
 }

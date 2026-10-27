@@ -16,6 +16,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 REPO=$(pwd)
+# Modo pacote: esta pasta é uma versão extraída (manifest.json sem .git, o critério do install_root).
+# Python, dependências, binários e tela vieram prontos: nada de git, uv, venv nem build da tela.
+PACOTE=0
+[ -f manifest.json ] && [ ! -e .git ] && PACOTE=1
+# Dados do usuário: no pacote (e depois da migração) o `.env` mora em ~/.hangar/config; antes, aqui.
+# Gravar no do checkout numa máquina migrada criaria um token que o novo esconde.
+ENV_FILE=backend/.env
+if [ "$PACOTE" = 1 ] || [ -f "$HOME/.hangar/config/.env" ]; then ENV_FILE="$HOME/.hangar/config/.env"; fi
 
 YES=0; CHECK=0; UPDATE=0; WRAPPER=1; SERVICES=1; CPSEND=1; PANEL=1; FRONTEND=1; AVANCADO=0; AGENTES=''
 APP=0; TAILSCALE=''; SEM_NATIVO=0
@@ -42,6 +50,11 @@ for arg in "$@"; do
     --no-hangar-send|--no-cp-send)  CPSEND=0 ;;
     --no-panel)    PANEL=0 ;;
     --no-frontend) FRONTEND=0 ;;
+    --help|-h)
+      # Lida deste próprio case: flag nova entra na ajuda sem lista à parte.
+      echo "uso: ./install.sh [flags]   (exemplos no começo do install.sh)"
+      sed -n '/^for arg in/,/^done/{/exit 1/!s/^ *\(-[^)]*\)).*/  \1/p;}' "$REPO/install.sh"
+      exit 0 ;;
     *) echo "flag desconhecida: $arg"; exit 1 ;;
   esac
 done
@@ -107,6 +120,9 @@ unset HANGAR_TOKEN
 APP_ASKPASS=${HANGAR_ASKPASS-}
 APP_ASKPASS_CODE=${HANGAR_ASKPASS_CODE-}
 unset HANGAR_ASKPASS HANGAR_ASKPASS_CODE
+# Só o bootstrap manda isto, enquanto há o marcador da instalação nova: depois de marcar, rodar de novo não marca passo.
+FRESH=${HANGAR_FRESH_PACKAGE-}
+unset HANGAR_FRESH_PACKAGE
 mark_item() { [ "$APP" = 1 ] || return 0; echo "##HANGAR-ITEM## $1 $2 $3"; }
 # Item de uma parte inteira: pendente quando ela somou problema desde a contagem `antes`.
 mark_item_since() { # mark_item_since <id> <antes> <texto>
@@ -249,6 +265,25 @@ if [ "$UPDATE" = 0 ] && [ "$CHECK" = 0 ]; then
   exec > >(tee -a "$LOG") 2>&1
 fi
 
+# O Python do backend: o embutido do pacote (pelo hangar-python) ou o venv do checkout.
+py_backend() {
+  if [ "$PACOTE" = 1 ]; then (cd backend && ../scripts/hangar-python "$@")
+  else (cd backend && uv run --quiet --no-sync python "$@"); fi
+}
+if [ "$PACOTE" = 1 ] && [ "$CHECK" = 0 ]; then
+  mkdir -p "$HOME/.hangar/config" && chmod 700 "$HOME/.hangar/config"
+  # Os sub-scripts chamam `python3`; no pacote ele é o Python embutido, e a máquina pode não ter outro.
+  SHIM="$HOME/.hangar/cache/install-bin"
+  mkdir -p "$SHIM"
+  printf '#!/bin/sh\nexec "%s/scripts/hangar-python" "$@"\n' "$REPO" > "$SHIM/python3"
+  chmod +x "$SHIM/python3"
+  export PATH="$SHIM:$PATH"
+fi
+# O .env guarda o token: nasce só do dono, e o que já existia aberto é fechado.
+if [ "$CHECK" = 0 ]; then
+  { (umask 077 && : >> "$ENV_FILE") && chmod 600 "$ENV_FILE"; } || fail "não consegui deixar $ENV_FILE só para o dono (chmod 600)"
+fi
+
 # Quatro sabores, e a diferença é quem decide:
 #  ask       -> padrão SIM sem perguntar (--avancado pergunta). Sem terminal: NÃO.
 #  ask_senha -> vai pedir sudo: SEMPRE pergunta (com terminal), mesmo no padrão. --yes: sim.
@@ -296,8 +331,21 @@ detecta_pkg() {
 }
 PKG=$(detecta_pkg)
 
+# Onde o fnm deixa o Node padrão (o mesmo caminho da unit). Só o .bashrc o põe no PATH, e ele não
+# carrega fora de terminal interativo: um Node instalado por uma rodada anterior seria dado como ausente.
+FNM_NODE="$HOME/.local/share/fnm/aliases/default/bin"
+[ -d "$FNM_NODE" ] && export PATH="$PATH:$FNM_NODE"
+# Mesmo motivo: o Claude Code de uma rodada anterior fica em ~/.local/bin. No fim, para não passar na frente do sistema.
+[ -d "$HOME/.local/bin" ] && export PATH="$PATH:$HOME/.local/bin"
+
+# 0 = há loginctl e o linger deste usuário está desligado: só então a dica de enable-linger serve.
+linger_falta() {
+  command -v loginctl >/dev/null || return 1
+  ! loginctl show-user "${USER:-$(id -un)}" -p Linger 2>/dev/null | grep -qx 'Linger=yes'
+}
+
 # Cedo porque o 6/8 também precisa dela (o `tailscale serve` publica ESTA porta), não só o resumo.
-PORTA_FIM=$(grep '^CP_PORT=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+PORTA_FIM=$(grep '^CP_PORT=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
 PORTA_FIM=${PORTA_FIM:-8765}
 
 if [ "$UPDATE" = 0 ] && [ "$CHECK" = 0 ]; then
@@ -329,13 +377,13 @@ echo "  No máximo duas perguntas agora, e depois o instalador segue sozinho at�
 echo "  Ele pode pedir sua senha de administrador (pergunta antes, cada vez) para:"
 echo "  instalar o programa que mantém as sessões abertas (tmux), liberar a porta do"
 echo "  Wi-Fi e, se você quiser, o Tailscale."
-if [ -f backend/.env ] && grep -q '^CP_AUTH_TOKEN=' backend/.env; then
-  ok "backend/.env já tem CP_AUTH_TOKEN (mantido)"
+if [ -f "$ENV_FILE" ] && grep -q '^CP_AUTH_TOKEN=' "$ENV_FILE"; then
+  ok "$ENV_FILE já tem CP_AUTH_TOKEN (mantido)"
 elif [ "$APP" = 1 ]; then
   # Mesmo piso da pergunta do terminal; vazio = o app pediu a senha gerada.
   case $APP_TOKEN in *$'\n'*|*$'\r'*) fail "a senha do celular veio do app com quebra de linha" ;; esac
   if [ -z "$APP_TOKEN" ]; then
-    APP_TOKEN=$(gera_token); ok "senha aleatória gerada (o app a lê de backend/.env)"
+    APP_TOKEN=$(gera_token); ok "senha aleatória gerada (o app a lê de $ENV_FILE)"
   elif [ ${#APP_TOKEN} -lt 8 ] || [ "$APP_TOKEN" = change-me ]; then
     fail "a senha do celular veio do app com menos de 8 caracteres"
   elif token_proibido "$APP_TOKEN"; then
@@ -343,22 +391,22 @@ elif [ "$APP" = 1 ]; then
   else
     ok "senha do celular escolhida no app"
   fi
-  printf 'CP_AUTH_TOKEN=%s\n' "$APP_TOKEN" >> backend/.env
+  printf 'CP_AUTH_TOKEN=%s\n' "$APP_TOKEN" >> "$ENV_FILE"
 elif [ "$YES" = 1 ]; then
-  printf 'CP_AUTH_TOKEN=%s\n' "$(gera_token)" >> backend/.env
+  printf 'CP_AUTH_TOKEN=%s\n' "$(gera_token)" >> "$ENV_FILE"
   ok "token aleatório gerado (--yes não pergunta)"
 elif [ "$TEM_TTY" = 0 ]; then
   # Sem terminal não dá pra perguntar, mas token é a ÚNICA tranca do app: gerar um aleatório é
   # o lado seguro (o inseguro seria seguir sem token). O que não pode é fazer isso calado —
   # quem rodou precisa saber que existe um token e onde ele está.
   TOKEN=$(gera_token)
-  printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> backend/.env
+  printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> "$ENV_FILE"
   # NÃO ecoar o valor: sem tty isto roda em provisionamento automatizado (CI, Ansible, ssh
   # não-interativo) e o stdout vira log. Pior aqui do que em qualquer projeto: o próprio app lê
   # `tmux capture-pane`, então uma instalação dentro de um pane monitorado gravaria o token no
   # histórico da ferramenta que ele protege. O PowerShell já não imprimia — era assimetria.
-  falta "sem terminal para perguntar — token ALEATÓRIO gerado (valor em backend/.env)"
-  nota "está em backend/.env; é ele que você digita no celular. Pra trocar, edite o arquivo."
+  falta "sem terminal para perguntar — token ALEATÓRIO gerado (valor em $ENV_FILE)"
+  nota "está em $ENV_FILE; é ele que você digita no celular. Pra trocar, edite o arquivo."
 else
   echo "  Você vai DIGITAR este token no celular, então escolha algo que lembre."
   echo "  Enter em branco = gera um aleatório de 48 caracteres (seguro, chato de digitar)."
@@ -374,25 +422,25 @@ else
     token_proibido "$TOKEN" && { erro "$TOKEN_PROIBIDO"; continue; }
     break
   done
-  printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> backend/.env
-  ok "CP_AUTH_TOKEN gravado em backend/.env"
+  printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> "$ENV_FILE"
+  ok "CP_AUTH_TOKEN gravado em $ENV_FILE"
 fi
 # Prova = o que o backend exige: valor presente e diferente do literal 'change-me'. O piso de
 # 8 caracteres é da PERGUNTA interativa, não da prova — um .env antigo com token curto é válido
 # pro backend e não pode derrubar uma reinstalação boa.
-grep -q '^CP_AUTH_TOKEN=.\+' backend/.env 2>/dev/null \
-  && ! grep -q '^CP_AUTH_TOKEN=change-me[[:space:]]*$' backend/.env \
-  || fail "o token não foi gravado em backend/.env — sem ele o celular não entra"
+grep -q '^CP_AUTH_TOKEN=.\+' "$ENV_FILE" 2>/dev/null \
+  && ! grep -q '^CP_AUTH_TOKEN=change-me[[:space:]]*$' "$ENV_FILE" \
+  || fail "o token não foi gravado em $ENV_FILE — sem ele o celular não entra"
 nota "É esse token que você digita no celular na primeira conexão."
 
 # Sem nome a máquina não conversa com as outras (recado de volta sai sem endereço). Nome que já
 # existe fica: trocá-lo pela tela avisa as outras máquinas, trocá-lo aqui não avisaria.
-if ! grep -q '^CP_SERVER_ID=.' backend/.env; then
+if ! grep -q '^CP_SERVER_ID=.' "$ENV_FILE"; then
   NOME_MAQUINA=$(hostname | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9_-]/-/g; s/^[-_]*//' | cut -c1-32)
   if [ -n "$NOME_MAQUINA" ]; then
     # Sem a quebra no fim do arquivo, o nome grudaria na última linha (o token).
-    [ -s backend/.env ] && [ -n "$(tail -c1 backend/.env)" ] && echo >> backend/.env
-    printf 'CP_SERVER_ID=%s\n' "$NOME_MAQUINA" >> backend/.env
+    [ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ] && echo >> "$ENV_FILE"
+    printf 'CP_SERVER_ID=%s\n' "$NOME_MAQUINA" >> "$ENV_FILE"
     ok "nome desta máquina para as outras: $NOME_MAQUINA"
   else
     falta "nome desta máquina não definido: o hostname não serve; defina na tela Máquinas"
@@ -446,12 +494,16 @@ precisa_home() { # precisa_home <rótulo> <cmd> <comando de instalação> <pra q
   if [ "$UPDATE" = 1 ]; then erro "$rotulo faltando (--update não instala dependência)"; PENDENTE+=("$rotulo"); return 1; fi
   if ask "Instalar agora? (vai pro teu \$HOME, sem sudo)"; then
     mark_item "$cmd" fazendo "$rotulo"
-    # O erro vai ao log: o relatório de falha precisa da causa. O resultado é conferido logo abaixo.
-    eval "$instalacao" >/dev/null 2>>"$LOG" || true
-    # O instalador põe em ~/.local/bin, que pode não estar no PATH DESTE shell.
-    export PATH="$HOME/.local/bin:$HOME/.local/share/fnm:$PATH"
+    # A saída inteira vai ao log se falhar: instaladores como o do fnm dizem a causa no stdout.
+    # O resultado é conferido logo abaixo.
+    local saida; saida=$(mktemp)
+    eval "$instalacao" >"$saida" 2>&1 || true
+    # O instalador põe em ~/.local/bin (e o fnm em aliases/default/bin), fora do PATH DESTE shell:
+    # sem terminal interativo o .bashrc que os acrescenta não carrega.
+    export PATH="$HOME/.local/bin:$HOME/.local/share/fnm:$FNM_NODE:$PATH"
     hash -r 2>/dev/null || true
-    if command -v "$cmd" >/dev/null; then ok "$rotulo instalado"; mark_item "$cmd" ok "$rotulo"; return 0; fi
+    if command -v "$cmd" >/dev/null; then rm -f "$saida"; ok "$rotulo instalado"; mark_item "$cmd" ok "$rotulo"; return 0; fi
+    cat "$saida" >> "$LOG"; rm -f "$saida"
   fi
   erro "$rotulo continua faltando"; mark_item "$cmd" falhou "$rotulo"
   # Código do primeiro que faltou: agente tem frase própria; o resto quase sempre é download que não veio.
@@ -553,13 +605,22 @@ elif [ -n "$ACHADOS" ]; then
 else
   precisa_home "Claude Code" claude "$CLAUDE_INSTALL" 'nenhum agente de código encontrado; o Claude Code é o padrão' || true
 fi
-precisa_home "uv"          uv     'curl -LsSf https://astral.sh/uv/install.sh | sh' 'gerencia o venv do backend' || true
+if [ "$PACOTE" = 1 ]; then
+  ok "Python e dependências do backend: vieram no pacote"
+else
+  precisa_home "uv"          uv     'curl -LsSf https://astral.sh/uv/install.sh | sh' 'gerencia o venv do backend' || true
+fi
+# No pacote a tela vem pronta; o Node segue servindo à statusline do Claude e ao hangar-preview.
+PRA_QUE_NODE='o frontend é Svelte'
+[ "$PACOTE" = 1 ] && PRA_QUE_NODE='statusline do Claude e hangar-preview'
 if [ "$FRONTEND" = 0 ]; then
   ok "Node: dispensado (--no-frontend)"
 elif ! command -v npm >/dev/null; then
+  # O instalador do fnm para sem o unzip; curl ele já tem, porque chegou por curl.
+  precisa_root "unzip" unzip unzip 'o instalador do Node (fnm) descompacta com ele' || true
   precisa_home "Node 20+" node \
     'curl -fsSL https://fnm.vercel.app/install | bash && "$HOME/.local/share/fnm/fnm" install 22 && "$HOME/.local/share/fnm/fnm" default 22' \
-    'o frontend é Svelte' || true
+    "$PRA_QUE_NODE" || true
 elif ! node -e 'process.exit(parseInt(process.versions.node) >= 20 ? 0 : 1)' 2>/dev/null; then
   erro "Node 20+ é necessário (atual: $(node --version))"; mark_item node falhou "Node 20+"; PENDENTE+=("Node 20+")
 else
@@ -569,8 +630,11 @@ fi
 # Os scripts de instalação (registrar-mcp.py, ponte de skills) rodam no python3 do PATH, não no
 # venv do backend. O do macOS é 3.9 e não aceita a sintaxe deles; o uv põe um 3.14 em ~/.local/bin.
 py_ok() { python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; }
-PY_ATUAL=$(python3 -V 2>&1 | awk '{print $2}')
-if py_ok; then
+PY_ATUAL=$(python3 -V 2>&1 | awk '{print $2}') || true
+if [ "$PACOTE" = 1 ]; then
+  # No pacote os scripts rodam no Python embutido, pelo atalho `python3` que a instalação cria.
+  ok "python3: o do pacote"; mark_item python3 ok "Python (do pacote)"
+elif py_ok; then
   ok "python3 $PY_ATUAL"; mark_item python3 ok "Python $PY_ATUAL"
 elif [ "$CHECK" = 1 ]; then
   falta "Python 3.10+ — os scripts de instalação usam o python3 (atual: ${PY_ATUAL:-nenhum})"
@@ -659,8 +723,8 @@ fi
 [ -n "$TS_STATE" ] && mark_step preparar fazendo
 
 if [ "$CHECK" = 1 ]; then
-  if [ -x backend/.venv/bin/python ]; then
-    say "Diagnóstico"; (cd backend && uv run --quiet --no-sync python -m app.doctor) || PENDENTE+=("doctor")
+  if [ "$PACOTE" = 1 ] || [ -x backend/.venv/bin/python ]; then
+    say "Diagnóstico"; py_backend -m app.doctor || PENDENTE+=("doctor")
   fi
   if [ ${#PENDENTE[@]} -eq 0 ]; then mark_step preparar ok; FINAL_STATE=ok; say "Nada faltando."; exit 0; fi
   mark_step preparar pendente; FINAL_STATE=pendente
@@ -672,17 +736,21 @@ mark_step preparar ok
 # ── 2/8 Backend ──────────────────────────────────────────────────────────────
 mark_step instalar fazendo
 say "2/8 Backend"
-(cd backend && uv sync --quiet) || fail_with "$(net_code)" "uv sync falhou — o backend ficou sem as dependências"
-ok "dependências instaladas"
+if [ "$PACOTE" = 1 ]; then
+  ok "dependências: vieram no pacote"
+else
+  (cd backend && uv sync --quiet) || fail_with "$(net_code)" "uv sync falhou — o backend ficou sem as dependências"
+  ok "dependências instaladas"
+fi
 mark_item backend ok "servidor do Hangar"
 # Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve.
-(cd backend && uv run --quiet --no-sync python -m app.vapid_setup) \
+py_backend -m app.vapid_setup \
   || anota_problema "chaves do push para o celular não geradas — rode: cd backend && uv run python -m app.vapid_setup" push
 nota "psutil NÃO entra aqui: no Linux existe /proc e ele é mais rápido (ver app/procinfo.py)"
 
 for a in $AGENTES_NOVOS; do
   mark_item "$a" fazendo "$(nome_agente "$a")"
-  if (cd backend && gira "instalando $(nome_agente "$a")" uv run --quiet --no-sync python -m app.harness_commands "$a"); then
+  if gira "instalando $(nome_agente "$a")" py_backend -m app.harness_commands "$a"; then
     export PATH="$HOME/.local/bin:$PATH"; hash -r 2>/dev/null || true
     if command -v "$a" >/dev/null; then ok "$(nome_agente "$a") instalado"; mark_item "$a" ok "$(nome_agente "$a")"
     else
@@ -705,14 +773,14 @@ for a in $TODOS_AGENTES; do command -v "$a" >/dev/null && TEM_AGENTE=1; done
 say "3/8 Token de acesso"
 # Confere o que o passo 0 gravou, em vez de anunciar sucesso de memória: sem TTY o passo 0 não
 # pergunta nada, e um `.env` sem token deixa o celular de fora sem ninguém ver.
-if grep -q '^CP_AUTH_TOKEN=.\+' backend/.env 2>/dev/null \
-   && ! grep -q '^CP_AUTH_TOKEN=change-me[[:space:]]*$' backend/.env; then
+if grep -q '^CP_AUTH_TOKEN=.\+' "$ENV_FILE" 2>/dev/null \
+   && ! grep -q '^CP_AUTH_TOKEN=change-me[[:space:]]*$' "$ENV_FILE"; then
   ok "definido no passo 0"
   mark_item token ok "senha do celular"
 elif [ "$UPDATE" = 1 ]; then
-  anota_problema "backend/.env sem CP_AUTH_TOKEN — rode ./install.sh sem --update para definir"
+  anota_problema "$ENV_FILE sem CP_AUTH_TOKEN — rode ./install.sh sem --update para definir"
 else
-  fail "o token não foi gravado em backend/.env — sem ele o celular não entra"
+  fail "o token não foi gravado em $ENV_FILE — sem ele o celular não entra"
 fi
 
 # ── 4/8 Frontend ─────────────────────────────────────────────────────────────
@@ -752,14 +820,25 @@ baixar_dist() { # 0 = frontend/dist agora tem o build publicado pelo CI
   return 1
 }
 say "4/8 Frontend"
-if [ "$FRONTEND" = 0 ]; then
+if [ "$PACOTE" = 1 ]; then
+  # O install-package baixa a tela da chave do pacote (~/.hangar/ui/<dist_key>), e o backend a serve;
+  # a falha do download lá é só nota, então a prova é a pasta.
+  DIST_KEY=$(sed -n 's/.*"dist_key"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{64\}\)".*/\1/p' manifest.json | head -1)
+  if grep -q '"web_ui"[[:space:]]*:[[:space:]]*false' "$HOME/.hangar/web-ui.json" 2>/dev/null; then
+    ok "tela web desligada nesta máquina (~/.hangar/web-ui.json)"
+  elif [ -n "$DIST_KEY" ] && [ -f "$HOME/.hangar/ui/$DIST_KEY/index.html" ]; then
+    ok "a tela vem pronta com o pacote (nada a compilar)"
+  else
+    anota_problema "a tela web do pacote não está em ~/.hangar/ui/${DIST_KEY:-<sem dist_key no manifest.json>} — use o app nativo, ou o Atualizar do app para baixá-la"
+  fi
+elif [ "$FRONTEND" = 0 ]; then
   ok "pulado (--no-frontend)"
   nota "UM frontend atende VÁRIOS backends: ele guarda a lista de servidores no próprio"
   nota "navegador (chave cp_servers) e você adiciona cada máquina pelo menu de conta."
   nota "Então dá pra ter o PWA numa VPS e só o backend em cada máquina de trabalho —"
   nota "menos porta aberta e nenhum processo node de graça por aqui."
   nota "Pra ligar este backend ao front que você já usa: abra o PWA, adicione o servidor"
-  nota "com a URL que o backend imprime no QR, e cole o token de backend/.env."
+  nota "com a URL que o backend imprime no QR, e cole o token de $ENV_FILE."
 else
 # Só rebuilda se houver motivo: dist ausente, ou alguma fonte/lockfile mais novo que ele. Num
 # re-run logo após um `git pull` sem mudança de front, isso economiza o `npm ci` inteiro.
@@ -828,8 +907,10 @@ fi
 # Sem eles o backend em Python atende sozinho: falha aqui nunca para a instalação.
 say "Binários Rust"
 RUST_RC=0
-(cd backend && uv run --quiet --no-sync python -m app.rust_release) || RUST_RC=$?
+if [ "$PACOTE" = 1 ]; then RUST_RC=pacote
+else (cd backend && uv run --quiet --no-sync python -m app.rust_release) || RUST_RC=$?; fi
 case "$RUST_RC" in
+  pacote) ok "hangar-server e hangar-cano: vieram no pacote"; mark_item rust ok "servidor rápido" ;;
   0) ok "hangar-server e hangar-cano em ~/.hangar/bin"; mark_item rust ok "servidor rápido" ;;
   2) falta "sem binários Rust para esta máquina — o backend em Python atende sozinho"; mark_item rust ok "servidor rápido (não há para esta máquina)" ;;
   *) anota_problema "binários Rust não baixaram — o backend em Python atende sozinho (tente: cd backend && uv run python -m app.rust_release)"; mark_item rust pendente "servidor rápido" ;;
@@ -866,15 +947,15 @@ say "6/8 Acesso pelo celular"
 # Escutar em todas as interfaces é o que deixa os clientes usarem a rede local antes do Tailscale.
 # 0.0.0.0 e nunca 'auto': 'auto' tira o loopback, e o `tailscale serve` fala com localhost. Valor
 # escolhido à mão (um IP específico) fica; só o padrão só-local é trocado. Vale no --update.
-BIND_ATUAL=$(grep -E '^CP_LAN_BIND_IP=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- | cut -d'#' -f1 | tr -d " \"'" || true)
+BIND_ATUAL=$(grep -E '^CP_LAN_BIND_IP=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | cut -d'#' -f1 | tr -d " \"'" || true)
 if [ "$CHECK" = 0 ] && { [ -z "$BIND_ATUAL" ] || [ "$BIND_ATUAL" = 127.0.0.1 ] || [ "$BIND_ATUAL" = localhost ] || [ "$BIND_ATUAL" = ::1 ]; }; then
-  grep -q '^CP_LAN_BIND_IP=' backend/.env 2>/dev/null && sed -i.bak '/^CP_LAN_BIND_IP=/d' backend/.env && rm -f backend/.env.bak
-  [ -n "$(tail -c1 backend/.env 2>/dev/null)" ] && echo >> backend/.env   # .env sem quebra no fim
-  printf 'CP_LAN_BIND_IP=0.0.0.0\n' >> backend/.env
+  grep -q '^CP_LAN_BIND_IP=' "$ENV_FILE" 2>/dev/null && sed -i.bak '/^CP_LAN_BIND_IP=/d' "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+  [ -n "$(tail -c1 "$ENV_FILE" 2>/dev/null)" ] && echo >> "$ENV_FILE"   # .env sem quebra no fim
+  printf 'CP_LAN_BIND_IP=0.0.0.0\n' >> "$ENV_FILE"
   ok "CP_LAN_BIND_IP=0.0.0.0 gravado — a rede local alcança o backend (o token continua exigido)"
 fi
-grep -qE '^CP_LAN_BIND_IP=' backend/.env 2>/dev/null || [ "$CHECK" = 1 ] \
-  || fail "CP_LAN_BIND_IP não foi gravado em backend/.env"
+grep -qE '^CP_LAN_BIND_IP=' "$ENV_FILE" 2>/dev/null || [ "$CHECK" = 1 ] \
+  || fail "CP_LAN_BIND_IP não foi gravado em $ENV_FILE"
 mark_item rede-local ok "rede de casa"
 if [ "$UPDATE" = 1 ]; then
   ok "pulado no --update (firewall e Tailscale pedem senha; nada aqui muda com git pull)"
@@ -932,8 +1013,8 @@ publica_tailscale() { # grava CP_PUBLIC_URL com o https do tailnet; o serve prec
   [ "$APP" = 1 ] && teto="$PRAZO 60"
   if saida_serve=$(app_sudo "publicar o Hangar na Tailscale" $teto "$(ts_bin)" serve --bg "$PORTA_FIM" 2>&1) \
      && tailscale serve status --json 2>/dev/null | grep -q '"443"'; then
-    grep -q '^CP_PUBLIC_URL=' backend/.env 2>/dev/null && sed -i.bak '/^CP_PUBLIC_URL=/d' backend/.env && rm -f backend/.env.bak
-    printf 'CP_PUBLIC_URL=https://%s\n' "$nome" >> backend/.env
+    grep -q '^CP_PUBLIC_URL=' "$ENV_FILE" 2>/dev/null && sed -i.bak '/^CP_PUBLIC_URL=/d' "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+    printf 'CP_PUBLIC_URL=https://%s\n' "$nome" >> "$ENV_FILE"
     ok "publicado no Tailscale: https://$nome"
     mark_item tailscale-https ok "endereço seguro (HTTPS)"
   else
@@ -1017,7 +1098,7 @@ elif [ "$SERVICES" = 1 ] && ask "Rodar backend+frontend como serviços de usuár
   [ "$SETUP_RC" != 0 ] && anota_problema "services-setup.sh falhou (exit $SETUP_RC)"
   [ "$(systemctl --user is-active hangar-backend.service 2>/dev/null)" = active ] \
     || anota_problema "serviços instalados mas o hangar-backend não está active"
-  nota "Pra sobreviver a logout/reboot também: loginctl enable-linger \$USER"
+  linger_falta && nota "Pra sobreviver a logout/reboot também: loginctl enable-linger \$USER"
 else
   nota "pulado — rodando na mão, fechar o terminal derruba o backend"
 fi
@@ -1051,6 +1132,9 @@ if [ -d "$HOME/.tmux/plugins/tmux-resurrect" ]; then
   ./scripts/tmux-persist-setup.sh >/dev/null && ok "persistência de sessões atualizada" || erro "persistência de sessões falhou ao atualizar"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
+elif ! command -v git >/dev/null; then
+  # A instalação pelo pacote não precisa do git; só este extra precisa, então ele não vira pendência.
+  nota "persistência de sessões pulada: ela precisa do git; instale o git e rode ./install.sh de novo"
 else
   nota "Opcional: fazer as sessões voltarem depois de um reboot/OOM, com a conversa junto."
   nota "Clona 3 plugins de tmux de terceiros (tpm, resurrect, continuum) no teu ~/.tmux."
@@ -1081,7 +1165,8 @@ fi
 # uma máquina ANTIGA até aqui. Sem esta marca, a primeira vez que essa máquina apertasse Atualizar
 # no app, ela rodaria a história inteira de passos, todos já cumpridos por este instalador.
 # No --update NÃO se marca nada: ali a máquina é justamente a antiga, e os passos precisam rodar.
-if [ "$UPDATE" = 1 ]; then
+# No pacote quem marca é o hangar-server, depois da checagem de fumaça (só com a instalação no fim).
+if [ "$UPDATE" = 1 ] || [ "$PACOTE" = 1 ]; then
   :
 else
   say "Passos de atualização"
@@ -1099,6 +1184,8 @@ fi
 HOOK=".git/hooks/post-merge"
 if [ "$UPDATE" = 1 ]; then
   :   # o próprio hook está rodando; não se re-instala no meio da própria execução
+elif [ "$PACOTE" = 1 ]; then
+  :   # o pacote se atualiza pelo Atualizar do app, sem git pull
 elif [ ! -d .git ]; then
   nota "sem .git (cópia sem histórico?) — hook de atualização indisponível"
 elif [ -f "$HOOK" ] && grep -q 'install.sh --update' "$HOOK"; then
@@ -1133,17 +1220,17 @@ fi
 mark_step instalar ok
 mark_step final fazendo
 say "8/8 Checagem de fumaça"
-(cd backend && uv run python -c "from app import api, registry, procinfo, projects" ) \
+py_backend -c "from app import api, registry, procinfo, projects" \
   && { ok "o backend importa"; mark_item backend-importa ok "o servidor abre"; } \
   || fail "o backend não importa nesta máquina"
 
 if [ "$(uname -s)" = Linux ]; then
-  (cd backend && uv run python -c "from app import procinfo; assert procinfo._TEM_PROC, 'sem /proc'") \
+  py_backend -c "from app import procinfo; assert procinfo._TEM_PROC, 'sem /proc'" \
     && ok "leitura de processo via /proc funcionando" \
     || nota "sem /proc — a leitura de processo do backend não vai funcionar"
 else
   # Sem /proc (macOS) o backend lê processo pelo psutil: a prova é ele ler o próprio.
-  (cd backend && uv run python -c "import os, psutil; psutil.Process(os.getpid()).cmdline()") \
+  py_backend -c "import os, psutil; psutil.Process(os.getpid()).cmdline()" \
     && ok "leitura de processo via psutil funcionando" \
     || nota "o psutil não lê processo nesta máquina — rode: cd backend && uv sync"
 fi
@@ -1155,6 +1242,20 @@ if tmux new-session -d -s "$S" -c /tmp 'sh' 2>/dev/null; then
   mark_item multiplexador ok "sessões abrem e fecham"
 else
   fail "o tmux não criou uma sessão de teste — o app não vai abrir sessão"
+fi
+
+if [ "$PACOTE" = 1 ] && [ "$UPDATE" = 0 ]; then
+  if [ "$FRESH" = 1 ]; then
+    # O marcador do bootstrap só sai com os passos marcados: falhou, a próxima execução tenta de novo.
+    if ! bin/hangar-server install-package --mark-steps; then
+      anota_problema "os passos de atualização não foram marcados como aplicados — rode: ~/.hangar/current/bin/hangar-server install-package --mark-steps"
+    elif ! rm -f "$HOME/.hangar/fresh-package"; then
+      # Sobrando, a próxima execução marcaria como aplicados passos que ainda estão pendentes.
+      anota_problema "não consegui apagar $HOME/.hangar/fresh-package — apague-o antes de rodar o instalador de novo"
+    fi
+  else
+    nota "instalação que já existia: nenhum passo de atualização marcado; os pendentes rodam no Atualizar do app"
+  fi
 fi
 
 # ── Portão final: extra que a pessoa pediu e falhou NÃO passa em branco ────────────────────
@@ -1198,11 +1299,11 @@ if [ "${ABRIR_NATIVO:-0}" = 1 ]; then
     falta "o app Hangar fechou logo ao abrir — use o Hangar pelo navegador (endereço no resumo abaixo)"
   fi
 fi
-URL_FIM=$(grep '^CP_PUBLIC_URL=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+URL_FIM=$(grep '^CP_PUBLIC_URL=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
 # O valor do token só aparece com terminal: sem TTY isto roda em provisionamento e o stdout
 # vira log — mesma regra do passo 3/8.
-TOKEN_FIM="(está em backend/.env)"
-[ "$TEM_TTY" = 1 ] && TOKEN_REAL=$(grep '^CP_AUTH_TOKEN=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+TOKEN_FIM="(está em $ENV_FILE)"
+[ "$TEM_TTY" = 1 ] && TOKEN_REAL=$(grep '^CP_AUTH_TOKEN=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
 echo
 echo "  +---------------------------------------------------------------"
 echo "   RESUMO"
@@ -1220,7 +1321,7 @@ if [ "$TEM_TTY" = 1 ] && [ "$UPDATE" = 0 ]; then
   # Só no terminal: a URL do QR carrega o token, e o log não pode tê-lo.
   # rc 0 é a prova de que o desenho saiu (2 = sem tty); sem ela a tela mandaria ler um QR que
   # não existe.
-  if (cd backend && uv run --quiet --no-sync python -m app.doctor --qr) > /dev/tty 2>/dev/null; then
+  if py_backend -m app.doctor --qr > /dev/tty 2>/dev/null; then
     QR_MOSTRADO=1
   fi
 fi
@@ -1236,8 +1337,9 @@ if [ "$QR_MOSTRADO" = 1 ]; then
 else
   echo "   2. No celular: abra $URL_FIM e digite o token."
 fi
-[ "$QUER_TAILSCALE" = 1 ] && echo "   3. No celular: instale o app Tailscale e entre com a MESMA conta do PC."
-command -v loginctl >/dev/null && echo "   4. Para o Hangar subir mesmo sem você logar no PC:  sudo loginctl enable-linger \$USER"
+ITEM=3
+[ "$QUER_TAILSCALE" = 1 ] && { echo "   $ITEM. No celular: instale o app Tailscale e entre com a MESMA conta do PC."; ITEM=$((ITEM + 1)); }
+linger_falta && echo "   $ITEM. Para o Hangar subir mesmo sem você logar no PC:  sudo loginctl enable-linger \$USER"
 cat <<EOF
    Algo não abriu?  hangar-doctor   (diz o que falta e como consertar)
    Log desta instalação: $LOG

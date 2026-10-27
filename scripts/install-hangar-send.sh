@@ -12,6 +12,8 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
+# Pacote: os links gravados fora do Hangar apontam para o `current`, não para a versão (a poda a apaga).
+if [ "$(realpath "$HOME/.hangar/current" 2>/dev/null)" = "$REPO" ]; then REPO="$HOME/.hangar/current"; fi
 
 mkdir -p "$HOME/.local/bin"
 
@@ -40,6 +42,8 @@ linkar_bin() {
     echo "ok: $destino (copia -> shim; o ln do Git Bash nao linka, entao chama o script do repo)"
 }
 
+# O Python do Hangar (pacote, venv ou python3) para os scripts; no Windows o install.ps1 grava o .cmd.
+linkar_bin "$REPO/scripts/hangar-python"  "$HOME/.local/bin/hangar-python"  "'$REPO/scripts/hangar-python'"
 linkar_bin "$REPO/scripts/hangar-send"    "$HOME/.local/bin/hangar-send"    "'$REPO/scripts/hangar-send'"
 linkar_bin "$REPO/scripts/hangar-preview" "$HOME/.local/bin/hangar-preview" "node '$REPO/scripts/hangar-preview'"
 linkar_bin "$REPO/scripts/hangar-doctor"  "$HOME/.local/bin/hangar-doctor"  "'$REPO/scripts/hangar-doctor'"
@@ -148,5 +152,5 @@ else
 fi
 
 # Trava de vazamento: toda máquina que instala o hangar-send liga também os hooks git versionados
-# (scripts/hooks/), senão o clone novo commita nome interno sem nada recusar.
-"$(dirname "$(realpath "$0")")/install-hooks.sh"
+# (scripts/hooks/), senão o clone novo commita nome interno sem nada recusar. O pacote não é clone.
+if [ -e "$REPO/.git" ]; then "$(dirname "$(realpath "$0")")/install-hooks.sh"; fi

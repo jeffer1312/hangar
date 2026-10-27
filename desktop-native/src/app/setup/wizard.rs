@@ -36,6 +36,8 @@ pub(crate) struct SetupWizard {
     runtime: tokio::runtime::Handle,
     /// Lido ao abrir: depois de uma troca o Linux responde "<caminho> (deleted)" (`update.rs`).
     exe: Option<PathBuf>,
+    mode: local::Mode,
+    /// No pacote, `~/.hangar`: é a pasta que os textos com `{pasta}` mostram.
     pub(super) dest: PathBuf,
     located: bool,
     pub(super) agents: Vec<&'static str>,
@@ -372,8 +374,9 @@ impl SetupWizard {
                 if this.update_in(cx, |w, window, cx| w.on_askpass(request, window, cx)).is_err() { break; }
             }
         }).detach();
+        let (mode, dest) = local::fresh_here();
         let mut wizard = Self {
-            hangar, runtime, exe: std::env::current_exe().ok(), dest: local::default_dir().unwrap_or_default(), located: false,
+            hangar, runtime, exe: std::env::current_exe().ok(), mode, dest, located: false,
             agents: vec!["claude"], agents_touched: false, installed: Vec::new(), outside: false, password_mode: PasswordMode::Generate,
             password, confirm, precheck: None, pkg: None, started: false, preparing: None,
             git_ready: false, bootstrap: None, token: None, runs: Runs::default(), check_tail: None, install_tail: None, records: (None, None),
@@ -422,13 +425,13 @@ impl SetupWizard {
 
     /// A pasta achada decide onde roda e se a senha do celular já existe ("senha atual mantida").
     fn apply_install(&mut self, install: Option<LocalInstall>) {
-        if let Some(dir) = install.as_ref().map(|i| i.dir.clone()).or_else(local::default_dir) { self.dest = dir; }
+        (self.mode, self.dest) = install.as_ref().map(|i| (i.mode, i.dir.clone())).unwrap_or_else(local::fresh_here);
         self.password_mode = if install.as_ref().is_some_and(|i| i.token.is_some()) { PasswordMode::Keep } else { PasswordMode::Generate };
     }
 
     /// Reabrir no meio: as escolhas vêm do `state.json`, o andamento do arquivo de cada execução, lido do começo.
     fn resume(&mut self, state: SetupState, window: &mut Window, cx: &mut Context<Self>) {
-        self.dest = state.dest;
+        (self.mode, self.dest) = (state.mode, state.dest);
         self.located = true;
         self.agents = state.options.agents.iter().filter_map(|a| system::AGENTS.iter().find(|(id, _)| id == a).map(|(id, _)| *id)).collect();
         self.agents_touched = true;
@@ -489,14 +492,13 @@ impl SetupWizard {
 
     pub(super) fn recheck(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.precheck = None;
-        let (locate, dest) = (!self.located, self.dest.clone());
+        let (locate, mode, dest) = (!self.located, self.mode, self.dest.clone());
         let (done, result) = tokio::sync::oneshot::channel();
         self.runtime.spawn(async move {
-            let install = if locate {
-                tokio::task::spawn_blocking(|| local::find_dir().map(|dir| local::read_install(&dir))).await.ok().flatten()
-            } else { None };
-            let dest = install.as_ref().map(|i| i.dir.clone()).unwrap_or(dest);
-            let facts = precheck::gather(dest).await;
+            let install = if locate { tokio::task::spawn_blocking(local::find_install).await.ok().flatten() } else { None };
+            // Achado nada, `prechecked` volta ao destino de máquina nova, que é o que já está em `mode`/`dest`.
+            let (mode, dest) = install.as_ref().map(|i| (i.mode, i.dir.clone())).unwrap_or((mode, dest));
+            let facts = precheck::gather(dest, mode == local::Mode::Package).await;
             let installed = tokio::task::spawn_blocking(|| system::installed_agents(&system::refreshed_path())).await.unwrap_or_default();
             let _ = done.send((locate.then_some(install), facts, installed));
         });
@@ -611,7 +613,7 @@ impl SetupWizard {
     fn launch(&mut self, kind: Kind, window: &mut Window, cx: &mut Context<Self>) {
         let Some(bootstrap) = self.bootstrap.clone() else { return };
         let log = run::log_path(kind);
-        let launch = run::Launch { kind, bootstrap, dest: self.dest.clone(), options: self.options(), log: log.clone(), token: self.token.clone(),
+        let launch = run::Launch { kind, bootstrap, mode: self.mode, dest: self.dest.clone(), options: self.options(), log: log.clone(), token: self.token.clone(),
             askpass: self.askpass_env() };
         match run::spawn(&launch) {
             Ok(pid) => {
@@ -634,7 +636,7 @@ impl SetupWizard {
     }
 
     fn save_state(&self) {
-        let state = SetupState { dest: self.dest.clone(), options: self.options(), askpass_code: self.vault.code().to_owned(),
+        let state = SetupState { mode: self.mode, dest: self.dest.clone(), options: self.options(), askpass_code: self.vault.code().to_owned(),
             check: self.records.0.clone(), install: self.records.1.clone() };
         if let Err(error) = run::save_state(&state) { crate::log_line(&format!("assistente: state.json não gravado: {error}")); }
     }
@@ -729,6 +731,7 @@ impl SetupWizard {
         if self.runs.install.is_none() {
             match self.runs.check.as_ref().and_then(|p| p.end) {
                 Some(End::Ok | End::Pending) => {
+                    self.settle_mode();
                     self.launch(Kind::Install, window, cx);
                     self.follow(before, cx);
                     return Watch::Grew;
@@ -766,7 +769,17 @@ impl SetupWizard {
         if !ended { let screen = self.frontier_now(); self.fail(Failure::app(None, tr("setup_failure_interrupted"), screen), cx); }
     }
 
+    /// O que o script deixou instalado vale para o doctor, a conexão e a retomada (`local::settle`).
+    fn settle_mode(&mut self) {
+        // Antes de qualquer execução o script não instalou nada, e gravar o `state.json` faria o app retomar ao abrir.
+        if self.mode != local::Mode::Package || self.records == (None, None) { return; }
+        let now = local::settle((self.mode, self.dest.clone()), local::installed_now());
+        if now != (self.mode, self.dest.clone()) { (self.mode, self.dest) = now; self.save_state(); }
+    }
+
     pub(super) fn fail(&mut self, mut failure: Failure, cx: &mut Context<Self>) {
+        // Antes do relatório: o doctor e o `.env` são os do que ficou instalado.
+        self.settle_mode();
         // O relatório da falha anterior que ainda não saiu entra na fila agora: a nova nunca o apaga.
         self.send_before_leaving(cx);
         // Antes do `forget`: a senha de administrador e o código do askpass também são procurados e trocados no relatório.
@@ -811,14 +824,14 @@ impl SetupWizard {
         self.report_about = Some(failure.clone());
         let logs: Vec<(String, PathBuf)> = [("check", self.records.0.as_ref()), ("install", self.records.1.as_ref())].into_iter()
             .filter_map(|(run, record)| record.map(|r| (run.to_owned(), r.log.clone()))).collect();
-        let dest = self.dest.clone();
+        let (mode, dest) = (self.mode, self.dest.clone());
         let about = failure.clone();
         // O doctor leva segundos: fora da thread da janela.
         let task = cx.background_executor().spawn(async move {
             secrets.extend(local::read_install(&dest).token);
             let secrets = report::Secrets::here(secrets);
             let facts = report::Facts { step: failure.screen, code: failure.code.clone(), text: failure.text.clone(),
-                system: report::system_line(), app: report::app_line(), doctor: report::doctor(&dest),
+                system: report::system_line(), app: report::app_line(), doctor: report::doctor(mode, &dest),
                 logs: logs.into_iter().map(|(run, path)| (run, report::read_log(&path))).collect() };
             report::compose(&facts, &secrets)
         });
@@ -887,6 +900,7 @@ impl SetupWizard {
 
     fn finish(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.polling = false;
+        self.settle_mode();
         // A reconferência do agente acabou: o relatório dele limpa também a senha desta execução, lida antes do `forget`.
         if self.agent.as_ref().is_some_and(|run| run.phase == AgentPhase::Rechecking) { self.report_secrets.extend(self.secret_values()); }
         self.vault.forget();
@@ -924,8 +938,9 @@ impl SetupWizard {
     fn connect_local(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let install = local::read_install(&self.dest);
         let Some(token) = install.token.clone() else {
-            let env = self.dest.join("backend").join(".env");
-            self.connection = Some(Err(tr("setup_connection_missing").replace("{path}", &env.display().to_string())));
+            // Sem conferir o lugar do `.env`, o motivo dessa falha entra no lugar do caminho.
+            let env = local::env_file(std::env::home_dir().as_deref(), &self.dest).map_or_else(|e| e, |env| env.display().to_string());
+            self.connection = Some(Err(tr("setup_connection_missing").replace("{path}", &env)));
             return;
         };
         let address = local::address(install.port);
@@ -983,11 +998,11 @@ impl SetupWizard {
 
     fn detect_agents(&mut self, cx: &mut Context<Self>) {
         self.agents_ready.clear();
-        let dest = self.dest.clone();
+        let (clone, dest) = (self.mode == local::Mode::Git, self.dest.clone());
         // Sem a pasta ser a raiz do próprio repositório não há como anotar e desfazer (antes do clone, ou dentro de outro
-        // repositório como dotfiles em `~`): o botão nem aparece.
+        // repositório como dotfiles em `~`): o botão nem aparece. No pacote, nunca: não há o que desfazer pelo git.
         let task = cx.background_executor().spawn(async move {
-            if repo::own_repo(&dest) { agent::available(&system::refreshed_path()) } else { Vec::new() }
+            if clone && repo::own_repo(&dest) { agent::available(&system::refreshed_path()) } else { Vec::new() }
         });
         cx.spawn(async move |this, cx| {
             let found = task.await;
@@ -1311,8 +1326,8 @@ impl SetupWizard {
         if matches!(self.qr, Qr::Loading | Qr::Shown { .. }) { return; }
         let install = local::read_install(&self.dest);
         let Some(api) = install.token.as_ref().and_then(|token| crate::api::Api::new(&local::address(install.port), token).ok()) else {
-            let env = self.dest.join("backend").join(".env");
-            self.qr = Qr::Failed(tr("setup_connection_missing").replace("{path}", &env.display().to_string()));
+            let env = local::env_file(std::env::home_dir().as_deref(), &self.dest).map_or_else(|e| e, |env| env.display().to_string());
+            self.qr = Qr::Failed(tr("setup_connection_missing").replace("{path}", &env));
             return cx.notify();
         };
         self.qr = Qr::Loading;

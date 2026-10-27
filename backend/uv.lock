@@ -356,7 +356,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "mcp" },
-    { name = "psutil", marker = "sys_platform != 'linux'" },
+    { name = "psutil" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
@@ -371,7 +371,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "httpx2" },
-    { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-xdist" },
@@ -381,7 +380,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.138.0" },
     { name = "mcp", specifier = ">=2.2.0" },
-    { name = "psutil", marker = "sys_platform != 'linux'", specifier = ">=5.9.0" },
+    { name = "psutil", specifier = ">=5.9.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pydantic-settings", specifier = ">=2.14.2" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
@@ -396,7 +395,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx2", specifier = ">=2.5.0" },
-    { name = "psutil", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },

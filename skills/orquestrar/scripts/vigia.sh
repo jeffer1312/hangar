@@ -112,7 +112,9 @@ avisar_arb() {
 }
 
 BASE=${CP_BASE:-http://127.0.0.1:8765}
-ENVFILE=${CP_ENV:-$(dirname "$(realpath "$(command -v hangar-send)")")/../backend/.env}
+# User data lives in ~/.hangar/config/; an unmigrated machine still has the .env in backend/.
+ENVFILE=${CP_ENV:-$HOME/.hangar/config/.env}
+[ -n "${CP_ENV:-}" ] || [ -e "$ENVFILE" ] || ENVFILE=$(dirname "$(realpath "$(command -v hangar-send)")")/../backend/.env
 T=$(grep '^CP_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)
 # An empty token cannot turn into "can't read the API" five minutes later: the watchdog would
 # stand, log clean, watching nothing — the same failure mode the file-based reader came to fix.

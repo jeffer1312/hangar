@@ -27,6 +27,7 @@ import sqlite3
 from fastapi import HTTPException
 
 from app import agentes_sync, contas, engine_probe, engines, hook_installer, kimi_hook_installer, oauth_codex, omp_dirs, skill_bridge
+from app import install_root
 from app.adapters.kimi.sessions import kimi_home
 from app.agentes_sync import _codex_dir, provedor_embutido_do_pi
 from app.config import list_config_dirs
@@ -34,7 +35,8 @@ from app.oauth_codex import PROVEDOR
 
 _log = logging.getLogger("hangar.harness_saude")
 
-_REPO = Path(__file__).resolve().parents[2]
+# Raiz da instalação: os links das extensões e as fontes conferidas apontam para o `current` com o pacote.
+_REPO = install_root.root()
 _EXTENSOES_PI = ("hangar-state", "rich-status-line", "claude-bridge", "claude-todo",
                  "claude-hooks-adapter", "git-checkpoint", "fullscreen-tui")
 _EXTENSOES_POR_CLI = {

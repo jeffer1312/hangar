@@ -4,6 +4,7 @@ titulo: No Linux, o navegador do app nativo passa a ser um Chromium sem janela
 comando_posix: ./scripts/install-chromium.sh
 prova: ~/.hangar/native/chromium-ok
 destrutivo: false
+tipo: maquina
 ---
 
 No Linux, o navegador do painel lateral do app nativo passa a usar um Chromium sem janela, e com

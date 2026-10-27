@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S sh -c 'exec "$(command -v hangar-python || command -v python3)" "$0" "$@"'
 """Valida um eventos.jsonl. ESTE arquivo é o contrato dos tipos e campos — a skill aponta pra cá.
 
 Uso: python3 ${CLAUDE_SKILL_DIR}/scripts/orq-valida-eventos.py <arquivo> [...]

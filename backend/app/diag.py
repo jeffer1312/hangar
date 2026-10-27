@@ -178,14 +178,40 @@ def rastrear(evento: str, **campos: Any):
         return run
     return decorate
 
+_ROOT = Path(__file__).resolve().parents[2]
+
+
+def install_manifest() -> dict[str, Any] | None:
+    """`manifest.json` do pacote instalado; `None` no checkout git (modo desenvolvedor).
+
+    Manifesto torto também é `None`, com uma linha no log: a versão cai no git em vez de derrubar a
+    importação. O diário ainda não existe quando isto roda na importação.
+    """
+    path = _ROOT / "manifest.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        _log.warning("manifest.json ilegível em %s, versão pelo git: %s", path, e)
+        return None
+    if not isinstance(data, dict) or not all(
+            isinstance(data.get(k), str) and data[k] for k in ("version", "commit", "channel")):
+        _log.warning("manifest.json sem version/commit/channel em %s, versão pelo git", path)
+        return None
+    return data
+
+
 def _git_describe() -> str:
+    if m := install_manifest():
+        return f"{m['version']}-g{m['commit'][:12]}"
     try:
         return subprocess.run(
             # So a `dist-latest` (movida pelo CI a cada push) da nome: sem `--match`, qualquer tag
             # de backup vira "a versao". `--long` mantem o hash mesmo em cima da tag, senao dois
             # commits diferentes (o rodando e o baixado) sairiam com o mesmo nome.
             ["git", "describe", "--tags", "--match", "dist-latest", "--long", "--always", "--dirty"],
-            cwd=Path(__file__).resolve().parents[2], capture_output=True,
+            cwd=_ROOT, capture_output=True,
             text=True, timeout=5, encoding="utf-8", errors="replace").stdout.strip() or "indisponivel"
     except Exception:                                # noqa: BLE001 — versão nunca derruba nada
         return "indisponivel"
@@ -208,7 +234,9 @@ def versao_legivel(ref: str = "HEAD") -> str | None:
     O `VERSION` é lido do próprio `ref` (`git show ref:VERSION`), não do disco: `origin/main` pode
     ter um bump que este checkout ainda não puxou.
     """
-    raiz = Path(__file__).resolve().parents[2]
+    if ref == "HEAD" and (m := install_manifest()):
+        return m["version"]
+    raiz = _ROOT
     try:
         n = subprocess.run(["git", "rev-list", "--count", ref], cwd=raiz, capture_output=True,
                            text=True, timeout=5, encoding="utf-8", errors="replace").stdout.strip()
