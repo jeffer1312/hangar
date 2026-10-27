@@ -67,6 +67,24 @@ fn registered(repo: &str, path: &str) -> Result<String> {
     }
 }
 
+fn completed_removal(home: &Path, path: &str, main: &str) -> Option<String> {
+    let map = worktrees::try_removed_at(&home.join(".hangar/worktrees-removidas.json")).ok()?;
+    let path = worktrees::registration_path(Path::new(path));
+    let main = worktrees::registration_path(Path::new(main));
+    let mut recorded: Option<String> = None;
+    for (key, repo) in map {
+        if worktrees::same_path(&worktrees::registration_path(Path::new(&key)), &path) {
+            if !worktrees::same_path(&worktrees::registration_path(Path::new(&repo)), &main) {
+                return None;
+            }
+            if recorded.as_ref().is_none_or(|previous| key < *previous) {
+                recorded = Some(key);
+            }
+        }
+    }
+    recorded
+}
+
 fn with_removed<T>(
     home: &Path,
     path: &str,
@@ -154,9 +172,8 @@ pub fn remove_with_guard(
     let main = worktrees::main_repo_of(&root);
     let path = match registered(&main, path) {
         Ok(path) => path,
-        Err(e) if e.status == 404 && missing_path(path)?
-            && worktrees::try_removed_at(&home.join(".hangar/worktrees-removidas.json"))
-                .ok().and_then(|m| m.get(path).cloned()).is_some_and(|r| real(Path::new(&r)) == real(Path::new(&main))) => {
+        Err(e) if e.status == 404 && missing_path(path)? => {
+            let recorded = completed_removal(home, path, &main).ok_or(e)?;
             if in_use(path, sessions) {
                 return Err(error(409, "sessão aberta dentro da worktree"));
             }
@@ -164,7 +181,7 @@ pub fn remove_with_guard(
             if !missing_path(path)? {
                 return Err(error(409, "a pasta reapareceu; confira a worktree antes de remover"));
             }
-            return Ok(json!({"removed":path,"branch_deleted":false,"moved":0}));
+            return Ok(json!({"removed":recorded,"branch_deleted":false,"moved":0}));
         }
         Err(e) => return Err(e),
     };
@@ -748,6 +765,33 @@ mod tests {
         let removed = remove(repo, &path, &[], &[], dir.path(), RemoveOptions { confirm: true, ..Default::default() }).unwrap();
         assert_eq!(removed["branch_deleted"], false);
         assert!(worktrees::worktree_paths(repo).iter().all(|p| !worktrees::same_path(Path::new(p), &wt)));
+    }
+
+    #[test]
+    fn repeated_removal_matches_path_aliases_without_bypassing_guards() {
+        let (dir, repo, wt) = policy_fixture();
+        std::fs::remove_file(wt.join(".git")).unwrap();
+        let (repo, path) = (repo.to_str().unwrap(), wt.to_str().unwrap());
+        let options = RemoveOptions { confirm: true, ..Default::default() };
+        let removed = remove(repo, path, &[], &[], dir.path(), options).unwrap();
+        let alias = format!("{path}{}", std::path::MAIN_SEPARATOR);
+        let repeated = remove(repo, &alias, &[], &[], dir.path(), options).unwrap();
+        assert_eq!(repeated["removed"], removed["removed"]);
+        let session = Session { name: "active".into(), git_cwd: Some(path.into()), ..Default::default() };
+        assert_eq!(remove(repo, &alias, &[session], &[], dir.path(), options).unwrap_err().status, 409);
+        let guard = |_: &str| {
+            std::fs::create_dir(&wt).unwrap();
+            std::fs::write(wt.join("source.rs"), "preservar").unwrap();
+            Ok(())
+        };
+        assert_eq!(remove_with_guard(repo, &alias, &[], &[], dir.path(), options, &guard).unwrap_err().status, 409);
+        assert!(wt.join("source.rs").exists());
+        std::fs::remove_dir_all(&wt).unwrap();
+        let file = dir.path().join(".hangar/worktrees-removidas.json");
+        let mut map = worktrees::try_removed_at(&file).unwrap();
+        map.insert(alias.clone(), dir.path().join("foreign").to_string_lossy().into_owned());
+        worktree_settings::write_json(&file, &map).unwrap();
+        assert_eq!(remove(repo, path, &[], &[], dir.path(), options).unwrap_err().status, 404);
     }
 
     #[test]
