@@ -570,10 +570,10 @@ def _arquivos_e_comandos(eventos: list, cwd: str | None = None) -> list[str]:
 
 
 def _grupo_e_par(nome: str) -> list[str]:
-    from app import orq_md, orq_papeis, pair
+    from app import pair, providers_bridge
 
     link = pair.PairLink(nome).get() if nome else None
-    gid = (link or {}).get("gid") or (orq_papeis.gid_por_sessao(nome) if nome else None)
+    gid = (link or {}).get("gid") or (providers_bridge.local("orq-info", "active-gid", name=nome) if nome else None)
     if not link and not gid:
         return ["_(sessão sem par e sem grupo)_"]
     out: list[str] = []
@@ -588,12 +588,11 @@ def _grupo_e_par(nome: str) -> list[str]:
         # origem estava fazendo, o contrato descreve o que ainda vale.
         out.append("- **Onde o resumo divergir do contrato, vale o contrato.**")
     if gid:
-        regras = orq_papeis.regras_path(gid)
-        texto, _mtime = orq_md.ler_arquivo(regras)
-        if texto:
-            out.append(f"- Tabela de papéis: `{regras}`")
-            out += [f"  - **{p.papel}** → `{p.sessao}` ({p.provider or '?'} · {p.conta or '?'} · "
-                    f"{p.modelo or '?'})" for p in orq_papeis.ler(texto)]
+        record = providers_bridge.local("orq-info", "roles-file", gid=gid)
+        if record["text"]:
+            out.append(f"- Tabela de papéis: `{record['path']}`")
+            out += [f"  - **{p['papel']}** → `{p['sessao']}` ({p['provider'] or '?'} · {p['conta'] or '?'} · "
+                    f"{p['modelo'] or '?'})" for p in record["roles"]]
     # O bastão NÃO reata nada disso (par, grupo, then e loop são sidecars por NOME): quem continua
     # tem de trocar a linha da tabela e avisar o par à mão. Dizer isso aqui é o que evita o par
     # seguir mandando recado pra uma sessão que parou.
