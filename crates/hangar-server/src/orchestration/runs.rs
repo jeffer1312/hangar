@@ -26,6 +26,15 @@ pub fn timeline_path(dir: &Path) -> PathBuf {
         resolved.file_name().unwrap_or_default().to_string_lossy()
     ))
 }
+pub fn optional_json(path: &Path) -> io::Result<Option<Value>> {
+    match fs::read(path) {
+        Ok(raw) => serde_json::from_slice(&raw)
+            .map(Some)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
 pub fn json(path: &Path) -> io::Result<Value> {
     serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)
 }
@@ -145,10 +154,19 @@ pub fn units() -> Option<Value> {
     Some(Value::Object(result))
 }
 pub fn watchdog(dir: &Path, units: Option<&Value>, at: f64) -> Value {
-    let hb = json(&dir.join("vigia.json"))
-        .ok()
-        .filter(|h| h.is_object() && when(&h["ts"]).is_some());
-    let u = units.and_then(|v| v.get(dir.to_string_lossy().as_ref()));
+    let hb = json(&dir.join("vigia.json")).ok();
+    let unit = units.and_then(|v| v.get(dir.to_string_lossy().as_ref()));
+    watchdog_from(hb, unit, units.is_some(), at)
+}
+/// A lista conserva a última linha boa quando o batimento está no meio da escrita.
+pub fn heartbeat(dir: &Path, at: f64) -> io::Result<Option<Value>> {
+    let Some(hb) = optional_json(&dir.join("vigia.json"))? else {
+        return Ok(None);
+    };
+    Ok((watchdog_from(Some(hb.clone()), None, false, at)["alive"] == true).then_some(hb))
+}
+fn watchdog_from(hb: Option<Value>, u: Option<&Value>, units_known: bool, at: f64) -> Value {
+    let hb = hb.filter(|h| h.is_object() && when(&h["ts"]).is_some());
     let state = u.map(|u| u["ActiveState"].clone()).unwrap_or_default();
     let (alive, source) = if let Some(h) = &hb {
         let iv = h["interval_s"].as_i64().filter(|i| *i >= 0).unwrap_or(60);
@@ -163,14 +181,7 @@ pub fn watchdog(dir: &Path, units: Option<&Value>, at: f64) -> Value {
     } else if let Some(u) = u {
         (u["ActiveState"] == "active", "systemd")
     } else {
-        (
-            false,
-            if units.is_some() {
-                "none"
-            } else {
-                "unavailable"
-            },
-        )
+        (false, if units_known { "none" } else { "unavailable" })
     };
     let h = hb.unwrap_or_default();
     let since = u
@@ -207,21 +218,35 @@ pub fn auto_run(dir: &Path, strict: bool) -> io::Result<Option<(Value, String, b
             return Err(e);
         }
     };
-    if cfg["auto"] != true {
+    if !truthy(&cfg["auto"]) {
         return Ok(None);
     }
     let ev = events(&dir.join("eventos.jsonl"), strict)?;
-    let gid = ev
+    Ok(auto_entry(cfg, &ev))
+}
+/// A descoberta da lista distingue JSON incompleto de uma execução encerrada.
+pub fn list_run(dir: &Path) -> io::Result<Option<(Value, String, bool)>> {
+    let Some(cfg) = optional_json(&dir.join("orq.json"))? else {
+        return Ok(None);
+    };
+    if cfg["auto"] != true {
+        return Ok(None);
+    }
+    let events = events(&dir.join("eventos.jsonl"), true)?;
+    Ok(auto_entry(cfg, &events))
+}
+fn auto_entry(cfg: Value, events: &[Value]) -> Option<(Value, String, bool)> {
+    if cfg["auto"] != true {
+        return None;
+    }
+    let gid = events
         .iter()
         .find(|e| kind(e) == "execucao_inicio")
         .map(|e| text(&e["gid"]))
         .unwrap_or("");
-    if gid.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some((cfg, gid.to_owned(), current_end(&ev).is_some())))
-    }
+    (!gid.is_empty()).then(|| (cfg, gid.to_owned(), current_end(events).is_some()))
 }
+
 pub fn group_phase(home: &Path, gid: &str) -> Option<String> {
     static WARNED: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(Mutex::default);
     let paths = match fs::read_dir(root(home)) {
