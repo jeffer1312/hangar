@@ -1106,3 +1106,65 @@ async fn public_pi_post_readback_preserves_success_refusal_no_republication_and_
         );
     }
 }
+
+#[tokio::test]
+async fn legacy_pane_registration_and_selection_match_original_protocol() {
+    let (url, store, task) = server("127.0.0.1:1").await;
+    let mut ws = connect(&url).await;
+    send(&mut ws, json!({"pane":"%33"})).await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !store.has_line("%33") {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(store.line_for(None, Some("%33")).as_deref(), Some("%33"));
+    assert_eq!(
+        store.line_for(Some("missing"), Some("%33")).as_deref(),
+        Some("%33")
+    );
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let named = store.register("named", tx);
+    assert_eq!(
+        store.line_for(Some("named"), Some("%33")).as_deref(),
+        Some("named")
+    );
+    send(&mut ws, json!({"id":"inexistente","ok":true})).await;
+    send(&mut ws, json!({"pong":true})).await;
+    let request = {
+        let store = store.clone();
+        tokio::spawn(async move { store.question("%33", "editor").await })
+    };
+    let message: Value =
+        serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+    assert_eq!(message["pedir"], "editor");
+    let generated = message["id"].as_str().unwrap().as_bytes();
+    assert_eq!(generated.len(), 32);
+    assert_eq!(generated[12], b'4');
+    assert!(b"89ab".contains(&generated[16]));
+    send(&mut ws, json!({"id":message["id"],"resposta":""})).await;
+    assert_eq!(request.await.unwrap(), Some(String::new()));
+    ws.close(None).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while store.has_line("%33") {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(store.has_line("named"));
+    store.remove("named", &named);
+    task.abort();
+}
+
+#[test]
+fn generated_inbox_ids_keep_the_python_uuid4_hex_format() {
+    let case = &fixture()["generated_ids"];
+    for frame in case["frames"].as_array().unwrap() {
+        assert_eq!(
+            inbox::message_id_from(case["seed"].as_str().unwrap()),
+            frame["id"]
+        );
+    }
+}

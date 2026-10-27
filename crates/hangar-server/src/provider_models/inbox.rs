@@ -22,6 +22,13 @@ pub fn message_fits(text: &str) -> bool {
     text.chars().count() <= MAX_MESSAGE
 }
 
+pub(super) fn message_id_from(hex: &str) -> String {
+    crate::session_open::open::uuid4(hex).replace('-', "")
+}
+fn message_id() -> String {
+    message_id_from(&crate::mods::state::random_hex(16))
+}
+
 pub const QUESTION_TIMEOUT: Duration = Duration::from_secs(1);
 pub const ACK_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_MESSAGE: usize = 256 * 1024;
@@ -155,7 +162,7 @@ impl Store {
     }
     pub async fn question_for(&self, key: &str, what: &str, deadline: Duration) -> Option<String> {
         let line = self.get(key)?;
-        let id = crate::mods::state::random_hex(16);
+        let id = message_id();
         let (send, recv) = oneshot::channel();
         line.questions
             .lock()
@@ -198,7 +205,7 @@ impl Store {
         let id = id
             .filter(|v| !v.is_empty())
             .map(str::to_owned)
-            .unwrap_or_else(|| crate::mods::state::random_hex(16));
+            .unwrap_or_else(message_id);
         let (send, recv) = oneshot::channel();
         line.deliveries
             .lock()

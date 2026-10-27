@@ -72,5 +72,20 @@ for provider in ['pi','omp','kimi']:
    try:status,value=200,asyncio.run(api.model_options_sem_sessao(provider=provider))
    except api.HTTPException as error:status,value=error.status_code,{'detail':error.detail}
   result['globals'].append({'provider':provider,'source':source,'catalog':cat,'message':str(failure),'status':status,'expected':value})
+import uuid
+async def capture_generated_ids():
+ from app.pi_inbox import PiInbox
+ inbox=PiInbox();frames=[]
+ async def outgoing(value):
+  frames.append(value)
+  if 'pedir' in value:inbox.responder('%1',value['id'],'')
+  else:inbox.confirmar('%1',value['id'],True,None)
+ inbox.registrar('%1',outgoing)
+ seed='0'*32
+ with patch('app.pi_inbox.uuid.uuid4',return_value=uuid.UUID(hex=seed,version=4)):
+  assert await inbox.entregar('%1','fixture')=='sent'
+  assert await inbox.perguntar('%1','editor')==''
+ return {'seed':seed,'frames':frames}
+result['generated_ids']=asyncio.run(capture_generated_ids())
 output.write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
 print(len(result['bodies']),result['sockets'],len(result['routes']))
