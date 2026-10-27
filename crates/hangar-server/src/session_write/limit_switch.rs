@@ -94,7 +94,7 @@ pub fn decide(spec:&SessionSpec,current:&str,catalog:&Value,quotas:&[Value],spen
 }
 
 /// Vai à sessão pela fila, depois de reaberta: sem ele a conversa ficaria parada no aviso de limite.
-pub const CONTINUE:&str = "O limite de uso da conta anterior acabou e esta sessão foi reaberta em outra conta. Continue de onde parou.";
+pub const CONTINUE:&str = "Continue de onde parou.";
 
 /// Janela sem reset conhecido fica gasta por cinco horas, a menor das janelas.
 const UNKNOWN_RESET_S:f64 = 5.0 * 3600.0;
