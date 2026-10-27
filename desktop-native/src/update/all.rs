@@ -458,7 +458,8 @@ impl Updater {
 
     /// `accepted`: o aceite de cada máquina, pela chave; `excluded`: as que não tiveram os avisos lidos.
     fn start_all(&mut self, accepted: HashMap<String, Acceptance>, excluded: HashSet<String>, window: &mut Window, cx: &mut Context<Self>) {
-        let machines = batch_machines(self.all_machines(), &excluded);
+        let all = self.all_machines();
+        let machines = batch_machines(all.clone(), &excluded);
         let mut local_acceptance = machines.iter().find(|m| m.local).and_then(|m| accepted.get(&m.key)).cloned();
         self.survey.generation += 1;
         self.survey.prepare(&machines, HashMap::new());
@@ -469,7 +470,10 @@ impl Updater {
         self.open_batch(window, cx);
         let (tx, rx) = async_channel::unbounded();
         self.runtime.spawn(async move {
-            let (machines, aliases) = prepare_machines(machines).await;
+            // `excluded` tem as chaves dos representantes que a leitura dos avisos escolheu: o lote escolhe sobre a mesma
+            // lista inteira e só depois exclui, senão o outro endereço da máquina vira representante e roda sem o aceite.
+            let (machines, aliases) = prepare_machines(all).await;
+            let machines = batch_machines(machines, &excluded);
             if tx.send(Event::Prepared(machines.clone(), aliases)).await.is_err() { return; }
             futures::future::join_all(machines.into_iter().filter(|m| !m.local).map(|machine| {
                 let tx = tx.clone();
@@ -915,6 +919,17 @@ mod tests {
         let status = Runtime::new().unwrap().block_on(read_machine(&machine));
         server.join().unwrap();
         assert_eq!(status, None, "consulta que falha não vira linha de erro");
+    }
+
+    #[test]
+    fn update_all_excludes_after_choosing_one_address_per_machine() {
+        let machine = |key: &str| Machine { key: key.into(), entry_id: String::new(), label: key.into(),
+            api: Err(Failure { status: None, detail: "fixture".into(), retry_after: None, uncertain: false, code: None }), local: false };
+        let raw = vec![machine("rep"), machine("alias")];
+        let identities = ["same-id".to_owned(), "same-id".to_owned()];
+        let excluded: HashSet<String> = ["rep".to_owned()].into();
+        assert!(batch_machines(unique_machines(raw.clone(), &identities), &excluded).is_empty(), "nenhum endereço da excluída roda");
+        assert_eq!(batch_machines(raw, &excluded).len(), 1, "excluir antes de escolher deixaria o outro endereço no lote");
     }
 
     #[test]
