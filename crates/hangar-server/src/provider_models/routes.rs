@@ -163,8 +163,12 @@ async fn session_catalog(
         .ok_or_else(|| catalog_error(&row.provider))?;
     Ok((value, config))
 }
-async fn global_catalog(st: &Arc<AppState>, raw_query: Option<String>) -> Result<Value, ModelError> {
-    let query = query(raw_query.as_deref());
+async fn global_catalog(
+    st: &Arc<AppState>,
+    raw: Option<String>,
+    catalogs: &Arc<super::catalog::Catalogs>,
+) -> Result<Value, ModelError> {
+    let query = query(raw.as_deref());
     let provider = query.get("provider").map(String::as_str).unwrap_or("");
     if query.get("engine_account").is_some() {
         return Err(coded(
@@ -184,11 +188,18 @@ async fn global_catalog(st: &Arc<AppState>, raw_query: Option<String>) -> Result
             json!({"kind":"kimi","reduced":false,"models":cat["models"],"default":cat["default"]}),
         );
     }
-    Ok(json!({"kind":provider,"reduced":false,"models":super::catalog(provider).await?}))
+    Ok(json!({"kind":provider,"reduced":false,"models":catalogs.read(provider).await?}))
 }
 
 /// A borda do servidor já decidiu quem pode usar a rota; o WebSocket confere ainda self-connect/token.
 pub async fn serve(st: &Arc<AppState>, request: Request) -> Response {
+    serve_with_catalogs(st, request, super::catalog::CATALOGS.clone()).await
+}
+pub(super) async fn serve_with_catalogs(
+    st: &Arc<AppState>,
+    request: Request,
+    catalogs: Arc<super::catalog::Catalogs>,
+) -> Response {
     if request.uri().path() == "/api/pi/inbox" {
         if inbox_http_request(request.method(), request.uri().path(), request.headers()) {
             return crate::session_write::json_response(
@@ -211,7 +222,7 @@ pub async fn serve(st: &Arc<AppState>, request: Request) -> Response {
         return super::inbox::websocket(st, peer, request).await;
     }
     let result = if request.uri().path() == "/api/model-options" {
-        global_catalog(st, request.uri().query().map(str::to_owned)).await
+        global_catalog(st, request.uri().query().map(str::to_owned), &catalogs).await
     } else {
         session(st, request).await
     };

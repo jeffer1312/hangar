@@ -6,8 +6,9 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
+#[cfg(unix)]
+use std::path::{Path, PathBuf};
 use std::{
-    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -563,12 +564,40 @@ async fn catalog_cli_argv_utf8_exit_errors_and_non_executable_path_match_python(
     assert_eq!(failure.status, 502);
     assert_eq!(failure.detail["code"], "erro_pi_list_models");
     assert_eq!(failure.detail["params"]["erro"], "falha explícita");
-    executable(&good,"#!/bin/sh\nprintf 'provider model context max-out thinking images cost\np m 1M 8K yes yes 1\n'\n");
-    assert!(catalog::read_from("pi",env.clone()).await.unwrap_err().detail["params"]["erro"].as_str().unwrap().contains("nao devolveu modelo nenhum"));
-    executable(&good,"#!/bin/sh\nprintf 'provider model context max-out thinking images\np m\\377 1M 8K yes yes\n'\n");
-    assert!(catalog::read_from("pi",env.clone()).await.unwrap_err().detail["params"]["erro"].as_str().unwrap().contains("ilegivel"));
-    executable(&good,"#!/bin/sh\nprintf 'provider model context max-out thinking images\np m 128\\377K 8K yes yes\n'\n");
-    assert_eq!(catalog::read_from("pi",env.clone()).await.unwrap()[0]["context"],"128�K");
+    executable(
+        &good,
+        "#!/bin/sh\nprintf 'provider model context max-out thinking images cost\np m 1M 8K yes yes 1\n'\n",
+    );
+    assert!(
+        catalog::read_from("pi", env.clone())
+            .await
+            .unwrap_err()
+            .detail["params"]["erro"]
+            .as_str()
+            .unwrap()
+            .contains("nao devolveu modelo nenhum")
+    );
+    executable(
+        &good,
+        "#!/bin/sh\nprintf 'provider model context max-out thinking images\np m\\377 1M 8K yes yes\n'\n",
+    );
+    assert!(
+        catalog::read_from("pi", env.clone())
+            .await
+            .unwrap_err()
+            .detail["params"]["erro"]
+            .as_str()
+            .unwrap()
+            .contains("ilegivel")
+    );
+    executable(
+        &good,
+        "#!/bin/sh\nprintf 'provider model context max-out thinking images\np m 128\\377K 8K yes yes\n'\n",
+    );
+    assert_eq!(
+        catalog::read_from("pi", env.clone()).await.unwrap()[0]["context"],
+        "128�K"
+    );
     for provider in ["pi", "omp"] {
         let failure = catalog::read_from(
             provider,
@@ -837,11 +866,243 @@ fn legacy_pytest_inputs_contract_replays_every_captured_python_assertion_input()
 
 #[cfg(unix)]
 #[tokio::test]
-async fn public_model_routes_refuse_overlay_and_kimi_working_without_typing(){
- let overlay=include_str!(concat!(env!("CARGO_MANIFEST_DIR"),"/../../backend/tests/fixtures/pane_awaiting_input.txt"));
- for provider in ["pi","kimi"] {let root=tempfile::tempdir().unwrap();let catalog=fixture()["posts"].as_array().unwrap().iter().find(|c|c["provider"]==provider).unwrap()["catalog"].clone();let state=route_state(root.path(),provider,Some(&catalog));write(&root.path().join("pane"),overlay);
- let request=Request::builder().method(Method::POST).header("content-type","application/json").uri(format!("/api/sessions/fixture/{provider}/model")).body(Body::from(json!({"effort":"high"}).to_string())).unwrap();let response=serve(&state,request).await;assert_eq!(response.status(),409);let body:Value=serde_json::from_slice(&to_bytes(response.into_body(),1<<20).await.unwrap()).unwrap();assert_eq!(body,json!({"detail":"pane com overlay aberto ou sessao morta — nada foi digitado"}));assert!(!root.path().join("keys").exists());
- }
- let root=tempfile::tempdir().unwrap();let catalog=fixture()["posts"].as_array().unwrap().iter().find(|c|c["provider"]=="kimi").unwrap()["catalog"].clone();let state=route_state(root.path(),"kimi",Some(&catalog));write(&root.path().join(".claude/.hangar-state/life.json"),r#"{"state":"working","ts":1}"#);
- let request=Request::builder().method(Method::POST).header("content-type","application/json").uri("/api/sessions/fixture/kimi/model").body(Body::from(json!({"model":"p/one"}).to_string())).unwrap();let response=serve(&state,request).await;assert_eq!(response.status(),409);let body:Value=serde_json::from_slice(&to_bytes(response.into_body(),1<<20).await.unwrap()).unwrap();assert_eq!(body["detail"]["code"],"erro_sessao_trabalhando");assert!(!root.path().join("keys").exists());
+async fn public_model_routes_refuse_overlay_and_kimi_working_without_typing() {
+    let overlay = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../backend/tests/fixtures/pane_awaiting_input.txt"
+    ));
+    for provider in ["pi", "kimi"] {
+        let root = tempfile::tempdir().unwrap();
+        let catalog = fixture()["posts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["provider"] == provider)
+            .unwrap()["catalog"]
+            .clone();
+        let state = route_state(root.path(), provider, Some(&catalog));
+        write(&root.path().join("pane"), overlay);
+        let request = Request::builder()
+            .method(Method::POST)
+            .header("content-type", "application/json")
+            .uri(format!("/api/sessions/fixture/{provider}/model"))
+            .body(Body::from(json!({"effort":"high"}).to_string()))
+            .unwrap();
+        let response = serve(&state, request).await;
+        assert_eq!(response.status(), 409);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1 << 20).await.unwrap())
+                .unwrap();
+        assert_eq!(
+            body,
+            json!({"detail":"pane com overlay aberto ou sessao morta — nada foi digitado"})
+        );
+        assert!(!root.path().join("keys").exists());
+    }
+    let root = tempfile::tempdir().unwrap();
+    let catalog = fixture()["posts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["provider"] == "kimi")
+        .unwrap()["catalog"]
+        .clone();
+    let state = route_state(root.path(), "kimi", Some(&catalog));
+    write(
+        &root.path().join(".claude/.hangar-state/life.json"),
+        r#"{"state":"working","ts":1}"#,
+    );
+    let request = Request::builder()
+        .method(Method::POST)
+        .header("content-type", "application/json")
+        .uri("/api/sessions/fixture/kimi/model")
+        .body(Body::from(json!({"model":"p/one"}).to_string()))
+        .unwrap();
+    let response = serve(&state, request).await;
+    assert_eq!(response.status(), 409);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1 << 20).await.unwrap()).unwrap();
+    assert_eq!(body["detail"]["code"], "erro_sessao_trabalhando");
+    assert!(!root.path().join("keys").exists());
+}
+
+#[test]
+fn inbox_endpoint_preparation_failure_warns_without_stopping_startup() {
+    use std::io::Write;
+    use std::sync::Mutex;
+    #[derive(Clone)]
+    struct Log(Arc<Mutex<Vec<u8>>>);
+    impl Write for Log {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let output = Arc::new(Mutex::new(vec![]));
+    let writer = output.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(move || Log(writer.clone()))
+        .finish();
+    let _trace = tracing::subscriber::set_default(subscriber);
+    assert!(
+        inbox::prepare_endpoint(
+            Err("list_dirs_missing"),
+            "127.0.0.1:8765".parse().unwrap(),
+            "fixture",
+            1.
+        )
+        .is_empty()
+    );
+    let logs = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert!(logs.contains("pi_inbox_endpoint_failed"), "{logs}");
+    assert!(logs.contains("não consegui preparar"), "{logs}");
+    assert!(!logs.contains("fixture"), "{logs}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn public_global_catalog_routes_match_python_success_absence_and_failure() {
+    struct Source(Value);
+    impl catalog::Source for Source {
+        fn read<'a>(&'a self, provider: &'a str) -> catalog::CatalogFuture<'a> {
+            Box::pin(async move {
+                if self.0["source"] == "present" {
+                    Ok(self.0["catalog"].as_array().unwrap().clone())
+                } else {
+                    Err(catalog::global_error(
+                        provider,
+                        self.0["message"].as_str().unwrap().into(),
+                        self.0["source"] == "missing",
+                    ))
+                }
+            })
+        }
+    }
+    for case in fixture()["globals"].as_array().unwrap() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = case["provider"].as_str().unwrap();
+        let st = route_state(
+            root.path(),
+            provider,
+            (case["source"] == "present" && provider == "kimi").then_some(&case["catalog"]),
+        );
+        let catalogs =
+            catalog::Catalogs::new(Arc::new(Source(case.clone())), Duration::from_secs(600));
+        let request = Request::builder()
+            .uri(format!("/api/model-options?provider={provider}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = routes::serve_with_catalogs(&st, request, catalogs).await;
+        let status = response.status().as_u16();
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1 << 20).await.unwrap())
+                .unwrap();
+        assert_eq!(
+            json!({"status":status,"body":body}),
+            json!({"status":case["status"],"body":case["expected"]}),
+            "{case}"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_catalog_cmd_uses_pathext_resolved_argv_and_provider_errors() {
+    let root = tempfile::tempdir().unwrap();
+    let pi = root.path().join("pi.cmd");
+    let omp = root.path().join("omp.cmd");
+    std::fs::write(root.path().join("pi"), "npm shell shim").unwrap();
+    std::fs::write(&pi, "@echo off\r\n> \"%~dp0argv\" echo %*\r\necho provider model context max-out thinking images\r\necho p m 1M 8K yes yes\r\n").unwrap();
+    std::fs::write(&omp, "@echo off\r\n> \"%~dp0argv\" echo %*\r\necho {\"models\":[{\"provider\":\"p\",\"id\":\"m\",\"contextWindow\":128000,\"maxTokens\":8192,\"thinking\":true,\"input\":[\"image\"]}]}\r\n").unwrap();
+    let mut environment: Vec<(String, String)> = std::env::vars()
+        .filter(|(k, _)| !k.eq_ignore_ascii_case("PATH") && !k.eq_ignore_ascii_case("PATHEXT"))
+        .collect();
+    environment.push(("PATH".into(), root.path().to_string_lossy().into()));
+    environment.push(("PATHEXT".into(), ".COM;.EXE;.BAT;.CMD".into()));
+    assert_eq!(catalog::program_from("pi", &environment), Some(pi.clone()));
+    assert_eq!(
+        catalog::read_from("pi", environment.clone()).await.unwrap()[0]["id"],
+        "m"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("argv"))
+            .unwrap()
+            .trim(),
+        "--list-models"
+    );
+    assert_eq!(
+        catalog::read_from("omp", environment.clone())
+            .await
+            .unwrap()[0]["context"],
+        "128K"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("argv"))
+            .unwrap()
+            .trim(),
+        "models --json"
+    );
+    std::fs::write(&pi, "@echo off\r\necho fixture-error 1>&2\r\nexit /b 3\r\n").unwrap();
+    let error = catalog::read_from("pi", environment.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(error.detail["code"], "erro_pi_list_models");
+    assert_eq!(error.detail["params"]["erro"], "fixture-error");
+    std::fs::remove_file(pi).unwrap();
+    assert_eq!(
+        catalog::read_from("pi", environment)
+            .await
+            .unwrap_err()
+            .detail["code"],
+        "erro_pi_ausente"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn public_pi_post_readback_preserves_success_refusal_no_republication_and_clamp() {
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/pi-readback.json")).unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let root = tempfile::tempdir().unwrap();
+        let st = route_state(root.path(), "pi", Some(&case["before"]));
+        write(&root.path().join("after.json"), &case["after"].to_string());
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/sessions/fixture/pi/model")
+            .header("content-type", "application/json")
+            .body(Body::from(case["body"].to_string()))
+            .unwrap();
+        let response = serve(&st, request).await;
+        let status = response.status().as_u16();
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1 << 20).await.unwrap())
+                .unwrap();
+        let expected = &case["expected"];
+        let wanted = if let Some(ok) = expected.get("ok") {
+            json!({"status":200,"body":ok})
+        } else {
+            json!({"status":expected["error"]["status"],"body":{"detail":expected["error"]["detail"]}})
+        };
+        assert_eq!(
+            json!({"status":status,"body":body}),
+            wanted,
+            "{}",
+            case["name"]
+        );
+        let keys = std::fs::read_to_string(root.path().join("keys")).unwrap();
+        assert_eq!(
+            keys.matches('\r').count(),
+            if case["body"].get("effort").is_some() && case["body"].get("model").is_some() {
+                2
+            } else {
+                1
+            },
+            "{keys}"
+        );
+    }
 }

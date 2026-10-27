@@ -1,6 +1,6 @@
 import asyncio,sys,json,tempfile,types,hashlib
 from pathlib import Path
-from unittest.mock import patch,AsyncMock
+from unittest.mock import patch,AsyncMock,Mock
 from fastapi import FastAPI,WebSocketDisconnect
 from fastapi.testclient import TestClient
 reference=Path(sys.argv[1]); output=Path(sys.argv[2]);sys.path.insert(0,str(reference/'backend'))
@@ -63,5 +63,14 @@ for provider,body in [('pi',{}),('pi',{'model':'one'}),('pi',{'provider':'p','mo
   try:status,value=200,asyncio.run((api.pi_model_set if provider=='pi' else api.kimi_model_set)('fixture',(api.PiModelBody if provider=='pi' else api.KimiModelBody)(**body)))
   except api.HTTPException as error:status,value=error.status_code,{'detail':error.detail}
   data['posts'].append({'provider':provider,'catalog':cat,'after':after,'body':body,'status':status,'expected':value,'effects':[list(c.args) for c in driver.call_args_list]})
+result['globals']=[]
+for provider in ['pi','omp','kimi']:
+ for source in ['present','missing','failure'] if provider!='kimi' else ['present','missing']:
+  failure=api.pi_catalog.PiAusente('fixture absent') if source=='missing' else RuntimeError('fixture failure')
+  cat=pc['models'] if provider!='kimi' else kc
+  with patch.object(api.pi_catalog,'listar',side_effect=failure if source!='present' else None,return_value=cat),patch.object(api.kimi_models,'read_catalog',return_value=kc if source=='present' else None):
+   try:status,value=200,asyncio.run(api.model_options_sem_sessao(provider=provider))
+   except api.HTTPException as error:status,value=error.status_code,{'detail':error.detail}
+  result['globals'].append({'provider':provider,'source':source,'catalog':cat,'message':str(failure),'status':status,'expected':value})
 output.write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
 print(len(result['bodies']),result['sockets'],len(result['routes']))

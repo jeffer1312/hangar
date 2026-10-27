@@ -2200,5 +2200,223 @@
         ]
       ]
     }
+  ],
+  "globals": [
+    {
+      "provider": "pi",
+      "source": "present",
+      "catalog": [
+        {
+          "provider": "p",
+          "id": "one",
+          "name": "One",
+          "reasoning": true
+        }
+      ],
+      "message": "fixture failure",
+      "status": 200,
+      "expected": {
+        "kind": "pi",
+        "reduced": false,
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "source": "missing",
+      "catalog": [
+        {
+          "provider": "p",
+          "id": "one",
+          "name": "One",
+          "reasoning": true
+        }
+      ],
+      "message": "fixture absent",
+      "status": 502,
+      "expected": {
+        "detail": {
+          "code": "erro_pi_ausente",
+          "params": {
+            "erro": "fixture absent"
+          },
+          "msg": "fixture absent"
+        }
+      }
+    },
+    {
+      "provider": "pi",
+      "source": "failure",
+      "catalog": [
+        {
+          "provider": "p",
+          "id": "one",
+          "name": "One",
+          "reasoning": true
+        }
+      ],
+      "message": "fixture failure",
+      "status": 502,
+      "expected": {
+        "detail": {
+          "code": "erro_pi_list_models",
+          "params": {
+            "erro": "fixture failure"
+          },
+          "msg": "pi --list-models falhou: fixture failure"
+        }
+      }
+    },
+    {
+      "provider": "omp",
+      "source": "present",
+      "catalog": [
+        {
+          "provider": "p",
+          "id": "one",
+          "name": "One",
+          "reasoning": true
+        }
+      ],
+      "message": "fixture failure",
+      "status": 200,
+      "expected": {
+        "kind": "omp",
+        "reduced": false,
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      }
+    },
+    {
+      "provider": "omp",
+      "source": "missing",
+      "catalog": [
+        {
+          "provider": "p",
+          "id": "one",
+          "name": "One",
+          "reasoning": true
+        }
+      ],
+      "message": "fixture absent",
+      "status": 502,
+      "expected": {
+        "detail": {
+          "code": "erro_omp_ausente",
+          "params": {
+            "erro": "fixture absent"
+          },
+          "msg": "fixture absent"
+        }
+      }
+    },
+    {
+      "provider": "omp",
+      "source": "failure",
+      "catalog": [
+        {
+          "provider": "p",
+          "id": "one",
+          "name": "One",
+          "reasoning": true
+        }
+      ],
+      "message": "fixture failure",
+      "status": 502,
+      "expected": {
+        "detail": {
+          "code": "erro_omp_list_models",
+          "params": {
+            "erro": "fixture failure"
+          },
+          "msg": "omp models --json falhou: fixture failure"
+        }
+      }
+    },
+    {
+      "provider": "kimi",
+      "source": "present",
+      "catalog": {
+        "default": "p/one",
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ]
+      },
+      "message": "fixture failure",
+      "status": 200,
+      "expected": {
+        "kind": "kimi",
+        "reduced": false,
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ],
+        "default": "p/one"
+      }
+    },
+    {
+      "provider": "kimi",
+      "source": "missing",
+      "catalog": {
+        "default": "p/one",
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ]
+      },
+      "message": "fixture absent",
+      "status": 409,
+      "expected": {
+        "detail": {
+          "code": "erro_catalogo_kimi_indisponivel",
+          "params": {},
+          "msg": "catalogo do Kimi indisponível — ~/.kimi-code/config.toml ausente ou sem seções [models.*]"
+        }
+      }
+    }
   ]
 }

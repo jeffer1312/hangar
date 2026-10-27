@@ -437,17 +437,35 @@ pub fn write_endpoint(
     }
     written
 }
+pub(super) fn prepare_endpoint(
+    dirs: Result<Vec<PathBuf>, &str>,
+    address: SocketAddr,
+    token: &str,
+    now: f64,
+) -> Vec<PathBuf> {
+    match dirs {
+        Ok(dirs) => write_endpoint(&dirs, address, token, now),
+        Err(code) => {
+            tracing::warn!(
+                code = "pi_inbox_endpoint_failed",
+                cause = code,
+                "não consegui preparar o endpoint da extensão; servidor continua sem a linha"
+            );
+            vec![]
+        }
+    }
+}
 pub async fn install_endpoint(st: Arc<AppState>) {
     let address = st.cfg.listen;
     let token = st.cfg.auth_token.clone();
     let list = st.list.clone();
-    let _ = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         let dirs = list
             .state_dirs_blocking()
             .map(|(v, _)| v.as_ref().clone())
-            .unwrap_or_default();
-        write_endpoint(
-            &dirs,
+            .map_err(|error| error.code);
+        prepare_endpoint(
+            dirs,
             address,
             &token,
             SystemTime::now()
@@ -457,4 +475,10 @@ pub async fn install_endpoint(st: Arc<AppState>) {
         );
     })
     .await;
+    if result.is_err() {
+        tracing::warn!(
+            code = "pi_inbox_endpoint_failed",
+            "não consegui preparar o endpoint da extensão; tarefa interrompida"
+        );
+    }
 }

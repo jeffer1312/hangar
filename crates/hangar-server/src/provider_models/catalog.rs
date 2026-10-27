@@ -49,7 +49,7 @@ pub(super) fn program_from(provider: &str, environment: &[(String, String)]) -> 
     }
 }
 
-fn global_error(provider: &str, message: String, absent: bool) -> ModelError {
+pub(super) fn global_error(provider: &str, message: String, absent: bool) -> ModelError {
     let code = format!(
         "erro_{provider}_{}",
         if absent { "ausente" } else { "list_models" }
