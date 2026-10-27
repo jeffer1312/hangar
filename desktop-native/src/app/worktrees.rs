@@ -1373,8 +1373,8 @@ impl Hangar {
             .child(div().flex().flex_wrap().gap(px(4.)).child(chip(st.label(), st.color()))
                 .children(stale_days(w, now).map(|d| chip(tr_shared("worktree_parada_dias", &[("n", &d.to_string())]), theme::warning_text()))))
             .when(!sessions.is_empty(), |el| el.child(div().flex().flex_wrap().gap(px(2.)).children(sessions)))
-            .when(w.degraded, |el| el.child(div().text_size(px(11.5)).text_color(theme::warning_text()).whitespace_normal()
-                .child(tr_shared("worktree_leitura_incompleta", &[]))))
+            .when_some(inventory_warning(w), |el, warning| el.child(div().text_size(px(11.5)).text_color(theme::warning_text()).whitespace_normal()
+                .child(warning)))
             .when(!w.exists, |el| {
                 let id = w.id();
                 el.child(div().flex().child(Button::new(SharedString::from(format!("worktree-clear-{id}"))).outline().xsmall()
