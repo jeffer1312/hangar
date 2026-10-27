@@ -299,6 +299,27 @@ fn or058_real_group_does_not_need_legacy_identity() {
     assert!(ctx.grouped);
 }
 #[test]
+fn or060_same_life_in_two_live_runs_refuses_ambiguous_context() {
+    let home = tempfile::tempdir().unwrap();
+    let side = home.path().join(".hangar/claude-headless");
+    fs::create_dir_all(&side).unwrap();
+    fs::write(side.join("same.json"), "{\"key\":\"life\"}").unwrap();
+    for gid in ["g1", "g2"] {
+        let directory = runs::root(home.path()).join(gid);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("orq.json"), json!({
+            "auto": true, "arbiter": "same", "arbiter_identity": "claude:life"
+        }).to_string()).unwrap();
+        fs::write(directory.join("eventos.jsonl"), format!("{}\n", json!({
+            "tipo": "execucao_inicio", "gid": gid, "arbiter": "same"
+        }))).unwrap();
+    }
+    // O contrato Python recusa escolher um grupo quando a mesma vida pertence aos dois.
+    let error = context::resolve(home.path(), &home.path().join("pairs"), "same", "missing-mux")
+        .unwrap_err();
+    assert_eq!(error, "a sessão está registrada em mais de uma execução viva");
+}
+#[test]
 fn or061_promotion_moves_one_record() {
     let d = tempfile::tempdir().unwrap();
     let side = d.path().join(".hangar/claude-headless");
