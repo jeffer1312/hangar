@@ -577,6 +577,13 @@ fn bg_agent_id(obj: &Map<String, Value>) -> Option<String> {
     tur.get("agentId").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
 }
 
+/// `_parado_por_taskstop` (transcript.py): o trabalho que o `TaskStop` parou, que não manda mais notificação.
+fn stopped_by_taskstop(obj: &Map<String, Value>) -> Option<String> {
+    let tur = obj.get("toolUseResult")?.as_object()?;
+    tur.get("task_type").and_then(Value::as_str)?;
+    tur.get("task_id").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
 fn user_blocks(obj: &Map<String, Value>, uid: &str, items: &[Value]) -> Vec<ChatEvent> {
     let is_type = |it: &&Map<String, Value>, t: &str| it.get("type").and_then(Value::as_str) == Some(t);
     let trs: Vec<_> = items.iter().filter_map(Value::as_object).filter(|it| is_type(it, "tool_result")).collect();
@@ -584,7 +591,7 @@ fn user_blocks(obj: &Map<String, Value>, uid: &str, items: &[Value]) -> Vec<Chat
         let ts = ts(obj);
         // O `toolUseResult` é um por linha: com dois resultados não dá para saber de quem é.
         let single = trs.len() == 1;
-        return trs
+        let mut out: Vec<ChatEvent> = trs
             .into_iter()
             .enumerate()
             .map(|(k, tr)| {
@@ -612,6 +619,17 @@ fn user_blocks(obj: &Map<String, Value>, uid: &str, items: &[Value]) -> Vec<Chat
                 }
             })
             .collect();
+        if single && out[0].is_error != Some(true) {
+            if let Some(stopped) = stopped_by_taskstop(obj) {
+                out.push(ChatEvent {
+                    tool_use_id: Some(format!("task:{stopped}")),
+                    result: Some("task-notification".into()),
+                    ts,
+                    ..event(ChatKind::ToolResult, sub_id(uid, 1))
+                });
+            }
+        }
+        return out;
     }
     let img_count = items.iter().filter_map(Value::as_object).filter(|it| is_type(it, "image")).count();
     let texts: Vec<&str> = items
@@ -967,6 +985,16 @@ mod tests {
         let [fin] = <[ChatEvent; 1]>::try_from(parse(json!({"agentId": "ag1"}), vec![], Value::Null)).unwrap();
         assert_eq!(ev.bg_agent_id.as_deref(), Some("ag1"));
         assert_eq!(fin.bg_agent_id, None);
+    }
+
+    #[test]
+    fn taskstop_closes_the_stopped_task() {
+        let stop = json!({"message": "Successfully stopped task: ag1 (Animar)", "task_id": "ag1", "task_type": "local_agent", "command": "Animar"});
+        let evs = parse(stop, vec![], Value::Null);
+        assert_eq!(evs.iter().map(|e| e.tool_use_id.as_deref()).collect::<Vec<_>>(), vec![Some("toolu_1"), Some("task:ag1")]);
+        assert_ne!(evs[0].id, evs[1].id);
+        let plain = parse(json!({"task_id": "ag1"}), vec![], Value::Null);
+        assert_eq!(plain.iter().map(|e| e.tool_use_id.as_deref()).collect::<Vec<_>>(), vec![Some("toolu_1")]);
     }
 
     #[test]

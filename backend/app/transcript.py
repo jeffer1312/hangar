@@ -402,6 +402,15 @@ def _bg_agent_id(obj: dict) -> Optional[str]:
     return aid if isinstance(aid, str) and aid else None
 
 
+def _parado_por_taskstop(obj: dict) -> Optional[str]:
+    """Id do trabalho em segundo plano que o `TaskStop` parou: depois dele nenhuma notificação chega."""
+    tur = obj.get("toolUseResult")
+    if not isinstance(tur, dict) or not isinstance(tur.get("task_type"), str):
+        return None
+    tid = tur.get("task_id")
+    return tid if isinstance(tid, str) and tid else None
+
+
 def parse_line(line: str) -> list[ChatEvent]:
     line = line.strip()
     if not line:
@@ -687,6 +696,9 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
                         patch=_patch_hunks(obj) if len(trs) == 1 and not failed else None,
                         bg_agent_id=_bg_agent_id(obj) if len(trs) == 1 else None,
                     ))
+                if len(trs) == 1 and not out[0].is_error and (parado := _parado_por_taskstop(obj)):
+                    out.append(ChatEvent(kind="tool_result", id=_sub_id(uid, 1), tool_use_id=f"task:{parado}",
+                                         result="task-notification", ts=_ts(obj)))
                 return out
             # Imagens coladas no terminal: contar os blocos `image` -> o front busca cada uma lazy.
             img_count = sum(1 for it in content if isinstance(it, dict) and it.get("type") == "image")
