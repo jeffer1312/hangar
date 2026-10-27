@@ -32,17 +32,23 @@ pub trait Backend: Send + Sync {
 
 pub struct Keyring {
     backend: std::sync::RwLock<std::sync::Arc<dyn Backend>>,
+    /// Backend trocado (teste): a escuta do barramento não publica por cima dele.
+    real: std::sync::atomic::AtomicBool,
     tx: tokio::sync::watch::Sender<KeyringState>,
 }
 
 impl Keyring {
     pub fn system() -> Self {
-        Self { backend: std::sync::RwLock::new(std::sync::Arc::new(System)), tx: tokio::sync::watch::channel(KeyringState::Absent).0 }
+        Self { backend: std::sync::RwLock::new(std::sync::Arc::new(System)), real: true.into(),
+            tx: tokio::sync::watch::channel(KeyringState::Absent).0 }
     }
 
     pub fn set_backend(&self, backend: std::sync::Arc<dyn Backend>) {
+        self.real.store(false, std::sync::atomic::Ordering::Relaxed);
         *self.backend.write().unwrap_or_else(|e| e.into_inner()) = backend;
     }
+
+    fn publish(&self, state: KeyringState) { self.tx.send_if_modified(|s| std::mem::replace(s, state) != state); }
 
     pub fn current(&self) -> KeyringState { *self.tx.borrow() }
 
@@ -59,7 +65,7 @@ impl Keyring {
             tracing::warn!(code = "keyring_state_unread", "estado do chaveiro não foi lido; fica o último");
             return None;
         };
-        self.tx.send_if_modified(|s| std::mem::replace(s, state) != state);
+        self.publish(state);
         Some(state)
     }
 
@@ -143,17 +149,71 @@ impl Backend for System {
     fn restart(&self) -> bool { false }
 }
 
-/// Relê o estado de tempos em tempos: o daemon pode cair, reiniciar ou ser aberto pelo login gráfico.
+#[cfg(target_os = "linux")]
+const SECRETS: &str = "org.freedesktop.secrets";
+
+/// Lê o estado ao ligar e depois só quando o daemon avisa: troca de dono do nome (queda, religada) ou
+/// `CollectionChanged` (trancou, abriu). Nunca por consulta periódica: cada `Get` de um cliente que já
+/// saiu do barramento derruba o gnome-keyring-daemon (assertion em `gkd_secret_service_get_pkcs11_session`).
+#[cfg(target_os = "linux")]
 pub fn spawn(keyring: std::sync::Arc<Keyring>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(15));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut warned = false;
         loop {
-            tick.tick().await;
-            let k = keyring.clone();
-            let _ = tokio::task::spawn_blocking(move || k.refresh()).await;
+            let result = watch(&keyring).await;
+            if let Some(error) = result.as_ref().err().filter(|_| !warned) {
+                tracing::warn!(code = "keyring_watch_failed", %error, "escuta do chaveiro parou; religa em 30 s");
+            }
+            warned = result.is_err();
+            tokio::time::sleep(Duration::from_secs(30)).await;
         }
     })
+}
+
+#[cfg(target_os = "linux")]
+async fn watch(keyring: &Keyring) -> zbus::Result<()> {
+    use futures_util::StreamExt;
+    let conn = zbus::Connection::session().await?;
+    let bus = zbus::fdo::DBusProxy::new(&conn).await?;
+    let mut owners = bus.receive_name_owner_changed_with_args(&[(0, SECRETS)]).await?;
+    let rule = zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal)
+        .interface("org.freedesktop.Secret.Service")?.member("CollectionChanged")?.build();
+    let mut changes = zbus::MessageStream::for_match_rule(rule, &conn, None).await?;
+    let props = zbus::proxy::Builder::<zbus::Proxy>::new(&conn).destination(SECRETS)?.path("/org/freedesktop/secrets/collection/login")?
+        .interface("org.freedesktop.DBus.Properties")?.cache_properties(zbus::proxy::CacheProperties::No).build().await?;
+    loop {
+        if keyring.real.load(std::sync::atomic::Ordering::Relaxed) {
+            match locked_state(&bus, &props).await {
+                Some(state) => keyring.publish(state),
+                None => tracing::warn!(code = "keyring_state_unread", "estado do chaveiro não foi lido; fica o último"),
+            }
+        }
+        tokio::select! {
+            owner = owners.next() => if owner.is_none() { return Ok(()); },
+            change = changes.next() => match change { None => return Ok(()), Some(Err(error)) => return Err(error), Some(Ok(_)) => {} },
+        }
+    }
+}
+
+/// `None` = não deu para ler agora. Sem dono do nome não pergunta: perguntar subiria o daemon.
+#[cfg(target_os = "linux")]
+async fn locked_state(bus: &zbus::fdo::DBusProxy<'_>, props: &zbus::Proxy<'_>) -> Option<KeyringState> {
+    const LIMIT: Duration = Duration::from_secs(5);
+    let name = zbus::names::BusName::try_from(SECRETS).ok()?;
+    if !tokio::time::timeout(LIMIT, bus.name_has_owner(name)).await.ok()?.ok()? { return Some(KeyringState::Absent); }
+    let reply = tokio::time::timeout(LIMIT, props.call_with_flags::<_, _, zbus::zvariant::OwnedValue>(
+        "Get", zbus::proxy::MethodFlags::NoAutoStart.into(), &("org.freedesktop.Secret.Collection", "Locked"))).await.ok()?;
+    match reply {
+        Ok(Some(value)) => bool::try_from(value).ok().map(|locked| if locked { KeyringState::Locked } else { KeyringState::Unlocked }),
+        // Daemon sem a coleção `login`, ou saindo do barramento: nada a destrancar.
+        Err(zbus::Error::MethodError(..) | zbus::Error::FDO(_)) => Some(KeyringState::Absent),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn spawn(keyring: std::sync::Arc<Keyring>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move { let _ = tokio::task::spawn_blocking(move || keyring.refresh()).await; })
 }
 
 #[derive(serde::Deserialize)]

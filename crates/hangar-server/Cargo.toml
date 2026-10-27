@@ -101,6 +101,9 @@ libc.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Wdk_System_SystemInformation", "Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security_Authorization", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading", "Win32_Storage_FileSystem"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
+
 [dev-dependencies]
 proptest = "=1.12.0"
 # Relógio pausado: as rodadas do `state::Monitor` contadas sem esperar o tempo real.
