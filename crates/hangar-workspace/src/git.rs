@@ -598,7 +598,10 @@ pub fn remove_worktree(cwd: &Path, path: &str, force: bool) -> Result<Value> {
         args.push("--force");
     }
     args.push(path);
-    let out = command(cwd, &args)?;
+    // Apagar depende do disco; matar por prazo de leitura deixa a pasta parcialmente removida.
+    let out = crate::process::run_program_to_completion(
+        std::process::Command::new("git").arg("-C").arg(cwd).args(&args),
+    )?;
     if out.code != 0 {
         return Err(error(
             500,

@@ -54,6 +54,47 @@ fn scene() -> tempfile::TempDir {
 }
 
 #[tokio::test]
+async fn residual_detail_and_manual_delete_keep_identity_files_and_branch_until_confirmation() {
+    let dir = scene();
+    let root = hangar_workspace::real(dir.path());
+    let repo = root.join("repo");
+    let path = root.join("residual");
+    git(&repo, &["worktree", "add", "-b", "residual", path.to_str().unwrap()]);
+    std::fs::write(path.join("source.rs"), "fn main() {}\n").unwrap();
+    std::fs::create_dir(path.join("node_modules")).unwrap();
+    std::fs::write(path.join("node_modules/cache"), "cache").unwrap();
+    std::fs::remove_file(path.join(".git")).unwrap();
+    let f = fixture(&root, true).await;
+    let c = client();
+    let mut url = reqwest::Url::parse(&format!("http://{}/api/worktrees/detail", f.addr)).unwrap();
+    url.query_pairs_mut().append_pair("path", path.to_str().unwrap());
+    let r = c.get(url).bearer_auth(OWNER).send().await.unwrap();
+    let status = r.status();
+    let detail: Value = serde_json::from_str(&r.text().await.unwrap()).unwrap();
+    assert_eq!(status, 200, "{detail}");
+    assert_eq!(detail["residual"], true);
+    assert_eq!(detail["branch"], "residual");
+    assert_eq!(detail["merged"], false);
+    assert_eq!(detail["degraded"], true);
+    assert!(detail["residual_files"].as_array().unwrap().iter().any(|v| v == "source.rs"));
+    assert!(detail["residual_files"].as_array().unwrap().iter().any(|v| v == "node_modules/cache"));
+    for confirm in [false, true] {
+        let r = c.post(format!("http://{}/api/worktrees/delete", f.addr)).bearer_auth(OWNER)
+            .header("content-type", "application/json")
+            .body(serde_json::json!({"repo":repo,"path":path,"confirm":confirm}).to_string()).send().await.unwrap();
+        let status = r.status();
+        let body: Value = serde_json::from_str(&r.text().await.unwrap()).unwrap();
+        assert_eq!(status, if confirm { 200 } else { 409 }, "{body}");
+        if !confirm { assert!(path.join("source.rs").exists()); }
+        else { assert_eq!(body["branch_deleted"], false); }
+    }
+    assert!(!path.exists());
+    assert!(!hangar_workspace::worktrees::worktree_paths(repo.to_str().unwrap()).contains(&path.to_string_lossy().into_owned()));
+    git(&repo, &["show-ref", "--verify", "refs/heads/residual"]);
+    assert_eq!(f.hits(), 0);
+}
+
+#[tokio::test]
 async fn cleanup_known_repo_is_safe_when_another_discovery_root_is_missing() {
     use std::{sync::Arc, time::Duration};
     use hangar_server::{list::{bridge::{ListBridge, ListEnv}, facts::FactsClient, mux::Mux}, worktree_policy};

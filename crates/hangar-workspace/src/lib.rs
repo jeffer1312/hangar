@@ -7,6 +7,7 @@ pub mod worktrees;
 pub mod worktree_settings;
 pub mod worktree_merge;
 pub mod worktree_cleanup;
+mod worktree_residual;
 mod process_lifetime;
 pub use hangar_api::workspace::WorkspaceError;
 use serde::Deserialize;

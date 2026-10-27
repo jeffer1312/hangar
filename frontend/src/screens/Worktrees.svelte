@@ -238,7 +238,7 @@
     {#if w.last_commit}<div class="assunto">{w.last_commit.subject}</div>{/if}
     <div class="metricas">
       <span class="mono">↑{w.ahead} ↓{w.behind ?? 0}</span>
-      <span class:aviso={w.dirty > 0} class:muted={!w.dirty}>{w.dirty ? m.worktree_n_nao_commitados({ n: w.dirty }) : m.worktree_limpa()}</span>
+      <span class:aviso={w.residual || w.dirty > 0} class:muted={!w.residual && !w.dirty}>{w.residual ? m.worktree_estado_residual() : w.dirty ? m.worktree_n_nao_commitados({ n: w.dirty }) : m.worktree_limpa()}</span>
       <span class="muted">{atividade(w)}</span>
       {#if w.created_at}<span class="muted">{m.worktree_criada({ quando: relativeTime(w.created_at) })}</span>{/if}
     </div>

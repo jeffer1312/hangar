@@ -438,6 +438,11 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   seu upstream ou o único remoto correspondente. Ambiguidade e falha de leitura impedem marcar
   mesclada; upstream apagado nunca comprova merge. Pontas iguais continuam protegidas. Evidência
   e limites em [plataforma.md](docs/decisoes/plataforma.md#worktrees-mescladas-usam-a-origem-e-a-base-publicada).
+- **Worktree registrada com pasta existente sem `.git` é residual.** A identidade vem da
+  administração do repositório principal; apagar exige confirmação de todos os arquivos
+  remanescentes e preserva a branch. Nunca entra na limpeza automática. Registro só sai depois
+  da pasta, e interrupção admite retomada. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#recuperação-manual-de-worktrees-residuais).
   Descoberta global incompleta avisa sobre repositórios ainda não encontrados; não bloqueia a
   limpeza de worktrees conhecidas, cuja identidade, arquivos, locks e uso são reconferidos.
 - **Plan progress lê o `.md` do plano**, sem arquivo de estado: blocos cercados são removidos

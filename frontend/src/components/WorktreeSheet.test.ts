@@ -18,6 +18,22 @@ afterEach(() => {
 });
 
 describe('releitura do tamanho', () => {
+  it('resíduo informa os arquivos remanescentes e confirma preservando a branch', async () => {
+    vi.spyOn(api, 'getWorktreeForServer').mockResolvedValue({ ...st, size_pending: false, residual: true,
+      residual_files: ['source.rs', 'node_modules/cache'], residual_entries: 2 } as api.WorktreeStatus);
+    const remove = vi.spyOn(api, 'deleteWorktreeForServer').mockResolvedValue({ removed: st.path, branch_deleted: false, moved: 0 });
+    const alvo = document.body.appendChild(document.createElement('div'));
+    comp = mount(WorktreeSheet, { target: alvo, props: { open: true, server: { id: 's' } as never, path: st.path, onClose: () => {} } });
+    await tick(); await tick(); flushSync();
+    [...document.querySelectorAll('button')].find((b) => b.textContent?.includes(m.worktree_apagar_reticencias()))!.click();
+    flushSync();
+    expect(document.body.textContent).toContain('source.rs');
+    expect(document.body.textContent).toContain('node_modules/cache');
+    expect(document.querySelector('input[type=checkbox]')).toBeNull();
+    document.querySelector<HTMLButtonElement>('.acoes .apagar')!.click();
+    await tick();
+    expect(remove).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ confirm: true, keep_branch: true, delete_branch: false }));
+  });
   it('falha aparece no detalhe e não vaza para a confirmação', async () => {
     vi.useFakeTimers();
     vi.spyOn(api, 'getWorktreeForServer').mockResolvedValueOnce(st).mockRejectedValueOnce(new Error('caiu'));

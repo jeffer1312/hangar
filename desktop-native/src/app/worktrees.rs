@@ -36,6 +36,12 @@ pub(super) struct WorktreeStatus {
     /// Leitura que falhou: dirty/ignored podem estar zerados sem ser verdade.
     #[serde(default)]
     pub degraded: bool,
+    #[serde(default)]
+    pub residual: bool,
+    #[serde(default)]
+    pub residual_files: Vec<String>,
+    #[serde(default)]
+    pub residual_entries: Option<u64>,
     pub ahead: i64,
     #[serde(default)]
     pub behind: i64,
@@ -93,11 +99,12 @@ pub(super) struct BranchList { current: Option<String>, #[serde(default)] branch
 
 /// Um estado só por worktree, na ordem do que mais importa antes de apagar (o `worktreeState` do core).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum WtState { Gone, Session, Dirty, Merged, Detached, Active }
+pub(super) enum WtState { Gone, Session, Residual, Dirty, Merged, Detached, Active }
 
 pub(super) fn state_of(w: &WorktreeStatus) -> WtState {
     if !w.exists { WtState::Gone }
     else if !w.sessions.is_empty() { WtState::Session }
+    else if w.residual { WtState::Residual }
     else if w.dirty > 0 { WtState::Dirty }
     else if w.merged { WtState::Merged }
     else if w.branch.is_none() { WtState::Detached }
@@ -108,6 +115,7 @@ impl WtState {
     fn label(self) -> String {
         tr_shared(match self {
             WtState::Gone => "worktree_estado_sumida", WtState::Session => "worktree_estado_em_uso",
+            WtState::Residual => "worktree_estado_residual",
             WtState::Dirty => "worktree_estado_nao_commitado", WtState::Merged => "worktree_estado_mesclada",
             WtState::Detached => "worktree_estado_sem_branch", WtState::Active => "worktree_estado_andamento",
         }, &[])
@@ -115,6 +123,7 @@ impl WtState {
     pub(super) fn color(self) -> Hsla {
         match self {
             WtState::Gone => theme::danger(), WtState::Session => theme::accent(), WtState::Dirty => theme::warning(),
+            WtState::Residual => theme::warning(),
             WtState::Merged => theme::success(), WtState::Detached => theme::faint(), WtState::Active => theme::muted(),
         }
     }
@@ -122,6 +131,7 @@ impl WtState {
         match self {
             WtState::Gone => tr_shared("worktree_veredito_sumida", &[]),
             WtState::Session => tr_shared("worktree_veredito_em_uso", &[]),
+            WtState::Residual => tr_shared("worktree_residual_warning", &[]),
             WtState::Dirty => tr_shared("worktree_veredito_nao_commitado", &[("n", &w.dirty.to_string())]),
             WtState::Merged => tr_shared("worktree_veredito_mesclada", &[]),
             WtState::Detached => tr_shared("worktree_veredito_sem_branch", &[]),
@@ -142,7 +152,7 @@ pub(super) fn age_days(w: &WorktreeStatus, now: f64) -> Option<i64> {
 pub(super) fn stale_days(w: &WorktreeStatus, now: f64) -> Option<i64> { age_days(w, now).filter(|d| *d > STALE_DAYS) }
 
 /// Pronta para apagar: mesclada, sem alteração e sem sessão. Arquivo ignorado não segura; a confirmação o lista.
-pub(super) fn ready(w: &WorktreeStatus) -> bool { w.merged && w.dirty == 0 && w.sessions.is_empty() && !w.degraded }
+pub(super) fn ready(w: &WorktreeStatus) -> bool { w.merged && w.dirty == 0 && w.sessions.is_empty() && !w.degraded && !w.residual }
 
 /// Worktree que o Claude cria para um subagente: nome gerado, agrupada à parte.
 pub(super) fn is_agent(w: &WorktreeStatus) -> bool {
@@ -171,12 +181,16 @@ fn loss_lines(w: &WorktreeStatus) -> Div {
 
 /// O lote de mescladas: as que entram na confirmação e as que ficam de fora (sessão aberta ou leitura falha).
 pub(super) fn merged_batch(list: &[WorktreeStatus]) -> (Vec<WorktreeStatus>, Vec<WorktreeStatus>) {
-    list.iter().filter(|w| w.merged).cloned().partition(|w| w.sessions.is_empty() && !w.degraded)
+    list.iter().filter(|w| w.merged).cloned().partition(|w| w.sessions.is_empty() && !w.degraded && !w.residual)
 }
 
 /// O que se perde ao apagar: a contagem de não commitados e os ignorados pelo nome.
 pub(super) fn lost_files(s: &WorktreeStatus) -> Vec<String> {
     let mut out = Vec::new();
+    if s.residual {
+        out.push(tr_shared("worktree_residual_warning", &[]));
+        out.extend(s.residual_files.iter().cloned());
+    }
     if s.dirty > 0 { out.push(tr_shared("worktree_nao_commitados", &[("n", &s.dirty.to_string())])); }
     out.extend(s.ignored.iter().cloned());
     out
@@ -804,7 +818,7 @@ impl Hangar {
 
     fn delete_worktree(&mut self, s: WorktreeStatus, window: &mut Window, cx: &mut Context<Self>) {
         let body = json!({"repo": &s.repo, "path": &s.path, "confirm": !lost_files(&s).is_empty(),
-                          "delete_branch": s.exists && self.worktrees.delete_branch, "keep_branch": !s.exists});
+                          "delete_branch": s.exists && !s.residual && self.worktrees.delete_branch, "keep_branch": !s.exists || s.residual});
         self.start_worktree_cleanup(vec![(s, "delete", body)], window, cx);
     }
 
@@ -1207,7 +1221,7 @@ impl Hangar {
         }).chain((!rest.is_empty()).then(|| div().px(px(6.)).py(px(4.))
             .child(line(tr_shared("worktrees_disco_outras", &[("n", &rest.len().to_string())]), String::new(), sum_size(rest.iter().copied()),
                 sum_label(rest.iter().copied()), theme::border_strong())).into_any_element())).collect();
-        let states = [WtState::Merged, WtState::Dirty, WtState::Session, WtState::Active, WtState::Detached];
+        let states = [WtState::Merged, WtState::Dirty, WtState::Residual, WtState::Session, WtState::Active, WtState::Detached];
         Some(card_plain().gap(px(10.))
             .child(div().flex().items_center().gap(px(10.)).flex_wrap()
                 .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(tr_shared("worktrees_disco_titulo", &[])))
@@ -1365,7 +1379,9 @@ impl Hangar {
         let commits = div().w(px(COL_COMMITS)).flex_shrink_0().flex().flex_col().gap(px(3.)).text_size(px(12.)).font_family(theme::MONO)
             .child(div().flex().items_center().gap(px(5.)).child(format!("↑{}", w.ahead)).child(bar(w.ahead, theme::accent())))
             .child(div().flex().items_center().gap(px(5.)).text_color(theme::muted()).child(format!("↓{}", w.behind)).child(bar(w.behind, theme::warning())));
-        let dirty = div().w(px(COL_DIRTY)).flex_shrink_0().text_size(px(12.5)).map(|el| if w.dirty > 0 {
+        let dirty = div().w(px(COL_DIRTY)).flex_shrink_0().text_size(px(12.5)).map(|el| if w.residual {
+            el.text_color(theme::warning_text()).child(tr_shared("worktree_estado_residual", &[]))
+        } else if w.dirty > 0 {
             el.text_color(theme::warning_text()).child(tr_shared("worktree_n_nao_commitados", &[("n", &w.dirty.to_string())]))
         } else { el.text_color(theme::faint()).child(tr_shared("worktree_limpa", &[])) });
         let activity = div().w(px(COL_ACTIVITY)).flex_shrink_0().flex().flex_col().gap(px(2.)).text_size(px(12.5))
@@ -1415,7 +1431,7 @@ impl Hangar {
                     .accessibility_label(tr_shared("worktree_copiar_caminho", &[]))
                     .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())))))
             .child(div().p(px(10.)).rounded(px(8.)).bg(theme::inset()).text_color(state.color()).child(state.verdict(&st)))
-            .when(st.degraded, |el| el.child(note_box(tr_shared("worktree_leitura_incompleta", &[]), theme::warning())))
+            .when(st.degraded && !st.residual, |el| el.child(note_box(tr_shared("worktree_leitura_incompleta", &[]), theme::warning())))
             .when_some(merge_notice(&st), |el, notice| el.child(note_box(notice, theme::warning()).id("worktree-merge-warning").role(Role::Status)))
             .when_some(detail_error, |el, error| el.child(note_box(error, theme::warning()).id("worktree-detail-error").role(Role::Alert)));
         let me = self.current_session(&st.server);
@@ -1479,7 +1495,7 @@ impl Hangar {
         let (here, target) = (st.clone(), st.id());
         let blocked = !st.sessions.is_empty();
         let actions = div().flex().flex_wrap().gap(px(8.))
-            .child(Button::new("worktree-new-session").outline().small().label(tr_shared(if st.sessions.is_empty() { "worktree_abrir_sessao_aqui" } else { "worktree_nova_sessao_aqui" }, &[])).disabled(!st.exists)
+            .child(Button::new("worktree-new-session").outline().small().label(tr_shared(if st.sessions.is_empty() { "worktree_abrir_sessao_aqui" } else { "worktree_nova_sessao_aqui" }, &[])).disabled(!st.exists || st.residual)
                 .on_click(cx.listener(move |this, _, window, cx| this.new_session_here(&here, window, cx))))
             .child(div().flex_1())
             .child(Button::new("worktree-delete").danger().small().label(tr_shared(if st.exists { "worktree_apagar_reticencias" } else { "worktree_clear_registration" }, &[]))
@@ -1531,6 +1547,10 @@ impl Hangar {
                 .when(st.size.is_some_and(|b| b > 0) && !st.size_error, |el| el.child(div().text_color(theme::success_text())
                     .child(tr_shared("worktree_libera", &[("tamanho", &Self::size_text(&st))])))))
             .when(!st.sessions.is_empty(), |el| el.child(note_box(tr_shared("worktree_bloqueada", &[("nomes", &st.sessions.join(", "))]), theme::warning())))
+            .when(st.residual, |el| el.child(div().flex().flex_col().gap(px(6.))
+                .child(note_box(tr_shared("worktree_residual_warning", &[]), theme::warning()))
+                .when_some(st.residual_entries, |el, n| el.child(muted(tr_shared("worktree_residual_entries", &[("n", &n.to_string())]))))
+                .children(st.residual_files.iter().map(|file| div().font_family(theme::MONO).text_size(px(12.)).child(file.clone())))))
             .when(lost, |el| el.child(div().flex().flex_col().gap(px(6.))
                 .child(section(tr_shared("worktree_apagar_perde", &[])).text_color(theme::warning_text()))
                 .child(div().p(px(10.)).rounded(px(8.)).border_1().border_color(theme::warning().alpha(0.35)).bg(theme::warning().alpha(0.06))
@@ -1543,7 +1563,7 @@ impl Hangar {
                     .when(!st.ignored.is_empty(), |el| el.child(div().text_color(theme::muted())
                         .child(tr_shared("worktree_ignorados", &[("nomes", &st.ignored.join(", "))])))))))
             .child(div().flex().flex_col().gap(px(6.)).child(section(tr_shared("worktree_fica_guardado", &[]))).children(kept))
-            .when(!st.merged && !branch.is_empty() && st.ahead > 0, |el| el.child(Checkbox::new("worktree-delete-branch")
+            .when(!st.residual && !st.merged && !branch.is_empty() && st.ahead > 0, |el| el.child(Checkbox::new("worktree-delete-branch")
                 .label(tr_shared("worktree_apagar_branch_tambem", &[("n", &st.ahead.to_string())]))
                 .checked(self.worktrees.delete_branch).disabled(deleting)
                 .on_change(cx.listener(|this, checked: &bool, _, cx| { this.worktrees.delete_branch = *checked; cx.notify(); }))))
@@ -1811,6 +1831,19 @@ const COL_SIZE: f32 = 76.;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn residual_state_never_enters_ready_and_always_informs_loss() {
+        let mut value = base("/r/residual");
+        value["residual"] = json!(true);
+        value["residual_files"] = json!(["source.rs", "node_modules/cache"]);
+        value["residual_entries"] = json!(2);
+        value["merged"] = json!(true);
+        let row = st(value);
+        assert_eq!(state_of(&row).label(), tr_shared("worktree_estado_residual", &[]));
+        assert!(!ready(&row));
+        assert!(lost_files(&row).iter().any(|s| s == "source.rs"));
+        assert!(lost_files(&row).iter().any(|s| s == "node_modules/cache"));
+    }
     use super::{fmt_size, lost_files, merged_batch, one_path_body, ready, slug, state_of, sum_label, title, tr_shared, is_agent, merge_notice, WorktreeSnapshot, Batch, BatchRun, WorktreeRepo, WorktreeStatus, Worktrees, WtState};
     use serde_json::json;
 

@@ -47,6 +47,7 @@
     switch (estado) {
       case 'gone': return m.worktree_veredito_sumida();
       case 'session': return m.worktree_veredito_em_uso();
+      case 'residual': return m.worktree_residual_warning();
       case 'dirty': return m.worktree_veredito_nao_commitado({ n: st.dirty });
       case 'merged': return m.worktree_veredito_mesclada();
       case 'detached': return m.worktree_veredito_sem_branch();
@@ -89,7 +90,8 @@
     const meu = geracao;
     apagando = true; erro = '';
     try {
-      await deleteWorktreeForServer(server, { repo, path: alvo, confirm: perdeArquivos > 0, delete_branch: apagarBranch });
+      await deleteWorktreeForServer(server, { repo, path: alvo, confirm: !!st.residual || perdeArquivos > 0,
+        delete_branch: !st.residual && apagarBranch, ...(st.residual ? { keep_branch: true } : {}) });
       worktreeStatus.drop(server.id, alvo);
       onDeleted?.();
       onClose();
@@ -113,6 +115,11 @@
       <h2 class="title">{m.worktree_apagar_titulo({ nome: worktreeTitle(st) })}</h2>
       <code class="caminho">{st.path}{st.branch ? ` · ${st.branch}` : ''}</code>
       {#if tamanho}<p class="libera">{m.worktree_libera({ tamanho })}</p>{/if}
+      {#if st.residual}
+        <p class="aviso">{m.worktree_residual_warning()}</p>
+        {#if st.residual_entries != null}<p>{m.worktree_residual_entries({ n: st.residual_entries })}</p>{/if}
+        <ul class="arquivos">{#each st.residual_files ?? [] as file (file)}<li>{file}</li>{/each}</ul>
+      {/if}
       {#if perdeArquivos}
         <p class="secao secao--perde">{m.worktree_apagar_perde()}</p>
         <div class="caixa-perde">
@@ -136,7 +143,7 @@
           <li>{m.worktree_apagar_conversas({ branch: st.main_branch ?? st.base ?? '' })}</li>
         {/if}
       </ul>
-      {#if !st.merged && st.branch}
+      {#if !st.residual && !st.merged && st.branch}
         <label class="marca"><input type="checkbox" bind:checked={apagarBranch} />
           <span class="marca-texto"><span>{m.worktree_apagar_branch_tambem({ n: st.ahead })}</span>
             {#if st.ahead}<span class="muted">{m.worktree_apagar_branch_perde({ n: st.ahead })}</span>{/if}</span></label>
@@ -161,7 +168,7 @@
       {#if erroCopia}<p class="erro" role="alert">{m.toast_copiar_falhou()}</p>{/if}
       <p class="veredito">{veredito}</p>
       {#if erro}<p class="erro" role="alert">{m.worktrees_erro({ motivo: erro })}</p>{/if}
-      {#if st.degraded}<p class="aviso" role="note">{m.worktree_leitura_incompleta()}</p>{/if}
+      {#if st.degraded && !st.residual}<p class="aviso" role="note">{m.worktree_leitura_incompleta()}</p>{/if}
 
       {#if sessoes.length}
         <p class="secao">{m.worktree_sessoes_aqui()}</p>

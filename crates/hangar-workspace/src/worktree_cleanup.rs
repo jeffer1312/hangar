@@ -1,6 +1,6 @@
 //! Política e remoção compartilhadas pelas ações manuais e pela limpeza periódica.
 use crate::{
-    Result, error, git, real,
+    Result, error, git, real, worktree_residual,
     worktree_settings::{self, KeepWhen, WorktreeSettings},
     worktrees::{self, Session},
 };
@@ -48,6 +48,11 @@ fn registration(repo: &str, path: &str) -> Result<Registration> {
             .iter()
             .any(|f| *f == "locked" || f.starts_with("locked "))
         {
+            if worktree_residual::missing_git(Path::new(p))
+                && worktree_residual::registration(repo, p).is_ok_and(|r| matches!(r.locked(), Ok(false)))
+            {
+                return Ok(Registration::Ready(p.into()));
+            }
             return Ok(Registration::Locked);
         }
         return Ok(Registration::Ready(p.into()));
@@ -147,9 +152,35 @@ pub fn remove_with_guard(
     let root =
         worktrees::repo_root_of(repo).ok_or_else(|| error(404, "repositório não encontrado"))?;
     let main = worktrees::main_repo_of(&root);
-    let path = registered(&main, path)?;
+    let path = match registered(&main, path) {
+        Ok(path) => path,
+        Err(e) if e.status == 404 && missing_path(path)?
+            && worktrees::try_removed_at(&home.join(".hangar/worktrees-removidas.json"))
+                .ok().and_then(|m| m.get(path).cloned()).is_some_and(|r| real(Path::new(&r)) == real(Path::new(&main))) => {
+            if in_use(path, sessions) {
+                return Err(error(409, "sessão aberta dentro da worktree"));
+            }
+            guard(path)?;
+            if !missing_path(path)? {
+                return Err(error(409, "a pasta reapareceu; confira a worktree antes de remover"));
+            }
+            return Ok(json!({"removed":path,"branch_deleted":false,"moved":0}));
+        }
+        Err(e) => return Err(e),
+    };
     if in_use(&path, sessions) {
         return Err(error(409, "sessão aberta dentro da worktree"));
+    }
+    if Path::new(&path).is_dir() && worktree_residual::missing_git(Path::new(&path)) {
+        worktree_residual::registration(&main, &path)?;
+        if require_merged || require_clean {
+            return Err(error(409, "pasta residual só pode ser removida manualmente"));
+        }
+        if !confirm {
+            return Err(error(409, "todos os arquivos remanescentes serão perdidos; a branch será preservada; confirme"));
+        }
+        with_removed(home, &path, &main, || worktree_residual::remove(&main, &path, guard))?;
+        return Ok(json!({"removed":path,"branch_deleted":false,"moved":0}));
     }
     // Sem pasta, o registro pode sobreviver até à branch: sua limpeza não depende do HEAD.
     if missing_path(&path)? && !require_merged {
@@ -159,7 +190,11 @@ pub fn remove_with_guard(
             if !missing_path(&path)? {
                 return Err(error(409, "a pasta reapareceu; confira a worktree antes de remover"));
             }
-            git::remove_worktree(Path::new(&main), &path, false)?;
+            if worktree_residual::registration(&main, &path).is_ok_and(|r| r.removing()) {
+                worktree_residual::remove(&main, &path, guard)?;
+            } else {
+                git::remove_worktree(Path::new(&main), &path, false)?;
+            }
             if worktrees::worktree_paths(&main).contains(&path) {
                 return Err(error(409, "a worktree continua registrada"));
             }
@@ -651,6 +686,143 @@ pub fn remove_candidate_with_guard(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn residual_requires_confirmation_then_removes_files_and_registration_preserving_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let wt = repo.join("nested-residual");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-b", "main"]);
+        std::fs::write(repo.join("source.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(repo.join(".gitignore"), "node_modules/\n.env\n").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "-m", "initial"]);
+        git(&repo, &["worktree", "add", "-b", "topic", wt.to_str().unwrap()]);
+        std::fs::create_dir(wt.join("node_modules")).unwrap();
+        std::fs::write(wt.join("node_modules/cache"), "dependência").unwrap();
+        std::fs::write(wt.join(".env"), "arquivo ignorado").unwrap();
+        std::fs::remove_file(wt.join(".git")).unwrap();
+        let repo = repo.to_str().unwrap();
+        let path = wt.to_str().unwrap();
+        let refused = remove(repo, path, &[], &[], dir.path(), RemoveOptions::default()).unwrap_err();
+        assert_eq!(refused.status, 409);
+        assert!(refused.detail.as_str().unwrap().contains("confirme"), "{}", refused.detail);
+        assert!(wt.join("source.rs").exists());
+        let out = remove(repo, path, &[], &[], dir.path(), RemoveOptions { confirm: true, ..Default::default() }).unwrap();
+        assert_eq!(out["branch_deleted"], false);
+        assert!(!wt.exists());
+        assert!(!worktrees::worktree_paths(repo).contains(&path.to_owned()));
+        git(Path::new(repo), &["show-ref", "--verify", "refs/heads/topic"]);
+    }
+
+    #[test]
+    fn residual_removal_can_resume_after_files_are_gone_and_repeat_after_success() {
+        let (dir, repo, wt) = policy_fixture();
+        let (repo, path) = (repo.to_str().unwrap(), wt.to_str().unwrap());
+        std::fs::write(wt.join("source.rs"), "trabalho").unwrap();
+        std::fs::remove_file(wt.join(".git")).unwrap();
+        let calls = std::cell::Cell::new(0);
+        let guard = |_: &str| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 2 { Err(error(503, "interrupção após apagar os arquivos")) } else { Ok(()) }
+        };
+        let options = RemoveOptions { confirm: true, ..Default::default() };
+        assert!(remove_with_guard(repo, path, &[], &[], dir.path(), options, &guard).is_err());
+        assert!(!wt.exists());
+        assert!(worktrees::worktree_paths(repo).contains(&path.to_owned()));
+        let removed = remove(repo, path, &[], &[], dir.path(), options).unwrap();
+        assert_eq!(removed["branch_deleted"], false);
+        assert!(!worktrees::worktree_paths(repo).contains(&path.to_owned()));
+        let repeated = remove(repo, path, &[], &[], dir.path(), options).unwrap();
+        assert_eq!(repeated["removed"], removed["removed"]);
+    }
+
+    #[test]
+    fn residual_protects_sessions_locks_main_foreign_paths_and_changed_admin_link() {
+        let (dir, repo, wt) = policy_fixture();
+        let (repo, path) = (repo.to_str().unwrap(), wt.to_str().unwrap());
+        std::fs::remove_file(wt.join(".git")).unwrap();
+        std::fs::write(wt.join("source.rs"), "preservar").unwrap();
+        let options = RemoveOptions { confirm: true, ..Default::default() };
+        let session = Session { name: "active".into(), git_cwd: Some(wt.join("src").to_string_lossy().into()), ..Default::default() };
+        assert_eq!(remove(repo, path, &[session], &[], dir.path(), options).unwrap_err().status, 409);
+        git(Path::new(repo), &["worktree", "lock", path]);
+        assert_eq!(remove(repo, path, &[], &[], dir.path(), options).unwrap_err().status, 409);
+        git(Path::new(repo), &["worktree", "unlock", path]);
+        let admin = worktree_residual::registration(repo, path).unwrap().admin;
+        for lock in [admin.join("HEAD.lock"), admin.join("index.lock"), Path::new(repo).join(".git/refs/heads/topic.lock")] {
+            std::fs::write(&lock, "outro Git").unwrap();
+            assert_eq!(remove(repo, path, &[], &[], dir.path(), options).unwrap_err().status, 409);
+            assert!(wt.join("source.rs").exists());
+            std::fs::remove_file(lock).unwrap();
+        }
+        assert!(remove(repo, repo, &[], &[], dir.path(), options).is_err());
+        let foreign = dir.path().join("foreign");
+        std::fs::create_dir(&foreign).unwrap();
+        std::fs::write(foreign.join("keep"), "preservar").unwrap();
+        assert!(remove(repo, foreign.to_str().unwrap(), &[], &[], dir.path(), options).is_err());
+        assert!(foreign.join("keep").exists());
+        std::fs::write(admin.join("commondir"), "../../outro-repo").unwrap();
+        assert!(remove(repo, path, &[], &[], dir.path(), options).is_err());
+        assert!(wt.join("source.rs").exists());
+    }
+
+    #[test]
+    fn residual_revalidates_new_git_link_files_and_session_before_acting_and_can_retry() {
+        let (dir, repo, wt) = policy_fixture();
+        let (repo, path) = (repo.to_str().unwrap(), wt.to_str().unwrap());
+        let link = std::fs::read(wt.join(".git")).unwrap();
+        std::fs::remove_file(wt.join(".git")).unwrap();
+        std::fs::write(wt.join("source.rs"), "preservar").unwrap();
+        let options = RemoveOptions { confirm: true, ..Default::default() };
+        let changed = |_: &str| { std::fs::write(wt.join("new.rs"), "novo").unwrap(); Ok(()) };
+        assert!(remove_with_guard(repo, path, &[], &[], dir.path(), options, &changed).is_err());
+        assert!(wt.join("source.rs").exists());
+        let restored = |_: &str| { std::fs::write(wt.join(".git"), &link).unwrap(); Ok(()) };
+        assert!(remove_with_guard(repo, path, &[], &[], dir.path(), options, &restored).is_err());
+        assert!(wt.join("source.rs").exists());
+        std::fs::remove_file(wt.join(".git")).unwrap();
+        let opened = |_: &str| Err(error(409, "sessão recém-aberta"));
+        assert!(remove_with_guard(repo, path, &[], &[], dir.path(), options, &opened).is_err());
+        assert!(wt.join("source.rs").exists());
+        assert!(remove(repo, path, &[], &[], dir.path(), options).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn residual_inventory_failure_keeps_serializable_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, repo, wt) = policy_fixture();
+        std::fs::remove_file(wt.join(".git")).unwrap();
+        let unreadable = wt.join("unreadable");
+        std::fs::create_dir(&unreadable).unwrap();
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let status = worktrees::status_of(wt.to_str().unwrap(), &[], false, &[]);
+        std::fs::set_permissions(unreadable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(status["repo"], repo.to_string_lossy().as_ref());
+        assert_eq!(status["residual"], true);
+        assert_eq!(status["residual_entries"], Value::Null);
+        assert_eq!(status["residual_files"], json!([]));
+    }
+
+    #[test]
+    fn residual_removal_keeps_external_directory_link_target() {
+        let (dir, repo, wt) = policy_fixture();
+        std::fs::remove_file(wt.join(".git")).unwrap();
+        let external = dir.path().join("external");
+        std::fs::create_dir(&external).unwrap();
+        std::fs::write(external.join("source.rs"), "preservar fora da worktree").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&external, wt.join("linked-workspace")).unwrap();
+        #[cfg(windows)]
+        assert!(std::process::Command::new("cmd").args(["/d", "/c", "mklink", "/J"])
+            .arg(wt.join("linked-workspace")).arg(&external).output().unwrap().status.success());
+        let removed = remove(repo.to_str().unwrap(), wt.to_str().unwrap(), &[], &[], dir.path(),
+            RemoveOptions { confirm: true, ..Default::default() }).unwrap();
+        assert_eq!(removed["branch_deleted"], false);
+        assert!(!wt.exists());
+        assert_eq!(std::fs::read_to_string(external.join("source.rs")).unwrap(), "preservar fora da worktree");
+    }
     use super::*;
     #[test]
     fn tree_stamp_skips_node_modules_but_not_a_repository_named_like_it() {

@@ -1,4 +1,7 @@
 {
+  "worktree_estado_residual": "Pasta residual",
+  "worktree_residual_warning": "Esta pasta perdeu o vínculo .git, mas continua registrada. Apagar remove todos os arquivos remanescentes, inclusive fontes e ignorados. A branch será preservada.",
+  "worktree_residual_entries": "{n} entradas remanescentes. Exemplos:",
   "$schema": "https://inlang.com/schema/inlang-message-format",
   "keyring_locked_title": "{label}: chaveiro trancado",
   "keyring_locked_hint": "Chrome, Slack e outros apps dessa máquina ficam esperando o chaveiro. Digite a senha do chaveiro dela (em geral, a mesma do login).",
