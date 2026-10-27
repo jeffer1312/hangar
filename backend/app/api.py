@@ -516,7 +516,9 @@ async def _providers_pelo_rust(request: Request, call_next):
         if account_bridge.owner_mode() == "python":
             return JSONResponse({"detail": {"code": "providers_need_rust_server"}}, status_code=503)
         return await account_bridge.forward_stream(request, guest=guest_of(request) is not None or guest_users.current.get() is not None)
-    return await _repasse_ao_rust(request, {"code": "providers_need_rust_server"}, "/__hangar_server/forwarded")
+    unavailable = (erro("orq_conductor_need_rust_server", "o condutor precisa do servidor Rust, que não está rodando")
+                   if re.fullmatch(r"/api/orq/[^/]+/conductor", path) else {"code": "providers_need_rust_server"})
+    return await _repasse_ao_rust(request, unavailable, "/__hangar_server/forwarded")
 
 
 @app.middleware("http")

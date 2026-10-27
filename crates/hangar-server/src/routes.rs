@@ -261,6 +261,7 @@ pub async fn serve_with_state(listener: TcpListener, state: AppState) -> std::io
 
 /// `guest`: endereço da porta do convidado. Ocupada não derruba a principal: tenta até soltar.
 pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest: Option<SocketAddr>) -> std::io::Result<()> {
+    crate::omp_sync::validate_environment(&crate::push::server_env()).map_err(std::io::Error::other)?;
     let guest = guest.filter(|addr| state.share.is_some() || {
         tracing::error!(listen = %addr, "porta do convidado pedida sem HANGAR_SHARES_FILE: fica fechada");
         false
@@ -823,6 +824,9 @@ pub(crate) async fn pass_any(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     mut req: Request,
 ) -> Response {
+    if crate::provider_models::inbox_http_request(req.method(), req.uri().path(), req.headers()) {
+        return crate::session_write::json_response(StatusCode::NOT_FOUND, serde_json::json!({"detail":"Not Found"}));
+    }
     if let Some(mut response) = crate::provider_info::wrong_method(req.method(), req.uri().path(), req.uri().query()) {
         cors(req.headers(), response.headers_mut());
         return response;
@@ -1194,6 +1198,12 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
         assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap(), serde_json::json!({"code":"omp_sync_unavailable"}));
+        for method in [Method::GET, Method::POST, Method::OPTIONS, Method::HEAD] {
+            let mut req = request("/api/pi/inbox", "198.51.100.53", false, "errado");
+            *req.method_mut() = method;
+            let response = pass_any(State(state.clone()), ConnectInfo(peer), req).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
     }
 
     #[tokio::test]

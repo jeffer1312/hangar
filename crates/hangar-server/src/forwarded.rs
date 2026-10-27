@@ -26,6 +26,9 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         return StatusCode::BAD_REQUEST.into_response();
     };
     let method = req.method().clone();
+    if crate::provider_models::inbox_http_request(&method, &path, req.headers()) {
+        return crate::session_write::json_response(StatusCode::NOT_FOUND, json!({"detail":"Not Found"}));
+    }
     if let Some(response) = crate::provider_info::wrong_method(&method, &path, req.uri().query()) { return response; }
     let models = crate::provider_models::matches(&method, &path)
         || crate::provider_models::catalog_request(&method, &path, req.uri().query());
