@@ -260,12 +260,13 @@ async fn read_machine(machine: &Machine) -> Option<Status> {
 
 /// Os avisos de cada máquina do lote, antes do modal: a desta (primeiro) com a versão, as novidades e o estado lido; as
 /// outras só com os avisos.
-async fn load_all(machines: Vec<Machine>) -> (Option<Value>, Vec<Notes>) {
+/// Devolve também as entradas lidas: o lote roda por elas, nunca por outra entrada da mesma máquina (outro token).
+async fn load_all(machines: Vec<Machine>) -> (Option<Value>, Vec<Notes>, Vec<Machine>) {
     let (machines, _) = prepare_machines(machines).await;
-    // Uma por chave, a primeira, como em `batch_machines`: a entrada que lê e aceita os avisos é a que o lote roda.
     let mut seen = HashSet::new();
     let machines: Vec<_> = machines.into_iter().filter(|m| seen.insert(m.key.clone())).collect();
-    let mut read =futures::future::join_all(machines.into_iter().map(|m| async move {
+    let targets = machines.clone();
+    let mut read = futures::future::join_all(machines.into_iter().map(|m| async move {
         match &m.api {
             Ok(api) if m.local => { let (state, notes) = confirm::load(api.clone()).await; (true, state, notes.labeled(m.label)) }
             _ => (false, None, confirm::load_warnings(m.api.clone(), m.key, m.label).await),
@@ -273,7 +274,7 @@ async fn load_all(machines: Vec<Machine>) -> (Option<Value>, Vec<Notes>) {
     })).await;
     read.sort_by_key(|(local, ..)| !local);
     let state = read.iter_mut().find_map(|(_, state, _)| state.take());
-    (state, read.into_iter().map(|(_, _, notes)| notes).collect())
+    (state, read.into_iter().map(|(_, _, notes)| notes).collect(), targets)
 }
 
 fn unread(machines: &[Machine]) -> Vec<Notes> {
@@ -421,18 +422,18 @@ impl Updater {
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             // A leitura que morreu no meio não vira "sem avisos": todas ficam de fora do lote, com a linha de falha.
-            let (state, groups) = task.await.unwrap_or_else(|_| (None, unread(&machines)));
+            let (state, groups, targets) = task.await.unwrap_or_else(|_| (None, unread(&machines), Vec::new()));
             let _ = handle.update(cx, |_, window, cx| { let _ = this.update(cx, |this, cx| {
                 this.run = Run::Idle;
                 if state.is_some() { this.receive_server(state, cx); }
                 cx.notify();
-                this.confirm_all(groups, window, cx);
+                this.confirm_all(groups, targets, window, cx);
             }); });
         }).detach();
     }
 
-    /// `groups`: os avisos de cada máquina; a que não deu para ler fica de fora do lote.
-    fn confirm_all(&mut self, groups: Vec<Notes>, window: &mut Window, cx: &mut Context<Self>) {
+    /// `groups`: os avisos de cada máquina; a que não deu para ler fica de fora do lote. `targets`: as entradas lidas.
+    fn confirm_all(&mut self, groups: Vec<Notes>, targets: Vec<Machine>, window: &mut Window, cx: &mut Context<Self>) {
         let all = Rc::new(Cell::new(true));
         let selected = all.clone();
         let this = cx.entity().downgrade();
@@ -451,10 +452,11 @@ impl Updater {
                 let accepted: HashMap<String, Acceptance> = servers.iter().cloned().zip(accepted).collect();
                 let local_acceptance = local.as_ref().and_then(|key| accepted.get(key)).cloned().unwrap_or_default();
                 let excluded = excluded.clone();
+                let targets = targets.clone();
                 // O alerta fecha antes de o modal de progresso abrir.
                 window.on_next_frame(move |window, cx| { let _ = this.update(cx, |this, cx| {
                     if this.busy() { return; }
-                    if all { this.start_all(accepted, excluded, window, cx); }
+                    if all { this.start_all(targets, accepted, excluded, window, cx); }
                     else { match this.plan().server {
                         ServerStep::Update => this.search_server(local_acceptance, window, cx),
                         _ => this.run_local(Notes::default(), window, cx),
@@ -463,10 +465,12 @@ impl Updater {
             });
     }
 
-    /// `accepted`: o aceite de cada máquina, pela chave; `excluded`: as que não tiveram os avisos lidos.
-    fn start_all(&mut self, accepted: HashMap<String, Acceptance>, excluded: HashSet<String>, window: &mut Window, cx: &mut Context<Self>) {
+    /// `targets`: as entradas cujos avisos foram lidos; `accepted`: o aceite de cada uma, pela chave; `excluded`: as que
+    /// não tiveram os avisos lidos.
+    fn start_all(&mut self, targets: Vec<Machine>, accepted: HashMap<String, Acceptance>, excluded: HashSet<String>,
+        window: &mut Window, cx: &mut Context<Self>) {
         let all = self.all_machines();
-        let machines = batch_machines(all.clone(), &accepted, &excluded);
+        let machines = batch_machines(targets, &accepted, &excluded);
         let mut local_acceptance = machines.iter().find(|m| m.local).and_then(|m| accepted.get(&m.key)).cloned();
         self.survey.generation += 1;
         self.survey.prepare(&machines, HashMap::new());
