@@ -6,13 +6,16 @@ import type { SessionInfo, AggSession } from './types';
 import type { Server } from './servers';
 import { serverColor } from './servers';
 
-export interface Slot { sessions: SessionInfo[] | null; error: string | null }
+export type KeyringState = 'unlocked' | 'locked' | 'absent';
+
+export interface Slot { sessions: SessionInfo[] | null; error: string | null; keyring?: KeyringState | null }
 
 export interface ServerBucket {
   server: Server;
   sessions: AggSession[];   // já deduplicadas e enriquecidas
   error: string | null;     // 'offline' quando o stream caiu ou veio frame malformado
   loaded: boolean;          // já recebeu ao menos uma lista boa (pode coexistir com error = stale)
+  keyringLocked?: boolean;  // evento `keyring` da lista: o chaveiro `login` da máquina está trancado
 }
 
 export interface Aggregate {
@@ -49,6 +52,7 @@ export function aggregateSessions(
       sessions: [],
       error: slot?.error ?? null,
       loaded: slot?.sessions != null,
+      keyringLocked: slot?.keyring === 'locked' && slot.error !== 'offline',
     };
     if (slot?.sessions && slot.error !== 'offline') {
       const color = serverColor(srv.id);

@@ -185,6 +185,8 @@ mod groups_peers;
 mod groups_routes;
 mod groups_store;
 mod groups_sweep;
+#[cfg(unix)]
+mod keyring;
 mod list_bridge;
 mod list_facts;
 mod list_routes;

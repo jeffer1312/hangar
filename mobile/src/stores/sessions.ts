@@ -392,13 +392,13 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
         const sessions: unknown = JSON.parse(e.data);
         if (!Array.isArray(sessions)) throw new Error('invalid_sessions');
         receivedList();
-        slots.set(s.id, { sessions: reuseUnchanged(slots.get(s.id)?.sessions, sessions as SessionInfo[]), error: null });
+        slots.set(s.id, { sessions: reuseUnchanged(slots.get(s.id)?.sessions, sessions as SessionInfo[]), error: null, keyring: slots.get(s.id)?.keyring });
         if (falhaDados) registrarDiag({ evento: 'lista.voltou', tela: 'lista' }, s.baseUrl);
         falhaDados = false;
       } catch {
         falhaDados = true;
         registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista', codigo: 'json_invalido' }, s.baseUrl);
-        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: m.sessao_erro_servidor() });
+        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: m.sessao_erro_servidor(), keyring: slots.get(s.id)?.keyring });
       }
       recompute(set);
     });
@@ -412,7 +412,19 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       const slot = slots.get(s.id);
       const sessions = slot?.sessions ?? null;
       if (sessions?.length && !slot?.error) return;
-      slots.set(s.id, { sessions, error: sessions?.length ? null : m.sessao_erro_servidor() });
+      slots.set(s.id, { sessions, error: sessions?.length ? null : m.sessao_erro_servidor(), keyring: slot?.keyring });
+      recompute(set);
+    });
+    // Chaveiro `login` da máquina: chega na conexão e a cada troca; frame torto mantém o último.
+    es.addEventListener('keyring', (e) => {
+      if (!active()) return;
+      answered();
+      let state: unknown;
+      try { state = (JSON.parse(e.data) as { state?: unknown } | null)?.state; } catch { return; }
+      if (state !== 'locked' && state !== 'unlocked' && state !== 'absent') return;
+      const slot = slots.get(s.id);
+      if (slot?.keyring === state) return;
+      slots.set(s.id, { sessions: slot?.sessions ?? null, error: slot?.error ?? null, keyring: state });
       recompute(set);
     });
     es.onerror = (event) => {

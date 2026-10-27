@@ -575,6 +575,16 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   "reconectando". `list_error` continua emitido; o cliente só o desenha com a lista vazia.
   Código novo de diagnóstico entra em `DIAGNOSTIC` de `problem_gate.rs`. Critério e tabela em
   [plataforma.md](docs/decisoes/plataforma.md#aviso-na-tela-só-para-ação-que-falhou-ou-bloqueio-real-20102026).
+- **Chaveiro trancado é do Rust (`keyring.rs`): estado no evento `keyring` da lista do dono,
+  senha só pelo `POST /api/keyring/unlock`.** Só o token do dono, nunca repassado ao Python; a
+  senha vai pelo socket de controle do gnome-keyring, nunca por `gnome-keyring-daemon --unlock`
+  (com daemon de pé ele sobe outro e não abre nada), linha de comando, log ou disco. Os três
+  clientes mostram o aviso por servidor. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#chaveiro-trancado-no-boot-o-rust-detecta-e-o-dono-destranca-de-outra-máquina-26102026).
+- **Chave secreta nunca vai no argv do `new-session`.** O escopo leva `--description`, e o
+  `ProcessMux::run` passa `*_API_KEY`/`*_TOKEN`/`*_SECRET` por um arquivo 0600 que o pane lê e
+  apaga: o systemd grava a linha de comando do escopo no journal. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#chave-secreta-do-pane-fora-da-linha-de-comando-26102026).
 - **Uma configuração do Jev para navegador, orquestração, voz, Computer Use e escolha de envio.** `jev_api_key`,
   `jev_endpoint` e `jev_model` no `runtime_config`; no ambiente `TYPESAFE_API_KEY`, `JEV_ENDPOINT`
   e `JEV_MODEL`, já resolvidos. Não existe chave do Jev só para o Computer Use. A regra do destino

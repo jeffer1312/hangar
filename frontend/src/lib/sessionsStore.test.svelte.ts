@@ -60,6 +60,21 @@ it('falha do produtor com linhas na tela vai ao diário e não marca o servidor'
   expect(sessionsStore.rows.some(s => s.name === 'hangar')).toBe(true);
 });
 
+it('evento keyring marca só o servidor dele, sobrevive ao quadro de sessões e ignora dado torto', () => {
+  sessionsStore.retain();
+  const vpn = () => sessionsStore.byServer.find(s => s.server.id === 'vpn');
+  const keyring = (data: string) => streams.get('vpn')!.get('keyring')?.({ data });
+  keyring(JSON.stringify({ state: 'locked' }));
+  streams.get('vpn')!.get('sessions')!({ data: '[]' });
+  expect(vpn()?.keyringLocked).toBe(true);
+  expect(sessionsStore.byServer.find(s => s.server.id === 'lan')?.keyringLocked).toBe(false);
+  keyring('{torto');
+  keyring(JSON.stringify({ state: 'outro' }));
+  expect(vpn()?.keyringLocked).toBe(true);
+  keyring(JSON.stringify({ state: 'unlocked' }));
+  expect(vpn()?.keyringLocked).toBe(false);
+});
+
 it('falha do produtor sem linha nenhuma em todos os servidores continua marcando cada um', () => {
   sessionsStore.retain();
   for (const id of ['lan', 'vpn']) streams.get(id)!.get('list_error')!({ data: '' });

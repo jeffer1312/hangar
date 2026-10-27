@@ -70,6 +70,9 @@ struct Published {
     error_seq: u64,
     shortcuts: Option<Bytes>,
     shortcuts_seq: u64,
+    /// `{state}` do chaveiro desta máquina; só o dono recebe.
+    keyring: Option<Bytes>,
+    keyring_seq: u64,
     /// (nome, `ts` do pedido, quadro `{name, url}`)
     nav: Arc<Vec<(String, f64, Bytes)>>,
 }
@@ -133,7 +136,8 @@ impl InternalSubscription {
 
 /// O que o produtor guarda entre tiques para só publicar mudança.
 #[derive(Default)]
-struct Last { sig: Option<String>, nav: Vec<(String, crate::nav_requests::Marker)>, shortcuts: Option<String> }
+struct Last { sig: Option<String>, nav: Vec<(String, crate::nav_requests::Marker)>, shortcuts: Option<String>,
+    keyring: Option<crate::keyring::KeyringState> }
 
 /// Pânico fora da produção (assinatura, publicação) não deixa o hub sem produtor: as listas abertas
 /// ficariam só com `ping`, e nenhuma nova religaria.
@@ -153,6 +157,7 @@ async fn supervise(hub: Arc<ListHub>, list: Arc<ListBridge>, diag: DiagClient) {
 async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, diag: DiagClient) {
     let mut last = Last::default();
     let mut files = FileWake::new();
+    let mut keyring = list.keyring.subscribe();
     loop {
         let clients = {
             let mut r = lock(&hub.refs);
@@ -182,6 +187,7 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, diag: DiagClient) {
         }
         publish(&hub.tx, &mut last, outcome, &diag);
         publish_nav(&hub.tx, &mut last, list.nav.live(crate::nav_requests::now()));
+        publish_keyring(&hub.tx, &mut last, *keyring.borrow_and_update());
         let tick = tokio::time::Instant::now() + TICK;
         // Até o tique, escrita numa pasta de estado reclassifica só a sessão dela.
         loop {
@@ -189,6 +195,10 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, diag: DiagClient) {
                 () = tokio::time::sleep_until(tick) => break,
                 () = list.nav.changed.notified() => {
                     publish_nav(&hub.tx, &mut last, list.nav.live(crate::nav_requests::now()));
+                    continue;
+                }
+                Ok(()) = keyring.changed() => {
+                    publish_keyring(&hub.tx, &mut last, *keyring.borrow_and_update());
                     continue;
                 }
                 w = files.recv() => w,
@@ -434,6 +444,16 @@ fn publish_nav(tx: &watch::Sender<Arc<Published>>, last: &mut Last, nav: Vec<(St
     tx.send_replace(Arc::new(next));
 }
 
+/// Fora da rodada, como o `nav`: lista em erro não esconde o chaveiro trancado.
+fn publish_keyring(tx: &watch::Sender<Arc<Published>>, last: &mut Last, state: crate::keyring::KeyringState) {
+    if last.keyring == Some(state) { return; }
+    let mut next = (**tx.borrow()).clone();
+    next.keyring = Some(sse_frame("keyring", &json!({"state": state}).to_string(), None));
+    next.keyring_seq += 1;
+    last.keyring = Some(state);
+    tx.send_replace(Arc::new(next));
+}
+
 /// Na transição ou na troca de motivo: lista vazia por falha seria igual a nenhuma sessão.
 fn fail(prev: &Published, next: &mut Published, code: &'static str) -> bool {
     if prev.error.as_ref().map(|e| e.0) == Some(code) {
@@ -451,7 +471,7 @@ fn nav_entries(nav: &[(String, crate::nav_requests::Marker)]) -> Vec<(String, f6
 
 /// O que uma conexão já entregou.
 #[derive(Default)]
-struct Sent { sessions: u64, error: u64, shortcuts: u64, nav: HashMap<String, f64> }
+struct Sent { sessions: u64, error: u64, shortcuts: u64, keyring: u64, nav: HashMap<String, f64> }
 
 /// Quadros que esta conexão ainda não mandou do que está publicado.
 fn frames(p: &Published, sent: &mut Sent) -> Vec<Bytes> {
@@ -468,6 +488,10 @@ fn frames(p: &Published, sent: &mut Sent) -> Vec<Bytes> {
     if let Some(sc) = p.shortcuts.as_ref().filter(|_| sent.shortcuts != p.shortcuts_seq) {
         sent.shortcuts = p.shortcuts_seq;
         out.push(sc.clone());
+    }
+    if let Some(k) = p.keyring.as_ref().filter(|_| sent.keyring != p.keyring_seq) {
+        sent.keyring = p.keyring_seq;
+        out.push(k.clone());
     }
     for (name, ts, frame) in p.nav.iter() {
         if sent.nav.get(name) != Some(ts) {

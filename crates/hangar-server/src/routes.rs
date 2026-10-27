@@ -267,6 +267,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let public_v6 = state.public_v6.take();
     let state = Arc::new(state);
     let _worktree_sweep=crate::AbortOnDrop(crate::worktree_policy::spawn(state.clone()));
+    let _keyring_watch = crate::AbortOnDrop(crate::keyring::spawn(state.list.keyring.clone()));
     let v6_state = state.clone();
     // Abortada na saída: a tarefa segura o estado do servidor, que sobreviveria a ele.
     // As sessões com terminal que o multiplexador perdeu voltam pelo spec; antes da varredura de grupos, que
@@ -605,6 +606,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Planos e catálogo de plugins e skills: o dono no Rust; o resto segue ao Python.
         .merge(crate::plans::routes::router())
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_any))
+        // Senha do chaveiro: só o dono, nunca repassada; só o preflight do CORS vai ao Python.
+        .route("/api/keyring/unlock", axum::routing::post(crate::keyring::unlock_route).options(pass_any))
         // SideStore no iPhone/iPad do cabo: só o dono, nunca repassado (a senha da Apple ID não vai ao Python).
         .route("/api/device-install/devices", get(crate::device_install::routes::devices))
         .route("/api/device-install/progress", get(crate::device_install::routes::progress))

@@ -3260,3 +3260,52 @@ em duas sessões, nenhum rename bem-sucedido no diário.
 **Limite conhecido.** Status, rótulo e limite de Pi/omp/Kimi guardados por nome no Python não são
 movidos: o nome novo os recalcula no próximo ciclo, e um nome velho reusado em até 20 s mostra o
 status antigo. Nada novo no Python para isso.
+
+## Chaveiro trancado no boot: o Rust detecta e o dono destranca de outra máquina (26/10/2026)
+
+**Regra.** O `hangar-server` lê `Locked` da coleção `login` do Secret Service (`busctl --user
+--auto-start=no`, a cada 15 s) e publica o evento `keyring` (`{state}`) na lista do dono. O
+`POST /api/keyring/unlock` só aceita o token do dono, nunca é repassado ao Python e manda a senha
+pelo socket de controle do gnome-keyring (`$XDG_RUNTIME_DIR/keyring/control`, protocolo do
+`gkr-pam`). Senha aceita e chaveiro ainda trancado: reinicia `gnome-keyring-daemon.service` e
+manda de novo, uma vez.
+
+**Por quê.** Com `Linger=yes` o Hangar sobe antes do login gráfico. No boot de 26/10 a checagem de
+worktree mesclada (`hangar-workspace/src/worktree_merge.rs`, `gh pr list`) pediu o token do `gh`,
+que mora na coleção `login`; o daemon nasceu com ela trancada, tentou o `gcr-prompter` sem display
+(`cannot open display`, 17 vezes) e o Chrome e o Slack ficaram esperando. As sessões do Claude não
+usam o chaveiro (`~/.claude/.credentials.json`; o Codex está em `cli_auth_credentials_store =
+"file"`): medido com `busctl --user monitor`, todo pedido `org.freedesktop.Secret.*` vinha do `gh`.
+
+**Medição (daemon isolado, HOME/XDG_RUNTIME_DIR/barramento temporários, gnome-keyring 51.1).**
+- `gnome-keyring-daemon --unlock` com um daemon de pé devolve 0, sobe outro daemon órfão e o
+  `login` segue trancado, com a senha certa ou errada. Não serve.
+- Socket de controle, op 1: senha errada responde 1 (negado), certa responde 0 e `Locked` vira
+  `false`, também depois de três prompts falhados sem display. Não precisou reiniciar.
+- O `Default_Keyring` (senha guardada no `login`) não abre sozinho sem display mesmo com o `login`
+  aberto: o desbloqueio automático roda dentro do fluxo do prompter. Com o login gráfico o prompter
+  existe e ele abre sem perguntar; isso não foi medido com prompter de verdade.
+
+**Limite.** Se a fila de prompts do daemon travar o pedido do Chrome ao `Default_Keyring`, abrir o
+`login` não a solta; a reinicialização só acontece quando o próprio `login` não abre.
+
+## Chave secreta do pane fora da linha de comando (26/10/2026)
+
+**Regra.** O `new-session` real (`ProcessMux::run` em `session_open/terminal.rs`) passa o escopo
+com `--description=hangar:<sessão>` e tira do `-e` toda variável terminada em `_API_KEY`, `_TOKEN`
+ou `_SECRET`. Elas vão a `$XDG_RUNTIME_DIR/hangar/env/<aleatório>.env` (pasta 0700, arquivo 0600,
+nome novo por subida), que o `/bin/sh -c` do pane lê e apaga antes do `exec` do agente. Recusa do
+tmux apaga o arquivo; sem resposta ele fica, porque o pane pode ter nascido. Sem `XDG_RUNTIME_DIR`
+ou com falha de gravação, as chaves seguem pelo `-e` com aviso no log. O argv montado por
+`new_session_argv` não muda: o tmux falso dos testes e a comparação com o Python continuam vendo o
+`-e` inteiro. `CP_SESSION_KEY` fica no `-e`: o `show-environment` o lê para adotar o pane.
+
+**Por quê.** O systemd grava `Started [systemd-run] <linha de comando>` no journal do usuário a
+cada escopo. Num boot, 15 linhas tinham `TYPESAFE_API_KEY`, `JEV_AUX_API_KEY` e
+`HANGAR_PLUGIN_TOKEN` em texto puro. Com `--description` a linha vira `Started hangar:<sessão>.`
+(medido com `systemd-run --user --scope --description=…`). O arquivo tira as chaves também do
+`/proc/<pid>/cmdline` do cliente tmux e do `show-environment` da sessão.
+
+**Limite.** Janela nova aberta dentro da sessão tmux não herda essas chaves (antes herdava pelo
+ambiente da sessão). O journal antigo e as chaves já gravadas lá não mudam com isto: trocar as
+chaves e limpar o journal são passos à parte.

@@ -100,6 +100,17 @@ it('mantém prontas expandidas ao abrir uma sessão e remontar a home', async ()
   expect([...target.querySelectorAll('.session-stub')].map((b) => b.textContent)).toEqual(['p1', 'p2']);
 });
 
+it('chaveiro trancado aparece na tela inicial, por máquina e com campo de senha', async () => {
+  Object.assign(store, { loading: false, rows: [row('s1', 'idle')], byServer: [
+    { server: server('a'), sessions: [], error: null, loaded: true, keyringLocked: true },
+    { server: server('b'), sessions: [], error: null, loaded: true, keyringLocked: false },
+  ] });
+  const text = await mount();
+  expect(text).toContain('a: chaveiro trancado');
+  expect(text).not.toContain('b: chaveiro trancado');
+  expect(target.querySelectorAll('input[type="password"]')).toHaveLength(1);
+});
+
 it('sucesso agrupa e "mais N prontas" expande', async () => {
   Object.assign(store, { loading: false, rows: [row('p1', 'idle'), row('w1', 'awaiting_input'), row('p2', 'idle')],
     byServer: [{ server: server('a'), sessions: [], error: null, loaded: true }] });

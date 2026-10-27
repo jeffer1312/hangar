@@ -294,6 +294,61 @@ pub fn client_command(program: &str) -> tokio::process::Command {
     command
 }
 
+/// O argv que vai ao processo de verdade. O systemd grava a linha de comando do escopo no journal:
+/// o escopo leva descrição própria, e o `-e` de chave secreta vira um arquivo que o shell do pane lê
+/// e apaga antes do agente (fora também do `/proc/<pid>/cmdline`). Devolve o conteúdo do arquivo.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn private_launch(mut argv: Vec<String>, file: &Path) -> (Vec<String>, Option<String>) {
+    let Some(at) = argv.iter().position(|a| a == "new-session") else { return (argv, None) };
+    let name = argv[at..].windows(2).find(|w| w[0] == "-s").map(|w| w[1].clone()).unwrap_or_default();
+    let scoped = argv.first().is_some_and(|p| Path::new(p).file_name().is_some_and(|f| f == "systemd-run"));
+    let mut at = at;
+    if scoped && let Some(end) = argv[..at].iter().position(|a| a == "--") {
+        argv.insert(end, format!("--description=hangar:{name}"));
+        at += 1;
+    }
+    let secret = |pair: &str| pair.split_once('=').is_some_and(|(k, _)| ["_API_KEY", "_TOKEN", "_SECRET"].iter().any(|s| k.ends_with(s)));
+    let shell = argv.len() >= 3 && argv[argv.len() - 3] == "/bin/sh" && argv[argv.len() - 2] == "-c";
+    if !shell { return (argv, None) }
+    let mut contents = String::new();
+    let mut i = at;
+    while i + 1 < argv.len() {
+        if argv[i] == "-e" && secret(&argv[i + 1]) {
+            let (key, value) = argv[i + 1].split_once('=').unwrap();
+            contents.push_str(&format!("export {key}={}\n", quote(value)));
+            argv.drain(i..i + 2);
+        } else { i += 1; }
+    }
+    if contents.is_empty() { return (argv, None) }
+    let path = quote(&file.to_string_lossy());
+    let command = argv.pop().unwrap();
+    argv.push(format!(". {path} && rm -f {path} && {command}"));
+    (argv, Some(contents))
+}
+
+fn quote(value: &str) -> String { format!("'{}'", value.replace('\'', "'\\''")) }
+
+/// Grava o arquivo de segredos do pane: só o dono lê, nome novo por subida.
+#[cfg(unix)]
+fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    if let Some(dir) = path.parent() {
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        // O pane lê e apaga em instantes; o que passou de 10 min é de uma subida que não respondeu.
+        let stale = std::time::SystemTime::now() - Duration::from_secs(600);
+        for entry in std::fs::read_dir(dir)?.flatten() {
+            if entry.metadata().and_then(|m| m.modified()).is_ok_and(|at| at < stale) {
+                if let Err(error) = std::fs::remove_file(entry.path()) {
+                    tracing::warn!(kind = ?error.kind(), "arquivo de segredos antigo do pane não foi apagado");
+                }
+            }
+        }
+    }
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?;
+    file.write_all(contents.as_bytes())
+}
+
 /// O processo de verdade, sem os segredos do servidor no ambiente do cliente (que vira o do
 /// servidor tmux quando é ele quem o sobe).
 /// `probe`: a sondagem do escopo (a do systemd; os testes trocam por uma falsa).
@@ -327,6 +382,27 @@ impl Mux for ProcessMux {
 
     fn run(&self, argv: Vec<String>) -> BoxFuture<'_, MuxOutput> {
         Box::pin(async move {
+            #[cfg(unix)]
+            let (argv, secrets) = match std::env::var_os("XDG_RUNTIME_DIR") {
+                Some(dir) => {
+                    let path = Path::new(&dir).join("hangar/env").join(format!("{}.env", crate::mods::state::random_hex(8)));
+                    match private_launch(argv.clone(), &path) {
+                        (private, Some(contents)) => match write_private(&path, &contents) {
+                            Ok(()) => (private, Some(path)),
+                            Err(error) => {
+                                tracing::warn!(kind = ?error.kind(), "arquivo de segredos do pane não foi gravado; as chaves seguem pelo -e");
+                                if self.diary.is_some() {
+                                    let line = serde_json::json!({"evento": "mux.segredos_no_argv", "nivel": "aviso", "erro_tipo": format!("{:?}", error.kind())});
+                                    let _ = crate::diag::record(self.diary.clone(), vec![line], "multiplexador").await;
+                                }
+                                (argv, None)
+                            }
+                        },
+                        (private, None) => (private, None),
+                    }
+                }
+                None => (argv, None),
+            };
             let Some((program, args)) = argv.split_first() else { return MuxOutput::default() };
             let simultaneous = RUNNING.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
             let started = std::time::Instant::now();
@@ -341,6 +417,9 @@ impl Mux for ProcessMux {
                 Err(_) => (MuxOutput { code: None, stdout: String::new(), stderr: "o multiplexador não respondeu no prazo".into() }, Some(("TimeoutExpired", None))),
             };
             RUNNING.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            // Recusado, o pane não nasceu e ninguém vai ler o arquivo; sem resposta, ele pode ter nascido.
+            #[cfg(unix)]
+            if let Some(path) = &secrets && out.code.is_some_and(|code| code != 0) { let _ = std::fs::remove_file(path); }
             if self.diary.is_some()
                 && let Some(line) = command_line(&argv, &out, failure, started.elapsed(), self.timeout, simultaneous) {
                 let _ = crate::diag::record(self.diary.clone(), vec![line], "multiplexador").await;
@@ -578,6 +657,89 @@ pub(crate) mod tests {
         let argv = new_session_argv(&windows, &pane);
         assert!(!argv.iter().any(|a| a.starts_with("CLAUDE_CONFIG_DIR=")), "a padrão escrita de outro jeito: {argv:?}");
         assert_eq!(argv.last().unwrap(), "claude --settings '{\"a\":\"it''s\"}'");
+    }
+
+    /// A chave secreta sai do argv (o systemd grava a linha de comando do escopo no journal) e vai a um
+    /// arquivo que o shell do pane lê e apaga antes do agente; o escopo ganha descrição própria.
+    #[cfg(unix)]
+    #[test]
+    fn secrets_leave_the_command_line_for_a_file_the_pane_reads_and_deletes() {
+        let pane = claude(vec![("TYPESAFE_API_KEY".into(), "sk-a'b".into()), ("HANGAR_PLUGIN_TOKEN".into(), "k.t".into()),
+            ("HANGAR_JEV".into(), "on".into())], None);
+        let mut argv: Vec<String> = ["/usr/bin/systemd-run", "--user", "--scope", "--collect", "-q", "--"].map(str::to_owned).into();
+        argv.extend(new_session_argv(&machine(), &pane));
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("s1.env");
+        let (private, contents) = private_launch(argv, &file);
+        let joined = private.join(" ");
+        assert!(!joined.contains("sk-a") && !joined.contains("k.t"), "{joined}");
+        assert!(private.windows(2).any(|w| w[0] == "-e" && w[1] == "HANGAR_JEV=on"), "{joined}");
+        assert!(private.windows(2).any(|w| w[0] == "-e" && w[1] == format!("CP_SESSION_KEY={}", "k".repeat(32))), "{joined}");
+        assert_eq!(private[..6].join(" "), "/usr/bin/systemd-run --user --scope --collect -q --description=hangar:s1");
+        std::fs::write(&file, contents.unwrap()).unwrap();
+        // O comando do pane, com `printenv` no lugar do agente.
+        let shell = private.last().unwrap().rsplit_once(" exec env ").map(|(head, _)| format!("{head} printenv TYPESAFE_API_KEY HANGAR_PLUGIN_TOKEN")).unwrap();
+        let out = std::process::Command::new("/bin/sh").args(["-c", &shell]).env_clear().output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "sk-a'b\nk.t\n", "{shell}");
+        assert!(!file.exists());
+    }
+
+    /// Prova na máquina: tmux isolado (`-L`) e escopo de verdade do systemd. O agente recebe a chave,
+    /// o arquivo some e o journal só tem a descrição. `cargo test … -- --ignored real_scope`.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "usa o systemd e o journal do usuário"]
+    async fn real_scope_keeps_the_key_out_of_the_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = format!("kr-{}", crate::mods::state::random_hex(4));
+        let tmux = dir.path().join("tmux");
+        std::fs::write(&tmux, format!("#!/bin/sh\nexec tmux -L {socket} -f /dev/null \"$@\"\n")).unwrap();
+        std::fs::set_permissions(&tmux, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let key = format!("sk-{}", crate::mods::state::random_hex(8));
+        let out = dir.path().join("out");
+        let env = TerminalEnv { program: tmux.to_string_lossy().into_owned(), display: Vec::new(), ..machine() };
+        let pane = PaneSpec { name: socket.clone(), cwd: dir.path().to_string_lossy().into_owned(), provider: AgentProvider::Claude,
+            key: "k".repeat(32), env: vec![("TYPESAFE_API_KEY".into(), key.clone())], config_dir: None,
+            command: vec!["sh".into(), "-c".into(), format!("printenv TYPESAFE_API_KEY > {}; sleep 30", out.display())] };
+        let mux = ProcessMux::default();
+        let spawned = spawn(&mux, &env, &pane).await;
+        let seen = (0..50).find_map(|_| { std::thread::sleep(Duration::from_millis(100)); std::fs::read_to_string(&out).ok().filter(|s| !s.is_empty()) });
+        let _ = std::process::Command::new(&tmux).arg("kill-server").status();
+        spawned.unwrap();
+        assert_eq!(seen.as_deref(), Some(format!("{key}\n").as_str()));
+        let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap();
+        let left: Vec<_> = std::fs::read_dir(Path::new(&runtime).join("hangar/env")).unwrap().flatten()
+            .filter(|e| std::fs::read_to_string(e.path()).is_ok_and(|s| s.contains(&key))).collect();
+        assert!(left.is_empty(), "arquivo ficou: {left:?}");
+        std::thread::sleep(Duration::from_secs(1));
+        let journal = std::process::Command::new("journalctl").args(["--user", "--since", "-2min", "--no-pager"]).output().unwrap();
+        let journal = String::from_utf8_lossy(&journal.stdout);
+        assert!(journal.contains(&format!("Started hangar:{socket}")), "sem a descrição no journal");
+        assert!(!journal.contains(&key), "a chave foi ao journal");
+    }
+
+    /// Subida que não respondeu deixa o arquivo para trás; a próxima gravação o apaga.
+    #[cfg(unix)]
+    #[test]
+    fn an_old_secrets_file_is_swept_by_the_next_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old.env");
+        std::fs::write(&old, "export K='v'\n").unwrap();
+        std::fs::File::options().write(true).open(&old).unwrap()
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600)).unwrap();
+        let fresh = dir.path().join("fresh.env");
+        write_private(&fresh, "export K='w'\n").unwrap();
+        assert!(!old.exists());
+        assert!(fresh.exists());
+    }
+
+    /// Sem segredo, sem arquivo; sem escopo, nada de descrição.
+    #[cfg(unix)]
+    #[test]
+    fn a_launch_without_secrets_stays_as_it_was() {
+        let argv = new_session_argv(&machine(), &claude(vec![("HANGAR_JEV".into(), "on".into())], None));
+        let (private, contents) = private_launch(argv.clone(), Path::new("/nope"));
+        assert_eq!((private, contents), (argv, None));
     }
 
     /// Nada que o servidor tmux herdou de outra sessão (subagente, Jev, ponte, portão de hooks,
