@@ -199,7 +199,7 @@ def test_notas_iguais_as_do_rust(tmp_path):
         for name, text in cases[pasta].items():
             (tmp_path / "docs" / pasta / name).write_bytes(text.encode())
     for os_name in ("linux-x86_64", "windows-x86_64"):
-        assert mp.notes(tmp_path, os_name) == {"warnings": cases["notes"][os_name], "news": cases["notes"]["news"]}, os_name
+        assert mp.notes(tmp_path, os_name) == cases["notes"][os_name], os_name
 
 
 def test_manifesto_acima_do_teto_do_extrator_falha_no_build(tmp_path, monkeypatch):

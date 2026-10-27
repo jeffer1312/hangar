@@ -27,6 +27,7 @@ O nome do arquivo é `<data>-<nome>.md` (ex.: `2026-10-26-historico-do-composito
 | `titulo` | Obrigatório. Sem ele o arquivo é ignorado. |
 | `tipo` | `novo`, `melhoria` ou `correcao`. Outro valor: arquivo ignorado. A tela mostra nessa ordem. |
 | `onde` | `desktop`, `celular` ou `todos`. Outro valor: arquivo ignorado. |
+| `sistema` | Opcional. O sistema da máquina que atualiza: `linux`, `windows` e/ou `macos`, separados por vírgula ou espaço (`sistema: linux, macos`). Sem o campo, vale para todos. Nome desconhecido: arquivo ignorado. |
 | `experimente` | Opcional. Uma frase dizendo como testar agora. |
 | `animacao` | Opcional. Nome de um roteiro animado que os apps conhecem. Nome que o app não conhece vira cartão só com texto. `correcao` nunca tem animação: o campo é descartado. |
 

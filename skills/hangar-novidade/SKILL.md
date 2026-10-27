@@ -34,6 +34,11 @@ mensagem de um commit (é o que cala o aviso do CI) e pare aqui.
 `onde`: `desktop` (só `desktop-native/`), `celular` (só `mobile/`) ou `todos` (os dois apps têm a
 mudança). Outro valor faz a rota descartar o arquivo sem aviso.
 
+`sistema`: só quando a mudança existe em parte dos sistemas da máquina que atualiza (`linux`,
+`windows`, `macos`; vários separados por vírgula). Ex.: chaveiro do GNOME = `sistema: linux`. Leia
+no diff se o código é de um sistema só (`#[cfg(windows)]`, `install.ps1`, D-Bus, `launchd`).
+Vale para todos? Omita o campo.
+
 ## 3. Escrever `docs/novidades/<AAAA-MM-DD>-<nome>.md`
 
 Formato e campos em `docs/novidades/README.md`. Data de hoje, `<nome>` curto em kebab-case;
