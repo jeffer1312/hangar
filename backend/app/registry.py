@@ -1398,6 +1398,10 @@ class SessionRegistry:
                 # turno o Pi escreve o transcript, o bilhete passa a resolver e a proxima varredura
                 # devolve tracked=True sozinha (list() e polled).
                 tracked = jsonl is not None
+            elif prov == "kimi":
+                # Só o bilhete do hook liga o pane ao wire; o Kimi não aceita um ID escolhido.
+                jsonl = kimi_session_file(p.get("pane_id", ""), p["pid"], p["cwd"])
+                tracked = jsonl is not None
             elif prov == "codex":
                 # Chegar aqui significa pane de Codex SEM sidecar (o filtro acima ja tirou os que
                 # tem): a TUI subiu e ainda nao abriu a thread. Nao ha transcript a resolver — o
