@@ -4,7 +4,7 @@ use crate::terminal_input::{self as input,TerminalBinding,TerminalDriver,Termina
 use crate::mods::click::{Pane,PaneFuture,PaneOp,PaneReply};
 use crate::interactions::{ExpectedInteraction,InteractionBinding,InteractionError,InteractionStore,runtime_error};
 use serde_json::{Value,json};
-use std::{collections::VecDeque,path::PathBuf,sync::{Arc,atomic::{AtomicBool,AtomicU64,Ordering}},time::{Duration,SystemTime,UNIX_EPOCH}};
+use std::{collections::VecDeque,path::{Path,PathBuf},sync::{Arc,atomic::{AtomicBool,AtomicU64,Ordering}},time::{Duration,SystemTime,UNIX_EPOCH}};
 use tokio::sync::{Mutex,mpsc,oneshot,broadcast};
 use super::terminal_status::{self, StatusSender};
 
@@ -344,6 +344,20 @@ fn clear_on_disk(transcript:&std::path::Path,since:f64)->Result<bool,std::io::Er
 /// limpeza renova a sua a cada volta ao prompt, também abaixo disto. Vence sozinha: uma tarefa de clique que
 /// sumiu sem o `Release` não segura a fila.
 pub(crate) const MAX_MODS_HOLD:Duration=Duration::from_secs(10);
+
+/// O ciclo de modos lido do terminal sobrevive ao reinício do servidor: sem ele o menu fica travado até
+/// nova leitura. Fora de `*.json`, que é o estado da fila varrido pelos dois lados.
+fn modes_path(state:&Path)->PathBuf {state.with_extension("modes")}
+fn read_modes(state:&Path)->Option<Value> {
+    std::fs::read(modes_path(state)).ok().and_then(|bytes|serde_json::from_slice::<Value>(&bytes).ok())
+        .filter(|modes|modes.as_array().is_some_and(|list|!list.is_empty()))
+}
+fn save_modes(state:&Path,modes:&Value) {
+    if let Err(failure)=super::queue::atomic_write(&modes_path(state),modes.to_string().as_bytes()) {
+        tracing::warn!(code="permission_modes_save_failed",%failure,"ciclo de modos lido e não gravado; o próximo reinício o esquece");
+    }
+}
+
 pub struct TerminalActor;
 impl TerminalActor {
     pub fn spawn(target:TerminalTarget,queue:QueueActor,policy:PolicyClient,options:TerminalOptions,events:broadcast::Sender<RuntimeEvent>,revision:Arc<AtomicU64>)->TerminalHandle {
@@ -355,7 +369,8 @@ impl TerminalActor {
         let local=Arc::new(crate::terminal_facts::LocalTerminalFacts::new(options.io.clone(),options.plugin.clone(),options.mode_facts.clone()));
         let status=options.status.clone();
         if let Some(sender)=&status { sender.send_replace(Default::default()); }
-        let executor=Executor {batch_blocked:false,target,queue:Arc::new(queue),local,options,events,revision,sequence,receipt,deliverable:false,last_error:None,uncertain:vec![],unprovable:false,mode_unproved:false,modes_cache:None,uncertain_since:None,loan:None,stall:None,hold:None,hold_checked:false,focus_refused:false,parked:VecDeque::new(),away:None,clear_watch:None,clear_notice:None,footer_misses:None,reconciliation:None,confirm_until:None,confirm_seen:None,
+        let modes_cache=read_modes(&target.state_path);
+        let executor=Executor {batch_blocked:false,target,queue:Arc::new(queue),local,options,events,revision,sequence,receipt,deliverable:false,last_error:None,uncertain:vec![],unprovable:false,mode_unproved:false,modes_cache,uncertain_since:None,loan:None,stall:None,hold:None,hold_checked:false,focus_refused:false,parked:VecDeque::new(),away:None,clear_watch:None,clear_notice:None,footer_misses:None,reconciliation:None,confirm_until:None,confirm_seen:None,
             unproved_since:None,no_safe_delivery:false,heal_requested:None,turn_wait:None,diag:policy.diag(),conversation_proved:false};
         let run=executor.run(receiver,closed.clone());
         let task=tokio::spawn(async move {
@@ -889,7 +904,10 @@ impl Executor {
             Err(failure)=>(json!({"ok":false,"current":null,"error_code":failure.code,"uncertain":true}),Disposition::Unknown),
         };
         if let Some(modes)=cached {value["modes"]=modes;}
-        else if probe && value["uncertain"]==false && value["modes"].as_array().is_some_and(|modes|!modes.is_empty()) {self.modes_cache=Some(value["modes"].clone());}
+        else if probe && value["uncertain"]==false && value["modes"].as_array().is_some_and(|modes|!modes.is_empty()) {
+            save_modes(&self.target.state_path,&value["modes"]);
+            self.modes_cache=Some(value["modes"].clone());
+        }
         // Como o Python: tecla sem efeito visível relê o rodapé e responde o modo que ficou, sem outra tecla.
         if disposition==Disposition::Unknown && let Ok(read)=permission_control::claude(&driver,PermissionAction::Read {probe:false}).await
             && let Some(mode)=read["current"].as_str() {
