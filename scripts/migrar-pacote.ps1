@@ -19,7 +19,13 @@ if (Test-Path -LiteralPath $marca) { Write-Output "ja migrada: $marca"; exit 0 }
 # Sem o aviso aceito na tela (o motor ou o app antigo atualizando), nada muda: a versao nova mostra o
 # aviso com a escolha, e a migracao roda pela tela.
 $aceitos = Join-Path $HOME '.hangar\update-accepted.json'
-if (-not ((Test-Path -LiteralPath $aceitos) -and (Get-Content -Raw -LiteralPath $aceitos) -match '"2026-10-24-pacote-por-versao"')) {
+# Mesma leitura do servidor (`update::accepted`): so uma lista de textos vale; outro formato e nada aceito.
+$aceito = $false
+try {
+    $lista = Get-Content -Raw -LiteralPath $aceitos -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    $aceito = ($lista -is [array]) -and -not ($lista | Where-Object { $_ -isnot [string] }) -and ($lista -contains '2026-10-24-pacote-por-versao')
+} catch { $aceito = $false }
+if (-not $aceito) {
     Write-Output 'migracao pendente: espera o aviso ser aceito na tela de atualizacao'
     exit 0
 }

@@ -364,10 +364,12 @@ pub async fn channel_write(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
     };
     let (home, claude) = (st.accounts.env.home.clone(), st.accounts.env.claude_base.clone());
     let written = tokio::task::spawn_blocking(move || {
-        if super::StateFile::new(&super::state_dir(&claude)).read().get("fase").and_then(Value::as_str) == Some("rodando") {
+        let layout = Layout::new(&home);
+        // O estado reconciliado, como no `start`: uma rodada que morreu em "rodando" não prende o canal.
+        let running = super::running_package().map(|p| p.version.clone());
+        if super::for_screen(&super::state_dir(&claude), &layout, running.as_deref()).get("fase").and_then(Value::as_str) == Some("rodando") {
             return Err(None);
         }
-        let layout = Layout::new(&home);
         let last = if channel == "latest" { super::chosen_channel(&layout).map(|(_, last)| last).unwrap_or_default() } else { channel.to_owned() };
         super::save_channel(&layout, channel, &last).map_err(|e| Some(e.to_string()))?;
         Ok(channel_snapshot(&layout))

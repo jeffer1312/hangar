@@ -55,6 +55,14 @@ expect_eq "sem-aceite: não baixa nem migra" "$(cat "$S/calls" 2>/dev/null)" ""
 expect_eq "sem-aceite: marca a migração pendente" "$([ -s "$H/.hangar/migration-offered" ] && echo sim || echo nao)" sim
 expect_eq "sem-aceite: sem marca de migrada" "$([ -e "$H/.hangar/migration.json" ] && echo sim || echo nao)" nao
 
+# Aceite fora do formato do servidor (lista com algo que não é texto): o servidor o lê vazio, o script também.
+run aceite-torto 0 1 0 "" 0
+S0="$S"; H0="$H"
+echo '["2026-10-24-pacote-por-versao", null]' > "$H0/.hangar/update-accepted.json"
+( cd "$S0/repo" && env -i HOME="$H0" PATH="$S0/bin:/usr/bin:/bin" bash scripts/migrar-pacote.sh >"$S0/out" 2>&1 ); RC=$?
+expect_eq "aceite-torto: sai 0" "$RC" 0 "$S0/out"
+expect_eq "aceite-torto: não baixa nem migra" "$(cat "$S0/calls" 2>/dev/null)" ""
+
 run sem-build 2 0
 expect_eq "sem-build: sai 0" "$RC" 0 "$S/out"
 expect_eq "sem-build: marca not_migrated" \

@@ -17,7 +17,11 @@ fi
 if [ -e "$marca" ]; then echo "já migrada: $marca"; exit 0; fi
 # Sem o aviso aceito na tela (o motor ou o app antigo atualizando), nada muda: a versão nova mostra o
 # aviso com a escolha, e a migração roda pela tela.
-if ! grep -q '"2026-10-24-pacote-por-versao"' "$HOME/.hangar/update-accepted.json" 2>/dev/null; then
+# Mesma leitura do servidor (`update::accepted`): só uma lista de textos vale; outro formato é nada aceito.
+if ! python3 -I -c 'import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+sys.exit(0 if isinstance(d, list) and all(isinstance(x, str) for x in d) and "2026-10-24-pacote-por-versao" in d else 1)' \
+    "$HOME/.hangar/update-accepted.json" 2>/dev/null; then
     echo "migração pendente: espera o aviso ser aceito na tela de atualização"
     exit 0
 fi
