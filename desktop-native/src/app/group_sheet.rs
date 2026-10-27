@@ -17,8 +17,9 @@ const FEED_SHOWN: usize = 40;
 /// Largura do painel com grupo (membros e conversa lado a lado); sem grupo ele fica estreito.
 const SHEET_WIDE: f32 = 1040.;
 
+/// Recado pronto para a tela: etiqueta e corpo arrumados uma vez, ao chegar, e o começo dele quando é longo.
 #[derive(Debug, PartialEq)]
-struct FeedItem { from: String, to: String, text: String, ts: f64 }
+struct FeedItem { from: String, to: String, text: String, ts: f64, tag: Option<String>, body: String, folded: Option<String> }
 
 /// `missing`: membros cujo histórico falhou, que não é o mesmo que conversa vazia.
 struct Feed { items: Vec<FeedItem>, missing: Vec<String> }
@@ -36,10 +37,12 @@ pub(super) struct Sheet {
     adding: bool,
     /// Membro (endereço da lista) com o "Retirar" aberto na linha, à espera da confirmação.
     removing: Option<String>,
-    /// Recados longos abertos por inteiro, por remetente e hora.
-    expanded: HashSet<String>,
+    /// Recados longos abertos por inteiro, pela posição na conversa carregada.
+    expanded: HashSet<usize>,
     busy: bool,
     error: Option<String>,
+    /// O aviso do "Retirar" sobrevive à recarga que a própria retirada causa.
+    keep_error: bool,
     /// Caminho e texto renderizado; `None` é grupo que ainda não escreveu contrato.
     contract: Remote<Option<(String, Entity<TextViewState>)>>,
     feed: Remote<Feed>,
@@ -60,7 +63,7 @@ struct SheetBody { hangar: WeakEntity<Hangar>, _observe: Subscription }
 impl Render for SheetBody {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = window.viewport_size();
-        // O diálogo começa a um décimo da altura; título, rodapé e margens levam ~190.
+        // O diálogo começa a um décimo da altura; o desconto é o título, o rodapé e as margens dele.
         let fit = (view.width >= px(SHEET_WIDE + 64.)).then(|| (view.height * 0.9 - px(190.)).clamp(px(320.), px(680.)));
         self.hangar.update(cx, |hangar, cx| hangar.render_group_sheet(fit, cx)).unwrap_or_else(|_| div())
     }
@@ -82,7 +85,8 @@ fn sheet_members(me: &str, peers: &[String]) -> Vec<(String, bool)> {
 fn dot(state: &str) -> Div { div().size(px(8.)).flex_shrink_0().rounded_full().bg(theme::status(state)) }
 
 /// Recados `[de: X]` que um membro recebeu de outro membro, de todos os históricos, em ordem de tempo; só a cauda.
-fn build_feed(members: &[String], histories: Vec<(String, Result<Vec<ChatEvent>, Failure>)>) -> Feed {
+/// `home`: a pasta do usuário desta máquina, quando o painel é desta máquina; só encurta recado de membro dela.
+fn build_feed(members: &[String], histories: Vec<(String, Result<Vec<ChatEvent>, Failure>)>, home: Option<&str>) -> Feed {
     let (mut items, mut missing) = (Vec::new(), Vec::new());
     for (owner, result) in histories {
         let Ok(events) = result else { missing.push(owner); continue };
@@ -90,7 +94,9 @@ fn build_feed(members: &[String], histories: Vec<(String, Result<Vec<ChatEvent>,
             let Some(peer) = event.text.as_deref().and_then(crate::cards::peer_message) else { continue };
             if peer.from == owner || !members.contains(&peer.from) { continue; }
             let text = match peer.canal { Some(canal) => format!("[{canal}] {}", peer.body), None => peer.body };
-            items.push(FeedItem { from: peer.from, to: owner.clone(), text, ts: event.ts.unwrap_or(0.) });
+            let (tag, body) = tidy_message(&text, home.filter(|_| !peer.from.contains("::")));
+            let folded = fold_message(&body);
+            items.push(FeedItem { from: peer.from, to: owner.clone(), text, ts: event.ts.unwrap_or(0.), tag, body, folded });
         }
     }
     items.sort_by(|a, b| a.ts.total_cmp(&b.ts));
@@ -98,12 +104,14 @@ fn build_feed(members: &[String], histories: Vec<(String, Result<Vec<ChatEvent>,
     Feed { items, missing }
 }
 
-/// Recado mais fácil de ler: a palavra de protocolo do começo (`ANDAMENTO`, `RESPOSTA`) vira etiqueta, a pasta do usuário
+/// Recado mais fácil de ler: a palavra de protocolo do começo (`ANDAMENTO`, `RESPOSTA:`) vira etiqueta, a pasta do usuário
 /// vira `~` e cada item numerado `(n)` começa numa linha.
 fn tidy_message(text: &str, home: Option<&str>) -> (Option<String>, String) {
     let text = text.trim();
+    // Cinco letras ou mais: sigla curta do texto (JSON, HTTP, TODO) continua na frase.
     let (tag, rest) = match text.split_once(' ') {
-        Some((word, rest)) if word.chars().count() >= 4 && word.chars().all(|c| c.is_uppercase() || c == '_') => (Some(word.to_owned()), rest.trim_start()),
+        Some((word, rest)) if { let w = word.trim_end_matches(':'); w.chars().count() >= 5 && w.chars().all(|c| c.is_alphabetic() && c.is_uppercase()) }
+            => (Some(word.trim_end_matches(':').to_owned()), rest.trim_start()),
         _ => (None, text),
     };
     // Só com o separador junto: `/home/eu` não pode comer o começo de `/home/euler`.
@@ -112,18 +120,36 @@ fn tidy_message(text: &str, home: Option<&str>) -> (Option<String>, String) {
         None => rest.to_owned(),
     };
     let mut body = String::with_capacity(rest.len());
-    let mut items = 0;
+    let mut items = 0u32;
+    let mut prev = ' ';
     for (ix, ch) in rest.char_indices() {
-        // Só a sequência (1), (2)… quebra linha: "(ver item 2)" fica onde está.
-        let next = (items + 1).to_string();
-        if ch == '(' && rest[ix + 1..].starts_with(&format!("{next})")) {
+        // Só a sequência (1), (2)… solta no texto quebra linha: "(ver item 2)" e `f(1)` ficam onde estão.
+        if ch == '(' && prev.is_whitespace() && item_number(&rest[ix + 1..]) == Some(items + 1) {
             items += 1;
             while body.ends_with(' ') { body.pop(); }
             if !body.is_empty() { body.push('\n'); }
         }
         body.push(ch);
+        prev = ch;
     }
     (tag, body)
+}
+
+/// O `n` de um `n)` no começo do texto.
+fn item_number(text: &str) -> Option<u32> {
+    let digits = text.find(|c: char| !c.is_ascii_digit())?;
+    (digits > 0 && text[digits..].starts_with(')')).then(|| text[..digits].parse().ok()).flatten()
+}
+
+/// O começo de um recado longo, cortado antes de desenhar: o `line_clamp` do GPUI não conta as linhas que o texto já traz.
+// ponytail: "longo" por tamanho e linhas, sem medir o texto desenhado.
+fn fold_message(body: &str) -> Option<String> {
+    const LINES: usize = 5;
+    const CHARS: usize = 360;
+    if body.chars().count() <= CHARS && body.lines().count() <= LINES + 1 { return None; }
+    let head = body.lines().take(LINES).collect::<Vec<_>>().join("\n");
+    let head: String = head.chars().take(CHARS).collect();
+    Some(format!("{}…", head.trim_end()))
 }
 
 /// Onde um membro do painel está: numa máquina conectada aqui, numa sem conexão aqui (o identificador dela), ou sem como
@@ -220,7 +246,7 @@ impl Hangar {
         g.seq += 1;
         let id = g.seq;
         g.sheet = Some(Sheet { session, server, id, peers_key: String::new(), picked: Vec::new(), task, adding: false, removing: None, expanded: HashSet::new(), busy: false, error: None,
-            contract: Remote::default(), feed: Remote::default() });
+            keep_error: false, contract: Remote::default(), feed: Remote::default() });
         self.load_group_sheet(window, cx);
         let hangar = cx.entity();
         let body = cx.new(|cx| SheetBody { _observe: cx.observe(&hangar, |_, _, cx| cx.notify()), hangar: hangar.downgrade() });
@@ -304,7 +330,9 @@ impl Hangar {
         })).collect();
         let Some(sheet) = self.sidebar.grouping.sheet.as_mut() else { return };
         let task = sheet.task.clone();
-        (sheet.peers_key, sheet.picked, sheet.adding, sheet.removing, sheet.busy, sheet.error) = (peers.join(","), Vec::new(), false, None, false, None);
+        let error = sheet.error.take().filter(|_| sheet.keep_error);
+        (sheet.peers_key, sheet.picked, sheet.adding, sheet.removing, sheet.busy, sheet.error, sheet.keep_error) = (peers.join(","), Vec::new(), false, None, false, error, false);
+        sheet.expanded.clear();
         (sheet.contract, sheet.feed) = (Remote::default(), Remote::default());
         task.update(cx, |input, cx| input.set_value("", window, cx));
         if peers.is_empty() { return; }
@@ -417,13 +445,14 @@ impl Hangar {
         cx.notify();
     }
 
-    /// A aba de grupo desta sessão: a chave e a principal, a mesma que a barra de abas põe na frente.
-    fn sheet_lead(&self) -> Option<(String, Target)> {
+    /// A aba de grupo desta sessão: a chave e os membros, a principal primeiro, como a barra de abas põe. Só quem está
+    /// na aba pode virar a principal: a escolha de quem ficou fora dela não mudaria nada.
+    fn sheet_lead(&self) -> Option<(String, Vec<Target>)> {
         let sheet = self.sidebar.grouping.sheet.as_ref()?;
         let me = Target::new(&sheet.server, &sheet.session);
         let groups = self.tab_groups();
         let group = groups.iter().find(|g| g.members.len() > 1 && g.members.contains(&me))?;
-        Some((group.key.clone()?, group.members[0].clone()))
+        Some((group.key.clone()?, group.members.clone()))
     }
 
     /// Membro escolhido: o painel fecha e a conversa dele abre no lugar desta, na máquina dele.
@@ -435,8 +464,10 @@ impl Hangar {
     }
 
     pub(super) fn receive_sheet(&mut self, reply: SheetReply, window: &mut Window, cx: &mut Context<Self>) {
+        // `~` só quando o painel é desta máquina: a pasta do usuário de outra não é a daqui.
+        let home = self.sheet_api().filter(Api::is_loopback).and_then(|_| super::tree::home_dir()).map(|h| h.to_string_lossy().into_owned());
         let Some(sheet) = self.sidebar.grouping.sheet.as_mut() else { return };
-        let mut close = false;
+        let (mut close, mut reload) = (false, false);
         match reply {
             SheetReply::Contract(id, seq, result) if id == sheet.id => {
                 let value = result.map_err(|e| failed(&e, "par_contrato_falhou")).map(|value| {
@@ -446,7 +477,7 @@ impl Hangar {
                 });
                 sheet.contract.finish(seq, value);
             }
-            SheetReply::Feed(id, seq, members, histories) if id == sheet.id => { sheet.feed.finish(seq, Ok(build_feed(&members, histories))); }
+            SheetReply::Feed(id, seq, members, histories) if id == sheet.id => { sheet.feed.finish(seq, Ok(build_feed(&members, histories, home.as_deref()))); }
             SheetReply::Paired(id, picked, result) if id == sheet.id => {
                 sheet.busy = false;
                 match result {
@@ -461,9 +492,9 @@ impl Hangar {
             SheetReply::Removed(id, address, result) if id == sheet.id => {
                 sheet.busy = false;
                 // Na falha a confirmação fica aberta, na linha do membro, para tentar de novo.
-                if result.is_ok() { sheet.removing = None; }
+                if result.is_ok() { (sheet.removing, reload) = (None, true); }
                 match result {
-                    Ok(PairResult { warning: Some(warning) }) => sheet.error = Some(warning),
+                    Ok(PairResult { warning: Some(warning) }) => (sheet.error, sheet.keep_error) = (Some(warning), true),
                     Ok(_) => {}
                     Err(error) => {
                         let base = tr("group_sheet_remove_failed").replace("{name}", &address);
@@ -485,6 +516,8 @@ impl Hangar {
             self.sidebar.grouping.sheet = None;
             window.close_dialog(cx);
         }
+        // A lista pode ter trazido o grupo novo enquanto o pedido corria, quando a recarga espera o painel livre.
+        if reload { self.refresh_group_sheet(window, cx); }
         cx.notify();
     }
 
@@ -561,7 +594,7 @@ impl Hangar {
             let at = if this { MemberAt::Here(Target::new(&here, &me)) } else { self.member_at(&peer, &ids) };
             (peer, this, at)
         }).collect();
-        let is_lead = |at: &MemberAt| matches!((at, &lead), (MemberAt::Here(t), Some((_, l))) if t == l);
+        let is_lead = |at: &MemberAt| matches!((at, &lead), (MemberAt::Here(t), Some((_, tab))) if tab.first() == Some(t));
         // A principal vem primeiro, como na aba do grupo.
         rows.sort_by_key(|(_, _, at)| !is_lead(at));
         let count = rows.len();
@@ -582,7 +615,7 @@ impl Hangar {
             let key = SharedString::from(format!("{i}-{peer}"));
             let confirming = removing.as_deref() == Some(peer.as_str());
             let mut actions = div().flex_shrink_0().flex().items_center().gap(px(2.));
-            if let (Some((t, ..)), Some((lead_key, _)), false) = (&live, &lead, principal) {
+            if let (Some((t, ..)), Some((lead_key, tab)), false) = (&live, &lead, principal) && tab.contains(t) {
                 let (t, lead_key) = (t.clone(), lead_key.clone());
                 actions = actions.child(chrome::icon_button(SharedString::from(format!("group-lead-{key}")), IconName::Star, tr("group_make_lead"), cx)
                     .disabled(busy).on_click(cx.listener(move |this, _, _, cx| this.set_group_lead(lead_key.clone(), Some(t.clone()), cx))));
@@ -674,7 +707,11 @@ impl Hangar {
             _ => None,
         };
         let now = chrono::Local::now().timestamp() as f64;
-        let home = super::tree::home_dir().map(|h| h.to_string_lossy().into_owned());
+        // O nome sem a máquina, salvo quando outro membro tem o mesmo nome noutra máquina.
+        let shorts: Vec<&str> = std::iter::once(me.as_str()).chain(peers.iter().map(String::as_str))
+            .map(|a| a.split_once("::").map_or(a, |(_, n)| n)).collect();
+        let short = |a: &str| { let n = a.split_once("::").map_or(a, |(_, n)| n);
+            if shorts.iter().filter(|s| **s == n).count() > 1 { a.to_owned() } else { n.to_owned() } };
         let feed = match (&sheet.feed.value, sheet.feed.loading) {
             (_, true) | (None, _) => muted(web("comum_carregando")).into_any_element(),
             (Some(Err(error)), _) => warn(error.clone()).into_any_element(),
@@ -685,17 +722,12 @@ impl Hangar {
                 .when(!feed.items.is_empty(), |el| el.child(div().id("group-feed")
                     .map(|el| if fit.is_some() { el.flex_1().min_h_0() } else { el.max_h(px(420.)) })
                     .overflow_y_scroll().flex().flex_col().gap(px(10.))
-                    .children(feed.items.iter().rev().enumerate().map(|(ix, item)| {
+                    .children(feed.items.iter().enumerate().rev().map(|(key, item)| {
                         let out = item.from == me;
-                        let short = |a: &str| a.split_once("::").map_or(a, |(_, n)| n).to_owned();
                         let when = (item.ts > 0.).then(|| super::side::ago(now - item.ts));
-                        let (tag, body) = tidy_message(&item.text, home.as_deref());
-                        // Muito recado vem sem hora: o texto entra na chave para dois recados não dividirem o mesmo id.
-                        let key = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new();
-                            (&item.from, &item.to, &item.text, item.ts.to_bits()).hash(&mut h); format!("{:x}-{ix}", h.finish()) };
                         let open = sheet.expanded.contains(&key);
-                        // ponytail: "longo" por tamanho e linhas, sem medir o texto desenhado.
-                        let long = body.chars().count() > 360 || body.lines().count() > 6;
+                        let long = item.folded.is_some();
+                        let text = item.folded.as_ref().filter(|_| !open).unwrap_or(&item.body);
                         let accent = if out { theme::accent() } else { theme::border_strong() };
                         let id = SharedString::from(format!("group-feed-more-{key}"));
                         div().flex().flex_col().gap(px(6.)).pl(px(12.)).pr_3().py(px(10.)).rounded(px(8.)).bg(theme::inset())
@@ -706,16 +738,15 @@ impl Hangar {
                                 .child(div().min_w_0().truncate().text_color(theme::muted()).child(short(&item.to)))
                                 .children(when.map(|w| div().ml_auto().flex_shrink_0().text_color(theme::faint()).child(w))))
                             .child(div().flex().flex_col().gap(px(4.))
-                                .children(tag.map(|t| div().flex().child(div().px(px(6.)).py(px(1.)).rounded(px(4.)).bg(theme::accent_dim())
+                                .children(item.tag.clone().map(|t| div().flex().child(div().px(px(6.)).py(px(1.)).rounded(px(4.)).bg(theme::accent_dim())
                                     .text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::accent_text()).child(t))))
                                 .child(div().text_sm().line_height(px(21.)).text_color(theme::body_text()).whitespace_normal()
-                                    .when(long && !open, |el| el.line_clamp(5).text_ellipsis())
-                                    .children(body.lines().map(|line| div().child(line.to_owned())))))
+                                    .children(text.lines().map(|line| div().child(line.to_owned())))))
                             .when(long, |el| el.child(div().id(id).flex().cursor_pointer().text_xs().font_weight(FontWeight::MEDIUM)
                                 .text_color(theme::accent_text()).hover(|s| s.underline())
                                 .child(tr(if open { "group_sheet_less" } else { "group_sheet_more" }))
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    if let Some(sheet) = this.sidebar.grouping.sheet.as_mut() && !sheet.expanded.remove(&key) { sheet.expanded.insert(key.clone()); }
+                                    if let Some(sheet) = this.sidebar.grouping.sheet.as_mut() && !sheet.expanded.remove(&key) { sheet.expanded.insert(key); }
                                     cx.notify();
                                 }))))
                     }))))
@@ -753,7 +784,7 @@ impl Hangar {
 #[cfg(test)]
 mod tests {
     // Sem glob: o `test` do gpui_kit, que o `super::*` traz, esconderia o `#[test]` da linguagem.
-    use super::{ChatEvent, Delivery, Failure, FeedItem, build_feed, group_delivery, sheet_members, tidy_message};
+    use super::{ChatEvent, Delivery, Failure, build_feed, fold_message, group_delivery, sheet_members, tidy_message};
 
     #[test]
     fn panel_lists_every_member_with_this_session_marked() {
@@ -773,12 +804,30 @@ mod tests {
             ("a".into(), Ok(vec![msg("[de: b] segundo", 2.), msg("[de: estranha] fora", 3.), msg("[de: a] eco", 4.), msg("sem prefixo", 5.)])),
             ("b".into(), Ok(vec![msg("[de: a] [vigia] primeiro", 1.)])),
             ("c".into(), Err(Failure::local("x"))),
-        ]);
-        assert_eq!(feed.items, [
-            FeedItem { from: "a".into(), to: "b".into(), text: "[vigia] primeiro".into(), ts: 1. },
-            FeedItem { from: "b".into(), to: "a".into(), text: "segundo".into(), ts: 2. },
-        ]);
+        ], None);
+        let got: Vec<_> = feed.items.iter().map(|i| (i.from.as_str(), i.to.as_str(), i.text.as_str(), i.ts)).collect();
+        assert_eq!(got, [("a", "b", "[vigia] primeiro", 1.), ("b", "a", "segundo", 2.)]);
         assert_eq!(feed.missing, ["c"], "histórico que falhou não é conversa vazia");
+    }
+
+    #[test]
+    fn home_is_shortened_only_for_members_of_this_machine() {
+        let members = ["a".to_owned(), "vm::b".to_owned()];
+        let feed = build_feed(&members, vec![
+            ("a".into(), Ok(vec![msg("[de: vm::b] em /home/eu/x", 1.)])),
+            ("vm::b".into(), Ok(vec![msg("[de: a] em /home/eu/y", 2.)])),
+        ], Some("/home/eu"));
+        let bodies: Vec<_> = feed.items.iter().map(|i| i.body.as_str()).collect();
+        assert_eq!(bodies, ["em /home/eu/x", "em ~/y"], "a pasta de outra máquina não é a daqui");
+    }
+
+    #[test]
+    fn long_message_folds_to_its_first_lines_even_when_they_are_short() {
+        let ten = (1..=10).map(|n| format!("linha {n}")).collect::<Vec<_>>().join("\n");
+        assert_eq!(fold_message(&ten).as_deref(), Some("linha 1\nlinha 2\nlinha 3\nlinha 4\nlinha 5…"));
+        let wide = "a".repeat(400);
+        assert_eq!(fold_message(&wide).map(|f| f.chars().count()), Some(361), "360 letras e o …");
+        assert_eq!(fold_message("curto\ncom duas"), None);
     }
 
     #[test]
@@ -789,6 +838,12 @@ mod tests {
         let (tag, body) = tidy_message("OK, pode seguir (ver item 2)", None);
         assert_eq!(tag, None, "palavra comum não vira etiqueta");
         assert_eq!(body, "OK, pode seguir (ver item 2)");
+        let (tag, body) = tidy_message("RESPOSTA: chama f(1) e depois (1) lê (2) grava", None);
+        assert_eq!(tag.as_deref(), Some("RESPOSTA"), "a palavra com dois-pontos também é etiqueta");
+        assert_eq!(body, "chama f(1) e depois\n(1) lê\n(2) grava", "`f(1)` não quebra");
+        for text in ["JSON inválido no /api", "HTTP 500 no deploy", "TODO revisar", "_____ x"] {
+            assert_eq!(tidy_message(text, None), (None, text.to_owned()), "sigla curta fica na frase: {text}");
+        }
     }
 
     #[test]
