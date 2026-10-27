@@ -8,6 +8,7 @@ import {
   mergeHistoryWithLiveRetiring,
   hasSeam,
   isAbortError,
+  isNoResponse,
   isTimeoutError,
   especificidade,
   donoDaLinha,
@@ -1086,7 +1087,7 @@ export async function submitConversationDraft(serverId: string, name: string, te
     try { await deliver(); } catch (error) {
       const rejected = isInputRejected(error);
       settle(rejected ? 'rejected' : 'unknown');
-      if (!rejected && error instanceof TypeError) throw new Error(m.chat_envio_incerto(), { cause: error });
+      if (!rejected && (error instanceof TypeError || isNoResponse(error))) throw new Error(m.chat_envio_incerto(), { cause: error });
       throw error;
     }
     // Entregue: falha local aqui não pode virar "não enviado", senão a pessoa reenvia e duplica.

@@ -338,6 +338,7 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server, pr
           codigo: timedOut || (e instanceof Error && e.name === 'TimeoutError') ? 'timeout' : 'rede' }, destino);
       }
       if (poll) _semRede.add(`${destino}|${rota}`);
+      if (typeof e === 'object' && e !== null) _semResposta.add(e);
       // Só falha de REDE esfria (o `isAbortError` acima já tirou o cancelamento de quem chamou).
       if (server && countsOutage) registrarFalha(server.id);
     }
@@ -874,6 +875,11 @@ export async function getSessionDefaultsForServer(server: Server, provider: Prov
   const result = await apiFetchForServer<{ defaults: SessionDefaults | null }>(server,
     `/api/session-defaults?${query}`, { signal: comTeto(signal, 8000) });
   return result.defaults;
+}
+
+// A senha só viaja no corpo, nunca na URL. Prazo largo: o servidor pode reiniciar o daemon do chaveiro.
+export function unlockKeyringForServer(s: Server, password: string): Promise<{ state: import('./sessions').KeyringState }> {
+  return apiFetchForServer(s, '/api/keyring/unlock', { method: 'POST', body: JSON.stringify({ password }) }, 45_000);
 }
 
 export function setClaudeDefaultsForServer(s: Server, body: ClaudeDefaultsBody): Promise<{ ok: boolean; written: string[] }> {
@@ -1620,6 +1626,13 @@ export function openEditor(name: string): Promise<{ ok: boolean }> {
 // verdade e o usuário precisa ver.
 export function isAbortError(e: unknown): boolean {
   return e instanceof Error && e.name === 'AbortError';
+}
+
+// Pedido que nunca teve resposta (rede caiu, teto estourou). A classe do erro muda por plataforma:
+// TypeError no navegador, exceção do Expo no iOS.
+const _semResposta = new WeakSet<object>();
+export function isNoResponse(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && _semResposta.has(e);
 }
 
 // Estourou o TETO de tempo (AbortSignal.timeout), que NÃO é o mesmo que cancelamento por quem

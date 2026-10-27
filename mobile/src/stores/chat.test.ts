@@ -1901,6 +1901,16 @@ describe('envio incerto que a conversa confirma', () => {
     expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'ok', submission: { status: 'unknown' } });
   });
 
+  test('queda com o erro nativo do Expo mostra a frase do app, não a mensagem crua', async () => {
+    historyResponses = [[]];
+    stubInput(async () => { throw new Error('fetch failed: UnexpectedException: A conexão de rede foi perdida.'); });
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await tick();
+    await expect(chat.send('A', undefined, { kind: 'direct', terminalClaude: true })).rejects.toThrow(m.chat_envio_incerto());
+    expect(readDraft('srv1', 'sess')).toMatchObject({ submission: { status: 'unknown' } });
+  });
+
   test('"sim" igual que já estava na conversa não confirma o "sim" que caiu', async () => {
     historyResponses = [[ev({ id: 'u:antes', text: 'sim', ts: agora() - 10 })]];
     stubInput(async () => { throw new TypeError('Network request failed'); });
