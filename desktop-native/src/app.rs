@@ -7078,7 +7078,13 @@ impl Hangar {
         // O compositor (e com ele o painel "Na fila") só aparece fora da orquestração e com a conversa legível.
         let panel_stalled = orq.is_none() && readable
             && queue::stalled_notice(&self.chat.queue_panel(), self.chat.state.problema.as_deref(), read_only);
-        let card = if readable && !read_only { self.render_ask(busy, window, cx).or_else(|| self.render_options(busy, window, cx)) } else { None };
+        // Com o pane da sessão à vista, o menu se responde nele: o cartão encolheria o terminal, o menu
+        // redesenhado sumiria do classificador e o cartão iria e voltaria sem parar.
+        let pane_shown = self.selected.as_ref()
+            .is_some_and(|s| self.terminal.as_ref().is_some_and(|panel| panel.shows_pane_of(&s.name)));
+        let card = if readable && !read_only {
+            self.render_ask(busy, window, cx).or_else(|| if pane_shown { None } else { self.render_options(busy, window, cx) })
+        } else { None };
         let plan_bar = if readable && !read_only && card.is_none() {
             self.render_plan_bar(busy, cx).or_else(|| self.render_headless_plan(cx)).or_else(|| self.render_plan_preview(cx))
         } else { None };
@@ -7090,7 +7096,7 @@ impl Hangar {
             .and_then(|ask| ask.tool_use_id).is_some_and(|id| self.tool_answered(&id));
         // Menu de uma pergunta nativa aberta ou recém-respondida: o card é quem responde, sem aviso de terminal.
         let ask_pane = self.chat.ask_pane();
-        let pending = card.is_none() && !answered && !ask_pane && !prethread_open && (self.chat.state.state == "awaiting_input" || self.chat.state.login);
+        let pending = card.is_none() && !pane_shown && !answered && !ask_pane && !prethread_open && (self.chat.state.state == "awaiting_input" || self.chat.state.login);
         let interaction = card.or_else(|| pending.then(|| in_column(div().py_2().text_sm().text_color(theme::warning())
             .child(tr("pending_question"))
             .when_some(self.chat.state.question.clone(), |el, question| el.child(div().text_color(theme::text()).child(question))))
