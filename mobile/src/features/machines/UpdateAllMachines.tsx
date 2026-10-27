@@ -11,7 +11,7 @@ import { MachineRow } from './MachineRows';
 import { haptic } from '../../ui/haptics';
 import { useRouter } from 'expo-router';
 import { useServers } from '../../stores/servers';
-import { firstPendingServer, requestUpdateConfirm, whatsNewHref } from '../updates/pending';
+import { clearPendingNews, firstPendingServer, requestUpdateConfirm, whatsNewHref } from '../updates/pending';
 import * as m from '../../paraglide/messages';
 
 function statusText(value: UpdateAllState): string {
@@ -64,12 +64,14 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
     const prepared = prepareUpdateAll(candidates);
     const accept = await requestUpdateConfirm(notesServer, () => router.push('/update-confirm' as never), candidates.length, prepared);
     if (!accept) return;
+    // Quem não mostrou os avisos fica fora da rodada: atualizá-la passaria por cima do aceite.
+    const targets = (await prepared).run.map((entry) => entry.server);
+    // A folha já trava o Atualizar sem máquina para rodar; isto só cobre a corrida.
+    if (!targets.length) { clearPendingNews(notesServer.id); return; }
     setOpen(true);
     if (round.busy) return;
-    setRound({ busy: true, count: candidates.length, rows: [], error: '' });
+    setRound({ busy: true, count: targets.length, rows: [], error: '' });
     try {
-      // Quem não mostrou os avisos fica fora da rodada: atualizá-la passaria por cima do aceite.
-      const targets = (await prepared).run.map((entry) => entry.server);
       const results = await updateAll(targets, (id, state) => {
         const server = candidates.find((entry) => entry.id === id);
         if (!server) return;
@@ -82,6 +84,8 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
       if (!results.length || results.some((row) => needsAttention(row.state))) haptic.error();
       else haptic.success();
       const done = results.find((row) => row.server.id === notesServer.id);
+      // A folha guardou as novidades da ativa antes de saber se ela rodaria.
+      if (!done || done.state.status === 'em_dia' || done.state.status === 'travado') clearPendingNews(notesServer.id);
       // Abre ao fechar a folha de resultados: por cima dela, no iOS, ficaria escondida e a lista se perderia.
       if (done && (done.state.status === 'atualizado' || done.state.status === 'atualizado_manual') && firstPendingServer([notesServer.id])) {
         if (openRef.current) newsAfterClose.current = notesServer.id;

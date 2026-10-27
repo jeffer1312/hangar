@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, View } from 'react-native';
-import { acceptAndStart, getAtualizacaoEm, iniciarAtualizacaoEm, reiniciarServidorEm, matchesRestartResult, type AtualizacaoEstado, type Server } from '@hangar/core';
+import { acceptUpdateWarningsEm, afterAccept, getAtualizacaoEm, iniciarAtualizacaoEm, reiniciarServidorEm, matchesRestartResult, type AtualizacaoEstado, type Server } from '@hangar/core';
 import { MachineGroup, MachineRow } from './MachineRows';
 import { ensureActive, reason } from './api';
 import { Notice, styles, useMachineAction } from './parts';
@@ -97,9 +97,18 @@ function OperationControls({ server }: { server: Server }) {
         ticket.started = true; setAsking(false); setResult(null);
         void action.run(async (signal) => {
           ensureActive(signal);
-          const acceptance = accept[server.id];
-          const started = await bounded<{ ok: boolean; pid: number; request_id?: string } | null>(operation === 'restart' ? reiniciarServidorEm(server)
-            : acceptance ? acceptAndStart(server, acceptance) : iniciarAtualizacaoEm(server), signal, 15_000);
+          const launch = async (): Promise<{ ok: boolean; pid: number; request_id?: string } | null> => {
+            if (operation === 'restart') return bounded(reiniciarServidorEm(server), signal, 15_000);
+            // Um prazo por pedido, não sobre a cadeia: estourado, o /iniciar não sai depois da falha na tela.
+            const acceptance = accept[server.id];
+            const accepted = acceptance ? await bounded(acceptUpdateWarningsEm(server, acceptance.ids, acceptance.mode), signal, 15_000) : undefined;
+            ensureActive(signal);
+            if (accepted?.started) return { ok: true, pid: accepted.pid! };
+            if (accepted && afterAccept(accepted, await bounded(getAtualizacaoEm(server), signal, 20_000)) === 'done') return null;
+            ensureActive(signal);
+            return bounded(iniciarAtualizacaoEm(server), signal, 15_000);
+          };
+          const started = await launch();
           ensureActive(signal);
           // Aceite gravado e nada a instalar: as novidades guardadas pela folha não vão chegar.
           if (started === null) { clearPendingNews(server.id); return null; }
@@ -112,7 +121,7 @@ function OperationControls({ server }: { server: Server }) {
           }
           updated = operation === 'update';
           return state;
-        }, setResult, m.mobile_machines_operation_ready()).finally(() => {
+        }, setResult, (state) => state ? m.mobile_machines_operation_ready() : m.update_all_up_to_date()).finally(() => {
           if (alive.current && confirmation.current === ticket) { confirmation.current = null; setAsking(false); }
           if (updated && alive.current && firstPendingServer([server.id])) router.push(whatsNewHref(server.id));
         });

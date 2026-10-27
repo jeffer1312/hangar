@@ -382,7 +382,8 @@ async fn update_accept_brings_back_the_unseen_migration_warning_until_accepted()
     let notes = body(fixture.call(reqwest::Method::GET, "/api/update/notes", true).await).await;
     assert_eq!(notes["warnings"], json!([{"id": step, "title": "Pacote", "text": "Texto do aviso.", "choice": "mode", "mode": "package"}]));
     let status = body(fixture.call(reqwest::Method::GET, "/api/atualizacao", true).await).await;
-    assert_eq!((status["aviso_pendente"].clone(), status["atualizacao_disponivel"].clone()), (json!(true), json!(true)));
+    assert_eq!((status["aviso_pendente"].clone(), status["atualizacao_disponivel"].clone()), (json!(true), json!(false)),
+        "o aviso acende o botão; a versão nova continua dita só pelo `atualizacao_disponivel`");
 
     let accept = |owner: bool, body: Value| {
         let request = reqwest::Client::new().post(format!("{}/api/update/accept", fixture.base)).json(&body);

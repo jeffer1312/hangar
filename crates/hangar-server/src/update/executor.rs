@@ -433,10 +433,12 @@ pub async fn dev_mode<R: Restarter, H: HealthProbe>(parts: &Parts, request: &Dev
         state.step(key);
     };
     // Desligar numa máquina que nunca teve pacote (migrou direto para o modo desenvolvedor): baixa o do canal antes.
-    // Sem pid no estado durante o download, pela mesma razão do comentário acima.
+    // O pid já no download: sem ele a tela daria a rodada por abandonada depois da janela de nascimento.
     let mut ui_warning = None;
     if *request == DevRequest::Off && matches!(super::dev_mode::check(&parts.home, request), Ok(super::dev_mode::Checked::Download)) {
-        state.write(json!({"fase": "rodando", "ok": null, "erro": null, "codigo": null, "pid": null, "log": [], "avisos": []}));
+        state.write(json!({"fase": "rodando", "ok": null, "erro": null, "codigo": null, "voltou": null, "no_ar": null, "resgate": null,
+            "pid": std::process::id(), "reinicio_erro": null, "request_id": null, "versao_para": null, "reiniciar_manual": false,
+            "log": [], "avisos": []}));
         state.step("baixar");
         match super::download_published(&parts.release, &parts.layout, &parts.home, settings).await {
             Ok(warning) => ui_warning = warning,
@@ -448,12 +450,14 @@ pub async fn dev_mode<R: Restarter, H: HealthProbe>(parts: &Parts, request: &Dev
         }
     }
     let front_runner = runner.clone();
+    // O checkout de onde o vite roda: o do modo desenvolvedor, antes da troca.
+    let dev_root = match super::http::mode(&parts.home) { super::http::Mode::Developer(root) => Some(root), _ => None };
     let result = super::dev_mode::switch(&parts.home, &parts.state_dir, request, in_service_group, restarter, health, settings, runner,
         &on_step, &|warning| state.warn(warning)).await;
     if let Some(warning) = ui_warning { state.warn(&warning); }
     // No pacote a porta do front é do servidor: o `vite` do checkout para de segurá-la (a tela velha).
-    if *request == DevRequest::Off && matches!(result, Ok(DevOutcome::Switched(_) | DevOutcome::SwitchedManual(_))) {
-        let (command, home) = (super::migrate::front_command(cfg!(windows), false), parts.home.clone());
+    if *request == DevRequest::Off && matches!(result, Ok(DevOutcome::Switched(_) | DevOutcome::SwitchedManual(_))) && let Some(root) = dev_root {
+        let (command, home) = (super::migrate::front_command(cfg!(windows), false, &root), parts.home.clone());
         let run = tokio::task::spawn_blocking(move || front_runner.run(&command, &home)).await;
         match run {
             Ok(run) if run.code == Some(0) => {}
@@ -503,6 +507,11 @@ async fn migrate(parts: &Parts, checkout: Option<PathBuf>) -> bool {
     std::thread::spawn(move || { let _ = sender.send(super::migrate::run(&args)); });
     let result = receiver.await.unwrap_or_else(|_| Err((1, "a migração morreu sem resposta".to_owned())));
     let pid = std::process::id();
+    // Só vale migrada de fato: "não migrada" (sem pacote para o sistema) sai 0 na linha de comando,
+    // mas aqui a pessoa pediu a migração e ela não aconteceu.
+    let migrated = super::migrate::read_record(&parts.layout.hangar.join(super::migrate::MARKER))
+        .is_some_and(|r| r.mode != super::migrate::Mode::NotMigrated);
+    let result = result.and_then(|lines| if migrated { Ok(lines) } else { Err((1, lines.join("; "))) });
     match result {
         Ok(lines) => {
             for line in lines.iter().filter_map(|l| l.strip_prefix("aviso: ")) { state.warn(line); }
@@ -510,8 +519,11 @@ async fn migrate(parts: &Parts, checkout: Option<PathBuf>) -> bool {
             true
         }
         Err((_, why)) => {
+            let why = why.trim_start_matches("##HANGAR-FALHA##").trim().to_owned();
             tracing::warn!("update: migração: {why}");
-            state.write(json!({"fase": "pronto", "ok": false, "erro": why, "codigo": "erro_migracao", "voltou": true, "no_ar": true, "pid": pid}));
+            // O motivo do `migrate::roll_back` diz o que da volta não se completou.
+            let (back, up) = (!(why.contains(", menos:") || why.contains("não parou")), !why.contains("não subiu"));
+            state.write(json!({"fase": "pronto", "ok": false, "erro": why, "codigo": "erro_migracao", "voltou": back, "no_ar": up, "pid": pid}));
             false
         }
     }

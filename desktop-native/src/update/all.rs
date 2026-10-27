@@ -269,6 +269,10 @@ async fn load_all(machines: Vec<Machine>) -> (Option<Value>, Vec<Notes>) {
     (state, read.into_iter().map(|(_, _, notes)| notes).collect())
 }
 
+fn unread(machines: &[Machine]) -> Vec<Notes> {
+    machines.iter().map(|m| Notes::unread(m.key.clone(), m.label.clone())).collect()
+}
+
 async fn run_machine(machine: Machine, acceptance: Acceptance, mut publish: impl FnMut(Status, Vec<String>)) {
     let mut previous = None;
     let mut publish = |status: Status, warnings: Vec<String>| {
@@ -405,10 +409,12 @@ impl Updater {
     pub(super) fn confirm_all_machines(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.run = Run::Searching;
         cx.notify();
-        let task = self.runtime.spawn(load_all(self.all_machines()));
+        let machines = self.all_machines();
+        let task = self.runtime.spawn(load_all(machines.clone()));
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
-            let (state, groups) = task.await.unwrap_or_default();
+            // A leitura que morreu no meio não vira "sem avisos": todas ficam de fora do lote, com a linha de falha.
+            let (state, groups) = task.await.unwrap_or_else(|_| (None, unread(&machines)));
             let _ = handle.update(cx, |_, window, cx| { let _ = this.update(cx, |this, cx| {
                 this.run = Run::Idle;
                 if state.is_some() { this.receive_server(state, cx); }
@@ -764,7 +770,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         // Só o aviso pendente: aceito, nada de `iniciar`.
         let (machine, server) = mock(vec![
-            ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": true, "aviso_pendente": true, "atras": 0})),
+            ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": false, "aviso_pendente": true, "atras": 0})),
             ("POST /api/update/accept ", 200, json!({"ok": true, "started": false})),
         ]);
         let mut states = Vec::new();
@@ -773,7 +779,7 @@ mod tests {
         assert_eq!(states.last(), Some(&Status::Current));
         // O aceite lançou a migração: segue o pid dele, sem `iniciar`.
         let (machine, server) = mock(vec![
-            ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": true, "aviso_pendente": true, "atras": 0, "estado": {"ts": "old"}})),
+            ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": false, "aviso_pendente": true, "atras": 0, "estado": {"ts": "old"}})),
             ("POST /api/update/accept ", 200, json!({"ok": true, "started": true, "pid": 7})),
             ("GET /api/atualizacao ", 200, json!({"estado": {"fase": "pronto", "ok": true, "ts": "new"}})),
         ]);
@@ -806,17 +812,20 @@ mod tests {
         let excluded: HashSet<String> = [&a, &b].into_iter().filter(|n| n.excluded()).map(|n| n.server().to_owned()).collect();
         let kept = batch_machines(vec![down.clone(), old.clone()], &excluded);
         assert_eq!(kept.iter().map(|m| m.key.as_str()).collect::<Vec<_>>(), [old.key.as_str()]);
+        // A leitura inteira que morreu deixa todas de fora, nunca "sem avisos".
+        assert!(unread(&[down.clone(), old.clone()]).iter().all(Notes::excluded));
     }
 
     #[test]
     fn update_all_pending_warning_alone_is_not_a_real_update() {
-        assert!(behind(&json!({"atualizacao_disponivel": true, "aviso_pendente": true, "atras": 0})), "o botão aparece");
-        assert!(!real_update(&json!({"atualizacao_disponivel": true, "aviso_pendente": true, "atras": 0})));
-        assert!(real_update(&json!({"atualizacao_disponivel": true, "aviso_pendente": true, "atras": 2})));
-        assert!(real_update(&json!({"atualizacao_disponivel": true, "aviso_pendente": true, "atras": 0,
-            "versoes": {"repo": "b", "backend": "a"}})), "disco diferente do que está no ar");
-        assert!(real_update(&json!({"atualizacao_disponivel": true})), "sem a marca, a regra de antes");
+        let warning = json!({"atualizacao_disponivel": false, "aviso_pendente": true, "atras": 0});
+        assert!(behind(&warning), "o botão aparece");
+        assert_eq!(classify(&warning), Classification::Start, "o lote abre a máquina para aceitar o aviso");
+        assert!(!real_update(&warning), "sem versão nova, nada de iniciar");
+        assert!(real_update(&json!({"atualizacao_disponivel": true, "aviso_pendente": true, "atras": 0})), "índice fora: a flag vale");
+        assert!(real_update(&json!({"aviso_pendente": true, "versoes": {"repo": "b", "backend": "a"}})), "disco diferente do que está no ar");
         assert!(!real_update(&json!({"atualizacao_disponivel": false})));
+        assert!(!behind(&json!({"atualizacao_disponivel": false})));
     }
 
     #[test]

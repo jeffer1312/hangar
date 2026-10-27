@@ -312,7 +312,7 @@ async fn migrate_install_with_dev_is_developer_mode_without_download() {
     assert_eq!(std::fs::canonicalize(b.current()).unwrap(), std::fs::canonicalize(&b.checkout).unwrap());
     assert!(b.unit().contains("launch backend"));
     assert_eq!(b.marker().unwrap()["mode"], "developer");
-    assert!(service.fronts.lock().unwrap().is_empty(), "no modo desenvolvedor o vite do checkout segue");
+    assert_eq!(*service.fronts.lock().unwrap(), [false], "a porta do front passa ao servidor também no modo desenvolvedor");
     assert!(!b.home.join(".hangar").join(DEV_REQUESTED).exists(), "a marca do --dev some depois de usada");
 }
 
@@ -591,4 +591,33 @@ fn migrate_windows_shortcuts_go_through_the_current_of_the_profile() {
     assert_eq!(retarget(cmd, r"c:\users\ZE\hangar\scripts\", "X\\", true).as_deref(), Some("@echo off\r\ncall \"%~dp0hangar-python.cmd\" \"X\\hangar-conta\" %*\r\n"),
         "o Windows não diferencia caixa");
     assert_eq!(retarget(cmd, r"D:\outro\scripts\", "X", true), None);
+}
+
+/// Tirar o serviço do front guarda a unit em `~/.hangar` e a devolve no `--undo`: só desligada, o
+/// reinício do Atualizar a subiria de novo. O comando real, num shell com `systemctl` falso.
+#[test]
+fn migrate_front_command_moves_the_unit_aside_and_back() {
+    let home = tempfile::tempdir().unwrap();
+    let bin = home.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("systemctl"), format!("#!/bin/sh\necho \"$*\" >> '{}/calls'\n", home.path().display())).unwrap();
+    sh(&bin, "chmod +x systemctl");
+    let unit = home.path().join(".config/systemd/user/hangar-frontend.service");
+    std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
+    std::fs::write(&unit, "[Service]\nExecStart=npm run preview\n").unwrap();
+    let run = |on: bool| std::process::Command::new("sh").arg("-c").arg(front_command(false, on, Path::new("/x")))
+        .env_clear().env("HOME", home.path()).env("PATH", format!("{}:/usr/bin:/bin", bin.display())).status().unwrap();
+
+    assert!(run(false).success());
+    assert!(!unit.exists(), "a unit sai: o restart do Atualizar só sobe a que existe");
+    let aside = home.path().join(".hangar/hangar-frontend.service.pre-pacote");
+    assert_eq!(std::fs::read_to_string(&aside).unwrap(), "[Service]\nExecStart=npm run preview\n");
+    assert!(run(false).success(), "sem a unit, nada a fazer");
+
+    assert!(run(true).success());
+    assert_eq!(std::fs::read_to_string(&unit).unwrap(), "[Service]\nExecStart=npm run preview\n");
+    assert!(!aside.exists());
+    let calls = std::fs::read_to_string(home.path().join("calls")).unwrap();
+    assert_eq!(calls.lines().collect::<Vec<_>>(), ["--user disable --now hangar-frontend.service", "--user daemon-reload",
+        "--user daemon-reload", "--user enable --now hangar-frontend.service"]);
 }

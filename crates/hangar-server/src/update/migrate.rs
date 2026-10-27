@@ -172,9 +172,15 @@ pub fn pending_warning(home: &Path, root: &Path) -> Option<Value> {
         None if super::offered_file(&layout).exists() => None,
         None => return None,
     };
-    let text = std::fs::read_to_string(root.join("docs").join("atualizacoes").join(format!("{STEP_ID}.md"))).ok()?;
-    let (fields, body) = super::steps::frontmatter(&text);
-    let title = fields.get("titulo").filter(|t| !t.is_empty())?;
+    let file = root.join("docs").join("atualizacoes").join(format!("{STEP_ID}.md"));
+    // Sem o texto o aviso sai assim mesmo: sumir deixaria a migração pendente sem tela que a ofereça.
+    let (title, body) = match std::fs::read_to_string(&file).map(|text| super::steps::frontmatter(&text)) {
+        Ok((fields, body)) if fields.get("titulo").is_some_and(|t| !t.is_empty()) => (fields["titulo"].clone(), body),
+        read => {
+            tracing::warn!(file = %file.display(), "aviso da migração sem o texto do passo ({:?}); vai com o título padrão", read.err());
+            ("O Hangar passa a se atualizar por pacote".to_owned(), String::new())
+        }
+    };
     Some(serde_json::json!({"id": STEP_ID, "title": title, "text": body, "choice": "mode", "mode": mode}))
 }
 
@@ -381,9 +387,7 @@ fn plan(m: &Machine<'_>, mode: Mode, why: Option<&str>, channel: &str, service: 
     lines.push(if m.windows { "apontar os atalhos .cmd para %USERPROFILE%\\.hangar\\current".to_owned() }
         else { format!("apontar para {} os links de {} que vão ao checkout", m.layout().current().display(), LINK_DIRS.join(", ")) });
     lines.push("regravar ~/.hangar/backend-dir e ~/.hangar/plugin-dir".to_owned());
-    if mode == Mode::Package {
-        lines.push("desligar o serviço do front (vite), se houver: a porta dele passa a ser do servidor".to_owned());
-    }
+    lines.push("tirar o serviço do front (vite), se houver, guardado em ~/.hangar: a porta dele passa a ser do servidor".to_owned());
     lines.push("subir o backend e provar o servidor em modo rust".to_owned());
     lines.push(format!("gravar {}", m.marker().display()));
     lines
@@ -480,12 +484,11 @@ fn apply(m: &Machine<'_>, record: &mut Record, target: &Path, service: &Path) ->
         unit_with_launcher(&String::from_utf8_lossy(&old), &launcher, &m.hangar())?.into_bytes()
     };
     rewrite(m, record, service, &new)?;
-    // A tela pelo `vite preview` na porta do front: no pacote quem atende essa porta é o próprio
-    // servidor (`routes::front_address`), com a tela da versão. Sem o serviço, nada a fazer.
-    if record.mode == Mode::Package {
-        push(m, record, Done::Front)?;
-        m.service.front(false)?;
-    }
+    // A tela pelo `vite preview` na porta do front: na máquina migrada quem atende essa porta é o
+    // próprio servidor (`routes::front_address`), com a tela da versão (ou do `frontend/dist` do
+    // checkout, no modo desenvolvedor). Sem o serviço, nada a fazer.
+    push(m, record, Done::Front)?;
+    m.service.front(false)?;
     // Hooks que apontam para o checkout: o Kimi só acrescenta e o Codex não troca hook de outro checkout.
     let needle = m.hooks_needle(&m.checkout);
     // Arquivo que não se lê fica como está, com nota: o hook velho dele segue apontando para o checkout.
@@ -835,19 +838,37 @@ impl Service for SystemService {
         self.run("systemctl --user daemon-reload && systemctl --user start hangar-backend.service")
     }
 
-    fn front(&self, on: bool) -> Result<(), String> { self.run(&front_command(self.windows, on)) }
+    fn front(&self, on: bool) -> Result<(), String> { self.run(&front_command(self.windows, on, &self.checkout)) }
 }
 
-/// Liga ou desliga o serviço do front (`vite preview`), quando existe. No pacote a porta dele é do
-/// servidor (`routes::front_address`); também o desligar do modo desenvolvedor o usa.
-pub fn front_command(windows: bool, on: bool) -> String {
+/// Tira ou devolve o serviço do front (`vite preview`), quando existe. Na máquina migrada a porta
+/// dele é do servidor (`routes::front_address`). Tirar, e não só desligar: o reinício do Atualizar
+/// sobe a unit que existe (`restart.rs`) e recusa a tarefa desabilitada (`windows-tasks.ps1`). O
+/// original fica em `~/.hangar`, e é de lá que o `--undo` o devolve. `checkout`: de onde o vite roda.
+pub fn front_command(windows: bool, on: bool, checkout: &Path) -> String {
     if windows {
-        let action = if on { "Enable-ScheduledTask -TaskName hangar-frontend | Out-Null; Start-ScheduledTask -TaskName hangar-frontend" }
-            else { "Stop-ScheduledTask -TaskName hangar-frontend; Disable-ScheduledTask -TaskName hangar-frontend | Out-Null" };
-        return format!("powershell -NoProfile -Command \"if (Get-ScheduledTask -TaskName hangar-frontend -ErrorAction SilentlyContinue) {{ {action} }}\"");
+        let bak = "(Join-Path $env:USERPROFILE '.hangar\\hangar-frontend.task.xml')";
+        let helper = ps_quote(&checkout.join("scripts").join("windows-tasks.ps1"));
+        let action = if on {
+            format!("if (Test-Path -LiteralPath {bak}) {{ Register-ScheduledTask -TaskName hangar-frontend -Xml (Get-Content -Raw -LiteralPath {bak}) | Out-Null; \
+                Remove-Item -LiteralPath {bak}; Start-ScheduledTask -TaskName hangar-frontend }}")
+        } else {
+            format!("if (Get-ScheduledTask -TaskName hangar-frontend -ErrorAction SilentlyContinue) {{ \
+                Export-ScheduledTask -TaskName hangar-frontend | Set-Content -Encoding Unicode -LiteralPath {bak}; \
+                Stop-ScheduledTask -TaskName hangar-frontend; . '{helper}'; Stop-HangarFrontend '{}'; \
+                Unregister-ScheduledTask -TaskName hangar-frontend -Confirm:$false }}", ps_quote(checkout))
+        };
+        // `Stop`: falha em qualquer comando sai com erro, não só no último.
+        return format!("powershell -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference = 'Stop'; {action}\"");
     }
-    let action = if on { "enable" } else { "disable" };
-    format!("if systemctl --user cat hangar-frontend.service >/dev/null 2>&1; then systemctl --user {action} --now hangar-frontend.service; fi")
+    let unit = "\"${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/hangar-frontend.service\"";
+    let bak = "\"$HOME/.hangar/hangar-frontend.service.pre-pacote\"";
+    if on {
+        format!("if [ -f {bak} ]; then mv {bak} {unit} && systemctl --user daemon-reload && systemctl --user enable --now hangar-frontend.service; fi")
+    } else {
+        format!("if [ -f {unit} ]; then systemctl --user disable --now hangar-frontend.service && mkdir -p \"$HOME/.hangar\" \
+            && mv {unit} {bak} && systemctl --user daemon-reload; fi")
+    }
 }
 
 /// O primeiro pacote, da release, e a tela web da chave dele quando ela está ligada.

@@ -109,6 +109,43 @@ describe('folha "Atualizar?"', () => {
     await act(async () => button(m.update_notes_understood()).click());
     await act(async () => button(m.update_confirm_action()).click());
     expect(request.resolve).toHaveBeenCalledWith(true, { other: { ids: ['mig'], mode: 'package' } });
+    // As novidades vêm do que já foi lido por máquina, sem ler de novo as da ativa.
+    expect(mocks.fetch.mock.calls.filter(([url]) => String(url).includes('/api/update/notes'))).toHaveLength(0);
+  });
+
+  const allSheet = async (machines: ConfirmRequest['machines']) => {
+    mocks.fetch.mockImplementation(async () => json({ versao_legivel: { repo: null, backend: 'v1.0', remoto: 'v1.1' } }));
+    const request: ConfirmRequest = { server, count: 2, resolve: vi.fn(), machines };
+    await act(async () => root.render(<UpdateConfirmSheet request={request} onClose={vi.fn()} />));
+    await act(async () => { await Promise.resolve(); });
+    return request;
+  };
+  const migration = (mode: 'package' | 'developer' | null) => ({ ...notes, warnings: [{ id: 'mig', title: 'fixture-migration', text: '', choice: 'mode' as const, mode }] });
+
+  it('duas máquinas, cada uma com o seu modo; o grupo de rádio diz de qual máquina é', async () => {
+    const other = { ...server, id: 'other', label: 'fixture-other' };
+    const request = await allSheet(Promise.resolve({ run: [{ server, notes: migration(null) }, { server: other, notes: migration('package') }], failed: [] }));
+    const groups = [...el.querySelectorAll('[aria-label]')].map((node) => node.getAttribute('aria-label'));
+    expect(groups).toContain(`${m.update_all_warnings_from({ server: server.label })}: ${m.update_choice_title()}`);
+    expect(groups).toContain(`${m.update_all_warnings_from({ server: 'fixture-other' })}: ${m.update_choice_title()}`);
+    const developer = [...el.querySelectorAll('button')].filter((b) => b.getAttribute('aria-label') === m.update_choice_developer());
+    expect(developer).toHaveLength(2);
+    await act(async () => developer[1].click());
+    await act(async () => button(m.update_notes_understood()).click());
+    await act(async () => button(m.update_confirm_action()).click());
+    expect(request.resolve).toHaveBeenCalledWith(true, { srv: { ids: ['mig'], mode: 'package' }, other: { ids: ['mig'], mode: 'developer' } });
+  });
+
+  it('sem máquina para rodar (todas falharam, ou a leitura caiu) o Atualizar fica travado', async () => {
+    await allSheet(Promise.resolve({ run: [], failed: [server] }));
+    expect(el.textContent).toContain(m.update_all_warnings_failed({ server: server.label }));
+    expect(button(m.update_confirm_action()).disabled).toBe(true);
+    await act(async () => root.unmount());
+    root = createRoot(el);
+    await allSheet(Promise.reject(new Error('fixture-rejected')));
+    expect(el.textContent).toContain(m.update_notes_failed());
+    expect(el.textContent).not.toContain(m.update_notes_loading());
+    expect(button(m.update_confirm_action()).disabled).toBe(true);
   });
 
   it('servidor antigo (404) mostra só a confirmação; fechar é cancelar', async () => {

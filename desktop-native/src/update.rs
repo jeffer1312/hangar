@@ -354,18 +354,14 @@ impl Plan {
 /// Servidor atrás: há atualização publicada a puxar, ou o disco não é o que está no ar. A versão do app não entra: quem
 /// diz se os dois se entendem é a API. O `-dirty` sai da comparação: qualquer edição depois do boot deixaria o servidor
 /// "atrás" para sempre.
-fn behind(state: &Value) -> bool { state["atualizacao_disponivel"].as_bool() == Some(true) || stale(state) }
+/// O aviso pendente (`aviso_pendente`) também abre o modal, para ser aceito, mesmo sem versão nova.
+fn behind(state: &Value) -> bool { real_update(state) || state["aviso_pendente"].as_bool() == Some(true) }
 
-fn stale(state: &Value) -> bool {
-    let clean = |v: &Value| v.as_str().map(|s| s.trim_end_matches("-dirty").to_owned());
-    matches!((clean(&state["versoes"]["repo"]), clean(&state["versoes"]["backend"])), (Some(disk), Some(up)) if disk != up)
-}
-
-/// O que o `iniciar` tem a rodar: o `atualizacao_disponivel` que só marca o aviso pendente (`aviso_pendente` sem `atras`)
-/// abre o modal, mas não é versão nova.
+/// O que o `iniciar` tem a rodar: versão nova publicada, ou o disco diferente do que está no ar.
 pub(crate) fn real_update(state: &Value) -> bool {
-    let warning_only = state["aviso_pendente"].as_bool() == Some(true) && state["atras"].as_u64().unwrap_or(0) == 0;
-    if warning_only { stale(state) } else { behind(state) }
+    let clean = |v: &Value| v.as_str().map(|s| s.trim_end_matches("-dirty").to_owned());
+    let restart = matches!((clean(&state["versoes"]["repo"]), clean(&state["versoes"]["backend"])), (Some(disk), Some(up)) if disk != up);
+    state["atualizacao_disponivel"].as_bool() == Some(true) || restart
 }
 
 /// API do servidor que a atualização alcança; ausente ou ilegível (branch sem release do servidor) é 1.

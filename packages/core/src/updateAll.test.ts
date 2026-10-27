@@ -33,19 +33,19 @@ describe('contrato compartilhado com o Rust', () => {
 });
 
 describe('aviso pendente e aceite', () => {
-  const pending = { atualizacao_disponivel: true, aviso_pendente: true, atras: 0, versoes: { repo: 'a', backend: 'a' } };
+  const pending = { atualizacao_disponivel: false, aviso_pendente: true, versoes: { repo: 'a', backend: 'a' } };
   it('aviso pendente pede a folha, mas não é versão nova', () => {
     expect(classify(pending)).toBe('iniciar');
+    expect(classify({ ...pending, aviso_pendente: false })).toBe('em_dia');
     expect(hasRealUpdate(pending)).toBe(false);
-    expect(hasRealUpdate({ ...pending, atras: 2 })).toBe(true);
+    expect(hasRealUpdate({ ...pending, atualizacao_disponivel: true })).toBe(true);
     expect(hasRealUpdate({ ...pending, versoes: { repo: 'b', backend: 'a' } })).toBe(true);
-    expect(hasRealUpdate({ atualizacao_disponivel: true })).toBe(true);
   });
   it.each([
     ['servidor antigo inicia', null, pending, 'start'],
-    ['lançado pelo aceite', { ok: true, started: true, pid: 5 }, { atras: 3 }, 'started'],
+    ['lançado pelo aceite', { ok: true, started: true, pid: 5 }, pending, 'started'],
     ['gravado sem versão nova fecha', { ok: true, started: false }, pending, 'done'],
-    ['gravado com versão nova inicia', { ok: true, started: false }, { ...pending, atras: 1 }, 'start'],
+    ['gravado com versão nova inicia', { ok: true, started: false }, { ...pending, atualizacao_disponivel: true }, 'start'],
     ['nada a aceitar segue a versão', undefined, { atualizacao_disponivel: true }, 'start'],
   ] as const)('%s', (_name, accepted, snapshot, expected) => {
     expect(afterAccept(accepted, snapshot)).toBe(expected);
@@ -140,7 +140,7 @@ describe('API e execução por máquina', () => {
       return json({ ok: true, started: false });
     };
     read = (id, count) => {
-      if (id === 'stored') return json({ ...ready(), aviso_pendente: true, atras: 0 });
+      if (id === 'stored') return json({ ...ready(), atualizacao_disponivel: false, aviso_pendente: true });
       return json(count === 1 ? ready() : done());
     };
     const ids = ['launched', 'stored', 'refused', 'old', 'plain'];
@@ -161,6 +161,21 @@ describe('API e execução por máquina', () => {
     const result = await prepareUpdateAll(['ok', 'down', 'old'].map((id) => server(id)), options);
     expect(result.run.map((entry) => [entry.server.id, entry.notes?.warnings.length ?? null])).toEqual([['ok', 1], ['old', null]]);
     expect(result.failed.map((entry) => entry.id)).toEqual(['down']);
+  });
+
+  it('quem não leu os avisos fica fora da rodada; o aceite de cada máquina chega ao POST dela', async () => {
+    const bodies: Record<string, unknown> = {};
+    accept = (id, body) => { bodies[id] = body; return json({ ok: true, started: false }); };
+    notes = (id) => id === 'down' ? Promise.reject(new TypeError('fixture-network'))
+      : json({ target: 'v2', warnings: [{ id: 'mig', title: 't', text: 'x', choice: 'mode', mode: null }], news: [] });
+    const prepared = await prepareUpdateAll(['p', 'd', 'down'].map((id) => server(id)), options);
+    await updateAll(prepared.run.map((entry) => entry.server), onChange, { ...options,
+      accept: { p: { ids: ['mig'], mode: 'package' }, d: { ids: ['mig'], mode: 'developer' } } });
+    expect(prepared.failed.map((entry) => entry.id)).toEqual(['down']);
+    expect(bodies).toEqual({ p: { ids: ['mig'], mode: 'package' }, d: { ids: ['mig'], mode: 'developer' } });
+    expect(calls.filter((path) => path.startsWith('down/') && !path.endsWith('/notes') && !path.endsWith('/identificador'))).toEqual([]);
+    expect(updates.has('down')).toBe(false);
+    expect(final('p')?.status).toBe('atualizado');
   });
 
   it('identidade vazia ou falha não junta máquinas', async () => {

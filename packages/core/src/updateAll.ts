@@ -11,7 +11,6 @@ export type UpdateFollow = 'rodando' | 'esperando' | 'atualizado' | 'atualizado_
 export type UpdateSnapshot = {
   atualizacao_disponivel?: boolean;
   aviso_pendente?: boolean;
-  atras?: number;
   versoes?: Partial<Atualizacao['versoes']>;
   pre_voo?: Partial<Atualizacao['pre_voo']>;
   estado?: { fase?: string };
@@ -22,9 +21,7 @@ export function hasRealUpdate(snapshot: UpdateSnapshot): boolean {
   const clean = (version: string | undefined) => version?.replace(/(?:-dirty)+$/, '');
   const disk = clean(snapshot.versoes?.repo);
   const live = clean(snapshot.versoes?.backend);
-  if (disk !== undefined && live !== undefined && disk !== live) return true;
-  // O aviso pendente liga `atualizacao_disponivel` sem versão nova: aí só o atraso diz.
-  return snapshot.aviso_pendente === true ? (snapshot.atras ?? 0) > 0 : snapshot.atualizacao_disponivel === true;
+  return snapshot.atualizacao_disponivel === true || (disk !== undefined && live !== undefined && disk !== live);
 }
 
 /** Mesmo pré-voo do nativo; o canal do app local não participa das outras máquinas. */

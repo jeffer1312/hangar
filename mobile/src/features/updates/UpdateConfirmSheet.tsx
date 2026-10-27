@@ -14,32 +14,39 @@ import * as m from '../../paraglide/messages';
 
 // `title` só no "Atualizar todas": os avisos vêm agrupados por máquina.
 type WarningGroup = { server: Server; title?: string; warnings: UpdateWarning[] };
-type Loaded = { notes: ClientUpdateNotes | null; version: string; from: string; failed: boolean; groups: WarningGroup[]; unreachable: Server[] };
+// `runnable`: quantas máquinas vão rodar; no "Atualizar todas", só as que leram os avisos.
+type Loaded = { notes: ClientUpdateNotes | null; version: string; from: string; failed: boolean; groups: WarningGroup[]; unreachable: Server[]; runnable: number };
+
+const loadFailed = (request: ConfirmRequest): Loaded =>
+  ({ notes: null, version: '', from: '', failed: true, groups: [], unreachable: [], runnable: request.machines ? 0 : 1 });
 
 async function load(request: ConfirmRequest): Promise<Loaded> {
-  const own = await loadOwn(request);
+  const version = await loadVersion(request.server);
   if (!request.machines) {
-    return { ...own, groups: own.notes?.warnings.length ? [{ server: request.server, warnings: own.notes.warnings }] : [], unreachable: [] };
+    try {
+      const raw = await getUpdateNotesEm(request.server);
+      const notes = raw ? forClient(raw, 'mobile') : null;
+      return { ...version, notes, failed: false, unreachable: [], runnable: 1,
+        groups: notes?.warnings.length ? [{ server: request.server, warnings: notes.warnings }] : [] };
+    } catch {
+      return { ...loadFailed(request), ...version };
+    }
   }
   const { run, failed } = await request.machines;
-  return { ...own, unreachable: failed, groups: run.filter((entry) => entry.notes?.warnings.length).map((entry) => ({
-    server: entry.server, title: m.update_all_warnings_from({ server: entry.server.label }), warnings: entry.notes!.warnings })) };
+  // A versão nova é a mesma em todas: as novidades vêm da ativa, ou de outra que respondeu.
+  const source = run.find((entry) => entry.server.id === request.server.id && entry.notes) ?? run.find((entry) => entry.notes);
+  return { ...version, notes: source?.notes ? forClient(source.notes, 'mobile') : null, failed: false, unreachable: failed, runnable: run.length,
+    groups: run.filter((entry) => entry.notes?.warnings.length).map((entry) => ({
+      server: entry.server, title: m.update_all_warnings_from({ server: entry.server.label }), warnings: entry.notes!.warnings })) };
 }
 
-async function loadOwn(request: ConfirmRequest): Promise<Omit<Loaded, 'groups' | 'unreachable'>> {
-  let version = '';
-  let from = '';
+async function loadVersion(server: Server): Promise<{ version: string; from: string }> {
   // A rota dos avisos não busca no remoto: a consulta com procurar=1 atualiza o alvo antes.
   try {
-    const { versao_legivel: v } = await getAtualizacaoEm(request.server, true);
-    from = v?.backend ?? '';
-    if (v?.backend && v.remoto) version = `${v.backend} → ${v.remoto}`;
-  } catch { /* sem a linha da versão; os avisos ainda podem vir */ }
-  try {
-    const notes = await getUpdateNotesEm(request.server);
-    return { notes: notes ? forClient(notes, 'mobile') : null, version, from, failed: false };
+    const { versao_legivel: v } = await getAtualizacaoEm(server, true);
+    return { from: v?.backend ?? '', version: v?.backend && v.remoto ? `${v.backend} → ${v.remoto}` : '' };
   } catch {
-    return { notes: null, version, from, failed: true };
+    return { version: '', from: '' }; // sem a linha da versão; os avisos ainda podem vir
   }
 }
 
@@ -54,7 +61,7 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
   useEffect(() => {
     if (!request) return;
     let alive = true;
-    void load(request).then((value) => { if (alive) setLoaded(value); });
+    void load(request).then((value) => { if (alive) setLoaded(value); }, () => { if (alive) setLoaded(loadFailed(request)); });
     // Fechar pelo gesto ou pelo X é cancelar.
     return () => { alive = false; if (!answered.current) request.resolve(false); };
   }, [request]);
@@ -67,7 +74,7 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
 
   const notes = loaded?.notes;
   const groups = loaded?.groups ?? [];
-  const blocked = !loaded || (groups.length > 0 && !understood);
+  const blocked = !loaded || loaded.runnable === 0 || (groups.length > 0 && !understood);
   const confirm = () => {
     if (blocked) return;
     answered.current = true;
@@ -118,7 +125,8 @@ function Warnings({ groups, understood, modes, onMode, onToggle }: { groups: War
       {g.warnings.map((w) => <View key={w.id} style={own.warnItem}>
         <Text accessibilityRole="header" style={[own.warnTitle, { color: t.amber }]}>{`${m.update_notes_important()}: ${w.title}`}</Text>
         <EnrichedMarkdownText markdown={w.text} markdownStyle={md} flavor="github" />
-        {w.choice === 'mode' ? <ModeChoice value={modes[g.server.id] ?? 'package'} onChange={(mode) => onMode(g.server.id, mode)} /> : null}
+        {w.choice === 'mode' ? <ModeChoice value={modes[g.server.id] ?? 'package'} onChange={(mode) => onMode(g.server.id, mode)}
+          label={g.title ? `${g.title}: ${m.update_choice_title()}` : m.update_choice_title()} /> : null}
       </View>)}
     </View>)}
     <Pressable accessibilityRole="checkbox" accessibilityLabel={m.update_notes_understood()} accessibilityState={{ checked: understood }}
@@ -132,14 +140,14 @@ function Warnings({ groups, understood, modes, onMode, onToggle }: { groups: War
 }
 
 /** Como a máquina roda o Hangar, pedido pelo aviso da migração; o pacote é a recomendação. */
-function ModeChoice({ value, onChange }: { value: UpdateMode; onChange: (mode: UpdateMode) => void }) {
+function ModeChoice({ value, onChange, label: groupLabel }: { value: UpdateMode; onChange: (mode: UpdateMode) => void; label: string }) {
   const c = useSettingsColors();
   const t = useNewsTones();
   const options = [
     ['package', m.update_choice_package(), m.update_choice_package_desc()],
     ['developer', m.update_choice_developer(), m.update_choice_developer_desc()],
   ] as const;
-  return <View accessibilityRole="radiogroup" accessibilityLabel={m.update_choice_title()}>
+  return <View accessibilityRole="radiogroup" accessibilityLabel={groupLabel}>
     <Text style={[own.checkLabel, { color: c.text }]}>{m.update_choice_title()}</Text>
     {options.map(([mode, label, desc]) => {
       const on = value === mode;

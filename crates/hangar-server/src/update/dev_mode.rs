@@ -162,7 +162,8 @@ pub async fn switch<R: Restarter, H: HealthProbe>(home: &Path, state_dir: &Path,
         UpdateError::Locked => Failure::new(BUSY, "uma atualização está rodando nesta máquina; tente de novo depois"),
         e => Failure::new("erro_dev_mode_falhou", e.to_string()),
     })?;
-    if let Some(pid) = super::other_engine(&StateFile::new(state_dir), state_dir) {
+    // O próprio pid no estado é do download que o executor fez antes desta troca, não do motor git.
+    if let Some(pid) = super::other_engine(&StateFile::new(state_dir), state_dir).filter(|pid| *pid != std::process::id()) {
         return Err(Failure::new("erro_dev_mode_motor_git", format!("o motor git do Python está atualizando esta máquina (pid {pid}); tente de novo depois")));
     }
     on_step("trocar");
@@ -428,8 +429,13 @@ mod tests {
             let _held = crate::update::UpdateLock::try_acquire(&m.layout()).unwrap();
             refused(m.switch(Request::On(m.checkout.clone()), false, &health).await, "atualização está rodando");
         }
-        crate::update::StateFile::new(&m.state_dir()).write(json!({"fase": "rodando", "pid": std::process::id()}));
+        // Outro processo vivo: o próprio pid no estado é o download do executor, não o motor git.
+        let mut engine = if cfg!(windows) { std::process::Command::new("ping").args(["-n", "60", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn() }
+            else { std::process::Command::new("sleep").arg("60").spawn() }.unwrap();
+        crate::update::StateFile::new(&m.state_dir()).write(json!({"fase": "rodando", "pid": engine.id()}));
         refused(m.switch(Request::On(m.checkout.clone()), false, &health).await, "motor git");
+        engine.kill().unwrap();
+        engine.wait().unwrap();
         std::fs::remove_dir_all(m.state_dir()).unwrap();
 
         // Sem `current` a máquina não foi migrada: quem decide é a migração.

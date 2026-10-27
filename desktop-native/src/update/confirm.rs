@@ -48,6 +48,9 @@ impl Notes {
 
     pub(crate) fn labeled(self, label: String) -> Self { Self { label: Some(label), ..self } }
 
+    /// Máquina do lote sem os avisos lidos: fica de fora, com a linha de falha.
+    pub(crate) fn unread(server: String, label: String) -> Self { Self { server, failed: true, ..Self::default() }.labeled(label) }
+
     /// A leitura falhou numa máquina do lote: ela fica de fora, com o motivo no modal.
     pub(crate) fn excluded(&self) -> bool { self.failed && self.label.is_some() }
 

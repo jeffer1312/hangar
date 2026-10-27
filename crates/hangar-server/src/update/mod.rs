@@ -187,6 +187,12 @@ pub fn accept(layout: &Layout, ids: &[String]) -> std::io::Result<()> {
     crate::runtime::queue::atomic_write(&accepted_file(layout), json!(all).to_string().as_bytes())
 }
 
+/// Desfaz o aceite de `ids`: o que ele devia lançar não subiu, e o aviso tem de voltar à tela.
+pub fn unaccept(layout: &Layout, ids: &[String]) -> std::io::Result<()> {
+    let all: Vec<String> = accepted(layout).into_iter().filter(|id| !ids.contains(id)).collect();
+    crate::runtime::queue::atomic_write(&accepted_file(layout), json!(all).to_string().as_bytes())
+}
+
 /// O Canal de testes do pacote, escolhido pela tela: `{"channel": "beta", "last": "beta"}`.
 pub fn channel_file(layout: &Layout) -> PathBuf { layout.hangar.join("config").join("update-channel.json") }
 

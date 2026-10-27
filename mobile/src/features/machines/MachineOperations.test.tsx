@@ -15,7 +15,7 @@ vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ ch
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => children }));
 import { MachineOperations } from './MachineOperations';
-import { currentConfirmRequest, savePendingNews, whatsNewHref } from '../updates/pending';
+import { currentConfirmRequest, readPendingNews, savePendingNews, whatsNewHref } from '../updates/pending';
 import * as m from '../../paraglide/messages';
 const server = { id: 'ops-b', label: 'fixture-operations', baseUrl: 'https://operations.test', token: 'secret-b' };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
@@ -88,15 +88,31 @@ describe('operações da máquina explícita', () => {
     let refuse = false;
     mocks.fetch.mockImplementation(async (url: string) => String(url).endsWith('/api/update/accept')
       ? refuse ? json({ detail: 'fixture-refused' }, 500) : json({ ok: true, started: false })
-      : json({ atualizacao_disponivel: true, aviso_pendente: true, atras: 0, versoes: { repo: 'a', backend: 'a' }, estado: {} }));
+      : json({ atualizacao_disponivel: false, aviso_pendente: true, versoes: { repo: 'a', backend: 'a' }, estado: {} }));
     await render(); await click(m.mobile_machines_update());
+    savePendingNews(server.id, { cards: [{ id: 'n1', title: 'fixture-news', kind: 'new', text: '', platforms: 'all', try_it: null, animation: null }], fixes: [] });
     await act(async () => { currentConfirmRequest()!.resolve(true, { [server.id]: { ids: ['mig'], mode: 'package' } }); });
     expect(postCalls().map(([url]) => url)).toEqual([`${server.baseUrl}/api/update/accept`]);
+    expect(readPendingNews(server.id)).toBeNull();
+    expect(el.textContent).toContain(m.update_all_up_to_date());
+    expect(el.textContent).not.toContain(m.mobile_machines_operation_ready());
     refuse = true; mocks.fetch.mockClear();
     await click(m.mobile_machines_update());
     await act(async () => { currentConfirmRequest()!.resolve(true, { [server.id]: { ids: ['mig'] } }); });
     expect(postCalls().map(([url]) => url)).toEqual([`${server.baseUrl}/api/update/accept`]);
     expect(el.textContent).toContain(m.update_accept_failed({ reason: '500: fixture-refused' }));
+  });
+
+  it('aceite que estoura o prazo mostra a falha e nunca dispara /iniciar depois', async () => {
+    mocks.fetch.mockImplementation((url: string) => String(url).endsWith('/api/update/accept')
+      ? new Promise((resolve) => setTimeout(() => resolve(json({ ok: true, started: false })), 40_000))
+      : Promise.resolve(json({ atualizacao_disponivel: true, versoes: { repo: 'a', backend: 'a' }, estado: {} })));
+    await render(); await click(m.mobile_machines_update());
+    await act(async () => { currentConfirmRequest()!.resolve(true, { [server.id]: { ids: ['mig'] } }); });
+    await tick(15_000);
+    expect(el.textContent).toContain(m.mobile_machines_unconfirmed_reason());
+    await tick(60_000);
+    expect(postCalls().map(([url]) => url)).toEqual([`${server.baseUrl}/api/update/accept`]);
   });
 
   it('cancelar a folha não envia e libera o botão de novo', async () => {

@@ -1070,7 +1070,7 @@ export interface Atualizacao {
   /** Commits em origin/main que ainda não estão aqui. */
   atras?: number;
   atualizacao_disponivel: boolean;
-  /** Aviso importante ainda não aceito: liga `atualizacao_disponivel` mesmo sem versão nova. */
+  /** Aviso importante ainda não aceito: oferece o Atualizar mesmo sem versão nova. */
   aviso_pendente?: boolean;
   /** API de cliente do servidor publicado para esta máquina; ausente em servidor anterior = 1. */
   api_publicado?: number;

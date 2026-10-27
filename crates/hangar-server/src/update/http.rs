@@ -244,12 +244,13 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     with_cors(req.headers(), json_response(StatusCode::OK, body))
 }
 
-/// Aviso importante que a pessoa ainda não aceitou (a migração pendente, ou feita sem o aviso): o
-/// Atualizar aparece mesmo sem versão nova, e a tela mostra o aviso com a escolha.
+/// Aviso importante que a pessoa ainda não aceitou (a migração pendente, ou feita sem o aviso): a
+/// tela acende o Atualizar por ele mesmo sem versão nova. `atualizacao_disponivel` fica como veio:
+/// é ele que diz se há versão nova de verdade.
 fn mark_pending_warning(body: &mut Value, home: &Path) {
-    if super::migrate::pending_warning(home, &crate::update_notes::notes_root(home)).is_none() { return; }
-    body["atualizacao_disponivel"] = true.into();
-    body["aviso_pendente"] = true.into();
+    if super::migrate::pending_warning(home, &crate::update_notes::notes_root(home)).is_some() {
+        body["aviso_pendente"] = true.into();
+    }
 }
 
 /// O `GET` do motor `git` do Python com a marca do aviso pendente. Resposta que não é JSON passa igual.
@@ -406,33 +407,49 @@ pub async fn accept(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     };
     let home = st.accounts.env.home.clone();
     let layout = Layout::new(&home);
-    if let Err(e) = super::accept(&layout, &ids) {
-        return with_cors(&headers, detail(StatusCode::INTERNAL_SERVER_ERROR, "update_accept_write", "o aceite não foi gravado", json!({"motivo": e.to_string()})));
+    let write_failed = |what: &str, e: std::io::Error| with_cors(&headers, detail(StatusCode::INTERNAL_SERVER_ERROR, "update_accept_write",
+        what, json!({"motivo": e.to_string()})));
+    let migration = ids.iter().any(|id| id == super::migrate::STEP_ID);
+    if !migration {
+        return match super::accept(&layout, &ids) {
+            Ok(()) => with_cors(&headers, json_response(StatusCode::OK, json!({"ok": true, "started": false}))),
+            Err(e) => write_failed("o aceite não foi gravado", e),
+        };
     }
-    if !ids.iter().any(|id| id == super::migrate::STEP_ID) { return with_cors(&headers, json_response(StatusCode::OK, json!({"ok": true, "started": false}))); }
-    let developer = mode.as_deref() == Some("developer");
+    // O aviso da migração é uma escolha: sem ela, nada é decidido pela pessoa.
+    let Some(developer) = mode.as_deref().map(|m| m == "developer") else {
+        return with_cors(&headers, detail(StatusCode::UNPROCESSABLE_ENTITY, "erro_corpo_invalido",
+            "o aviso da migração pede \"mode\": \"package\" ou \"developer\"", json!({})));
+    };
+    // A escolha vai ao disco antes do aceite: o script da migração lê os dois, e aceite sem a escolha migraria no modo errado.
     let task = match super::migrate::read_record(&layout.hangar.join(super::migrate::MARKER)) {
         None => {
             // A migração decide pelo `--dev`: a escolha da tela vale como ele.
             let marker = layout.hangar.join(super::migrate::DEV_REQUESTED);
             let written = if developer { std::fs::write(&marker, "") } else { std::fs::remove_file(&marker).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) }) };
-            if let Err(e) = written {
-                return with_cors(&headers, detail(StatusCode::INTERNAL_SERVER_ERROR, "update_accept_write", "a escolha do modo não foi gravada", json!({"motivo": e.to_string()})));
-            }
+            if let Err(e) = written { return write_failed("a escolha do modo não foi gravada", e); }
             super::offered_file(&layout).exists().then(|| Task::Migrate { checkout: server_checkout() })
         }
         Some(record) => match (record.mode, developer) {
             (super::migrate::Mode::Developer, false) => Some(Task::DevMode(super::dev_mode::Request::Off)),
-            (super::migrate::Mode::Package, true) if !record.checkout.as_os_str().is_empty() =>
+            (super::migrate::Mode::Package, true) if super::migrate::is_checkout(&record.checkout) =>
                 Some(Task::DevMode(super::dev_mode::Request::On(record.checkout))),
+            (super::migrate::Mode::Package, true) => return with_cors(&headers, detail(StatusCode::CONFLICT, "update_accept_no_checkout",
+                &format!("não há checkout para o modo desenvolvedor ({} não é um checkout do Hangar); ligue-o pela tela com a pasta", record.checkout.display()),
+                json!({}))),
             _ => None,
         },
     };
+    if let Err(e) = super::accept(&layout, &ids) { return write_failed("o aceite não foi gravado", e); }
     let response = match task {
         None => json_response(StatusCode::OK, json!({"ok": true, "started": false})),
         Some(task) => match launch(&st, task).await {
             Ok(Started { pid, .. }) => json_response(StatusCode::OK, json!({"ok": true, "started": true, "pid": pid})),
-            other => started(other),
+            // Não subiu: o aviso volta, senão a escolha se perderia sem tela que a ofereça de novo.
+            other => {
+                if let Err(e) = super::unaccept(&layout, &ids) { tracing::warn!("update: aceite não desfeito depois do lançamento que falhou: {e}"); }
+                started(other)
+            }
         },
     };
     with_cors(&headers, response)
