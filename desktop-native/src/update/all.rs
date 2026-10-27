@@ -828,6 +828,16 @@ mod tests {
         runtime.block_on(run_machine(machine, acceptance, |s, _| states.push(s)));
         server.join().unwrap();
         assert_eq!(states.last(), Some(&Status::Failed(tr("update_new_warnings"))), "{states:?}");
+        // O modal leu os avisos da versão nova e a releitura não: nada é aceito nem iniciado.
+        let (machine, server) = mock(vec![
+            ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": true, "atras": 1})),
+            ("GET /api/update/notes ", 200, json!({"warnings": [{"id": "2026-10-24-pacote-por-versao", "title": "t"}], "incomplete": true})),
+        ]);
+        let mut states = Vec::new();
+        runtime.block_on(run_machine(machine, Acceptance { ids: vec!["2026-10-24-pacote-por-versao".into()], mode: Some("package"), incomplete: false },
+            |s, _| states.push(s)));
+        server.join().unwrap();
+        assert_eq!(states.last(), Some(&Status::Failed(tr_shared("update_notes_failed", &[]))), "{states:?}");
     }
 
     #[test]

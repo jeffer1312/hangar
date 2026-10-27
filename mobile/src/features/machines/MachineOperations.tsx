@@ -101,7 +101,10 @@ function OperationControls({ server }: { server: Server }) {
             if (operation === 'restart') return bounded(reiniciarServidorEm(server), signal, 15_000);
             // Um prazo por pedido, não sobre a cadeia: estourado, o /iniciar não sai depois da falha na tela.
             const acceptance = accept[server.id];
-            await bounded(refuseUnseenWarnings(server, acceptance?.ids ?? []), signal, 20_000);
+            // Sem procurar, o servidor relê o índice guardado e não vê a versão publicada depois da folha.
+            await bounded(getAtualizacaoEm(server, true), signal, 120_000);
+            ensureActive(signal);
+            await bounded(refuseUnseenWarnings(server, acceptance), signal, 20_000);
             ensureActive(signal);
             const accepted =acceptance ? await bounded(acceptUpdateWarningsEm(server, acceptance.ids, acceptance.mode), signal, 15_000) : undefined;
             ensureActive(signal);

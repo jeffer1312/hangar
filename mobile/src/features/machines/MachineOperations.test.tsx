@@ -45,7 +45,8 @@ describe('operações da máquina explícita', () => {
   it('confirma antes do POST e só conclui a atualização com o pid correto, mostrando progresso e avisos', async () => {
     let reads = 0;
     mocks.fetch.mockImplementation(async (url: string, init) => init?.method === 'POST' ? json({ ok: true, pid: 77 })
-      : String(url).endsWith('/api/update/notes') ? json({ warnings: [] }) : json({ estado: [
+      : String(url).endsWith('/api/update/notes') ? json({ warnings: [] })
+      : String(url).includes('procurar=1') ? json({ estado: {} }) : json({ estado: [
       { pid: 88, fase: 'pronto', ok: true },
       { pid: 77, fase: 'rodando', passo: 2, total: 3, texto: 'fixture-progress' },
       { pid: 77, fase: 'pronto', ok: true, reiniciar_manual: true, avisos: ['fixture-warning'] },

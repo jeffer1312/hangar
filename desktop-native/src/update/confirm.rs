@@ -87,7 +87,9 @@ pub(crate) async fn load_warnings(api: Result<Api, Failure>, server: String, lab
         Ok(api) => {
             // Busca o alvo antes, como na desta máquina: sem isso os avisos podem ser os da versão anterior. Falhou, segue
             // com o alvo que ela tem; a releitura antes de iniciar (`unseen_warnings`) barra o que mudou.
-            let _ = api.server_read(&["atualizacao"], &[("procurar", "1")], 120).await;
+            if let Err(error) = api.server_read(&["atualizacao"], &[("procurar", "1")], 120).await {
+                eprintln!("update warnings: {} target search failed: {}", notes.server, tr(&error.detail));
+            }
             api.server_read(&["update", "notes"], &[], 20).await
         }
         Err(error) => Err(error),
@@ -116,9 +118,11 @@ fn after_accept(reply: Option<&Result<Value, Failure>>, real: bool) -> AfterAcce
 }
 
 /// Aviso do alvo de agora que o modal não mostrou (versão publicada depois dele): recusa, nada é aceito nem iniciado.
-async fn unseen_warnings(api: &Api, shown: &[String]) -> Option<String> {
+async fn unseen_warnings(api: &Api, acceptance: &Acceptance) -> Option<String> {
     match parse_notes(api.server_read(&["update", "notes"], &[], 20).await) {
-        Ok(Some(wire)) if wire.warnings.iter().any(|w| !shown.contains(&w.id)) => Some(tr("update_new_warnings")),
+        Ok(Some(wire)) if wire.warnings.iter().any(|w| !acceptance.ids.contains(&w.id)) => Some(tr("update_new_warnings")),
+        // O modal leu os avisos da versão nova e agora não deu: não há como saber se ela trouxe outro.
+        Ok(Some(wire)) if wire.incomplete && !acceptance.incomplete => Some(tr_shared("update_notes_failed", &[])),
         Ok(_) => None,
         Err(()) => Some(tr_shared("update_notes_failed", &[])),
     }
@@ -129,7 +133,7 @@ pub(crate) enum Launch { Started(Result<Value, Failure>), Nothing, AcceptFailed(
 
 /// Aceita os avisos mostrados e, se o aceite não lançou nada, inicia a atualização quando há uma de verdade.
 pub(crate) async fn accept_then_start(api: &Api, acceptance: &Acceptance, real: bool) -> Launch {
-    if let Some(text) = unseen_warnings(api, &acceptance.ids).await { return Launch::AcceptFailed(text); }
+    if let Some(text) = unseen_warnings(api, acceptance).await { return Launch::AcceptFailed(text); }
     let reply =if acceptance.ids.is_empty() { None } else {
         let mut body = serde_json::json!({"ids": acceptance.ids});
         if let Some(mode) = acceptance.mode { body["mode"] = mode.into(); }

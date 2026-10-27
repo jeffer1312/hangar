@@ -200,6 +200,11 @@ describe('API e execução por máquina', () => {
     await updateAll([server('late')], onChange, { ...options, accept: { late: { ids: ['mig'] } } });
     expect(calls.filter((path) => /\/(accept|iniciar)$/.test(path))).toEqual([]);
     expect(final('late')).toMatchObject({ status: 'falhou', error: m.update_new_warnings() });
+    calls = []; updates = new Map(); reads = new Map();
+    notes = () => json({ target: null, warnings: [{ id: 'mig', title: 't', text: 'x' }], news: [], incomplete: true });
+    await updateAll([server('late')], onChange, { ...options, accept: { late: { ids: ['mig'] } } });
+    expect(calls.filter((path) => /\/(accept|iniciar)$/.test(path))).toEqual([]);
+    expect(final('late')).toMatchObject({ status: 'falhou', error: m.update_notes_failed() });
   });
 
   it('identidade vazia ou falha não junta máquinas', async () => {
