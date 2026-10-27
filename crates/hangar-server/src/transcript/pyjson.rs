@@ -95,7 +95,7 @@ pub(crate) fn decode_raw(raw: &str) -> Option<Value> {
             b't' | b'f' => typed(raw).map(Value::Bool),
             b'n' if raw == "null" => Some(Value::Null),
             _ => {
-                if raw.contains(['.','e','E']) {
+                if raw == "-0" || raw.contains(['.','e','E']) {
                     let number: f64 = typed(raw)?;
                     Number::from_f64(number).map(Value::Number)
                 } else {

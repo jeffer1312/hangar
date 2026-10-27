@@ -495,7 +495,7 @@ fn transcript_json_keeps_literal_reserved_keys_and_canonical_numeric_types() {
     }
     for (raw, expected) in [
         ("1e3", "1000.0"),
-        ("-0", "0"),
+        ("-0", "-0.0"),
         ("1.0", "1.0"),
         ("18446744073709551616", "18446744073709551616"),
         (
@@ -510,4 +510,7 @@ fn transcript_json_keeps_literal_reserved_keys_and_canonical_numeric_types() {
             "{raw}"
         );
     }
+    let orq_zero = orq::codec::loads("-0").unwrap();
+    assert_eq!(orq_zero.as_u64(), Some(0));
+    assert_eq!(orq::codec::dumps(&orq_zero, false), "0");
 }
