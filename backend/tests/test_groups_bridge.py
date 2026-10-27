@@ -265,12 +265,10 @@ def test_task_suggestion_reads_only_sessions_with_a_conversation(monkeypatch, cl
     assert len(asked) == 1
 
 
-def test_close_that_skipped_the_rust_leaves_with_the_orq_facts(monkeypatch, client):
-    """Connect (8768) e convidado não passam pelo `delete` do Rust: a saída vai pela ponte, com a fase."""
+def test_close_that_skipped_rust_leaves_without_rebuilding_orq_facts(monkeypatch, client):
+    """A saída segue pela ponte; o Rust resolve a execução sem fatos reconstruídos no Python."""
     from app import internal_api
-    from app.adapters.orq import runs
     internal_api.set_secret("s3gredo")
-    monkeypatch.setattr(runs, "group_phase", lambda gid: "live")
     _sidecar("a", ["b"], orq=True)
     not_notified = {"sessao": "srv::x", "erro": {"code": "erro_peer_nao_avisado", "params": {}, "msg": "srv inacessível"}}
     calls = _rust(monkeypatch, reply={"ex_peers": ["srv::x"], "warnings": [not_notified]})
@@ -280,7 +278,7 @@ def test_close_that_skipped_the_rust_leaves_with_the_orq_facts(monkeypatch, clie
     try:
         r = client.delete("/api/sessions/a", headers=H)
         assert r.status_code == 200, r.text
-        assert calls == [("group.leave", {"name": "a", "phases": {"g1": "live"}})]
+        assert calls == [("group.leave", {"name": "a", "phases": {}})]
         assert r.json()["warning"]["params"]["avisos"] == [not_notified]
         # Repassado pelo Rust, quem sai do grupo é ele: nada pela ponte.
         calls.clear()
@@ -317,7 +315,7 @@ def test_pair_route_forwards_status_and_body(monkeypatch, client):
     assert r.status_code == 409 and r.json()["detail"]["code"] == "erro_pareamento_tarefa_existente"
     assert calls == [("group.route", {"method": "POST", "name": "a", "route": "pair", "body": {
         "peer": "b", "peers": [], "task": "y", "replace_task": False, "notify_members": True, "orq": False},
-        "facts": {"orchestrators": [], "phases": {}}})]
+        "facts": {}})]
 
 
 GROUP_ROUTES = [
@@ -371,13 +369,21 @@ def test_bridge_failure_is_an_explicit_error():
     assert body["detail"]["params"]["detalhe"] == "groups_bridge_off"
 
 
-def test_associate_in_rust_mode_sends_the_orq_facts(monkeypatch, client):
-    calls = _rust(monkeypatch, reply={"status": 200, "body": {"ok": True, "gid": "g1", "grouped": True}})
-    monkeypatch.setattr(api.orq_context, "associate_facts", lambda name, gid: {"draft_gid": name + gid})
+def test_associate_in_rust_mode_forwards_without_rebuilding_orq_facts(monkeypatch, client):
+    from app import account_bridge
+    from fastapi.responses import JSONResponse
+    calls = []
+    monkeypatch.setattr(runtime_coordinator, "_current", SimpleNamespace(mode="rust"))
+    monkeypatch.setattr(groups_bridge, "call", lambda *a, **k: pytest.fail("a associação HTTP não volta pela ponte de grupos"))
+
+    async def forward(request, destination, **options):
+        calls.append((destination, request.method, request.url.path, await request.json(), options))
+        return JSONResponse({"ok": True, "gid": "g1", "grouped": True})
+    monkeypatch.setattr(account_bridge, "forward_public", forward)
     r = client.post("/api/sessions/arb/orq/grupo", headers=H, json={"gid": "g1", "mtime": 1.5})
     assert r.status_code == 200, r.text
     assert r.json() == {"ok": True, "gid": "g1", "grouped": True}
-    assert calls == [("group.orq_associate", {"name": "arb", "gid": "g1", "mtime": 1.5, "facts": {"draft_gid": "arbg1"}})]
+    assert calls == [("/__hangar_server/forwarded", "POST", "/api/sessions/arb/orq/grupo", {"gid": "g1", "mtime": 1.5}, {"limit": None})]
 
 
 @pytest.mark.parametrize("mode", ["python", None])
@@ -405,7 +411,7 @@ def test_child_gets_group_env(monkeypatch, tmp_path):
     assert env["HANGAR_SERVER_ID"] == "casa"
     assert env["HANGAR_PEERS_FILE"] == str(peers._PEERS_FILE)
     assert env["HANGAR_PAIR_ARCHIVE"] == str(pair._arquivo_dir())
-    assert rust_server.RUST_SERVER_PROTOCOL == 90
+    assert rust_server.RUST_SERVER_PROTOCOL == 91
 
 
 @pytest.mark.parametrize("mode", ["python", None])
