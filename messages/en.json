@@ -1,4 +1,8 @@
 {
+  "worktree_estado_residual": "Residual folder",
+  "worktree_residual_warning": "This folder lost its .git link but is still registered. Deleting removes all remaining files, including sources and ignored files. The branch will be preserved.",
+  "worktree_residual_entries": "{n} remaining entries. Examples:",
+  "worktree_residual_inventory_incomplete": "Couldn't inspect all remaining files. Open the folder to check what will be lost before confirming.",
   "$schema": "https://inlang.com/schema/inlang-message-format",
   "keyring_locked_title": "{label}: keyring locked",
   "keyring_locked_hint": "Chrome, Slack and other apps on that machine are waiting for the keyring. Type its keyring password (usually the same as the login one).",

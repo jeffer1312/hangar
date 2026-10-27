@@ -31,6 +31,7 @@ function veredito(k: WorktreeState, st: WorktreeStatus): string {
   switch (k) {
     case 'gone': return m.worktree_veredito_sumida();
     case 'session': return m.worktree_veredito_em_uso();
+    case 'residual': return m.worktree_residual_warning();
     case 'dirty': return m.worktree_veredito_nao_commitado({ n: st.dirty });
     case 'merged': return m.worktree_veredito_mesclada();
     case 'detached': return m.worktree_veredito_sem_branch();
@@ -66,7 +67,8 @@ export function WorktreeSheet({ server, path, onClose, onDeleted }: Props) {
     if (!server || !st) return;
     setApagando(true); setErro('');
     try {
-      await deleteWorktreeForServer(server, { repo: st.repo, path: st.path, confirm: nPerde > 0, delete_branch: apagarBranch });
+      await deleteWorktreeForServer(server, { repo: st.repo, path: st.path, confirm: !!st.residual || nPerde > 0,
+        delete_branch: !st.residual && apagarBranch, ...(st.residual ? { keep_branch: true } : {}) });
       dropWorktreeStatus(server.id, st.path);
       onDeleted?.();
       onClose();
@@ -98,7 +100,8 @@ export function WorktreeSheet({ server, path, onClose, onDeleted }: Props) {
               </Pressable>
             </View>
             <Text style={styles.text}>{veredito(k, st)}</Text>
-            {st.degraded ? <Text style={styles.aviso}>{m.worktree_leitura_incompleta()}</Text> : null}
+            {st.residual && st.residual_entries == null ? <Text style={styles.aviso}>{m.worktree_residual_inventory_incomplete()}</Text> : null}
+            {st.degraded && !st.residual ? <Text style={styles.aviso}>{m.worktree_leitura_incompleta()}</Text> : null}
 
             {st.sessions.length && server ? (
               <Secao titulo={m.worktree_sessoes_aqui()}>
@@ -151,6 +154,12 @@ export function WorktreeSheet({ server, path, onClose, onDeleted }: Props) {
             <Text style={styles.title} accessibilityRole="header">{m.worktree_apagar_titulo({ nome: displayTitle(st) })}</Text>
             <Text style={styles.mono}>{st.path}{st.branch ? ` · ${st.branch}` : ''}</Text>
             {st.size ? <Text style={styles.ok}>{m.worktree_libera({ tamanho: sizeLabel(st) })}</Text> : null}
+            {st.residual ? <View style={styles.perdaCaixa}>
+              <Text style={styles.aviso}>{m.worktree_residual_warning()}</Text>
+              {st.residual_entries == null ? <Text style={styles.aviso}>{m.worktree_residual_inventory_incomplete()}</Text> : null}
+              {st.residual_entries != null ? <Text style={styles.text}>{m.worktree_residual_entries({ n: st.residual_entries })}</Text> : null}
+              {st.residual_files?.map((file) => <Arquivo key={file} code="" path={file} />)}
+            </View> : null}
 
             {nPerde ? (
               <View style={styles.perdaCaixa}>
@@ -171,7 +180,7 @@ export function WorktreeSheet({ server, path, onClose, onDeleted }: Props) {
               {st.closed ? m.worktree_fica_conversas({ n: st.closed }) : m.worktree_apagar_conversas({ branch: st.main_branch ?? st.base ?? '' })}
             </Guardado>
 
-            {!st.merged && st.branch ? (
+            {!st.residual && !st.merged && st.branch ? (
               <View style={styles.linha}>
                 <Switch value={apagarBranch} onValueChange={setApagarBranch} accessibilityLabel={m.worktree_apagar_branch_tambem({ n: st.ahead })} />
                 <View style={styles.flex}>

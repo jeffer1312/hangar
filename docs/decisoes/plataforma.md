@@ -2257,6 +2257,38 @@ mostrar a worktree e a branch dela.
 
 ## Worktrees mescladas usam a origem e a base publicada
 
+### Recuperação manual de worktrees residuais
+
+(27/10/2026.) Pasta existente sem `.git`, ainda registrada na administração do repositório,
+é um estado residual explícito. O PR #220 recuperou pasta ausente; o PR #262 manteve os resíduos
+existentes protegidos como leitura incerta, sem um caminho manual de exclusão. Na reprodução,
+o detalhe respondia 404 e a exclusão falhava antes de permitir o descarte informado. Em pasta
+aninhada em outro checkout, ainda havia o risco de ler HEAD e arquivos do repositório pai.
+
+O estado residual lê HEAD, branch e vínculo na administração do repositório principal. A tela
+informa que todos os arquivos remanescentes serão perdidos, mostra a quantidade de entradas e
+até 50 exemplos, incluindo fontes e ignorados, e conserva a branch. A confirmação é manual:
+resíduo nunca comprova limpeza ou merge. Caminho não registrado, checkout principal, sessão
+ou terminal em uso, lock do Git e vínculo administrativo alterado continuam recusados.
+
+A remoção protege o registro contra prune com o lock da worktree, e uma trava do sistema
+separa execução viva de retomada. O inventário e o vínculo são reconferidos depois da guarda
+de sessões. A pasta sai primeiro; falha conserva o registro para outra tentativa, inclusive
+quando a pasta já acabou de sair. Repetir um sucesso conhecido não tenta apagar outro caminho.
+
+O `git worktree remove` não usa mais o prazo de 20 s das consultas: a operação destrutiva é
+acompanhada até concluir, com proteção da árvore de processos. O worker HTTP não é cancelado
+pela desconexão do cliente; uma interrupção do servidor admite recuperação residual. O teste
+de prazo mantém um comando bloqueado por sinal além dos 20 s e então o libera. Isso corrige
+o mecanismo capaz de produzir remoção parcial, sem afirmar que ele originou os resíduos
+históricos, para os quais não há log dessa causa.
+
+As provas usam Git e disco reais descartáveis, chamadas HTTP ao servidor de teste e os
+componentes dos três clientes. Cobrem confirmação, preservação da branch, retomada, reentrada,
+locks, sessões e revalidação. Nenhuma prova apaga uma pasta residual do ambiente em uso.
+
+### Base publicada e elegibilidade
+
 **Regra:** `branch.<branch>.hangar-base` tem prioridade. Sem ela, a base vem da referência
 nomeada de criação no reflog; `HEAD`, hashes e o upstream da própria branch não informam o
 destino. Sem origem recuperável, permanece o fallback para a branch do checkout principal.

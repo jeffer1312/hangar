@@ -3,7 +3,7 @@
 //! Configuração e referências são compartilhadas por repositório; o reflog recupera a base das
 //! branches criadas fora do app. `rev-list --left-right` dá ahead, behind e a ancestralidade de
 //! uma vez. As worktrees rodam em paralelo.
-use crate::{Result, error, git, real};
+use crate::{Result, error, git, real, worktree_residual};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -57,12 +57,25 @@ fn text(path: &Path) -> String {
 }
 
 /// Caminhos iguais: no Windows sem distinguir maiúsculas, como o `normcase` do Python.
-fn same_path(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
     if cfg!(windows) {
         a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
     } else {
         a == b
     }
+}
+
+/// A pasta ausente ainda pode ter ancestrais com nome curto ou caixa diferente no Windows.
+pub(crate) fn registration_path(path: &Path) -> PathBuf {
+    let path = real(path);
+    for ancestor in path.ancestors() {
+        if let Ok(resolved) = std::fs::canonicalize(ancestor) {
+            let suffix = path.strip_prefix(ancestor).unwrap();
+            let resolved = crate::simplify(resolved);
+            return if suffix.as_os_str().is_empty() { resolved } else { resolved.join(suffix) };
+        }
+    }
+    path
 }
 
 /// `target` dentro de `root`, os dois pelo mesmo `real`: a caixa que o macOS devolve no
@@ -614,6 +627,29 @@ pub fn status(
 ) -> Value {
     let main = repo.main.as_str();
     let exists = is_dir(path);
+    if exists && worktree_residual::missing_git(Path::new(path)) {
+        let registration = worktree_residual::registration(main, path).ok();
+        let inventory = worktree_residual::summary(Path::new(path)).ok();
+        let names = sessions.iter().filter(|s| session_inside(s, Path::new(path)))
+            .map(|s| s.name.clone()).collect::<Vec<_>>();
+        let live = sessions.iter().filter(|s| session_inside(s, Path::new(path)))
+            .filter_map(|s| s.jsonl.as_deref()).map(|p| real(Path::new(p))).collect();
+        let created_at = repo.created_at(path);
+        let size = disk_usage(path, created_at, measure);
+        return json!({
+            "path":path,"repo":main,"exists":true,"residual":registration.is_some(),
+            "branch":registration.as_ref().and_then(|r| r.branch.as_deref()),
+            "head":registration.as_ref().and_then(|r| r.head(main)),"main_branch":repo.main_branch,
+            "base":null,"merged":false,"degraded":true,"ahead":0,"behind":0,
+            "dirty":0,"dirty_files":[],"ignored":[],"commits":[],"last_commit":null,
+            "residual_files":inventory.as_ref().map_or(&[][..], |i| i.files.as_slice()),
+            "residual_entries":inventory.as_ref().map(|i| i.entries),
+            "created_at":created_at,"sessions":names,"closed":closed_count(path,&live,bases),
+            "size":size.as_ref().and_then(|s| s.bytes),"size_biggest":size.as_ref().and_then(|s| s.biggest.clone()),
+            "size_pending":size.is_none(),"size_error":size.as_ref().is_some_and(|s| s.error),
+            "size_partial":size.as_ref().is_some_and(|s| s.partial),
+        });
+    }
     let branch = if exists {
         git::head_info(Some(path)).0
     } else {
@@ -745,7 +781,7 @@ pub fn status(
 
 /// Situação de uma pasta sem saber o repositório: o mesmo `status()` sem `main` do Python.
 pub fn status_of(path: &str, sessions: &[Session], measure: bool, bases: &[String]) -> Value {
-    let root = if is_dir(path) {
+    let root = if is_dir(path) && !worktree_residual::missing_git(Path::new(path)) {
         repo_root_of(path)
     } else {
         None
@@ -989,6 +1025,9 @@ fn allowed_scan_root(path: &str, roots: &[String]) -> Result<()> {
 /// Worktree fora das raízes (o Codex cria em `~/.codex/worktrees`) vale pelo repo principal
 /// que a registra, se ele estiver numa raiz.
 fn registered_in_allowed_repo(path: &str, roots: &[String]) -> bool {
+    if worktree_residual::missing_git(Path::new(path)) {
+        return residual_main(path, roots).is_some();
+    }
     let main = if is_dir(path) {
         let Some(root) = repo_root_of(path) else {
             return false;
@@ -1031,10 +1070,28 @@ pub fn allowed_repo(path: &str, roots: &[String]) -> Result<String> {
 pub fn allowed_worktree(path: &str, roots: &[String]) -> Result<String> {
     let path = allowed_repo(path, roots)?;
     // Pasta que existe mas não é raiz de repo/worktree daria uma situação inventada.
-    if is_dir(&path) && !Path::new(&path).join(".git").exists() {
+    if is_dir(&path) && !Path::new(&path).join(".git").exists()
+        && residual_main(&path, roots).is_none() {
         return Err(error(404, "não é um repositório git"));
     }
     Ok(path)
+}
+
+fn residual_main(path: &str, roots: &[String]) -> Option<String> {
+    let candidate = main_of_missing(path);
+    let valid = |main: &str| allowed_scan_root(main, roots).is_ok()
+        && worktree_residual::registration(main, path).is_ok();
+    if valid(&candidate) { return Some(candidate); }
+    discover_repositories(roots).repos.into_iter().find(|main| valid(main))
+}
+
+pub fn status_allowed(path: &str, roots: &[String], sessions: &[Session], measure: bool, bases: &[String]) -> Result<Value> {
+    let path = allowed_worktree(path, roots)?;
+    if worktree_residual::missing_git(Path::new(&path))
+        && let Some(main) = residual_main(&path, roots) {
+        return Ok(status(&path, sessions, &Repo::read(&main), measure, bases));
+    }
+    Ok(status_of(&path, sessions, measure, bases))
 }
 
 // --- Espaço em disco: medido por trás, uma pasta por vez, com cache ---
@@ -1368,6 +1425,17 @@ mod tests {
         assert_eq!(sanitize_cwd("/home/x/ação/"), "-home-x-a--o");
         assert_eq!(sanitize_cwd("/"), "-");
         assert_eq!(sanitize_cwd("C:\\x\\"), "C--x");
+    }
+
+    #[test]
+    fn registration_path_is_stable_after_the_folder_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worktree");
+        std::fs::create_dir(&path).unwrap();
+        let before = super::registration_path(&path);
+        std::fs::remove_dir(&path).unwrap();
+        let after = super::registration_path(&path);
+        assert_eq!(before.as_os_str(), after.as_os_str());
     }
 
     #[test]

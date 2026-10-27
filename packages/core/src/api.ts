@@ -1339,6 +1339,9 @@ export interface WorktreeStatus {
   main_branch: string | null;   // branch da pasta principal, onde as conversas retomam
   merged: boolean; ahead: number; dirty: number; ignored: string[]; sessions: string[]; closed: number;
   degraded?: boolean;   // leitura do git falhou: dirty/ignored podem estar zerados sem ser verdade
+  residual?: boolean;
+  residual_files?: string[];
+  residual_entries?: number | null;
   behind?: number;      // commits novos na base que a branch ainda não tem
   dirty_files?: { code: string; path: string }[];
   last_commit?: WorktreeCommit | null;
@@ -1353,12 +1356,13 @@ export interface WorktreeStatus {
 export interface WorktreeCommit { sha: string; subject: string; at: number }
 export interface WorktreeRepo { repo: string; worktrees: WorktreeStatus[] }
 
-export type WorktreeState = 'gone' | 'session' | 'dirty' | 'merged' | 'detached' | 'active';
+export type WorktreeState = 'gone' | 'session' | 'residual' | 'dirty' | 'merged' | 'detached' | 'active';
 
 /** Um estado só por worktree, na ordem do que mais importa antes de apagar. */
 export function worktreeState(w: WorktreeStatus): WorktreeState {
   if (!w.exists) return 'gone';
   if (w.sessions.length) return 'session';
+  if (w.residual) return 'residual';
   if (w.dirty) return 'dirty';
   if (w.merged) return 'merged';
   if (!w.branch) return 'detached';
@@ -1376,7 +1380,7 @@ export function worktreeAgeDays(w: WorktreeStatus, now = Date.now() / 1000): num
 /** Pronta para apagar: mesclada, sem alteração e sem sessão. Arquivo ignorado não segura (cópia
  *  do CLAUDE.local.md, cache); a confirmação lista o que ele perde. */
 export function worktreeReady(w: WorktreeStatus): boolean {
-  return w.merged && !w.dirty && !w.sessions.length && !w.degraded;
+  return w.merged && !w.dirty && !w.sessions.length && !w.degraded && !w.residual;
 }
 
 /** Soma do disco de várias: com alguma pendente, falha ou parcial, o total é só um mínimo. */
@@ -1431,7 +1435,7 @@ export function getWorktreeForServer(server: Server, path: string, signal?: Abor
 export async function fetchWorktreesForServer(server: Server, repo: string): Promise<void> {
   await apiFetchForServer(server, '/api/worktrees/fetch', { method: 'POST', body: JSON.stringify({ repo }) }, FOLDER_ACTION_MS);
 }
-export function deleteWorktreeForServer(server: Server, body: { repo: string; path: string; confirm: boolean; delete_branch: boolean }):
+export function deleteWorktreeForServer(server: Server, body: { repo: string; path: string; confirm: boolean; delete_branch: boolean; keep_branch?: boolean }):
   Promise<{ removed: string; branch_deleted: boolean; moved: number }> {
   return apiFetchForServer(server, '/api/worktrees/delete', { method: 'POST', body: JSON.stringify(body) }, FOLDER_ACTION_MS);
 }

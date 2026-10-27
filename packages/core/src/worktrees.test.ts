@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { runWorktreeBatch, worktreeLabel, worktreesSizeTotal } from './api';
+import { runWorktreeBatch, worktreeLabel, worktreesSizeTotal, worktreeState, worktreeReady } from './api';
+
+it('resíduo registrado nunca parece limpo ou mesclado', () => {
+  const w = { exists: true, residual: true, sessions: [], dirty: 0, merged: true, branch: 'topic' } as never;
+  expect(worktreeState(w)).toBe('residual');
+  expect(worktreeReady(w)).toBe(false);
+});
 
 describe('worktreeLabel', () => {
   it('usa a pasta da worktree onde o agente está', () => {
