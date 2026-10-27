@@ -19,7 +19,7 @@ const SHEET_WIDE: f32 = 1040.;
 
 /// Recado pronto para a tela: etiqueta e corpo arrumados uma vez, ao chegar, e o começo dele quando é longo.
 #[derive(Debug, PartialEq)]
-struct FeedItem { from: String, to: String, text: String, ts: f64, tag: Option<String>, body: String, folded: Option<String> }
+struct FeedItem { from: String, to: String, ts: f64, tag: Option<String>, body: String, folded: Option<String> }
 
 /// `missing`: membros cujo histórico falhou, que não é o mesmo que conversa vazia.
 struct Feed { items: Vec<FeedItem>, missing: Vec<String> }
@@ -94,7 +94,7 @@ fn build_feed(members: &[String], histories: Vec<(String, Result<Vec<ChatEvent>,
             let text = match peer.canal { Some(canal) => format!("[{canal}] {}", peer.body), None => peer.body };
             let (tag, body) = tidy_message(&text, home.filter(|_| !peer.from.contains("::")));
             let folded = fold_message(&body);
-            items.push(FeedItem { from: peer.from, to: owner.clone(), text, ts: event.ts.unwrap_or(0.), tag, body, folded });
+            items.push(FeedItem { from: peer.from, to: owner.clone(), ts: event.ts.unwrap_or(0.), tag, body, folded });
         }
     }
     items.sort_by(|a, b| a.ts.total_cmp(&b.ts));
@@ -803,7 +803,7 @@ mod tests {
             ("b".into(), Ok(vec![msg("[de: a] [vigia] primeiro", 1.)])),
             ("c".into(), Err(Failure::local("x"))),
         ], None);
-        let got: Vec<_> = feed.items.iter().map(|i| (i.from.as_str(), i.to.as_str(), i.text.as_str(), i.ts)).collect();
+        let got: Vec<_> = feed.items.iter().map(|i| (i.from.as_str(), i.to.as_str(), i.body.as_str(), i.ts)).collect();
         assert_eq!(got, [("a", "b", "[vigia] primeiro", 1.), ("b", "a", "segundo", 2.)]);
         assert_eq!(feed.missing, ["c"], "histórico que falhou não é conversa vazia");
     }
