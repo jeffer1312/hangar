@@ -20,6 +20,7 @@ pub mod diag;
 pub mod display_env;
 pub mod groups;
 pub mod interactions;
+pub(crate) mod json_envelope;
 pub mod list;
 pub mod locate;
 pub mod loops;

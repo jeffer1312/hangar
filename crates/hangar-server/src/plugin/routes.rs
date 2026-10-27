@@ -75,8 +75,7 @@ pub fn router<S: Clone + Send + Sync + 'static>(state: Arc<RouteState>) -> Route
         .with_state(state)
 }
 
-#[derive(Deserialize)]
-struct Envelope<T> { sessao: String, token: String, #[serde(flatten)] body: T }
+use crate::json_envelope::Envelope;
 #[derive(Clone, Debug, Deserialize)]
 pub struct Whoami {
     pub chave: String,

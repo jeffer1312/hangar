@@ -44,7 +44,9 @@ pub fn command(operation: &str, input: &serde_json::Value) -> Result<serde_json:
         ))),
         "at-or-after" => Ok(json!(state::at_or_after(&input["ts"], &input["reference"]))),
         "until-future" => Ok(json!(
-            runs::when(&input["deadline"])
+            crate::transcript::py::fromisoformat(text(&input["deadline"]))
+                .filter(|(_, offset)| offset.is_some())
+                .and_then(|_| runs::when(&input["deadline"]))
                 .is_some_and(|t| t.timestamp_micros() as f64 / 1e6 > runs::now())
         )),
         "normalize" => Ok(json!(markdown::normalize(text(&input["text"])))),
