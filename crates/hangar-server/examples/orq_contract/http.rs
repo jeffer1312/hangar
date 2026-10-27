@@ -84,7 +84,12 @@ fn request(input: &Value, public: bool) -> Result<Value, String> {
                 request.headers_mut().insert("x-hangar-internal", "fixture-internal".parse().unwrap());
                 *request.uri_mut() = format!("/__hangar_server/forwarded{query}").parse().unwrap();
             }
-            hangar_server::routes::router(state.clone()).call(request).await.map_err(|e|e.to_string())?
+            let mut router = if input["forwarded"] == true {
+                hangar_server::routes::terminal_router(state.clone())
+            } else {
+                hangar_server::routes::router(state.clone())
+            };
+            router.call(request).await.map_err(|e|e.to_string())?
         } else { orq::serve(&state, request).await };
         let status = response.status().as_u16();
         let body: Value = if input["state_only"] == true && status == 200 {
