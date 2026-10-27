@@ -59,7 +59,22 @@ impl<'de> Deserialize<'de> for Strict {
                 Ok(Strict(Value::Object(v)))
             }
         }
-        d.deserialize_any(V)
+        // O texto bruto distingue objetos reais do mapa interno usado para números pelo serde.
+        let raw = Box::<serde_json::value::RawValue>::deserialize(d)?;
+        let mut decoder = serde_json::Deserializer::from_str(raw.get());
+        match raw.get().trim_start().as_bytes().first() {
+            Some(b'{') => decoder.deserialize_map(V).map_err(de::Error::custom),
+            Some(b'[') => decoder.deserialize_seq(V).map_err(de::Error::custom),
+            _ => {
+                let value: Value = serde_json::from_str(raw.get()).map_err(de::Error::custom)?;
+                if value.is_number() && raw.get().contains(['.', 'e', 'E']) {
+                    let number: f64 = raw.get().parse().map_err(de::Error::custom)?;
+                    Ok(Strict(json!(number)))
+                } else {
+                    Ok(Strict(value))
+                }
+            }
+        }
     }
 }
 pub fn parse(raw: &str) -> Result<Value, String> {
@@ -156,6 +171,27 @@ pub async fn lock(p: &Path) -> Result<Guard, String> {
     }
 }
 pub struct NativeRunner;
+
+struct RunningGroup(Option<u32>);
+
+impl RunningGroup {
+    fn stop(&mut self) {
+        if let Some(pid) = self.0.take() {
+            #[cfg(unix)]
+            unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+            #[cfg(not(unix))]
+            let _ = pid;
+        }
+    }
+}
+
+impl Drop for RunningGroup {
+    fn drop(&mut self) {
+        // Cancelar o future também precisa encerrar os descendentes que mantêm os pipes abertos.
+        self.stop();
+    }
+}
+
 impl Runner for NativeRunner {
     fn run<'a>(
         &'a self,
@@ -184,7 +220,7 @@ impl Runner for NativeRunner {
             #[cfg(unix)]
             cmd.process_group(0);
             let mut child = cmd.spawn().map_err(os_error)?;
-            let pid = child.id();
+            let mut group = RunningGroup(child.id());
             let mut out = child.stdout.take().ok_or("OSError")?;
             let mut stderr = child.stderr.take().ok_or("OSError")?;
             let waited = tokio::time::timeout(timeout, async {
@@ -205,16 +241,18 @@ impl Runner for NativeRunner {
             })
             .await;
             match waited {
-                Ok(result) => result.map_err(os_error),
+                Ok(Ok(result)) => {
+                    group.0 = None;
+                    Ok(result)
+                }
+                Ok(Err(error)) => {
+                    group.stop();
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                    Err(os_error(error))
+                }
                 Err(_) => {
-                    #[cfg(unix)]
-                    if let Some(id) = pid {
-                        unsafe {
-                            libc::kill(-(id as i32), libc::SIGKILL);
-                        }
-                    }
-                    #[cfg(not(unix))]
-                    let _ = pid;
+                    group.stop();
                     let _ = child.kill().await;
                     let _ = child.wait().await;
                     Err(err("TimeoutExpired"))
@@ -240,5 +278,31 @@ fn exit_code(status: std::process::ExitStatus) -> i64 {
     #[cfg(not(any(unix, windows)))]
     {
         i64::from(status.code().unwrap_or(-1))
+    }
+}
+
+#[cfg(test)]
+mod codec_tests {
+    use super::*;
+
+    #[test]
+    fn op081_numbers_and_private_named_objects_keep_the_python_json_contract() {
+        let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/omp-json/numbers.json")).unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let raw = case["input"].as_str().unwrap();
+            let actual = read_record(raw);
+            if let Some(expected) = case["expected"]["text"].as_str() {
+                assert_eq!(serde_json::to_string(&actual.unwrap()).unwrap(), expected, "{raw}");
+            } else {
+                assert_eq!(actual.unwrap_err(), case["expected"]["error"].as_str().unwrap(), "{raw}");
+            }
+        }
+    }
+
+    fn read_record(raw: &str) -> Result<Value, String> {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("record.json");
+        fs::write(&path, raw).unwrap();
+        read(&path, None)
     }
 }
