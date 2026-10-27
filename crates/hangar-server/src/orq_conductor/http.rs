@@ -27,6 +27,10 @@ pub async fn public(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
+    if let Some(mut response) = crate::provider_info::wrong_method(req.method(), req.uri().path(), req.uri().query()) {
+        crate::routes::cors(req.headers(), response.headers_mut());
+        return response;
+    }
     let (forward, owner) = crate::routes::gate(&st, peer, &req);
     if !owner || req.method() != Method::GET {
         return crate::routes::pass(&st, req, &forward).await;

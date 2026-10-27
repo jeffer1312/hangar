@@ -245,26 +245,15 @@ async fn conductor_http_owner_auth_forwarded_and_readonly() {
         client.get(&url).send().await.unwrap().status(),
         StatusCode::UNAUTHORIZED
     );
-    assert_eq!(
-        client
-            .head(&url)
-            .bearer_auth("fixture-owner")
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        client
-            .post(&url)
-            .bearer_auth("fixture-owner")
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
+    for method in [reqwest::Method::HEAD, reqwest::Method::POST] {
+        for authenticated in [false, true] {
+            let request = client.request(method.clone(), &url);
+            let request = if authenticated { request.bearer_auth("fixture-owner") } else { request };
+            let response = request.send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+            assert_eq!(response.headers()["allow"], "GET");
+        }
+    }
     assert_eq!(
         client
             .get(format!(
