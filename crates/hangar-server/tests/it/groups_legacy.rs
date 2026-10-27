@@ -46,11 +46,15 @@ async fn machine(root: &Path, id: &str) -> Machine {
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config(upstream, ""));
+    state.accounts = hangar_server::accounts::AccountService::new(
+        hangar_server::accounts::environment::AccountEnvironment::from_map(
+            [("HOME".into(),home.to_string_lossy().into_owned()),
+             ("USERPROFILE".into(),home.to_string_lossy().into_owned())].into()));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
     let pair = home.join(".claude/.hangar-pair");
-    state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")), Arc::new(PythonOrq::from_state(&state)), id.into())));
+    state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")), Arc::new(PythonOrq::from_state(&state).with_paths(home.clone(),pair.clone())), id.into())));
     state.peers = Arc::new(PeerClient::new(PeerBook::new(Some(root.join("peers.json")))));
     let share = crate::share_pair_routes::share_state(&root.join("shares.json"), &pair, Arc::new(Mutex::new(1_000.0)));
     state.share = Some(share.clone());
@@ -310,9 +314,14 @@ async fn pair_remote_whose_undo_fails_is_500() {
 async fn pair_remote_refuses_the_orchestrator() {
     let dir = tempfile::tempdir().unwrap();
     let casa = machine(dir.path(), "casa").await;
-    casa.python.set_internal("orq/is-orchestrator", StatusCode::OK, json!({"names": ["s2"]}));
-    let (status, body) = call(casa.addr, "POST", "s2/pair-remote", Some(&json!({"initiator": "lab::s1"}))).await;
+    let root = dir.path().join("home/.hangar/orq/one");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("orq.json"),"{\"auto\":true}").unwrap();
+    std::fs::write(root.join("eventos.jsonl"),"{\"tipo\":\"execucao_inicio\",\"gid\":\"g1\"}\n").unwrap();
+    std::fs::write(root.join("vigia.json"),json!({"ts":chrono::Utc::now().to_rfc3339(),"pid":std::process::id()}).to_string()).unwrap();
+    let (status, body) = call(casa.addr, "POST", "g1-orq/pair-remote", Some(&json!({"initiator": "lab::s1"}))).await;
     assert_eq!((status, body["detail"]["code"].clone()), (409, json!("erro_sessao_orq")));
-    assert!(!casa.pair.join("s2.json").exists());
+    assert!(!casa.pair.join("g1-orq.json").exists());
+    assert!(casa.python.internal_bodies("orq/is-orchestrator").is_empty());
     assert_eq!(inputs(&casa), [0, 0, 0, 0]);
 }
