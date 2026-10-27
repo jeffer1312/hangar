@@ -401,7 +401,12 @@ fn hold(state: &Value) -> Option<Hold> {
 /// desconhecida). O botão só aparece quando um clique consegue concluir.
 fn plan(need: Option<u32>, server: Option<&Value>, run: Option<u32>) -> Plan {
     let step = match server {
-        Some(state) if behind(state) => hold(state).map_or(ServerStep::Update, ServerStep::Held),
+        Some(state) if behind(state) => match hold(state) {
+            // Aceitar o aviso não faz `git pull`: edição no checkout ou branch de trabalho não o seguram. Se houver
+            // versão nova, o `iniciar` depois do aceite é que recusa, com o motivo.
+            Some(Hold::LocalChanges | Hold::WorkBranch(..)) if state["aviso_pendente"].as_bool() == Some(true) => ServerStep::Update,
+            other => other.map_or(ServerStep::Update, ServerStep::Held),
+        },
         _ => ServerStep::Skip,
     };
     let Some(need) = need else { return Plan { server: step, app: false } };
@@ -1448,6 +1453,19 @@ mod tests {
         assert_eq!(only, Plan { server: ServerStep::Update, app: false });
         assert!(only.visible(), "servidor atrás sem app novo ainda mostra o botão");
         assert!(!plan(None, Some(&server(serde_json::json!({}))), Some(2)).visible(), "nada a fazer: botão some");
+    }
+
+    /// Modo desenvolvedor com edição no checkout: o aviso pendente ainda abre o modal e chega ao aceite, que não faz
+    /// `git pull`; sem o aviso, a edição segura a atualização como antes.
+    #[test]
+    fn plan_pending_warning_is_not_held_by_local_changes() {
+        let dirty = |extra: Value| { let mut s = server(extra); s["pre_voo"]["sujo"] = 1.into(); s };
+        assert_eq!(plan(None, Some(&dirty(serde_json::json!({"aviso_pendente": true}))), Some(2)).server, ServerStep::Update);
+        let mut work = dirty(serde_json::json!({"aviso_pendente": true}));
+        work["pre_voo"]["branch_de_trabalho"] = true.into();
+        assert_eq!(plan(None, Some(&work), Some(2)).server, ServerStep::Update);
+        assert_eq!(plan(None, Some(&dirty(serde_json::json!({"atualizacao_disponivel": true}))), Some(2)).server,
+            ServerStep::Held(Hold::LocalChanges));
     }
 
     #[test]

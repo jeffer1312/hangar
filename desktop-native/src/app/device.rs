@@ -422,7 +422,14 @@ impl Hangar {
 
     fn start_update(&mut self, acceptance: Acceptance, real: bool, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
-        if self.device.run_active() || self.device.channel.blocks_update() { return; }
+        // Barrado nunca sai calado: o clique no modal tem de dar uma resposta na tela.
+        let blocked = if self.device.run_active() { Some(tr("app_restart_busy")) }
+            else if self.device.channel.blocks_update() { Some(tr("settings_channel_pending")) } else { None };
+        if let Some(text) = blocked {
+            if !self.device.run_active() { self.device.run = Some(Run::Done { ok: false, text }); }
+            cx.notify();
+            return;
+        }
         self.device.baseline_ts = self.device.about.ok().and_then(|v| v.ts.clone());
         self.device.run = Some(Run::Starting);
         self.device.run_seq += 1;

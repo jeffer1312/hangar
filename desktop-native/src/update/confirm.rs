@@ -200,13 +200,21 @@ pub(crate) fn open(window: &mut Window, cx: &mut App, title: String, description
             .when(warned, |el| el.child(div().flex().flex_col().gap(px(7.)).px(px(12.)).py(px(11.)).rounded(px(10.))
                 .border_1().border_color(palette::amber().alpha(0.28)).bg(palette::amber().alpha(0.08))
                 .children(groups)
-                .child(div().pt(px(2.)).text_size(px(13.)).child(check("update-understood", tr_shared("update_notes_understood", &[]), understood.clone())))))
+                // Em caixa própria e no tamanho normal: pequena, dentro do bloco âmbar, ela não parecia uma caixa de marcar.
+                .child(div().mt(px(4.)).px(px(12.)).py(px(10.)).rounded(px(8.)).border_1().border_color(palette::amber().alpha(0.6))
+                    .bg(theme::inset()).text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD)
+                    .child(gpui_kit::component::checkbox::Checkbox::new("update-understood").label(tr_shared("update_notes_understood", &[]))
+                        .checked(understood.get()).on_click({
+                            let value = understood.clone();
+                            move |checked: &bool, window, _| { value.set(*checked); window.refresh(); }
+                        })))))
             .child(sections(tr_shared("update_notes_news", &[]), &primary.news, true, &fixes_open, started, window, cx))
             .when_some(all.clone(), |el, (label, value)| el.child(div().px(px(10.)).py(px(9.)).rounded(px(9.)).border_1()
                 .border_color(palette::edge()).bg(palette::fill(0.04)).text_size(px(13.)).child(check("confirm-check", label, value))))
             .into_any_element()
     };
-    let (width, height) = if tall { (px(440.), window.viewport_size().height * 0.8) } else { (px(360.), px(150.)) };
+    // Largo o bastante para o aviso e a escolha não virarem uma coluna estreita; nunca além da janela.
+    let (width, height) = if tall { (px(620.).min(window.viewport_size().width * 0.92), window.viewport_size().height * 0.8) } else { (px(360.), px(150.)) };
     chrome::confirm_dialog(window, cx, width, height, None, Rc::new(body), enabled, tr("update_confirm_ok"), None,
         |dialog| dialog.p(px(18.)).rounded(px(14.)), move |window, cx| {
             let primary = &notes[0];

@@ -37,6 +37,10 @@ describe('aviso pendente e aceite', () => {
   it('aviso pendente pede a folha, mas não é versão nova', () => {
     expect(classify(pending)).toBe('iniciar');
     expect(classify({ ...pending, aviso_pendente: false })).toBe('em_dia');
+    // Modo desenvolvedor com edição: o aceite não faz git pull, então a edição não segura o aviso.
+    const dirty = { pre_voo: { sujo: 1, branch_de_trabalho: true } };
+    expect(classify({ ...pending, ...dirty })).toBe('iniciar');
+    expect(classify({ ...pending, ...dirty, aviso_pendente: false, atualizacao_disponivel: true })).toBe('travado:branch');
     expect(hasRealUpdate(pending)).toBe(false);
     expect(hasRealUpdate({ ...pending, atualizacao_disponivel: true })).toBe(true);
     expect(hasRealUpdate({ ...pending, versoes: { repo: 'b', backend: 'a' } })).toBe(true);

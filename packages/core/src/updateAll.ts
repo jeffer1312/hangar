@@ -29,8 +29,11 @@ export function classify(snapshot: UpdateSnapshot): UpdateClassification {
   // Aviso pendente pede a folha mesmo sem versão nova; quem decide se inicia é `afterAccept`.
   if (!hasRealUpdate(snapshot) && snapshot.aviso_pendente !== true) return 'em_dia';
   const pre = snapshot.pre_voo;
-  if (pre?.branch_de_trabalho === true) return 'travado:branch';
-  if ((pre?.sujo ?? 0) > 0 || (pre?.ahead ?? 0) > 0 || pre?.divergiu === true) return 'travado:mudancas';
+  // Aceitar o aviso não faz `git pull`: edição ou branch de trabalho não o seguram. Com versão nova, o `iniciar`
+  // depois do aceite é que recusa, com o motivo.
+  const warning = snapshot.aviso_pendente === true;
+  if (!warning && pre?.branch_de_trabalho === true) return 'travado:branch';
+  if (!warning && ((pre?.sujo ?? 0) > 0 || (pre?.ahead ?? 0) > 0 || pre?.divergiu === true)) return 'travado:mudancas';
   if (snapshot.estado?.fase === 'rodando') return 'travado:rodando';
   if (pre?.pode === false) return 'travado:falta';
   return 'iniciar';
