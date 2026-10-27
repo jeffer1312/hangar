@@ -277,6 +277,11 @@ async fn load_all(machines: Vec<Machine>) -> (Option<Value>, Vec<Notes>, Vec<Mac
     (state, read.into_iter().map(|(_, _, notes)| notes).collect(), targets)
 }
 
+/// O registro pode mudar com o modal aberto: segue só a entrada lida que ainda existe, com os dados de agora (token).
+fn still_registered(targets: Vec<Machine>, now: &[Machine]) -> Vec<Machine> {
+    targets.into_iter().filter_map(|t| now.iter().find(|m| m.key == t.key && m.entry_id == t.entry_id).cloned()).collect()
+}
+
 fn unread(machines: &[Machine]) -> Vec<Notes> {
     machines.iter().map(|m| Notes::unread(m.key.clone(), m.label.clone())).collect()
 }
@@ -470,7 +475,7 @@ impl Updater {
     fn start_all(&mut self, targets: Vec<Machine>, accepted: HashMap<String, Acceptance>, excluded: HashSet<String>,
         window: &mut Window, cx: &mut Context<Self>) {
         let all = self.all_machines();
-        let machines = batch_machines(targets, &accepted, &excluded);
+        let machines = batch_machines(still_registered(targets, &all), &accepted, &excluded);
         let mut local_acceptance = machines.iter().find(|m| m.local).and_then(|m| accepted.get(&m.key)).cloned();
         self.survey.generation += 1;
         self.survey.prepare(&machines, HashMap::new());
@@ -942,6 +947,8 @@ mod tests {
         assert_eq!(kept.iter().map(|m| m.key.as_str()).collect::<Vec<_>>(), ["alias"], "lidos em separado: o lido segue");
         let twice = batch_machines(vec![machine("alias"), machine("alias")], &keys(&["alias"]), &HashSet::new());
         assert_eq!(twice.len(), 1, "a mesma chave duas vezes vira uma linha só");
+        let kept = still_registered(vec![machine("rep"), machine("gone")], &[machine("rep"), machine("new")]);
+        assert_eq!(kept.iter().map(|m| m.key.as_str()).collect::<Vec<_>>(), ["rep"], "apagada com o modal aberto não roda; nova não entra sem avisos lidos");
     }
 
     #[test]
