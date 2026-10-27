@@ -355,6 +355,8 @@ pub fn discard(state_path: &Path, projection_dir: &Path, projection: bool) -> io
     if projection && let Ok((state, _)) = State::load(&bytes) {
         ignore_missing(std::fs::remove_file(projection_dir.join(format!("{}.jsonl", sanitize(&state.name)))))?;
     }
+    // O ciclo de modos gravado pelo executor terminal morre com a fila da mesma vida.
+    ignore_missing(std::fs::remove_file(state_path.with_extension("modes")))?;
     ignore_missing(std::fs::remove_file(state_path))
 }
 

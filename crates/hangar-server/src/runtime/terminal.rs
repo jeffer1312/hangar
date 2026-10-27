@@ -349,8 +349,14 @@ pub(crate) const MAX_MODS_HOLD:Duration=Duration::from_secs(10);
 /// nova leitura. Fora de `*.json`, que é o estado da fila varrido pelos dois lados.
 fn modes_path(state:&Path)->PathBuf {state.with_extension("modes")}
 fn read_modes(state:&Path)->Option<Value> {
-    std::fs::read(modes_path(state)).ok().and_then(|bytes|serde_json::from_slice::<Value>(&bytes).ok())
-        .filter(|modes|modes.as_array().is_some_and(|list|!list.is_empty()))
+    let bytes=match std::fs::read(modes_path(state)) {
+        Ok(bytes)=>bytes,
+        Err(failure) if failure.kind()==std::io::ErrorKind::NotFound=>return None,
+        Err(failure)=>{tracing::warn!(code="permission_modes_read_failed",%failure,"ciclo de modos gravado e não lido; o menu espera nova leitura");return None;}
+    };
+    let modes=serde_json::from_slice::<Value>(&bytes).ok().filter(|modes|modes.as_array().is_some_and(|list|!list.is_empty()));
+    if modes.is_none() {tracing::warn!(code="permission_modes_read_failed","ciclo de modos gravado ilegível; o menu espera nova leitura");}
+    modes
 }
 fn save_modes(state:&Path,modes:&Value) {
     if let Err(failure)=super::queue::atomic_write(&modes_path(state),modes.to_string().as_bytes()) {
