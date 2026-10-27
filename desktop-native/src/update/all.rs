@@ -83,8 +83,10 @@ fn warnings(state: &Value) -> Vec<String> {
 
 fn failure_text(error: &Failure) -> String { tr(&error.detail) }
 
-fn batch_machines(machines: Vec<Machine>, excluded: &HashSet<String>) -> Vec<Machine> {
-    machines.into_iter().filter(|m| !excluded.contains(&m.key)).collect()
+/// Só os representantes que a leitura dos avisos escolheu (`read`), menos os sem avisos lidos. Refazer a escolha aqui
+/// pode eleger outro endereço da mesma máquina (identidade que falhou numa das vezes), que rodaria sem o aceite.
+fn batch_machines<T>(machines: Vec<Machine>, read: &HashMap<String, T>, excluded: &HashSet<String>) -> Vec<Machine> {
+    machines.into_iter().filter(|m| read.contains_key(&m.key) && !excluded.contains(&m.key)).collect()
 }
 
 fn own_servers(servers: &[ServerEntry]) -> Vec<ServerEntry> {
@@ -459,7 +461,7 @@ impl Updater {
     /// `accepted`: o aceite de cada máquina, pela chave; `excluded`: as que não tiveram os avisos lidos.
     fn start_all(&mut self, accepted: HashMap<String, Acceptance>, excluded: HashSet<String>, window: &mut Window, cx: &mut Context<Self>) {
         let all = self.all_machines();
-        let machines = batch_machines(all.clone(), &excluded);
+        let machines = batch_machines(all.clone(), &accepted, &excluded);
         let mut local_acceptance = machines.iter().find(|m| m.local).and_then(|m| accepted.get(&m.key)).cloned();
         self.survey.generation += 1;
         self.survey.prepare(&machines, HashMap::new());
@@ -470,10 +472,7 @@ impl Updater {
         self.open_batch(window, cx);
         let (tx, rx) = async_channel::unbounded();
         self.runtime.spawn(async move {
-            // `excluded` tem as chaves dos representantes que a leitura dos avisos escolheu: o lote escolhe sobre a mesma
-            // lista inteira e só depois exclui, senão o outro endereço da máquina vira representante e roda sem o aceite.
-            let (machines, aliases) = prepare_machines(all).await;
-            let machines = batch_machines(machines, &excluded);
+            let (_, aliases) = prepare_machines(all).await;
             if tx.send(Event::Prepared(machines.clone(), aliases)).await.is_err() { return; }
             futures::future::join_all(machines.into_iter().filter(|m| !m.local).map(|machine| {
                 let tx = tx.clone();
@@ -814,7 +813,8 @@ mod tests {
         assert!(a.excluded(), "leitura que falha deixa a máquina de fora");
         assert!(!b.excluded(), "servidor antigo: sem avisos, segue no lote");
         let excluded: HashSet<String> = [&a, &b].into_iter().filter(|n| n.excluded()).map(|n| n.server().to_owned()).collect();
-        let kept = batch_machines(vec![down.clone(), old.clone()], &excluded);
+        let read: HashMap<String, ()> = [&a, &b].into_iter().map(|n| (n.server().to_owned(), ())).collect();
+        let kept = batch_machines(vec![down.clone(), old.clone()], &read, &excluded);
         assert_eq!(kept.iter().map(|m| m.key.as_str()).collect::<Vec<_>>(), [old.key.as_str()]);
         // A leitura inteira que morreu deixa todas de fora, nunca "sem avisos".
         assert!(unread(&[down.clone(), old.clone()]).iter().all(Notes::excluded));
@@ -922,14 +922,15 @@ mod tests {
     }
 
     #[test]
-    fn update_all_excludes_after_choosing_one_address_per_machine() {
+    fn update_all_batch_keeps_only_the_addresses_whose_warnings_were_read() {
         let machine = |key: &str| Machine { key: key.into(), entry_id: String::new(), label: key.into(),
             api: Err(Failure { status: None, detail: "fixture".into(), retry_after: None, uncertain: false, code: None }), local: false };
-        let raw = vec![machine("rep"), machine("alias")];
-        let identities = ["same-id".to_owned(), "same-id".to_owned()];
+        let raw = || vec![machine("rep"), machine("alias")];
+        let keys = |keys: &[&str]| keys.iter().map(|k| (k.to_string(), ())).collect::<HashMap<_, _>>();
         let excluded: HashSet<String> = ["rep".to_owned()].into();
-        assert!(batch_machines(unique_machines(raw.clone(), &identities), &excluded).is_empty(), "nenhum endereço da excluída roda");
-        assert_eq!(batch_machines(raw, &excluded).len(), 1, "excluir antes de escolher deixaria o outro endereço no lote");
+        assert!(batch_machines(raw(), &keys(&["rep"]), &excluded).is_empty(), "o outro endereço da excluída não roda");
+        let kept = batch_machines(raw(), &keys(&["rep", "alias"]), &excluded);
+        assert_eq!(kept.iter().map(|m| m.key.as_str()).collect::<Vec<_>>(), ["alias"], "lidos em separado: o lido segue");
     }
 
     #[test]
