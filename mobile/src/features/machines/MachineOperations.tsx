@@ -106,6 +106,7 @@ function OperationControls({ server }: { server: Server }) {
             if (accepted?.started) return { ok: true, pid: accepted.pid! };
             if (accepted && afterAccept(accepted, await bounded(getAtualizacaoEm(server), signal, 20_000)) === 'done') return null;
             ensureActive(signal);
+            if (acceptance?.incomplete) throw new Error(m.update_accept_incomplete());
             return bounded(iniciarAtualizacaoEm(server), signal, 15_000);
           };
           const started = await launch();

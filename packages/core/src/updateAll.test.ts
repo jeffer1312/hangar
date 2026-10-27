@@ -159,14 +159,14 @@ describe('API e execução por máquina', () => {
     expect(final('old')?.status).toBe('atualizado');
   });
 
-  it('notas incompletas aceitam sem iniciar; aviso pendente sem aceite não sai "em dia"', async () => {
+  it('notas incompletas aceitam sem iniciar e falham; aviso pendente sem aceite não sai "em dia"', async () => {
     read = (id) => id === 'unaccepted' ? json({ ...ready(), atualizacao_disponivel: false, pending_warning: true })
       : json({ ...ready(), atualizacao_disponivel: true });
     await updateAll(['partial', 'unaccepted'].map((id) => server(id)), onChange,
       { ...options, accept: { partial: { ids: ['mig'], mode: 'package', incomplete: true } } });
     expect(calls.filter((path) => path.endsWith('/iniciar'))).toEqual([]);
     expect(calls).toContain('partial/api/update/accept');
-    expect(final('partial')?.status).toBe('em_dia');
+    expect(final('partial')).toMatchObject({ status: 'falhou', error: m.update_accept_incomplete() });
     expect(final('unaccepted')).toMatchObject({ status: 'falhou', error: m.update_all_warning_not_accepted({ server: 'unaccepted' }) });
   });
 

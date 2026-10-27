@@ -87,7 +87,8 @@ export async function acceptAndStart(server: Server, acceptance: UpdateAcceptanc
   const accepted = acceptance?.ids.length ? await acceptUpdateWarningsEm(server, acceptance.ids, acceptance.mode, fetcher) : undefined;
   if (accepted?.started) return { ok: true, pid: accepted.pid! };
   const next = afterAccept(accepted, accepted === null ? {} : snapshot ?? await getAtualizacaoEm(server, false, fetcher));
-  return next === 'start' && !acceptance?.incomplete ? iniciarAtualizacaoEm(server, fetcher) : null;
+  if (next === 'start' && acceptance?.incomplete) throw new Error(m.update_accept_incomplete());
+  return next === 'start' ? iniciarAtualizacaoEm(server, fetcher) : null;
 }
 
 /** As máquinas próprias, uma por identidade; `last` vence como representante da dele. */

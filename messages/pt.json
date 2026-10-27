@@ -9195,6 +9195,8 @@
   "update_choice_developer": "Modo desenvolvedor",
   "update_choice_developer_desc": "Roda direto do seu checkout; o Atualizar faz git pull nele.",
   "update_accept_failed": "O aceite do aviso não foi gravado: {reason}",
+  "update_accept_incomplete": "Aviso aceito, mas os avisos da versão nova não puderam ser lidos. Tente atualizar de novo.",
+  "native_update_accept_incomplete": "Aviso aceito, mas os avisos da versão nova não puderam ser lidos. Tente atualizar de novo.",
   "update_all_warnings_from": "Avisos de {server}",
   "update_all_warnings_failed": "{server}: não deu para ler os avisos; atualize essa máquina sozinha.",
   "update_all_warning_not_accepted": "{server}: o aviso desta máquina não foi aceito; atualize-a sozinha para vê-lo.",

@@ -117,8 +117,10 @@ pub(crate) async fn accept_then_start(api: &Api, acceptance: &Acceptance, real: 
         if let Some(mode) = acceptance.mode { body["mode"] = mode.into(); }
         Some(api.server_send(reqwest::Method::POST, &["update", "accept"], Some(body), 30).await)
     };
-    match after_accept(reply.as_ref(), real && !acceptance.incomplete) {
+    match after_accept(reply.as_ref(), real) {
         AfterAccept::Follow => Launch::Started(reply.unwrap_or(Ok(Value::Null))),
+        // Os avisos da versão nova não foram lidos: iniciar por cima deles seria aceitá-los sem mostrar.
+        AfterAccept::Start if acceptance.incomplete => Launch::AcceptFailed(tr("update_accept_incomplete")),
         AfterAccept::Start => Launch::Started(api.server_post(&["atualizacao", "iniciar"], 30).await),
         AfterAccept::Nothing => Launch::Nothing,
         AfterAccept::Failed(text) => Launch::AcceptFailed(text),
