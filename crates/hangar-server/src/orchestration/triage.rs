@@ -39,7 +39,7 @@ pub fn decide(text: &str) -> (&'static str, Option<String>) {
         let ok = ALLOWED.find_iter(tail).any(|a| {
             tail[..a.start()].chars().count() <= 30
                 && !(a.as_str().eq_ignore_ascii_case("revisor")
-                    && tail[a.end()..].starts_with(" que"))
+                    && tail[a.end()..].get(..4).is_some_and(|prefix| prefix.eq_ignore_ascii_case(" que")))
         });
         if !ok {
             return ("wake", None);
@@ -62,4 +62,19 @@ pub fn decide(text: &str) -> (&'static str, Option<String>) {
         }
     }
     ("wake", None)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn or039_waiting_veto_preserves_python_case_insensitivity() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../backend/tests/fixtures/contract/orq/triage-case.json"
+        )).unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let text = case["text"].as_str().unwrap();
+            let (verdict, category) = super::decide(text);
+            assert_eq!(serde_json::json!([verdict, category]), case["expected"], "{text}");
+        }
+    }
 }
