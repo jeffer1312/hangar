@@ -443,3 +443,70 @@ fn python_model_body_contract_keeps_defaults_error_order_and_missing_body() {
         );
     }
 }
+
+#[tokio::test]
+async fn inbox_access_warns_once_per_cause_and_host_and_success_rearms_the_warning() {
+    use std::io::Write;
+    #[derive(Clone)]
+    struct Log(Arc<Mutex<Vec<u8>>>);
+    impl Write for Log {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let output = Arc::new(Mutex::new(vec![]));
+    let writer = output.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(move || Log(writer.clone()))
+        .finish();
+    let _trace = tracing::subscriber::set_default(subscriber);
+    let config = crate::config::Config::from_lookup(|key| match key {
+        "HANGAR_SERVER_LISTEN" => Some("192.0.2.50:18765".into()),
+        "HANGAR_SERVER_UPSTREAM" => Some("127.0.0.1:1".into()),
+        "HANGAR_INTERNAL_SECRET" => Some("fixture-internal".into()),
+        "CP_AUTH_TOKEN" => Some("fixture-owner".into()),
+        _ => None,
+    })
+    .unwrap();
+    let state = Arc::new(crate::routes::AppState::new(config));
+    let request = |query: &str| {
+        axum::extract::Request::builder()
+            .uri(format!("/api/pi/inbox{query}"))
+            .body(axum::body::Body::empty())
+            .unwrap()
+    };
+    let local = "192.0.2.50:1".parse().unwrap();
+    for _ in 0..3 {
+        assert_eq!(
+            inbox::websocket(&state, local, request("")).await.status(),
+            403
+        );
+    }
+    let first = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!(first.matches("token recusado").count(), 1, "{first}");
+    // A credencial válida rearma o aviso antes da atualização HTTP, como na rota original.
+    inbox::websocket(&state, local, request("?token=fixture-owner")).await;
+    inbox::websocket(&state, local, request("")).await;
+    let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!(log.matches("token recusado").count(), 2, "{log}");
+    for _ in 0..3 {
+        assert_eq!(
+            inbox::websocket(
+                &state,
+                "192.0.2.99:1".parse().unwrap(),
+                request("?token=fixture-owner")
+            )
+            .await
+            .status(),
+            403
+        );
+    }
+    let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!(log.matches("origem recusada").count(), 1, "{log}");
+}

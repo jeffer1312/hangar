@@ -10,8 +10,8 @@ use axum::{
 };
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
-    net::SocketAddr,
+    collections::{HashMap, HashSet},
+    net::{IpAddr, SocketAddr},
     path::PathBuf,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -234,6 +234,23 @@ impl Store {
     }
 }
 pub static INBOX: LazyLock<Arc<Store>> = LazyLock::new(Store::new);
+static ACCESS_WARNINGS: LazyLock<Mutex<HashSet<(IpAddr, &'static str)>>> =
+    LazyLock::new(Mutex::default);
+
+fn refuse_once(host: IpAddr, cause: &'static str) {
+    // A extensão tenta reconectar em laço; só uma mudança de estado merece outro aviso.
+    if ACCESS_WARNINGS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert((host, cause))
+    {
+        if cause == "origin" {
+            tracing::warn!(code="pi_inbox_origin_refused",%host,"origem recusada da extensão; aviso único até conectar");
+        } else {
+            tracing::warn!(code="pi_inbox_token_refused",%host,"token recusado da extensão; aviso único até conectar");
+        }
+    }
+}
 
 /// A borda pública mantém a mesma restrição de self-connect da extensão, além do bearer.
 pub async fn websocket(st: &Arc<AppState>, peer: SocketAddr, request: Request) -> Response {
@@ -244,8 +261,11 @@ pub async fn websocket(st: &Arc<AppState>, peer: SocketAddr, request: Request) -
             .collect();
     let local = peer.ip().is_loopback()
         || (!st.cfg.listen.ip().is_unspecified() && peer.ip() == st.cfg.listen.ip());
-    if !local
-        || st.cfg.auth_token.is_empty()
+    if !local {
+        refuse_once(peer.ip(), "origin");
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if st.cfg.auth_token.is_empty()
         || !bool::from(
             params
                 .get("token")
@@ -254,11 +274,13 @@ pub async fn websocket(st: &Arc<AppState>, peer: SocketAddr, request: Request) -
                 .ct_eq(st.cfg.auth_token.as_bytes()),
         )
     {
-        tracing::warn!(
-            code = "pi_inbox_access_refused",
-            "conexão da extensão recusada"
-        );
+        refuse_once(peer.ip(), "token");
         return StatusCode::FORBIDDEN.into_response();
+    }
+    {
+        let mut warned = ACCESS_WARNINGS.lock().unwrap_or_else(|e| e.into_inner());
+        warned.remove(&(peer.ip(), "origin"));
+        warned.remove(&(peer.ip(), "token"));
     }
     let (mut parts, _) = request.into_parts();
     let upgrade = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
