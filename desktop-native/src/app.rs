@@ -7080,8 +7080,9 @@ impl Hangar {
             && queue::stalled_notice(&self.chat.queue_panel(), self.chat.state.problema.as_deref(), read_only);
         // Com o pane da sessão à vista, o menu se responde nele: o cartão encolheria o terminal, o menu
         // redesenhado sumiria do classificador e o cartão iria e voltaria sem parar.
+        let server = self.open_server();
         let pane_shown = self.selected.as_ref()
-            .is_some_and(|s| self.terminal.as_ref().is_some_and(|panel| panel.shows_pane_of(&s.name)));
+            .is_some_and(|s| self.terminal.as_ref().is_some_and(|panel| panel.shows_pane_of(&server, &s.name)));
         let card = if readable && !read_only {
             self.render_ask(busy, window, cx).or_else(|| if pane_shown { None } else { self.render_options(busy, window, cx) })
         } else { None };
