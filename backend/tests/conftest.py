@@ -290,10 +290,12 @@ def _reset_auth_backoff():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_provider_inbox_transport(monkeypatch):
+def _isolate_provider_inbox_transport():
+    from unittest.mock import patch
     from app import providers_bridge
-    monkeypatch.setattr(providers_bridge, "inbox_call", lambda operation, **arguments:
-                        {"line": None, "value": None, "disposition": "sem-linha", "present": False})
+    with patch.object(providers_bridge, "inbox_call", lambda operation, **arguments:
+                      {"line": None, "value": None, "disposition": "sem-linha", "present": False}):
+        yield
 
 
 @pytest.fixture(autouse=True)
