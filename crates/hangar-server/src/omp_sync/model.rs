@@ -28,7 +28,10 @@ pub fn features(v: &Value) -> bool {
         })
 }
 pub fn identity(raw: &str) -> Result<Value, String> {
-    if raw.chars().any(char::is_whitespace) {
+    if raw
+        .chars()
+        .any(|c| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
+    {
         return Err(err("Origem Git inválida"));
     }
     let mut raw = raw.strip_prefix("git+").unwrap_or(raw).to_owned();

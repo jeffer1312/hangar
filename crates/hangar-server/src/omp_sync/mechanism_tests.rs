@@ -347,11 +347,16 @@ async fn op091_cancel_before_deadline_reaps_the_created_process_group() {
                 .await
         }
     });
-    let pid = tokio::time::timeout(Duration::from_secs(5), async {
+    let (pid, leader) = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let Ok(raw) = fs::read_to_string(home.join("descendant")) {
-                if let Ok(pid) = raw.trim().parse::<i32>() {
-                    break pid;
+            if let (Ok(raw), Ok(parent)) = (
+                fs::read_to_string(home.join("descendant")),
+                fs::read_to_string(home.join("leader")),
+            ) {
+                if let (Ok(pid), Ok(leader)) =
+                    (raw.trim().parse::<i32>(), parent.trim().parse::<i32>())
+                {
+                    break (pid, leader);
                 }
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -386,10 +391,21 @@ async fn op091_cancel_before_deadline_reaps_the_created_process_group() {
     })
     .await
     .is_ok();
+    let reaped = tokio::time::timeout(Duration::from_secs(2), async {
+        while Path::new(&format!("/proc/{leader}")).exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_ok();
     drop(cleanup);
     assert!(
         stopped,
         "cancelamento antes do prazo deixou o descendente criado vivo"
+    );
+    assert!(
+        reaped,
+        "o líder criado permaneceu sem reap depois do cancelamento"
     );
 }
 
@@ -492,5 +508,45 @@ fn op083_git_origins_keep_protocol_user_port_and_refuse_hostile_lexical_forms() 
         } else {
             assert_eq!(result.unwrap(), case["value"], "{case}");
         }
+    }
+}
+
+#[tokio::test]
+async fn op081_public_reconciliation_refuses_invalid_utf8_and_symbolic_inventory() {
+    for case in fixture()["records"].as_array().unwrap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let record = home.join(".claude/plugins/installed_plugins.json");
+        fs::create_dir_all(record.parent().unwrap()).unwrap();
+        let target = home.join("record-target");
+        if case["kind"] == "invalid_utf8" {
+            fs::write(&record, [255]).unwrap();
+        } else {
+            fs::write(&target, case["target_text"].as_str().unwrap()).unwrap();
+            symbolic_file(&target, &record);
+        }
+        let sync = Synchronizer::new(
+            home.into(),
+            home.join(".claude"),
+            BTreeMap::new(),
+            Arc::new(ForbiddenRunner),
+        );
+        assert_eq!(sync.reconcile(false, &|| false).await, case["report"]);
+        if case["kind"] == "symbolic_record" {
+            assert_eq!(
+                fs::read_to_string(target).unwrap(),
+                case["target_text"].as_str().unwrap()
+            );
+            assert!(
+                fs::symlink_metadata(record)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+        }
+        assert!(
+            !sync.ledger().exists(),
+            "a leitura recusada não pode ganhar propriedade"
+        );
     }
 }

@@ -238,6 +238,44 @@
     {
       "input": "https://git.example.invalid/team\u001c/comet.git",
       "error": "Origem Git inválida"
+    },
+    {
+      "input": "https://git.example.invalid/team\u001d/comet.git",
+      "error": "Origem Git inválida"
+    },
+    {
+      "input": "https://git.example.invalid/team\u001e/comet.git",
+      "error": "Origem Git inválida"
+    },
+    {
+      "input": "https://git.example.invalid/team\u001f/comet.git",
+      "error": "Origem Git inválida"
+    }
+  ],
+  "records": [
+    {
+      "kind": "invalid_utf8",
+      "report": {
+        "complete_inventory": false,
+        "items": [],
+        "errors": [
+          "Registro JSON inválido"
+        ],
+        "mode": "native"
+      },
+      "target_text": null
+    },
+    {
+      "kind": "symbolic_record",
+      "report": {
+        "complete_inventory": false,
+        "items": [],
+        "errors": [
+          "Registro simbólico recusado"
+        ],
+        "mode": "native"
+      },
+      "target_text": "sentinel\n"
     }
   ]
 }

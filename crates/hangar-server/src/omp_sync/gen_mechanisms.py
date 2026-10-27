@@ -79,16 +79,31 @@ if sys.platform=='linux':
    except KeyboardInterrupt:pass
    else:raise AssertionError('interrupção não propagada')
   pid=int((root/'descendant').read_text());proc=Path('/proc')/str(pid)/'stat'
-  alive=proc.exists() and not proc.read_text().rsplit(')',1)[1].lstrip().startswith('Z')
+  try:alive=not proc.read_text().rsplit(')',1)[1].lstrip().startswith('Z')
+  except (FileNotFoundError,ProcessLookupError):alive=False
   if alive:os.kill(pid,9)
   out['runner_cancel']={'exception':'KeyboardInterrupt','descendant_alive':alive,'reaped':seen[0].returncode is not None,'communicate_calls':seen[0].calls}
 
 
 urls=['https://GIT.EXAMPLE.INVALID:443/team/comet.git','http://git.example.invalid/team/comet.git','ssh://git@git.example.invalid:22/team/comet.git','git@git.example.invalid:team/comet.git','git+https://git.example.invalid/team/comet.git','https://user:pass@git.example.invalid/team/comet.git','https://git.example.invalid/team/comet.git?q=1','https://git.example.invalid/team/comet.git#part','https://git.example.invalid/./comet.git','https://git.example.invalid/../comet.git','https://git.example.invalid/team /comet.git','https://git.example.invalid/team'+chr(28)+'/comet.git']
+urls.extend('https://git.example.invalid/team'+chr(code)+'/comet.git' for code in range(29,32))
 out_cases=[]
 for url in urls:
  try:out_cases.append({'input':url,'value':m._identity(url)})
  except (m.InventoryError,ValueError) as error:out_cases.append({'input':url,'error':str(error)})
 out['origins']=out_cases
+
+
+import base64
+out['records']=[]
+for kind in ['invalid_utf8','symbolic_record']:
+ with tempfile.TemporaryDirectory() as directory,patch.dict(os.environ,{},clear=True):
+  home=Path(directory);claude=home/'.claude';record=claude/'plugins/installed_plugins.json';record.parent.mkdir(parents=True)
+  if kind=='invalid_utf8':record.write_bytes(bytes([255]))
+  else:
+   target=home/'record-target';target.write_text('sentinel\n');record.symlink_to(target)
+  sync=m.PluginSynchronizer(home=home,claude_dir=claude,runner=lambda *a,**kw:(_ for _ in()).throw(AssertionError('CLI inesperado')))
+  result=sync.reconcile()
+  out['records'].append({'kind':kind,'report':result,'target_text':(home/'record-target').read_text() if kind=='symbolic_record' else None})
 
 Path(sys.argv[2]).write_text(json.dumps(out,ensure_ascii=False,indent=2)+'\n')

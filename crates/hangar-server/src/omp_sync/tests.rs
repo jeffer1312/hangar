@@ -175,13 +175,24 @@ impl Runner for Replay {
         Box::pin(async move {
             let git = [
                 ("GIT_CONFIG_NOSYSTEM", "1"),
-                ("GIT_CONFIG_GLOBAL", if cfg!(windows) { "nul" } else { "/dev/null" }),
+                (
+                    "GIT_CONFIG_GLOBAL",
+                    if cfg!(windows) { "nul" } else { "/dev/null" },
+                ),
                 ("GIT_TERMINAL_PROMPT", "0"),
                 ("GIT_OPTIONAL_LOCKS", "0"),
             ];
-            assert!(env.keys().filter(|key| key.starts_with("GIT_")).all(|key| git.iter().any(|(expected, _)| key == expected)), "o replay recebeu variável Git herdada do host");
+            assert!(
+                env.keys()
+                    .filter(|key| key.starts_with("GIT_"))
+                    .all(|key| git.iter().any(|(expected, _)| key == expected)),
+                "o replay recebeu variável Git herdada do host"
+            );
             for (key, value) in git {
-                assert!(env.get(key).is_some_and(|actual| actual == value), "o replay recebeu configuração Git divergente em {key}");
+                assert!(
+                    env.get(key).is_some_and(|actual| actual == value),
+                    "o replay recebeu configuração Git divergente em {key}"
+                );
             }
             let call = {
                 let mut calls = self.calls.lock().unwrap();
@@ -1555,10 +1566,19 @@ fn measurement_usage() -> (f64, u64) {
             + usage.ru_utime.tv_usec as f64 / 1e6
             + usage.ru_stime.tv_sec as f64
             + usage.ru_stime.tv_usec as f64 / 1e6;
-        let rss = if cfg!(target_os="linux") {
-            fs::read_to_string("/proc/self/status").unwrap().lines()
-                .find_map(|line|line.strip_prefix("VmHWM:").and_then(|v|v.split_whitespace().next()).and_then(|v|v.parse().ok())).unwrap()
-        } else {usage.ru_maxrss as u64 / 1024};
+        let rss = if cfg!(target_os = "linux") {
+            fs::read_to_string("/proc/self/status")
+                .unwrap()
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("VmHWM:")
+                        .and_then(|v| v.split_whitespace().next())
+                        .and_then(|v| v.parse().ok())
+                })
+                .unwrap()
+        } else {
+            usage.ru_maxrss as u64 / 1024
+        };
         (cpu, rss)
     }
     #[cfg(windows)]
