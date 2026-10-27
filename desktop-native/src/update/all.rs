@@ -262,7 +262,10 @@ async fn read_machine(machine: &Machine) -> Option<Status> {
 /// outras só com os avisos.
 async fn load_all(machines: Vec<Machine>) -> (Option<Value>, Vec<Notes>) {
     let (machines, _) = prepare_machines(machines).await;
-    let mut read = futures::future::join_all(machines.into_iter().map(|m| async move {
+    // Uma por chave, a primeira, como em `batch_machines`: a entrada que lê e aceita os avisos é a que o lote roda.
+    let mut seen = HashSet::new();
+    let machines: Vec<_> = machines.into_iter().filter(|m| seen.insert(m.key.clone())).collect();
+    let mut read =futures::future::join_all(machines.into_iter().map(|m| async move {
         match &m.api {
             Ok(api) if m.local => { let (state, notes) = confirm::load(api.clone()).await; (true, state, notes.labeled(m.label)) }
             _ => (false, None, confirm::load_warnings(m.api.clone(), m.key, m.label).await),
