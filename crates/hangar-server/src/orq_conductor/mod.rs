@@ -1,4 +1,4 @@
-//! Feed do condutor. O watchdog compartilhado com a lista continua como fato do Python.
+//! Feed do condutor, lido diretamente do cofre e das unidades do vigia.
 use crate::transcript::{py, pyjson};
 use chrono::{Datelike, FixedOffset, Local, NaiveDate, TimeZone};
 use regex::Regex;
@@ -123,6 +123,7 @@ fn py_repr(v: &Value, marker: &str) -> String {
         _ => py::py_repr(v),
     }
 }
+pub(crate) fn python_string(value:&Value)->String { py_str(value,MARK) }
 fn py_str(v: &Value, marker: &str) -> String {
     match v {
         Value::String(s)

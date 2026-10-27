@@ -1,0 +1,49 @@
+{
+  "status": [
+    [
+      "janela",
+      "\\bjanela( de prova)?( d[ao] [\\w-]+)?( \\(rodada \\d+\\))?:? (\\w+ )?(abert|fechad|encerrad|reabert)|\\bjanela fechada|abrindo (agora )?a (janela|tela)|abri a tela|tela aberta"
+    ],
+    [
+      "acordou",
+      "^\\W*(\\[[^\\]]+\\]\\s*)?(acordei|acordado|wake-up ok|assumi)"
+    ],
+    [
+      "entrega",
+      "\\b(entregue|entrega r\\w+ rodada|rodada \\d+ entregue|report(e)? (r\\d+ )?pronto|reporte:)|\\|\\s*round:\\s*\\d|^task:\\s*\\w+\\s*\\|\\s*hash"
+    ],
+    [
+      "veredito",
+      "\\b(aprova|reprova)\\b"
+    ],
+    [
+      "ack",
+      "\\back\\b|\\brecebid[oa]\\b|\\blid[oa]\\b"
+    ]
+  ],
+  "veto": [
+    "\\w\\?(\\s|$)|\\?\\s*$",
+    "\\bpe[çc]o\\b|\\bposso\\b|\\bpode\\?|preciso de|\\bpeço\\b",
+    "\\b(aguardo|espero|aguardando)\\b(?![^.\\n]{0,30}\\b(veredito|parecer|revisor(?! que)|a revis))",
+    "\\bconfirma\\?|\\bconfirma\\s*$",
+    "decis[ãa]o (tua|sua|do usu|de custo)|(tua|sua) decis|voc[êe] decide|\\bdecide\\b|\\b[a-c]\\s*/\\s*[a-c]\\b|op[çc][õo]es\\s+[a-c]|proposta|recomendo|sem obje[çc][ãa]o",
+    "^\\W*(\\[[^\\]]+\\]\\s*)?(\\S+\\s+)?(parei|parado|pare)\\b|\\bPAREI\\b|\\bPARADO\\b|\\bPARE\\b|\\bparada de\\b",
+    "bloqueado (em|por|:)|estou bloquead|\\bblocked\\b|travad|n[ãa]o consig|n[ãa]o sei\\b",
+    "\\bcrash|\\b40[13]\\b|recusad[oa] pelo|diverg[êe]ncia|premissa|anomal|desvio|fora do combinado|n[ãa]o fui eu",
+    "sucessor|substitu|passagem|handover|n[ãa]o est[áa] viv|n[ãa]o aparece|n[ãa]o cabe|\\+\\d+\\s*a[çc]",
+    "\\bdisco\\b|\\bM livres\\b|abaixo dos \\d+M",
+    "usu[áa]rio",
+    "\\[decis|\\bA\\)\\s[^\\n]*\\bB\\)",
+    "(?<!\\b0 )\\bNOTED\\b|para ti\\b|\\b[ée] teu\\b|\\b[ée] tua\\b",
+    "\\bcontexto\\b|\\bctx\\s*\\d{2}\\s*%|\\b\\d{3}k\\s*/\\s*\\d{3}k\\b",
+    "\\bachei\\b|\\bcorrigi\\b|n[ãa]o (foi |foram )?(compilad|rodad|rodou|rodaram|despachad|executad|executei|provad)|offline|fica com o lote",
+    "decid(ed|ido|i) (alone|sozinho)|merge commit|conflit|conflict|hook rejected|rejeit|recus",
+    "aposent|[úu]ltima entrega|\\bretiro\\b|replanej|contrato exige|\\badiad|te aviso|limite de prova|(tua|sua) pergunta",
+    "^\\W*defeito\\b|defeito (achado|anterior)|pr[ée]-existente|fora do escopo|diff --git",
+    "fase 4|revis[ãa]o (final|da branch)|revisao-final|aprovada no conjunto",
+    "reprova[^.\\n]{0,60}\\b(recebida|lida)\\b|\\b(recebida|lida)[^.\\n]{0,20}reprova",
+    "\\(\\s*(5\\d|[6-9]\\d)(\\.\\d)?\\s*%\\s*\\)|\\b(5\\d\\d|[6-9]\\d\\d)k\\s*/\\s*1M",
+    "nomea|nomeia|nomear|\\blibera(r|ç)|kick-?off|despacho|reincid|noted \\d+ [ée] (teu|seu|decis)|pend[êe]ncia pra (voc|ti)",
+    "^\\W*(\\[[^\\]]+\\]\\s*)?task:\\s*\\w+\\s*(\\([^)]*\\))?\\s*\\|\\s*hash\\b[^\\n]*\\|\\s*rounds|\\bcommit (da r\\w+ )?feito\\b|\\br\\w+ commitada\\b|commit[^.\\n]{0,40}sem push"
+  ]
+}
