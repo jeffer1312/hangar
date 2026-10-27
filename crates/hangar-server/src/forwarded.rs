@@ -34,7 +34,7 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         || crate::provider_models::catalog_request(&method, &path, req.uri().query());
     let guest = req.headers().get("x-hangar-forwarded-guest").is_some_and(|v| v == "1");
     let read = path.strip_prefix("/api/sessions/").and_then(|rest| rest.rsplit_once('/'))
-        .filter(|(name, route)| method == Method::GET && !name.contains('/') && matches!(*route, "history" | "events"))
+        .filter(|(name, route)| method == Method::GET && name.ends_with("-orq") && !name.contains('/') && matches!(*route, "history" | "events"))
         .and_then(|(name, route)| percent_encoding::percent_decode_str(name).decode_utf8().ok().map(|name| (name.into_owned(), route == "events")));
     let owned = if let Some((name, events)) = read {
         match st.info(&name).await {
