@@ -3,9 +3,10 @@ use regex::Regex;
 use serde_json::{Value, json};
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 pub fn normalize(text: &str) -> String {
-    let plain = text.trim().trim_matches('`').replace("**", "");
+    let whitespace=|c:char|c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c);
+    let plain = text.trim_matches(whitespace).trim_matches('`').replace("**", "");
     plain
-        .trim()
+        .trim_matches(whitespace)
         .nfkd()
         .filter(|c| !is_combining_mark(*c))
         .collect::<String>()

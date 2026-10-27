@@ -378,6 +378,7 @@ pub fn entry(obj: &Value, dir: Option<&Path>) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orchestration::array;
     #[test]
     fn python_timeline_contract() {
         let fixture: Value = serde_json::from_str(include_str!("fixtures/timeline.json")).unwrap();

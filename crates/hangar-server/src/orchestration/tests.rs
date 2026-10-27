@@ -11,6 +11,135 @@ fn fixture(name: &str) -> Value {
         .join(name);
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
+fn isolated_state(home: &Path) -> Arc<crate::routes::AppState> {
+    let mut st = crate::routes::AppState::new(crate::config::Config {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: "127.0.0.1:1".parse().unwrap(),
+        internal_secret: "fixture-secret".into(),
+        auth_token: "fixture-owner".into(),
+        log_path: None,
+        trusted: crate::auth::TrustedHosts::parse("127.0.0.1"),
+    });
+    st.accounts.env = crate::accounts::environment::AccountEnvironment::from_map(
+        std::collections::BTreeMap::from([
+            ("HOME".into(), home.to_string_lossy().into_owned()),
+            ("USERPROFILE".into(), home.to_string_lossy().into_owned()),
+        ]),
+    );
+    st.groups = None;
+    Arc::new(st)
+}
+#[tokio::test]
+async fn http_handler_future_is_send() {
+    fn send<T:Send>(value:T)->T{value}
+    let temporary=tempfile::tempdir().unwrap();let st=isolated_state(temporary.path());
+    let request=axum::http::Request::builder().uri("/api/orq/missing")
+        .body(axum::body::Body::empty()).unwrap();
+    let _=send(serve(&st,request)).await;
+}
+#[tokio::test]
+async fn or059_or065_or066_or069_http_role_writes_match_python_effects() {
+    use axum::{body::{Body,to_bytes},http::Request};
+    for case in array(&fixture("http-writes.json")["cases"]) {
+        let temporary=tempfile::tempdir().unwrap();let home=temporary.path();let st=isolated_state(home);
+        let pair=home.join(".claude/.hangar-pair");fs::create_dir_all(&pair).unwrap();
+        let side=home.join(".hangar/claude-headless");fs::create_dir_all(&side).unwrap();
+        fs::write(side.join("planner.json"),"{\"key\":\"key\"}").unwrap();
+        let file=pair.join(text(&case["file"]));
+        if !text(&case["initial"]).is_empty(){fs::write(&file,text(&case["initial"])).unwrap();}
+        let mut body=case["body"].clone();body["mtime"]=json!(read(&file).unwrap().1);
+        let request=Request::builder().method(text(&case["method"])).uri(text(&case["path"]))
+            .header("content-type","application/json").body(Body::from(body.to_string())).unwrap();
+        let response=serve(&st,request).await;
+        assert_eq!(response.status().as_u16() as u64,case["status"].as_u64().unwrap(),"{case}");
+        let mut value:Value=serde_json::from_slice(&to_bytes(response.into_body(),65536).await.unwrap()).unwrap();
+        let version=value.as_object_mut().unwrap().remove("mtime");
+        if case["version"]==true{assert_eq!(version,Some(json!(read(&file).unwrap().1)));}else{assert!(version.is_none());}
+        assert_eq!(value,case["output"],"{case}");
+        assert_eq!(fs::read_to_string(&file).ok().map(Value::String).unwrap_or_default(),case["final"],"{case}");
+    }
+}
+#[tokio::test]
+async fn or068_or070_or073_or075_http_invalid_bodies_match_python() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    let temporary = tempfile::tempdir().unwrap();
+    let st = isolated_state(temporary.path());
+    for case in array(&fixture("http-invalid.json")["cases"]) {
+        let request = Request::builder()
+            .method(text(&case["method"]))
+            .uri(text(&case["path"]))
+            .header("content-type", text(&case["content_type"]))
+            .body(Body::from(text(&case["body"]).to_owned()))
+            .unwrap();
+        let response = serve(&st, request).await;
+        assert_eq!(
+            response.status().as_u16() as u64,
+            case["status"].as_u64().unwrap(),
+            "{case}"
+        );
+        let value: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(value, case["output"], "{case}");
+    }
+    assert!(!temporary.path().join(".claude/.hangar-pair").exists());
+}
+#[test]
+fn review_filetime_identity_preserves_fraction_before_float_conversion() {
+    assert_eq!(
+        context::filetime_seconds(134060400001234567),
+        1761566400.1234567
+    );
+    assert_eq!(context::filetime_seconds(116444735999999999), -0.0000001);
+}
+#[test]
+fn review_claude_start_day_uses_the_usage_bucket_timezone() {
+    let since = chrono::DateTime::parse_from_rfc3339("2026-10-01T01:00:00Z").unwrap();
+    let usage = crate::costs::py::LocalTs::from_iso("2026-10-01T02:00:00Z").unwrap();
+    assert!(!consumption::before_start_day(usage, since));
+}
+#[tokio::test]
+async fn review_unreadable_policy_aborts_role_write() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    let d = tempfile::tempdir().unwrap();
+    let mut st = crate::routes::AppState::new(crate::config::Config {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: "127.0.0.1:1".parse().unwrap(),
+        internal_secret: "fixture-secret".into(),
+        auth_token: "fixture-owner".into(),
+        log_path: None,
+        trusted: crate::auth::TrustedHosts::parse("127.0.0.1"),
+    });
+    st.accounts.env = crate::accounts::environment::AccountEnvironment::from_map(
+        std::collections::BTreeMap::from([
+            ("HOME".into(), d.path().to_string_lossy().into_owned()),
+            (
+                "USERPROFILE".into(),
+                d.path().to_string_lossy().into_owned(),
+            ),
+        ]),
+    );
+    st.groups = None;
+    let path = policy::path(d.path());
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, [0xff, 0xfe]).unwrap();
+    let req = Request::builder().method("POST").uri("/api/sessions/planner/orq/papel")
+        .header("content-type","application/json").body(Body::from(json!({
+            "papel":"executor","provider":"claude","conta":"padrao","modelo":"opus","esforco":"high","mtime":0
+        }).to_string())).unwrap();
+    let reply = serve(&Arc::new(st), req).await;
+    assert_eq!(reply.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let value: Value =
+        serde_json::from_slice(&to_bytes(reply.into_body(), 65536).await.unwrap()).unwrap();
+    assert_eq!(value["detail"]["code"], "orq_policy_read_failed");
+    assert_eq!(fs::read(path).unwrap(), [0xff, 0xfe]);
+    assert!(!d.path().join(".claude/.hangar-pair").exists());
+}
 #[test]
 fn or048_cost_rounding_follows_python_binary_float() {
     for c in array(&fixture("rounding.json")["cases"]) {

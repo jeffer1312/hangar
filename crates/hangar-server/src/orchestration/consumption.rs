@@ -308,6 +308,15 @@ pub fn rows_for(
         _ => None,
     }
 }
+pub fn before_start_day<Tz: chrono::TimeZone>(
+    ts: costs::py::LocalTs,
+    since: chrono::DateTime<Tz>,
+) -> bool
+where
+    Tz::Offset: std::fmt::Display,
+{
+    ts.day() < costs::py::LocalTs(since.timestamp_micros()).day()
+}
 pub fn compute(
     dir: &Path,
     home: &Path,
@@ -359,7 +368,7 @@ pub fn compute(
                 subagents |= row.subagente;
                 if let Some(since) = since {
                     let before = if row.source == "claude" && until.is_none() {
-                        row.ts.day() < since.format("%Y-%m-%d").to_string()
+                        before_start_day(row.ts, since)
                     } else {
                         row.ts.0 < since.timestamp_micros()
                     };

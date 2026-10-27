@@ -120,7 +120,7 @@ fn process_start(pid: u32) -> Option<f64> {
             if ok != 0 {
                 let ticks =
                     (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime);
-                Some((ticks as f64 - 116444736000000000.) / 10000000.)
+                Some(filetime_seconds(ticks))
             } else {
                 None
             }
@@ -131,6 +131,9 @@ fn process_start(pid: u32) -> Option<f64> {
         let _ = pid;
         None
     }
+}
+pub fn filetime_seconds(ticks: u64) -> f64 {
+    (i128::from(ticks) - 116444736000000000i128) as f64 / 10000000.
 }
 pub fn draft(home: &Path, name: &str, mux: &str) -> Result<String, String> {
     Ok(format!(

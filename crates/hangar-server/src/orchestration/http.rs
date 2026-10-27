@@ -5,7 +5,7 @@ use axum::{
     body::to_bytes,
     extract::Request,
     http::{Method, StatusCode},
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -88,13 +88,11 @@ fn invalid() -> Response {
     )
 }
 fn body<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Response> {
-    if serde_json::from_slice::<Value>(bytes)
-        .ok()
-        .is_none_or(|v| !v.is_object())
-    {
-        return Err(invalid());
-    }
-    serde_json::from_slice(bytes).map_err(|_| invalid())
+    let value = super::body::parse(bytes)
+        .map_err(|(status, value)| crate::session_write::json_response(status, value))?;
+    let value = super::body::validate(std::any::type_name::<T>(), &value)
+        .map_err(|v| crate::session_write::json_response(StatusCode::UNPROCESSABLE_ENTITY, v))?;
+    serde_json::from_value(value).map_err(|_| invalid())
 }
 fn changed(e: &str) -> Response {
     fail(
@@ -168,6 +166,7 @@ struct PolicyBody {
     trocar: bool,
     #[serde(default = "yes")]
     ligada: bool,
+    #[serde(deserialize_with = "super::body::deserialize_number")]
     mtime: f64,
 }
 fn any_models() -> Vec<String> {
@@ -209,6 +208,7 @@ struct RoleBody {
 #[serde(deny_unknown_fields)]
 struct RolesBody {
     papeis: Vec<RoleBody>,
+    #[serde(deserialize_with = "super::body::deserialize_number")]
     mtime: f64,
     #[serde(default = "yes", rename = "avisar")]
     _notify: bool,
@@ -237,6 +237,7 @@ struct OneRoleBody {
     subagente: String,
     #[serde(default)]
     perfil: String,
+    #[serde(deserialize_with = "super::body::deserialize_number")]
     mtime: f64,
 }
 #[derive(Deserialize)]
@@ -245,18 +246,21 @@ struct RemoveBody {
     papel: String,
     #[serde(default)]
     vez: String,
+    #[serde(deserialize_with = "super::body::deserialize_number")]
     mtime: f64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GroupBody {
     gid: String,
+    #[serde(deserialize_with = "super::body::deserialize_number")]
     mtime: f64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StartBody {
     #[serde(default, rename = "mtime")]
+    #[serde(deserialize_with = "super::body::deserialize_number")]
     _mtime: f64,
 }
 fn validate_role(st: &AppState, r: &roles::Role) -> Result<(), Response> {
@@ -365,14 +369,21 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
-        .starts_with("application/json");
-    let bytes = match to_bytes(req.into_body(), 64 * 1024).await {
+        .to_ascii_lowercase();
+    let json_body = content_type.is_empty()
+        || content_type.split(';').next().is_some_and(|mime| {
+            mime == "application/json"
+                || mime.starts_with("application/") && mime.ends_with("+json")
+        });
+    let bytes = match to_bytes(req.into_body(), 100 * 1024 * 1024).await {
         Ok(b) => b,
-        Err(_) => return invalid(),
+        Err(_) => return (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response(),
     };
-    if method != Method::GET && !content_type {
-        return invalid();
-    }
+    let bytes = if json_body {
+        bytes.to_vec()
+    } else {
+        serde_json::to_vec(&String::from_utf8_lossy(&bytes)).unwrap()
+    };
     let (home, pair, mux) = dirs(st);
     let session = match &route {
         Route::Role(n) | Route::Roles(n) | Route::Group(n) | Route::Start(n)
@@ -621,9 +632,18 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
                     "nenhum papel",
                 );
             }
-            let policies = super::read(&policy::path(&home))
-                .map(|(s, _)| policy::read(&s))
-                .unwrap_or_default();
+            let policy_path = policy::path(&home);
+            let policies = match blocking(move || super::read(&policy_path)).await {
+                Ok(Ok((content, _))) => policy::read(&content),
+                Ok(Err(e)) => {
+                    return fail(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "orq_policy_read_failed",
+                        &e.to_string(),
+                    );
+                }
+                Err(e) => return e,
+            };
             let kimi = crate::provider_models::kimi_catalog(&home);
             let lock_home = home.clone();
             let lock_pair = pair.clone();
@@ -718,6 +738,7 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
                 Ok(b) => b,
                 Err(e) => return e,
             };
+            let missing_role=format!("não há linha para {} nesta configuração",crate::transcript::py::py_repr(&json!(b.papel)));
             match blocking(move || {
                 let _lock = context::WRITE_LOCK.lock().unwrap();
                 let ctx = context::resolve(&home, &pair, &name, &mux)?;
@@ -732,7 +753,7 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
                 Ok(Err(e)) if e == "erro_orq_papel_inexistente" => fail(
                     StatusCode::NOT_FOUND,
                     &e,
-                    "não há linha para este papel nesta configuração",
+                    &missing_role,
                 ),
                 Ok(Err(e)) => changed(&e),
                 Err(e) => e,

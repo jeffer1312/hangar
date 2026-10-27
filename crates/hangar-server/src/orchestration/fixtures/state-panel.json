@@ -1,5 +1,5 @@
 {
-  "source_commit": "d2a42410f9fe6df4ea491b296c7fea7b98d8b844",
+  "source_commit": "a0860f26b6e3f611806e780acf87588f6065b328",
   "command": "python crates/hangar-server/src/orchestration/fixtures/generate.py",
   "cases": [
     {
@@ -114,7 +114,6 @@
           "tipo": "execucao_inicio",
           "gid": "g1",
           "branch": "main",
-          "plano": "p.md",
           "ts": "2026-09-29T10:00:00+00:00"
         },
         {
@@ -189,12 +188,12 @@
         "gid": "g1",
         "errors": [],
         "metadata": {
-          "title": "p",
-          "plan": "p.md",
+          "title": "run",
+          "plan": "",
           "repo": "",
           "total_tasks": null,
           "tasks": [],
-          "error": "[Errno 2] No such file or directory: '/tmp/tmp5sdhid77/run/plan.snapshot.md'"
+          "error": null
         },
         "empty": false,
         "tasks": {
@@ -328,7 +327,6 @@
           "tipo": "execucao_inicio",
           "gid": "g1",
           "branch": "main",
-          "plano": "p.md",
           "ts": "2026-09-29T10:00:00+00:00"
         },
         {
@@ -373,12 +371,12 @@
         "gid": "g1",
         "errors": [],
         "metadata": {
-          "title": "p",
-          "plan": "p.md",
+          "title": "run",
+          "plan": "",
           "repo": "",
           "total_tasks": null,
           "tasks": [],
-          "error": "[Errno 2] No such file or directory: '/tmp/tmp31zk2drh/run/plan.snapshot.md'"
+          "error": null
         },
         "empty": false,
         "tasks": {
@@ -491,7 +489,6 @@
           "tipo": "execucao_inicio",
           "gid": "g1",
           "branch": "main",
-          "plano": "p.md",
           "ts": "2026-09-29T10:00:00+00:00"
         },
         {
@@ -577,12 +574,12 @@
         "gid": "g1",
         "errors": [],
         "metadata": {
-          "title": "p",
-          "plan": "p.md",
+          "title": "run",
+          "plan": "",
           "repo": "",
           "total_tasks": null,
           "tasks": [],
-          "error": "[Errno 2] No such file or directory: '/tmp/tmptmhq0y2q/run/plan.snapshot.md'"
+          "error": null
         },
         "empty": false,
         "tasks": {
@@ -711,6 +708,787 @@
             },
             "2": {
               "started_at": "2026-09-29T10:05:00+00:00",
+              "finished_at": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "config": {
+        "arbiter": "arb",
+        "auto": true
+      },
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g1",
+          "branch": "main",
+          "ts": "2026-09-29T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 1,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Primeira",
+          "ts": "2026-09-29T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": 1,
+          "rodada": 1,
+          "ts": "2026-09-29T10:02:00+00:00"
+        },
+        {
+          "tipo": "espera",
+          "sessao": "rev",
+          "task": 1,
+          "ate": "9999-12-01T00:00:00+00:00"
+        }
+      ],
+      "closed": [
+        {
+          "task": 1,
+          "hash": "abc",
+          "ts": "2026-09-29T10:03:30+00:00"
+        }
+      ],
+      "state": {
+        "roles": {
+          "1": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [],
+        "owners": [],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [],
+        "ended": false,
+        "replaced": []
+      },
+      "panel": {
+        "run": "run",
+        "gid": "g1",
+        "errors": [],
+        "metadata": {
+          "title": "run",
+          "plan": "",
+          "repo": "",
+          "total_tasks": null,
+          "tasks": [],
+          "error": null
+        },
+        "empty": false,
+        "tasks": {
+          "integrated": 0,
+          "total": 1,
+          "total_known": false,
+          "rows": [
+            {
+              "n": 1,
+              "title": "Primeira",
+              "state": "in_review",
+              "round": 1
+            }
+          ]
+        },
+        "team": [
+          {
+            "name": "arb",
+            "role": "arbiter",
+            "task": null,
+            "last": null,
+            "current": true
+          },
+          {
+            "name": "ex",
+            "role": "executor",
+            "task": 1,
+            "last": {
+              "code": "delivered",
+              "round": 1,
+              "ts": "2026-09-29T10:02:00+00:00"
+            },
+            "current": true
+          },
+          {
+            "name": "rev",
+            "role": "reviewer",
+            "task": 1,
+            "last": {
+              "code": "started",
+              "round": null,
+              "ts": "2026-09-29T10:01:00+00:00"
+            },
+            "current": true
+          }
+        ],
+        "decisions": [],
+        "automation": {
+          "mode": {
+            "jev": "shadow",
+            "regex": "shadow"
+          },
+          "woke": {
+            "total": 0,
+            "decisions": 0,
+            "alarms": 0,
+            "messages": 0
+          },
+          "alone": {
+            "total": 0,
+            "opened": 0,
+            "integrated": 0,
+            "dropped": 0
+          },
+          "dropped_by_jev": 0,
+          "advanced": {
+            "would_drop": 0,
+            "disagree": 0,
+            "judged": 0,
+            "min_confidence": null,
+            "by_rule": 0
+          }
+        },
+        "consumption": null,
+        "integration": {
+          "branch": "main",
+          "last": null,
+          "outcome": null,
+          "red_log": null,
+          "delivery_checks": {
+            "ok": 0,
+            "total": 0,
+            "failing": []
+          }
+        }
+      },
+      "aux": {
+        "since": "2026-09-29T10:00:00+00:00",
+        "until": null,
+        "models": {},
+        "timing": {
+          "started_at": "2026-09-29T10:00:00+00:00",
+          "finished_at": null,
+          "tasks": {
+            "1": {
+              "started_at": "2026-09-29T10:01:00+00:00",
+              "finished_at": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "config": {
+        "arbiter": "arb",
+        "auto": true
+      },
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g1",
+          "branch": "main",
+          "ts": "2026-09-29T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 1,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Primeira",
+          "ts": "2026-09-29T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": 1,
+          "rodada": 1,
+          "ts": "2026-09-29T10:02:00+00:00"
+        },
+        {
+          "tipo": "veredito",
+          "task": 1,
+          "rodada": 1,
+          "resultado": "aprova",
+          "fase": "codigo",
+          "ts": "2026-09-29T10:03:00+00:00"
+        },
+        {
+          "tipo": "execucao_fim",
+          "resultado": "ok",
+          "ts": "2026-09-29T10:04:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 2,
+          "executor": "ex2",
+          "par": "subagente",
+          "ts": "2026-09-29T10:05:00+00:00"
+        },
+        {
+          "tipo": "espera",
+          "sessao": "ex2",
+          "task": 2,
+          "ate": "9999-12-01T00:00:00+00:00"
+        }
+      ],
+      "closed": [
+        {
+          "task": 1,
+          "hash": "abc",
+          "ts": "2026-09-29T10:03:30+00:00"
+        }
+      ],
+      "state": {
+        "roles": {
+          "1": {
+            "executor": "ex",
+            "par": "rev"
+          },
+          "2": {
+            "executor": "ex2",
+            "par": "subagente"
+          }
+        },
+        "ball": [],
+        "owners": [
+          "ex2"
+        ],
+        "waiting": [
+          "ex2"
+        ],
+        "arbiter": "arb",
+        "open": [
+          2
+        ],
+        "ended": false,
+        "replaced": []
+      },
+      "panel": {
+        "run": "run",
+        "gid": "g1",
+        "errors": [],
+        "metadata": {
+          "title": "run",
+          "plan": "",
+          "repo": "",
+          "total_tasks": null,
+          "tasks": [],
+          "error": null
+        },
+        "empty": false,
+        "tasks": {
+          "integrated": 0,
+          "total": 2,
+          "total_known": false,
+          "rows": [
+            {
+              "n": 1,
+              "title": "Primeira",
+              "state": "approved",
+              "round": 1
+            },
+            {
+              "n": 2,
+              "title": "",
+              "state": "executing",
+              "round": null
+            }
+          ]
+        },
+        "team": [
+          {
+            "name": "arb",
+            "role": "arbiter",
+            "task": null,
+            "last": null,
+            "current": true
+          },
+          {
+            "name": "ex2",
+            "role": "executor",
+            "task": 2,
+            "last": {
+              "code": "started",
+              "round": null,
+              "ts": "2026-09-29T10:05:00+00:00"
+            },
+            "current": true
+          },
+          {
+            "name": "ex",
+            "role": "executor",
+            "task": 1,
+            "last": {
+              "code": "delivered",
+              "round": 1,
+              "ts": "2026-09-29T10:02:00+00:00"
+            },
+            "current": true
+          },
+          {
+            "name": "rev",
+            "role": "reviewer",
+            "task": 1,
+            "last": {
+              "code": "started",
+              "round": null,
+              "ts": "2026-09-29T10:01:00+00:00"
+            },
+            "current": true
+          }
+        ],
+        "decisions": [],
+        "automation": {
+          "mode": {
+            "jev": "shadow",
+            "regex": "shadow"
+          },
+          "woke": {
+            "total": 0,
+            "decisions": 0,
+            "alarms": 0,
+            "messages": 0
+          },
+          "alone": {
+            "total": 0,
+            "opened": 0,
+            "integrated": 0,
+            "dropped": 0
+          },
+          "dropped_by_jev": 0,
+          "advanced": {
+            "would_drop": 0,
+            "disagree": 0,
+            "judged": 0,
+            "min_confidence": null,
+            "by_rule": 0
+          }
+        },
+        "consumption": null,
+        "integration": {
+          "branch": "main",
+          "last": null,
+          "outcome": null,
+          "red_log": null,
+          "delivery_checks": {
+            "ok": 0,
+            "total": 0,
+            "failing": []
+          }
+        }
+      },
+      "aux": {
+        "since": "2026-09-29T10:00:00+00:00",
+        "until": null,
+        "models": {},
+        "timing": {
+          "started_at": "2026-09-29T10:00:00+00:00",
+          "finished_at": null,
+          "tasks": {
+            "1": {
+              "started_at": "2026-09-29T10:01:00+00:00",
+              "finished_at": null
+            },
+            "2": {
+              "started_at": "2026-09-29T10:05:00+00:00",
+              "finished_at": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "config": {
+        "arbiter": "arb",
+        "auto": true
+      },
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g1",
+          "branch": "main",
+          "ts": "2026-09-29T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 1,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Primeira",
+          "ts": "2026-09-29T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": 1,
+          "rodada": 1,
+          "ts": "2026-09-29T10:02:00+00:00"
+        },
+        {
+          "tipo": "veredito",
+          "task": 1,
+          "rodada": 1,
+          "resultado": "aprova",
+          "fase": "codigo",
+          "ts": "2026-09-29T10:03:00+00:00"
+        },
+        {
+          "tipo": "execucao_fim",
+          "resultado": "ok",
+          "ts": "2026-09-29T10:04:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 2,
+          "executor": "ex2",
+          "par": "subagente",
+          "ts": "2026-09-29T10:05:00+00:00"
+        },
+        {
+          "tipo": "sessao_trocada",
+          "de": "arb",
+          "para": "next-arbiter"
+        }
+      ],
+      "closed": [
+        {
+          "task": 1,
+          "hash": "abc",
+          "ts": "2026-09-29T10:03:30+00:00"
+        }
+      ],
+      "state": {
+        "roles": {
+          "1": {
+            "executor": "ex",
+            "par": "rev"
+          },
+          "2": {
+            "executor": "ex2",
+            "par": "subagente"
+          }
+        },
+        "ball": [
+          "ex2"
+        ],
+        "owners": [
+          "ex2"
+        ],
+        "waiting": [],
+        "arbiter": "next-arbiter",
+        "open": [
+          2
+        ],
+        "ended": false,
+        "replaced": []
+      },
+      "panel": {
+        "run": "run",
+        "gid": "g1",
+        "errors": [],
+        "metadata": {
+          "title": "run",
+          "plan": "",
+          "repo": "",
+          "total_tasks": null,
+          "tasks": [],
+          "error": null
+        },
+        "empty": false,
+        "tasks": {
+          "integrated": 0,
+          "total": 2,
+          "total_known": false,
+          "rows": [
+            {
+              "n": 1,
+              "title": "Primeira",
+              "state": "approved",
+              "round": 1
+            },
+            {
+              "n": 2,
+              "title": "",
+              "state": "executing",
+              "round": null
+            }
+          ]
+        },
+        "team": [
+          {
+            "name": "next-arbiter",
+            "role": "arbiter",
+            "task": null,
+            "last": null,
+            "current": true
+          },
+          {
+            "name": "arb",
+            "role": "arbiter",
+            "task": null,
+            "last": null,
+            "current": false
+          },
+          {
+            "name": "ex2",
+            "role": "executor",
+            "task": 2,
+            "last": {
+              "code": "started",
+              "round": null,
+              "ts": "2026-09-29T10:05:00+00:00"
+            },
+            "current": true
+          },
+          {
+            "name": "ex",
+            "role": "executor",
+            "task": 1,
+            "last": {
+              "code": "delivered",
+              "round": 1,
+              "ts": "2026-09-29T10:02:00+00:00"
+            },
+            "current": true
+          },
+          {
+            "name": "rev",
+            "role": "reviewer",
+            "task": 1,
+            "last": {
+              "code": "started",
+              "round": null,
+              "ts": "2026-09-29T10:01:00+00:00"
+            },
+            "current": true
+          }
+        ],
+        "decisions": [],
+        "automation": {
+          "mode": {
+            "jev": "shadow",
+            "regex": "shadow"
+          },
+          "woke": {
+            "total": 0,
+            "decisions": 0,
+            "alarms": 0,
+            "messages": 0
+          },
+          "alone": {
+            "total": 0,
+            "opened": 0,
+            "integrated": 0,
+            "dropped": 0
+          },
+          "dropped_by_jev": 0,
+          "advanced": {
+            "would_drop": 0,
+            "disagree": 0,
+            "judged": 0,
+            "min_confidence": null,
+            "by_rule": 0
+          }
+        },
+        "consumption": null,
+        "integration": {
+          "branch": "main",
+          "last": null,
+          "outcome": null,
+          "red_log": null,
+          "delivery_checks": {
+            "ok": 0,
+            "total": 0,
+            "failing": []
+          }
+        }
+      },
+      "aux": {
+        "since": "2026-09-29T10:00:00+00:00",
+        "until": null,
+        "models": {},
+        "timing": {
+          "started_at": "2026-09-29T10:00:00+00:00",
+          "finished_at": null,
+          "tasks": {
+            "1": {
+              "started_at": "2026-09-29T10:01:00+00:00",
+              "finished_at": null
+            },
+            "2": {
+              "started_at": "2026-09-29T10:05:00+00:00",
+              "finished_at": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "config": {
+        "arbiter": "arb",
+        "auto": true
+      },
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g1",
+          "branch": "main",
+          "ts": "2026-09-29T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 1,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Primeira",
+          "ts": "2026-09-29T10:01:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 1,
+          "executor": "new",
+          "par": "rev",
+          "ts": "2026-10-01T00:00:00+00:00"
+        }
+      ],
+      "closed": [
+        {
+          "task": 1,
+          "hash": "abc",
+          "ts": "2026-09-29T10:03:30+00:00"
+        }
+      ],
+      "state": {
+        "roles": {
+          "1": {
+            "executor": "new",
+            "par": "rev"
+          }
+        },
+        "ball": [
+          "new"
+        ],
+        "owners": [
+          "new"
+        ],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [
+          1
+        ],
+        "ended": false,
+        "replaced": []
+      },
+      "panel": {
+        "run": "run",
+        "gid": "g1",
+        "errors": [],
+        "metadata": {
+          "title": "run",
+          "plan": "",
+          "repo": "",
+          "total_tasks": null,
+          "tasks": [],
+          "error": null
+        },
+        "empty": false,
+        "tasks": {
+          "integrated": 0,
+          "total": 1,
+          "total_known": false,
+          "rows": [
+            {
+              "n": 1,
+              "title": "Primeira",
+              "state": "executing",
+              "round": null
+            }
+          ]
+        },
+        "team": [
+          {
+            "name": "arb",
+            "role": "arbiter",
+            "task": null,
+            "last": null,
+            "current": true
+          },
+          {
+            "name": "new",
+            "role": "executor",
+            "task": 1,
+            "last": {
+              "code": "started",
+              "round": null,
+              "ts": "2026-10-01T00:00:00+00:00"
+            },
+            "current": true
+          },
+          {
+            "name": "rev",
+            "role": "reviewer",
+            "task": 1,
+            "last": {
+              "code": "started",
+              "round": null,
+              "ts": "2026-10-01T00:00:00+00:00"
+            },
+            "current": true
+          }
+        ],
+        "decisions": [],
+        "automation": {
+          "mode": {
+            "jev": "shadow",
+            "regex": "shadow"
+          },
+          "woke": {
+            "total": 0,
+            "decisions": 0,
+            "alarms": 0,
+            "messages": 0
+          },
+          "alone": {
+            "total": 0,
+            "opened": 0,
+            "integrated": 0,
+            "dropped": 0
+          },
+          "dropped_by_jev": 0,
+          "advanced": {
+            "would_drop": 0,
+            "disagree": 0,
+            "judged": 0,
+            "min_confidence": null,
+            "by_rule": 0
+          }
+        },
+        "consumption": null,
+        "integration": {
+          "branch": "main",
+          "last": null,
+          "outcome": null,
+          "red_log": null,
+          "delivery_checks": {
+            "ok": 0,
+            "total": 0,
+            "failing": []
+          }
+        }
+      },
+      "aux": {
+        "since": "2026-09-29T10:00:00+00:00",
+        "until": null,
+        "models": {},
+        "timing": {
+          "started_at": "2026-09-29T10:00:00+00:00",
+          "finished_at": null,
+          "tasks": {
+            "1": {
+              "started_at": "2026-09-29T10:01:00+00:00",
               "finished_at": null
             }
           }

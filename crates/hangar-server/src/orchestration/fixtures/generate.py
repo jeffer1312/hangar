@@ -6,13 +6,14 @@ A referência deve existir: a ausência do Python original é erro, nunca um ski
 from dataclasses import asdict
 import importlib.util
 import json
+import os
 import re
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[5]
+ROOT = Path(os.environ.get("HANGAR_ORQ_REFERENCE_ROOT") or Path(__file__).resolve().parents[5])
 sys.path.insert(0, str(ROOT / "backend"))
 from app import orq, orq_md, orq_papeis, orq_politica, orq_timeline, orq_start
 
@@ -70,7 +71,12 @@ events = [
 save("summaries.json", [{"events": events[:i], "summary": asdict(orq._monta("run", events[:i]))} for i in range(1, len(events)+1)])
 
 pure = []
-for rows in ([], events, events[:3], events + [{"tipo":"sessao_trocada","de":"ex2","para":"next","ts":"2026-09-29T10:06:00+00:00"}]):
+for rows in ([], events, events[:3], events + [{"tipo":"sessao_trocada","de":"ex2","para":"next","ts":"2026-09-29T10:06:00+00:00"}],
+             events[:3]+[{"tipo":"espera","sessao":"rev","task":1,"ate":"9999-12-01T00:00:00+00:00"}],
+             events+[{"tipo":"espera","sessao":"ex2","task":2,"ate":"9999-12-01T00:00:00+00:00"}],
+             events+[{"tipo":"sessao_trocada","de":"arb","para":"next-arbiter"}],
+             events[:2]+[{"tipo":"task_inicio","task":1,"executor":"new","par":"rev","ts":"2026-10-01T00:00:00+00:00"}]):
+    rows=[{k:v for k,v in row.items() if k!="plano"} for row in rows]
     with tempfile.TemporaryDirectory() as scratch:
         directory = Path(scratch) / "run"
         directory.mkdir()

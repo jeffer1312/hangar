@@ -1,5 +1,5 @@
 {
-  "source_commit": "d2a42410f9fe6df4ea491b296c7fea7b98d8b844",
+  "source_commit": "a0860f26b6e3f611806e780acf87588f6065b328",
   "command": "python crates/hangar-server/src/orchestration/fixtures/generate.py",
   "cases": [
     {

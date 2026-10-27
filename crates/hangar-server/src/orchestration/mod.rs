@@ -1,4 +1,5 @@
 //! Orquestração: contratos, histórico e linha do tempo lidos no próprio servidor.
+mod body;
 mod common;
 pub mod markdown;
 pub use common::*;
@@ -35,6 +36,15 @@ pub fn command(operation: &str, input: &serde_json::Value) -> Result<serde_json:
     let name = text(&input["name"]);
     let mux = input["mux"].as_str().unwrap_or("tmux");
     match operation {
+        "section" => Ok(json!(plan::section(
+            text(&input["text"]),
+            text(&input["name"])
+        ))),
+        "at-or-after" => Ok(json!(state::at_or_after(&input["ts"], &input["reference"]))),
+        "until-future" => Ok(json!(
+            runs::when(&input["deadline"])
+                .is_some_and(|t| t.timestamp_micros() as f64 / 1e6 > runs::now())
+        )),
         "normalize" => Ok(json!(markdown::normalize(text(&input["text"])))),
         "team-rows" => Ok(json!(roles::cli_rows(text(&input["text"])))),
         "active-gid" => context::active_gid(&home, name, mux).map(|v| json!(v)),
