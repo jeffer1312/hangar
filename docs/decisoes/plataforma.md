@@ -3309,3 +3309,37 @@ cada escopo. Num boot, 15 linhas tinham `TYPESAFE_API_KEY`, `JEV_AUX_API_KEY` e
 **Limite.** Janela nova aberta dentro da sessão tmux não herda essas chaves (antes herdava pelo
 ambiente da sessão). O journal antigo e as chaves já gravadas lá não mudam com isto: trocar as
 chaves e limpar o journal são passos à parte.
+
+## Reportar problema: o pacote de diagnóstico vai ao dono (27/10/2026)
+
+**Decisão.** Configurações > Diário de uso tem **Reportar problema** nos três clientes. O cliente
+manda ao seu servidor `POST /api/diag/report` (só o dono) com o texto opcional da pessoa e as
+falhas recentes dele contra aquele servidor. O `hangar-server` (`diag_report/`) monta o pacote e o
+envia ao worker `hangar-relatorio` (`kind: "diagnostico"`, KV `diag/<código>` por 90 dias e
+e-mail ao dono); o diário inteiro dos 7 dias vai compactado num `PUT` separado, gravado pelo
+worker sem decodificar (o plano Free tem 10 ms de CPU por pedido). A pessoa recebe um código de 8
+caracteres para passar ao dono.
+
+**Por quê.** Em 27/10 três casos no mesmo dia só se explicaram pedindo log por SSH ou por comando:
+a fila travada depois da troca de conta numa máquina de casa (`input_unproved`), o
+`runtime_unhealthy` no Windows de outra pessoa depois de uma atualização automática, e o Orientar
+recusado. O diário exportado não tinha a causa e o 503 do envio não estava em lugar nenhum; nem
+todo mundo que usa sabe rodar comando. "Só erros não ajudam: tem que ser ele completo" — por isso o
+diário vai inteiro, com os eventos `ok` em volta da falha.
+
+**Privacidade (invariante).** Os logs privados podem ter token, caminho, conversa e `peer_info`:
+do `hangar-server.log` saem só hora, nível, a mensagem fixa e os campos `code`, `session`,
+`reason`, `stage`, `kind`, `window`, `outcome`, `status`, `attempt`, `wait_s` (o `detail` fica de
+fora); do log do Python, só a contagem por logger. Sessões sem `last_reply`, pergunta, opções,
+linha de status nem texto de fila; contas sem `id`, caminho, assinatura de credencial nem token.
+O `scrub` roda em cada parte do texto, antes de qualquer corte, e em cada linha do diário anexo: home e `C:\Users\<nome>`,
+`sk-…`, `Bearer …`, `token=` em URL, hex/base64 longos, e-mail, `*.ts.net` e IPv4.
+
+**Limites.** O worker usa KV: a senha de uso único do envio do diário não é atômica (dois envios
+quase simultâneos com a mesma senha podem gravar os dois). O teto diário do KV conta escritas
+(o diagnóstico custa 2, o diário mais 2) e, passado o teto, o diagnóstico recebe 503 em vez de um
+código que não abre.
+
+**Passo futuro (não feito): envio automático de erros.** Falha relevante iria sozinha ao dono,
+sem clique. Exige consentimento explícito na instalação, controle de volume no worker e os mesmos
+limites de privacidade acima. Fica para quando o botão manual não bastar.

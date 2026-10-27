@@ -566,6 +566,11 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   etapas, códigos e origem da falha. Texto de conversa, credenciais e saídas brutas ficam fora
   dele. O shell Electron também escreve lá (`privado/shell.log`): lançado pelo `.desktop`, o
   console dele vai pro `/dev/null`. Detalhes e compatibilidade em [plataforma.md](docs/decisoes/plataforma.md#diário-de-uso-causa-e-contexto-no-arquivo-exportado).
+- **Reportar problema: o servidor monta o pacote e o envia ao worker `hangar-relatorio`.** Rota só
+  do dono no Rust (`diag_report/`); dos logs privados só saem campos conhecidos (o log do Python, só
+  contagem), e o `scrub` passa em cada parte do texto, antes de qualquer corte, e em cada linha do diário anexo. O diário vai
+  completo, compactado, num segundo envio que o worker grava sem abrir. Motivo e invariante em
+  [plataforma.md](docs/decisoes/plataforma.md#reportar-problema-o-pacote-de-diagnóstico-vai-ao-dono-27102026).
 - **Aviso na tela só para ação que falhou ou bloqueio real.** Falha de acompanhamento, dado velho
   ou condição que some sozinha vai ao diário de uso e ao log, nunca a faixa, anel ou linha. A
   classificação é uma só, `problem_gate::diagnostic`; os dois portões de saída (`gate_problem` da
