@@ -354,6 +354,19 @@ pub fn write(
     }
     super::write(&context.path, &content, Some(mtime))
 }
+#[derive(Debug, PartialEq, Eq)]
+pub enum PromotionError {
+    IdentityUnavailable(String),
+    Conflict(String),
+}
+impl std::fmt::Display for PromotionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IdentityUnavailable(message) | Self::Conflict(message) => formatter.write_str(message),
+        }
+    }
+}
+
 pub fn promote(
     home: &Path,
     pair_dir: &Path,
@@ -362,19 +375,32 @@ pub fn promote(
     mtime: Option<f64>,
     mux: &str,
 ) -> Result<(), String> {
+    promote_classified(home, pair_dir, name, gid, mtime, mux).map_err(|error| error.to_string())
+}
+
+/// Sem identidade não há rascunho a promover; isso conserva o grupo recém-criado.
+pub fn promote_classified(
+    home: &Path,
+    pair_dir: &Path,
+    name: &str,
+    gid: &str,
+    mtime: Option<f64>,
+    mux: &str,
+) -> Result<(), PromotionError> {
+    use PromotionError::{Conflict, IdentityUnavailable};
     if !runs::valid_id(gid) || gid.starts_with("draft-") || gid == "padrao" {
-        return Err("grupo de destino inválido".into());
+        return Err(Conflict("grupo de destino inválido".into()));
     }
-    let source = pair_dir.join(format!("regras-{}.md", draft(home, name, mux)?));
-    let (content, current) = super::read(&source).map_err(|e| e.to_string())?;
+    let source = pair_dir.join(format!("regras-{}.md", draft(home, name, mux).map_err(IdentityUnavailable)?));
+    let (content, current) = super::read(&source).map_err(|e| Conflict(e.to_string()))?;
     if mtime.is_some_and(|t| (t - current).abs() > 1e-6) {
-        return Err("o arquivo mudou desde a leitura — recarregue".into());
+        return Err(Conflict("o arquivo mudou desde a leitura — recarregue".into()));
     }
     if let Some(target) = mark(&content, "group") {
         return if target == gid || ended(home, pair_dir, &target) {
             Ok(())
         } else {
-            Err("o time já pertence a outro grupo".into())
+            Err(Conflict("o time já pertence a outro grupo".into()))
         };
     }
     if content.is_empty() {
@@ -382,7 +408,7 @@ pub fn promote(
     }
     let dest = pair_dir.join(format!("regras-{gid}.md"));
     promote_source(&source, &dest, &content, current, mtime.unwrap_or(current))
-        .map_err(|e| e.message)
+        .map_err(|e| Conflict(e.message))
 }
 
 pub struct PromotionFailure {

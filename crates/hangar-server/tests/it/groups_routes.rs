@@ -29,6 +29,10 @@ struct Server { addr: SocketAddr, python: Arc<fake::Fake>, groups: Arc<GroupServ
 
 /// `n` sessões Claude (`s0`..) e o roteador de grupo montado na frente do principal.
 async fn server(root: &Path, n: usize) -> Server {
+    server_with_orq(root, n, None).await
+}
+
+async fn server_with_orq(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::groups::service::OrqFacts>>) -> Server {
     let script = list_support::sessions(root, n);
     let home = root.join("home");
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
@@ -36,11 +40,16 @@ async fn server(root: &Path, n: usize) -> Server {
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config(upstream, ""));
+    state.accounts = hangar_server::accounts::AccountService::new(
+        hangar_server::accounts::environment::AccountEnvironment::from_map(
+            [("HOME".into(), home.to_string_lossy().into_owned()),
+             ("USERPROFILE".into(), home.to_string_lossy().into_owned())].into()));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
     let pair = home.join(".claude/.hangar-pair");
-    let groups = Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")), Arc::new(PythonOrq::from_state(&state)), "casa".into()));
+    let groups = Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")),
+        orq.unwrap_or_else(|| Arc::new(PythonOrq::from_state(&state).with_paths(home.clone(), pair.clone()))), "casa".into()).with_diary(state.diag.clone()));
     state.groups = Some(groups.clone());
     let share = crate::share_pair_routes::share_state(&root.join("shares.json"), &pair, Arc::new(std::sync::Mutex::new(1_000.0)));
     state.share = Some(share.clone());
@@ -71,8 +80,36 @@ fn input_hits(python: &fake::Fake, names: &[&str]) -> Vec<usize> {
     names.iter().map(|n| python.hits_to(&format!("/api/sessions/{n}/input"))).collect()
 }
 
-fn orchestrators(python: &fake::Fake, names: &Value) {
-    python.set_internal("orq/is-orchestrator", StatusCode::OK, json!({"names": names}));
+fn orchestrators(srv: &Server, names: &Value) {
+    let home = srv.pair.parent().unwrap().parent().unwrap();
+    let root = hangar_server::orchestration::runs::root(home);
+    if root.exists() { std::fs::remove_dir_all(&root).unwrap(); }
+    for name in names.as_array().unwrap() {
+        let gid = name.as_str().unwrap().strip_suffix("-orq").unwrap();
+        let run = root.join(gid);
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join("orq.json"), "{\"auto\":true}").unwrap();
+        std::fs::write(run.join("eventos.jsonl"), json!({"tipo":"execucao_inicio","gid":gid}).to_string()+"\n").unwrap();
+        std::fs::write(run.join("vigia.json"), json!({"ts":chrono::Utc::now().to_rfc3339(),"pid":std::process::id()}).to_string()).unwrap();
+    }
+}
+
+#[path = "groups_native.rs"]
+mod native_contract;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_promotion_without_identity_keeps_the_group_and_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = server(dir.path(), 1).await;
+    let (status, body) = call(srv.addr, "POST", "s0/pair", Some(&json!({"orq": true})), OWNER).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["warning"]["code"], "erro_orq_promocao_sem_identidade");
+    assert_eq!(body["warning"]["params"]["sessao"], "s0");
+    assert_eq!(body["warning"]["params"]["grupo"], body["gid"]);
+    assert!(srv.groups.link("s0").await.unwrap().unwrap().orq);
+    for path in ["orq/promote", "orq/is-orchestrator", "orq/group-phase"] {
+        assert!(srv.python.internal_bodies(path).is_empty(), "{path}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -85,7 +122,7 @@ async fn routes_answer_like_python() {
     let mut gid = String::new();
     for step in steps.as_array().unwrap() {
         let name = step["name"].as_str().unwrap();
-        orchestrators(&srv.python, step.get("orchestrators").unwrap_or(&json!([])));
+        orchestrators(&srv, step.get("orchestrators").unwrap_or(&json!([])));
         if let Some(text) = step["contract"].as_str() {
             std::fs::write(srv.pair.join(format!("grupo-{gid}.md")), text).unwrap();
         }
@@ -276,31 +313,12 @@ async fn guest_goes_to_python_and_cross_machine_stays_in_rust() {
 async fn orchestrator_lookup_failure_is_503() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), 2).await;
-    srv.python.set_internal("orq/is-orchestrator", StatusCode::INTERNAL_SERVER_ERROR, json!({}));
+    let root = dir.path().join("home/.hangar");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("orq"), "ilegível").unwrap();
     let (status, body) = call(srv.addr, "POST", "s0/pair", Some(&json!({"peers": ["s1"]})), OWNER).await;
     assert_eq!((status, body["detail"]["code"].clone()), (503, json!("erro_lista_indisponivel")));
     assert!(!srv.pair.join("s0.json").exists());
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn uncertain_promotion_restores_and_goes_to_the_diary() {
-    let dir = tempfile::tempdir().unwrap();
-    let srv = server(dir.path(), 1).await;
-    srv.python.set_internal("orq/promote", StatusCode::CONFLICT,
-        json!({"detail": {"code": "erro_orq_arquivo_mudou", "params": {}, "msg": "o time já pertence a outro grupo"}}));
-    let (status, body) = call(srv.addr, "POST", "s0/pair", Some(&json!({"orq": true})), OWNER).await;
-    assert_eq!((status, body["detail"]["msg"].clone()), (409, json!("o time já pertence a outro grupo")));
-    srv.python.set_internal("orq/promote", StatusCode::INTERNAL_SERVER_ERROR, json!({}));
-    let (status, body) = call(srv.addr, "POST", "s0/pair", Some(&json!({"orq": true})), OWNER).await;
-    // Python sem resposta não é "o arquivo mudou": indisponível, com o código.
-    assert_eq!((status, body["detail"]["code"].clone(), body["detail"]["params"]["detalhe"].clone()),
-        (503, json!("erro_grupo_indisponivel"), json!("groups_orq_promote_status_500")));
-    assert!(!srv.pair.join("s0.json").exists(), "o join volta atrás nos dois casos");
-    let python = srv.python.clone();
-    fake::wait_until(move || python.diag().iter().any(|d| d["evento"] == "rust.groups_orq_promote_uncertain"
-        && d["codigo"] == "groups_orq_promote_status_500")).await;
-    assert_eq!(srv.python.diag().iter().filter(|d| d["evento"] == "rust.groups_orq_promote_uncertain").count(), 1,
-        "o conflito do Python não é incerteza");
 }
 
 /// Grupo misto: sessão local entra no grupo que tem membro de fora; pedir o de fora pelo nome é

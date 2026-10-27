@@ -153,6 +153,8 @@ pub(crate) fn group_failed(e: GroupError) -> Failed {
             super::routes::ORQ_ARBITER_MSG,
         ),
         GroupError::Orq(PromoteError::Conflict(text)) => fail("erro_orq_arquivo_mudou", text),
+        GroupError::Orq(PromoteError::ConflictWithRemaining { message, .. }) => fail("erro_orq_arquivo_mudou", message),
+        GroupError::Orq(PromoteError::IdentityUnavailable(text)) => fail("erro_orq_promocao_sem_identidade", text),
         GroupError::Orq(PromoteError::Unavailable(code)) => fail("erro_grupo_indisponivel", code),
         GroupError::Store(e) => fail("groups_store_failed", e.to_string()),
     }

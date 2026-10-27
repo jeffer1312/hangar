@@ -38,11 +38,15 @@ async fn server(root: &Path, n: usize) -> Server {
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config(upstream, ""));
+    state.accounts = hangar_server::accounts::AccountService::new(
+        hangar_server::accounts::environment::AccountEnvironment::from_map(
+            [("HOME".into(),home.to_string_lossy().into_owned()),
+             ("USERPROFILE".into(),home.to_string_lossy().into_owned())].into()));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
     let pair = home.join(".claude/.hangar-pair");
-    let groups = Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")), Arc::new(PythonOrq::from_state(&state)), "casa".into()));
+    let groups = Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")), Arc::new(PythonOrq::from_state(&state).with_paths(home.clone(),pair.clone())), "casa".into()));
     state.groups = Some(groups.clone());
     let state = Arc::new(state);
     let public = serve(router(state.clone())).await;
@@ -50,9 +54,9 @@ async fn server(root: &Path, n: usize) -> Server {
     Server { public, private, python, groups, pair }
 }
 
-/// Sem fatos dados, a rota leva os fatos vazios que o Python mandaria sem orquestração ativa.
+/// Fatos enviados são ignorados: o Rust consulta o cofre da máquina.
 async fn bridge(addr: SocketAddr, op: &str, mut args: Value, secret: Option<&str>) -> (u16, Value) {
-    if op == "group.route" && args.get("facts").is_none() { args["facts"] = json!({"orchestrators": [], "phases": {}}); }
+    if op == "group.route" && args.get("facts").is_none() { args["facts"] = json!({}); }
     let mut req = client().post(format!("http://{addr}/__hangar_server/groups")).header("content-type", "application/json")
         .body(json!({"op": op, "args": args}).to_string());
     if let Some(secret) = secret { req = req.header("x-hangar-internal", secret); }
@@ -138,8 +142,7 @@ async fn bridged_request_never_goes_back_to_python() {
     assert_eq!((status, body["ok"].clone(), body["error"]["code"].clone()), (200, json!(false), json!("groups_bridge_invalid_request")));
 }
 
-/// Fechamento que não passou pelo `delete` do Rust (Connect, convidado): a fase do `orq` vem no
-/// pedido e a saída não pergunta nada de volta ao Python.
+/// Fechamento pela ponte usa a execução do cofre, sem confiar na fase enviada nem consultar Python.
 #[tokio::test(flavor = "multi_thread")]
 async fn bridged_leave_never_calls_python() {
     let dir = tempfile::tempdir().unwrap();
@@ -148,11 +151,12 @@ async fn bridged_leave_never_calls_python() {
     for (me, other) in [("s0", "s1"), ("s1", "s0")] {
         std::fs::write(srv.pair.join(format!("{me}.json")), json!({"peers": [other], "task": "t", "gid": "g1", "harness": {}, "orq": true}).to_string()).unwrap();
     }
-    let out = result(&srv, "group.leave", json!({"name": "s0", "phases": {"g1": "live"}})).await;
+    native_run(&srv, "g1", false);
+    let out = result(&srv, "group.leave", json!({"name": "s0", "phases": {"g1": "ended"}})).await;
     assert_eq!(out, json!({"ex_peers": ["s1"], "warnings": [], "deliveries": []}));
     assert!(!srv.pair.join("s0.json").exists());
     assert!(srv.pair.join("s1.json").exists(), "execução viva mantém o grupo orq de um");
-    assert!(srv.python.internal_bodies("orq/group-phase").is_empty(), "a fase veio no pedido");
+    assert!(srv.python.internal_bodies("orq/group-phase").is_empty(), "a fase foi lida no cofre");
 
     // Grupo entre máquinas desta dona que se dissolve: o aviso de saída ao membro Pi, que só o
     // Python atende, volta na resposta em vez de o Rust chamar o `/input` dele.
@@ -189,15 +193,17 @@ fn mtime(path: &Path) -> f64 {
     std::fs::metadata(path).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64()
 }
 
-/// BRG-20 (I-5A): o Python manda os fatos do `orq` no corpo e o Rust associa o time sob o lock de
-/// grupo, sem chamar o Python de volta.
+/// A associação resolve a vida e o grupo localmente, sob o lock, sem chamar o Python de volta.
 #[tokio::test(flavor = "multi_thread")]
 async fn orq_associate_never_calls_python() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), 1).await;
     std::fs::create_dir_all(&srv.pair).unwrap();
     std::fs::write(srv.pair.join("arbiter.json"), json!({"peers": [], "task": "obra", "gid": "real", "harness": {}, "orq": true}).to_string()).unwrap();
-    let (draft, real) = (srv.pair.join("regras-draft-p.md"), srv.pair.join("regras-real.md"));
+    let home = srv.pair.parent().unwrap().parent().unwrap();
+    native_identity(home,"planner");
+    let gid = hangar_server::orchestration::context::draft(home,"planner","unused").unwrap();
+    let (draft, real) = (srv.pair.join(format!("regras-{gid}.md")), srv.pair.join("regras-real.md"));
     std::fs::write(&draft, "| papel | conta |\n").unwrap();
     let facts = |gid: &str| json!({"active_gid": null, "draft_gid": "draft-p", "groups": {gid: {"phase": null, "archived": false}}});
     let args = |gid: &str, mtime: f64| json!({"name": "planner", "gid": gid, "mtime": mtime, "facts": facts(gid)});
@@ -234,9 +240,7 @@ async fn orq_associate_never_calls_python() {
         "nenhuma pergunta de volta ao Python");
 }
 
-/// Rota que chega pela ponte do Python (8768): os fatos do `orq` vêm no pedido, e o que só o Python
-/// faz (entregar a sessão que ele atende, promover o time) volta na resposta. Nenhuma chamada ao
-/// Python durante a rota.
+/// Rota da ponte decide fatos e promoção em processo; somente entregas remanescentes voltam ao Python.
 #[tokio::test(flavor = "multi_thread")]
 async fn bridged_route_never_calls_python() {
     let dir = tempfile::tempdir().unwrap();
@@ -244,9 +248,10 @@ async fn bridged_route_never_calls_python() {
     let calls = |p: &fake::Fake| ["orq/is-orchestrator", "orq/group-phase", "orq/promote"].iter().map(|r| p.internal_bodies(r).len()).sum::<usize>()
         + p.list_facts_calls.load(std::sync::atomic::Ordering::SeqCst) + p.input_calls();
     let before = calls(&srv.python);
-    let facts = json!({"orchestrators": ["s3"], "phases": {}});
-    let refused = result(&srv, "group.route", json!({"method": "POST", "name": "s3", "route": "pair", "body": {"peers": ["s0"]}, "facts": facts})).await;
-    assert_eq!((refused["status"].clone(), refused["body"]["detail"]["code"].clone()), (json!(409), json!("erro_sessao_orq")), "o fato do Python decide");
+    native_run(&srv,"g1",false);
+    let facts = json!({"orchestrators": ["s0"], "phases": {}});
+    let refused = result(&srv, "group.route", json!({"method": "POST", "name": "g1-orq", "route": "pair", "body": {"peers": ["s0"]}, "facts": facts})).await;
+    assert_eq!((refused["status"].clone(), refused["body"]["detail"]["code"].clone()), (json!(409), json!("erro_sessao_orq")), "o cofre nativo decide apesar do fato contrário enviado");
     let paired = result(&srv, "group.route", json!({"method": "POST", "name": "s0", "route": "pair", "body": {"peers": ["s1"]}, "facts": facts})).await;
     assert_eq!(paired["status"], 200, "{paired}");
     let mut told: Vec<&str> = paired["deliveries"].as_array().unwrap().iter().map(|d| d["name"].as_str().unwrap()).collect();
@@ -259,12 +264,30 @@ async fn bridged_route_never_calls_python() {
     assert_eq!(left["deliveries"][0]["name"], "s1", "o aviso de saída também");
     let orq = result(&srv, "group.route", json!({"method": "POST", "name": "s2", "route": "pair", "body": {"orq": true}, "facts": facts})).await;
     assert_eq!(orq["status"], 200, "{orq}");
-    assert_eq!((orq["post"][0]["op"].clone(), orq["post"][0]["name"].clone()), (json!("promote"), json!("s2")), "a promoção fica com o Python");
-    // A saída de um grupo `orq` usa a fase que o Python mandou.
+    assert_eq!(orq["post"],json!([]),"nenhuma promoção volta ao Python");
+    assert_eq!(orq["body"]["warning"]["code"],"erro_orq_promocao_sem_identidade");
+    // A saída de um grupo ORQ usa o encerramento real, mesmo com fase contrária enviada.
     let orq_gid = orq["body"]["gid"].as_str().unwrap().to_owned();
+    native_run(&srv,&orq_gid,true);
     let gone = result(&srv, "group.route", json!({"method": "DELETE", "name": "s2", "route": "pair", "body": null,
-        "facts": {"orchestrators": [], "phases": {orq_gid: "ended"}}})).await;
+        "facts": {"orchestrators": [], "phases": {orq_gid: "live"}}})).await;
     assert_eq!(gone["status"], 200, "{gone}");
     assert!(!srv.pair.join("s2.json").exists(), "execução acabada: o grupo orq sozinho sai");
     assert_eq!(calls(&srv.python), before, "nenhuma chamada ao Python dentro da rota da ponte");
+}
+
+fn native_identity(home: &Path, name: &str) {
+    let root = home.join(".hangar/claude-headless");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(format!("{name}.json")),json!({"key":format!("key-{name}")}).to_string()).unwrap();
+}
+fn native_run(srv: &Server, gid: &str, ended: bool) {
+    let home = srv.pair.parent().unwrap().parent().unwrap();
+    let root = hangar_server::orchestration::runs::root(home).join(gid);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("orq.json"),"{\"auto\":true}").unwrap();
+    let mut events = json!({"tipo":"execucao_inicio","gid":gid}).to_string()+"\n";
+    if ended {events += "{\"tipo\":\"execucao_fim\"}\n";}
+    std::fs::write(root.join("eventos.jsonl"),events).unwrap();
+    std::fs::write(root.join("vigia.json"),json!({"ts":chrono::Utc::now().to_rfc3339(),"pid":std::process::id()}).to_string()).unwrap();
 }

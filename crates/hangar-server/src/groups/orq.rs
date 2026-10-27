@@ -21,6 +21,7 @@ pub struct PythonOrq {
     http: HttpClient,
     home: std::path::PathBuf,
     pair: std::path::PathBuf,
+    mux: String,
 }
 
 impl PythonOrq {
@@ -32,11 +33,17 @@ impl PythonOrq {
             http,
             home: env.home,
             pair: env.claude_base.join(".hangar-pair"),
+            mux: if cfg!(windows) { "psmux" } else { "tmux" }.into(),
         }
     }
     pub fn with_paths(mut self, home: std::path::PathBuf, pair: std::path::PathBuf) -> Self {
         self.home = home;
         self.pair = pair;
+        self
+    }
+
+    pub fn with_mux(mut self, mux: String) -> Self {
+        self.mux = mux;
         self
     }
 
@@ -46,6 +53,7 @@ impl PythonOrq {
             st.cfg.internal_secret.clone(),
             st.http.clone(),
         )
+        .with_mux(st.list.env().capture_program.to_string_lossy().into_owned())
         .with_paths(
             st.accounts.env.home.clone(),
             st.groups
@@ -133,16 +141,21 @@ impl OrqFacts for PythonOrq {
         gid: &'a str,
     ) -> BoxFuture<'a, Result<(), PromoteError>> {
         Box::pin(async move {
-            let (home, pair, name, gid) = (
+            let (home, pair, name, gid, mux) = (
                 self.home.clone(),
                 self.pair.clone(),
                 name.to_owned(),
                 gid.to_owned(),
+                self.mux.clone(),
             );
             tokio::task::spawn_blocking(move || {
                 let _lock = crate::orchestration::context::WRITE_LOCK.lock().unwrap();
-                crate::orchestration::context::promote(&home, &pair, &name, &gid, None, "tmux")
-                    .map_err(PromoteError::Conflict)
+                use crate::orchestration::context::PromotionError;
+                crate::orchestration::context::promote_classified(&home, &pair, &name, &gid, None, &mux)
+                    .map_err(|error| match error {
+                        PromotionError::IdentityUnavailable(message) => PromoteError::IdentityUnavailable(message),
+                        PromotionError::Conflict(message) => PromoteError::Conflict(message),
+                    })
             })
             .await
             .map_err(|_| PromoteError::Unavailable("groups_orq_promote_failed".into()))?
