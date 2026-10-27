@@ -928,8 +928,16 @@ impl TerminalDriver {
         // entre as tentativas. A prova é a mesma: só o texto presente passa.
         for attempt in 0..self.limits.proof_attempts.max(1) {
             if attempt > 0 { self.settle().await; }
-            let Ok(now) = self.snapshot().await else { return false; };
-            if now.proves(text, before) == Proof::Present { return true; }
+            match self.snapshot().await {
+                Ok(now) if now.proves(text, before) == Proof::Present => return true,
+                Ok(_) => {}
+                // Tela ainda redesenhando (o TUI recém-retomado): a leitura volta dentro da mesma janela.
+                Err(error) if matches!(error.code, "composer_unreadable" | "overlay" | "footer_focus") => {}
+                Err(error) => {
+                    tracing::warn!(code = "input_proof_read_failed", reason = error.code, "prova da entrada encerrada por leitura que falhou");
+                    return false;
+                }
+            }
         }
         false
     }
