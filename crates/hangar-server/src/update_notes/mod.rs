@@ -116,9 +116,19 @@ pub(crate) fn update_branch(env: Option<String>, dotenv: Option<&str>) -> String
 }
 
 
-fn news_item(id: &str, text: &str) -> Option<(u8, Value)> {
+/// `sistema` vazio = todos; nome fora de `linux`/`windows`/`macos` = arquivo ignorado, como o `onde`.
+/// A mesma regra do `_for_system` do `scripts/montar-pacote.py`.
+fn for_system(field: Option<&String>, os: &str) -> Option<bool> {
+    let names: Vec<&str> = field.map(String::as_str).unwrap_or_default().split(|c: char| c == ',' || c.is_whitespace()).filter(|n| !n.is_empty()).collect();
+    if names.iter().any(|n| !matches!(*n, "linux" | "windows" | "macos")) { return None; }
+    Some(names.is_empty() || names.contains(&os))
+}
+
+/// `os`: o sistema da máquina que vai atualizar, nos nomes do `std::env::consts::OS`.
+fn news_item(id: &str, text: &str, os: &str) -> Option<(u8, Value)> {
     let (f, body) = frontmatter(text);
     let title = f.get("titulo").filter(|t| !t.is_empty())?;
+    if !for_system(f.get("sistema"), os)? { return None; }
     let (rank, kind) = match f.get("tipo").map(String::as_str)? { "novo" => (0, "new"), "melhoria" => (1, "improvement"), "correcao" => (2, "fix"), _ => return None };
     let platforms = match f.get("onde").map(String::as_str)? { "desktop" => "desktop", "celular" => "mobile", "todos" => "all", _ => return None };
     let opt = |k: &str| f.get(k).filter(|v| !v.is_empty()).cloned();
@@ -182,7 +192,7 @@ async fn news(repo: &Path, target: &str) -> Result<Vec<Value>, ()> {
     let mut news = Vec::new();
     for name in names {
         let id = name.trim_end_matches(".md").to_owned();
-        if let Some(item) = news_item(&id, &show(repo, target, &format!("docs/novidades/{name}")).await?) { news.push((item.0, id, item.1)); }
+        if let Some(item) = news_item(&id, &show(repo, target, &format!("docs/novidades/{name}")).await?, std::env::consts::OS) { news.push((item.0, id, item.1)); }
     }
     Ok(order_news(news))
 }

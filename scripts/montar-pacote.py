@@ -250,6 +250,17 @@ def _stem(name: str) -> str:
     return name
 
 
+SYSTEMS = {"linux", "windows", "macos"}
+
+
+def _for_system(value: str, system: str):
+    """O `for_system` do crates/hangar-server/src/update_notes: vazio = todos; nome desconhecido = None."""
+    names = value.replace(",", " ").split()
+    if not set(names) <= SYSTEMS:
+        return None
+    return not names or system in names
+
+
 def notes(root: Path, os_name: str) -> dict:
     """Avisos e novidades da versão, no formato do `GET /api/update/notes`. As regras são as do
     crates/hangar-server/src/update_notes (casos comuns em fixtures.json); aviso só de passo destrutivo
@@ -270,7 +281,7 @@ def notes(root: Path, os_name: str) -> dict:
     for name, text in _note_files(root / "docs/novidades"):
         f, body = frontmatter(text)
         kind, platforms = kinds.get(f.get("tipo")), places.get(f.get("onde"))
-        if not (f.get("titulo") and kind and platforms):
+        if not (f.get("titulo") and kind and platforms and _for_system(f.get("sistema", ""), os_name.split("-")[0])):
             continue
         news.append({"id": _stem(name), "title": f["titulo"], "kind": kind, "text": body, "platforms": platforms,
                      "try_it": f.get("experimente") or None,

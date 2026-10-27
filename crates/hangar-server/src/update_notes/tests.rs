@@ -87,14 +87,13 @@ fn package_fixtures_match_the_python_builder() {
         files.sort();
         files
     };
-    let news = order_news(files("novidades").iter().filter_map(|(name, text)| {
-        let id = name.trim_end_matches(".md");
-        news_item(id, text).map(|(rank, item)| (rank, id.to_owned(), item))
-    }).collect());
-    assert_eq!(json!(news), cases["notes"]["news"]);
-    for (os, windows) in [("linux-x86_64", false), ("windows-x86_64", true)] {
+    for (os, system, windows) in [("linux-x86_64", "linux", false), ("windows-x86_64", "windows", true)] {
+        let news = order_news(files("novidades").iter().filter_map(|(name, text)| {
+            let id = name.trim_end_matches(".md");
+            news_item(id, text, system).map(|(rank, item)| (rank, id.to_owned(), item))
+        }).collect());
         let warnings: Vec<Value> = files("atualizacoes").iter().filter_map(|(name, text)| package_warning(name, text, windows)).map(|w| w.1).collect();
-        assert_eq!(json!(warnings), cases["notes"][os], "{os}");
+        assert_eq!(json!({"warnings": warnings, "news": news}), cases["notes"][os], "{os}");
     }
 }
 
