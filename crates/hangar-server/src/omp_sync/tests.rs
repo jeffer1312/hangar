@@ -20,6 +20,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 #[cfg(windows)]
+const PYTHON_CONTRACT: &str = include_str!("contract-windows.json");
+#[cfg(not(windows))]
+const PYTHON_CONTRACT: &str = include_str!("contract.json");
+
+#[cfg(windows)]
 #[tokio::test]
 async fn op091_native_runner_resolves_mixed_case_path_and_pathext() {
     let temp = tempfile::tempdir().unwrap();
@@ -47,7 +52,8 @@ fn expand(v: &Value, home: &Path) -> Value {
     let template = home
         .parent()
         .unwrap()
-        .join("templates/carregar-claude-md-do-projeto.md");
+        .join("templates")
+        .join("carregar-claude-md-do-projeto.md");
     fn convert(v: &Value, home: &str, template: &str) -> Value {
         match v {
             Value::String(s) => {
@@ -92,7 +98,18 @@ fn install(home: &Path, entries: &Value) {
                 std::os::unix::fs::symlink(s, p).unwrap();
             }
             #[cfg(windows)]
-            std::os::windows::fs::symlink_file(s, p).unwrap();
+            if fs::read_link(&p).ok().map(crate::list::links::without_verbatim)
+                .as_deref() != Some(Path::new(s)) {
+                let is_dir = Path::new(s).is_dir()
+                    || Path::new(s).strip_prefix(home).ok().is_some_and(|p| {
+                        entries[p.to_string_lossy().replace('\\', "/")]["dir"] == true
+                    });
+                if is_dir {
+                    std::os::windows::fs::symlink_dir(s, p).unwrap();
+                } else {
+                    std::os::windows::fs::symlink_file(s, p).unwrap();
+                }
+            }
         }
     }
 }
@@ -114,9 +131,12 @@ fn tree(home: &Path) -> Value {
             }
             let m = fs::symlink_metadata(&p).unwrap();
             if m.file_type().is_symlink() {
+                let target = fs::read_link(&p).unwrap();
+                #[cfg(windows)]
+                let target = crate::list::links::without_verbatim(target).components().collect::<PathBuf>();
                 map.insert(
                     rel,
-                    json!({"link":fs::read_link(&p).unwrap().to_string_lossy()}),
+                    json!({"link":target.to_string_lossy()}),
                 );
             } else if m.is_dir() {
                 map.insert(rel, json!({"dir":true}));
@@ -208,7 +228,7 @@ impl Runner for Replay {
     }
 }
 async fn contract_case(selected: &str) {
-    let data: Value = serde_json::from_str(include_str!("contract.json")).unwrap();
+    let data: Value = serde_json::from_str(PYTHON_CONTRACT).unwrap();
     assert!(
         data["cases"]
             .as_array()
@@ -264,7 +284,19 @@ async fn contract_case(selected: &str) {
             replay.calls.lock().unwrap().is_empty(),
             "comando Python não executado: {name}"
         );
-        assert_eq!(tree(&home), c["final"], "efeito em disco: {name}");
+        let expected = c["final"].clone();
+        #[cfg(windows)]
+        let expected = {
+        let mut expected = expected;
+        for entry in expected.as_object_mut().unwrap().values_mut() {
+            if let Some(target) = entry["link"].as_str() {
+                entry["link"] = json!(crate::list::links::without_verbatim(PathBuf::from(target))
+                    .components().collect::<PathBuf>().to_string_lossy());
+            }
+        }
+        expected
+        };
+        assert_eq!(tree(&home), expected, "efeito em disco: {name}");
     }
 }
 proptest::proptest! {
@@ -797,7 +829,7 @@ impl Runner for GateReplay {
     }
 }
 fn fresh_contract(home: &Path) -> Value {
-    let data: Value = serde_json::from_str(include_str!("contract.json")).unwrap();
+    let data: Value = serde_json::from_str(PYTHON_CONTRACT).unwrap();
     expand(
         data["cases"]
             .as_array()

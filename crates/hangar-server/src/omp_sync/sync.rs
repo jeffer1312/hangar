@@ -330,7 +330,7 @@ impl Synchronizer {
             if !features(&f) {
                 return Err(err("Seleção de features inválida"));
             }
-            let path = root.join("node_modules").join(n);
+            let path = package_path(root, n);
             let installed = io::read(&path.join("package.json"), None)?;
             if installed["name"] != *n {
                 return Err(err("Nome instalado diverge do registro"));
@@ -511,7 +511,7 @@ impl Synchronizer {
                 || !native["digest"]
                     .as_str()
                     .is_some_and(|s| matches_re(r"\A[0-9a-f]{64}\z", s))
-                || native["path"] != json!(root.join("node_modules").join(n).to_string_lossy())
+                || native["path"] != json!(package_path(root, n).to_string_lossy())
                 || !native["spec"].is_string()
                 || !native.as_object().unwrap().contains_key("version")
                 || (!native["version"].is_null() && !native["version"].is_string())
@@ -863,4 +863,8 @@ fn lexical_absolute(home: &Path, p: &str) -> PathBuf {
         }
     }
     out
+}
+fn package_path(root: &Path, name: &str) -> PathBuf {
+    name.split('/')
+        .fold(root.join("node_modules"), |path, part| path.join(part))
 }

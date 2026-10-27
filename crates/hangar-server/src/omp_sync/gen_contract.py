@@ -2,7 +2,7 @@
 
 Comando: cd backend && uv run python ../crates/hangar-server/src/omp_sync/gen_contract.py
 """
-import base64,json,os,sys,tempfile,subprocess
+import base64,json,os,sys,tempfile,subprocess,threading
 from pathlib import Path
 sys.path.insert(0,str(Path.cwd()))
 import pytest
@@ -31,6 +31,9 @@ def snapshot(home):
   if p.is_symlink():out[rel]={'link':str(p.readlink()).replace(str(home),'<HOME>')}
   elif p.is_dir():out[rel]={'dir':True}
   else:
+   # Uma trava de byte no Windows também recusa a leitura do arquivo vazio por outro handle.
+   if p.stat().st_size==0:
+    out[rel]={'text':''};continue
    data=p.read_bytes()
    try:out[rel]={'text':normalize(data.decode(),home)}
    except UnicodeDecodeError:out[rel]={'base64':base64.b64encode(data).decode()}
@@ -140,13 +143,14 @@ def context_case(kind):
   if kind in ['swap-append','swap-dir','rules-symlink']:
    (home/'external.md').write_text('Contexto externo');(home/'external-rules').mkdir()
    if kind=='rules-symlink':(agent/'rules').symlink_to(home/'external-rules',target_is_directory=True)
-  initial=snapshot(home);calls=[]
+  initial=snapshot(home);calls=[];calls_lock=threading.Lock()
   def native(args,**kw):
-   before=snapshot(home);result=cli(args,**kw)
-   if args[2]=='get':
-    if kind=='swap-append' and not (agent/'APPEND_SYSTEM.md').is_symlink():(agent/'APPEND_SYSTEM.md').symlink_to(home/'external.md')
-    if kind=='swap-dir' and not (agent/'rules').is_symlink():(agent/'rules').symlink_to(home/'external-rules',target_is_directory=True)
-   after=snapshot(home);calls.append({'args':args,'cwd':str(kw['cwd']),'timeout':kw['timeout'],'output':{'code':result.returncode,'stdout':result.stdout},'set':{k:v for k,v in after.items() if before.get(k)!=v},'remove':[k for k in before if k not in after]});return result
+   with calls_lock:
+    before=snapshot(home);result=cli(args,**kw)
+    if args[2]=='get':
+     if kind=='swap-append' and not (agent/'APPEND_SYSTEM.md').is_symlink():(agent/'APPEND_SYSTEM.md').symlink_to(home/'external.md')
+     if kind=='swap-dir' and not (agent/'rules').is_symlink():(agent/'rules').symlink_to(home/'external-rules',target_is_directory=True)
+    after=snapshot(home);calls.append({'args':args,'cwd':str(kw['cwd']),'timeout':kw['timeout'],'output':{'code':result.returncode,'stdout':result.stdout},'set':{k:v for k,v in after.items() if before.get(k)!=v},'remove':[k for k in before if k not in after]});return result
   result=omp_context.configure_claude_context(home=home,claude_dir=claude,enabled=kind!='disabled',runner=native)
   normalized=lambda v:normalize(v,home,template)
   return normalized({'name':'context-'+kind,'operation':'context','enabled':kind!='disabled','template':template.read_text(),'env':{'HOME':str(home),'USERPROFILE':str(home),'CLAUDE_CONFIG_DIR':str(claude),'PI_CODING_AGENT_DIR':str(agent)},'initial':initial,'calls':calls,'report':result,'final':snapshot(home)})
