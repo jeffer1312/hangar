@@ -25,13 +25,15 @@ pub fn identity(home: &Path, name: &str, mux: &str) -> Result<String, String> {
     }
     let claude = runs::json(
         &home
-            .join(".hangar/claude-headless")
+            .join(".hangar")
+            .join("claude-headless")
             .join(format!("{name}.json")),
     )
     .unwrap_or_default();
     let codex = runs::json(
         &home
-            .join(".hangar/codex-sessions")
+            .join(".hangar")
+            .join("codex-sessions")
             .join(format!("{name}.json")),
     )
     .unwrap_or_default();
@@ -185,7 +187,7 @@ pub fn ended(home: &Path, pair_dir: &Path, gid: &str) -> bool {
         || fs::read_dir(
             std::env::var_os("HANGAR_PAIR_ARCHIVE")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".hangar/pair-arquivo")),
+                .unwrap_or_else(|| home.join(".hangar").join("pair-arquivo")),
         )
         .ok()
         .into_iter()

@@ -11,7 +11,21 @@ use std::{
 };
 
 pub fn root(home: &Path) -> PathBuf {
-    home.join(".hangar/orq")
+    home.join(".hangar").join("orq")
+}
+
+#[cfg(test)]
+mod windows_readers_tests {
+    use super::*;
+
+    #[test]
+    fn windows_readers_execution_root_displays_native_path_components() {
+        let home = Path::new("home");
+        let separator = std::path::MAIN_SEPARATOR;
+        assert_eq!(root(home).to_string_lossy(), format!("home{separator}.hangar{separator}orq"));
+        assert_eq!(exec_dir(home, "execução").unwrap().to_string_lossy(),
+            format!("home{separator}.hangar{separator}orq{separator}execução"));
+    }
 }
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && !matches!(id, "." | "..") && !id.contains(['/', '\\', ':', '\0'])

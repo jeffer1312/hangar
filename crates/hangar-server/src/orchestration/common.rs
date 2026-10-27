@@ -61,7 +61,26 @@ pub fn read(path: &Path) -> io::Result<(String, f64)> {
 pub fn read_open(mut file: fs::File) -> io::Result<(String, f64)> {
     let mut text = String::new();
     file.read_to_string(&mut text)?;
+    // O leitor Python de texto usa quebras universais, inclusive nos arquivos carimbados.
+    if text.contains('\r') {
+        text = text.replace("\r\n", "\n").replace('\r', "\n");
+    }
     Ok((text, mtime_meta(&file.metadata()?)))
+}
+
+#[cfg(test)]
+mod windows_readers_tests {
+    #[test]
+    fn windows_readers_common_read_matches_python_text_mode_and_file_version() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("regras.md");
+        std::fs::write(&path, "papéis\r\nprimeiro\rsegundo\núltimo\r\n").unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        let modified = super::mtime_meta(&file.metadata().unwrap());
+        let (text, version) = super::read_open(file).unwrap();
+        assert_eq!(text, "papéis\nprimeiro\nsegundo\núltimo\n");
+        assert_eq!(version, modified);
+    }
 }
 pub fn mtime_meta(meta: &fs::Metadata) -> f64 {
     meta.modified()

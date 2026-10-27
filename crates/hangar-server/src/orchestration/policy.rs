@@ -21,7 +21,17 @@ pub struct Policy {
     pub trocar: bool,
 }
 pub fn path(home: &Path) -> PathBuf {
-    home.join(".hangar/orquestracao-contas.md")
+    home.join(".hangar").join("orquestracao-contas.md")
+}
+
+#[cfg(test)]
+mod windows_readers_tests {
+    #[test]
+    fn windows_readers_policy_path_displays_native_path_components() {
+        let separator = std::path::MAIN_SEPARATOR;
+        assert_eq!(super::path(std::path::Path::new("home")).to_string_lossy(),
+            format!("home{separator}.hangar{separator}orquestracao-contas.md"));
+    }
 }
 pub fn read(content: &str) -> Vec<Policy> {
     md::table(content, &headers())

@@ -39,6 +39,32 @@ pub fn sha(text: &str) -> String {
     let body = rx.replace_all(text, "");
     super::sha256(&Regex::new("\n{3,}").unwrap().replace_all(&body, "\n\n"))[..12].into()
 }
+
+#[cfg(test)]
+mod windows_readers_tests {
+    use super::*;
+
+    #[test]
+    fn windows_readers_readiness_preserves_stamps_with_universal_newlines() {
+        let directory = tempfile::tempdir().unwrap();
+        let repo = directory.path();
+        assert!(std::process::Command::new("git").args(["init", "-q"])
+            .arg(repo).status().unwrap().success());
+        let body = "# Plano\n\n### Task 1: x\n- [ ] **Step 1: y**\n";
+        let stamped = format!("Preparado: hoje · sha {}\n{body}", sha(body));
+        let path = repo.join("plano.orq.md");
+        for newline in ["\n", "\r\n", "\r"] {
+            let bytes = stamped.replace('\n', newline).into_bytes();
+            fs::write(&path, &bytes).unwrap();
+            let result = readiness(repo.to_str(), true, false);
+            assert_eq!(result["plan"]["state"], "stamped", "{newline:?}: {result}");
+            assert_eq!(result["phase"], "arbiter", "{newline:?}: {result}");
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+        // A normalização pertence à leitura do arquivo; o hash de uma string continua literal.
+        assert_ne!(sha(body), sha(&body.replace('\n', "\r\n")));
+    }
+}
 fn without_fences(text: &str) -> String {
     let mut out = String::new();
     let mut fence: Option<(char, usize)> = None;
@@ -107,7 +133,7 @@ pub fn find(repo: &Path) -> Value {
             Err(e) => problems.push(format!("git {}: {e}", args[2])),
         }
     }
-    if let Ok(entries) = fs::read_dir(repo.join("docs/superpowers/plans")) {
+    if let Ok(entries) = fs::read_dir(repo.join("docs").join("superpowers").join("plans")) {
         let mut kept: Vec<_> = entries
             .flatten()
             .map(|e| e.path())
