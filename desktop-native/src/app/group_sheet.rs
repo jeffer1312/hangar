@@ -41,8 +41,6 @@ pub(super) struct Sheet {
     expanded: HashSet<usize>,
     busy: bool,
     error: Option<String>,
-    /// O aviso do "Retirar" sobrevive à recarga que a própria retirada causa.
-    keep_error: bool,
     /// Caminho e texto renderizado; `None` é grupo que ainda não escreveu contrato.
     contract: Remote<Option<(String, Entity<TextViewState>)>>,
     feed: Remote<Feed>,
@@ -246,7 +244,7 @@ impl Hangar {
         g.seq += 1;
         let id = g.seq;
         g.sheet = Some(Sheet { session, server, id, peers_key: String::new(), picked: Vec::new(), task, adding: false, removing: None, expanded: HashSet::new(), busy: false, error: None,
-            keep_error: false, contract: Remote::default(), feed: Remote::default() });
+            contract: Remote::default(), feed: Remote::default() });
         self.load_group_sheet(window, cx);
         let hangar = cx.entity();
         let body = cx.new(|cx| SheetBody { _observe: cx.observe(&hangar, |_, _, cx| cx.notify()), hangar: hangar.downgrade() });
@@ -330,8 +328,8 @@ impl Hangar {
         })).collect();
         let Some(sheet) = self.sidebar.grouping.sheet.as_mut() else { return };
         let task = sheet.task.clone();
-        let error = sheet.error.take().filter(|_| sheet.keep_error);
-        (sheet.peers_key, sheet.picked, sheet.adding, sheet.removing, sheet.busy, sheet.error, sheet.keep_error) = (peers.join(","), Vec::new(), false, None, false, error, false);
+        // O erro fica: a recarga quase sempre vem da ação que o escreveu; a próxima ação o limpa.
+        (sheet.peers_key, sheet.picked, sheet.adding, sheet.removing, sheet.busy) = (peers.join(","), Vec::new(), false, None, false);
         sheet.expanded.clear();
         (sheet.contract, sheet.feed) = (Remote::default(), Remote::default());
         task.update(cx, |input, cx| input.set_value("", window, cx));
@@ -494,7 +492,7 @@ impl Hangar {
                 // Na falha a confirmação fica aberta, na linha do membro, para tentar de novo.
                 if result.is_ok() { (sheet.removing, reload) = (None, true); }
                 match result {
-                    Ok(PairResult { warning: Some(warning) }) => (sheet.error, sheet.keep_error) = (Some(warning), true),
+                    Ok(PairResult { warning: Some(warning) }) => sheet.error = Some(warning),
                     Ok(_) => {}
                     Err(error) => {
                         let base = tr("group_sheet_remove_failed").replace("{name}", &address);
