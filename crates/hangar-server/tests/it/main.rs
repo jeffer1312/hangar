@@ -12,6 +12,7 @@ mod artifacts;
 mod session_media;
 mod commands;
 mod device_install;
+mod diag_report;
 mod install_root;
 mod web_ui;
 mod update_routes;

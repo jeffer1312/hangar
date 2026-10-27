@@ -105,6 +105,8 @@ pub struct AppState {
     pub prewarm: Arc<crate::prewarm::Store>,
     /// Base das releases do pacote que o `GET /api/atualizacao` consulta; o teste troca.
     pub update_release_base: String,
+    /// Base do worker do "Reportar problema" (`/api/relatorio`); o teste troca por um falso.
+    pub diag_report_base: String,
 }
 
 impl AppState {
@@ -188,6 +190,7 @@ impl AppState {
             origins_home: std::path::PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap_or_default()),
             prewarm: Arc::new(crate::prewarm::Store::server(&hangar_dir)),
             update_release_base: crate::update::RELEASE_BASE.to_owned(),
+            diag_report_base: crate::diag_report::WORKER_BASE.to_owned(),
             hangar_dir, device_install,
             upload_naming: Default::default(),
             origins: std::sync::Mutex::new(indexmap::IndexMap::new()),
@@ -647,6 +650,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_any))
         // Senha do chaveiro: só o dono, nunca repassada; só o preflight do CORS vai ao Python.
         .route("/api/keyring/unlock", axum::routing::post(crate::keyring::unlock_route).options(pass_any))
+        // Relatório de diagnóstico: só o dono, nunca repassado; só o preflight do CORS vai ao Python.
+        .route("/api/diag/report", axum::routing::post(crate::diag_report::report_route).options(pass_any))
         // SideStore no iPhone/iPad do cabo: só o dono, nunca repassado (a senha da Apple ID não vai ao Python).
         .route("/api/device-install/devices", get(crate::device_install::routes::devices))
         .route("/api/device-install/progress", get(crate::device_install::routes::progress))

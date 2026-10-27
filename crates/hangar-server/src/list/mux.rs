@@ -116,6 +116,15 @@ impl Mux {
         String::from_utf8_lossy(&out.stdout).lines().find_map(|line| line.trim().strip_prefix(prefix.as_str()).map(str::to_owned))
     }
 
+    /// `tmux -V` (o psmux responde ao mesmo); `None` sem programa, no prazo estourado ou na recusa.
+    pub async fn version(&self) -> Option<String> {
+        let mut command = crate::terminal_input::child_command(&self.program);
+        command.arg("-V").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true);
+        let out = tokio::time::timeout(self.timeout, command.output()).await.ok()?.ok()?;
+        if !out.status.success() { return None; }
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_owned()).filter(|v| !v.is_empty())
+    }
+
     pub async fn list_panes(&self) -> Result<Vec<Pane>, MuxUnavailable> {
         self.list_panes_checked().await.map(|(panes, _)| panes)
     }
