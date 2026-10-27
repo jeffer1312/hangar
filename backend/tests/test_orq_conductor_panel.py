@@ -199,7 +199,8 @@ def test_condutor_valida_caminho_sem_exigir_eventos(monkeypatch, tmp_path):
     answer = client.get("/api/orq/execução/conductor")
     assert answer.status_code == 200
     assert call("conductor.exec-dir", home=client.home, id="execução") == str(directory)
-    assert answer.json()["watchdog"]["source"] == "none"
+    expected_source = "none" if sys.platform == "linux" else "unavailable"
+    assert answer.json()["watchdog"]["source"] == expected_source
     assert list(directory.iterdir()) == []
     for invalid in ("a:b", "a%5Cb", "a%00b", "ausente"):
         answer = client.get(f"/api/orq/{invalid}/conductor")

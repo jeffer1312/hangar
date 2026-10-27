@@ -169,8 +169,16 @@ fn shadow_metadata_failure_warns_once_without_conversation_text() {
         .with_writer(move || sink.clone())
         .finish();
     let tmp = tempfile::tempdir().unwrap();
-    let blocked = tmp.path().join("blocked");
-    std::fs::write(&blocked, "x").unwrap();
+    // No Windows, um arquivo usado como pasta devolve NotFound; o nome inválido força o erro de metadados.
+    let blocked = if cfg!(windows) {
+        tmp.path().join("blocked<")
+    } else {
+        let path = tmp.path().join("blocked");
+        std::fs::write(&path, "x").unwrap();
+        path
+    };
+    assert_ne!(std::fs::metadata(blocked.join("jev-shadow.jsonl")).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound);
     let obj = &fixture()["shadow"]["input"];
     tracing::subscriber::with_default(subscriber, || {
         timeline::entry(obj, Some(&blocked));
