@@ -15,9 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from app import pi_catalog
-
-_APP = Path(pi_catalog.__file__).parent
+_APP = Path(__file__).resolve().parent.parent / "app"
 
 # A regra NAO e "nome cru e sempre defeito" — e "nome cru so vale pra quem e binario de verdade".
 # O que quebra e CLI instalada por gerenciador de pacote de linguagem, que no Windows vira um script

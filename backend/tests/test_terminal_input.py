@@ -326,7 +326,9 @@ class _LinhaFalsa:
 
 def _com_linha(monkeypatch, resposta, registradas=("pi-x",)):
     linha = _LinhaFalsa(resposta, registradas)
-    monkeypatch.setattr(terminal_input.pi_inbox, "INBOX", linha)
+    monkeypatch.setattr(terminal_input.providers_bridge, "inbox_call", lambda op, **args: (
+        {"line": next((k for k in (args.get("name"), args.get("pane")) if k in linha.registradas), None)}
+        if op == "line" else {"value": linha.perguntar_sync(args["key"], args["what"])}))
     return linha
 
 
@@ -1007,12 +1009,12 @@ def test_send_prompt_pi_ocupado_alem_do_limite_vira_erro_visivel(monkeypatch, ca
 
 def test_pi_com_linha_entrega_sem_digitar(monkeypatch):
     """O ponto da fase inteira: havendo linha, NENHUMA tecla é mandada."""
-    from app import pi_inbox, terminal_input
+    from app import terminal_input
 
     teclas = []
     monkeypatch.setattr(terminal_input, "send_keys", lambda *a, **k: teclas.append(a) or True)
-    monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
-    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", lambda pane, texto, msg_id=None: "sent")
+    monkeypatch.setattr(terminal_input.providers_bridge, "inbox_call",
+                        lambda op, **args: {"line": args.get("name"), "disposition": "sent"})
 
     r = terminal_input.TerminalInput().send_prompt("s", "oi", provider="pi", pane_id="%1")
     assert r == "sent"
@@ -1022,11 +1024,11 @@ def test_pi_com_linha_entrega_sem_digitar(monkeypatch):
 def test_pi_com_linha_funciona_mesmo_com_overlay(monkeypatch):
     """A linha não digita, então overlay aberto não é motivo pra adiar. Na v1 do plano o gate
     `deliverable` vinha antes e a sessão com picker nunca tentava a linha."""
-    from app import pi_inbox, terminal_input
+    from app import terminal_input
 
     monkeypatch.setattr(terminal_input, "deliverable", lambda name: False)
-    monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
-    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", lambda pane, texto, msg_id=None: "sent")
+    monkeypatch.setattr(terminal_input.providers_bridge, "inbox_call",
+                        lambda op, **args: {"line": args.get("name"), "disposition": "sent"})
 
     assert terminal_input.TerminalInput().send_prompt(
         "s", "oi", provider="pi", pane_id="%1") == "sent"
@@ -1034,9 +1036,9 @@ def test_pi_com_linha_funciona_mesmo_com_overlay(monkeypatch):
 
 def test_pi_sem_linha_cai_na_tecla(monkeypatch):
     """Sessão Pi antiga (sem a extensão nova) continua funcionando exatamente como hoje."""
-    from app import pi_inbox, terminal_input
+    from app import terminal_input
 
-    monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: False)
+    monkeypatch.setattr(terminal_input.providers_bridge, "inbox_call", lambda op, **args: {"line": None})
     chamou = {"v": False}
 
     def marcar(*a, **k):
@@ -1059,13 +1061,16 @@ def test_pi_nao_entrega_na_linha_de_OUTRA_sessao(monkeypatch):
     """No psmux o pane é `%1` em TODA sessão Pi. Com a busca por pane, a mensagem endereçada a uma
     sessão saía na conversa da outra — medido 22/08/2026: um `POST /input` pra `pi-teste` respondeu
     `delivered: true` e o texto apareceu na `pi-medir`."""
-    from app import pi_inbox, terminal_input
+    from app import terminal_input
 
-    inbox = pi_inbox.PiInbox()
     entregues = []
-    inbox.registrar("pi-medir", lambda payload: entregues.append(payload))
-    monkeypatch.setattr(pi_inbox, "INBOX", inbox)
-    monkeypatch.setattr(terminal_input.pi_inbox, "INBOX", inbox)
+    def inbox_call(operation, **arguments):
+        if operation == "line":
+            assert arguments == {"name": "pi-teste", "pane": "%1"}
+            return {"line": None}
+        entregues.append(arguments)
+        return {"disposition": "deferred"}
+    monkeypatch.setattr(terminal_input.providers_bridge, "inbox_call", inbox_call)
     monkeypatch.setattr(terminal_input, "deliverable", lambda name: True)
     monkeypatch.setattr(terminal_input, "_wait_input_ready", lambda *a, **k: True)
     monkeypatch.setattr(terminal_input, "_composer_ocupado_pi", lambda *a, **k: False)
@@ -1081,12 +1086,12 @@ def test_pi_nao_entrega_na_linha_de_OUTRA_sessao(monkeypatch):
 
 def test_pi_linha_sem_confirmacao_nao_digita(monkeypatch):
     """A regra da duplicata: tentou pela linha e não confirmou -> deferred, e NENHUMA tecla."""
-    from app import pi_inbox, terminal_input
+    from app import terminal_input
 
     teclas = []
     monkeypatch.setattr(terminal_input, "send_keys", lambda *a, **k: teclas.append(a) or True)
-    monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
-    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", lambda pane, texto, msg_id=None: "deferred")
+    monkeypatch.setattr(terminal_input.providers_bridge, "inbox_call",
+                        lambda op, **args: {"line": args.get("name"), "disposition": "deferred"})
 
     r = terminal_input.TerminalInput().send_prompt("s", "oi", provider="pi", pane_id="%1")
     assert r == "deferred"
@@ -1095,12 +1100,12 @@ def test_pi_linha_sem_confirmacao_nao_digita(monkeypatch):
 
 def test_claude_nunca_consulta_a_linha(monkeypatch):
     """Sessão de Claude não pode nem encostar no caminho novo."""
-    from app import pi_inbox, terminal_input
+    from app import terminal_input
 
     def explode(*a, **k):
         raise AssertionError("o caminho do Pi foi consultado numa sessao Claude")
 
-    monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", explode)
+    monkeypatch.setattr(terminal_input.providers_bridge, "inbox_call", explode)
     monkeypatch.setattr(terminal_input, "deliverable", lambda name: True)
     monkeypatch.setattr(terminal_input, "_wait_input_ready", lambda *a, **k: True)
     monkeypatch.setattr(terminal_input, "_entrou_no_composer", lambda *a, **k: True)
@@ -1122,7 +1127,7 @@ def test_claude_nunca_consulta_a_linha(monkeypatch):
 def test_porta_a_retry_pela_fila_usa_o_mesmo_msg_id(tmp_queue, monkeypatch):
     """Timeout de ACK (linha viva, "deferred") -> drain() reclama a MESMA entrada -> a 'extensao'
     (dublê) recebe o MESMO id nas duas tentativas."""
-    from app import pi_inbox, terminal_input
+    from app import terminal_input
     from app.pqueue import PromptQueue
 
     ids_recebidos = []
@@ -1131,8 +1136,9 @@ def test_porta_a_retry_pela_fila_usa_o_mesmo_msg_id(tmp_queue, monkeypatch):
         ids_recebidos.append(msg_id)
         return "deferred"   # ACK nunca chega, nas DUAS tentativas
 
-    monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
-    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", fake_entregar_sync)
+    monkeypatch.setattr(terminal_input.providers_bridge, "inbox_call",
+                        lambda op, **args: {"line": args.get("name")} if op == "line" else
+                        {"disposition": fake_entregar_sync(args["key"], args["text"], args.get("msg_id"))})
     # drain resolve pelo pane do AGENTE (I1 da revisao final), nao pelo ATIVO.
     monkeypatch.setattr(terminal_input.agentpane, "pane_info", lambda name: ("pi", "%1"))
 
@@ -1159,7 +1165,7 @@ def test_porta_b_reconcile_redrena_com_o_mesmo_msg_id(tmp_queue, monkeypatch):
     aterrissar no transcript como committed_user_lines espera, reconcile_delivered re-enfileira a
     MESMA entrada e o drain() a reenvia -- tambem com o id ORIGINAL, senao seria a mesma duplicata
     da Porta A por outra porta."""
-    from app import pi_inbox, terminal_input
+    from app import terminal_input
     from app.pqueue import PromptQueue
 
     ids_recebidos = []
@@ -1168,8 +1174,9 @@ def test_porta_b_reconcile_redrena_com_o_mesmo_msg_id(tmp_queue, monkeypatch):
         ids_recebidos.append(msg_id)
         return "sent"
 
-    monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
-    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", fake_entregar_sync)
+    monkeypatch.setattr(terminal_input.providers_bridge, "inbox_call",
+                        lambda op, **args: {"line": args.get("name")} if op == "line" else
+                        {"disposition": fake_entregar_sync(args["key"], args["text"], args.get("msg_id"))})
     # drain resolve pelo pane do AGENTE (I1 da revisao final), nao pelo ATIVO.
     monkeypatch.setattr(terminal_input.agentpane, "pane_info", lambda name: ("pi", "%1"))
 

@@ -286,16 +286,10 @@ def _reset_auth_backoff():
 
 
 @pytest.fixture(autouse=True)
-def _reset_pi_inbox_ws_warn():
-    # Aviso-uma-vez-ate-mudar da recusa de conexao WS (app.api._ws_origem_avisada/_ws_token_avisado)
-    # e dict de MODULO: sem reset, o teste que prova "recusa loga" falharia se um teste anterior na
-    # mesma sessao ja tivesse "gasto" o aviso daquele host (mesmo padrao do _reset_auth_backoff acima).
-    from app import api
-    api._ws_origem_avisada.clear()
-    api._ws_token_avisado.clear()
-    yield
-    api._ws_origem_avisada.clear()
-    api._ws_token_avisado.clear()
+def _isolate_provider_inbox_transport(monkeypatch):
+    from app import providers_bridge
+    monkeypatch.setattr(providers_bridge, "inbox_call", lambda operation, **arguments:
+                        {"line": None, "value": None, "disposition": "sem-linha", "present": False})
 
 
 @pytest.fixture(autouse=True)

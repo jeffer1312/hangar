@@ -38,7 +38,6 @@ from app.bastao import montar as bastao_montar
 from app.fs import FsError, allowed_roots, list_roots, make_dir, scan_dir
 from app.model_picker import PickerError
 from app.mensagens import erro
-from app import kimi_models
 from app import claude_models
 from app import dictation_bridge
 from app import claude_customizations
@@ -49,12 +48,9 @@ from app import filesearch, filetree, git_ops, worktrees
 from app.file_response import file_response
 from app.filesearch import SearchError
 from app.filetree import FileError
-from app import pi_catalog
 from app import cli_probe
-from app import pi_models
-from app import pi_inbox
-from app.pi_inbox import INBOX
 from app import registry as registry_mod
+from app import providers_bridge
 from app.registry import KillFailed, SessionRegistry, sanitize_cwd
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, CreatedSessionInfo, ChatEvent, CostReport, UsoReport, RunnersResponse, RunBody,
@@ -274,12 +270,8 @@ async def _lifespan(app: FastAPI):
     # montar(). Sem aquecer aqui, o primeiro /api/costs depois de todo restart paga a coleta fria
     # (657ms medidos) MAIS até 3s de câmbio, contra o AbortSignal.timeout(4000) do cliente.
     threading.Thread(target=_usd_brl, name="usd-brl-warm", daemon=True).start()
-    # Catálogo do pi/omp em fundo: a primeira lista de modelos depois do restart levava segundos.
-    pi_catalog.warm()
     from app import transcript_index
     transcript_index.start_background()
-    # A linha vive no loop do servidor, mas o send_prompt roda em thread — ver pi_inbox.entregar_sync.
-    INBOX.ligar_loop(asyncio.get_running_loop())
     # Mesmo motivo, outro caminho: o drain do Codex e assincrono (app-server) e quem o chama sao
     # threads (Timer da confirmacao, gatilho de hook). Ver `_drenar`.
     global _loop_servidor
@@ -785,141 +777,6 @@ app.include_router(migration_status.router)
 app.include_router(internal_api.router)
 registry = SessionRegistry()
 terminal = TerminalInput()
-
-# Teto de mensagem: o _BodySizeLimitMiddleware ignora scope != http de propósito (api.py:83), então
-# a rota WebSocket nasceria sem limite nenhum. 256 KiB cobre com folga qualquer texto de chat.
-_WS_MAX = 256 * 1024
-# Heartbeat DO SERVIDOR, não eco do cliente: socket aberto não prova que tem alguém lendo (extensão
-# com laço travado, notebook suspenso). Sem isto, uma linha zumbi faria toda mensagem pagar o
-# PRAZO_ACK inteiro antes de cair pro fallback — a lentidão que o caminho de tecla não tinha.
-_WS_PING = 20.0
-# Teto de heartbeats SEGUIDOS sem resposta antes de fechar. `send_json` sozinho não pega o zumbi que
-# o comentário acima descreve: com o laço de eventos travado (ou notebook suspenso), o buffer TCP do
-# SO absorve o ping sem erro nenhum — é exatamente esse caso que o heartbeat existe pra cobrir. Dois
-# pings perdidos (~2×_WS_PING) é rápido o bastante pra não atrasar a decisão "linha ou tecla" da
-# Task 4, e generoso o bastante pra não fechar por uma rajada de latência isolada.
-_WS_PINGS_SEM_RESPOSTA_MAX = 2
-
-
-# Aviso-uma-vez-ate-mudar da recusa de conexao (achado ALTA da revisao 02/08/2026): sem isto, um
-# token girado / bind mudado / firewall no meio faz TODA tentativa de retry da extensao (laco com
-# recuo, hangar-state.ts) virar linha de log — e a mesma enxurrada que o retry em si tenta evitar do
-# lado dela. Mesma politica de terminal_input._avisa_deferred/_limpa_deferred: WARNING na 1a recusa
-# por host, calado ate uma conexao daquele host DAR CERTO (o que também reabre o aviso se a falha
-# voltar depois — nao e "avisa uma vez na vida do processo").
-_ws_origem_avisada: set[str] = set()
-_ws_token_avisado: set[str] = set()
-
-
-# Única rota WebSocket do backend. Quem LIGA é a extensão do Pi; o backend nunca procura ninguém —
-# é isso que faz o custo ser zero pra quem não tem Pi.
-# Auth pela query e não por header: é o mesmo caminho que o SSE já usa (auth.py:86-94), e cliente
-# WebSocket não manda Authorization de forma portável.
-@app.websocket("/api/pi/inbox")
-async def pi_inbox_ws(ws: WebSocket):
-    host = ws.client.host if ws.client else ""
-    # bind_host: o endereco em que o PROPRIO uvicorn subiu (resolve_bind_ip == main.py). Com
-    # CP_LAN_BIND_IP=auto ou IP fixo de LAN (modo celular documentado), o processo nao escuta em
-    # loopback -- so aceitar 127.0.0.1 fechava a linha do Pi em silencio pra sempre (achado da
-    # revisao final). Aceitar TAMBEM o bind continua seguro: uma conexao TCP com origem igual ao
-    # endereco que o proprio host bindou so acontece self-connect (a mesma maquina falando com uma
-    # interface dela mesma) -- um host remoto na LAN nunca aparece aqui com ESSE endereco de
-    # origem, porque a origem eh o IP DELE, nao o do servidor (TCP nao deixa forjar isso).
-    if host not in ("127.0.0.1", "::1", "localhost", resolve_bind_ip(settings)):
-        # A defesa real é esta. Em loopback o token não protege de quem já está logado na máquina
-        # (o próprio auth.py:42-46 registra isso), mas conexão de FORA não tem o que fazer aqui.
-        # Achado ALTA da revisao 02/08/2026: ate aqui a recusa era MUDA — nem no terminal do Pi nem
-        # no log do backend sobrava rastro de por que a linha rapida nunca ligava.
-        if host not in _ws_origem_avisada:
-            _ws_origem_avisada.add(host)
-            _log.warning("pi_inbox: origem recusada host=%s (fora do bind aceito) — linha do Pi "
-                         "vai continuar caindo pra tecla (aviso unico ate mudar)", host)
-        await ws.close(code=1008)
-        return
-    if not settings.auth_token or not secrets.compare_digest(
-            ws.query_params.get("token", ""), settings.auth_token):
-        # Mesmo achado: inconsistente com auth.py:75, que loga toda virada de bloqueio de token —
-        # aqui nao logava NADA. Token girado / sidecar desatualizado ficava indistinguivel de
-        # "extensao nao instalada".
-        if host not in _ws_token_avisado:
-            _ws_token_avisado.add(host)
-            _log.warning("pi_inbox: token recusado host=%s — linha do Pi vai continuar caindo pra "
-                         "tecla (aviso unico ate acertar)", host)
-        await ws.close(code=1008)
-        return
-    # Conectou: qualquer recusa ANTERIOR deste host era um estado velho — se voltar a falhar depois,
-    # merece aviso de novo (nao e "avisou uma vez na vida do processo, calado pra sempre").
-    _ws_origem_avisada.discard(host)
-    _ws_token_avisado.discard(host)
-    await ws.accept()
-    pane = ""
-    linha = None
-    try:
-        # Texto cru primeiro, igual ao loop abaixo: receive_json() direto pularia o teto de
-        # tamanho pra ESTA mensagem (achado da revisão — só as do loop passavam pelo len(bruto)).
-        bruto = await asyncio.wait_for(ws.receive_text(), _WS_PING)
-        if len(bruto) > _WS_MAX:
-            _log.warning("pi_inbox: primeira mensagem de %d bytes — fechando", len(bruto))
-            await ws.close(code=1009)
-            return
-        primeira = json.loads(bruto)
-        # `chave` e o que a extensao declara como identidade da sessao: o nome do psmux quando
-        # existe, o pane quando nao (tmux). Extensao ANTIGA nao manda o campo e cai no pane, que e
-        # exatamente o comportamento de antes — ninguem precisa dar /reload pra continuar
-        # funcionando no Linux. Ver pi_inbox: no psmux o pane e `%1` em TODA sessao, e por isso a
-        # linha da segunda sessao Pi tomava o lugar da primeira.
-        pane = str(primeira.get("chave") or primeira.get("pane") or "")
-        if not pane:
-            await ws.close(code=1008)
-            return
-        linha = INBOX.registrar(pane, ws.send_json)
-        _log.info("pi_inbox: linha aberta chave=%s", pane)
-        pings_sem_resposta = 0
-        while True:
-            try:
-                bruto = await asyncio.wait_for(ws.receive_text(), _WS_PING)
-            except asyncio.TimeoutError:
-                # Silêncio: cobra sinal de vida. Se o socket estiver morto, o send levanta e a
-                # linha cai aqui mesmo, em vez de ficar registrada como viva pra sempre. Mas o send
-                # sozinho não pega o zumbi (buffer do SO absorvendo o ping) — daí o contador: sem
-                # NENHUMA resposta por _WS_PINGS_SEM_RESPOSTA_MAX rodadas, fecha por conta própria.
-                pings_sem_resposta += 1
-                if pings_sem_resposta > _WS_PINGS_SEM_RESPOSTA_MAX:
-                    _log.warning("pi_inbox: %d heartbeats sem resposta pane=%s — linha zumbi, "
-                                 "fechando", pings_sem_resposta, pane)
-                    await ws.close(code=1000)
-                    return
-                await ws.send_json({"ping": True})
-                continue
-            # Qualquer mensagem é sinal de vida, não só o pong: zera antes de olhar o conteúdo.
-            pings_sem_resposta = 0
-            if len(bruto) > _WS_MAX:
-                _log.warning("pi_inbox: mensagem de %d bytes pane=%s — fechando", len(bruto), pane)
-                await ws.close(code=1009)
-                return
-            msg = json.loads(bruto)
-            if msg.get("pong") or msg.get("ping"):
-                continue
-            msg_id = str(msg.get("id") or "")
-            if not msg_id:
-                continue
-            if "resposta" in msg:
-                # Resposta de PERGUNTA (leitura), nao confirmacao de entrega — chaves diferentes
-                # de proposito: a extensao responde `{id, resposta}` e nunca `ok`, entao uma
-                # mensagem jamais cai nos dois caminhos. `None` explicito (a extensao dizendo "nao
-                # sei") chega como None e o backend cai no plano B; string vazia e resposta.
-                valor = msg.get("resposta")
-                INBOX.responder(pane, msg_id, valor if isinstance(valor, str) else None)
-                continue
-            INBOX.confirmar(pane, msg_id, bool(msg.get("ok")), msg.get("erro"))
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        _log.warning("pi_inbox: linha caiu pane=%s: %r", pane, e)
-    finally:
-        if linha is not None:
-            INBOX.remover(pane, linha)
-
 
 @app.websocket("/api/sessions/{name}/term")
 async def term_ws_route(ws: WebSocket, name: str):
@@ -3433,7 +3290,7 @@ def _send_one_available(name: str, text: str, track_entry: bool = False) -> dict
     # respeitar/disputar o _send_lock. Mover so o append() e necessario, mas sozinho e insuficiente.
     # `pi_inbox.linha_de` (nome primeiro, pane depois), nunca o pane cru: no psmux o pane e `%1`
     # em toda sessao Pi e a busca por pane achava a linha da OUTRA — ver pi_inbox.
-    is_pi = (provider in ("pi", "omp") and pi_inbox.linha_de(name, pane_id) is not None
+    is_pi = (provider in ("pi", "omp") and providers_bridge.inbox_call("line", name=name, pane=pane_id)["line"] is not None
              and not stripped.startswith("/"))
     if is_pi:
         try:
@@ -7889,34 +7746,6 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "",
     """
     if engine_account is not None and (provider != "claude" or not engine):
         raise HTTPException(400, detail=erro("erro_cliproxy_conta", "conta ChatGPT exige Claude com motor CLIProxyAPI local"))
-    if provider in ("pi", "omp"):
-        try:
-            return {"kind": provider, "reduced": False,
-                    "models": await asyncio.to_thread(pi_catalog.listar, provider)}
-        except pi_catalog.PiAusente as e:
-            # Codigo proprio: "nao achei o pi" nao e "o pi falhou". Antes isso chegava como
-            # `[WinError 2] O sistema nao pode encontrar o arquivo especificado` dentro da mensagem
-            # de falha do comando — a pessoa ia procurar defeito no `pi --list-models` de um pi que
-            # nem estava instalado ali.
-            # Codigo proprio por provider, mesmo motivo do erro_omp_list_models: o front traduz por
-            # `code`, entao um codigo so mandaria a sessao omp instalar o Pi.
-            codigo = "erro_omp_ausente" if provider == "omp" else "erro_pi_ausente"
-            raise HTTPException(502, detail=erro(codigo, str(e), erro=str(e)))
-        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
-            # Codigo proprio por provider: o front traduz por `code` (a `msg` do backend so aparece
-            # pra codigo DESCONHECIDO), entao um so codigo pros dois faria a falha do omp renderizar
-            # o texto fixo "pi --list-models falhou" na tela.
-            if provider == "omp":
-                raise HTTPException(502, detail=erro("erro_omp_list_models", f"omp models --json falhou: {e}", erro=str(e)))
-            raise HTTPException(502, detail=erro("erro_pi_list_models", f"pi --list-models falhou: {e}", erro=str(e)))
-    if provider == "kimi":
-        # Sem subprocess aqui (não existe `kimi --list-models`): o catálogo é o config.toml.
-        cat = kimi_models.read_catalog()
-        if cat is None:
-            raise HTTPException(409, detail=erro("erro_catalogo_kimi_indisponivel",
-                                                 "catalogo do Kimi indisponível — ~/.kimi-code/config.toml "
-                                                 "ausente ou sem seções [models.*]"))
-        return {"kind": "kimi", "reduced": False, "models": cat["models"], "default": cat["default"]}
     if provider == "codex":
         account = _resolve_codex_account(codex_account or None)
         await _codex_require_idle_preparation(account, _codex_service())
@@ -8046,18 +7875,6 @@ async def engine_model_set(name: str, body: EngineModelBody):
     return {**res, "model": body.model}
 
 
-# ── Modelo + raciocinio de uma sessao Pi ────────────────────────────────────────────────────────
-# Rotas separadas das do Claude (/model-effort, picker do TUI) e das do Codex (/models, app-server)
-# porque o mecanismo e um terceiro: a extensao hangar-state.ts publica o catalogo num sidecar e expoe
-# dois comandos que aplicam a troca pela API do Pi. Ver app/pi_models.py pro porque de nao raspar
-# o TUI aqui.
-
-class PiModelBody(_StrictBody):
-    provider: str | None = None
-    model: str | None = None
-    effort: str | None = None
-
-
 def _session_config_dir(name: str) -> Path | None:
     """CLAUDE_CONFIG_DIR do processo do pane (o sidecar do Pi e o settings.json moram la dentro).
     None -> ~/.claude.
@@ -8076,166 +7893,6 @@ def _session_config_dir(name: str) -> Path | None:
                      exc_info=True)
         return None
 
-
-async def _pi_catalog(name: str) -> tuple[dict, str]:
-    info = await _cached_info(name)
-    if not info or not info.jsonl:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao ou transcript nao encontrado"))
-    if info.provider not in ("pi", "omp"):
-        raise HTTPException(400, detail=erro("erro_rota_so_pi", "esta rota so existe pra sessoes Pi"))
-    cat = await asyncio.to_thread(pi_models.read_catalog, info.jsonl, _session_config_dir(name))
-    if cat is None:
-        # Falha ALTA: sem o sidecar nao ha catalogo real, e inventar um faria o app oferecer
-        # modelos que o `/cp-model` nao encontraria. Instrucao junto porque a causa e sempre a
-        # mesma (extensao velha/ausente) — mas o conserto E o CODIGO mudam por provider: o front
-        # traduz pelo `code` (a `msg` do backend so aparece pra codigo DESCONHECIDO), entao um so
-        # codigo pros dois faria uma sessao omp mostrar a instrucao do Pi.
-        if info.provider == "omp":
-            raise HTTPException(409, detail=erro(
-                "erro_catalogo_omp_indisponivel",
-                "catalogo do omp indisponivel — rode ./scripts/install-claude-wrapper.sh e feche "
-                "e reabra a sessao (o /reload do omp nao recarrega a extensao)"))
-        raise HTTPException(409, detail=erro(
-            "erro_catalogo_pi_indisponivel",
-            "catalogo do Pi indisponivel — rode ./scripts/install-claude-wrapper.sh e reinicie a "
-            "sessao (extensao hangar-state.ts desatualizada)"))
-    return cat, info.jsonl
-
-
-@app.get("/api/sessions/{name}/pi/models", dependencies=[Depends(require_auth)])
-async def pi_models_list(name: str):
-    cat, _ = await _pi_catalog(name)
-    return {"models": cat.get("models", []), "current": cat.get("current"),
-            "thinking": cat.get("thinking"), "levels": cat.get("levels", [])}
-
-
-@app.post("/api/sessions/{name}/pi/model", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def pi_model_set(name: str, body: PiModelBody):
-    cat, jsonl = await _pi_catalog(name)
-    cmds: list[str] = []
-    try:
-        if body.model:
-            if not body.provider:
-                raise pi_models.PiModelError(422, "provider obrigatorio junto com model")
-            pi_models.check_known(cat, body.provider, body.model)
-            cmds.append(pi_models.model_command(body.provider, body.model))
-        if body.effort:
-            cmds.append(pi_models.think_command(body.effort))
-    except pi_models.PiModelError as e:
-        raise HTTPException(e.status, e.detail)
-    if not cmds:
-        raise HTTPException(422, detail=erro("erro_model_effort_faltando", "informe model (com provider) e/ou effort"))
-    try:
-        await asyncio.to_thread(terminal.send_pi_commands, name, cmds)
-    except terminal_input.DriveError as e:
-        raise HTTPException(409, str(e))
-    # Re-le o sidecar ATE ele confirmar (ou estourar 2s): o Pi CLAMPA o nivel pro que o modelo
-    # suporta, entao o que voltamos e o que FICOU, nao o que foi pedido — e o `/cp-model` pode
-    # RECUSAR sem levantar nada (sem chave pro provedor: notifica no TUI e o sidecar segue no modelo
-    # velho). Devolver ok=True sem comparar era declarar sucesso sobre um no-op, com a folha
-    # fechando calada.
-    after = await asyncio.to_thread(pi_models.read_back, jsonl, _session_config_dir(name),
-                                    body.provider, body.model, body.effort)
-    if after is not None and pi_models.confirms(after, body.provider, body.model, body.effort):
-        return {"ok": True, "current": after.get("current"), "thinking": after.get("thinking"),
-                "levels": after.get("levels", [])}
-    # Nao confirmou. As duas causas pedem acoes diferentes do usuario, entao nao viram a mesma frase:
-    # sidecar ilegivel ou parado no MESMO `ts` = o Pi nem republicou o catalogo (comando pode nao ter
-    # chegado) -> indeterminado; `ts` novo com o modelo velho = o Pi processou e RECUSOU.
-    if after is None or after.get("ts") == cat.get("ts"):
-        raise HTTPException(409, detail=erro("erro_sem_confirmacao_troca",
-                                             "comandos digitados, mas o Pi nao republicou o catalogo — nao da "
-                                             "pra confirmar a troca; veja o modelo no proprio terminal"))
-    cur = after.get("current") or {}
-    raise HTTPException(409, detail=erro("erro_pi_recusou_troca",
-                                             f"o Pi recusou a troca — segue em "
-                                             f"{cur.get('provider')}/{cur.get('id')} (raciocinio "
-                                             f"{after.get('thinking')}). Causa mais comum: sem chave configurada "
-                                             f"pro provedor pedido (o Pi avisa dentro do TUI)",
-                                             provider=cur.get("provider"), id=cur.get("id"),
-                                             thinking=after.get("thinking")))
-
-
-# ── Modelo de uma sessão Kimi ─────────────────────────────────────────────────────────────────
-# Quarto mecanismo, diferente dos três vizinhos: sem picker legível (Claude), sem extensão com
-# sidecar (Pi), sem app-server (Codex). O catálogo mora no ~/.kimi-code/config.toml e a troca
-# dirige a busca do picker + Alt+S, confirmada pela linha "Switched to …" do scrollback — ver
-# app/kimi_models.py pro que foi medido na TUI.
-
-class KimiModelBody(_StrictBody):
-    model: str | None = None
-    effort: str | None = None
-
-
-def _kimi_catalog() -> dict:
-    cat = kimi_models.read_catalog()
-    if cat is None:
-        # Mesma política do _pi_catalog: falha ALTA com instrução, nunca lista inventada.
-        raise HTTPException(409, detail=erro("erro_catalogo_kimi_indisponivel",
-                                             "catalogo do Kimi indisponível — ~/.kimi-code/config.toml "
-                                             "ausente ou sem seções [models.*]"))
-    return cat
-
-
-async def _kimi_info(name: str):
-    info = await _cached_info(name)
-    if not info:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessão não encontrada"))
-    if info.provider != "kimi":
-        raise HTTPException(400, detail=erro("erro_rota_so_kimi", "esta rota só existe pra sessões Kimi"))
-    return info
-
-
-@app.get("/api/sessions/{name}/kimi/models", dependencies=[Depends(require_auth)])
-async def kimi_models_list(name: str):
-    await _kimi_info(name)
-    cat = _kimi_catalog()
-    # "current" ao vivo não tem fonte barata (a TUI não expõe e o marcador da statusline é display
-    # name, que repete entre providers): quem mostra o atual é a pill do composer, que já lê a
-    # statusline. Aqui vai o default do config como referência da abertura.
-    return {"models": cat["models"], "default": cat["default"]}
-
-
-@app.post("/api/sessions/{name}/kimi/model", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def kimi_model_set(name: str, body: KimiModelBody):
-    info = await _kimi_info(name)
-    await asyncio.to_thread(_recusa_se_painel_aberto, name)
-    # Sessão TRABALHANDO: o `/model` digitado cairia no composer e o Enter o enfileiraria como
-    # MENSAGEM — a troca viraria um "/model" pro modelo ler. No Claude o _require_drivable cobre
-    # isso pelo spinner; o do Kimi são fases de lua, fora do que ele detecta, então a guarda é o
-    # marcador do hook (corrigido: pode ser o idle CONGELADO do turno anterior).
-    if info.jsonl:
-        m = hook_state.get_state(session_key(info.jsonl))
-        if m:
-            m = corrige_ocioso_kimi(m, info.jsonl)
-        if m and m[0] == "working":
-            raise HTTPException(409, detail=erro("erro_sessao_trabalhando",
-                                                 "a sessão está trabalhando — espere ela terminar"))
-    cat = _kimi_catalog()
-    try:
-        alvo = kimi_models.check_known(cat, body.model) if body.model else None
-        nivel = None
-        if body.effort:
-            # Com modelo junto, valida contra o support_efforts DELE. Sozinho, quem valida é o
-            # picker ao vivo (a linha Thinking mostra os níveis do modelo ATUAL — o backend não
-            # sabe o alias vigente sem perguntar à TUI).
-            nivel = (kimi_models.check_effort(alvo, body.effort) if alvo
-                     else kimi_models.clean_alias(body.effort).lower())
-    except kimi_models.KimiModelError as e:
-        raise HTTPException(e.status, e.detail)
-    if alvo is None and nivel is None:
-        raise HTTPException(422, detail=erro("erro_model_effort_faltando",
-                                             "informe model e/ou effort"))
-    try:
-        res = await asyncio.to_thread(terminal.set_kimi_model, name,
-                                      alvo and alvo["alias"], alvo and alvo["name"], nivel)
-    except terminal_input.DriveError as e:
-        raise HTTPException(409, str(e))
-    except PickerError as e:
-        raise HTTPException(e.status, e.detail)
-    return {"ok": True,
-            "current": {"alias": alvo["alias"], "name": alvo["name"]} if alvo else None,
-            "effort": nivel, "result": res.get("result")}
 
 
 @app.get("/api/fs/roots", dependencies=[Depends(require_auth)])
