@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fixtures from './updateAll.fixtures.json';
-import { classify, follow, ownUpdatableServers, updateAll } from './updateAll';
+import { afterAccept, classify, follow, hasRealUpdate, ownUpdatableServers, prepareUpdateAll, updateAll } from './updateAll';
+import * as m from './paraglide/messages';
 import type { UpdateAllOptions, UpdateAllState } from './updateAll';
 import { getAtualizacaoEm, getIdentificadorEm } from './api';
 import { configureApi, _resetApiEnvForTests } from './apiEnv';
@@ -31,6 +32,26 @@ describe('contrato compartilhado com o Rust', () => {
   });
 });
 
+describe('aviso pendente e aceite', () => {
+  const pending = { atualizacao_disponivel: true, aviso_pendente: true, atras: 0, versoes: { repo: 'a', backend: 'a' } };
+  it('aviso pendente pede a folha, mas não é versão nova', () => {
+    expect(classify(pending)).toBe('iniciar');
+    expect(hasRealUpdate(pending)).toBe(false);
+    expect(hasRealUpdate({ ...pending, atras: 2 })).toBe(true);
+    expect(hasRealUpdate({ ...pending, versoes: { repo: 'b', backend: 'a' } })).toBe(true);
+    expect(hasRealUpdate({ atualizacao_disponivel: true })).toBe(true);
+  });
+  it.each([
+    ['servidor antigo inicia', null, pending, 'start'],
+    ['lançado pelo aceite', { ok: true, started: true, pid: 5 }, { atras: 3 }, 'started'],
+    ['gravado sem versão nova fecha', { ok: true, started: false }, pending, 'done'],
+    ['gravado com versão nova inicia', { ok: true, started: false }, { ...pending, atras: 1 }, 'start'],
+    ['nada a aceitar segue a versão', undefined, { atualizacao_disponivel: true }, 'start'],
+  ] as const)('%s', (_name, accepted, snapshot, expected) => {
+    expect(afterAccept(accepted, snapshot)).toBe(expected);
+  });
+});
+
 it('filtra convites, desligadas, efêmeras e removidas, conservando a ordem', () => {
   const own = server('own');
   expect(ownUpdatableServers([
@@ -49,6 +70,8 @@ describe('API e execução por máquina', () => {
   let read: (id: string, count: number) => Response | Promise<Response>;
   let identity: (id: string) => Response | Promise<Response>;
   let start: (id: string) => Response | Promise<Response>;
+  let accept: (id: string, body: unknown) => Response | Promise<Response>;
+  let notes: (id: string) => Response | Promise<Response>;
   const onChange = (id: string, state: UpdateAllState) => {
     updates.set(id, [...(updates.get(id) ?? []), state]);
   };
@@ -60,13 +83,17 @@ describe('API e execução por máquina', () => {
     read = (_id, count) => json(count === 1 ? ready() : done());
     identity = (id) => json({ identificador: id, lan_url: '' });
     start = () => json({ ok: true, pid: 1 });
+    accept = () => json({ ok: true, started: false });
+    notes = () => json({ target: 'v2', warnings: [], news: [] });
     fetchMock.mockReset();
-    fetchMock.mockImplementation(async (input) => {
+    fetchMock.mockImplementation(async (input, init) => {
       const url = new URL(String(input));
       const id = url.hostname.split('.')[0];
       calls.push(`${id}${url.pathname}${url.search}`);
       if (url.pathname === '/api/peers/identificador') return identity(id);
       if (url.pathname === '/api/atualizacao/iniciar') return start(id);
+      if (url.pathname === '/api/update/accept') return accept(id, JSON.parse(String(init?.body)));
+      if (url.pathname === '/api/update/notes') return notes(id);
       if (url.pathname === '/api/atualizacao') {
         const count = (reads.get(id) ?? 0) + 1;
         reads.set(id, count);
@@ -101,6 +128,39 @@ describe('API e execução por máquina', () => {
     expect(calls.filter((path) => path.endsWith('/iniciar'))).toEqual(['last/api/atualizacao/iniciar']);
     expect(updates.has('alias')).toBe(false);
     expect(final('last')?.status).toBe('atualizado');
+  });
+
+  it('aceite por máquina antes de iniciar: lançado acompanha, gravado sem versão fecha, recusa não inicia', async () => {
+    const bodies: Record<string, unknown> = {};
+    accept = (id, body) => {
+      bodies[id] = body;
+      if (id === 'launched') return json({ ok: true, started: true, pid: 7 });
+      if (id === 'refused') return json({ detail: 'fixture-accept' }, 500);
+      if (id === 'old') return json({}, 404);
+      return json({ ok: true, started: false });
+    };
+    read = (id, count) => {
+      if (id === 'stored') return json({ ...ready(), aviso_pendente: true, atras: 0 });
+      return json(count === 1 ? ready() : done());
+    };
+    const ids = ['launched', 'stored', 'refused', 'old', 'plain'];
+    const acceptance = { ids: ['2026-10-24-pacote-por-versao'], mode: 'developer' as const };
+    await updateAll(ids.map((id) => server(id)), onChange,
+      { ...options, accept: { launched: acceptance, stored: acceptance, refused: acceptance, old: { ids: ['w'] } } });
+    expect(bodies).toEqual({ launched: acceptance, stored: acceptance, refused: acceptance, old: { ids: ['w'] } });
+    expect(calls.filter((path) => path.endsWith('/iniciar')).sort()).toEqual(['old/api/atualizacao/iniciar', 'plain/api/atualizacao/iniciar']);
+    expect(final('launched')?.status).toBe('atualizado');
+    expect(final('stored')?.status).toBe('em_dia');
+    expect(final('refused')).toMatchObject({ status: 'falhou', error: m.update_accept_failed({ reason: '500: fixture-accept' }) });
+    expect(final('old')?.status).toBe('atualizado');
+  });
+
+  it('prepara os avisos de cada máquina; quem falha fica de fora e 404 é sem avisos', async () => {
+    notes = (id) => id === 'down' ? json({ detail: 'fixture-down' }, 503)
+      : id === 'old' ? json({}, 404) : json({ target: 'v2', warnings: [{ id: 'w', title: 't', text: 'x', choice: 'mode', mode: null }], news: [] });
+    const result = await prepareUpdateAll(['ok', 'down', 'old'].map((id) => server(id)), options);
+    expect(result.run.map((entry) => [entry.server.id, entry.notes?.warnings.length ?? null])).toEqual([['ok', 1], ['old', null]]);
+    expect(result.failed.map((entry) => entry.id)).toEqual(['down']);
   });
 
   it('identidade vazia ou falha não junta máquinas', async () => {

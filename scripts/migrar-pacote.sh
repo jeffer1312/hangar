@@ -9,7 +9,18 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 marca="$HOME/.hangar/migration.json"
+# A prova do passo: ele rodou, migrando agora ou deixando a migração para a tela.
+if ! { mkdir -p "$HOME/.hangar" && date +%Y-%m-%dT%H:%M:%S%z > "$HOME/.hangar/migration-offered"; } 2>/dev/null; then
+    echo "##HANGAR-FALHA## não consegui gravar $HOME/.hangar/migration-offered"
+    exit 1
+fi
 if [ -e "$marca" ]; then echo "já migrada: $marca"; exit 0; fi
+# Sem o aviso aceito na tela (o motor ou o app antigo atualizando), nada muda: a versão nova mostra o
+# aviso com a escolha, e a migração roda pela tela.
+if ! grep -q '"2026-10-24-pacote-por-versao"' "$HOME/.hangar/update-accepted.json" 2>/dev/null; then
+    echo "migração pendente: espera o aviso ser aceito na tela de atualização"
+    exit 0
+fi
 pasta="$HOME/.hangar/migrate"
 bin="$pasta/hangar-server"
 

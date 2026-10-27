@@ -1,26 +1,36 @@
-import { getAtualizacaoEm, getIdentificadorEm, iniciarAtualizacaoEm } from './api';
+import { acceptUpdateWarningsEm, getAtualizacaoEm, getIdentificadorEm, getUpdateNotesEm, iniciarAtualizacaoEm, type UpdateAcceptResult } from './api';
 import { isOwnMachine } from './machineImport';
 import { registrar as registerDiagnostic } from './diag';
 import type { Server } from './servers';
-import type { Atualizacao, AtualizacaoEstado } from './types';
+import type { Atualizacao, AtualizacaoEstado, UpdateMode, UpdateNotes } from './types';
 
 export type UpdateHoldReason = 'branch' | 'mudancas' | 'rodando' | 'falta';
 export type UpdateClassification = 'iniciar' | 'em_dia' | `travado:${UpdateHoldReason}`;
 export type UpdateFollow = 'rodando' | 'esperando' | 'atualizado' | 'atualizado_manual' | 'falhou';
 
-type UpdateSnapshot = {
+export type UpdateSnapshot = {
   atualizacao_disponivel?: boolean;
+  aviso_pendente?: boolean;
+  atras?: number;
   versoes?: Partial<Atualizacao['versoes']>;
   pre_voo?: Partial<Atualizacao['pre_voo']>;
   estado?: { fase?: string };
 };
 
-/** Mesmo pré-voo do nativo; o canal do app local não participa das outras máquinas. */
-export function classify(snapshot: UpdateSnapshot): UpdateClassification {
+/** Versão nova de fato, ou disco à frente do processo; o aviso pendente sozinho não conta. */
+export function hasRealUpdate(snapshot: UpdateSnapshot): boolean {
   const clean = (version: string | undefined) => version?.replace(/(?:-dirty)+$/, '');
   const disk = clean(snapshot.versoes?.repo);
   const live = clean(snapshot.versoes?.backend);
-  if (snapshot.atualizacao_disponivel !== true && !(disk !== undefined && live !== undefined && disk !== live)) return 'em_dia';
+  if (disk !== undefined && live !== undefined && disk !== live) return true;
+  // O aviso pendente liga `atualizacao_disponivel` sem versão nova: aí só o atraso diz.
+  return snapshot.aviso_pendente === true ? (snapshot.atras ?? 0) > 0 : snapshot.atualizacao_disponivel === true;
+}
+
+/** Mesmo pré-voo do nativo; o canal do app local não participa das outras máquinas. */
+export function classify(snapshot: UpdateSnapshot): UpdateClassification {
+  // Aviso pendente pede a folha mesmo sem versão nova; quem decide se inicia é `afterAccept`.
+  if (!hasRealUpdate(snapshot) && snapshot.aviso_pendente !== true) return 'em_dia';
   const pre = snapshot.pre_voo;
   if (pre?.branch_de_trabalho === true) return 'travado:branch';
   if ((pre?.sujo ?? 0) > 0 || (pre?.ahead ?? 0) > 0 || pre?.divergiu === true) return 'travado:mudancas';
@@ -58,6 +68,65 @@ export function ownUpdatableServers(list: readonly Server[]): Server[] {
   return list.filter((server) => isOwnMachine(server) && !server.disabled);
 }
 
+/** O que a pessoa aceitou na folha para uma máquina: os ids lidos e, com o aviso da migração, o modo. */
+export interface UpdateAcceptance { ids: string[]; mode?: UpdateMode }
+export type AfterAccept = 'started' | 'start' | 'done';
+
+/** `null` = servidor antigo, sem a rota: inicia como antes. Aceite gravado sem lançar inicia só com versão nova. */
+export function afterAccept(accepted: UpdateAcceptResult | null | undefined, snapshot: UpdateSnapshot): AfterAccept {
+  if (accepted === null) return 'start';
+  if (accepted?.started) return 'started';
+  return hasRealUpdate(snapshot) ? 'start' : 'done';
+}
+
+/** Aceita os avisos e inicia conforme `afterAccept`; `null` = nada foi iniciado. Sem `snapshot`, relê o estado. */
+export async function acceptAndStart(server: Server, acceptance: UpdateAcceptance | undefined, snapshot?: UpdateSnapshot,
+  fetcher?: typeof fetch): Promise<{ ok: boolean; pid: number } | null> {
+  const accepted = acceptance?.ids.length ? await acceptUpdateWarningsEm(server, acceptance.ids, acceptance.mode, fetcher) : undefined;
+  if (accepted?.started) return { ok: true, pid: accepted.pid! };
+  const next = afterAccept(accepted, accepted === null ? {} : snapshot ?? await getAtualizacaoEm(server, false, fetcher));
+  return next === 'start' ? iniciarAtualizacaoEm(server, fetcher) : null;
+}
+
+/** As máquinas próprias, uma por identidade; `last` vence como representante da dele. */
+export async function distinctMachines(servers: readonly Server[], opts: Pick<UpdateAllOptions, 'last' | 'fetch'> = {}): Promise<Server[]> {
+  const candidates = ownUpdatableServers(servers);
+  const identities = await Promise.all(candidates.map(async (server) => {
+    try {
+      const response = await getIdentificadorEm(server, opts.fetch);
+      return typeof response.identificador === 'string' ? response.identificador.trim() : '';
+    } catch (error) {
+      registerDiagnostic({ evento: 'update_all.identity_failed', nivel: 'aviso',
+        codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
+      return '';
+    }
+  }));
+  const representatives = new Map<string, Server>();
+  candidates.forEach((server, index) => {
+    const identity = identities[index];
+    if (identity && (!representatives.has(identity) || server.id === opts.last)) representatives.set(identity, server);
+  });
+  return candidates.filter((server, index) => !identities[index] || representatives.get(identities[index]) === server);
+}
+
+export interface MachineNotes { server: Server; notes: UpdateNotes | null }
+export interface PreparedUpdateAll { run: MachineNotes[]; failed: Server[] }
+
+/** Avisos de cada máquina a atualizar; quem não responde fica de fora (`failed`), `null` = servidor antigo. */
+export async function prepareUpdateAll(servers: readonly Server[], opts: Pick<UpdateAllOptions, 'last' | 'fetch'> = {}): Promise<PreparedUpdateAll> {
+  const targets = await distinctMachines(servers, opts);
+  const read = await Promise.all(targets.map(async (server): Promise<MachineNotes | null> => {
+    try {
+      return { server, notes: await getUpdateNotesEm(server, opts.fetch) };
+    } catch (error) {
+      registerDiagnostic({ evento: 'update_all.notes_failed', nivel: 'aviso',
+        codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
+      return null;
+    }
+  }));
+  return { run: read.filter((entry): entry is MachineNotes => entry !== null), failed: targets.filter((_, index) => !read[index]) };
+}
+
 export interface UpdateAllState {
   status: 'consultando' | 'iniciando' | 'em_dia' | 'travado' | 'fora_do_ar' | UpdateFollow;
   reason?: UpdateHoldReason;
@@ -72,6 +141,8 @@ export interface UpdateAllState {
 export interface UpdateAllOptions {
   /** Servidor da página PWA: seu reinício só começa depois das outras máquinas. */
   last?: string;
+  /** Aceite da folha por id de servidor, gravado antes de iniciar cada máquina. */
+  accept?: Readonly<Record<string, UpdateAcceptance>>;
   fetch?: typeof fetch;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -94,23 +165,7 @@ export async function updateAll(
 ): Promise<UpdateAllResult[]> {
   const now = opts.now ?? (() => performance.now());
   const sleep = opts.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const candidates = ownUpdatableServers(servers);
-  const identities = await Promise.all(candidates.map(async (server) => {
-    try {
-      const response = await getIdentificadorEm(server, opts.fetch);
-      return typeof response.identificador === 'string' ? response.identificador.trim() : '';
-    } catch (error) {
-      registerDiagnostic({ evento: 'update_all.identity_failed', nivel: 'aviso',
-        codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
-      return '';
-    }
-  }));
-  const representatives = new Map<string, Server>();
-  candidates.forEach((server, index) => {
-    const identity = identities[index];
-    if (identity && (!representatives.has(identity) || server.id === opts.last)) representatives.set(identity, server);
-  });
-  const unique = candidates.filter((server, index) => !identities[index] || representatives.get(identities[index]) === server);
+  const unique = await distinctMachines(servers, opts);
 
   async function run(server: Server): Promise<UpdateAllResult> {
     let previous = '';
@@ -136,7 +191,7 @@ export async function updateAll(
     const startedAt = now();
     publish({ status: 'iniciando', warnings: [] });
     try {
-      await iniciarAtualizacaoEm(server, opts.fetch);
+      if (!await acceptAndStart(server, opts.accept?.[server.id], snapshot, opts.fetch)) return finish({ status: 'em_dia', warnings: [] });
     } catch (error) {
       return finish({ status: 'falhou', error: errorMessage(error), warnings: [] });
     }

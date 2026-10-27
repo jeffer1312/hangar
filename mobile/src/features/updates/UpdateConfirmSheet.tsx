@@ -3,18 +3,30 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-nati
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet } from 'react-native-unistyles';
 import { EnrichedMarkdownText } from 'react-native-enriched-markdown';
-import { forClient, getAtualizacaoEm, getUpdateNotesEm, type ClientUpdateNotes } from '@hangar/core';
+import { forClient, getAtualizacaoEm, getUpdateNotesEm, type ClientUpdateNotes, type Server, type UpdateMode, type UpdateWarning } from '@hangar/core';
 import { useSettingsColors } from '../config/colors';
 import { Icon } from '../../ui/Icon';
 import { haptic } from '../../ui/haptics';
 import { Notice } from '../machines/parts';
 import { NewsSections, PrimaryButton, SheetHeader, styles, useNewsTones, useSmallMarkdown } from './WhatsNewSheet';
-import { savePendingNews, type ConfirmRequest } from './pending';
+import { savePendingNews, type ConfirmRequest, type UpdateAcceptances } from './pending';
 import * as m from '../../paraglide/messages';
 
-type Loaded = { notes: ClientUpdateNotes | null; version: string; from: string; failed: boolean };
+// `title` só no "Atualizar todas": os avisos vêm agrupados por máquina.
+type WarningGroup = { server: Server; title?: string; warnings: UpdateWarning[] };
+type Loaded = { notes: ClientUpdateNotes | null; version: string; from: string; failed: boolean; groups: WarningGroup[]; unreachable: Server[] };
 
 async function load(request: ConfirmRequest): Promise<Loaded> {
+  const own = await loadOwn(request);
+  if (!request.machines) {
+    return { ...own, groups: own.notes?.warnings.length ? [{ server: request.server, warnings: own.notes.warnings }] : [], unreachable: [] };
+  }
+  const { run, failed } = await request.machines;
+  return { ...own, unreachable: failed, groups: run.filter((entry) => entry.notes?.warnings.length).map((entry) => ({
+    server: entry.server, title: m.update_all_warnings_from({ server: entry.server.label }), warnings: entry.notes!.warnings })) };
+}
+
+async function loadOwn(request: ConfirmRequest): Promise<Omit<Loaded, 'groups' | 'unreachable'>> {
   let version = '';
   let from = '';
   // A rota dos avisos não busca no remoto: a consulta com procurar=1 atualiza o alvo antes.
@@ -36,6 +48,7 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
   const c = useSettingsColors();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [understood, setUnderstood] = useState(false);
+  const [modes, setModes] = useState<Record<string, UpdateMode>>({});
   const answered = useRef(false);
 
   useEffect(() => {
@@ -53,13 +66,17 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
   </ScrollView>;
 
   const notes = loaded?.notes;
-  const warnings = notes?.warnings ?? [];
-  const blocked = !loaded || (warnings.length > 0 && !understood);
+  const groups = loaded?.groups ?? [];
+  const blocked = !loaded || (groups.length > 0 && !understood);
   const confirm = () => {
     if (blocked) return;
     answered.current = true;
     savePendingNews(request.server.id, { cards: notes?.cards ?? [], fixes: notes?.fixes ?? [] }, loaded?.from);
-    request.resolve(true);
+    const accept: UpdateAcceptances = Object.fromEntries(groups.map(({ server, warnings }) => [server.id, {
+      ids: warnings.map((w) => w.id),
+      ...(warnings.some((w) => w.choice === 'mode') ? { mode: modes[server.id] ?? 'package' } : {}),
+    }]));
+    request.resolve(true, accept);
     onClose();
   };
   const all = request.count !== undefined;
@@ -74,7 +91,9 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
       <Text style={[styles.body, { color: c.muted }]}>{m.update_notes_loading()}</Text>
     </View> : null}
     {loaded?.failed ? <Notice error text={m.update_notes_failed()} /> : null}
-    {warnings.length ? <Warnings warnings={warnings} understood={understood}
+    {loaded?.unreachable.map((server) => <Notice key={server.id} error text={m.update_all_warnings_failed({ server: server.label })} />)}
+    {groups.length ? <Warnings groups={groups} understood={understood} modes={modes}
+      onMode={(id, mode) => setModes((v) => ({ ...v, [id]: mode }))}
       onToggle={() => { haptic.selection(); setUnderstood((v) => !v); }} /> : null}
     {notes ? <NewsSections cards={notes.cards} fixes={notes.fixes} /> : null}
     <View style={styles.actions}>
@@ -88,14 +107,19 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
 }
 
 /** Bloco âmbar: o "Entendi" mora dentro dele e libera o Atualizar. */
-function Warnings({ warnings, understood, onToggle }: { warnings: ClientUpdateNotes['warnings']; understood: boolean; onToggle: () => void }) {
+function Warnings({ groups, understood, modes, onMode, onToggle }: { groups: WarningGroup[]; understood: boolean;
+  modes: Record<string, UpdateMode>; onMode: (serverId: string, mode: UpdateMode) => void; onToggle: () => void }) {
   const c = useSettingsColors();
   const t = useNewsTones();
   const md = useSmallMarkdown(c.text);
   return <View style={[own.warn, { backgroundColor: t.amberBg, borderColor: t.amberLine }]}>
-    {warnings.map((w) => <View key={w.id} style={own.warnItem}>
-      <Text accessibilityRole="header" style={[own.warnTitle, { color: t.amber }]}>{`${m.update_notes_important()}: ${w.title}`}</Text>
-      <EnrichedMarkdownText markdown={w.text} markdownStyle={md} flavor="github" />
+    {groups.map((g) => <View key={g.server.id} style={own.warnItem}>
+      {g.title ? <Text accessibilityRole="header" style={[own.warnTitle, { color: c.text }]}>{g.title}</Text> : null}
+      {g.warnings.map((w) => <View key={w.id} style={own.warnItem}>
+        <Text accessibilityRole="header" style={[own.warnTitle, { color: t.amber }]}>{`${m.update_notes_important()}: ${w.title}`}</Text>
+        <EnrichedMarkdownText markdown={w.text} markdownStyle={md} flavor="github" />
+        {w.choice === 'mode' ? <ModeChoice value={modes[g.server.id] ?? 'package'} onChange={(mode) => onMode(g.server.id, mode)} /> : null}
+      </View>)}
     </View>)}
     <Pressable accessibilityRole="checkbox" accessibilityLabel={m.update_notes_understood()} accessibilityState={{ checked: understood }}
       onPress={onToggle} style={own.check}>
@@ -107,6 +131,32 @@ function Warnings({ warnings, understood, onToggle }: { warnings: ClientUpdateNo
   </View>;
 }
 
+/** Como a máquina roda o Hangar, pedido pelo aviso da migração; o pacote é a recomendação. */
+function ModeChoice({ value, onChange }: { value: UpdateMode; onChange: (mode: UpdateMode) => void }) {
+  const c = useSettingsColors();
+  const t = useNewsTones();
+  const options = [
+    ['package', m.update_choice_package(), m.update_choice_package_desc()],
+    ['developer', m.update_choice_developer(), m.update_choice_developer_desc()],
+  ] as const;
+  return <View accessibilityRole="radiogroup" accessibilityLabel={m.update_choice_title()}>
+    <Text style={[own.checkLabel, { color: c.text }]}>{m.update_choice_title()}</Text>
+    {options.map(([mode, label, desc]) => {
+      const on = value === mode;
+      return <Pressable key={mode} accessibilityRole="radio" accessibilityLabel={label} accessibilityHint={desc} accessibilityState={{ checked: on }}
+        onPress={() => { if (on) return; haptic.selection(); onChange(mode); }} style={own.option}>
+        <View style={[own.radio, { borderColor: on ? t.violet : c.borderStrong }]}>
+          {on ? <View style={[own.dot, { backgroundColor: t.violet }]} /> : null}
+        </View>
+        <View style={own.optionText}>
+          <Text style={[own.checkLabel, { color: c.text }]}>{label}</Text>
+          <Text style={[own.optionDesc, { color: c.muted }]}>{desc}</Text>
+        </View>
+      </Pressable>;
+    })}
+  </View>;
+}
+
 const own = StyleSheet.create((theme) => ({
   warn: { borderWidth: 1, borderRadius: theme.base.radius.md, borderCurve: 'continuous', paddingHorizontal: theme.base.space[3], paddingTop: theme.base.space[3], gap: theme.base.space[2] },
   warnItem: { gap: theme.base.space[1] },
@@ -114,4 +164,9 @@ const own = StyleSheet.create((theme) => ({
   check: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3] },
   box: { width: 22, height: 22, borderRadius: theme.base.radius.xs, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
   checkLabel: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },
+  option: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3], paddingVertical: theme.base.space[2] },
+  radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  dot: { width: 12, height: 12, borderRadius: 6 },
+  optionText: { flex: 1, gap: 2 },
+  optionDesc: { fontSize: theme.base.text.xs },
 }));

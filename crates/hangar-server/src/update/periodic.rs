@@ -19,7 +19,7 @@ const FAILURE_WINDOW: chrono::TimeDelta = chrono::TimeDelta::hours(24);
 
 /// O que um tique pergunta à máquina; o teste troca.
 pub trait Machine {
-    /// O canal do pacote instalado; `None` fora do modo pacote.
+    /// O canal que o Atualizar segue (`super::channel`); `None` fora do modo pacote.
     fn package_channel(&self) -> Option<String>;
     fn automations(&self) -> bool;
     fn state(&self) -> Map<String, Value>;
@@ -85,8 +85,7 @@ impl Live {
 
 impl Machine for Live {
     fn package_channel(&self) -> Option<String> {
-        matches!(super::http::mode(&self.env.home), super::http::Mode::Package(_)).then(|| super::installed(&self.layout()))?
-            .map(|m| m.channel)
+        matches!(super::http::mode(&self.env.home), super::http::Mode::Package(_)).then(|| super::channel(&self.layout()))
     }
 
     fn automations(&self) -> bool { crate::push::watch::Settings::read(&self.claude_dir(), &crate::push::server_env()).automations }

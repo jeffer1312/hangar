@@ -50,6 +50,8 @@ pub struct AppState {
     pub terminal_address: Option<SocketAddr>,
     /// Segundo socket da porta pública, em `[::]` dual-stack; atende como o primeiro.
     pub public_v6: Option<TcpListener>,
+    /// A porta do front (`front_address`), decidida só na subida real (`main.rs`).
+    pub front: Option<SocketAddr>,
     pub workspace_slots: Arc<tokio::sync::Semaphore>,
     pub workspace_read_slots: Arc<tokio::sync::Semaphore>,
     pub workspace_meta_slots: Arc<tokio::sync::Semaphore>,
@@ -173,7 +175,7 @@ impl AppState {
         };
         let groups = crate::groups::from_env(list.env().dirs.as_ref(), server_id.clone(),
             Arc::new(crate::groups::orq::PythonOrq::new(cfg.upstream, cfg.internal_secret.clone(), http.clone())), list.clone(), diag.clone());
-        AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, diag,
+        AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             interactions, plugin,
             transcription: Arc::default(),
@@ -285,10 +287,23 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
         crate::share::owner_routes::sweep_loop(share, crate::share::owner_routes::SWEEP_EVERY))));
     let plugin_state = state.clone();
     let guest_state = state.clone();
+    let (front_state, front) = (state.clone(), state.front);
     // Uma só para as portas: convite e par veem as mesmas lojas e a mesma conferência.
     let pair = pair_state(&state);
     let guest_pair = pair.clone();
+    let front_pair = pair.clone();
     tokio::select! {
+        // Nunca termina: a porta do front é extra, e cair nela não derruba o servidor.
+        () = async {
+            let Some(addr) = front else { return std::future::pending().await };
+            let listener = bind_when_free(addr).await;
+            tracing::info!(listen = %addr, "porta do front servida pelo hangar-server");
+            if let Err(e) = axum::serve(listener.tap_io(crate::nodelay), router_with(front_state.clone(), front_pair.as_ref())
+                .into_make_service_with_connect_info::<SocketAddr>()).await {
+                tracing::warn!(listen = %addr, "porta do front parou: {e}");
+            }
+            std::future::pending().await
+        } => Ok(()),
         result = async {
             match guest {
                 Some(addr) => serve_guest(addr, guest_state, guest_pair).await,
@@ -310,6 +325,30 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
                 None => std::future::pending::<std::io::Result<()>>().await,
             }
         } => result,
+    }
+}
+
+/// A porta do front (`CP_FRONT_PORT`) de quem servia a tela pelo `vite preview`: na máquina migrada
+/// (pacote ou modo desenvolvedor) esta porta entrega a mesma tela e a mesma API, e o navegador
+/// guarda o que já tinha nessa origem. Máquina no git segue com o `vite`.
+pub fn front_address(home: &std::path::Path, listen: SocketAddr) -> Option<SocketAddr> {
+    if std::fs::symlink_metadata(crate::install_root::current(home)).is_err() { return None; }
+    let port = crate::user_data::env_port(home, None, "CP_FRONT_PORT")
+        .inspect_err(|e| tracing::warn!("porta do front ilegível: {e}")).ok().flatten()?;
+    (port != 0 && port != listen.port()).then(|| SocketAddr::new(listen.ip(), port))
+}
+
+/// Liga quando a porta solta: o `vite` que a migração desligou pode ainda segurá-la por instantes.
+async fn bind_when_free(addr: SocketAddr) -> TcpListener {
+    let mut warned = false;
+    loop {
+        match TcpListener::bind(addr).await {
+            Ok(listener) => return listener,
+            Err(e) => {
+                if !warned { tracing::warn!(listen = %addr, "porta do front ocupada, tentando de novo: {e}"); warned = true; }
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            }
+        }
     }
 }
 
@@ -619,6 +658,10 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/atualizacao/iniciar", axum::routing::post(crate::update::http::start).fallback(pass_any))
         .route("/api/atualizacao/reiniciar", axum::routing::post(crate::update::http::restart).fallback(pass_any))
         .route("/api/atualizacao/dev-mode", axum::routing::post(crate::update::http::switch_dev_mode).fallback(pass_any))
+        // Aviso importante aceito na tela: só do dono, em todo modo, nunca repassado.
+        .route("/api/update/accept", axum::routing::post(crate::update::http::accept))
+        // Canal de testes: no pacote é do Rust (`latest` ou `beta`); no git, a branch do Python.
+        .route("/api/update-channel", get(crate::update::http::channel_read).put(crate::update::http::channel_write).fallback(pass_any))
         // A tela web é servida aqui; o que não é dela segue ao Python.
         .fallback(crate::ui::fallback)
         .layer(axum::middleware::from_fn(crate::migration_status::count_public))

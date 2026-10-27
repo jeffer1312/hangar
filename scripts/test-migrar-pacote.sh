@@ -19,6 +19,8 @@ run() {
   mkdir -p "$R/scripts" "$R/backend" "$H" "$B"
   cp "$REPO/scripts/migrar-pacote.sh" "$R/scripts/"
   [ "${4:-0}" = 1 ] && mkdir -p "$H/.hangar" && echo '{}' > "$H/.hangar/migration.json"
+  # 6º argumento 0: o aviso não foi aceito na tela (o padrão é aceito).
+  [ "${6:-1}" = 1 ] && mkdir -p "$H/.hangar" && echo '["2026-10-24-pacote-por-versao"]' > "$H/.hangar/update-accepted.json"
   if [ "${5:-}" = velho ]; then
     mkdir -p "$H/.hangar/migrate"
     printf '#!/bin/sh\necho "velho $*" >> "%s/calls"\n' "$S" > "$H/.hangar/migrate/hangar-server"
@@ -44,6 +46,14 @@ EOF
 run marcada 0 0 1
 expect_eq "marcada: sai 0" "$RC" 0 "$S/out"
 expect_eq "marcada: não baixa nada" "$(cat "$S/calls" 2>/dev/null)" ""
+expect_eq "marcada: a prova do passo existe" "$([ -s "$H/.hangar/migration-offered" ] && echo sim || echo nao)" sim
+
+# Motor ou app antigo atualizando, sem o aviso aceito: só a marca de pendente, nada baixado nem migrado.
+run sem-aceite 0 1 0 "" 0
+expect_eq "sem-aceite: sai 0" "$RC" 0 "$S/out"
+expect_eq "sem-aceite: não baixa nem migra" "$(cat "$S/calls" 2>/dev/null)" ""
+expect_eq "sem-aceite: marca a migração pendente" "$([ -s "$H/.hangar/migration-offered" ] && echo sim || echo nao)" sim
+expect_eq "sem-aceite: sem marca de migrada" "$([ -e "$H/.hangar/migration.json" ] && echo sim || echo nao)" nao
 
 run sem-build 2 0
 expect_eq "sem-build: sai 0" "$RC" 0 "$S/out"

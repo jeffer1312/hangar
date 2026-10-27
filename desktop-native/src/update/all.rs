@@ -1,5 +1,6 @@
 //! Atualização conjunta: cada servidor conserva seu resultado e o app só reabre após os demais terminarem.
 use super::*;
+use super::confirm::{Acceptance, Launch, Notes};
 use crate::{app::ServerEntry, i18n::tr_shared};
 use gpui_kit::prelude::FluentBuilder;
 use std::{cell::Cell, collections::HashSet, rc::Rc};
@@ -81,6 +82,10 @@ fn warnings(state: &Value) -> Vec<String> {
 }
 
 fn failure_text(error: &Failure) -> String { tr(&error.detail) }
+
+fn batch_machines(machines: Vec<Machine>, excluded: &HashSet<String>) -> Vec<Machine> {
+    machines.into_iter().filter(|m| !excluded.contains(&m.key)).collect()
+}
 
 fn own_servers(servers: &[ServerEntry]) -> Vec<ServerEntry> {
     servers.iter().filter(|s| !s.disabled && !s.invite && !s.ephemeral).cloned().collect()
@@ -249,7 +254,22 @@ async fn read_machine(machine: &Machine) -> Option<Status> {
     }
 }
 
-async fn run_machine(machine: Machine, mut publish: impl FnMut(Status, Vec<String>)) {
+/// Os avisos de cada máquina do lote, antes do modal: a desta (primeiro) com a versão, as novidades e o estado lido; as
+/// outras só com os avisos.
+async fn load_all(machines: Vec<Machine>) -> (Option<Value>, Vec<Notes>) {
+    let (machines, _) = prepare_machines(machines).await;
+    let mut read = futures::future::join_all(machines.into_iter().map(|m| async move {
+        match &m.api {
+            Ok(api) if m.local => { let (state, notes) = confirm::load(api.clone()).await; (true, state, notes.labeled(m.label)) }
+            _ => (false, None, confirm::load_warnings(m.api.clone(), m.key, m.label).await),
+        }
+    })).await;
+    read.sort_by_key(|(local, ..)| !local);
+    let state = read.iter_mut().find_map(|(_, state, _)| state.take());
+    (state, read.into_iter().map(|(_, _, notes)| notes).collect())
+}
+
+async fn run_machine(machine: Machine, acceptance: Acceptance, mut publish: impl FnMut(Status, Vec<String>)) {
     let mut previous = None;
     let mut publish = |status: Status, warnings: Vec<String>| {
         let value = (status, warnings);
@@ -276,10 +296,13 @@ async fn run_machine(machine: Machine, mut publish: impl FnMut(Status, Vec<Strin
     let baseline = snapshot["estado"]["ts"].as_str();
     let started = std::time::Instant::now();
     publish(Status::Starting, Vec::new());
-    match api.server_post(&["atualizacao", "iniciar"], 30).await {
-        Ok(value) if value["ok"].as_bool() == Some(true) => {}
-        Ok(_) => { publish(Status::Failed(tr("invalid_response")), Vec::new()); return; }
-        Err(error) => { publish(Status::Failed(failure_text(&error)), Vec::new()); return; }
+    match confirm::accept_then_start(&api, &acceptance, real_update(&snapshot)).await {
+        Launch::Started(Ok(value)) if value["ok"].as_bool() == Some(true) => {}
+        Launch::Started(Ok(_)) => { publish(Status::Failed(tr("invalid_response")), Vec::new()); return; }
+        Launch::Started(Err(error)) => { publish(Status::Failed(failure_text(&error)), Vec::new()); return; }
+        Launch::AcceptFailed(text) => { publish(Status::Failed(text), Vec::new()); return; }
+        // Só o aviso estava pendente: aceito, não há versão a puxar.
+        Launch::Nothing => { publish(Status::Current, Vec::new()); return; }
     }
     let (mut silent, mut latest_warnings) = (0, Vec::new());
     loop {
@@ -371,13 +394,32 @@ impl Updater {
             .label(tr_shared("update_all_short", &[])).icon(IconName::Download)
             .tooltip(tr_shared("update_all_button", &[("n", &self.update_all_count().to_string())]))
             .loading(self.all_running).disabled(self.busy())
-            .on_click(cx.listener(|this, _, window, cx| { if !this.busy() { this.start_all(window, cx); } }))
+            // O mesmo modal do topo: os avisos de cada máquina são aceitos antes de ela atualizar.
+            .on_click(cx.listener(|this, _, window, cx| { if !this.busy() { this.run(window, cx); } }))
             .into_any_element())
     }
 
     pub(super) fn idle_visible(&self, plan: &Plan) -> bool { idle_visible(plan, self.update_all_count(), &self.survey.rows) }
 
-    pub(super) fn confirm_all(&mut self, notes: super::confirm::Notes, window: &mut Window, cx: &mut Context<Self>) {
+    /// Lê os avisos de todas as máquinas antes de abrir o modal do lote.
+    pub(super) fn confirm_all_machines(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.run = Run::Searching;
+        cx.notify();
+        let task = self.runtime.spawn(load_all(self.all_machines()));
+        let handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let (state, groups) = task.await.unwrap_or_default();
+            let _ = handle.update(cx, |_, window, cx| { let _ = this.update(cx, |this, cx| {
+                this.run = Run::Idle;
+                if state.is_some() { this.receive_server(state, cx); }
+                cx.notify();
+                this.confirm_all(groups, window, cx);
+            }); });
+        }).detach();
+    }
+
+    /// `groups`: os avisos de cada máquina; a que não deu para ler fica de fora do lote.
+    fn confirm_all(&mut self, groups: Vec<Notes>, window: &mut Window, cx: &mut Context<Self>) {
         let all = Rc::new(Cell::new(true));
         let selected = all.clone();
         let this = cx.entity().downgrade();
@@ -386,24 +428,32 @@ impl Updater {
             if plan.app { (tr("app_update_confirm_title"), tr("app_update_confirm_desc")) }
             else { (tr("app_update_confirm_server_title"), tr("app_update_confirm_server_desc")) }
         } else { (tr_shared("update_all_title", &[]), tr("update_confirm_desc")) };
-        super::confirm::open(window, cx, title, description, notes,
-            Some((tr_shared("update_all_button", &[("n", &self.update_all_count().to_string())]), all)), move |window, _| {
+        let servers: Vec<String> = groups.iter().map(|n| n.server().to_owned()).collect();
+        let excluded: HashSet<String> = groups.iter().filter(|n| n.excluded()).map(|n| n.server().to_owned()).collect();
+        let local = self.local.as_ref().map(Api::identity);
+        super::confirm::open(window, cx, title, description, groups,
+            Some((tr_shared("update_all_button", &[("n", &self.update_all_count().to_string())]), all)), move |accepted, window, _| {
                 let this = this.clone();
                 let all = selected.get();
+                let accepted: HashMap<String, Acceptance> = servers.iter().cloned().zip(accepted).collect();
+                let local_acceptance = local.as_ref().and_then(|key| accepted.get(key)).cloned().unwrap_or_default();
+                let excluded = excluded.clone();
                 // O alerta fecha antes de o modal de progresso abrir.
                 window.on_next_frame(move |window, cx| { let _ = this.update(cx, |this, cx| {
                     if this.busy() { return; }
-                    if all { this.start_all(window, cx); }
+                    if all { this.start_all(accepted, excluded, window, cx); }
                     else { match this.plan().server {
-                        ServerStep::Update => this.search_server(window, cx),
-                        _ => this.run_local(super::confirm::Notes::default(), window, cx),
+                        ServerStep::Update => this.search_server(local_acceptance, window, cx),
+                        _ => this.run_local(Notes::default(), window, cx),
                     } }
                 }); });
             });
     }
 
-    fn start_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let machines = self.all_machines();
+    /// `accepted`: o aceite de cada máquina, pela chave; `excluded`: as que não tiveram os avisos lidos.
+    fn start_all(&mut self, accepted: HashMap<String, Acceptance>, excluded: HashSet<String>, window: &mut Window, cx: &mut Context<Self>) {
+        let machines = batch_machines(self.all_machines(), &excluded);
+        let mut local_acceptance = machines.iter().find(|m| m.local).and_then(|m| accepted.get(&m.key)).cloned();
         self.survey.generation += 1;
         self.survey.prepare(&machines, HashMap::new());
         let progress = cx.new(|_| Progress { preparing: true, ..Progress::default() });
@@ -418,7 +468,8 @@ impl Updater {
             futures::future::join_all(machines.into_iter().filter(|m| !m.local).map(|machine| {
                 let tx = tx.clone();
                 let key = machine.key.clone();
-                run_machine(machine, move |status, warnings| { let _ = tx.try_send(Event::Changed(key.clone(), status, warnings)); })
+                let acceptance = accepted.get(&key).cloned().unwrap_or_default();
+                run_machine(machine, acceptance, move |status, warnings| { let _ = tx.try_send(Event::Changed(key.clone(), status, warnings)); })
             })).await;
         });
         let handle = window.window_handle();
@@ -436,7 +487,7 @@ impl Updater {
                                     status: Status::Checking, warnings: Vec::new() }).collect();
                                 cx.notify();
                             });
-                            if local { this.search_server(window, cx); }
+                            if local { this.search_server(local_acceptance.take().unwrap_or_default(), window, cx); }
                             else if this.plan().app { this.install_app(window, cx); }
                         }
                         Event::Changed(key, status, warnings) => batch.progress.update(cx, |p, cx| { p.change(&key, status, warnings); cx.notify(); }),
@@ -685,7 +736,7 @@ mod tests {
         let mut states = Vec::new();
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let result = runtime.block_on(async {
-            tokio::time::timeout(Duration::from_secs(20), run_machine(machine, |status, warnings| states.push((status, warnings)))).await
+            tokio::time::timeout(Duration::from_secs(20), run_machine(machine, Acceptance::default(), |status, warnings| states.push((status, warnings)))).await
         });
         server.join().unwrap();
         result.expect("o acompanhamento simulado deve terminar em 20 segundos");
@@ -700,11 +751,72 @@ mod tests {
         let (ready, second) = mock(vec![("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel":false}))]);
         let (mut a, mut b) = (Vec::new(), Vec::new());
         tokio::runtime::Runtime::new().unwrap().block_on(async {
-            tokio::join!(run_machine(failed, |s, _| a.push(s)), run_machine(ready, |s, _| b.push(s)));
+            tokio::join!(run_machine(failed, Acceptance::default(), |s, _| a.push(s)), run_machine(ready, Acceptance::default(), |s, _| b.push(s)));
         });
         first.join().unwrap(); second.join().unwrap();
         assert!(matches!(a.last(), Some(Status::Failed(error)) if error.contains("fixture-failure")));
         assert_eq!(b.last(), Some(&Status::Current));
+    }
+
+    #[test]
+    fn update_all_accepts_the_warning_and_starts_only_a_real_update() {
+        let acceptance = Acceptance { ids: vec!["2026-10-24-pacote-por-versao".into()], mode: Some("package") };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        // Só o aviso pendente: aceito, nada de `iniciar`.
+        let (machine, server) = mock(vec![
+            ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": true, "aviso_pendente": true, "atras": 0})),
+            ("POST /api/update/accept ", 200, json!({"ok": true, "started": false})),
+        ]);
+        let mut states = Vec::new();
+        runtime.block_on(run_machine(machine, acceptance.clone(), |s, _| states.push(s)));
+        server.join().unwrap();
+        assert_eq!(states.last(), Some(&Status::Current));
+        // O aceite lançou a migração: segue o pid dele, sem `iniciar`.
+        let (machine, server) = mock(vec![
+            ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": true, "aviso_pendente": true, "atras": 0, "estado": {"ts": "old"}})),
+            ("POST /api/update/accept ", 200, json!({"ok": true, "started": true, "pid": 7})),
+            ("GET /api/atualizacao ", 200, json!({"estado": {"fase": "pronto", "ok": true, "ts": "new"}})),
+        ]);
+        let mut states = Vec::new();
+        runtime.block_on(async { tokio::time::timeout(Duration::from_secs(10), run_machine(machine, acceptance.clone(), |s, _| states.push(s))).await })
+            .expect("o acompanhamento deve terminar");
+        server.join().unwrap();
+        assert_eq!(states.last(), Some(&Status::Updated));
+        // Aceite recusado: nada é iniciado.
+        let (machine, server) = mock(vec![
+            ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": true, "atras": 3})),
+            ("POST /api/update/accept ", 500, json!({"detail": "fixture-accept"})),
+        ]);
+        let mut states = Vec::new();
+        runtime.block_on(run_machine(machine, acceptance, |s, _| states.push(s)));
+        server.join().unwrap();
+        assert!(matches!(states.last(), Some(Status::Failed(error)) if error.contains("fixture-accept")), "{states:?}");
+    }
+
+    #[test]
+    fn update_all_leaves_out_a_machine_whose_warnings_did_not_load() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (down, first) = mock(vec![("GET /api/update/notes ", 503, json!({"detail": "fixture-unavailable"}))]);
+        let (old, second) = mock(vec![("GET /api/update/notes ", 404, json!({"detail": "Not Found"}))]);
+        let read = |m: &Machine| confirm::load_warnings(m.api.clone(), m.key.clone(), m.label.clone());
+        let (a, b) = runtime.block_on(async { tokio::join!(read(&down), read(&old)) });
+        first.join().unwrap(); second.join().unwrap();
+        assert!(a.excluded(), "leitura que falha deixa a máquina de fora");
+        assert!(!b.excluded(), "servidor antigo: sem avisos, segue no lote");
+        let excluded: HashSet<String> = [&a, &b].into_iter().filter(|n| n.excluded()).map(|n| n.server().to_owned()).collect();
+        let kept = batch_machines(vec![down.clone(), old.clone()], &excluded);
+        assert_eq!(kept.iter().map(|m| m.key.as_str()).collect::<Vec<_>>(), [old.key.as_str()]);
+    }
+
+    #[test]
+    fn update_all_pending_warning_alone_is_not_a_real_update() {
+        assert!(behind(&json!({"atualizacao_disponivel": true, "aviso_pendente": true, "atras": 0})), "o botão aparece");
+        assert!(!real_update(&json!({"atualizacao_disponivel": true, "aviso_pendente": true, "atras": 0})));
+        assert!(real_update(&json!({"atualizacao_disponivel": true, "aviso_pendente": true, "atras": 2})));
+        assert!(real_update(&json!({"atualizacao_disponivel": true, "aviso_pendente": true, "atras": 0,
+            "versoes": {"repo": "b", "backend": "a"}})), "disco diferente do que está no ar");
+        assert!(real_update(&json!({"atualizacao_disponivel": true})), "sem a marca, a regra de antes");
+        assert!(!real_update(&json!({"atualizacao_disponivel": false})));
     }
 
     #[test]
@@ -718,7 +830,7 @@ mod tests {
             ]);
             let mut states = Vec::new();
             let result = runtime.block_on(async {
-                tokio::time::timeout(Duration::from_secs(8), run_machine(machine, |s, _| states.push(s))).await
+                tokio::time::timeout(Duration::from_secs(8), run_machine(machine, Acceptance::default(), |s, _| states.push(s))).await
             });
             server.join().unwrap();
             result.expect("a recusa de autenticação deve encerrar na primeira leitura");

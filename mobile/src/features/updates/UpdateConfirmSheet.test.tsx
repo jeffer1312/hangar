@@ -70,7 +70,7 @@ describe('folha "Atualizar?"', () => {
     await act(async () => button(m.update_notes_understood()).click());
     expect(update.disabled).toBe(false);
     await act(async () => update.click());
-    expect(request.resolve).toHaveBeenCalledWith(true);
+    expect(request.resolve).toHaveBeenCalledWith(true, { srv: { ids: ['w1'] } });
     expect(onClose).toHaveBeenCalled();
     const saved = readPendingNews(server.id);
     expect([...saved?.cards ?? [], ...saved?.fixes ?? []].map((n) => n.id)).toEqual(['n1', 'f1']);
@@ -80,7 +80,35 @@ describe('folha "Atualizar?"', () => {
     const { request } = await open(() => json({ code: 'update_notes_unavailable' }, 503));
     expect(el.textContent).toContain(m.update_notes_failed());
     await act(async () => button(m.update_confirm_action()).click());
-    expect(request.resolve).toHaveBeenCalledWith(true);
+    expect(request.resolve).toHaveBeenCalledWith(true, {});
+  });
+
+  it('aviso da migração pede o modo, com o pacote marcado; a escolha volta com os ids', async () => {
+    const migration = { id: 'mig', title: 'fixture-migration', text: 'fixture-migration-text', choice: 'mode' as const, mode: null };
+    const { request } = await open(() => json({ ...notes, warnings: [migration] }));
+    expect(el.textContent).toContain(m.update_choice_title());
+    await act(async () => button(m.update_choice_developer()).click());
+    await act(async () => button(m.update_notes_understood()).click());
+    await act(async () => button(m.update_confirm_action()).click());
+    expect(request.resolve).toHaveBeenCalledWith(true, { srv: { ids: ['mig'], mode: 'developer' } });
+  });
+
+  it('"Atualizar todas" agrupa os avisos por máquina e diz quem não respondeu', async () => {
+    mocks.fetch.mockImplementation(async (url: string) => url.includes('/api/update/notes') ? json({ ...notes, warnings: [] })
+      : json({ versao_legivel: { repo: null, backend: 'v1.0', remoto: 'v1.1' } }));
+    const other = { ...server, id: 'other', label: 'fixture-other' };
+    const down = { ...server, id: 'down', label: 'fixture-down' };
+    const migration = { id: 'mig', title: 'fixture-migration', text: '', choice: 'mode' as const, mode: 'package' as const };
+    const request: ConfirmRequest = { server, count: 3, resolve: vi.fn(), machines: Promise.resolve({
+      run: [{ server, notes: null }, { server: other, notes: { ...notes, warnings: [migration] } }], failed: [down] }) };
+    await act(async () => root.render(<UpdateConfirmSheet request={request} onClose={vi.fn()} />));
+    await act(async () => { await Promise.resolve(); });
+    expect(el.textContent).toContain(m.update_all_warnings_from({ server: 'fixture-other' }));
+    expect(el.textContent).not.toContain(m.update_all_warnings_from({ server: server.label }));
+    expect(el.textContent).toContain(m.update_all_warnings_failed({ server: 'fixture-down' }));
+    await act(async () => button(m.update_notes_understood()).click());
+    await act(async () => button(m.update_confirm_action()).click());
+    expect(request.resolve).toHaveBeenCalledWith(true, { other: { ids: ['mig'], mode: 'package' } });
   });
 
   it('servidor antigo (404) mostra só a confirmação; fechar é cancelar', async () => {

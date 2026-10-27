@@ -73,6 +73,32 @@ describe('operações da máquina explícita', () => {
     expect(el.textContent).not.toContain('991bb4f1');
   });
 
+  it('aviso aceito vai antes: migração lançada pelo aceite é acompanhada pelo pid dele, sem /iniciar', async () => {
+    mocks.fetch.mockImplementation(async (url: string, init) => String(url).endsWith('/api/update/accept')
+      ? json({ ok: true, started: true, pid: 55 }) : json({ estado: { pid: 55, fase: 'pronto', ok: true } }));
+    await render(); await click(m.mobile_machines_update());
+    await act(async () => { currentConfirmRequest()!.resolve(true, { [server.id]: { ids: ['mig'], mode: 'developer' } }); });
+    expect(postCalls().map(([url]) => url)).toEqual([`${server.baseUrl}/api/update/accept`]);
+    expect(JSON.parse(postCalls()[0][1].body)).toEqual({ ids: ['mig'], mode: 'developer' });
+    await tick();
+    expect(el.textContent).toContain(m.mobile_machines_operation_ready());
+  });
+
+  it('aceite gravado sem versão nova não inicia nada; recusa do aceite mostra o erro e não inicia', async () => {
+    let refuse = false;
+    mocks.fetch.mockImplementation(async (url: string) => String(url).endsWith('/api/update/accept')
+      ? refuse ? json({ detail: 'fixture-refused' }, 500) : json({ ok: true, started: false })
+      : json({ atualizacao_disponivel: true, aviso_pendente: true, atras: 0, versoes: { repo: 'a', backend: 'a' }, estado: {} }));
+    await render(); await click(m.mobile_machines_update());
+    await act(async () => { currentConfirmRequest()!.resolve(true, { [server.id]: { ids: ['mig'], mode: 'package' } }); });
+    expect(postCalls().map(([url]) => url)).toEqual([`${server.baseUrl}/api/update/accept`]);
+    refuse = true; mocks.fetch.mockClear();
+    await click(m.mobile_machines_update());
+    await act(async () => { currentConfirmRequest()!.resolve(true, { [server.id]: { ids: ['mig'] } }); });
+    expect(postCalls().map(([url]) => url)).toEqual([`${server.baseUrl}/api/update/accept`]);
+    expect(el.textContent).toContain(m.update_accept_failed({ reason: '500: fixture-refused' }));
+  });
+
   it('cancelar a folha não envia e libera o botão de novo', async () => {
     await render(); await click(m.mobile_machines_update());
     await act(async () => answerUpdate(false)());

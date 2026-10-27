@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { InteractionManager, Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { ownUpdatableServers, updateAll } from '@hangar/core';
+import { ownUpdatableServers, prepareUpdateAll, updateAll } from '@hangar/core';
 import type { Server, UpdateAllResult, UpdateAllState } from '@hangar/core';
 import { SectionCard } from '../config/SectionCard';
 import { SettingsRow } from '../config/SettingsRow';
@@ -58,21 +58,26 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
 
   const start = async () => {
     if (round.busy) { setOpen(true); return; }
-    // Os avisos e novidades são os do servidor ativo: a versão nova é a mesma em todas as máquinas.
+    // As novidades são as do servidor ativo (a versão nova é a mesma); os avisos, os de cada máquina.
     const notesServer = candidates.find((s) => s.id === activeId) ?? candidates[0];
-    if (!notesServer || !await requestUpdateConfirm(notesServer, () => router.push('/update-confirm' as never), candidates.length)) return;
+    if (!notesServer) return;
+    const prepared = prepareUpdateAll(candidates);
+    const accept = await requestUpdateConfirm(notesServer, () => router.push('/update-confirm' as never), candidates.length, prepared);
+    if (!accept) return;
     setOpen(true);
     if (round.busy) return;
     setRound({ busy: true, count: candidates.length, rows: [], error: '' });
     try {
-      const results = await updateAll(candidates, (id, state) => {
+      // Quem não mostrou os avisos fica fora da rodada: atualizá-la passaria por cima do aceite.
+      const targets = (await prepared).run.map((entry) => entry.server);
+      const results = await updateAll(targets, (id, state) => {
         const server = candidates.find((entry) => entry.id === id);
         if (!server) return;
         // O core só publica representantes depois de tirar endereços da mesma máquina.
         setRound({ rows: round.rows.some((row) => row.server.id === id)
           ? round.rows.map((row) => row.server.id === id ? { server, state } : row)
           : [...round.rows, { server, state }] });
-      });
+      }, { accept });
       setRound({ rows: results });
       if (!results.length || results.some((row) => needsAttention(row.state))) haptic.error();
       else haptic.success();

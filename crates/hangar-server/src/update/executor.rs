@@ -30,6 +30,8 @@ pub enum Task {
     Dev,
     /// Liga ou desliga o modo desenvolvedor, como o `hangar-server dev-mode`.
     DevMode(DevRequest),
+    /// A migração para o pacote depois do aviso aceito na tela, como o `hangar-server migrate-package`.
+    Migrate { checkout: Option<PathBuf> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,7 +52,8 @@ impl Args {
         while let Some(arg) = it.next() {
             let mut value = |name: &str| it.next().cloned().ok_or_else(|| format!("{name} sem valor"));
             match arg.as_str() {
-                "--run" | "--restart" | "--dev" | "--dev-mode-off" if task.is_none() => task = Some(arg.clone()),
+                "--run" | "--restart" | "--dev" | "--dev-mode-off" | "--migrate" if task.is_none() => task = Some(arg.clone()),
+                "--checkout" => checkout = Some(value("--checkout")?),
                 "--dev-mode-on" if task.is_none() => { task = Some(arg.clone()); checkout = Some(value("--dev-mode-on")?); }
                 "--channel" => channel = Some(value("--channel")?),
                 "--request-id" => request_id = Some(value("--request-id")?),
@@ -64,7 +67,8 @@ impl Args {
             Some("--dev") => Task::Dev,
             Some("--dev-mode-on") => Task::DevMode(DevRequest::On(checkout.unwrap_or_default().into())),
             Some("--dev-mode-off") => Task::DevMode(DevRequest::Off),
-            _ => return Err("falta --run, --restart, --dev, --dev-mode-on ou --dev-mode-off".into()),
+            Some("--migrate") => Task::Migrate { checkout: checkout.map(PathBuf::from) },
+            _ => return Err("falta --run, --restart, --dev, --dev-mode-on, --dev-mode-off ou --migrate".into()),
         };
         Ok(Args { task, listen })
     }
@@ -81,6 +85,10 @@ impl Args {
             Task::Dev => argv.push("--dev".into()),
             Task::DevMode(DevRequest::On(dir)) => argv.extend(["--dev-mode-on".into(), dir.display().to_string()]),
             Task::DevMode(DevRequest::Off) => argv.push("--dev-mode-off".into()),
+            Task::Migrate { checkout } => {
+                argv.push("--migrate".into());
+                if let Some(dir) = checkout { argv.extend(["--checkout".into(), dir.display().to_string()]); }
+            }
         }
         argv.extend(["--listen".into(), self.listen.to_string()]);
         argv
@@ -117,12 +125,12 @@ fn lock(parts: &Parts, state: &StateFile) -> Option<UpdateLock> {
 }
 
 impl Parts {
-    /// Canal: o pedido; senão o do pacote instalado; senão `latest` (a main).
+    /// Canal: o pedido; senão o escolhido no Canal de testes ou o do pacote instalado (`super::channel`).
     pub fn new(env: &AccountEnvironment, args: &Args, release_base: &str) -> Parts {
         let layout = Layout::new(&env.home);
         let channel = match &args.task {
             Task::Update { channel: Some(channel) } => channel.clone(),
-            _ => super::installed(&layout).map_or_else(|| "latest".to_owned(), |m| m.channel),
+            _ => super::channel(&layout),
         };
         let host = if args.listen.ip().is_unspecified() { std::net::Ipv4Addr::LOCALHOST.into() } else { args.listen.ip() };
         Parts {
@@ -424,8 +432,35 @@ pub async fn dev_mode<R: Restarter, H: HealthProbe>(parts: &Parts, request: &Dev
         }
         state.step(key);
     };
+    // Desligar numa máquina que nunca teve pacote (migrou direto para o modo desenvolvedor): baixa o do canal antes.
+    // Sem pid no estado durante o download, pela mesma razão do comentário acima.
+    let mut ui_warning = None;
+    if *request == DevRequest::Off && matches!(super::dev_mode::check(&parts.home, request), Ok(super::dev_mode::Checked::Download)) {
+        state.write(json!({"fase": "rodando", "ok": null, "erro": null, "codigo": null, "pid": null, "log": [], "avisos": []}));
+        state.step("baixar");
+        match super::download_published(&parts.release, &parts.layout, &parts.home, settings).await {
+            Ok(warning) => ui_warning = warning,
+            Err(e) => {
+                state.write(json!({"fase": "pronto", "ok": false, "erro": format!("o pacote do canal {} não baixou: {e}", parts.release.channel),
+                    "codigo": "erro_dev_mode_sem_pacote", "voltou": false, "no_ar": true, "pid": std::process::id()}));
+                return false;
+            }
+        }
+    }
+    let front_runner = runner.clone();
     let result = super::dev_mode::switch(&parts.home, &parts.state_dir, request, in_service_group, restarter, health, settings, runner,
         &on_step, &|warning| state.warn(warning)).await;
+    if let Some(warning) = ui_warning { state.warn(&warning); }
+    // No pacote a porta do front é do servidor: o `vite` do checkout para de segurá-la (a tela velha).
+    if *request == DevRequest::Off && matches!(result, Ok(DevOutcome::Switched(_) | DevOutcome::SwitchedManual(_))) {
+        let (command, home) = (super::migrate::front_command(cfg!(windows), false), parts.home.clone());
+        let run = tokio::task::spawn_blocking(move || front_runner.run(&command, &home)).await;
+        match run {
+            Ok(run) if run.code == Some(0) => {}
+            Ok(run) => state.warn(&format!("o serviço do front (vite) não desligou e segue na porta dele: {}", run.output.trim())),
+            Err(e) => state.warn(&format!("o serviço do front (vite) não desligou: {e}")),
+        }
+    }
     let label = if *request == DevRequest::Off { "Modo desenvolvedor desligado" } else { "Modo desenvolvedor ligado" };
     // O pid vai em todo desfecho: a tela casa o fim pelo pid que o pedido devolveu, e recusa não passa pelo `trocar`.
     let pid = std::process::id();
@@ -455,13 +490,40 @@ pub async fn dev_mode<R: Restarter, H: HealthProbe>(parts: &Parts, request: &Dev
     }
 }
 
+/// A migração aceita na tela. Ela mesma para, sobe, prova e desfaz; aqui só o estado que a tela lê.
+/// Numa thread comum: o `migrate::run` cria o próprio runtime.
+async fn migrate(parts: &Parts, checkout: Option<PathBuf>) -> bool {
+    let state = StateFile::new(&parts.state_dir);
+    state.write(json!({"fase": "rodando", "ok": null, "erro": null, "codigo": null, "voltou": null, "no_ar": null, "resgate": null,
+        "pid": std::process::id(), "reinicio_erro": null, "request_id": null, "versao_para": null, "reiniciar_manual": false,
+        "log": [], "avisos": []}));
+    state.step("migrar");
+    let args: Vec<String> = checkout.map(|dir| vec!["--checkout".to_owned(), dir.display().to_string()]).unwrap_or_default();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || { let _ = sender.send(super::migrate::run(&args)); });
+    let result = receiver.await.unwrap_or_else(|_| Err((1, "a migração morreu sem resposta".to_owned())));
+    let pid = std::process::id();
+    match result {
+        Ok(lines) => {
+            for line in lines.iter().filter_map(|l| l.strip_prefix("aviso: ")) { state.warn(line); }
+            state.write(json!({"fase": "pronto", "ok": true, "texto": lines.first().cloned().unwrap_or_default(), "pid": pid}));
+            true
+        }
+        Err((_, why)) => {
+            tracing::warn!("update: migração: {why}");
+            state.write(json!({"fase": "pronto", "ok": false, "erro": why, "codigo": "erro_migracao", "voltou": true, "no_ar": true, "pid": pid}));
+            false
+        }
+    }
+}
+
 /// `hangar-server update …`: `args` sem o nome do programa nem o `update`.
 pub fn cli(args: &[String]) -> ExitCode {
     let args = match Args::parse(args) {
         Ok(args) => args,
         Err(e) => {
             eprintln!("hangar-server update: {e}\nuso: hangar-server update --run [--channel C] | --restart --request-id ID | --dev \
-                | --dev-mode-on PASTA | --dev-mode-off  [--listen IP:PORTA]");
+                | --dev-mode-on PASTA | --dev-mode-off | --migrate [--checkout PASTA]  [--listen IP:PORTA]");
             return ExitCode::from(2);
         }
     };
@@ -495,6 +557,7 @@ async fn execute(env: &AccountEnvironment, args: &Args) -> bool {
             _ => { tracing::warn!("update: --dev sem modo desenvolvedor"); false }
         },
         Task::DevMode(request) => dev_mode(&parts, request, super::migrate::in_service_group(), &restarter, &health, &settings, fetch_runner).await,
+        Task::Migrate { checkout } => migrate(&parts, checkout.clone()).await,
         Task::Update { .. } => {
             let client = match crate::http_client().build() {
                 Ok(client) => client,
@@ -529,7 +592,8 @@ mod tests {
         let restart = Args::parse(&strings(&["--restart", "--request-id", "abc"])).unwrap();
         assert_eq!(restart, Args { task: Task::Restart { request_id: "abc".into() }, listen: DEFAULT_LISTEN.parse().unwrap() });
         assert_eq!(Args::parse(&strings(&["--dev"])).unwrap().task, Task::Dev);
-        for task in [Task::DevMode(DevRequest::On("/x/hangar".into())), Task::DevMode(DevRequest::Off)] {
+        for task in [Task::DevMode(DevRequest::On("/x/hangar".into())), Task::DevMode(DevRequest::Off),
+                     Task::Migrate { checkout: None }, Task::Migrate { checkout: Some("/x/hangar".into()) }] {
             let args = Args { task, listen: DEFAULT_LISTEN.parse().unwrap() };
             assert_eq!(Args::parse(&args.argv()[1..]).unwrap(), args);
         }

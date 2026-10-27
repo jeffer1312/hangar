@@ -225,7 +225,7 @@ async fn update_routes_dev_mode_refuses_with_a_code_and_launches_nothing() {
 }
 
 #[tokio::test]
-async fn update_routes_dev_mode_off_without_a_package_refuses() {
+async fn update_routes_dev_mode_offers_the_checkout_and_turning_it_on_again_is_a_no_op() {
     let fixture = Fixture::start("0.1.0.1").await;
     let checkout = fixture.checkout();
     fixture.point_current(&checkout);
@@ -237,9 +237,6 @@ async fn update_routes_dev_mode_off_without_a_package_refuses() {
 
     let already = body(fixture.dev_mode(json!({"on": true, "checkout": checkout.display().to_string()}), true).await).await;
     assert_eq!(already["nada_a_fazer"], true);
-    let refused = fixture.dev_mode(json!({"on": false}), true).await;
-    assert_eq!(refused.status(), 409);
-    assert_eq!(body(refused).await["detail"]["code"], "erro_dev_mode_sem_pacote");
     assert!(!fixture.state().exists(), "nada lançado");
 }
 
@@ -317,4 +314,88 @@ async fn update_notes_developer_mode_keeps_the_git_engine() {
     let status = response.status();
     let value = body(response).await;
     assert!(status == 503 || value["target"].as_str().is_some_and(|t| t.starts_with("origin/")), "{status} {value}");
+}
+
+/// Quem servia a tela pelo `vite` na porta do front (`CP_FRONT_PORT`): na máquina migrada, a mesma
+/// porta responde com as rotas do servidor, e o navegador mantém a origem que já usava.
+#[tokio::test]
+async fn update_routes_front_port_answers_like_the_public_one_on_a_migrated_machine() {
+    let home = tempfile::tempdir().unwrap();
+    let front_port = std::net::TcpListener::bind("127.0.0.2:0").unwrap().local_addr().unwrap().port();
+    let dir = home.path().join(".hangar/versions/0.1.0.1");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("manifest.json"), json!({"version": "0.1.0.1", "commit": "c", "channel": "latest", "protocol": 1,
+        "api": 5, "os": hangar_server::update::platform(), "files": {}}).to_string()).unwrap();
+    hangar_server::update::swap(&hangar_server::update::Layout::new(home.path()), &dir).unwrap();
+    std::fs::create_dir_all(home.path().join(".hangar/config")).unwrap();
+    std::fs::write(home.path().join(".hangar/config/.env"), format!("CP_AUTH_TOKEN=x\nCP_FRONT_PORT={front_port}\n")).unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.2:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let front = hangar_server::routes::front_address(home.path(), address);
+    assert_eq!(front, Some(std::net::SocketAddr::new(address.ip(), front_port)));
+    assert_eq!(hangar_server::routes::front_address(home.path(), std::net::SocketAddr::new(address.ip(), front_port)), None,
+        "a porta do front igual à principal não abre duas vezes");
+
+    let (upstream, python) = serve(axum::Router::new().fallback(|| async { "python" })).await;
+    let mut state = AppState::new(Config {
+        listen: address, upstream, internal_secret: "fixture-internal".into(),
+        auth_token: "fixture-owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1"),
+    });
+    state.accounts = AccountService::new(AccountEnvironment::from_map([
+        ("HOME".into(), home.path().to_string_lossy().into_owned()),
+        ("USERPROFILE".into(), home.path().to_string_lossy().into_owned()),
+    ].into()));
+    state.update_release_base = "http://127.0.0.1:9".into();
+    state.front = front;
+    let server = tokio::spawn(hangar_server::serve_until_with_guest(listener, state, None, std::future::pending()));
+
+    let client = reqwest::Client::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    let health = loop {
+        if let Ok(r) = client.get(format!("http://127.0.0.2:{front_port}/__hangar_server/health")).send().await { break r; }
+        assert!(!server.is_finished(), "o servidor saiu: {:?}", server.await);
+        assert!(tokio::time::Instant::now() < deadline, "a porta do front não abriu em 20 s");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+    assert_eq!(health.status(), 200);
+    let status = client.get(format!("http://127.0.0.2:{front_port}/api/atualizacao")).bearer_auth("fixture-owner").send().await.unwrap();
+    assert_eq!(status.status(), 200);
+    assert_eq!(body(status).await["modo"], "pacote", "o dono pela porta do front é atendido pelo mesmo servidor");
+    server.abort();
+    python.abort();
+}
+
+/// A máquina que migrou sem ver o aviso (antes da trava do aceite) o recebe de novo, com a escolha do
+/// modo e o Atualizar aceso; aceito mantendo o modo de agora, nada é lançado e o aviso some.
+#[tokio::test]
+async fn update_accept_brings_back_the_unseen_migration_warning_until_accepted() {
+    let step = hangar_server::update::migrate::STEP_ID;
+    let fixture = Fixture::start("0.1.0.8200").await;
+    fixture.package("0.1.0.8200");
+    let docs = fixture.home.path().join(".hangar/versions/0.1.0.8200/docs/atualizacoes");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join(format!("{step}.md")), "---\ntitulo: Pacote\ndestrutivo: true\n---\n\nTexto do aviso.\n").unwrap();
+    std::fs::write(fixture.home.path().join(".hangar/migration.json"), json!({"mode": "package", "date": "x", "checkout": "/algum/checkout",
+        "version": "0.1.0.8200", "reason": null, "notes": [], "done": []}).to_string()).unwrap();
+
+    let notes = body(fixture.call(reqwest::Method::GET, "/api/update/notes", true).await).await;
+    assert_eq!(notes["warnings"], json!([{"id": step, "title": "Pacote", "text": "Texto do aviso.", "choice": "mode", "mode": "package"}]));
+    let status = body(fixture.call(reqwest::Method::GET, "/api/atualizacao", true).await).await;
+    assert_eq!((status["aviso_pendente"].clone(), status["atualizacao_disponivel"].clone()), (json!(true), json!(true)));
+
+    let accept = |owner: bool, body: Value| {
+        let request = reqwest::Client::new().post(format!("{}/api/update/accept", fixture.base)).json(&body);
+        if owner { request.bearer_auth("fixture-owner") } else { request }
+    };
+    assert_eq!(accept(false, json!({"ids": [step]})).send().await.unwrap().status(), 403);
+    assert_eq!(accept(true, json!({"ids": [step], "mode": "outro"})).send().await.unwrap().status(), 422);
+    let accepted = body(accept(true, json!({"ids": [step], "mode": "package"})).send().await.unwrap()).await;
+    assert_eq!(accepted, json!({"ok": true, "started": false}), "o modo escolhido é o de agora: nada a lançar");
+    assert!(!fixture.state().exists(), "nada lançado");
+
+    let notes = body(fixture.call(reqwest::Method::GET, "/api/update/notes", true).await).await;
+    assert_eq!(notes["warnings"], json!([]));
+    let status = body(fixture.call(reqwest::Method::GET, "/api/atualizacao", true).await).await;
+    assert!(status.get("aviso_pendente").is_none(), "{status}");
 }

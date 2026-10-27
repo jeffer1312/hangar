@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, View } from 'react-native';
-import { getAtualizacaoEm, iniciarAtualizacaoEm, reiniciarServidorEm, matchesRestartResult, type AtualizacaoEstado, type Server } from '@hangar/core';
+import { acceptAndStart, getAtualizacaoEm, iniciarAtualizacaoEm, reiniciarServidorEm, matchesRestartResult, type AtualizacaoEstado, type Server } from '@hangar/core';
 import { MachineGroup, MachineRow } from './MachineRows';
 import { ensureActive, reason } from './api';
 import { Notice, styles, useMachineAction } from './parts';
 import { useRouter } from 'expo-router';
-import { firstPendingServer, requestUpdateConfirm, whatsNewHref } from '../updates/pending';
+import { clearPendingNews, firstPendingServer, requestUpdateConfirm, whatsNewHref, type UpdateAcceptances } from '../updates/pending';
 import * as m from '../../paraglide/messages';
 
 type Operation = 'restart' | 'update';
@@ -92,13 +92,17 @@ function OperationControls({ server }: { server: Server }) {
       confirmation.current = null; setAsking(false);
     };
     let updated = false;
-    const start = () => {
+    const start = (accept: UpdateAcceptances = {}) => {
         if (confirmation.current !== ticket || ticket.started || !alive.current) return;
         ticket.started = true; setAsking(false); setResult(null);
         void action.run(async (signal) => {
           ensureActive(signal);
-          const started = await bounded(operation === 'restart' ? reiniciarServidorEm(server) : iniciarAtualizacaoEm(server), signal, 15_000);
+          const acceptance = accept[server.id];
+          const started = await bounded<{ ok: boolean; pid: number; request_id?: string } | null>(operation === 'restart' ? reiniciarServidorEm(server)
+            : acceptance ? acceptAndStart(server, acceptance) : iniciarAtualizacaoEm(server), signal, 15_000);
           ensureActive(signal);
+          // Aceite gravado e nada a instalar: as novidades guardadas pela folha não vão chegar.
+          if (started === null) { clearPendingNews(server.id); return null; }
           if (started?.ok !== true || !Number.isSafeInteger(started.pid) || started.pid <= 0) throw new Error(m.mobile_machines_invalid_response());
           const state = await followOperation(server,
             (state) => operation === 'restart' ? matchesRestartResult(state, started) : state.pid === started.pid,
@@ -114,12 +118,12 @@ function OperationControls({ server }: { server: Server }) {
         });
     };
     if (operation === 'update') {
-      void requestUpdateConfirm(server, () => router.push('/update-confirm' as never)).then((ok) => { if (ok) start(); else cancel(); });
+      void requestUpdateConfirm(server, () => router.push('/update-confirm' as never)).then((accept) => { if (accept) start(accept); else cancel(); });
       return;
     }
     Alert.alert(m.mobile_machines_confirm_operation({ action: label, name: server.label }), m.mobile_machines_confirm_operation_body(), [
       { text: m.comum_cancelar(), style: 'cancel', onPress: cancel },
-      { text: label, onPress: start },
+      { text: label, onPress: () => start() },
     ], { cancelable: true, onDismiss: cancel });
   };
   const busy = asking || action.busy;

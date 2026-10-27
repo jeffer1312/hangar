@@ -1070,6 +1070,8 @@ export interface Atualizacao {
   /** Commits em origin/main que ainda não estão aqui. */
   atras?: number;
   atualizacao_disponivel: boolean;
+  /** Aviso importante ainda não aceito: liga `atualizacao_disponivel` mesmo sem versão nova. */
+  aviso_pendente?: boolean;
   /** API de cliente do servidor publicado para esta máquina; ausente em servidor anterior = 1. */
   api_publicado?: number;
   mudancas: AtualizacaoMudanca[];
@@ -1125,7 +1127,9 @@ export interface MigrationStatus {
 }
 
 /** `GET /api/update/notes`: o que a próxima atualização traz, lido antes de atualizar. */
-export interface UpdateWarning { id: string; title: string; text: string }
+export type UpdateMode = 'package' | 'developer';
+/** `choice: 'mode'` = o aviso da migração, que pede o modo; `mode` é o atual (`null` = não migrou). */
+export interface UpdateWarning { id: string; title: string; text: string; choice?: 'mode'; mode?: UpdateMode | null }
 export type UpdateNewsKind = 'new' | 'improvement' | 'fix';
 export type UpdateNewsPlatforms = 'desktop' | 'mobile' | 'all';
 export interface UpdateNews {

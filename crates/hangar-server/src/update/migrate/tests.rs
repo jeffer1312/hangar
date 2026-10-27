@@ -17,6 +17,8 @@ const UNIT: &str = "[Unit]\nDescription=hangar backend\n\n[Service]\nWorkingDire
 #[derive(Default)]
 struct FakeService {
     calls: Mutex<Vec<&'static str>>,
+    /// O serviço do front, à parte das paradas e subidas do backend: `false` desligou, `true` religou.
+    fronts: Mutex<Vec<bool>>,
     starts: Arc<AtomicUsize>,
     fail_start: bool,
     fail_restop: bool,
@@ -31,6 +33,10 @@ impl Service for FakeService {
         let mut calls = self.calls.lock().unwrap();
         calls.push("stop");
         if self.fail_restop && calls.iter().filter(|c| **c == "stop").count() == 2 { return Err("systemctl stop saiu com 1".into()); }
+        Ok(())
+    }
+    fn front(&self, on: bool) -> Result<(), String> {
+        self.fronts.lock().unwrap().push(on);
         Ok(())
     }
     fn start(&self) -> Result<(), String> {
@@ -178,16 +184,13 @@ fn migrate_step_id_is_the_step_file() {
 }
 
 #[test]
-fn migrate_decides_developer_by_edits_ahead_branch_and_preview() {
-    let clean = Facts { dirty: 0, untracked: 0, ahead: 0, branch: "main".into(), upstream: true, preview: false, dev_requested: false };
-    assert_eq!(decide(&clean).0, Mode::Package);
-    assert_eq!(decide(&Facts { branch: "beta".into(), ..clean.clone() }), (Mode::Package, None), "beta é o canal de teste");
-    for facts in [Facts { dirty: 2, ..clean.clone() }, Facts { untracked: 1, ..clean.clone() },Facts { ahead: 1, ..clean.clone() }, Facts { branch: "PM-1".into(), ..clean.clone() },
-                  Facts { preview: true, ..clean.clone() }, Facts { upstream: false, ..clean.clone() }, Facts { dev_requested: true, ..clean.clone() }] {
-        let (mode, why) = decide(&facts);
-        assert_eq!(mode, Mode::Developer, "{facts:?}");
-        assert!(why.is_some(), "{facts:?}");
-    }
+fn migrate_is_package_unless_the_install_asked_for_developer() {
+    let main = Facts { branch: "main".into(), dev_requested: false };
+    assert_eq!(decide(&main), (Mode::Package, None));
+    assert_eq!(decide(&Facts { branch: "PM-1".into(), ..main.clone() }), (Mode::Package, None), "a branch do checkout não escolhe o modo");
+    let (mode, why) = decide(&Facts { dev_requested: true, ..main });
+    assert_eq!(mode, Mode::Developer);
+    assert!(why.is_some());
 }
 
 #[tokio::test]
@@ -200,6 +203,7 @@ async fn migrate_clean_checkout_becomes_package() {
     assert_eq!(fetcher.calls.load(Ordering::SeqCst), 1);
     assert_eq!(*fetcher.channels.lock().unwrap(), ["latest"]);
     assert_eq!(*service.calls.lock().unwrap(), ["stop", "start"]);
+    assert_eq!(*service.fronts.lock().unwrap(), [false], "a porta do front passa ao servidor");
 
     // Dados do usuário no lugar novo, com um link no antigo.
     let config = b.home.join(".hangar/config");
@@ -273,27 +277,43 @@ async fn migrate_clean_beta_checkout_becomes_package_of_the_beta_channel() {
 }
 
 #[tokio::test]
-async fn migrate_dirty_branch_or_preview_checkout_is_developer_mode_without_download() {
-    for case in ["dirty", "untracked", "branch", "preview", "dev-requested"] {
+async fn migrate_edited_or_other_branch_checkout_is_package_and_keeps_the_checkout() {
+    for case in ["dirty", "untracked", "branch"] {
         let b = Box_::new();
         match case {
             "dirty" => sh(&b.checkout, "echo mudou > a"),
             "untracked" => sh(&b.checkout, "echo novo > novo.txt"),
-            "branch" => sh(&b.checkout, "git checkout -q -b PM-1"),
-            "preview" => std::fs::write(b.home.join(".config/systemd/user/hangar-frontend.service"), "[Service]\n").unwrap(),
-            _ => std::fs::write(b.home.join(".hangar").join(DEV_REQUESTED), "").unwrap(),
+            _ => sh(&b.checkout, "git checkout -q -b PM-1"),
         }
         let (service, fetcher) = (FakeService::default(), FakeFetcher::default());
         let outcome = migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap();
-        assert_eq!(outcome, Outcome::Migrated(Mode::Developer), "{case}");
-        assert!(b.step_applied(), "{case}");
-        assert_eq!(fetcher.calls.load(Ordering::SeqCst), 0, "{case}: nada baixado");
-        assert!(!b.home.join(".hangar/versions").exists(), "{case}");
-        assert_eq!(std::fs::canonicalize(b.current()).unwrap(), std::fs::canonicalize(&b.checkout).unwrap(), "{case}");
-        assert!(b.unit().contains("launch backend"), "{case}");
-        assert_eq!(b.marker().unwrap()["mode"], "developer", "{case}");
-        assert!(!b.home.join(".hangar").join(DEV_REQUESTED).exists(), "{case}: a marca do --dev some depois de usada");
+        assert_eq!(outcome, Outcome::Migrated(Mode::Package), "{case}");
+        assert_eq!(*fetcher.channels.lock().unwrap(), ["latest"], "{case}");
+        assert_eq!(b.marker().unwrap()["mode"], "package", "{case}");
+        assert!(b.checkout.join("backend").exists(), "{case}: o checkout fica no disco");
     }
+    let b = Box_::new();
+    sh(&b.checkout, "echo mudou > a");
+    let (service, fetcher) = (FakeService::default(), FakeFetcher::default());
+    migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap();
+    assert_eq!(std::fs::read_to_string(b.checkout.join("a")).unwrap(), "mudou\n", "a edição fica como estava");
+}
+
+#[tokio::test]
+async fn migrate_install_with_dev_is_developer_mode_without_download() {
+    let b = Box_::new();
+    std::fs::write(b.home.join(".hangar").join(DEV_REQUESTED), "").unwrap();
+    let (service, fetcher) = (FakeService::default(), FakeFetcher::default());
+    let outcome = migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap();
+    assert_eq!(outcome, Outcome::Migrated(Mode::Developer));
+    assert!(b.step_applied());
+    assert_eq!(fetcher.calls.load(Ordering::SeqCst), 0, "nada baixado");
+    assert!(!b.home.join(".hangar/versions").exists());
+    assert_eq!(std::fs::canonicalize(b.current()).unwrap(), std::fs::canonicalize(&b.checkout).unwrap());
+    assert!(b.unit().contains("launch backend"));
+    assert_eq!(b.marker().unwrap()["mode"], "developer");
+    assert!(service.fronts.lock().unwrap().is_empty(), "no modo desenvolvedor o vite do checkout segue");
+    assert!(!b.home.join(".hangar").join(DEV_REQUESTED).exists(), "a marca do --dev some depois de usada");
 }
 
 #[tokio::test]
@@ -324,6 +344,7 @@ async fn migrate_server_that_does_not_come_back_undoes_everything() {
     let error = migrate(&b.machine(&service, &fetcher), &health(&service, false), false).await.unwrap_err();
     assert!(error.contains("não voltou"), "{error}");
     assert_eq!(*service.calls.lock().unwrap(), ["stop", "start", "stop", "start"]);
+    assert_eq!(*service.fronts.lock().unwrap(), [false, true], "o front volta junto");
     assert_eq!(b.unit(), unit);
     assert!(std::fs::symlink_metadata(b.current()).is_err());
     assert_eq!(std::fs::read_to_string(b.checkout.join("backend/.env")).unwrap(), "CP_AUTH_TOKEN=segredo\nCP_SERVER_ID=caixa\n");
@@ -346,6 +367,7 @@ async fn migrate_undo_points_everything_back_to_the_checkout() {
     let service = FakeService::default();
     undo(&b.machine(&service, &fetcher), &health(&service, true)).await.unwrap();
     assert_eq!(*service.calls.lock().unwrap(), ["stop", "start"]);
+    assert_eq!(*service.fronts.lock().unwrap(), [true], "o --undo religa o front");
     assert_eq!(b.unit(), unit);
     assert!(std::fs::symlink_metadata(b.current()).is_err());
     assert!(!b.checkout.join("backend/.env").is_symlink());

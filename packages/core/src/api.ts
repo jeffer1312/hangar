@@ -22,6 +22,7 @@ import type { ConfigSyncItem, ConfigSyncManifest, ConfigSyncProgress, ConfigSync
 import type {
   Atualizacao,
   AtualizacaoEstado,
+  UpdateMode,
   UpdateNotes,
   MigrationStatus,
   SessionInfo,
@@ -2242,6 +2243,26 @@ export async function getUpdateNotesEm(s: Server | null, fetcher?: typeof fetch)
     if ((e as { status?: number }).status === 404) return null;
     throw e;
   }
+}
+
+export interface UpdateAcceptResult { ok: true; started: boolean; pid?: number }
+
+/**
+ * Grava o aceite dos avisos lidos (`mode` só com o aviso da migração). `started`: o servidor já
+ * lançou a migração ou a troca de modo e vai reiniciar. 404 = servidor antigo, sem a rota: `null`.
+ */
+export async function acceptUpdateWarningsEm(s: Server | null, ids: string[], mode?: UpdateMode, fetcher?: typeof fetch): Promise<UpdateAcceptResult | null> {
+  const init: RequestInit = { method: 'POST', body: JSON.stringify(mode ? { ids, mode } : { ids }) };
+  let response: { ok?: unknown; started?: unknown; pid?: unknown } | null;
+  try {
+    response = await (s ? apiFetchForServer<typeof response>(s, '/api/update/accept', init, 15000, true, fetcher)
+                        : apiFetch<typeof response>('/api/update/accept', { ...init, signal: AbortSignal.timeout(15000) }, fetcher));
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) return null;
+    throw new Error(m.update_accept_failed({ reason: e instanceof Error ? e.message : String(e) }));
+  }
+  if (response?.ok !== true) throw new Error(m.update_accept_failed({ reason: m.atualizar_resposta_invalida() }));
+  return response.started === true ? { ok: true, started: true, pid: confirmUpdateStarted(response).pid } : { ok: true, started: false };
 }
 
 export function getIdentificadorEm(s: Server, fetcher?: typeof fetch): Promise<{ identificador: string; lan_url?: string }> {

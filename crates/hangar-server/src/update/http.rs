@@ -188,7 +188,11 @@ fn with_cors(headers: &axum::http::HeaderMap, mut resp: Response) -> Response {
 
 /// `GET /api/atualizacao[?procurar=1]`.
 pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let Some(mode) = owned(&st, peer, &req) else { return pass_any(State(st), ConnectInfo(peer), req).await };
+    let Some(mode) = owned(&st, peer, &req) else {
+        let (owner, home) = (gate(&st, peer, &req).1, st.accounts.env.home.clone());
+        let response = pass_any(State(st), ConnectInfo(peer), req).await;
+        return if owner { with_pending_warning(response, &home).await } else { response };
+    };
     let refresh = req.uri().query().is_some_and(|q| q.split('&').any(|p| matches!(p, "procurar=1" | "procurar=true")));
     let (home, claude) = (st.accounts.env.home.clone(), st.accounts.env.claude_base.clone());
     let topology = topology().await.name();
@@ -213,9 +217,16 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         }
         Mode::Package(_) => {
             let installed = super::installed(&layout);
-            let channel = installed.as_ref().map_or_else(|| "latest".to_owned(), |m| m.channel.clone());
+            let channel = super::channel(&layout);
+            let switching = installed.as_ref().is_some_and(|m| m.channel != channel);
             let remote = published(&Release { base_url: st.update_release_base.clone(), channel }, refresh).await;
-            package_body(installed.as_ref(), running.as_deref(), remote.entry.as_ref(), remote.error.as_deref(), topology, estado)
+            let mut body = package_body(installed.as_ref(), running.as_deref(), remote.entry.as_ref(), remote.error.as_deref(), topology, estado);
+            // Canal trocado na tela: o publicado no outro entra, mesmo com número menor.
+            if switching && remote.entry.as_ref().zip(installed.as_ref()).is_some_and(|(r, m)| r.version != m.version) {
+                body["atras"] = 1.into();
+                body["atualizacao_disponivel"] = true.into();
+            }
+            body
         }
         Mode::Developer(root) => {
             let checkout = tokio::task::spawn_blocking(move || super::dev::read(&root, refresh)).await.unwrap_or_else(|e| Err(e.to_string()));
@@ -229,7 +240,29 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         _ => body["pre_voo"]["branch"].as_str().unwrap_or_default().to_owned(),
     }.into();
     body["checkout"] = suggested.map(|p| p.display().to_string()).into();
+    mark_pending_warning(&mut body, &home);
     with_cors(req.headers(), json_response(StatusCode::OK, body))
+}
+
+/// Aviso importante que a pessoa ainda não aceitou (a migração pendente, ou feita sem o aviso): o
+/// Atualizar aparece mesmo sem versão nova, e a tela mostra o aviso com a escolha.
+fn mark_pending_warning(body: &mut Value, home: &Path) {
+    if super::migrate::pending_warning(home, &crate::update_notes::notes_root(home)).is_none() { return; }
+    body["atualizacao_disponivel"] = true.into();
+    body["aviso_pendente"] = true.into();
+}
+
+/// O `GET` do motor `git` do Python com a marca do aviso pendente. Resposta que não é JSON passa igual.
+async fn with_pending_warning(response: Response, home: &Path) -> Response {
+    if !response.status().is_success() { return response; }
+    let (mut parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 8 * 1024 * 1024).await else {
+        return detail(StatusCode::BAD_GATEWAY, "erro_atualizacao_status", "a resposta do motor git não chegou inteira", json!({}));
+    };
+    let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) else { return Response::from_parts(parts, axum::body::Body::from(bytes)) };
+    mark_pending_warning(&mut value, home);
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+    Response::from_parts(parts, axum::body::Body::from(value.to_string()))
 }
 
 fn busy() -> Response { detail(StatusCode::CONFLICT, "erro_atualizacao_ja_rodando", "ja existe uma atualizacao rodando", json!({})) }
@@ -292,6 +325,126 @@ pub async fn restart(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     with_cors(req.headers(), started(launch(&st, Task::Restart { request_id }).await))
 }
 
+/// O Canal de testes no formato do `update_channel.py`: `branch` vazio = main; `checkout_branch` = a
+/// do pacote instalado; `last_branch` = a que a tela oferece ao religar.
+fn channel_snapshot(layout: &Layout) -> Value {
+    let installed = super::installed(layout).map_or_else(|| "latest".to_owned(), |m| m.channel);
+    let (chosen, last) = super::chosen_channel(layout).unwrap_or_else(|| (installed.clone(), String::new()));
+    let branch = if chosen == "latest" { String::new() } else { chosen };
+    let last = if last.is_empty() { if branch.is_empty() { "beta".to_owned() } else { branch.clone() } } else { last };
+    json!({"branch": branch, "checkout_branch": target_branch(&installed), "last_branch": last})
+}
+
+fn package_only(st: &AppState, peer: SocketAddr, req: &Request) -> bool { matches!(owned(st, peer, req), Some(Mode::Package(_))) }
+
+/// `GET /api/update-channel` no pacote; fora dele, a branch do motor `git` do Python.
+pub async fn channel_read(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    if !package_only(&st, peer, &req) { return pass_any(State(st), ConnectInfo(peer), req).await; }
+    with_cors(req.headers(), json_response(StatusCode::OK, channel_snapshot(&Layout::new(&st.accounts.env.home))))
+}
+
+#[derive(serde::Deserialize)]
+struct ChannelBody { branch: String }
+
+/// `PUT /api/update-channel` `{"branch": "beta"}` ou `{"branch": ""}`: grava o canal que o próximo
+/// Atualizar segue. No pacote só a main (`latest`) e a beta são publicadas.
+pub async fn channel_write(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    if !package_only(&st, peer, &req) { return pass_any(State(st), ConnectInfo(peer), req).await; }
+    let headers = req.headers().clone();
+    let parsed = axum::body::to_bytes(req.into_body(), 64 * 1024).await.ok().and_then(|raw| serde_json::from_slice::<ChannelBody>(&raw).ok());
+    let Some(ChannelBody { branch }) = parsed else {
+        return with_cors(&headers, detail(StatusCode::UNPROCESSABLE_ENTITY, "erro_corpo_invalido", "esperado {\"branch\": \"<nome>\"}", json!({})));
+    };
+    let channel = match branch.trim() {
+        "" | "main" => "latest",
+        "beta" => "beta",
+        other => return with_cors(&headers, detail(StatusCode::BAD_REQUEST, "update_channel_missing",
+            "No pacote só a main e a beta têm versão publicada.", json!({"branch": other}))),
+    };
+    let (home, claude) = (st.accounts.env.home.clone(), st.accounts.env.claude_base.clone());
+    let written = tokio::task::spawn_blocking(move || {
+        if super::StateFile::new(&super::state_dir(&claude)).read().get("fase").and_then(Value::as_str) == Some("rodando") {
+            return Err(None);
+        }
+        let layout = Layout::new(&home);
+        let last = if channel == "latest" { super::chosen_channel(&layout).map(|(_, last)| last).unwrap_or_default() } else { channel.to_owned() };
+        super::save_channel(&layout, channel, &last).map_err(|e| Some(e.to_string()))?;
+        Ok(channel_snapshot(&layout))
+    }).await.unwrap_or_else(|e| Err(Some(e.to_string())));
+    let response = match written {
+        Ok(snapshot) => json_response(StatusCode::OK, snapshot),
+        Err(None) => detail(StatusCode::CONFLICT, "update_channel_busy", "Aguarde a atualização terminar antes de mudar o canal.", json!({})),
+        Err(Some(why)) => detail(StatusCode::INTERNAL_SERVER_ERROR, "update_channel_write",
+            "Não foi possível gravar o canal. O canal anterior continua valendo.", json!({"motivo": why})),
+    };
+    with_cors(&headers, response)
+}
+
+#[derive(serde::Deserialize)]
+struct AcceptBody {
+    ids: Vec<String>,
+    /// A escolha do aviso da migração: `package` (o recomendado) ou `developer`.
+    #[serde(default)]
+    mode: Option<String>,
+}
+
+/// `POST /api/update/accept` `{"ids": [...], "mode": "package" | "developer"}`: os avisos que a pessoa
+/// aceitou na tela. Com o da migração: migra agora se ela estava pendente, ou troca o modo de quem
+/// migrou sem ver o aviso; `started` diz se algo foi lançado (a tela acompanha como uma atualização).
+/// Antes de o passo rodar, só grava: o Atualizar o roda com o aceite já no disco.
+pub async fn accept(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    if !gate(&st, peer, &req).1 {
+        return with_cors(&headers, detail(StatusCode::FORBIDDEN, "update_accept_owner_only", "só o dono aceita os avisos da atualização", json!({})));
+    }
+    let parsed = axum::body::to_bytes(req.into_body(), 64 * 1024).await.ok().and_then(|raw| serde_json::from_slice::<AcceptBody>(&raw).ok())
+        .filter(|b| !b.ids.is_empty() && b.ids.iter().all(|id| !id.is_empty() && id.len() <= 200)
+            && b.mode.as_deref().is_none_or(|m| m == "package" || m == "developer"));
+    let Some(AcceptBody { ids, mode }) = parsed else {
+        return with_cors(&headers, detail(StatusCode::UNPROCESSABLE_ENTITY, "erro_corpo_invalido",
+            "esperado {\"ids\": [\"<aviso>\"], \"mode\": \"package\" | \"developer\"}", json!({})));
+    };
+    let home = st.accounts.env.home.clone();
+    let layout = Layout::new(&home);
+    if let Err(e) = super::accept(&layout, &ids) {
+        return with_cors(&headers, detail(StatusCode::INTERNAL_SERVER_ERROR, "update_accept_write", "o aceite não foi gravado", json!({"motivo": e.to_string()})));
+    }
+    if !ids.iter().any(|id| id == super::migrate::STEP_ID) { return with_cors(&headers, json_response(StatusCode::OK, json!({"ok": true, "started": false}))); }
+    let developer = mode.as_deref() == Some("developer");
+    let task = match super::migrate::read_record(&layout.hangar.join(super::migrate::MARKER)) {
+        None => {
+            // A migração decide pelo `--dev`: a escolha da tela vale como ele.
+            let marker = layout.hangar.join(super::migrate::DEV_REQUESTED);
+            let written = if developer { std::fs::write(&marker, "") } else { std::fs::remove_file(&marker).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) }) };
+            if let Err(e) = written {
+                return with_cors(&headers, detail(StatusCode::INTERNAL_SERVER_ERROR, "update_accept_write", "a escolha do modo não foi gravada", json!({"motivo": e.to_string()})));
+            }
+            super::offered_file(&layout).exists().then(|| Task::Migrate { checkout: server_checkout() })
+        }
+        Some(record) => match (record.mode, developer) {
+            (super::migrate::Mode::Developer, false) => Some(Task::DevMode(super::dev_mode::Request::Off)),
+            (super::migrate::Mode::Package, true) if !record.checkout.as_os_str().is_empty() =>
+                Some(Task::DevMode(super::dev_mode::Request::On(record.checkout))),
+            _ => None,
+        },
+    };
+    let response = match task {
+        None => json_response(StatusCode::OK, json!({"ok": true, "started": false})),
+        Some(task) => match launch(&st, task).await {
+            Ok(Started { pid, .. }) => json_response(StatusCode::OK, json!({"ok": true, "started": true, "pid": pid})),
+            other => started(other),
+        },
+    };
+    with_cors(&headers, response)
+}
+
+/// O checkout de onde este servidor roda (o motor `git` o sobe na `backend/`).
+fn server_checkout() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    let root = if cwd.file_name().is_some_and(|n| n == "backend") { cwd.parent()?.to_path_buf() } else { cwd };
+    super::migrate::is_checkout(&root).then_some(root)
+}
+
 #[derive(serde::Deserialize)]
 struct DevModeBody {
     on: bool,
@@ -320,7 +473,7 @@ pub async fn switch_dev_mode(State(st): State<Arc<AppState>>, ConnectInfo(peer):
         Err(e) => detail(StatusCode::INTERNAL_SERVER_ERROR, "erro_dev_mode_falhou", &e.to_string(), json!({})),
         Ok(Err(failure)) => detail(StatusCode::CONFLICT, failure.code, &failure.message, json!({})),
         Ok(Ok(super::dev_mode::Checked::Already(text))) => json_response(StatusCode::OK, json!({"ok": true, "nada_a_fazer": true, "detalhe": text})),
-        Ok(Ok(super::dev_mode::Checked::Switch { .. })) => started(launch(&st, Task::DevMode(request)).await),
+        Ok(Ok(super::dev_mode::Checked::Switch { .. } | super::dev_mode::Checked::Download)) => started(launch(&st, Task::DevMode(request)).await),
     };
     with_cors(&headers, response)
 }
@@ -332,6 +485,25 @@ mod tests {
     use hangar_package::MANIFEST_FILE;
 
     use super::*;
+
+    /// O Canal de testes no formato que a tela lê, antes e depois de escolher, e o canal que o Atualizar segue.
+    #[test]
+    fn package_channel_follows_the_choice_and_keeps_the_last_test_branch() {
+        let home = tempfile::tempdir().unwrap();
+        let layout = Layout::new(home.path());
+        std::fs::create_dir_all(layout.current()).unwrap();
+        std::fs::write(layout.current().join(MANIFEST_FILE), serde_json::to_vec(&manifest("0.1.0.8324", "beta")).unwrap()).unwrap();
+        assert_eq!(channel_snapshot(&layout), json!({"branch": "beta", "checkout_branch": "beta", "last_branch": "beta"}));
+        assert_eq!(super::super::channel(&layout), "beta");
+
+        super::super::save_channel(&layout, "latest", "beta").unwrap();
+        assert_eq!(channel_snapshot(&layout), json!({"branch": "", "checkout_branch": "beta", "last_branch": "beta"}));
+        assert_eq!(super::super::channel(&layout), "latest");
+
+        super::super::save_channel(&layout, "beta", "beta").unwrap();
+        assert_eq!(channel_snapshot(&layout)["branch"], "beta");
+        assert_eq!(super::super::channel(&layout), "beta");
+    }
 
     fn manifest(version: &str, channel: &str) -> Manifest {
         Manifest { version: version.into(), commit: "abc123".into(), channel: channel.into(), protocol: 89, api: 4, os: "linux-x86_64".into(),

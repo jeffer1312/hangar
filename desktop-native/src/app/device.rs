@@ -6,6 +6,7 @@ use super::settings::{Page, segments, settings_box};
 use crate::appearance::{self, Currency, Language};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::switch::Switch;
+use crate::update::confirm::{Acceptance, Launch};
 
 /// Um pedido ao servidor e o último resultado: carregando, erro, vazio e com dados saem daqui.
 pub(super) struct Remote<T> { pub(super) value: Option<Result<T, String>>, pub(super) loading: bool, pub(super) seq: u64 }
@@ -156,7 +157,7 @@ impl Device {
         device
     }
     fn rate_value(&self) -> Option<f64> { self.rate.ok().copied().flatten() }
-    fn run_active(&self) -> bool { self.run.as_ref().is_some_and(|run| !matches!(run, Run::Done { .. })) }
+    pub(super) fn run_active(&self) -> bool { self.run.as_ref().is_some_and(|run| !matches!(run, Run::Done { .. })) }
 }
 
 pub(super) enum DeviceReply {
@@ -165,7 +166,7 @@ pub(super) enum DeviceReply {
     Downloaded(u64, Result<PathBuf, String>),
     About(u64, bool, Result<Value, Failure>),
     Channel(u64, bool, Result<Value, Failure>),
-    Started(u64, Result<Value, Failure>),
+    Started(u64, Launch),
     Tick(u64, Result<Value, Failure>),
     Migration(u64, Result<Value, Failure>),
 }
@@ -260,6 +261,7 @@ impl Hangar {
             Page::About => {
                 if !self.device.about.loading { self.load_about(false, cx); }
                 if !self.device.channel.request.loading && !self.device.channel.is_dirty() { self.load_channel(cx); }
+                if !self.machines.dev_switch_busy() { self.load_dev_mode(cx); }
             }
             Page::Accounts => self.accounts_opened(cx),
             Page::Orchestration => self.orchestration_opened(cx),
@@ -396,23 +398,29 @@ impl Hangar {
         self.confirm_server_update(Self::start_update, window, cx);
     }
 
-    /// "Atualizar {server}?" do servidor ativo, com os avisos e as novidades lidos antes de abrir; `start` roda ao confirmar.
-    pub(super) fn confirm_server_update(&mut self, start: fn(&mut Self, &mut Context<Self>), window: &mut Window, cx: &mut Context<Self>) {
+    /// "Atualizar {server}?" do servidor ativo, com os avisos e as novidades lidos antes de abrir; `start` roda ao confirmar,
+    /// com o aceite dos avisos e se há atualização de verdade (sem estado lido, vale o clique, como antes).
+    pub(super) fn confirm_server_update(&mut self, start: fn(&mut Self, Acceptance, bool, &mut Context<Self>), window: &mut Window,
+        cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
         if self.device.notes_loading { return; }
         self.device.notes_loading = true;
         cx.notify();
-        crate::update::confirm::load_then_open(api, &self.runtime, window, cx, move |this, _, notes, window, cx| {
+        crate::update::confirm::load_then_open(api, &self.runtime, window, cx, move |this, state, notes, window, cx| {
             this.device.notes_loading = false;
             cx.notify();
             let weak = cx.entity().downgrade();
             let server = this.server_label(cx);
+            let real = state.as_ref().is_none_or(crate::update::real_update);
             crate::update::confirm::open(window, cx, tr("update_confirm_title").replace("{server}", &server), tr("update_confirm_desc"),
-                notes, None, move |_, cx| { let _ = weak.update(cx, |this, cx| start(this, cx)); });
+                vec![notes], None, move |accepted, _, cx| {
+                    let acceptance = accepted.into_iter().next().unwrap_or_default();
+                    let _ = weak.update(cx, |this, cx| start(this, acceptance, real, cx));
+                });
         });
     }
 
-    fn start_update(&mut self, cx: &mut Context<Self>) {
+    fn start_update(&mut self, acceptance: Acceptance, real: bool, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
         if self.device.run_active() || self.device.channel.blocks_update() { return; }
         self.device.baseline_ts = self.device.about.ok().and_then(|v| v.ts.clone());
@@ -420,7 +428,9 @@ impl Hangar {
         self.device.run_seq += 1;
         let seq = self.device.run_seq;
         let done = self.device_send_later();
-        self.runtime.spawn(async move { done(DeviceReply::Started(seq, api.server_post(&["atualizacao", "iniciar"], 30).await)).await });
+        self.runtime.spawn(async move {
+            done(DeviceReply::Started(seq, crate::update::confirm::accept_then_start(&api, &acceptance, real).await)).await
+        });
         cx.notify();
     }
 
@@ -446,6 +456,8 @@ impl Hangar {
         self.device.search = None;
         self.device.channel.after_update();
         self.load_channel(cx);
+        // O aceite do aviso da migração pode ter trocado o modo.
+        if !self.machines.dev_switch_busy() { self.load_dev_mode(cx); }
     }
 
     pub(super) fn receive_device(&mut self, reply: DeviceReply, window: &mut Window, cx: &mut Context<Self>) {
@@ -521,13 +533,22 @@ impl Hangar {
                 if seq != self.device.run_seq { return; }
                 match result {
                     // O servidor grava "rodando" antes de responder: o próximo "pronto" é o desfecho.
-                    Ok(value) if crate::update::update_process_id(&value).is_some() => {
+                    Launch::Started(Ok(value)) if crate::update::update_process_id(&value).is_some() => {
                         (self.device.run, self.device.saw_running) = (Some(Run::Running { step: 0, total: 0, text: String::new() }), true);
                         self.follow_update();
                     }
-                    Ok(_) => self.finish_update(false, tr("invalid_response"), cx),
-                    Err(error) if error.uncertain => { (self.device.run, self.device.saw_running) = (Some(Run::Uncertain), false); self.follow_update(); }
-                    Err(error) => self.finish_update(false, tr("update_refused").replace("{reason}", &Self::failure(&error)), cx),
+                    Launch::Started(Ok(_)) => self.finish_update(false, tr("invalid_response"), cx),
+                    Launch::Started(Err(error)) if error.uncertain => {
+                        (self.device.run, self.device.saw_running) = (Some(Run::Uncertain), false);
+                        self.follow_update();
+                    }
+                    Launch::Started(Err(error)) => self.finish_update(false, tr("update_refused").replace("{reason}", &Self::failure(&error)), cx),
+                    Launch::AcceptFailed(text) => self.finish_update(false, text, cx),
+                    // Só o aviso estava pendente: aceito, a linha relida deixa de oferecer o Atualizar.
+                    Launch::Nothing => {
+                        (self.device.run, self.device.search) = (None, None);
+                        self.load_about(false, cx);
+                    }
                 }
             }
             DeviceReply::Tick(seq, result) => {
@@ -834,6 +855,7 @@ impl Hangar {
             .child(self.heading("settings_about_app_group")).child(settings_box().child(app_row))
             .child(self.heading("settings_about_server_group"))
             .child(settings_box().child(server_row).child(update_row).children(progress))
+            .children(self.render_dev_mode(cx).map(|row| row.mt(px(12.))))
             .when(!self.active_invite() && self.api.is_some(), |el| el.child(div().mt(px(12.)).child(Button::new("migration-open").outline().small()
                 .icon(IconName::Activity).label(tr_shared("migration_open", &[]))
                 .on_click(cx.listener(|this, _, window, cx| this.open_settings(Page::Migration, window, cx))))))

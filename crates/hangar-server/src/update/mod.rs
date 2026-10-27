@@ -167,6 +167,48 @@ pub fn broken_manifest(layout: &Layout) -> Option<String> {
 /// desenvolvedor, máquina não migrada).
 pub fn installed(layout: &Layout) -> Option<Manifest> { read_manifest(&layout.current()) }
 
+/// Avisos importantes que a pessoa aceitou na tela (ids). O passo destrutivo só roda com o dele aqui;
+/// o `scripts/migrar-pacote.*` lê o mesmo arquivo.
+pub fn accepted_file(layout: &Layout) -> PathBuf { layout.hangar.join("update-accepted.json") }
+
+/// O passo da migração rodou sem o aviso aceito: só deixou esta marca, e a migração espera a tela.
+pub fn offered_file(layout: &Layout) -> PathBuf { layout.hangar.join("migration-offered") }
+
+/// Ilegível é vazio: o aviso volta à tela, e nada destrutivo roda sem aceite.
+pub fn accepted(layout: &Layout) -> std::collections::BTreeSet<String> {
+    std::fs::read(accepted_file(layout)).ok().and_then(|bytes| serde_json::from_slice::<Vec<String>>(&bytes).ok())
+        .unwrap_or_default().into_iter().collect()
+}
+
+pub fn accept(layout: &Layout, ids: &[String]) -> std::io::Result<()> {
+    let mut all = accepted(layout);
+    all.extend(ids.iter().cloned());
+    std::fs::create_dir_all(&layout.hangar)?;
+    crate::runtime::queue::atomic_write(&accepted_file(layout), json!(all).to_string().as_bytes())
+}
+
+/// O Canal de testes do pacote, escolhido pela tela: `{"channel": "beta", "last": "beta"}`.
+pub fn channel_file(layout: &Layout) -> PathBuf { layout.hangar.join("config").join("update-channel.json") }
+
+/// A escolha gravada: `(canal, último canal de testes)`.
+pub fn chosen_channel(layout: &Layout) -> Option<(String, String)> {
+    let value: Value = serde_json::from_slice(&std::fs::read(channel_file(layout)).ok()?).ok()?;
+    let channel = value.get("channel")?.as_str().filter(|c| !c.is_empty())?.to_owned();
+    let last = value.get("last").and_then(Value::as_str).unwrap_or_default().to_owned();
+    Some((channel, last))
+}
+
+pub fn save_channel(layout: &Layout, channel: &str, last: &str) -> std::io::Result<()> {
+    let file = channel_file(layout);
+    if let Some(parent) = file.parent() { std::fs::create_dir_all(parent)?; }
+    crate::runtime::queue::atomic_write(&file, json!({"channel": channel, "last": last}).to_string().as_bytes())
+}
+
+/// O canal que o Atualizar segue: o escolhido na tela, senão o do pacote instalado, senão `latest`.
+pub fn channel(layout: &Layout) -> String {
+    chosen_channel(layout).map(|(c, _)| c).or_else(|| installed(layout).map(|m| m.channel)).unwrap_or_else(|| "latest".to_owned())
+}
+
 /// Caminho real, sem o `\\?\` que o Windows devolve (o `mklink` e o Python não o entendem).
 fn real(path: &Path) -> std::io::Result<PathBuf> { std::fs::canonicalize(path).map(crate::list::links::without_verbatim) }
 
@@ -484,6 +526,21 @@ pub trait Restarter {
 }
 
 /// Baixa a tela web (`frontend/dist`) da chave para `ui_dir`; o real é o `ui::fetch`.
+/// Baixa e prepara a versão publicada no canal, sem trocar o `current`: a volta do modo
+/// desenvolvedor para o pacote numa máquina que nunca teve um. Devolve o aviso da tela web, se falhou.
+pub async fn download_published(release: &Release, layout: &Layout, home: &Path, settings: &Settings) -> Result<Option<String>, UpdateError> {
+    let client = crate::http_client().build().map_err(|e| UpdateError::Download(e.to_string()))?;
+    let entry = entry(&client, release, &platform()).await?;
+    let dir = prepare(&client, release, &entry, layout, settings.download_deadline).await?;
+    let key = read_manifest(&dir).and_then(|m| m.dist_key);
+    // Escolha ilegível: a tela fica ligada, como na atualização.
+    if let Some(key) = key && crate::ui::enabled(home).unwrap_or(true)
+        && let Err(e) = ReleaseUi.fetch(&key, &layout.hangar.join("ui")).await {
+        return Ok(Some(format!("a tela web não foi baixada: {e}")));
+    }
+    Ok(None)
+}
+
 pub trait UiFetcher: Sync {
     fn fetch<'a>(&'a self, key: &'a str, ui_dir: &'a Path) -> std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 }
@@ -830,7 +887,8 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     for note in &job.notes { state.warn(note); }
 
     state.step("baixar");
-    let installed_version = before.as_ref().and_then(|m| m.version.parse().ok());
+    // Trocar de canal instala o publicado no outro, mesmo com número menor que o instalado.
+    let installed_version = before.as_ref().filter(|m| m.channel == job.release.channel).and_then(|m| m.version.parse().ok());
     let entry = match check(job.client, job.release, job.platform, installed_version).await {
         Ok(Some(entry)) => entry,
         Ok(None) => {
