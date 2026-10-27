@@ -63,13 +63,7 @@ pub fn identity(home: &Path, name: &str, mux: &str) -> Result<String, String> {
                 && f[2].chars().all(|c| c.is_ascii_digit())
             {
                 if let Some(start) = f[0].parse::<u32>().ok().and_then(process_start) {
-                    return Ok(format!(
-                        "tmux:{}:{}:{}:{}",
-                        f[0],
-                        crate::transcript::pyjson::float_repr(start),
-                        f[1],
-                        f[2]
-                    ));
+                    return Ok(tmux_identity(f[0],start,f[1],f[2]));
                 }
             }
         }
@@ -83,6 +77,10 @@ pub fn identity(home: &Path, name: &str, mux: &str) -> Result<String, String> {
     }
     Err("não foi possível identificar o contexto atual da sessão".into())
 }
+pub fn tmux_identity(pid:&str,started:f64,session:&str,created:&str)->String {
+    format!("tmux:{pid}:{}:{session}:{created}",crate::transcript::pyjson::float_repr(started))
+}
+
 fn process_start(pid: u32) -> Option<f64> {
     #[cfg(target_os = "linux")]
     {
@@ -399,6 +397,14 @@ pub fn promote_source(
     current: f64,
     expected: f64,
 ) -> Result<(), PromotionFailure> {
+    promote_source_with(source,dest,content,current,expected,super::write)
+}
+
+/// O escritor recebe a versão esperada; a restauração nunca substitui uma edição concorrente.
+pub fn promote_source_with(
+    source:&Path,dest:&Path,content:&str,current:f64,expected:f64,
+    write:impl FnOnce(&Path,&str,Option<f64>)->Result<f64,String>,
+)->Result<(),PromotionFailure>{
     let invalid = |message: String| PromotionFailure {
         changed: false,
         message,
@@ -425,7 +431,7 @@ pub fn promote_source(
     }
     let gid = dest.file_stem().unwrap_or_default().to_string_lossy();
     let gid = gid.strip_prefix("regras-").unwrap_or(&gid);
-    if let Err(error) = super::write(
+    if let Err(error) = write(
         source,
         &format!("<!-- hangar-orq-group: {gid} -->\n"),
         Some(if moved { 0. } else { current }),

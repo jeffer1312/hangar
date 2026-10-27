@@ -12,6 +12,7 @@ pub mod policy;
 pub mod roles;
 pub mod runs;
 pub mod state;
+pub mod snapshot;
 pub mod timeline;
 pub mod triage;
 pub use http::{matches, serve};

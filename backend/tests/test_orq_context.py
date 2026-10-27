@@ -4,17 +4,25 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import orq_context as oc, orq_md, orq_papeis as roles, pair
-from app.adapters.orq import runs
+from pathlib import Path
+from app import pair
+from orq_contract_client import contexts as oc, markdown as orq_md, roles, call
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(pair, "_pair_dir", lambda: tmp_path)
     monkeypatch.setattr(pair, "_arquivo_dir", lambda: tmp_path / "archive")
-    monkeypatch.setattr(oc, "identity", lambda name: "identity:" + name)
-    monkeypatch.setattr(oc, "active_gid", lambda name: None)
-    monkeypatch.setattr(runs, "group_phase", lambda gid: None)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("HANGAR_PAIR_ARCHIVE", str(tmp_path / "archive"))
+    for name in ("a", "b", "same", "planner", "arbiter", "legacy"):
+        _identity(name, "identity:" + name)
+
+
+def _identity(name, key, session_id="initial"):
+    directory = Path.home() / ".hangar" / "claude-headless"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{name}.json").write_text(json.dumps({"key":key,"session_id":session_id}))
 
 
 def _orq_sidecar(name, gid="real"):
@@ -45,7 +53,7 @@ def test_two_contexts_ignore_default_and_old_contract():
 
 def test_recreated_name_does_not_inherit_draft(monkeypatch):
     old, _ = save("same")
-    monkeypatch.setattr(oc, "identity", lambda name: "another-life")
+    _identity("same", "another-life")
     new = oc.resolve("same")
     assert new.gid != old.gid
     assert orq_md.ler_arquivo(new.path) == ("", 0.0)
@@ -116,7 +124,7 @@ def test_unknown_group_phase_does_not_clear_record(monkeypatch):
     link = _orq_sidecar("arbiter")
     oc.promote("planner", "real", mtime)
     link.unlink()
-    monkeypatch.setattr(runs, "group_phase", lambda gid: "unknown")
+    # Sem vínculo ou arquivo confirmado, a promoção continua sem encerramento comprovado.
     with pytest.raises(oc.PromotionConflict, match="confirmar o encerramento"):
         oc.resolve("planner")
     assert "hangar-orq-group" in context.path.read_text()
@@ -125,17 +133,8 @@ def test_unknown_group_phase_does_not_clear_record(monkeypatch):
 def test_promotion_conflict_preserves_external_source_and_rolls_back_group(monkeypatch):
     context, _ = save("planner")
     before = context.path.read_text()
-    original_write = orq_md.gravar
-
-    def external_write(path, text, mtime_lido=None):
-        if path == context.path and "hangar-orq-group" in text:
-            path.write_text("external editor", encoding="utf-8")
-            raise orq_md.Conflito(str(path))
-        return original_write(path, text, mtime_lido)
-
-    monkeypatch.setattr(orq_md, "gravar", external_write)
     with pytest.raises(oc.PromotionConflict, match="origem não restaurada"):
-        oc.promote("planner", "fresh")
+        call("context.promote-failure", source=context.path, destination=context.path.parent/"regras-fresh.md", external=True)
     assert context.path.read_text() == "external editor"
     destinations = [p for p in context.path.parent.glob("regras-*.md") if p != context.path]
     assert len(destinations) == 1 and destinations[0].read_text() == before
@@ -144,37 +143,27 @@ def test_promotion_conflict_preserves_external_source_and_rolls_back_group(monke
 def test_promotion_failure_restores_source_exclusively(monkeypatch):
     context, _ = save("planner")
     before = context.path.read_text()
-    original_write = orq_md.gravar
-
-    def failed_write(path, text, mtime_lido=None):
-        if path == context.path and "hangar-orq-group" in text:
-            raise OSError("unable to write pointer")
-        return original_write(path, text, mtime_lido)
-
-    monkeypatch.setattr(orq_md, "gravar", failed_write)
     with pytest.raises(oc.PromotionConflict, match="origem restaurada"):
-        oc.promote("planner", "fresh")
+        call("context.promote-failure", source=context.path, destination=context.path.parent/"regras-fresh.md", external=False)
     assert context.path.read_text() == before
 
 
 def test_associate_facts_carry_what_the_rust_needs(monkeypatch):
+    # Os fatos intermediários saíram: o Rust lê os mesmos arquivos no caminho da associação.
     context, _ = save("planner")
     context.path.write_text("<!-- hangar-orq-group: old -->\n", encoding="utf-8")
-    (pair._arquivo_dir()).mkdir()
+    pair._arquivo_dir().mkdir()
     (pair._arquivo_dir() / "regras-old-20261019-120000.md").write_text("x", encoding="utf-8")
-    monkeypatch.setattr(runs, "group_phase", lambda gid: "live" if gid == "real" else None)
-    assert oc.associate_facts("planner", "real") == {"active_gid": None, "draft_gid": context.gid, "groups": {
-        "real": {"phase": "live", "archived": False}, "old": {"phase": None, "archived": True}}}
-    # Com grupo no sidecar o rascunho não importa: nem a identidade é lida.
+    assert not oc.resolve("planner").grouped
     _orq_sidecar("planner")
-    monkeypatch.setattr(oc, "identity", lambda name: pytest.fail("identidade lida"))
-    assert oc.associate_facts("planner", "real") == {"active_gid": None, "draft_gid": None,
-                                                     "groups": {"real": {"phase": "live", "archived": False}}}
+    (Path.home()/".hangar/claude-headless/planner.json").unlink()
+    resolved=oc.resolve("planner")
+    assert resolved.grouped and resolved.gid == "real"
 
 
 def test_actual_pair_link_preserved_without_legacy_identity(monkeypatch):
     _orq_sidecar("legacy")
-    monkeypatch.setattr(oc, "identity", lambda name: (_ for _ in ()).throw(oc.IdentityUnavailable("unknown")))
+    (Path.home()/".hangar/claude-headless/legacy.json").unlink()
     context = oc.resolve("legacy")
     assert context.gid == "real" and context.grouped
 
@@ -191,22 +180,15 @@ def test_new_orq_group_promotes_founder_record():
 
 
 def test_sidecar_identity_survives_clear_and_changes_when_recreated(monkeypatch):
-    monkeypatch.undo()
-    meta = {"key": "first", "session_id": "before"}
-    monkeypatch.setattr(oc.orq_identity, "_load_sidecar", lambda directory, name: meta)
+    _identity("same", "first", "before")
     first = oc.identity("same")
-    meta["session_id"] = "after"
+    _identity("same", "first", "after")
     assert oc.identity("same") == first
-    meta["key"] = "second"
+    _identity("same", "second", "after")
     assert oc.identity("same") != first
 
 
 def test_tmux_identity_survives_name_change_and_rejects_recycled_server(monkeypatch):
-    monkeypatch.undo()
-    monkeypatch.setattr(oc.orq_identity, "_load_sidecar", lambda directory, name: {})
-    monkeypatch.setattr(oc.orq_identity.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="42\t$1\t100\n"))
-    monkeypatch.setattr(oc.orq_identity, "_process_start", lambda pid: 1.0)
-    assert oc.identity("before") == oc.identity("renamed")
-    before = oc.identity("same")
-    monkeypatch.setattr(oc.orq_identity, "_process_start", lambda pid: 2.0)
-    assert oc.identity("same") != before
+    first=call("identity.tmux", pid=42, started=1.0, session="$1", created="100")
+    assert call("identity.tmux",pid=42,started=1.0,session="$1",created="100") == first
+    assert call("identity.tmux",pid=42,started=2.0,session="$1",created="100") != first

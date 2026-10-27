@@ -9,9 +9,8 @@ use std::{
     sync::{LazyLock, Mutex},
     time::SystemTime,
 };
-static SHADOW: LazyLock<
-    Mutex<IndexMap<std::path::PathBuf, (Option<(SystemTime, u64)>, Vec<Value>)>>,
-> = LazyLock::new(Mutex::default);
+static SHADOW:LazyLock<super::snapshot::SnapshotCache<Option<(SystemTime,u64)>,Vec<Value>>>=LazyLock::new(||super::snapshot::SnapshotCache::new(true));
+
 fn regex(pattern: &str) -> Regex {
     static REGEXES: LazyLock<Mutex<std::collections::HashMap<String, Regex>>> =
         LazyLock::new(Mutex::default);
@@ -60,18 +59,7 @@ fn shadow(dir: &Path) -> Vec<Value> {
     let sig = fs::metadata(&path)
         .ok()
         .and_then(|m| Some((m.modified().ok()?, m.len())));
-    let mut cache = SHADOW.lock().unwrap();
-    if let Some((saved, rows)) = cache.get(&path) {
-        if *saved == sig {
-            return rows.clone();
-        }
-    }
-    let rows = runs::lines(&path, false).unwrap_or_default();
-    if cache.len() >= 16 {
-        cache.shift_remove_index(0);
-    }
-    cache.insert(path, (sig, rows.clone()));
-    rows
+    SHADOW.get(path.clone(),sig,||runs::lines(&path,false).unwrap_or_default())
 }
 fn jev_for(dir: &Path, msg: &str, at: &Value) -> Value {
     let Some(at) = runs::when(at) else {

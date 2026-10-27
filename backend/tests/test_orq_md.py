@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app import orq_md
+from orq_contract_client import markdown as orq_md, call
 
 CAB = ("papel", "sessão", "provider", "conta", "modelo", "esforço")
 
@@ -16,16 +16,7 @@ def test_read_and_mtime_come_from_same_file_during_replace(tmp_path, monkeypatch
     old_mtime = path.stat().st_mtime
     replacement.write_text("new", encoding="utf-8")
     os.utime(replacement, (old_mtime + 10, old_mtime + 10))
-    original_open = Path.open
-
-    def open_and_replace(self, *args, **kwargs):
-        file = original_open(self, *args, **kwargs)
-        if self == path:
-            orq_md.atomico.substituir(replacement, path)
-        return file
-
-    monkeypatch.setattr(Path, "open", open_and_replace)
-    assert orq_md.ler_arquivo(path) == ("old", old_mtime)
+    assert tuple(call("file.read-after-replace", path=path, replacement=replacement)) == ("old", old_mtime)
 
 CONTRATO = """> Sessões deste grupo: leiam a página do seu papel.
 

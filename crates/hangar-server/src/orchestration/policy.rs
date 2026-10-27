@@ -234,106 +234,154 @@ pub fn migrate(home: &Path, base: &Path) -> bool {
     }
     true
 }
+#[derive(Default, Deserialize)]
+pub struct InventoryFacts {
+    pub base: PathBuf,
+    pub aliases: Value,
+    #[serde(default)]
+    pub claude: Vec<Value>,
+    #[serde(default)]
+    pub kimi: Value,
+    #[serde(default)]
+    pub kimi_names: Vec<String>,
+    #[serde(default)]
+    pub pi: Vec<Value>,
+    #[serde(default)]
+    pub codex: Vec<Value>,
+}
+pub fn claude_name(base:&Path,dir:&Path)->String {
+    let resolved=fs::canonicalize(dir).unwrap_or_else(|_|dir.to_owned());
+    let base=fs::canonicalize(base).unwrap_or_else(|_|base.to_owned());
+    if resolved==base {"padrao".into()} else {
+        let name=resolved.file_name().unwrap_or_default().to_string_lossy();
+        name.strip_prefix(".claude-").unwrap_or(&name).to_owned()
+    }
+}
+/// Os catálogos já resolvidos mantêm a mesma ordem, inclusive quando um provedor não respondeu.
+pub fn inventory_from(facts: InventoryFacts) -> Vec<Value> {
+    let InventoryFacts {
+        base,
+        aliases,
+        claude,
+        kimi,
+        kimi_names,
+        pi,
+        codex,
+    } = facts;
+    let mut out = Vec::new();
+    for row in claude {
+        let account = &row["account"];
+        let dir = PathBuf::from(text(&account["path"]));
+        let resolved = fs::canonicalize(&dir).unwrap_or(dir.clone());
+        let name = claude_name(&base,&dir);
+        let (models, reduced) = if row["models"].is_array() {
+            (array(&row["models"]).to_vec(), row["reduced"] == true)
+        } else {
+            claude_models(&dir, runs::now())
+        };
+        out.push(json!({"conta":name,"provider":"claude","apelido":account["label"],"id_cota":format!("claude:{}",resolved.display()),"modelos":models,"reduced":reduced}));
+    }
+    for name in kimi_names {
+        let models:Vec<_>=array(&kimi["models"]).iter().filter(|m|m["provider"]==name.as_str()).map(|m|json!({"id":m["alias"],"name":m["name"],"context_length":m["context_length"],"efforts":m["efforts"]})).collect();
+        out.push(json!({"conta":name,"provider":"kimi","apelido":aliases.get(format!("kimi:{name}")).unwrap_or(&json!(name)),"id_cota":format!("kimi:{name}"),"modelos":models,"reduced":false}));
+    }
+    let mut by = IndexMap::<String, Vec<Value>>::new();
+    for model in pi {
+        by.entry(text(&model["provider"]).into()).or_default().push(json!({"id":model["id"],"context_length":model["context"],"thinking":model["thinking"]}));
+    }
+    for (provider, models) in by {
+        out.push(json!({"conta":provider,"provider":"pi","apelido":provider,"id_cota":null,"modelos":models,"reduced":false}));
+    }
+    for row in codex {
+        let account = &row["account"];
+        let id = text(&account["id"]);
+        let default = account["is_default"] == true;
+        let key = format!("codex:{}", text(&account["home"]));
+        let natural = if default {
+            aliases
+                .get("codex")
+                .cloned()
+                .unwrap_or(json!("OpenAI Codex"))
+        } else {
+            json!(id)
+        };
+        let label = aliases
+            .get(&key)
+            .filter(|v| super::truthy(v))
+            .unwrap_or(&natural);
+        out.push(json!({"conta":if default{"openai-codex"}else{id},"provider":"codex","apelido":label,"id_cota":null,"modelos":row["models"],"reduced":false}));
+    }
+    out
+}
 pub async fn inventory(st: &Arc<crate::routes::AppState>) -> Vec<Value> {
     let service = &st.accounts;
     let home = &service.env.home;
     let base = &service.env.claude_base;
-    let aliases = runs::json(&base.join(".hangar-apelidos.json")).unwrap_or_default();
-    let mut out = Vec::new();
+    let mut facts = InventoryFacts {
+        base: base.clone(),
+        aliases: runs::json(&base.join(".hangar-apelidos.json")).unwrap_or_default(),
+        ..Default::default()
+    };
     if let Ok(accounts) = service.claude_catalog() {
         for account in array(&accounts) {
-            let dir = PathBuf::from(text(&account["path"]));
-            let resolved = fs::canonicalize(&dir).unwrap_or(dir.clone());
-            let base_resolved = fs::canonicalize(base).unwrap_or(base.clone());
-            let name = if resolved == base_resolved {
-                "padrao".into()
-            } else {
-                resolved
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .trim_start_matches(".claude-")
-                    .to_owned()
-            };
-            let (models, reduced) = claude_models(&dir, runs::now());
-            out.push(json!({"conta":name,"provider":"claude","apelido":account["label"],"id_cota":format!("claude:{}",resolved.display()),"modelos":models,"reduced":reduced}));
+            let (models, reduced) = claude_models(Path::new(text(&account["path"])), runs::now());
+            facts
+                .claude
+                .push(json!({"account":account,"models":models,"reduced":reduced}));
         }
     }
-    let kimi = crate::provider_models::kimi_catalog(home).unwrap_or_default();
+    facts.kimi = crate::provider_models::kimi_catalog(home).unwrap_or_default();
     let conf = fs::read_to_string(crate::accounts::quotas::other::kimi_config(&service.env))
         .ok()
-        .and_then(|s| s.parse::<toml::Value>().ok());
+        .and_then(|s| toml::from_str::<toml::Value>(&s).ok());
     if let Some(providers) = conf
         .as_ref()
         .and_then(|c| c.get("providers"))
         .and_then(toml::Value::as_table)
     {
-        for (name, provider) in providers {
-            if provider.get("type").and_then(toml::Value::as_str) != Some("kimi")
-                || provider
-                    .get("api_key")
-                    .and_then(toml::Value::as_str)
-                    .is_none_or(str::is_empty)
-                || provider
-                    .get("base_url")
-                    .and_then(toml::Value::as_str)
-                    .is_none_or(str::is_empty)
-            {
-                continue;
-            }
-            let models:Vec<_>=array(&kimi["models"]).iter().filter(|m|m["provider"]==name.as_str()).map(|m|json!({"id":m["alias"],"name":m["name"],"context_length":m["context_length"],"efforts":m["efforts"]})).collect();
-            out.push(json!({"conta":name,"provider":"kimi","apelido":aliases.get(format!("kimi:{name}")).filter(|v|!text(v).trim().is_empty()).unwrap_or(&json!(name)),"id_cota":format!("kimi:{name}"),"modelos":models,"reduced":false}));
-        }
+        facts.kimi_names = providers
+            .iter()
+            .filter(|(_, provider)| {
+                provider.get("type").and_then(toml::Value::as_str) == Some("kimi")
+                    && provider
+                        .get("api_key")
+                        .and_then(toml::Value::as_str)
+                        .is_some_and(|s| !s.is_empty())
+                    && provider
+                        .get("base_url")
+                        .and_then(toml::Value::as_str)
+                        .is_some_and(|s| !s.is_empty())
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
     }
-    if let Ok(models) = crate::provider_models::catalog("pi").await {
-        let mut by = IndexMap::<String, Vec<Value>>::new();
-        for m in models {
-            by.entry(text(&m["provider"]).into())
-                .or_default()
-                .push(json!({"id":m["id"],"context_length":m["context"],"thinking":m["thinking"]}));
-        }
-        for (provider, models) in by {
-            out.push(json!({"conta":provider,"provider":"pi","apelido":provider,"id_cota":null,"modelos":models,"reduced":false}));
-        }
-    }
+    facts.pi = crate::provider_models::catalog("pi")
+        .await
+        .unwrap_or_default();
     if let Ok(accounts) = service.visible_codex_accounts() {
         let model_slots = tokio::sync::Semaphore::new(8);
         let slots = &model_slots;
         use futures_util::StreamExt;
-        let catalogs = futures_util::stream::iter(accounts.clone().into_iter().map(|account| async move {
-            st.dictation_models
-                .get(service, slots, "codex", &account.home, false)
-                .await
-                .map(|(models, _)| {
-                    models
-                        .into_iter()
-                        .map(|m| json!({"id":m["id"],"name":m["name"],"efforts":m["efforts"]}))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        }))
-        .buffered(8)
-        .collect::<Vec<_>>()
-        .await;
-        for (account, models) in accounts.iter().zip(catalogs) {
-            let key = format!("codex:{}", account.home.display());
-            let natural = if account.is_default {
-                text(&aliases["codex"]).trim().to_owned()
-            } else {
-                account.id.clone()
-            };
-            let label = aliases
-                .get(&key)
-                .map(text)
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or(if natural.is_empty() {
-                    "OpenAI Codex"
-                } else {
-                    &natural
-                });
-            out.push(json!({"conta":if account.is_default{"openai-codex"}else{&account.id},"provider":"codex","apelido":label,"id_cota":null,"modelos":models,"reduced":false}));
+        let catalogs =
+            futures_util::stream::iter(accounts.clone().into_iter().map(|account| async move {
+                st.dictation_models
+                    .get(service, slots, "codex", &account.home, false)
+                    .await
+                    .map(|(models, _)| {
+                        models
+                            .into_iter()
+                            .map(|m| json!({"id":m["id"],"name":m["name"],"efforts":m["efforts"]}))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            }))
+            .buffered(8)
+            .collect::<Vec<_>>()
+            .await;
+        for (account, models) in accounts.into_iter().zip(catalogs) {
+            facts.codex.push(json!({"account":{"id":account.id,"home":account.home,"is_default":account.is_default},"models":models}));
         }
     }
-    out
+    inventory_from(facts)
 }
 use indexmap::IndexMap;

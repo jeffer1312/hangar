@@ -8,103 +8,18 @@ use std::{
     fs,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, Mutex},
+    sync::{Arc, LazyLock},
     time::Instant,
 };
-#[derive(Clone)]
-struct Cached {
-    at: Instant,
-    value: Value,
-    error: Option<String>,
-    unavailable: bool,
-}
-#[derive(Default)]
-struct Entry {
-    hit: Option<Cached>,
-    running: bool,
-}
-static CACHE: LazyLock<Mutex<IndexMap<String, Entry>>> = LazyLock::new(Mutex::default);
-pub fn cached(
-    dir: &Path,
-    home: &Path,
-    names: Vec<String>,
-    aux: Value,
-    live: Vec<Value>,
-    costs: Arc<costs::collect::Collector>,
-) -> (Value, Option<String>) {
-    let key = format!(
-        "{}{}",
-        fs::canonicalize(dir)
-            .unwrap_or_else(|_| dir.into())
-            .display(),
-        if truthy(&aux["until"]) {
-            format!("@{}", text(&aux["until"]))
-        } else {
-            String::new()
-        }
-    );
-    let mut entries = CACHE.lock().unwrap();
-    if entries.len() >= 16 && !entries.contains_key(&key) {
-        if let Some(i) = entries.iter().position(|(_, e)| !e.running) {
-            entries.shift_remove_index(i);
-        }
-    }
-    let entry = entries.entry(key.clone()).or_default();
-    let stale = entry
-        .hit
-        .as_ref()
-        .map(|h| (h.value.clone(), h.error.clone()))
-        .unwrap_or_default();
-    let fresh = entry
-        .hit
-        .as_ref()
-        .is_some_and(|h| h.at.elapsed().as_secs_f64() < if h.unavailable { 5. } else { 60. });
-    if fresh || entry.running {
-        return stale;
-    }
-    entry.running = true;
-    let dir = dir.to_owned();
-    let home = home.to_owned();
-    drop(entries);
-    let worker_key = key.clone();
-    let started = std::thread::Builder::new()
-        .name("orq-consumption".into())
-        .spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                compute(&dir, &home, &names, &aux, &live, &costs)
-            }))
-            .unwrap_or_else(|_| Err("não foi possível calcular o consumo".into()));
-            let mut cache = CACHE.lock().unwrap();
-            let entry = cache.entry(worker_key).or_default();
-            entry.running = false;
-            entry.hit = Some(match result {
-                Ok((value, unavailable)) => Cached {
-                    at: Instant::now(),
-                    value,
-                    error: None,
-                    unavailable,
-                },
-                Err(e) => Cached {
-                    at: Instant::now(),
-                    value: Value::Null,
-                    error: Some(e),
-                    unavailable: false,
-                },
-            });
-        });
-    if let Err(e) = started {
-        let mut cache = CACHE.lock().unwrap();
-        let entry = cache.entry(key).or_default();
-        entry.running = false;
-        entry.hit = Some(Cached {
-            at: Instant::now(),
-            value: Value::Null,
-            error: Some(e.to_string()),
-            unavailable: true,
-        });
-        return (Value::Null, Some(e.to_string()));
-    }
-    stale
+pub mod cache;
+static CACHE:LazyLock<Arc<cache::Cache>>=LazyLock::new(||Arc::new(cache::Cache::default()));
+fn clock()->f64 {static START:LazyLock<Instant>=LazyLock::new(Instant::now);START.elapsed().as_secs_f64()}
+pub fn cached(dir:&Path,home:&Path,names:Vec<String>,aux:Value,live:Vec<Value>,costs:Arc<costs::collect::Collector>)->(Value,Option<String>){
+    let key=format!("{}{}",fs::canonicalize(dir).unwrap_or_else(|_|dir.into()).display(),if truthy(&aux["until"]){format!("@{}",text(&aux["until"]))}else{String::new()});
+    let dir=dir.to_owned();let home=home.to_owned();
+    CACHE.request(key,Arc::new(clock),60.,5.,move||compute(&dir,&home,&names,&aux,&live,&costs),|work|{
+        std::thread::Builder::new().name("orq-consumption".into()).spawn(work).map(|_|())
+    })
 }
 fn walk(dir: &Path, filter: &impl Fn(&Path) -> bool) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -174,7 +89,7 @@ fn codex_path(home: &Path, config: &str, id: &str) -> Option<PathBuf> {
     }
     None
 }
-fn paths(
+pub fn paths(
     dir: &Path,
     home: &Path,
     names: &[String],
@@ -325,9 +240,17 @@ pub fn compute(
     live: &[Value],
     collector: &costs::collect::Collector,
 ) -> Result<(Value, bool), String> {
+    compute_with(dir,names,aux,live,collector,|live|paths(dir,home,names,live),rows_for)
+}
+pub type SourcePaths=BTreeMap<String,IndexMap<PathBuf,String>>;
+pub fn compute_with(
+    dir:&Path,names:&[String],aux:&Value,live:&[Value],collector:&costs::collect::Collector,
+    resolve:impl FnOnce(&[Value])->SourcePaths,
+    read:impl Fn(&str,&Path,Option<chrono::DateTime<chrono::Local>>)->Option<Vec<UsageRow>>,
+)->Result<(Value,bool),String>{
     let since = runs::when(&aux["since"]);
     let until = runs::when(&aux["until"]);
-    let sources = paths(dir, home, names, if until.is_some() { &[] } else { live });
+    let sources = resolve(if until.is_some() { &[] } else { live });
     let mut hints = aux["models"].as_object().cloned().unwrap_or_default();
     for p in walk(&dir.join("medicao"), &|p| {
         p.extension().is_some_and(|x| x == "json")
@@ -354,7 +277,7 @@ pub fn compute(
                 }
                 continue;
             }
-            let rows = rows_for(provider, path, until);
+            let rows = read(provider, path, until);
             seen.insert(path.clone(), rows.is_some());
             let Some(rows) = rows else { continue };
             readable.insert(name.clone());

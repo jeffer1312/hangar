@@ -5,16 +5,15 @@ import json
 
 import pytest
 
-from app.adapters.orq import runs
+from pathlib import Path
+from orq_contract_client import runs, call
 
 
 @pytest.fixture(autouse=True)
 def root(tmp_path, monkeypatch):
-    r = tmp_path / "orq"
-    r.mkdir()
-    monkeypatch.setattr(runs, "root", lambda: r)
-    # Só "alive" importa aqui; o batimento tem testes próprios em test_orq_conductor*.
-    monkeypatch.setattr(runs.orq_conductor, "watchdog", lambda d, units: {"alive": True, "arbiter": "arb"})
+    monkeypatch.setenv("HOME",str(tmp_path))
+    r=tmp_path/".hangar/orq"
+    r.mkdir(parents=True)
     return r
 
 
@@ -38,7 +37,7 @@ def test_phase_follows_the_run(root):
 
 def test_a_watchdog_restart_keeps_a_live_run_live(root, monkeypatch):
     # Restart=always leaves a window with no heartbeat; the run itself is still alive.
-    monkeypatch.setattr(runs.orq_conductor, "watchdog", lambda d, units: {"alive": False, "arbiter": "arb"})
+    # O arquivo de batimento está ausente: a vida da execução basta.
     _run(root, "g1")
     assert runs.group_phase("g1") == "live"
 
@@ -55,8 +54,7 @@ def test_unreadable_runs_root_is_unknown(root, caplog):
 def test_an_unreadable_runs_root_is_warned_once(root, caplog):
     root.chmod(0)
     try:
-        for _ in range(3):
-            assert runs.group_phase("g") == "unknown"
+        assert call("runs.phases",home=Path.home(),gids=["g"]*3) == ["unknown"]*3
     finally:
         root.chmod(0o755)
     assert len([r for r in caplog.records if "ilegíveis" in r.getMessage()]) == 1

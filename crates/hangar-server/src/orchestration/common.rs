@@ -51,11 +51,14 @@ pub fn bounded(
     })
 }
 pub fn read(path: &Path) -> io::Result<(String, f64)> {
-    let mut file = match fs::File::open(path) {
+    let file = match fs::File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((String::new(), 0.)),
         Err(e) => return Err(e),
     };
+    read_open(file)
+}
+pub fn read_open(mut file: fs::File) -> io::Result<(String, f64)> {
     let mut text = String::new();
     file.read_to_string(&mut text)?;
     Ok((text, mtime_meta(&file.metadata()?)))

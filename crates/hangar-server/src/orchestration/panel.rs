@@ -5,12 +5,10 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     path::Path,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{Arc, LazyLock},
     time::SystemTime,
 };
-type Snapshot = (Vec<Option<(SystemTime, u64)>>, Value, Value);
-static PANELS: LazyLock<Mutex<IndexMap<std::path::PathBuf, Snapshot>>> =
-    LazyLock::new(Mutex::default);
+static PANELS:LazyLock<super::snapshot::SnapshotCache<Vec<Option<(SystemTime,u64)>>,(Value,Value)>>=LazyLock::new(||super::snapshot::SnapshotCache::new(false));
 pub fn verdict(e: &Value) -> Option<&'static str> {
     match text(&e["resultado"]) {
         "aprova" | "corrige" => Some("approved"),
@@ -54,23 +52,7 @@ pub fn panel(
         Path::new(text(&cfg["plan"])),
         home,
     )));
-    let hit = PANELS
-        .lock()
-        .unwrap()
-        .get(&key)
-        .filter(|(s, _, _)| *s == sig)
-        .cloned();
-    let (mut out, aux) = if let Some((_, out, aux)) = hit {
-        (out, aux)
-    } else {
-        let (out, aux) = build(dir, home);
-        let mut cache = PANELS.lock().unwrap();
-        if cache.len() >= 16 && !cache.contains_key(&key) {
-            cache.shift_remove_index(0);
-        }
-        cache.insert(key, (sig, out.clone(), aux.clone()));
-        (out, aux)
-    };
+    let (mut out,aux)=PANELS.get(key,sig,||build(dir,home));
     out = with_timing(out, &aux, runs::now());
     let names: Vec<_> = array(&out["team"])
         .iter()
@@ -153,7 +135,7 @@ pub fn task_rows(events: &[Value], plan: &[Value], integrated: &BTreeSet<i128>) 
         })
         .collect()
 }
-fn team(cfg: &Value, st: &Value, events: &[Value]) -> Vec<Value> {
+pub fn team(cfg: &Value, st: &Value, events: &[Value]) -> Vec<Value> {
     let mut roles: BTreeMap<i128, Value> = BTreeMap::new();
     let mut last = IndexMap::<String, Value>::new();
     let mut slots = BTreeMap::<String, (i128, &str)>::new();
@@ -254,7 +236,7 @@ fn team(cfg: &Value, st: &Value, events: &[Value]) -> Vec<Value> {
     rows.retain(|r| seen.insert(r["name"].to_string()));
     rows
 }
-fn decisions(entries: &[(Value, Value)], events: &[Value]) -> Vec<Value> {
+pub fn decisions(entries: &[(Value, Value)], events: &[Value]) -> Vec<Value> {
     let mut later = BTreeMap::<i128, Vec<chrono::DateTime<chrono::Local>>>::new();
     for e in events {
         if matches!(kind(e), "entrega" | "veredito" | "integrada") {
@@ -290,7 +272,7 @@ fn decisions(entries: &[(Value, Value)], events: &[Value]) -> Vec<Value> {
     }
     rows
 }
-fn automation(cfg: &Value, entries: &[(Value, Value)], shadow: &[Value]) -> Value {
+pub fn automation(cfg: &Value, entries: &[(Value, Value)], shadow: &[Value]) -> Value {
     let mut woke = json!({"total":0,"decisions":0,"alarms":0,"messages":0});
     let mut alone = json!({"total":0,"opened":0,"integrated":0,"dropped":0});
     let (mut dropped, mut would, mut rule) = (0, 0, 0);
@@ -352,7 +334,7 @@ fn automation(cfg: &Value, entries: &[(Value, Value)], shadow: &[Value]) -> Valu
     }
     json!({"mode":{"jev":cfg.get("jev").unwrap_or(&json!("shadow")),"regex":cfg.get("regex").unwrap_or(&json!("shadow"))},"woke":woke,"alone":alone,"dropped_by_jev":dropped,"advanced":{"would_drop":would,"disagree":disagree,"judged":judged,"min_confidence":lowest,"by_rule":rule}})
 }
-fn integration(events: &[Value], closes: &IndexMap<i128, Value>, checks: &[Value]) -> Value {
+pub fn integration(events: &[Value], closes: &IndexMap<i128, Value>, checks: &[Value]) -> Value {
     let begin = events
         .iter()
         .find(|e| kind(e) == "execucao_inicio")

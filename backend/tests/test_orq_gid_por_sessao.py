@@ -3,18 +3,26 @@ import json
 
 import pytest
 
-from app import orq_context, orq_papeis as op, pair
-from app.adapters.orq import runs
+from pathlib import Path
+from app import pair
+from orq_contract_client import contexts as orq_context, roles as op, runs
 
 
 @pytest.fixture(autouse=True)
 def _pair_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(pair.settings, "projects_dir", tmp_path / "projects")
-    root = tmp_path / "runs"
-    root.mkdir()
-    monkeypatch.setattr(runs, "root", lambda: root)
-    monkeypatch.setattr(orq_context, "identity", lambda name: "identity:" + name)
+    monkeypatch.setenv("HOME",str(tmp_path))
+    root=tmp_path/".hangar/orq"
+    root.mkdir(parents=True)
+    for name in ("arb","t1","review1","t2","pm1-arb","pm1-t9","pm2-arb","x1","s1"):
+        _identity(name,"identity:"+name)
     return tmp_path
+
+
+def _identity(name,key):
+    d=Path.home()/".hangar/claude-headless"
+    d.mkdir(parents=True,exist_ok=True)
+    (d/f"{name}.json").write_text(json.dumps({"key":key}))
 
 
 def _regras(gid: str, linhas: str) -> None:
@@ -47,14 +55,14 @@ def _run(events):
     d = runs.root() / "current"
     d.mkdir(exist_ok=True)
     (d / "orq.json").write_text(json.dumps({"auto": True, "arbiter": "arb",
-                                           "arbiter_identity": "identity:arb"}), encoding="utf-8")
+                                           "arbiter_identity": "claude:identity:arb"}), encoding="utf-8")
     (d / "eventos.jsonl").write_text("\n".join(json.dumps(e) for e in events), encoding="utf-8")
 
 
 def test_registro_real_preservado_antes_do_vigia():
     _run([{"tipo": "execucao_inicio", "gid": "real"},
           {"tipo": "task_inicio", "task": 1, "executor": "t1", "par": "review1",
-           "session_identities": {"t1": "identity:t1", "review1": "identity:review1"}}])
+           "session_identities": {"t1": "claude:identity:t1", "review1": "claude:identity:review1"}}])
     assert op.gid_por_sessao("arb") == op.gid_por_sessao("t1") == op.gid_por_sessao("review1") == "real"
     assert op.gid_por_sessao("t2") is None
 
@@ -62,8 +70,9 @@ def test_registro_real_preservado_antes_do_vigia():
 def test_nome_recriado_na_execucao_viva_nao_herda_time(monkeypatch):
     _run([{"tipo": "execucao_inicio", "gid": "real"},
           {"tipo": "task_inicio", "task": 1, "executor": "t1", "par": "review1",
-           "session_identities": {"t1": "identity:t1", "review1": "identity:review1"}}])
-    monkeypatch.setattr(orq_context, "identity", lambda name: "new-life:" + name)
+           "session_identities": {"t1": "claude:identity:t1", "review1": "claude:identity:review1"}}])
+    _identity("t1","new-life:t1")
+    _identity("arb","new-life:arb")
     assert op.gid_por_sessao("t1") is None
     assert op.gid_por_sessao("arb") is None
 

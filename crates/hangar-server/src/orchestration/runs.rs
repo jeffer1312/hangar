@@ -218,7 +218,7 @@ pub fn auto_run(dir: &Path, strict: bool) -> io::Result<Option<(Value, String, b
             return Err(e);
         }
     };
-    if !truthy(&cfg["auto"]) {
+    if cfg["auto"] != true {
         return Ok(None);
     }
     let ev = events(&dir.join("eventos.jsonl"), strict)?;
@@ -249,39 +249,21 @@ fn auto_entry(cfg: Value, events: &[Value]) -> Option<(Value, String, bool)> {
 
 pub fn group_phase(home: &Path, gid: &str) -> Option<String> {
     static WARNED: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(Mutex::default);
-    let paths = match fs::read_dir(root(home)) {
-        Ok(d) => d,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return None,
-        Err(_) => return Some("unknown".into()),
-    };
-    let mut ended = false;
-    for entry in paths {
-        let d = match entry {
-            Ok(d) => d.path(),
-            Err(_) => return Some("unknown".into()),
-        };
-        match auto_run(&d, true) {
-            Ok(Some((_, g, end))) if g == gid => {
-                if !end {
-                    return Some("live".into());
-                }
-                ended = true
-            }
-            Err(_) => {
-                if WARNED.lock().unwrap().insert(d) {
-                    tracing::warn!(
-                        code = "orq_run_unreadable",
-                        "orquestração ilegível; grupo mantido"
-                    )
-                }
-                return Some("unknown".into());
-            }
-            _ => (),
-        }
-    }
+    let unknown=|path:PathBuf|{if WARNED.lock().unwrap().insert(path.clone()){
+        tracing::warn!(code="orq_run_unreadable",run=%path.file_name().unwrap_or_default().to_string_lossy(),"orq: execuções ilegíveis, grupo mantido");
+    }Some("unknown".into())};
+    let root=root(home);
+    let paths=match fs::read_dir(&root){Ok(d)=>d,Err(e)if e.kind()==io::ErrorKind::NotFound=>return None,Err(_)=>return unknown(root)};
+    let mut paths=match paths.map(|d|d.map(|e|e.path())).collect::<io::Result<Vec<_>>>(){Ok(p)=>p,Err(_)=>return unknown(root)};
+    paths.sort();let mut ended=false;let mut live=false;
+    for d in paths {match auto_run(&d,true){
+        Ok(Some((_,g,end))) if g==gid=>{ended|=end;live|=!end},
+        Err(_)=>return unknown(d),_=>(),
+    }}
     WARNED.lock().unwrap().clear();
-    ended.then(|| "ended".into())
+    if live {Some("live".into())}else{ended.then(||"ended".into())}
 }
+
 pub fn activity(timeline: &Path, at: f64) -> (&'static str, Option<f64>) {
     let lock = timeline
         .parent()
@@ -384,27 +366,28 @@ pub fn summary(id: &str, ev: &[Value]) -> Value {
     }
     json!({"id":id,"plano":super::py_string(begin.get("plano").unwrap_or(&json!(""))),"branch":super::py_string(begin.get("branch").unwrap_or(&json!(""))),"gid":super::py_string(begin.get("gid").unwrap_or(&json!(""))),"inicio":begin["ts"],"fim":end.map(|e|e["ts"].clone()),"resultado":end.map(|e|e["resultado"].clone()),"tasks":tasks,"eventos_execucao":loose,"voltas":returns,"aprovadas_primeira":firsts,"reconstruida":truthy(&begin["reconstruido"])})
 }
-pub fn list(home: &Path) -> Vec<Value> {
-    let mut out = Vec::new();
-    if let Ok(dirs) = fs::read_dir(root(home)) {
-        for d in dirs.flatten() {
-            if d.path().is_dir() {
-                if let Ok(ev) = events(&d.path().join("eventos.jsonl"), false) {
-                    if !ev.is_empty() {
-                        out.push(summary(&d.file_name().to_string_lossy(), &ev));
-                    }
-                }
-            }
-        }
-    }
-    out.sort_by(|a, b| text(&b["id"]).cmp(text(&a["id"])));
-    out
+pub fn list(home:&Path)->Vec<Value>{list_directory(&root(home))}
+pub fn list_directory(root:&Path)->Vec<Value>{
+    list_directory_with(root,|path|match fs::metadata(path){Ok(m)=>Ok(m.is_dir()),Err(e)if e.kind()==io::ErrorKind::NotFound=>Ok(false),Err(e)=>Err(e)})
 }
-pub fn detail(home: &Path, id: &str) -> Option<Value> {
-    let dir = exec_dir(home, id)?;
-    let ev = events(&dir.join("eventos.jsonl"), false).ok()?;
-    (!ev.is_empty()).then(|| summary(id, &ev))
+/// Uma entrada ilegível não oculta as demais execuções.
+pub fn list_directory_with(root:&Path,inspect:impl Fn(&Path)->io::Result<bool>)->Vec<Value>{
+    let mut out=Vec::new();
+    if let Ok(dirs)=fs::read_dir(root){for d in dirs.flatten(){let path=d.path();
+        match inspect(&path){Ok(true)=>{},Ok(false)=>continue,Err(_)=>{tracing::warn!(code="orq_run_stat_failed",run=%d.file_name().to_string_lossy(),"não foi possível inspecionar a execução");continue}}
+        let event_path=path.join("eventos.jsonl");
+        let ev=events(&event_path,false).unwrap_or_default();
+        if !ev.is_empty(){out.push(summary(&d.file_name().to_string_lossy(),&ev));}
+        else if event_path.exists(){tracing::warn!(code="orq_run_empty",run=%d.file_name().to_string_lossy(),"eventos sem linha válida; execução fora da lista");}
+    }}
+    out.sort_by(|a,b|text(&b["id"]).cmp(text(&a["id"])));out
 }
+pub fn detail(home:&Path,id:&str)->Option<Value>{detail_directory(&root(home),id)}
+pub fn detail_directory(root:&Path,id:&str)->Option<Value>{
+    if !valid_id(id){return None}let ev=events(&root.join(id).join("eventos.jsonl"),false).ok()?;
+    (!ev.is_empty()).then(||summary(id,&ev))
+}
+
 pub fn cards(runs: &[Value]) -> Vec<Value> {
     let mut cards: indexmap::IndexMap<String, Value> = indexmap::IndexMap::new();
     for r in runs {
