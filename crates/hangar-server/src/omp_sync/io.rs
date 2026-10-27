@@ -87,7 +87,14 @@ pub fn read(p: &Path, default: Option<Value>) -> Result<Value, String> {
         return Err(err("Registro simbólico recusado"));
     }
     match fs::read(p) {
-        Ok(raw) => parse(std::str::from_utf8(&raw).map_err(|_| err("Registro JSON inválido"))?),
+        Ok(raw) => parse(std::str::from_utf8(&raw).map_err(|_| err("Registro JSON inválido"))?)
+            .map_err(|error| {
+                if error == "JSON contém chaves repetidas" {
+                    err("Registro JSON inválido")
+                } else {
+                    error
+                }
+            }),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             default.ok_or_else(|| err("Registro obrigatório ausente"))
         }

@@ -11,7 +11,7 @@ pub use directories::agent_directory;
 use futures_util::future::BoxFuture;
 pub use io::NativeRunner;
 use serde_json::{Map, Value, json};
-pub use service::{Service, matches, serve};
+pub use service::{Service, matches, serve, validate_environment};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},

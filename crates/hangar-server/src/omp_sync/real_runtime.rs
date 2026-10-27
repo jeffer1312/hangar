@@ -167,7 +167,7 @@ fn inventory(home: &Path, source: &Path, url: &str, revision: &str, enabled: boo
 #[tokio::test]
 #[ignore = "Requer omp, Bun e Git instalados; executar explicitamente no sandbox."]
 async fn native_plugin_install_adopt_update_disable_and_remove() {
-    for adopt in [false, true] {
+    for (adopt, xdg) in [(false, false), (true, false), (false, true)] {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         fs::create_dir_all(&home).unwrap();
@@ -186,6 +186,9 @@ async fn native_plugin_install_adopt_update_disable_and_remove() {
             ("XDG_CACHE_HOME", home.join(".cache")),
         ] {
             env.insert(key.into(), path.to_string_lossy().into_owned());
+        }
+        if xdg {
+            fs::create_dir_all(home.join(".local/share/omp")).unwrap();
         }
         env.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
         env.insert(
@@ -237,9 +240,18 @@ async fn native_plugin_install_adopt_update_disable_and_remove() {
         );
         fs::write(source.join("commands/base.md"), "Primeira revisão.\n").unwrap();
         fs::write(source.join("commands/optional.md"), "Comando opcional.\n").unwrap();
+        json_file(
+            &source.join(".claude-plugin/marketplace.json"),
+            json!({"name":"catalog","owner":{"name":"Fixture"},"plugins":[]}),
+        );
         git(&env, &source, &["init", "--initial-branch=main"]).await;
         git(&env, &source, &["remote", "add", "origin", &url]).await;
-        git(&env, &source, &["add", "package.json", "commands"]).await;
+        git(
+            &env,
+            &source,
+            &["add", "package.json", "commands", ".claude-plugin"],
+        )
+        .await;
         git(&env, &source, &["commit", "-m", "Primeira revisão"]).await;
         let first = git(&env, &source, &["rev-parse", "HEAD"]).await;
         git(
@@ -255,7 +267,16 @@ async fn native_plugin_install_adopt_update_disable_and_remove() {
             env.clone(),
             Arc::new(DiagnosticNative),
         );
-        let root = home.join(".omp/plugins");
+        let root = sync.directories().unwrap().data_root.join("plugins");
+        let imported = sync.import_marketplaces(false, &|| false).await;
+        assert_eq!(imported["errors"], json!([]), "{imported}");
+        assert_eq!(imported["items"][0]["action"], "import");
+        let catalog = io::read(&root.parent().unwrap().join("marketplaces.json"), None).unwrap();
+        assert_eq!(catalog["marketplaces"][0]["sourceUri"], url);
+        assert_eq!(
+            sync.import_marketplaces(false, &|| false).await["items"][0]["action"],
+            "unchanged"
+        );
         let lock = root.join("omp-plugins.lock.json");
         let package = root.join("node_modules/hangar-comet-runtime-fixture");
         if adopt {
@@ -360,5 +381,144 @@ async fn native_plugin_install_adopt_update_disable_and_remove() {
         );
         server.0.abort();
         let _ = (&mut server.0).await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "Requer CLI omp instalado; roda isolado, sem credenciais nem chamada a modelo."]
+async fn native_marketplace_layouts_match_the_cli() {
+    for layout in [
+        "custom-agent",
+        "xdg-absent",
+        "xdg-default",
+        "xdg-custom",
+        "config-root",
+        "profile-legacy",
+        "profile-xdg",
+        "canonical-default",
+        "xdg-double-slash",
+    ] {
+        if cfg!(windows) && layout == "xdg-double-slash" {
+            continue;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir(&home).unwrap();
+        let mut env = BTreeMap::new();
+        for key in ["PATH", "SYSTEMROOT", "WINDIR", "LANG"] {
+            if let Ok(value) = std::env::var(key) {
+                env.insert(key.into(), value);
+            }
+        }
+        let data = home.join(".local/share");
+        env.insert("XDG_DATA_HOME".into(), data.to_string_lossy().into_owned());
+        env.insert(
+            "XDG_CONFIG_HOME".into(),
+            home.join(".config").to_string_lossy().into_owned(),
+        );
+        env.insert(
+            "XDG_CACHE_HOME".into(),
+            home.join(".cache").to_string_lossy().into_owned(),
+        );
+        let mut expected = home.join(".omp");
+        if ["custom-agent", "xdg-custom"].contains(&layout) {
+            env.insert(
+                "PI_CODING_AGENT_DIR".into(),
+                home.join("custom-agent").to_string_lossy().into_owned(),
+            );
+        }
+        if [
+            "xdg-default",
+            "xdg-custom",
+            "profile-legacy",
+            "canonical-default",
+            "xdg-double-slash",
+        ]
+        .contains(&layout)
+        {
+            fs::create_dir_all(data.join("omp")).unwrap();
+        }
+        match layout {
+            "xdg-default" => {
+                env.insert(
+                    "PI_CODING_AGENT_DIR".into(),
+                    home.join(".omp/agent").to_string_lossy().into_owned(),
+                );
+                if cfg!(any(target_os = "linux", target_os = "macos")) {
+                    expected = data.join("omp");
+                }
+            }
+            "config-root" => {
+                env.insert("PI_CONFIG_DIR".into(), ".omp-alt".into());
+                expected = home.join(".omp-alt");
+            }
+            "profile-legacy" | "profile-xdg" => {
+                env.insert("OMP_PROFILE".into(), "review".into());
+                env.insert(
+                    "PI_CODING_AGENT_DIR".into(),
+                    home.join("ignored-agent").to_string_lossy().into_owned(),
+                );
+                expected = home.join(".omp/profiles/review");
+                if layout == "profile-xdg" {
+                    fs::create_dir_all(data.join("omp/profiles/review")).unwrap();
+                    if cfg!(any(target_os = "linux", target_os = "macos")) {
+                        expected = data.join("omp/profiles/review");
+                    }
+                }
+            }
+            "canonical-default" => {
+                env.insert("OMP_PROFILE".into(), String::new());
+                env.insert("PI_PROFILE".into(), "review".into());
+                env.insert(
+                    "PI_CODING_AGENT_DIR".into(),
+                    home.join(".omp/profiles/review/agent")
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+                if cfg!(any(target_os = "linux", target_os = "macos")) {
+                    expected = data.join("omp");
+                }
+            }
+            "xdg-double-slash" => {
+                env.insert(
+                    "XDG_DATA_HOME".into(),
+                    format!("//{}", data.to_string_lossy().trim_start_matches('/')),
+                );
+                expected = data.join("omp");
+            }
+            _ => {}
+        }
+        let catalog = home.join("catalog");
+        json_file(
+            &catalog.join(".claude-plugin/marketplace.json"),
+            json!({"name":"layout-fixture","owner":{"name":"Fixture"},"plugins":[]}),
+        );
+        json_file(
+            &home.join(".claude/plugins/known_marketplaces.json"),
+            json!({"fixture":{"source":{"source":"directory","path":catalog},"installLocation":catalog}}),
+        );
+        let sync = Synchronizer::new(
+            home.clone(),
+            home.join(".claude"),
+            env,
+            Arc::new(DiagnosticNative),
+        );
+        assert_eq!(sync.directories().unwrap().data_root, expected, "{layout}");
+        let report = sync.import_marketplaces(false, &|| false).await;
+        assert_eq!(report["errors"], json!([]), "{layout}: {report}");
+        let registry = expected.join("marketplaces.json");
+        let contents = fs::read(&registry).unwrap();
+        assert_eq!(
+            io::read(&registry, None).unwrap()["marketplaces"][0]["name"],
+            "layout-fixture",
+            "{layout}"
+        );
+        assert_eq!(
+            sync.import_marketplaces(false, &|| false).await["errors"],
+            json!([]),
+            "{layout}"
+        );
+        assert_eq!(fs::read(&registry).unwrap(), contents, "{layout}");
+        assert!(!expected.join("plugins/package.json").exists(), "{layout}");
     }
 }

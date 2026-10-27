@@ -98,8 +98,12 @@ fn install(home: &Path, entries: &Value) {
                 std::os::unix::fs::symlink(s, p).unwrap();
             }
             #[cfg(windows)]
-            if fs::read_link(&p).ok().map(crate::list::links::without_verbatim)
-                .as_deref() != Some(Path::new(s)) {
+            if fs::read_link(&p)
+                .ok()
+                .map(crate::list::links::without_verbatim)
+                .as_deref()
+                != Some(Path::new(s))
+            {
                 let is_dir = Path::new(s).is_dir()
                     || Path::new(s).strip_prefix(home).ok().is_some_and(|p| {
                         entries[p.to_string_lossy().replace('\\', "/")]["dir"] == true
@@ -133,11 +137,10 @@ fn tree(home: &Path) -> Value {
             if m.file_type().is_symlink() {
                 let target = fs::read_link(&p).unwrap();
                 #[cfg(windows)]
-                let target = crate::list::links::without_verbatim(target).components().collect::<PathBuf>();
-                map.insert(
-                    rel,
-                    json!({"link":target.to_string_lossy()}),
-                );
+                let target = crate::list::links::without_verbatim(target)
+                    .components()
+                    .collect::<PathBuf>();
+                map.insert(rel, json!({"link":target.to_string_lossy()}));
             } else if m.is_dir() {
                 map.insert(rel, json!({"dir":true}));
                 visit(root, &p, map);
@@ -287,14 +290,18 @@ async fn contract_case(selected: &str) {
         let expected = c["final"].clone();
         #[cfg(windows)]
         let expected = {
-        let mut expected = expected;
-        for entry in expected.as_object_mut().unwrap().values_mut() {
-            if let Some(target) = entry["link"].as_str() {
-                entry["link"] = json!(crate::list::links::without_verbatim(PathBuf::from(target))
-                    .components().collect::<PathBuf>().to_string_lossy());
+            let mut expected = expected;
+            for entry in expected.as_object_mut().unwrap().values_mut() {
+                if let Some(target) = entry["link"].as_str() {
+                    entry["link"] = json!(
+                        crate::list::links::without_verbatim(PathBuf::from(target))
+                            .components()
+                            .collect::<PathBuf>()
+                            .to_string_lossy()
+                    );
+                }
             }
-        }
-        expected
+            expected
         };
         assert_eq!(tree(&home), expected, "efeito em disco: {name}");
     }
@@ -948,3 +955,701 @@ python_contract!(python_contract_manual_enabled, "manual-enabled");
 python_contract!(python_contract_manual_features, "manual-features");
 
 python_contract!(python_contract_manual_removed, "manual-removed");
+
+struct StopReplay {
+    replay: Replay,
+    stops: Mutex<VecDeque<bool>>,
+    stopped: std::sync::atomic::AtomicBool,
+}
+impl Runner for StopReplay {
+    fn run<'a>(
+        &'a self,
+        args: Vec<String>,
+        cwd: &'a Path,
+        env: &'a BTreeMap<String, String>,
+        timeout: Duration,
+    ) -> BoxFuture<'a, Result<Output, String>> {
+        Box::pin(async move {
+            let stop = self.stops.lock().unwrap().pop_front().unwrap();
+            let result = self.replay.run(args, cwd, env, timeout).await;
+            if stop {
+                self.stopped
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            result
+        })
+    }
+}
+async fn original_assertions(id: &str) {
+    let data: Value = serde_json::from_str(include_str!("assertion-contract.json")).unwrap();
+    let mut steps = 0;
+    for case in data["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["id"] == id)
+    {
+        assert_eq!(case["assertions_passed"], true);
+        for step in case["steps"].as_array().unwrap() {
+            let temp = tempfile::tempdir().unwrap();
+            let home = temp.path().join("home");
+            fs::create_dir(&home).unwrap();
+            let c = expand(step, &home);
+            install(&home, &c["initial"]);
+            let calls = c["calls"].as_array().unwrap();
+            let runner = Arc::new(StopReplay {
+                replay: Replay {
+                    home: home.clone(),
+                    calls: Mutex::new(calls.iter().cloned().collect()),
+                },
+                stops: Mutex::new(
+                    calls
+                        .iter()
+                        .map(|c| c["stop_after"].as_bool().unwrap())
+                        .collect(),
+                ),
+                stopped: std::sync::atomic::AtomicBool::new(c["stop"].as_bool().unwrap()),
+            });
+            let env = c["env"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap().into()))
+                .collect();
+            let sync = Synchronizer::new(home.clone(), home.join(".claude"), env, runner.clone());
+            let report = sync
+                .reconcile(c["dry_run"].as_bool().unwrap(), &|| {
+                    runner.stopped.load(std::sync::atomic::Ordering::SeqCst)
+                })
+                .await;
+            assert_eq!(
+                report, c["report"],
+                "{id}: {} {}, etapa {steps}",
+                case["test"], case["parameters"]
+            );
+            assert!(
+                runner.replay.calls.lock().unwrap().is_empty(),
+                "{id}: comando esperado ausente"
+            );
+            assert_eq!(tree(&home), c["final"], "{id}: disco, etapa {steps}");
+            steps += 1;
+        }
+    }
+    assert!(steps > 0, "asserções Python ausentes para {id}");
+}
+macro_rules! original_python_assertions {
+    ($test:ident,$id:literal) => {
+        #[cfg(not(windows))]
+        #[tokio::test]
+        async fn $test() {
+            original_assertions($id).await;
+        }
+    };
+}
+original_python_assertions!(op001_original_assertions, "OP001");
+original_python_assertions!(op002_original_assertions, "OP002");
+original_python_assertions!(op003_original_assertions, "OP003");
+original_python_assertions!(op004_original_assertions, "OP004");
+original_python_assertions!(op005_original_assertions, "OP005");
+original_python_assertions!(op006_original_assertions, "OP006");
+original_python_assertions!(op007_original_assertions, "OP007");
+original_python_assertions!(op008_original_assertions, "OP008");
+original_python_assertions!(op009_original_assertions, "OP009");
+original_python_assertions!(op010_original_assertions, "OP010");
+original_python_assertions!(op011_original_assertions, "OP011");
+original_python_assertions!(op012_original_assertions, "OP012");
+original_python_assertions!(op013_original_assertions, "OP013");
+original_python_assertions!(op014_original_assertions, "OP014");
+original_python_assertions!(op015_original_assertions, "OP015");
+original_python_assertions!(op016_original_assertions, "OP016");
+original_python_assertions!(op017_original_assertions, "OP017");
+original_python_assertions!(op020_original_assertions, "OP020");
+original_python_assertions!(op021_original_assertions, "OP021");
+original_python_assertions!(op022_original_assertions, "OP022");
+original_python_assertions!(op023_original_assertions, "OP023");
+original_python_assertions!(op025_original_assertions, "OP025");
+original_python_assertions!(op026_original_assertions, "OP026");
+original_python_assertions!(op027_original_assertions, "OP027");
+original_python_assertions!(op028_original_assertions, "OP028");
+original_python_assertions!(op029_original_assertions, "OP029");
+original_python_assertions!(op030_original_assertions, "OP030");
+original_python_assertions!(op031_original_assertions, "OP031");
+original_python_assertions!(op032_original_assertions, "OP032");
+original_python_assertions!(op033_original_assertions, "OP033");
+original_python_assertions!(op034_original_assertions, "OP034");
+original_python_assertions!(op035_original_assertions, "OP035");
+original_python_assertions!(op036_original_assertions, "OP036");
+
+#[test]
+fn op045_original_assertions_interval_matches_pydantic() {
+    let cases: Value = serde_json::from_str(include_str!("settings-contract.json")).unwrap();
+    for case in cases
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["key"] == "omp_plugin_sync_interval")
+    {
+        let env = BTreeMap::from([(
+            "CP_OMP_PLUGIN_SYNC_INTERVAL".into(),
+            case["input"].as_str().unwrap().into(),
+        )]);
+        let result = service::interval(&env);
+        if let Some(expected) = case["result"].as_f64() {
+            assert_eq!(result.unwrap(), expected, "{}", case["input"]);
+        } else {
+            assert!(result.is_err(), "{}", case["input"]);
+        }
+    }
+}
+
+original_python_assertions!(op043_original_assertions, "OP043");
+original_python_assertions!(op048_original_assertions, "OP048");
+
+#[test]
+fn op019_digest_reuses_bytes_until_metadata_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir(temp.path().join("sub")).unwrap();
+    fs::write(temp.path().join("a"), b"a").unwrap();
+    fs::write(temp.path().join("sub/b"), b"b").unwrap();
+    model::DIGEST_READS.set(0);
+    let first = model::digest(temp.path()).unwrap();
+    assert_eq!(model::DIGEST_READS.get(), 2);
+    assert_eq!(model::digest(temp.path()).unwrap(), first);
+    assert_eq!(model::DIGEST_READS.get(), 2);
+    fs::write(temp.path().join("a"), b"aa").unwrap();
+    assert_ne!(model::digest(temp.path()).unwrap(), first);
+    assert_eq!(model::DIGEST_READS.get(), 4);
+}
+
+struct FailedRollback {
+    replay: Replay,
+    listing: std::sync::atomic::AtomicUsize,
+}
+impl Runner for FailedRollback {
+    fn run<'a>(
+        &'a self,
+        args: Vec<String>,
+        cwd: &'a Path,
+        env: &'a BTreeMap<String, String>,
+        timeout: Duration,
+    ) -> BoxFuture<'a, Result<Output, String>> {
+        Box::pin(async move {
+            let listing = args.get(2).is_some_and(|s| s == "list");
+            let result = self.replay.run(args, cwd, env, timeout).await;
+            if listing
+                && self
+                    .listing
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    == 2
+            {
+                fs::write(self.replay.home.join(".omp/plugins/package.json"), "{").unwrap();
+            }
+            result
+        })
+    }
+}
+#[tokio::test]
+async fn op018_rollback_failure_preserves_original_native_failure() {
+    let data: Value = serde_json::from_str(PYTHON_CONTRACT).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let c = expand(
+        data["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "fail-install:no-effect")
+            .unwrap(),
+        &home,
+    );
+    install(&home, &c["initial"]);
+    let runner = Arc::new(FailedRollback {
+        replay: Replay {
+            home: home.clone(),
+            calls: Mutex::new(c["calls"].as_array().unwrap().iter().cloned().collect()),
+        },
+        listing: 0.into(),
+    });
+    let env = c["env"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap().into()))
+        .collect();
+    let sync = Synchronizer::new(home.clone(), home.join(".claude"), env, runner.clone());
+    let report = sync.reconcile(false, &|| false).await;
+    assert_eq!(
+        report["errors"],
+        json!(["Efeito nativo não corresponde à ação solicitada"])
+    );
+    assert!(runner.replay.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn op057_invalid_profile_never_touches_marketplaces() {
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Arc::new(Replay {
+        home: temp.path().into(),
+        calls: Mutex::new(VecDeque::new()),
+    });
+    let sync = Synchronizer::new(
+        temp.path().into(),
+        temp.path().join(".claude"),
+        BTreeMap::from([("OMP_PROFILE".into(), "../invalid".into())]),
+        runner,
+    );
+    let before = tree(temp.path());
+    let report = sync.import_marketplaces(false, &|| false).await;
+    assert_eq!(report["errors"], json!(["Nome de perfil OMP inválido"]));
+    assert_eq!(tree(temp.path()), before);
+}
+
+fn loop_plan(home: &Path, c: &Value, register: bool) -> (BTreeMap<String, String>, Value) {
+    install(home, &c["initial"]);
+    let env: BTreeMap<String, String> = c["env"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap().into()))
+        .collect();
+    let known: Value = serde_json::from_str(
+        &fs::read_to_string(home.join(".claude/plugins/known_marketplaces.json")).unwrap(),
+    )
+    .unwrap();
+    let uri = known["catalog"]["installLocation"].as_str().unwrap();
+    let catalog: Value = serde_json::from_str(
+        &fs::read_to_string(Path::new(uri).join(".claude-plugin/marketplace.json")).unwrap(),
+    )
+    .unwrap();
+    let registry = json!({"version":1,"marketplaces":[{"name":catalog["name"],"sourceType":"local","sourceUri":uri}]});
+    if register {
+        io::write(&home.join(".omp/marketplaces.json"), &registry).unwrap();
+    }
+    let call = json!({"args":["omp","plugin","marketplace","add",uri],"cwd":home.to_string_lossy(),"timeout":120,"output":{"code":0,"stdout":""},"set":{".omp/marketplaces.json":{"text":serde_json::to_string_pretty(&registry).unwrap()+if cfg!(windows){"\r\n"}else{"\n"}}},"remove":[]});
+    (env, call)
+}
+async fn wait_state(service: &Service, expected: &str) {
+    for _ in 0..2000 {
+        if service.status()["state"] == expected {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("estado esperado {expected}, recebido {}", service.status());
+}
+#[tokio::test(start_paused = true)]
+async fn op038_first_cycle_and_next_interval_are_ordered_and_do_not_overlap() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let c = fresh_contract(&home);
+    let (env, _) = loop_plan(&home, &c, true);
+    let mut calls = c["calls"].as_array().unwrap().clone();
+    calls.push(calls[0].clone());
+    calls.push(calls[4].clone());
+    let runner = Arc::new(Replay {
+        home: home.clone(),
+        calls: Mutex::new(calls.into()),
+    });
+    let sync = Synchronizer::new(home.clone(), home.join(".claude"), env, runner.clone());
+    let service = Service::new(sync, true, 2.0, Arc::new(|| true)).unwrap();
+    service.start_loop().await;
+    wait_state(&service, "updated").await;
+    assert_eq!(runner.calls.lock().unwrap().len(), 2);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(runner.calls.lock().unwrap().len(), 2);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    wait_state(&service, "unchanged").await;
+    assert!(runner.calls.lock().unwrap().is_empty());
+    service.close().await;
+}
+#[tokio::test(start_paused = true)]
+async fn op039_failed_cycle_recovers_without_restarting_service() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let c = fresh_contract(&home);
+    let (env, _) = loop_plan(&home, &c, true);
+    let mut calls = vec![c["calls"][0].clone(), c["calls"][1].clone()];
+    calls[1]["output"]["stdout"] = json!("{");
+    calls.extend(c["calls"].as_array().unwrap().clone());
+    let runner = Arc::new(Replay {
+        home: home.clone(),
+        calls: Mutex::new(calls.into()),
+    });
+    let sync = Synchronizer::new(home.clone(), home.join(".claude"), env, runner.clone());
+    let service = Service::new(sync, true, 2.0, Arc::new(|| true)).unwrap();
+    service.start_loop().await;
+    wait_state(&service, "error").await;
+    assert_eq!(runner.calls.lock().unwrap().len(), 5);
+    tokio::time::advance(Duration::from_secs(2)).await;
+    wait_state(&service, "updated").await;
+    assert!(runner.calls.lock().unwrap().is_empty());
+    service.close().await;
+}
+struct PulseReplay {
+    replay: Replay,
+    pulse: Arc<std::sync::atomic::AtomicBool>,
+}
+impl Runner for PulseReplay {
+    fn run<'a>(
+        &'a self,
+        args: Vec<String>,
+        cwd: &'a Path,
+        env: &'a BTreeMap<String, String>,
+        timeout: Duration,
+    ) -> BoxFuture<'a, Result<Output, String>> {
+        Box::pin(async move {
+            let import = args.get(2).is_some_and(|s| s == "marketplace");
+            let out = self.replay.run(args, cwd, env, timeout).await;
+            if import {
+                self.pulse.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            out
+        })
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn op044_observed_stop_stays_latched_even_when_master_switch_returns() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let c = fresh_contract(&home);
+    let (env, import) = loop_plan(&home, &c, false);
+    let mut calls = vec![import];
+    calls.extend(c["calls"].as_array().unwrap().clone());
+    let pulse = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let runner = Arc::new(PulseReplay {
+        replay: Replay {
+            home: home.clone(),
+            calls: Mutex::new(calls.into()),
+        },
+        pulse: pulse.clone(),
+    });
+    let sync = Synchronizer::new(home.clone(), home.join(".claude"), env, runner.clone());
+    let service = Service::new(
+        sync,
+        true,
+        2.0,
+        Arc::new(move || !pulse.swap(false, std::sync::atomic::Ordering::SeqCst)),
+    )
+    .unwrap();
+    service.start_loop().await;
+    wait_state(&service, "paused").await;
+    assert_eq!(runner.replay.calls.lock().unwrap().len(), 5);
+    assert!(service.status()["last_report"]["plugins"].is_null());
+    tokio::time::advance(Duration::from_secs(2)).await;
+    wait_state(&service, "updated").await;
+    assert!(runner.replay.calls.lock().unwrap().is_empty());
+    service.close().await;
+}
+#[tokio::test(start_paused = true)]
+async fn op047_suspension_wins_over_import_in_the_same_cycle() {
+    let data: Value = serde_json::from_str(PYTHON_CONTRACT).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let c = expand(
+        data["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "manual")
+            .unwrap(),
+        &home,
+    );
+    let (env, import) = loop_plan(&home, &c, false);
+    let mut calls = vec![import];
+    calls.extend(c["calls"].as_array().unwrap().clone());
+    let runner = Arc::new(Replay {
+        home: home.clone(),
+        calls: Mutex::new(calls.into()),
+    });
+    let sync = Synchronizer::new(home.clone(), home.join(".claude"), env, runner.clone());
+    let service = Service::new(sync, true, 300.0, Arc::new(|| true)).unwrap();
+    service.start_loop().await;
+    wait_state(&service, "suspended").await;
+    assert_eq!(
+        service.status()["last_report"]["marketplaces"]["items"][0]["action"],
+        "import"
+    );
+    assert_eq!(
+        service.status()["last_report"]["plugins"]["items"][0]["action"],
+        "suspended"
+    );
+    assert!(runner.calls.lock().unwrap().is_empty());
+    service.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn op042_http_status_responds_while_native_worker_is_waiting() {
+    use axum::{Router, http::StatusCode, routing::get};
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    fs::create_dir_all(home.join(".claude/plugins")).unwrap();
+    fs::write(
+        home.join(".claude/plugins/installed_plugins.json"),
+        "{\"version\":2,\"plugins\":{}}",
+    )
+    .unwrap();
+    let runner = Arc::new(BlockingRunner {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+        calls: 0.into(),
+    });
+    let sync = Synchronizer::new(
+        home.into(),
+        home.join(".claude"),
+        BTreeMap::new(),
+        runner.clone(),
+    );
+    let service = Service::new(sync, true, 300.0, Arc::new(|| true)).unwrap();
+    service.start_loop().await;
+    runner.entered.notified().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let published = service.clone();
+    let router = Router::new().route(
+        "/api/omp/plugin-sync",
+        get(move || {
+            let service = published.clone();
+            async move { crate::session_write::json_response(StatusCode::OK, service.status()) }
+        }),
+    );
+    let (stop, finish) = tokio::sync::oneshot::channel::<()>();
+    let http = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async {
+                let _ = finish.await;
+            })
+            .await
+            .unwrap();
+    });
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .unwrap()
+        .get(format!("http://{addr}/api/omp/plugin-sync"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let status = response.json::<Value>().await.unwrap();
+    assert_eq!(status["state"], "running");
+    assert!(status["completed_at"].is_null());
+    runner.release.notify_one();
+    service.close().await;
+    assert_eq!(service.status()["state"], "stopped");
+    assert_eq!(runner.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let _ = stop.send(());
+    http.await.unwrap();
+}
+
+#[test]
+fn op079_flags_match_original_pydantic_and_reject_invalid_configuration() {
+    let cases: Value = serde_json::from_str(include_str!("settings-contract.json")).unwrap();
+    for case in cases
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["key"] == "omp_plugin_sync_enabled")
+    {
+        for key in [
+            "CP_OMP_PLUGIN_SYNC_ENABLED",
+            "CP_OMP_CLAUDE_CONTEXT_ENABLED",
+        ] {
+            let env = BTreeMap::from([(key.into(), case["input"].as_str().unwrap().into())]);
+            let result = service::flag(&env, key);
+            if let Some(expected) = case["result"].as_bool() {
+                assert_eq!(result.unwrap(), expected);
+            } else {
+                assert!(result.is_err());
+                assert!(validate_environment(&env).is_err());
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn op079_windows_environment_names_ignore_case() {
+    let env = BTreeMap::from([
+        ("Cp_Omp_Plugin_Sync_Enabled".into(), "yes".into()),
+        ("cp_omp_plugin_sync_interval".into(), "1_0".into()),
+    ]);
+    assert_eq!(service::flag(&env, "CP_OMP_PLUGIN_SYNC_ENABLED"), Ok(true));
+    assert_eq!(service::interval(&env), Ok(10.0));
+}
+
+#[tokio::test]
+async fn op080_context_rule_targets_current_without_resolving_version() {
+    let data: Value = serde_json::from_str(PYTHON_CONTRACT).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let c = expand(
+        data["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "context-normal")
+            .unwrap(),
+        &home,
+    );
+    install(&home, &c["initial"]);
+    let real = home.join(".hangar/versions/v1");
+    let rule = real.join("scripts/omp/carregar-claude-md-do-projeto.md");
+    fs::create_dir_all(rule.parent().unwrap()).unwrap();
+    fs::write(&rule, c["template"].as_str().unwrap()).unwrap();
+    let current = home.join(".hangar/current");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&real, &current).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(&real, &current).unwrap();
+    let runner = Arc::new(Replay {
+        home: home.clone(),
+        calls: Mutex::new(c["calls"].as_array().unwrap().iter().cloned().collect()),
+    });
+    let env = c["env"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap().into()))
+        .collect();
+    let sync = Synchronizer::new(home.clone(), home.join(".claude"), env, runner.clone());
+    let template = service::context_template(&home);
+    assert_eq!(
+        template,
+        current
+            .join("scripts")
+            .join("omp")
+            .join("carregar-claude-md-do-projeto.md")
+    );
+    let report = configure_claude_context(&sync, &template, true).await;
+    assert_eq!(report["errors"], json!([]));
+    let stored =
+        fs::read_link(home.join(".omp/agent/rules/carregar-claude-md-do-projeto.md")).unwrap();
+    assert_eq!(crate::list::links::without_verbatim(stored), template);
+    assert!(runner.calls.lock().unwrap().is_empty());
+}
+
+fn measurement_usage() -> (f64, u64) {
+    #[cfg(unix)]
+    {
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) }, 0);
+        let cpu = usage.ru_utime.tv_sec as f64
+            + usage.ru_utime.tv_usec as f64 / 1e6
+            + usage.ru_stime.tv_sec as f64
+            + usage.ru_stime.tv_usec as f64 / 1e6;
+        let rss = if cfg!(target_os="linux") {
+            fs::read_to_string("/proc/self/status").unwrap().lines()
+                .find_map(|line|line.strip_prefix("VmHWM:").and_then(|v|v.split_whitespace().next()).and_then(|v|v.parse().ok())).unwrap()
+        } else {usage.ru_maxrss as u64 / 1024};
+        (cpu, rss)
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::{
+            Foundation::FILETIME,
+            System::Threading::{GetCurrentProcess, GetProcessTimes},
+        };
+        #[repr(C)]
+        struct Memory {
+            size: u32,
+            faults: u32,
+            peak: usize,
+            working: usize,
+            paged_peak: usize,
+            paged: usize,
+            nonpaged_peak: usize,
+            nonpaged: usize,
+            pagefile: usize,
+            pagefile_peak: usize,
+        }
+        #[link(name = "psapi")]
+        unsafe extern "system" {
+            fn GetProcessMemoryInfo(
+                process: *mut std::ffi::c_void,
+                memory: *mut Memory,
+                size: u32,
+            ) -> i32;
+        }
+        let mut times: [FILETIME; 4] = unsafe { std::mem::zeroed() };
+        let process = unsafe { GetCurrentProcess() };
+        assert_ne!(
+            unsafe {
+                GetProcessTimes(
+                    process,
+                    &mut times[0],
+                    &mut times[1],
+                    &mut times[2],
+                    &mut times[3],
+                )
+            },
+            0
+        );
+        let ticks = |v: FILETIME| (u64::from(v.dwHighDateTime) << 32) | u64::from(v.dwLowDateTime);
+        let mut memory: Memory = unsafe { std::mem::zeroed() };
+        memory.size = std::mem::size_of::<Memory>() as u32;
+        let size = memory.size;
+        assert_ne!(
+            unsafe { GetProcessMemoryInfo(process, &mut memory, size) },
+            0
+        );
+        (
+            (ticks(times[2]) + ticks(times[3])) as f64 / 1e7,
+            memory.peak as u64 / 1024,
+        )
+    }
+}
+#[tokio::test]
+#[ignore = "Medição comparável do dry-run público; executar explicitamente sem outros testes."]
+async fn measure_omp_dry_reconciliation() {
+    let data: Value = serde_json::from_str(PYTHON_CONTRACT).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let c = expand(
+        data["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "unchanged")
+            .unwrap(),
+        &home,
+    );
+    install(&home, &c["initial"]);
+    let runner = Arc::new(Replay {
+        home: home.clone(),
+        calls: Mutex::new(VecDeque::new()),
+    });
+    let env = c["env"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap().into()))
+        .collect();
+    let sync = Synchronizer::new(home.clone(), home.join(".claude"), env, runner);
+    for _ in 0..5 {
+        assert_eq!(sync.reconcile(true, &|| false).await["errors"], json!([]));
+    }
+    let before = measurement_usage().0;
+    let mut samples = vec![];
+    for _ in 0..50 {
+        let start = std::time::Instant::now();
+        let report = sync.reconcile(true, &|| false).await;
+        samples.push(start.elapsed().as_secs_f64() * 1000.0);
+        assert_eq!(report["errors"], json!([]));
+        assert_eq!(report["items"][0]["action"], "unchanged");
+    }
+    let (cpu, rss) = measurement_usage();
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "{}",
+        json!({"language":"rust","platform":std::env::consts::OS,"scenario":"unchanged-dry-reconcile","samples":50,"warmups":5,"p50_ms":samples[25],"p95_ms":samples[47],"cpu_ms":(cpu-before)*1000.0,"peak_rss_kib":rss})
+    );
+}

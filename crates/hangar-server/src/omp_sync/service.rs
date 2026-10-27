@@ -11,24 +11,55 @@ use std::sync::{
 };
 use tokio::sync::Notify;
 
-fn flag(env: &BTreeMap<String, String>, key: &str) -> bool {
-    env.get(key).is_some_and(|s| {
-        matches!(
-            s.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "t" | "yes" | "y" | "on"
-        )
-    })
+fn variable<'a>(env: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
+    if cfg!(windows) {
+        env.iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(key))
+            .map(|(_, value)| value.as_str())
+    } else {
+        env.get(key).map(String::as_str)
+    }
+}
+pub(crate) fn flag(env: &BTreeMap<String, String>, key: &str) -> Result<bool, String> {
+    let Some(value) = variable(env, key) else {
+        return Ok(false);
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "t" | "yes" | "y" | "on" => Ok(true),
+        "0" | "false" | "f" | "no" | "n" | "off" => Ok(false),
+        _ => Err(format!("Valor booleano inválido em {key}")),
+    }
+}
+pub fn validate_environment(env: &BTreeMap<String, String>) -> Result<(), String> {
+    flag(env, "CP_OMP_PLUGIN_SYNC_ENABLED")?;
+    flag(env, "CP_OMP_CLAUDE_CONTEXT_ENABLED")?;
+    interval(env)?;
+    Ok(())
+}
+pub(crate) fn context_template(home: &Path) -> PathBuf {
+    crate::install_root::root(home)
+        .unwrap_or_default()
+        .join("scripts")
+        .join("omp")
+        .join("carregar-claude-md-do-projeto.md")
 }
 pub fn interval(env: &BTreeMap<String, String>) -> Result<f64, String> {
-    let s = env
-        .get("CP_OMP_PLUGIN_SYNC_INTERVAL")
-        .map(String::as_str)
-        .unwrap_or("")
-        .trim();
-    let n = if s.is_empty() {
+    let raw = variable(env, "CP_OMP_PLUGIN_SYNC_INTERVAL").unwrap_or("");
+    let s = raw.trim();
+    let n = if raw
+        .chars()
+        .all(|c| c.is_whitespace() || matches!(c, '\u{001c}'..='\u{001f}'))
+    {
         300.0
     } else {
         s.parse::<f64>()
+            .or_else(|failure| {
+                if !raw.starts_with('_') && !raw.ends_with('_') && !raw.contains("__") {
+                    raw.replace('_', "").parse::<f64>()
+                } else {
+                    Err(failure)
+                }
+            })
             .map_err(|_| err("O intervalo deve ser positivo e finito"))?
     };
     if !n.is_finite() || n <= 0.0 {
@@ -53,8 +84,9 @@ impl Service {
         let env = crate::push::server_env();
         let home = st.accounts.env.home.clone();
         let claude = st.accounts.env.claude_base.clone();
-        let enabled = flag(&env, "CP_OMP_PLUGIN_SYNC_ENABLED");
-        let context = flag(&env, "CP_OMP_CLAUDE_CONTEXT_ENABLED");
+        let validation = validate_environment(&env);
+        let enabled = flag(&env, "CP_OMP_PLUGIN_SYNC_ENABLED").unwrap_or(false);
+        let context = flag(&env, "CP_OMP_CLAUDE_CONTEXT_ENABLED").unwrap_or(false);
         let duration = interval(&env);
         let sync = Synchronizer::new(home.clone(), claude, env, Arc::new(NativeRunner));
         let weak = Arc::downgrade(&st);
@@ -71,10 +103,15 @@ impl Service {
         .expect("intervalo padrão válido");
         let clone = service.clone();
         let handle = tokio::spawn(async move {
+            if let Err(error) = validation {
+                let mut status = clone.status.lock().unwrap();
+                status["state"] = json!("error");
+                status["last_report"] = json!({"errors":[error]});
+                clone.ready.send_replace(true);
+                return;
+            }
             if context {
-                let template = crate::install_root::root(&home)
-                    .unwrap_or_default()
-                    .join("scripts/omp/carregar-claude-md-do-projeto.md");
+                let template = context_template(&home);
                 let result = super::context::configure(&clone.sync, &template, true).await;
                 if !result["errors"].as_array().is_some_and(Vec::is_empty) {
                     tracing::warn!(
@@ -84,12 +121,6 @@ impl Service {
                 }
             }
             clone.ready.send_replace(true);
-            if let Err(e) = duration {
-                let mut status = clone.status.lock().unwrap();
-                status["state"] = json!("error");
-                status["last_report"] = json!({"errors":[e]});
-                return;
-            }
             if enabled {
                 clone.run().await
             }
@@ -153,7 +184,9 @@ impl Service {
                 self.status.lock().unwrap()["state"] = json!("error");
                 return;
             }
-            self.status.lock().unwrap()["state"] = json!("stopped");
+            if self.enabled {
+                self.status.lock().unwrap()["state"] = json!("stopped");
+            }
         }
     }
     async fn run(&self) {

@@ -255,6 +255,8 @@ pub fn bun_revision(root: &Path, name: &str) -> Result<Option<(Value, String)>, 
     spec(value).map(Some)
 }
 type Signature = Vec<(String, u128, i64)>;
+#[cfg(test)]
+thread_local! { pub(crate) static DIGEST_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 pub fn digest(root: &Path) -> Result<String, String> {
     fn walk(root: &Path, d: &Path, v: &mut Signature) -> Result<(), String> {
         let mut dirs = vec![];
@@ -309,6 +311,8 @@ pub fn digest(root: &Path) -> Result<String, String> {
         hash.update(rel.as_bytes());
         hash.update(&[0]);
         if *size >= 0 {
+            #[cfg(test)]
+            DIGEST_READS.with(|reads| reads.set(reads.get() + 1));
             hash.update(&fs::read(root.join(rel)).map_err(io::os_error)?);
         }
     }
