@@ -19,6 +19,30 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
+#[cfg(windows)]
+#[tokio::test]
+async fn op091_native_runner_resolves_mixed_case_path_and_pathext() {
+    let temp = tempfile::tempdir().unwrap();
+    let bin = temp.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    fs::copy(std::env::current_exe().unwrap(), bin.join("omp.exe")).unwrap();
+    let env = BTreeMap::from([
+        ("Path".into(), bin.to_string_lossy().into_owned()),
+        ("PathExt".into(), ".COM;.EXE;.BAT;.CMD".into()),
+        ("SYSTEMROOT".into(), std::env::var("SYSTEMROOT").unwrap()),
+    ]);
+    let output = NativeRunner
+        .run(
+            vec!["omp".into(), "config".into(), "--list".into()],
+            temp.path(),
+            &env,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    assert!(output.stdout.contains("test"), "{}", output.stdout);
+}
 fn expand(v: &Value, home: &Path) -> Value {
     let template = home
         .parent()
