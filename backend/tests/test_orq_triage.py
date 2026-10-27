@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("hangar_server_bin")
+
 TRIAGE = Path(__file__).resolve().parents[2] / "skills" / "orquestrar" / "scripts" / "orq_triage.py"
 # Conversa privada classificada à mão: fica fora do git, e o teste pula onde ela não existe.
 LABELED = Path.home() / ".hangar" / "orq" / "jev-calibracao" / "regex" / "labeled.json"
