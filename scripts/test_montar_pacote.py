@@ -191,6 +191,13 @@ def test_pacote_tem_exatamente_os_arquivos_do_manifesto(tmp_path, monkeypatch, o
     assert "2026-10-26-historico-do-compositor" in {n["id"] for n in notes["news"]}
 
 
+def test_toda_novidade_do_repo_chega_a_algum_sistema():
+    """Campo com erro de digitação (`sistema: Linux`, `onde: tablet`) descarta o arquivo calado: falha aqui."""
+    files = {mp._stem(name) for name, _ in mp._note_files(REPO / "docs/novidades")}
+    shown = {n["id"] for os_name in (*mp.OSES, "macos-aarch64") for n in mp.notes(REPO, os_name)["news"]}
+    assert files == shown, sorted(files - shown)
+
+
 def test_notas_iguais_as_do_rust(tmp_path):
     """Os casos que o update_notes/tests.rs também lê: as duas leituras dão as mesmas notas."""
     cases = json.loads((REPO / "crates/hangar-server/src/update_notes/fixtures.json").read_text(encoding="utf-8"))
