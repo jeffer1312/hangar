@@ -69,7 +69,8 @@ impl<'de> Deserialize<'de> for Strict {
                 let value: Value = serde_json::from_str(raw.get()).map_err(de::Error::custom)?;
                 if value.is_number() && raw.get().contains(['.', 'e', 'E']) {
                     let number: f64 = raw.get().parse().map_err(de::Error::custom)?;
-                    Ok(Strict(json!(number)))
+                    let number = serde_json::Number::from_f64(number).ok_or_else(|| de::Error::custom("Registro JSON inválido"))?;
+                    Ok(Strict(Value::Number(number)))
                 } else {
                     Ok(Strict(value))
                 }
