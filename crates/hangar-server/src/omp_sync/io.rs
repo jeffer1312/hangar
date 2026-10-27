@@ -158,15 +158,10 @@ impl Runner for NativeRunner {
         timeout: Duration,
     ) -> BoxFuture<'a, Result<Output, String>> {
         Box::pin(async move {
-            let mut program = PathBuf::from(&args[0]);
+            let found = crate::runtime::process::resolve_program(&args[0], env);
+            let mut program = found.clone().unwrap_or_else(|| PathBuf::from(&args[0]));
             if args[0] == "omp" && args.get(1).is_some_and(|a| a == "config") {
-                let found = env.get("PATH").is_some_and(|value| {
-                    std::env::split_paths(value).any(|dir| {
-                        dir.join(if cfg!(windows) { "omp.exe" } else { "omp" })
-                            .is_file()
-                    })
-                });
-                if !found {
+                if found.is_none() {
                     program = cwd.join(".local/bin/omp");
                 }
             }
