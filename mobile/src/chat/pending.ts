@@ -14,6 +14,13 @@ function cap(text: string): string {
   return (i >= 0 ? text.slice(0, i) : text).trim();
 }
 
+// Confirmação de entrega: a mensagem inteira, nunca uma linha de outra.
+export function sameMessage(sent: string, incoming: string): boolean {
+  const s = sent.trim();
+  const t = incoming.trim();
+  return s === t || (!!cap(s) && cap(s) === cap(t));
+}
+
 // Remove do pending o que o evento recém-chegado já cobre.
 // Regra de dedup do Chat.svelte: texto normalizado + legenda + linha.
 // - idempotente: chamar duas vezes com o mesmo incoming não muda nada além da 1ª.

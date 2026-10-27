@@ -39,7 +39,7 @@ import {
 } from '@hangar/core';
 import type { ChatEvent, StateEvent, PreviewEvent, AskQuestionPayload, StatsEvent, EventSourceLike, Server, QueuePanel, QueueEdit } from '@hangar/core';
 import * as m from '../paraglide/messages';
-import { reconcilePending, type PendingMsg } from '../chat/pending';
+import { reconcilePending, sameMessage, type PendingMsg } from '../chat/pending';
 import { useServers } from './servers';
 import { readDraft, writeDraft, type ConversationDraft } from './drafts';
 import { sendWithDelivery, type DeliveryFeedback, type QueueSendMode } from '../chat/queueDelivery';
@@ -318,14 +318,18 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     try { draft = readDraft(serverId, name); } catch { return false; }
     const sent = draft?.submission;
     if (!draft || !sent || sent.status !== 'unknown' || sent.startedAt === undefined) return false;
-    const probe = [{ id: 'submission', text: sent.text }];
     // Folga para o relógio do celular adiantado em relação ao servidor.
     const since = sent.startedAt / 1000 - 30;
-    const arrived = events.some((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-')
-      && e.ts != null && e.ts >= since && reconcilePending(probe, e).length === 0);
+    const arrived = events.some((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-') && !sent.seenIds?.includes(e.id)
+      && e.ts != null && e.ts >= since && !!e.text && sameMessage(sent.text, e.text));
     if (!arrived) return false;
     const restored = draft.text.trim() === sent.text.trim();
-    writeDraft(serverId, name, { ...draft, submission: null, ...(restored ? { text: '', revision: draft.revision + 1 } : {}) });
+    const recordings = draft.recordings?.filter((r) => !sent.recordingIds?.includes(r.id));
+    // Sem gravar, o aviso fica: é o lado seguro.
+    try {
+      writeDraft(serverId, name, { ...draft, submission: null, ...(recordings ? { recordings } : {}),
+        ...(restored ? { text: '', revision: draft.revision + 1 } : {}) });
+    } catch { return false; }
     useChatStore.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
     return true;
   }
@@ -1002,7 +1006,9 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       const target = useServers.getState().servers.find((s) => s.id === serverId);
       if (!target) throw new Error(m.chat_servidor_removido());
       const wasUnknown = readDraft(serverId, name)?.submission?.status === 'unknown';
+      let delivering = false;
       return submitConversationDraft(serverId, name, trimmed, async () => {
+        delivering = true;
         if (wasUnknown) useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.text !== trimmed) }));
         showDeliveryFeedback(null);
         const id = `pending-${pendingSeq++}`;
@@ -1023,7 +1029,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         }
       }, draftRevision).catch((error: unknown) => {
         // A resposta se perdeu (app em segundo plano), mas a mensagem já está na conversa.
-        if (confirmSubmission(useChatStore.getState().events)) return;
+        // Erro de antes do POST (outro envio pendente) nunca vira sucesso.
+        if (delivering && confirmSubmission(useChatStore.getState().events)) return;
         throw error;
       });
     },
@@ -1049,9 +1056,12 @@ export async function submitConversationDraft(serverId: string, name: string, te
       transcript: null, attachments: [], submission: null,
     };
     if (current.submission && current.submission.text.trim() !== text.trim()) throw new Error(m.composer_submission_recover_first());
-    const submission = { text, draftRevision: draftRevision ?? current.revision, status: 'sending' as const, startedAt: Date.now() };
     // O campo pode já ter outra edição (primeiro input, pedido de plano): essa fica onde está.
     const fromField = draftRevision === undefined ? current.text.trim() === text.trim() : current.revision === draftRevision;
+    const seenIds = chatStore(serverId, name).use.getState().events
+      .filter((e) => e.kind === 'user_msg' && !!e.text && sameMessage(text, e.text)).map((e) => e.id);
+    const submission = { text, draftRevision: draftRevision ?? current.revision, status: 'sending' as const, startedAt: Date.now(), seenIds,
+      ...(fromField && current.recordings?.length ? { recordingIds: current.recordings.map((r) => r.id) } : {}) };
     // A fila já mostra a mensagem: texto e áudios enviados saem do campo antes da resposta.
     writeDraft(serverId, name, { ...current, submission,
       ...(fromField ? { text: '', revision: current.revision + 1, ...(current.recordings ? { recordings: [] } : {}) } : {}) });

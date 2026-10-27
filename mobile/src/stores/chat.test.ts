@@ -1901,6 +1901,28 @@ describe('envio incerto que a conversa confirma', () => {
     expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'ok', submission: { status: 'unknown' } });
   });
 
+  test('"sim" igual que já estava na conversa não confirma o "sim" que caiu', async () => {
+    historyResponses = [[ev({ id: 'u:antes', text: 'sim', ts: agora() - 10 })]];
+    stubInput(async () => { throw new TypeError('Network request failed'); });
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await tick();
+    await expect(chat.send('sim')).rejects.toThrow(m.chat_envio_incerto());
+    created[0].trigger('message', JSON.stringify(ev({ id: 'u:antes', text: 'sim', ts: agora() - 10 })));
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'sim', submission: { status: 'unknown' } });
+  });
+
+  test('uma linha de outra mensagem não confirma o envio', async () => {
+    historyResponses = [[]];
+    stubInput(async () => { throw new TypeError('Network request failed'); });
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await tick();
+    await expect(chat.send('ok')).rejects.toThrow(m.chat_envio_incerto());
+    created[0].trigger('message', JSON.stringify(ev({ id: 'u:2', text: 'ok\ncontinua o plano', ts: agora() })));
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'ok', submission: { status: 'unknown' } });
+  });
+
   test('mensagem que chega com o POST em voo: a queda depois não vira erro', async () => {
     historyResponses = [[]];
     let fail: ((error: Error) => void) | undefined;
