@@ -9,7 +9,7 @@ from app.adapters.pi import sessions
 
 
 @pytest.fixture
-def home(tmp_path, monkeypatch):
+def home(tmp_path, monkeypatch, hangar_server_bin):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     for key in ("OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR", "PI_CODING_AGENT_DIR", "XDG_DATA_HOME"):
         monkeypatch.delenv(key, raising=False)
