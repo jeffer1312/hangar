@@ -4,6 +4,7 @@ use chrono::{Datelike, FixedOffset, Local, NaiveDate, TimeZone};
 use regex::Regex;
 use serde_json::{Value, json};
 use std::{path::Path, sync::LazyLock};
+pub const JEV_VETO_P: f64 = 0.40;
 const PREFIXES: &[(&str, &str, bool)] = &[
     ("notify → arbiter: ", "woke", true),
     ("(jev: no action) ", "dropped", true),
@@ -421,7 +422,7 @@ fn jev(row: &Value, marker: &str) -> Result<Value, &'static str> {
     if let Some(raw) = row["veto"].as_object() {
         for (key, value) in raw {
             let value = num(value, marker)?;
-            if value.is_null() || value.as_f64().is_some_and(|x| x > 0.40) {
+            if value.is_null() || value.as_f64().is_some_and(|x| x > JEV_VETO_P) {
                 held.push(key)
             }
             veto.insert(key.clone(), value);
