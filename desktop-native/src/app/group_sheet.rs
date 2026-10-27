@@ -14,6 +14,8 @@ use gpui_kit::component::{WindowExt, checkbox::Checkbox};
 const FEED_TAIL: usize = 1000;
 /// A conversa mostra só os últimos recados, como o web; o resto vive no chat de cada um.
 const FEED_SHOWN: usize = 40;
+/// Largura do painel com grupo (membros e conversa lado a lado); sem grupo ele fica estreito.
+const SHEET_WIDE: f32 = 1040.;
 
 #[derive(Debug, PartialEq)]
 struct FeedItem { from: String, to: String, text: String, ts: f64 }
@@ -32,6 +34,10 @@ pub(super) struct Sheet {
     picked: Vec<Target>,
     task: Entity<InputState>,
     adding: bool,
+    /// Membro (endereço da lista) com o "Retirar" aberto na linha, à espera da confirmação.
+    removing: Option<String>,
+    /// Recados longos abertos por inteiro, por remetente e hora.
+    expanded: HashSet<String>,
     busy: bool,
     error: Option<String>,
     /// Caminho e texto renderizado; `None` é grupo que ainda não escreveu contrato.
@@ -45,14 +51,18 @@ pub(super) enum SheetReply {
     Feed(u64, u64, Vec<String>, Vec<(String, Result<Vec<ChatEvent>, Failure>)>),
     Paired(u64, Vec<String>, Result<PairResult, Failure>),
     Left(u64, Result<PairResult, Failure>),
+    Removed(u64, String, Result<PairResult, Failure>),
 }
 
 /// O corpo do painel, redesenhado quando o `Hangar` muda (lista de sessões, respostas).
 struct SheetBody { hangar: WeakEntity<Hangar>, _observe: Subscription }
 
 impl Render for SheetBody {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.hangar.update(cx, |hangar, cx| hangar.render_group_sheet(cx)).unwrap_or_else(|_| div())
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = window.viewport_size();
+        // O diálogo começa a um décimo da altura; título, rodapé e margens levam ~190.
+        let fit = (view.width >= px(SHEET_WIDE + 64.)).then(|| (view.height * 0.9 - px(190.)).clamp(px(320.), px(680.)));
+        self.hangar.update(cx, |hangar, cx| hangar.render_group_sheet(fit, cx)).unwrap_or_else(|_| div())
     }
 }
 
@@ -86,6 +96,30 @@ fn build_feed(members: &[String], histories: Vec<(String, Result<Vec<ChatEvent>,
     items.sort_by(|a, b| a.ts.total_cmp(&b.ts));
     items.drain(..items.len().saturating_sub(FEED_SHOWN));
     Feed { items, missing }
+}
+
+/// Recado mais fácil de ler: a palavra de protocolo do começo (`ANDAMENTO`, `RESPOSTA`) vira etiqueta, a pasta do usuário
+/// vira `~` e cada item numerado `(n)` começa numa linha.
+fn tidy_message(text: &str, home: Option<&str>) -> (Option<String>, String) {
+    let text = text.trim();
+    let (tag, rest) = match text.split_once(' ') {
+        Some((word, rest)) if word.chars().count() >= 4 && word.chars().all(|c| c.is_uppercase() || c == '_') => (Some(word.to_owned()), rest.trim_start()),
+        _ => (None, text),
+    };
+    let rest = match home.filter(|h| h.len() > 1) { Some(home) => rest.replace(home, "~"), None => rest.to_owned() };
+    let mut body = String::with_capacity(rest.len());
+    let mut items = 0;
+    for (ix, ch) in rest.char_indices() {
+        // Só a sequência (1), (2)… quebra linha: "(ver item 2)" fica onde está.
+        let next = (items + 1).to_string();
+        if ch == '(' && rest[ix + 1..].starts_with(&format!("{next})")) {
+            items += 1;
+            while body.ends_with(' ') { body.pop(); }
+            if !body.is_empty() { body.push('\n'); }
+        }
+        body.push(ch);
+    }
+    (tag, body)
 }
 
 /// Onde um membro do painel está: numa máquina conectada aqui, numa sem conexão aqui (o identificador dela), ou sem como
@@ -181,7 +215,7 @@ impl Hangar {
         let g = &mut self.sidebar.grouping;
         g.seq += 1;
         let id = g.seq;
-        g.sheet = Some(Sheet { session, server, id, peers_key: String::new(), picked: Vec::new(), task, adding: false, busy: false, error: None,
+        g.sheet = Some(Sheet { session, server, id, peers_key: String::new(), picked: Vec::new(), task, adding: false, removing: None, expanded: HashSet::new(), busy: false, error: None,
             contract: Remote::default(), feed: Remote::default() });
         self.load_group_sheet(window, cx);
         let hangar = cx.entity();
@@ -207,7 +241,7 @@ impl Hangar {
                 });
             let close = weak.clone();
             // Com a chamada em voo o painel não fecha: a resposta (aviso, erro) cairia no vazio.
-            popup::dialog(dialog).w(px(560.))
+            popup::dialog(dialog).w(px(if paired { SHEET_WIDE } else { 560. }))
                 .title(div().flex().items_center().gap_2().when(paired, |el| el.child(glyph(18., theme::accent()))).child(title))
                 .keyboard(!busy).overlay_closable(!busy).close_button(!busy)
                 .child(body.clone())
@@ -266,7 +300,7 @@ impl Hangar {
         })).collect();
         let Some(sheet) = self.sidebar.grouping.sheet.as_mut() else { return };
         let task = sheet.task.clone();
-        (sheet.peers_key, sheet.picked, sheet.adding, sheet.busy, sheet.error) = (peers.join(","), Vec::new(), false, false, None);
+        (sheet.peers_key, sheet.picked, sheet.adding, sheet.removing, sheet.busy, sheet.error) = (peers.join(","), Vec::new(), false, None, false, None);
         (sheet.contract, sheet.feed) = (Remote::default(), Remote::default());
         task.update(cx, |input, cx| input.set_value("", window, cx));
         if peers.is_empty() { return; }
@@ -353,6 +387,39 @@ impl Hangar {
         cx.notify();
     }
 
+    /// Retira outro membro: é a saída dele, pedida à máquina onde ele está; os demais seguem juntos.
+    fn remove_member(&mut self, address: String, cx: &mut Context<Self>) {
+        let MemberAt::Here(target) = self.member_at(&address, &self.identities()) else { return };
+        let api = self.machine_api(&target.server);
+        let tell = self.sidebar_tell();
+        let Some(sheet) = self.sidebar.grouping.sheet.as_mut() else { return };
+        if sheet.busy { return; }
+        let Some(api) = api else { sheet.error = Some(tr("connection_failed")); cx.notify(); return };
+        (sheet.busy, sheet.error) = (true, None);
+        let id = sheet.id;
+        self.runtime.spawn(async move {
+            let result = api.unpair(&target.name).await;
+            tell.send(SidebarReply::Sheet(SheetReply::Removed(id, address, result))).await;
+        });
+        cx.notify();
+    }
+
+    fn ask_remove(&mut self, address: Option<String>, cx: &mut Context<Self>) {
+        let Some(sheet) = self.sidebar.grouping.sheet.as_mut() else { return };
+        if sheet.busy { return; }
+        (sheet.removing, sheet.error) = (address, None);
+        cx.notify();
+    }
+
+    /// A aba de grupo desta sessão: a chave e a principal, a mesma que a barra de abas põe na frente.
+    fn sheet_lead(&self) -> Option<(String, Target)> {
+        let sheet = self.sidebar.grouping.sheet.as_ref()?;
+        let me = Target::new(&sheet.server, &sheet.session);
+        let groups = self.tab_groups();
+        let group = groups.iter().find(|g| g.members.len() > 1 && g.members.contains(&me))?;
+        Some((group.key.clone()?, group.members[0].clone()))
+    }
+
     /// Membro escolhido: o painel fecha e a conversa dele abre no lugar desta, na máquina dele.
     fn open_member(&mut self, target: &Target, window: &mut Window, cx: &mut Context<Self>) {
         let Some(session) = self.target_session(target).cloned() else { return };
@@ -381,6 +448,17 @@ impl Hangar {
                     Ok(_) => close = true,
                     Err(error) => {
                         let base = web_with("par_falhou_pareamento", "nomes", &picked.join(", "));
+                        sheet.error = Some(format!("{base} {}", Self::fetch_failure(&error)).trim().to_owned());
+                    }
+                }
+            }
+            SheetReply::Removed(id, address, result) if id == sheet.id => {
+                (sheet.busy, sheet.removing) = (false, None);
+                match result {
+                    Ok(PairResult { warning: Some(warning) }) => sheet.error = Some(warning),
+                    Ok(_) => {}
+                    Err(error) => {
+                        let base = tr("group_sheet_remove_failed").replace("{name}", &address);
                         sheet.error = Some(format!("{base} {}", Self::fetch_failure(&error)).trim().to_owned());
                     }
                 }
@@ -425,7 +503,8 @@ impl Hangar {
                         move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx) }))))
     }
 
-    fn render_group_sheet(&mut self, cx: &mut Context<Self>) -> Div {
+    /// `fit`: altura do corpo quando o painel cabe em duas colunas; `None` empilha tudo numa coluna.
+    fn render_group_sheet(&mut self, fit: Option<Pixels>, cx: &mut Context<Self>) -> Div {
         let Some(sheet) = self.sidebar.grouping.sheet.as_ref() else { return div() };
         let me = sheet.session.clone();
         let here = sheet.server.clone();
@@ -467,23 +546,80 @@ impl Hangar {
                 .child(pick_list(self, "par_parear_aria", "forward_nenhuma_viva", cx))
                 .child(Input::new(&task).disabled(busy).aria_label(web("par_tarefa_placeholder")));
         }
-        let members = sheet_members(&me, &peers).into_iter().fold(div().flex().flex_col().gap(px(2.)), |list, (peer, this)| {
-            let peer = &peer;
-            let at = self.member_at(peer, &ids);
-            let live = match &at { MemberAt::Here(t) => self.target_session(t).map(|s| (t.clone(), s.state.clone())), _ => None };
-            let missing = match &at { MemberAt::Missing(id) => Some(tr_shared("grupo_membro_maquina_desconectada", &[("maquina", id)])), _ => None };
-            let tip = web_with("par_abrir_conversa_de", "nome", peer);
-            list.child(div().flex().items_center().gap_3().px_2().py(px(6.)).rounded(px(8.))
-                .children(live.as_ref().map(|(_, state)| dot(state)))
-                .child(div().flex_1().min_w_0().flex().flex_col()
-                    .child(div().flex().items_center().gap_2().min_w_0()
-                        .child(div().min_w_0().truncate().text_sm().font_weight(FontWeight::MEDIUM).child(peer.clone()))
-                        .when(this, |el| el.child(div().flex_shrink_0().text_xs().text_color(theme::accent_text()).child(tr_shared("worktree_esta_sessao", &[])))))
-                    .children(missing.map(|text| div().truncate().text_xs().text_color(theme::muted()).child(text))))
-                .children(live.as_ref().and_then(|(_, state)| state_label(state)).map(|label| div().flex_shrink_0().text_xs().text_color(theme::muted()).child(label)))
-                // Só o membro numa máquina conectada aqui tem conversa para abrir; a desta sessão já está aberta.
-                .when_some(live.filter(|_| !this).map(|(t, _)| t), |el, open| el.child(chrome::icon_button(SharedString::from(format!("group-open-{}", open.id())),
-                    IconName::MessageCircle, tip, cx).on_click(cx.listener(move |this, _, window, cx| this.open_member(&open, window, cx))))))
+        let lead = self.sheet_lead();
+        let removing = sheet.removing.clone();
+        let tag = |text: String, color: Hsla| div().flex_shrink_0().px(px(6.)).py(px(1.)).rounded(px(4.)).text_xs().text_color(color).bg(color.opacity(0.12)).child(text);
+        let mut rows: Vec<(String, bool, MemberAt)> = sheet_members(&me, &peers).into_iter().map(|(peer, this)| {
+            let at = if this { MemberAt::Here(Target::new(&here, &me)) } else { self.member_at(&peer, &ids) };
+            (peer, this, at)
+        }).collect();
+        let is_lead = |at: &MemberAt| matches!((at, &lead), (MemberAt::Here(t), Some((_, l))) if t == l);
+        // A principal vem primeiro, como na aba do grupo.
+        rows.sort_by_key(|(_, _, at)| !is_lead(at));
+        let count = rows.len();
+        let members = rows.into_iter().enumerate().fold(div().flex().flex_col().rounded(px(10.)).border_1().border_color(theme::border()), |list, (i, (peer, this, at))| {
+            let principal = is_lead(&at);
+            let live = match &at { MemberAt::Here(t) => self.target_session(t).map(|s| (t.clone(), s.state.clone(), s.cwd.clone())), _ => None };
+            let (short, machine_id) = match peer.split_once("::") { Some((id, name)) => (name.to_owned(), Some(id.to_owned())), None => (peer.clone(), None) };
+            let machine = match &at {
+                MemberAt::Here(t) if t.server != here => Some(self.machine_label(&t.server, cx)),
+                MemberAt::Here(_) => None,
+                _ => machine_id,
+            };
+            let detail = match (&at, &live) {
+                (MemberAt::Missing(id), _) => Some(tr_shared("grupo_membro_maquina_desconectada", &[("maquina", id)])),
+                (_, Some((_, state, cwd))) => Some([state_label(state), cwd.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ")),
+                _ => None,
+            };
+            let key = SharedString::from(format!("{i}-{peer}"));
+            let confirming = removing.as_deref() == Some(peer.as_str());
+            let mut actions = div().flex_shrink_0().flex().items_center().gap(px(2.));
+            if let (Some((t, ..)), Some((lead_key, _)), false) = (&live, &lead, principal) {
+                let (t, lead_key) = (t.clone(), lead_key.clone());
+                actions = actions.child(chrome::icon_button(SharedString::from(format!("group-lead-{key}")), IconName::Star, tr("group_make_lead"), cx)
+                    .disabled(busy).on_click(cx.listener(move |this, _, _, cx| this.set_group_lead(lead_key.clone(), Some(t.clone()), cx))));
+            }
+            // Só o membro numa máquina conectada aqui tem conversa para abrir ou saída para pedir; esta sessão sai pelo rodapé.
+            if let Some((open, ..)) = live.as_ref().filter(|_| !this) {
+                let (open, address) = (open.clone(), peer.clone());
+                actions = actions
+                    .child(chrome::icon_button(SharedString::from(format!("group-open-{key}")), IconName::MessageCircle, web_with("par_abrir_conversa_de", "nome", &peer), cx)
+                        .on_click(cx.listener(move |this, _, window, cx| this.open_member(&open, window, cx))))
+                    .child(chrome::icon_button(SharedString::from(format!("group-remove-{key}")), IconName::Close, tr("group_sheet_remove"), cx)
+                        .disabled(busy || confirming).on_click(cx.listener(move |this, _, _, cx| this.ask_remove(Some(address.clone()), cx))));
+            }
+            let confirm = confirming.then(|| {
+                let target = live.as_ref().map(|(t, ..)| t.clone());
+                let anchors = target.as_ref().map(|t| self.anchored_owners(t)).unwrap_or_default();
+                let address = peer.clone();
+                div().mt(px(8.)).p_2().rounded(px(8.)).bg(theme::danger().opacity(0.08)).flex().flex_col().gap_2()
+                    .child(div().text_sm().whitespace_normal().child(tr("group_sheet_remove_confirm").replace("{name}", &short)))
+                    .children(anchors.iter().map(|dono| div().text_xs().whitespace_normal().text_color(theme::warning_text())
+                        .child(format!("⚠ {}", tr_shared("pair_undo_anchor_body", &[("dono", dono)])))))
+                    .child(div().flex().justify_end().gap_2()
+                        .child(Button::new(SharedString::from(format!("group-remove-cancel-{key}"))).small().label(tr("cancel")).disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.ask_remove(None, cx))))
+                        .child(Button::new(SharedString::from(format!("group-remove-ok-{key}"))).small().danger()
+                            .label(tr(if busy { "group_sheet_removing" } else { "group_sheet_remove_ok" })).loading(busy).disabled(busy)
+                            .on_click(cx.listener(move |this, _, _, cx| this.remove_member(address.clone(), cx)))))
+            });
+            let lead_tag = principal.then(|| div().id(SharedString::from(format!("group-lead-tag-{key}"))).flex_shrink_0().flex().items_center().gap(px(3.))
+                .px(px(6.)).py(px(1.)).rounded(px(4.)).text_xs().text_color(theme::accent_text()).bg(theme::accent_dim())
+                .child(chrome::small_icon(IconName::Star, 10., theme::accent_text())).child(tr("group_sheet_lead"))
+                .tooltip({ let tip = tr("group_sheet_lead_tip"); move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx) }));
+            list.child(div().px_3().py(px(10.)).when(i + 1 < count, |el| el.border_b_1().border_color(theme::border()))
+                .when(principal, |el| el.bg(theme::accent_dim().opacity(0.35)))
+                .child(div().flex().items_center().gap_3()
+                    .child(live.as_ref().map_or_else(|| dot("dead").opacity(0.4), |(_, state, _)| dot(state)))
+                    .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+                        .child(div().flex().items_center().gap_2().min_w_0()
+                            .child(div().min_w_0().truncate().text_sm().font_weight(FontWeight::MEDIUM).child(short.clone()))
+                            .children(lead_tag)
+                            .when(this, |el| el.child(tag(tr_shared("worktree_esta_sessao", &[]), theme::muted())))
+                            .children(machine.map(|m| tag(m, theme::faint()))))
+                        .children(detail.filter(|d| !d.is_empty()).map(|text| div().truncate().text_xs().text_color(theme::faint()).child(text))))
+                    .child(actions))
+                .children(confirm))
         });
         // Acesso completo pendente de cada membro daqui, com o "Liberar" ao lado.
         let server = here.clone();
@@ -502,22 +638,22 @@ impl Hangar {
         });
         let outside = self.sheet_live().is_some_and(|s| !s.outside_pairs().is_empty());
         let notices: Vec<String> = self.sheet_grants().iter().map(|g| tr_shared("pair_full_confirm", &[("sessao", &g.session), ("dono", &g.owner)])).collect();
-        let add = if adding {
+        let (add, add_panel) = if adding {
             let label = if busy { web("par_adicionando") } else if picked.is_empty() { web("par_escolha_sessoes") }
                 else { web_with("par_adicionar_nomes", "nomes", &picked_names) };
-            div().flex().flex_col().gap_2()
+            (None, Some(div().flex().flex_col().gap_2()
                 .child(pick_list(self, "par_adicionar_aria", "par_vazio_fora_grupo", cx))
                 // Confirmar o "Adicionar" com esta frase à vista é o que libera o acesso completo.
                 .when(!notices.is_empty(), |el| el.child(div().p_2().rounded_md().bg(theme::warning().opacity(0.12)).flex().flex_col().gap(px(4.))
                     .text_sm().whitespace_normal().children(notices)))
                 .child(div().child(Button::new("group-sheet-add").primary().small().label(label).loading(busy).disabled(busy || picked.is_empty())
-                    .on_click(cx.listener(|this, _, _, cx| this.pair_from_sheet(cx)))))
+                    .on_click(cx.listener(|this, _, _, cx| this.pair_from_sheet(cx)))))))
         } else {
-            div().child(Button::new("group-sheet-adding").ghost().small().label(web("par_adicionar_sessao")).disabled(busy)
+            (Some(Button::new("group-sheet-adding").ghost().small().label(web("par_adicionar_sessao")).disabled(busy)
                 .on_click(cx.listener(|this, _, _, cx| {
                     if let Some(sheet) = this.sidebar.grouping.sheet.as_mut() { sheet.adding = true; }
                     cx.notify();
-                })))
+                }))), None)
         };
         let warn = |text: String| muted(format!("⚠ {text}"));
         // Contrato: só aparece com texto; grupo sem contrato é normal e não diz nada, mas a busca que falhou diz.
@@ -530,39 +666,86 @@ impl Hangar {
             _ => None,
         };
         let now = chrono::Local::now().timestamp() as f64;
+        let home = super::tree::home_dir().map(|h| h.to_string_lossy().into_owned());
         let feed = match (&sheet.feed.value, sheet.feed.loading) {
             (_, true) | (None, _) => muted(web("comum_carregando")).into_any_element(),
             (Some(Err(error)), _) => warn(error.clone()).into_any_element(),
-            (Some(Ok(feed)), _) => div().flex().flex_col().gap_2()
+            (Some(Ok(feed)), _) => div().flex().flex_col().gap_2().when(fit.is_some(), |el| el.flex_1().min_h_0())
                 .when(!feed.missing.is_empty(), |el| el.child(warn(web_with("par_sem_historico", "nomes", &feed.missing.join(", ")))))
                 .when(feed.items.is_empty(), |el| el.child(muted(web("par_vazio_trocas"))))
-                .children(feed.items.iter().map(|item| {
-                    let out = item.from == me;
-                    let when = (item.ts > 0.).then(|| format!(" · {}", super::side::ago(now - item.ts))).unwrap_or_default();
-                    div().flex().flex_col().gap(px(2.)).px_3().py_2().rounded(px(8.)).bg(if out { theme::accent_dim() } else { theme::inset() })
-                        .child(div().text_xs().text_color(theme::faint()).child(format!("{} → {}{when}", item.from, item.to)))
-                        .child(div().text_sm().whitespace_normal().child(item.text.clone()))
-                }))
+                // A mais nova no topo, numa área com rolagem própria: membros e ações ficam à vista.
+                .when(!feed.items.is_empty(), |el| el.child(div().id("group-feed")
+                    .map(|el| if fit.is_some() { el.flex_1().min_h_0() } else { el.max_h(px(420.)) })
+                    .overflow_y_scroll().flex().flex_col().gap(px(10.))
+                    .children(feed.items.iter().rev().map(|item| {
+                        let out = item.from == me;
+                        let short = |a: &str| a.split_once("::").map_or(a, |(_, n)| n).to_owned();
+                        let when = (item.ts > 0.).then(|| super::side::ago(now - item.ts));
+                        let (tag, body) = tidy_message(&item.text, home.as_deref());
+                        // Muito recado vem sem hora: o texto entra na chave para dois recados não dividirem o mesmo id.
+                        let key = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new();
+                            (&item.from, &item.to, &item.text, item.ts.to_bits()).hash(&mut h); format!("{:x}", h.finish()) };
+                        let open = sheet.expanded.contains(&key);
+                        // ponytail: "longo" por tamanho e linhas, sem medir o texto desenhado.
+                        let long = body.chars().count() > 360 || body.lines().count() > 6;
+                        let accent = if out { theme::accent() } else { theme::border_strong() };
+                        let id = SharedString::from(format!("group-feed-more-{key}"));
+                        div().flex().flex_col().gap(px(6.)).pl(px(12.)).pr_3().py(px(10.)).rounded(px(8.)).bg(theme::inset())
+                            .border_l_2().border_color(accent)
+                            .child(div().flex().items_center().gap_2().text_xs().min_w_0()
+                                .child(div().flex_shrink_0().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(short(&item.from)))
+                                .child(div().flex_shrink_0().text_color(theme::faint()).child("→"))
+                                .child(div().min_w_0().truncate().text_color(theme::muted()).child(short(&item.to)))
+                                .children(when.map(|w| div().ml_auto().flex_shrink_0().text_color(theme::faint()).child(w))))
+                            .child(div().flex().flex_col().gap(px(4.))
+                                .children(tag.map(|t| div().flex().child(div().px(px(6.)).py(px(1.)).rounded(px(4.)).bg(theme::accent_dim())
+                                    .text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::accent_text()).child(t))))
+                                .child(div().text_sm().line_height(px(21.)).text_color(theme::body_text()).whitespace_normal()
+                                    .when(long && !open, |el| el.line_clamp(5).text_ellipsis())
+                                    .children(body.lines().map(|line| div().child(line.to_owned())))))
+                            .when(long, |el| el.child(div().id(id).flex().cursor_pointer().text_xs().font_weight(FontWeight::MEDIUM)
+                                .text_color(theme::accent_text()).hover(|s| s.underline())
+                                .child(tr(if open { "group_sheet_less" } else { "group_sheet_more" }))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(sheet) = this.sidebar.grouping.sheet.as_mut() && !sheet.expanded.remove(&key) { sheet.expanded.insert(key.clone()); }
+                                    cx.notify();
+                                }))))
+                    }))))
                 .into_any_element(),
         };
-        div().flex().flex_col().gap_3()
-            .child(muted(web("par_membros_hint")))
+        let task_text = self.sheet_live().and_then(|s| s.pair_task.clone()).filter(|t| !t.trim().is_empty());
+        let members_head = div().flex().items_center().justify_between().gap_2()
+            .child(heading(format!("{} · {count}", tr("group_sheet_members"))).mt_0())
+            .children(add);
+        let side = div().flex().flex_col().gap_3()
+            .children(task_text.map(|t| div().flex().items_start().gap_2().p_3().rounded(px(8.)).bg(theme::inset())
+                .child(chrome::small_icon(IconName::ListChecks, 14., theme::muted()).mt(px(2.)))
+                .child(div().flex_1().min_w_0().text_sm().whitespace_normal().child(t))))
             .when(outside, |el| el.child(muted(tr_shared("pair_not_transitive", &[]))))
             // Esta sessão é a ponta do par: o "Sair do grupo" do rodapé desfaz o par para todos.
             .children(self.anchored_owners(&Target::new(&server, &me)).iter()
                 .map(|dono| warn(tr_shared("pair_undo_anchor_body", &[("dono", dono)]))))
-            .child(members)
+            .child(div().flex().flex_col().gap_2().child(members_head).child(members)
+                .child(div().text_xs().text_color(theme::faint()).whitespace_normal().child(web("par_membros_hint"))))
+            .children(add_panel)
             .child(pending)
-            .child(add)
-            .children(contract)
-            .child(div().flex().flex_col().gap_2().child(heading(web("par_conversa_titulo"))).child(feed))
+            .children(contract);
+        let talk = div().flex().flex_col().gap_2().child(heading(web("par_conversa_titulo")).mt_0());
+        match fit {
+            // Duas colunas de altura fixa, cada uma com rolagem: o painel não cresce nem pula quando a conversa chega.
+            Some(height) => div().flex().gap(px(20.)).h(height)
+                .child(div().id("group-side").w(px(420.)).flex_shrink_0().h_full().overflow_y_scroll().pr_1().child(side))
+                .child(div().w(px(1.)).h_full().bg(theme::border()))
+                .child(talk.flex_1().min_w_0().h_full().child(div().flex_1().min_h_0().flex().flex_col().child(feed))),
+            None => side.child(talk.mt(px(8.)).child(feed)),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     // Sem glob: o `test` do gpui_kit, que o `super::*` traz, esconderia o `#[test]` da linguagem.
-    use super::{ChatEvent, Delivery, Failure, FeedItem, build_feed, group_delivery, sheet_members};
+    use super::{ChatEvent, Delivery, Failure, FeedItem, build_feed, group_delivery, sheet_members, tidy_message};
 
     #[test]
     fn panel_lists_every_member_with_this_session_marked() {
@@ -588,6 +771,16 @@ mod tests {
             FeedItem { from: "b".into(), to: "a".into(), text: "segundo".into(), ts: 2. },
         ]);
         assert_eq!(feed.missing, ["c"], "histórico que falhou não é conversa vazia");
+    }
+
+    #[test]
+    fn message_gets_its_kind_as_tag_short_home_and_one_line_per_item() {
+        let (tag, body) = tidy_message("ANDAMENTO W5 seta: (1) sim, em /home/eu/x.png; (2) a seta é dela", Some("/home/eu"));
+        assert_eq!(tag.as_deref(), Some("ANDAMENTO"));
+        assert_eq!(body, "W5 seta:\n(1) sim, em ~/x.png;\n(2) a seta é dela");
+        let (tag, body) = tidy_message("OK, pode seguir (ver item 2)", None);
+        assert_eq!(tag, None, "palavra comum não vira etiqueta");
+        assert_eq!(body, "OK, pode seguir (ver item 2)");
     }
 
     #[test]
