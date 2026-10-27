@@ -169,10 +169,20 @@ impl Runner for Replay {
         &'a self,
         args: Vec<String>,
         cwd: &'a Path,
-        _env: &'a BTreeMap<String, String>,
+        env: &'a BTreeMap<String, String>,
         timeout: Duration,
     ) -> BoxFuture<'a, Result<Output, String>> {
         Box::pin(async move {
+            let git = [
+                ("GIT_CONFIG_NOSYSTEM", "1"),
+                ("GIT_CONFIG_GLOBAL", if cfg!(windows) { "nul" } else { "/dev/null" }),
+                ("GIT_TERMINAL_PROMPT", "0"),
+                ("GIT_OPTIONAL_LOCKS", "0"),
+            ];
+            assert!(env.keys().filter(|key| key.starts_with("GIT_")).all(|key| git.iter().any(|(expected, _)| key == expected)), "o replay recebeu variável Git herdada do host");
+            for (key, value) in git {
+                assert!(env.get(key).is_some_and(|actual| actual == value), "o replay recebeu configuração Git divergente em {key}");
+            }
             let call = {
                 let mut calls = self.calls.lock().unwrap();
                 let config_get = |v: &Value| v["args"][1] == "config" && v["args"][2] == "get";
@@ -1653,3 +1663,6 @@ async fn measure_omp_dry_reconciliation() {
         json!({"language":"rust","platform":std::env::consts::OS,"scenario":"unchanged-dry-reconcile","samples":50,"warmups":5,"p50_ms":samples[25],"p95_ms":samples[47],"cpu_ms":(cpu-before)*1000.0,"peak_rss_kib":rss})
     );
 }
+
+#[path = "mechanism_tests.rs"]
+mod mechanisms;

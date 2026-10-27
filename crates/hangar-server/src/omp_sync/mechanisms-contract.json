@@ -1,0 +1,243 @@
+{
+  "origin": "d2a42410f9fe6df4ea491b296c7fea7b98d8b844",
+  "platform": "linux",
+  "command": "python gen_mechanisms.py <checkout-baseline> <fixture-destino>",
+  "operations": [
+    "PluginSynchronizer.__init__",
+    "PluginSynchronizer.reconcile",
+    "PluginSynchronizer.import_marketplaces",
+    "_write"
+  ],
+  "environment_input": {
+    "HOME": "ignored-home",
+    "USERPROFILE": "ignored-profile",
+    "CLAUDE_CONFIG_DIR": "ignored-claude",
+    "GIT_DIR": "host-repository",
+    "GIT_WORK_TREE": "host-worktree",
+    "GIT_CONFIG_GLOBAL": "host-global",
+    "GIT_CONFIG_SYSTEM": "host-system",
+    "GIT_CONFIG_COUNT": "1",
+    "GIT_CONFIG_KEY_0": "alias.host",
+    "GIT_CONFIG_VALUE_0": "host-value",
+    "GIT_TERMINAL_PROMPT": "1",
+    "GIT_OPTIONAL_LOCKS": "1",
+    "GIT_SYNTHETIC": "host-extra",
+    "UNCHANGED": "kept"
+  },
+  "environment_expected": {
+    "HOME": "<HOME>",
+    "USERPROFILE": "<HOME>",
+    "CLAUDE_CONFIG_DIR": "<HOME>/.claude",
+    "UNCHANGED": "kept",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_OPTIONAL_LOCKS": "0"
+  },
+  "lock_cases": [
+    {
+      "target": "ledger",
+      "operation": "reconcile",
+      "report": {
+        "complete_inventory": false,
+        "items": [],
+        "errors": [
+          "Estado gerenciado simbólico recusado"
+        ],
+        "mode": "native"
+      },
+      "target_text": "preservar\n",
+      "link_preserved": true
+    },
+    {
+      "target": "ledger",
+      "operation": "import_marketplaces",
+      "report": {
+        "complete_inventory": false,
+        "items": [],
+        "errors": [
+          "Estado gerenciado simbólico recusado"
+        ],
+        "mode": "native"
+      },
+      "target_text": "preservar\n",
+      "link_preserved": true
+    },
+    {
+      "target": "lock",
+      "operation": "reconcile",
+      "report": {
+        "complete_inventory": false,
+        "items": [],
+        "errors": [
+          "Estado gerenciado simbólico recusado"
+        ],
+        "mode": "native"
+      },
+      "target_text": "preservar\n",
+      "link_preserved": true
+    },
+    {
+      "target": "lock",
+      "operation": "import_marketplaces",
+      "report": {
+        "complete_inventory": false,
+        "items": [],
+        "errors": [
+          "Estado gerenciado simbólico recusado"
+        ],
+        "mode": "native"
+      },
+      "target_text": "preservar\n",
+      "link_preserved": true
+    }
+  ],
+  "backend_unavailable": {
+    "reconcile": {
+      "complete_inventory": false,
+      "items": [],
+      "errors": [
+        "Trava de processo indisponível"
+      ],
+      "mode": "native"
+    },
+    "import_marketplaces": {
+      "complete_inventory": false,
+      "items": [],
+      "errors": [
+        "Trava de processo indisponível"
+      ],
+      "mode": "native"
+    }
+  },
+  "atomic_success": {
+    "bytes": "{\n  \"ação\": \"migração\",\n  \"itens\": [\n    1,\n    2\n  ]\n}\n",
+    "order": [
+      "fsync",
+      "replace"
+    ]
+  },
+  "atomic_failure": {
+    "unchanged": true,
+    "temporary_files": []
+  },
+  "packed_refs": {
+    "files": {
+      ".git/packed-refs": "# pack-refs with: peeled fully-peeled sorted\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/other\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/work\n",
+      ".git/HEAD": "ref: refs/heads/work\n",
+      ".git/config": "[remote \"origin\"]\n url = https://git.example.invalid/team/comet.git\n"
+    },
+    "expected": [
+      [
+        "https",
+        "git.example.invalid",
+        443,
+        "",
+        "/team/comet"
+      ],
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "outside_ref_error": "Caminho escapa da raiz do pacote",
+    "symbolic_git_expected": null
+  },
+  "bun_jsonc": {
+    "text": "{\n // comment before packages\n \"notice\":\"https://example.invalid/*keep*/,} // keep \\\"quoted\\\"\",\n \"packages\": {\"@fixture/comet\": [\"@fixture/comet@https://git.example.invalid/team/comet.git#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", {\"preserve\":\"a,}/* b */ // c\"},],},\n}\n",
+    "name": "@fixture/comet",
+    "expected": [
+      [
+        "https",
+        "git.example.invalid",
+        443,
+        "",
+        "/team/comet"
+      ],
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ]
+  },
+  "runner_cancel": {
+    "exception": "KeyboardInterrupt",
+    "descendant_alive": false,
+    "reaped": true,
+    "communicate_calls": 2
+  },
+  "origins": [
+    {
+      "input": "https://GIT.EXAMPLE.INVALID:443/team/comet.git",
+      "value": [
+        "https",
+        "git.example.invalid",
+        443,
+        "",
+        "/team/comet"
+      ]
+    },
+    {
+      "input": "http://git.example.invalid/team/comet.git",
+      "value": [
+        "http",
+        "git.example.invalid",
+        80,
+        "",
+        "/team/comet"
+      ]
+    },
+    {
+      "input": "ssh://git@git.example.invalid:22/team/comet.git",
+      "value": [
+        "ssh",
+        "git.example.invalid",
+        22,
+        "git",
+        "/team/comet"
+      ]
+    },
+    {
+      "input": "git@git.example.invalid:team/comet.git",
+      "value": [
+        "ssh",
+        "git.example.invalid",
+        22,
+        "git",
+        "/team/comet"
+      ]
+    },
+    {
+      "input": "git+https://git.example.invalid/team/comet.git",
+      "value": [
+        "https",
+        "git.example.invalid",
+        443,
+        "",
+        "/team/comet"
+      ]
+    },
+    {
+      "input": "https://user:pass@git.example.invalid/team/comet.git",
+      "error": "Origem com credenciais ou parâmetros recusada"
+    },
+    {
+      "input": "https://git.example.invalid/team/comet.git?q=1",
+      "error": "Origem com credenciais ou parâmetros recusada"
+    },
+    {
+      "input": "https://git.example.invalid/team/comet.git#part",
+      "error": "Origem com credenciais ou parâmetros recusada"
+    },
+    {
+      "input": "https://git.example.invalid/./comet.git",
+      "error": "Caminho da origem inválido"
+    },
+    {
+      "input": "https://git.example.invalid/../comet.git",
+      "error": "Caminho da origem inválido"
+    },
+    {
+      "input": "https://git.example.invalid/team /comet.git",
+      "error": "Origem Git inválida"
+    },
+    {
+      "input": "https://git.example.invalid/team\u001c/comet.git",
+      "error": "Origem Git inválida"
+    }
+  ]
+}
