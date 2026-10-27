@@ -76,6 +76,13 @@ fn request(input: &Value, public: bool) -> Result<Value, String> {
             request.extensions_mut().insert(axum::extract::ConnectInfo("127.0.0.1:5000".parse::<std::net::SocketAddr>().unwrap()));
             request.headers_mut().insert("x-forwarded-for", "198.51.100.80".parse().unwrap());
             if input["authenticated"] != false { request.headers_mut().insert("authorization", "Bearer fixture-owner".parse().unwrap()); }
+            if input["forwarded"] == true {
+                let path = request.uri().path().to_owned();
+                let query = request.uri().query().map(|q|format!("?{q}")).unwrap_or_default();
+                request.headers_mut().insert("x-hangar-path", path.parse().unwrap());
+                request.headers_mut().insert("x-hangar-internal", "fixture-internal".parse().unwrap());
+                *request.uri_mut() = format!("/__hangar_server/forwarded{query}").parse().unwrap();
+            }
             hangar_server::routes::router(state.clone()).call(request).await.map_err(|e|e.to_string())?
         } else { orq::serve(&state, request).await };
         let status = response.status().as_u16();

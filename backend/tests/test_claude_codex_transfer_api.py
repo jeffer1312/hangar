@@ -546,7 +546,6 @@ def terminal_ingress(scenario, monkeypatch):
     monkeypatch.setattr(api, "_pane_info", lambda name: ("claude", None))
     monkeypatch.setattr(api, "_enviar_nativo", lambda *args: None)
     monkeypatch.setattr(api.plugin_bridge, "aguardando", lambda name: False)
-    monkeypatch.setattr(api, "_recusa_orq", Mock())
     monkeypatch.setattr(api, "_session_exists", lambda name: True)
     monkeypatch.setattr(api, "_agendar_confirmacao", Mock())
     monkeypatch.setattr(api, "_drain_session", Mock())

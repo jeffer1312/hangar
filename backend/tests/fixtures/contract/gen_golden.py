@@ -754,7 +754,6 @@ def session_write_rows() -> tuple[list, list]:
     api.diag.registrar = lambda event, level="ok", **fields: (event.startswith(("runtime.", "opcao."))
         and diary.append({"event": event, "code": fields.get("codigo")}))
     api.uuid = SimpleNamespace(uuid4=lambda: SimpleNamespace(hex=INPUT_OP))
-    api._recusa_orq = lambda name: None
     api._session_exists = lambda name: True
     api._provider_of = lambda name: "claude"
     api._pane_info = lambda name: ("claude", "%1")
@@ -929,7 +928,6 @@ def control_rows() -> list:
             return {"operation_id": operation_id, "disposition": self.reply[0], "payload": self.reply[1]}
 
     api.diag.registrar = lambda event, level="ok", **fields: event.startswith(("runtime.", "opcao.")) and diary.append(event)
-    api._recusa_orq = lambda name: None
     api._session_exists = lambda name: True
     api._provider_of = lambda name: "claude"
     api._cached_info_sync = lambda name: SimpleNamespace(provider="claude", headless=False)
@@ -1187,7 +1185,6 @@ def answer_rows() -> list:
     ti.TerminalInput.interrupt = interrupt
     api._espera_picker_fechar = lambda name, *a, **k: True
     api.clear_pending_askq = lambda jsonl: cleared.append(jsonl)
-    api._recusa_orq = lambda name: None
     api._session_exists = lambda name: True
     api._provider_of = lambda name: "claude"
     api._cached_info_sync = lambda name: SimpleNamespace(provider="claude", jsonl="/c/projects/p/sid.jsonl")

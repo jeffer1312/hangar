@@ -116,7 +116,6 @@ def test_close_done_by_the_rust_never_touches_the_group(monkeypatch):
     def forbidden(op, **args):
         pytest.fail(f"a ponte não pode ser chamada num fechamento do Rust: {op}")
     monkeypatch.setattr(groups_bridge, "call", forbidden)
-    monkeypatch.setattr(api, "_recusa_orq", lambda n: None)
     monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: [])
     monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
     monkeypatch.setattr(api.share_bridge, "revoke_session", lambda n: None)

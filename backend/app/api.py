@@ -502,8 +502,15 @@ async def _providers_pelo_rust(request: Request, call_next):
              or path == "/api/orquestracao/politica" or path.startswith("/api/orquestracao/politica/")
              or path == "/api/model-options" and request.query_params.get("provider") in {"pi", "omp", "kimi"})
     read = re.fullmatch(r"/api/sessions/([^/]+-orq)/(history|events)", path)
-    if read:
-        info = await _cached_info(read.group(1))
+    write = re.fullmatch(r"/api/sessions/([^/]+-orq)(?:/(input|interrupt))?", path)
+    write = write if write and (request.method == "DELETE" and write.group(2) is None
+                               or request.method == "POST" and write.group(2) is not None) else None
+    if read or write:
+        try:
+            require_auth(request)
+        except HTTPException as error:
+            return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
+        info = await _cached_info((read or write).group(1))
         owned = info is not None and info.provider == "orq"
     if not owned:
         return await call_next(request)
@@ -2099,7 +2106,6 @@ async def kill_session(name: str, by: str | None = None, request: Request = None
     # 500 quando a sessao SOBREVIVE ao kill — mesmo padrao do /rename logo abaixo, que ja confere e
     # responde 404/500. Antes era {"ok": true} incondicional: o card sumia da UI e a sessao reaparecia
     # na varredura seguinte, sem fila e sem pareamento (ver SessionRegistry.kill).
-    await asyncio.to_thread(_recusa_orq, name)
     # Marca do Rust: ele já encerrou o Codex com terminal dele (e o grupo); aqui só as lojas daqui.
     marked = lambda h: bool(request and internal_api._secret) and secrets.compare_digest(request.headers.get(h, "").encode(), internal_api._secret.encode())
     closed = marked("x-hangar-rust-closed")
@@ -3723,14 +3729,6 @@ def _session_exists(name: str) -> bool:
     return codex_sessions.exists(name) or headless_sessions.exists(name) or tmux.has_session(name)
 
 
-def _recusa_orq(name: str) -> None:
-    """O orquestrador não tem pane nem processo: sem esta recusa, entrada, nome, fim e interrupção
-    cairiam no tmux de uma sessão que não existe."""
-    if name.endswith("-orq") and any(info.name == name and info.provider == "orq" for info in registry.list()):
-        raise HTTPException(409, detail=erro("erro_sessao_orq",
-                                             "o orquestrador não recebe mensagens; fale com o árbitro"))
-
-
 def _headless(name: str) -> bool:
     """Sessão Claude SEM terminal (sidecar do adapter headless). Provider continua "claude"; só o
     transporte muda — quem ramifica por isto é a entrada, o interrupt, a opção e a resposta."""
@@ -3745,7 +3743,6 @@ async def input_prompt(name: str, body: InputBody):
     # (nao o default do asyncio, que a decoracao — git_summary/capture_pane — pode ocupar). Assim um
     # git status pendurado + refine (60s, pool do anyio) + check (600s, thread propria) nao seguram
     # o POST /input. Ver _send_thread.
-    await _send_thread(_recusa_orq, name)
     if not await _send_thread(_session_exists, name):
         raise HTTPException(404, detail=erro("erro_sessao_recado_nao_enfileirado", "sessão não encontrada — recado NÃO enfileirado"))
     provider = _provider_of(name)
@@ -4499,7 +4496,6 @@ async def plugin_input(name: str, request: Request):
 
 @app.post("/api/sessions/{name}/interrupt", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
 async def interrupt(name: str, clear: bool = False):
-    await asyncio.to_thread(_recusa_orq, name)
     # Codex: interrompe a propria TUI pelo tmux, mantendo celular e terminal no mesmo controlador.
     if _provider_of(name) == "codex":
         try:

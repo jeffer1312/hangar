@@ -164,7 +164,6 @@ def test_call_waits_while_the_mode_is_settling(monkeypatch):
 
 
 def _close_stubs(monkeypatch):
-    monkeypatch.setattr(api, "_recusa_orq", lambda n: None)
     monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: [])
     monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
     monkeypatch.setattr(api.share_bridge, "revoke_session", lambda n: None)
@@ -187,7 +186,6 @@ def test_close_with_an_unreadable_sidecar_still_leaves_and_journals(monkeypatch,
 def test_close_of_a_session_without_group_never_asks_the_bridge(monkeypatch, client):
     """Sem sidecar não há grupo a deixar: ponte fora do ar não vira aviso falso no fechamento."""
     calls = _rust(monkeypatch, error="groups_bridge_off")
-    monkeypatch.setattr(api, "_recusa_orq", lambda n: None)
     monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: [])
     monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
     monkeypatch.setattr(api.share_bridge, "revoke_session", lambda n: None)
@@ -276,7 +274,6 @@ def test_close_that_skipped_the_rust_leaves_with_the_orq_facts(monkeypatch, clie
     _sidecar("a", ["b"], orq=True)
     not_notified = {"sessao": "srv::x", "erro": {"code": "erro_peer_nao_avisado", "params": {}, "msg": "srv inacessível"}}
     calls = _rust(monkeypatch, reply={"ex_peers": ["srv::x"], "warnings": [not_notified]})
-    monkeypatch.setattr(api, "_recusa_orq", lambda n: None)
     monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: [])
     monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
     monkeypatch.setattr(api.share_bridge, "revoke_session", lambda n: None)
@@ -305,7 +302,6 @@ def test_close_delivers_what_the_rust_left_for_python(monkeypatch, client):
         sent.append((name, text))
         return {"ok": name == "b", "error": {"code": "erro_x", "params": {}, "msg": "x"}}
     monkeypatch.setattr(api, "_enviar", enviar)
-    monkeypatch.setattr(api, "_recusa_orq", lambda n: None)
     monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: [])
     monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
     monkeypatch.setattr(api.share_bridge, "revoke_session", lambda n: None)
@@ -419,7 +415,6 @@ def test_python_mode_close_of_a_grouped_session_closes_and_warns(monkeypatch, cl
     monkeypatch.setattr(groups_bridge, "call", lambda *a, **k: pytest.fail("sem Rust não há ponte"))
     _sidecar("a", ["b"])
     killed, recorded = [], []
-    monkeypatch.setattr(api, "_recusa_orq", lambda n: None)
     monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: killed.append(n) or [])
     monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
     monkeypatch.setattr(api, "_jsonl_of_session", lambda n: None)

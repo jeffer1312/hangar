@@ -151,8 +151,10 @@ def test_history_turns_each_timeline_line_into_a_notice(tmp_path, monkeypatch):
     ("delete", "/api/sessions/g1-orq", None),
     ("post", "/api/sessions/g1-orq/interrupt", None),
 ])
-def test_orq_row_refuses_input_kill_interrupt(root, monkeypatch, method, path, body, cli):
+@pytest.mark.parametrize("forwarded", [False, True])
+def test_orq_row_refuses_input_kill_interrupt(root, monkeypatch, method, path, body, cli, forwarded):
     _run(root, "2026-09-28-g1", "g1")
+    cli.forwarded = forwarded
     kw = {"json": body} if body is not None else {}
     r = getattr(cli, method)(path, headers=H, **kw)
     assert r.status_code == 409, r.text

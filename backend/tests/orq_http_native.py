@@ -66,6 +66,7 @@ class NativeClient:
                      "kimi_home": str(kimi)}
         self.enviados = []
         self.public = False
+        self.forwarded = False
         self.upstream_response = {"status": 200, "body": {"ok": True, "delivered": True}}
         self.deliveries = []
         self.poll_panel = False
@@ -74,7 +75,7 @@ class NativeClient:
         result = call("http.public" if self.public else "http.request", method=method, path=quote(path, safe="/%?=&"), body=json,
                       home=self.home, env=self.env, dirs=self.dirs, mux=str(self.mux),
                       upstream_response=self.upstream_response, authenticated=headers is not None,
-                      state_only=path.endswith("/events"), poll_panel=self.poll_panel)
+                      state_only=path.endswith("/events"), poll_panel=self.poll_panel, forwarded=self.forwarded)
         self.deliveries.extend(result["deliveries"])
         self.enviados.extend((row["path"].split("/")[-2], row["body"]["text"])
                              for row in result["deliveries"] if row["method"] == "POST" and row["path"].endswith("/input"))

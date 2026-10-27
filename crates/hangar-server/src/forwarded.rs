@@ -41,6 +41,10 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
             Ok(Some(info)) if info.provider == "orq" => Owned::Read(name, events, guest),
             _ => return crate::session_write::json_response(StatusCode::NOT_FOUND, json!({"code":"forwarded_route_not_owned"})),
         }
+    } else if let Some(name) = crate::session_write::session_name(&path).filter(|name| name.ends_with("-orq"))
+        .filter(|_| method == Method::DELETE && path.strip_prefix("/api/sessions/").is_some_and(|rest| !rest.contains('/'))
+            || method == Method::POST && (path.ends_with("/input") || path.ends_with("/interrupt"))) {
+        Owned::OrchestrationGuard(name)
     } else if models { Owned::Models }
     else if crate::orchestration::matches(&method, &path) && !guest { Owned::Orchestration }
     else if crate::omp_sync::matches(&method, &path) && !guest { Owned::OmpSync }
@@ -89,6 +93,9 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     req.headers_mut().remove("x-hangar-path");
     req.headers_mut().remove("x-hangar-forwarded-guest");
     match owned {
+        Owned::OrchestrationGuard(name) => crate::session_write::orchestration_guard(&st, &name, req.headers()).await
+            .unwrap_or_else(|| crate::session_write::json_response(StatusCode::NOT_FOUND, crate::session_write::detail_body(
+                "erro_sessao_recado_nao_enfileirado", "sessão não encontrada — recado NÃO enfileirado", json!({})))),
         Owned::Read(name, events, guest) => {
             req.extensions_mut().insert(crate::session_write::bridge::BridgedOwner);
             req.extensions_mut().insert(ReadGuest(guest));
@@ -148,4 +155,4 @@ fn live_resume(method: &Method, path: &str) -> Option<String> {
 }
 
 /// As rotas do Rust que aceitam o repasse.
-enum Owned { Read(String, bool, bool), Models, Orchestration, OmpSync, Groups(bool), Conductor, Catalog, SessionDefaults, PushExpo, Commands, Mermaid, Prewarm, Nav, Plans, Worktrees, JevDelivery, ClientApi, ArchiveResume(String, String), Resume(String), Media(String, bool) }
+enum Owned { Read(String, bool, bool), OrchestrationGuard(String), Models, Orchestration, OmpSync, Groups(bool), Conductor, Catalog, SessionDefaults, PushExpo, Commands, Mermaid, Prewarm, Nav, Plans, Worktrees, JevDelivery, ClientApi, ArchiveResume(String, String), Resume(String), Media(String, bool) }
