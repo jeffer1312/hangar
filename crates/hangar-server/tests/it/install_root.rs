@@ -54,7 +54,8 @@ fn launch_backend_runs_the_real_version_python() {
     assert_eq!(record.lines().collect::<Vec<_>>(), [
         "-m app.main --log /tmp/x.log",
         real.join("backend").to_str().unwrap(),
-        home.join(".hangar/cache/pycache/0.1.0.8207").to_str().unwrap(),
+        // Sem prefixo de bytecode: o Python lê os `.pyc` que vêm no pacote.
+        "",
     ]);
 }
 

@@ -79,11 +79,13 @@ pub async fn machine(root: &Path, id: &str) -> Machine {
     Machine { addr, private, python, pair, root: root.to_path_buf(), state, share, changes, runtime }
 }
 
-/// Endereço que recusa conexão: a máquina fora do ar.
+/// Endereço que recusa conexão: a máquina fora do ar. A porta fica presa por um socket sem
+/// `listen` até o fim do processo: solta, outro teste em paralelo a reutiliza e recebe os pedidos.
 pub async fn closed_port() -> SocketAddr {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let addr = socket.local_addr().unwrap();
+    std::mem::forget(socket);
     addr
 }
 
