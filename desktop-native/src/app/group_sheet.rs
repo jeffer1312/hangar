@@ -106,7 +106,11 @@ fn tidy_message(text: &str, home: Option<&str>) -> (Option<String>, String) {
         Some((word, rest)) if word.chars().count() >= 4 && word.chars().all(|c| c.is_uppercase() || c == '_') => (Some(word.to_owned()), rest.trim_start()),
         _ => (None, text),
     };
-    let rest = match home.filter(|h| h.len() > 1) { Some(home) => rest.replace(home, "~"), None => rest.to_owned() };
+    // Só com o separador junto: `/home/eu` não pode comer o começo de `/home/euler`.
+    let rest = match home.filter(|h| h.len() > 1) {
+        Some(home) => rest.replace(&format!("{home}/"), "~/").replace(&format!("{home}\\"), "~\\"),
+        None => rest.to_owned(),
+    };
     let mut body = String::with_capacity(rest.len());
     let mut items = 0;
     for (ix, ch) in rest.char_indices() {
@@ -389,11 +393,13 @@ impl Hangar {
 
     /// Retira outro membro: é a saída dele, pedida à máquina onde ele está; os demais seguem juntos.
     fn remove_member(&mut self, address: String, cx: &mut Context<Self>) {
-        let MemberAt::Here(target) = self.member_at(&address, &self.identities()) else { return };
-        let api = self.machine_api(&target.server);
+        let at = self.member_at(&address, &self.identities());
         let tell = self.sidebar_tell();
+        let api = match &at { MemberAt::Here(target) => self.machine_api(&target.server), _ => None };
         let Some(sheet) = self.sidebar.grouping.sheet.as_mut() else { return };
         if sheet.busy { return; }
+        // A máquina do membro saiu do ar entre abrir o "Retirar" e confirmar.
+        let MemberAt::Here(target) = at else { sheet.error = Some(Refusal::NoIdentity.text()); cx.notify(); return };
         let Some(api) = api else { sheet.error = Some(tr("connection_failed")); cx.notify(); return };
         (sheet.busy, sheet.error) = (true, None);
         let id = sheet.id;
@@ -453,7 +459,9 @@ impl Hangar {
                 }
             }
             SheetReply::Removed(id, address, result) if id == sheet.id => {
-                (sheet.busy, sheet.removing) = (false, None);
+                sheet.busy = false;
+                // Na falha a confirmação fica aberta, na linha do membro, para tentar de novo.
+                if result.is_ok() { sheet.removing = None; }
                 match result {
                     Ok(PairResult { warning: Some(warning) }) => sheet.error = Some(warning),
                     Ok(_) => {}
@@ -677,14 +685,14 @@ impl Hangar {
                 .when(!feed.items.is_empty(), |el| el.child(div().id("group-feed")
                     .map(|el| if fit.is_some() { el.flex_1().min_h_0() } else { el.max_h(px(420.)) })
                     .overflow_y_scroll().flex().flex_col().gap(px(10.))
-                    .children(feed.items.iter().rev().map(|item| {
+                    .children(feed.items.iter().rev().enumerate().map(|(ix, item)| {
                         let out = item.from == me;
                         let short = |a: &str| a.split_once("::").map_or(a, |(_, n)| n).to_owned();
                         let when = (item.ts > 0.).then(|| super::side::ago(now - item.ts));
                         let (tag, body) = tidy_message(&item.text, home.as_deref());
                         // Muito recado vem sem hora: o texto entra na chave para dois recados não dividirem o mesmo id.
                         let key = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new();
-                            (&item.from, &item.to, &item.text, item.ts.to_bits()).hash(&mut h); format!("{:x}", h.finish()) };
+                            (&item.from, &item.to, &item.text, item.ts.to_bits()).hash(&mut h); format!("{:x}-{ix}", h.finish()) };
                         let open = sheet.expanded.contains(&key);
                         // ponytail: "longo" por tamanho e linhas, sem medir o texto desenhado.
                         let long = body.chars().count() > 360 || body.lines().count() > 6;
@@ -775,9 +783,9 @@ mod tests {
 
     #[test]
     fn message_gets_its_kind_as_tag_short_home_and_one_line_per_item() {
-        let (tag, body) = tidy_message("ANDAMENTO W5 seta: (1) sim, em /home/eu/x.png; (2) a seta é dela", Some("/home/eu"));
+        let (tag, body) = tidy_message("ANDAMENTO W5 seta: (1) sim, em /home/eu/x.png e /home/euler/y; (2) a seta é dela", Some("/home/eu"));
         assert_eq!(tag.as_deref(), Some("ANDAMENTO"));
-        assert_eq!(body, "W5 seta:\n(1) sim, em ~/x.png;\n(2) a seta é dela");
+        assert_eq!(body, "W5 seta:\n(1) sim, em ~/x.png e /home/euler/y;\n(2) a seta é dela");
         let (tag, body) = tidy_message("OK, pode seguir (ver item 2)", None);
         assert_eq!(tag, None, "palavra comum não vira etiqueta");
         assert_eq!(body, "OK, pode seguir (ver item 2)");
