@@ -112,7 +112,6 @@ async def test_lifespan_nao_reconcilia_sozinho_e_fecha_a_integracao(tmp_path, mo
         monkeypatch.setattr(api, nome, nada)
     monkeypatch.setattr(api.pricing, "atualizar_em_background", lambda: None)
     monkeypatch.setattr(api, "threading", SimpleNamespace(Thread=Mock(return_value=SimpleNamespace(start=lambda: None))))
-    monkeypatch.setattr(api.INBOX, "ligar_loop", lambda loop: None)
     monkeypatch.setattr(api, "_loop_servidor", None)
     async with api._lifespan(api.app):
         await asyncio.sleep(0.05)

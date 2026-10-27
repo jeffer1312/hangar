@@ -15,7 +15,7 @@ FIX = __import__("pathlib").Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture(autouse=True)
-def _sidecars_no_tmp(tmp_path, monkeypatch):
+def _sidecars_no_tmp(tmp_path, monkeypatch, hangar_server_bin):
     from app import pair
     from app.config import settings
     monkeypatch.setattr(settings, "projects_dir", str(tmp_path / "projects"))

@@ -1322,6 +1322,10 @@ def no_transfer(monkeypatch):
     from app.adapters.codex import sessions as codex_sessions
     monkeypatch.setattr(conversation_transfer, "transfer_active", lambda _name: False)
     monkeypatch.setattr(codex_sessions, "exists", lambda _name: False)
+    # A simulação de os.name testa o clipboard; a trava usa o sistema real do host.
+    import threading
+    keyboard_lock = threading.Lock()
+    monkeypatch.setattr(terminal_input, "_send_lock", lambda _name: keyboard_lock)
 
 
 def test_windows_clipboard_com_prova_manda_enter_e_nao_digita(monkeypatch, no_transfer):

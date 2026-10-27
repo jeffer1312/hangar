@@ -235,7 +235,7 @@ def test_input_pi_cria_a_entrada_antes_do_envio_com_id_estavel(api_client, tmp_p
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
     with patch("app.api.terminal.send_prompt", return_value="sent") as sp:
         r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 200
@@ -252,7 +252,7 @@ def test_input_pi_deferred_mantem_a_entrada_pendente_com_o_mesmo_id(api_client, 
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
     with patch("app.api.terminal.send_prompt", return_value="deferred") as sp:
         r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 200
@@ -268,7 +268,7 @@ def test_input_pi_partial_nao_deixa_entrada_orfa_pendente(api_client, tmp_path, 
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
     with patch("app.api.terminal.send_prompt", return_value="partial"):
         r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 400
@@ -316,7 +316,7 @@ def test_input_pi_slash_command_nao_cria_entrada_antecipada(api_client, tmp_path
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
     with patch("app.api.terminal.send_prompt", return_value="sent") as sp:
         r = api_client.post("/api/sessions/pisess/input", json={"text": "/clear"}, headers=_h())
     assert r.status_code == 200
@@ -335,7 +335,7 @@ def test_input_pi_sem_linha_nao_cria_entrada_antes_do_envio(api_client, tmp_path
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: False)   # sem linha -> fallback de tecla
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": None})   # sem linha -> fallback de tecla
 
     visto = {}
 
