@@ -62,6 +62,7 @@ export const SF_SYMBOLS: Partial<Record<IconName, SFSymbol>> = {
   KeyRound: 'key',
   Keyboard: 'keyboard',
   Languages: 'character.bubble',
+  LifeBuoy: 'lifepreserver',
   Layers: 'square.3.layers.3d',
   Link: 'link',
   List: 'list.bullet',

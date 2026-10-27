@@ -7,7 +7,7 @@ import { localeAtual } from './i18n';
 import { basename } from './format';
 import { mensagemDeErro, formataErro, type EnvelopeErro } from './errosApi';
 // diag NÃO importa api (ele usa `fetch` direto) — é o que mantém esta dependência de mão única.
-import { registrar as registrarDiag, novoReq } from './diag';
+import { registrar as registrarDiag, novoReq, recordFailure, recentFailures, type RecentFailure } from './diag';
 import { dispensaPrazo, retryAfterMs, registrarFalha, registrarSucesso } from './esfriamento';
 import {
   inviteAllows, parsePairLink, SharePrerequisiteError, ShareReachError, tailscaleEnableUrl, type ShareCreated, type ShareInfo, type SharePrereqs,
@@ -228,8 +228,11 @@ async function ensureOk(res: Response, server?: Server | null): Promise<void> {
 //    retomada de conversa arquivada (é POST, então entra mesmo dando certo).
 const SEGMENTOS_OPACOS = /\/(sessions|servers|agents|archive|claude-configs|projects|codex-contas|conta-estado)\/[^/]+/g;
 
+// Id de entrada da fila; `reorder` é rota fixa e fica.
+const ID_DA_FILA = /\/queue\/(?!reorder(?:\/|$))[^/]+/g;
+
 export function rotaGenerica(path: string): string {
-  return path.split('?')[0].replace(SEGMENTOS_OPACOS, '/$1/*');
+  return path.split('?')[0].replace(SEGMENTOS_OPACOS, '/$1/*').replace(ID_DA_FILA, '/queue/*');
 }
 
 function ehCredencialAtiva(server?: Server | null): boolean {
@@ -337,6 +340,7 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server, pr
       if (!poll || !_semRede.has(`${destino}|${rota}`)) {
         registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0, req, detalhe: rota,
           codigo: timedOut || (e instanceof Error && e.name === 'TimeoutError') ? 'timeout' : 'rede' }, destino);
+        if (!convite) recordFailure(destino, { ts: Date.now() / 1000, route: rota, status: 0, code: null });
       }
       if (poll) _semRede.add(`${destino}|${rota}`);
       if (typeof e === 'object' && e !== null) _semResposta.add(e);
@@ -351,8 +355,10 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server, pr
   // "token a repareamento". O 503 (erro_sessao_indisponivel) é a trava do dono numa troca de modo
   // ou com o tmux mudo, e passa sozinho.
   if (convite && (res.status === 410 || res.status === 401)) apiEnv().onInviteEnded?.(server?.id ?? null);
-  {
-    const rota = `${(init?.method ?? 'GET').toUpperCase()} ${rotaGenerica(path)}`;
+  const metodo = (init?.method ?? 'GET').toUpperCase();
+  // Sem rota esperando a volta da rede, a resposta comum não paga a rota genérica.
+  if (_semRede.size) {
+    const rota = `${metodo} ${rotaGenerica(path)}`;
     if (_semRede.delete(`${destino}|${rota}`)) {
       registrarDiag({ evento: 'api.voltou', nivel: 'ok', ms: Date.now() - t0, req, detalhe: rota }, destino);
     }
@@ -363,19 +369,24 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server, pr
   //    responde "o que quebrou", e a pergunta era como o app está sendo usado.
   //  - toda LEITURA que FALHA. O sucesso de GET fica de fora de propósito: o poll da lista e o
   //    histórico dariam milhares de linhas por hora e afogariam o resto.
-  const metodo = (init?.method ?? 'GET').toUpperCase();
   const acao = metodo !== 'GET';
   // 304 não é falha: é a resposta certa pra "o que eu tenho ainda vale". Sem esta exceção, toda
   // entrada em sessão sem novidade viraria uma linha de aviso no diário.
   if (acao || (!res.ok && res.status !== 304)) {
+    const rota = `${metodo} ${rotaGenerica(path)}`;
     // Código estável explica a recusa sem copiar texto livre do servidor; o clone preserva a resposta da tela.
     let motivo = '';
     if (!res.ok) {
+      let code: string | undefined;
       try {
-        const { code } = await lerErro(res.clone());
-        motivo = code && /^[a-z][a-z0-9_]{0,79}$/.test(code) ? code : '';
+        code = (await lerErro(res.clone())).code;
       } catch {
-        motivo = '';
+        code = undefined;
+      }
+      motivo = code && /^[a-z][a-z0-9_]{0,79}$/.test(code) ? code : '';
+      // Convite fica de fora: o relatório é do dono e vai só ao servidor dele.
+      if (!convite) {
+        recordFailure(destino, { ts: Date.now() / 1000, route: rota, status: res.status, code: code ?? null });
       }
     }
     registrarDiag({
@@ -384,7 +395,7 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server, pr
       codigo: String(res.status),
       ms: Date.now() - t0,
       req,
-      detalhe: [`${metodo} ${rotaGenerica(path)}`, motivo].filter(Boolean).join(' — '),
+      detalhe: [rota, motivo].filter(Boolean).join(' — '),
     }, destino);
   }
   return res;
@@ -429,6 +440,50 @@ async function apiFetchForServer<T>(s: Server, path: string, init?: RequestInit,
     throw Object.assign(new Error(`${res.status}: ${msg}`), { status: res.status, code, envelope });
   }
   return res.json() as Promise<T>;
+}
+
+export { recentFailures, type RecentFailure };
+
+/** Teto do texto da pessoa no relatório; acima disso o servidor responde 422. */
+export const DIAG_REPORT_TEXT_MAX = 2000;
+
+/** O que a tela diz da falha; só `unsupported` não deixa tentar de novo. */
+export type DiagReportFailureKind = 'unsupported' | 'rate_limited' | 'unreachable' | 'failed';
+
+export type DiagReportResult =
+  | { ok: true; code: string; diary: 'sent' | 'failed' }
+  /** `code`: o do servidor (C1), `unsupported` (servidor sem a rota), `network` (sem resposta)
+   *  ou `unexpected` (resposta sem código). `status` 0 = sem resposta. */
+  | { ok: false; code: string; status: number; kind: DiagReportFailureKind };
+
+function diagReportFailure(code: string, status: number): DiagReportResult {
+  const kind: DiagReportFailureKind = code === 'unsupported' ? 'unsupported'
+    : code === 'diag_report_rate_limited' ? 'rate_limited'
+    : code === 'diag_report_unreachable' || code === 'network' ? 'unreachable'
+    : 'failed';
+  return { ok: false, code, status, kind };
+}
+
+/** Falhas recentes deste servidor, por qualquer endereço pelo qual ele foi alcançado. */
+export function recentFailuresFor(server: Server): RecentFailure[] {
+  return recentFailures(server.baseUrl, server.lan?.url ?? '', server.remote?.url ?? '', baseOf(server));
+}
+
+/** Relatório de diagnóstico ao servidor da tela. Não lança: toda saída vira um `DiagReportResult`. */
+export async function sendDiagReport(server: Server, { text, client }: { text?: string; client: string }): Promise<DiagReportResult> {
+  const body = { ...(text?.trim() ? { text } : {}), client, failures: recentFailuresFor(server) };
+  try {
+    // Pior caso do servidor: montagem (até 50 s), worker (20 s) e diário inteiro (60 s).
+    const res = await apiFetchForServer<{ code?: unknown; diary?: unknown }>(server, '/api/diag/report',
+      { method: 'POST', body: JSON.stringify(body) }, 150_000);
+    if (typeof res?.code !== 'string') return diagReportFailure('unexpected', 201);
+    return { ok: true, code: res.code, diary: res.diary === 'sent' ? 'sent' : 'failed' };
+  } catch (e) {
+    const { status, code } = (e ?? {}) as { status?: unknown; code?: unknown };
+    if (typeof status !== 'number') return diagReportFailure('network', 0);
+    if (status === 404) return diagReportFailure('unsupported', status);
+    return diagReportFailure(typeof code === 'string' ? code : 'unexpected', status);
+  }
 }
 
 export function getSessions(server?: Server | null, init?: RequestInit): Promise<SessionInfo[]> {
