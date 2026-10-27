@@ -88,7 +88,7 @@ describe('operações da máquina explícita', () => {
     let refuse = false;
     mocks.fetch.mockImplementation(async (url: string) => String(url).endsWith('/api/update/accept')
       ? refuse ? json({ detail: 'fixture-refused' }, 500) : json({ ok: true, started: false })
-      : json({ atualizacao_disponivel: false, aviso_pendente: true, versoes: { repo: 'a', backend: 'a' }, estado: {} }));
+      : json({ atualizacao_disponivel: false, pending_warning: true, versoes: { repo: 'a', backend: 'a' }, estado: {} }));
     await render(); await click(m.mobile_machines_update());
     savePendingNews(server.id, { cards: [{ id: 'n1', title: 'fixture-news', kind: 'new', text: '', platforms: 'all', try_it: null, animation: null }], fixes: [] });
     await act(async () => { currentConfirmRequest()!.resolve(true, { [server.id]: { ids: ['mig'], mode: 'package' } }); });

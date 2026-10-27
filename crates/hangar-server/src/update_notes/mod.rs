@@ -22,7 +22,15 @@ pub async fn route(State(state): State<Arc<AppState>>, ConnectInfo(peer): Connec
     if let crate::update::http::Mode::Package(_) = crate::update::http::mode(&home) {
         return match package(&state).await {
             Ok(notes) => json_response(StatusCode::OK, with_acceptance(notes, &home)),
-            Err(why) => { tracing::warn!("leitura dos avisos da atualização falhou no índice do pacote: {why}"); unavailable() }
+            Err(why) => {
+                tracing::warn!("leitura dos avisos da atualização falhou no índice do pacote: {why}");
+                // O aviso da migração pendente é só de arquivos locais: sem o índice ele ainda sai, senão o
+                // Atualizar acenderia por ele e o modal não teria o que aceitar.
+                match crate::update::migrate::pending_warning(&home, &notes_root(&home)) {
+                    Some(warning) => json_response(StatusCode::OK, json!({"target": null, "warnings": [warning], "news": []})),
+                    None => unavailable(),
+                }
+            }
         };
     }
     // Mesmo registro que o `atualizacoes.py` grava.
@@ -56,6 +64,11 @@ fn with_acceptance(mut notes: Value, home: &Path) -> Value {
 pub(crate) fn notes_root(home: &Path) -> PathBuf {
     let current = crate::install_root::current(home);
     if std::fs::symlink_metadata(&current).is_ok() { return current; }
+    server_root()
+}
+
+/// A raiz de onde este servidor roda: o motor `git` o sobe na `backend/` do checkout.
+pub(crate) fn server_root() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_default();
     if cwd.file_name().is_some_and(|n| n == "backend") { cwd.parent().map(Path::to_path_buf).unwrap_or(cwd) } else { cwd }
 }

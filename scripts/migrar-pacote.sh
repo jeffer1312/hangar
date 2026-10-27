@@ -18,10 +18,18 @@ if [ -e "$marca" ]; then echo "já migrada: $marca"; exit 0; fi
 # Sem o aviso aceito na tela (o motor ou o app antigo atualizando), nada muda: a versão nova mostra o
 # aviso com a escolha, e a migração roda pela tela.
 # Mesma leitura do servidor (`update::accepted`): só uma lista de textos vale; outro formato é nada aceito.
-if ! python3 -I -c 'import json, sys
+# Sem python3 que funcione, a busca no texto: o arquivo é o servidor que grava, sempre uma lista de textos.
+aceito() {
+    local file="$HOME/.hangar/update-accepted.json"
+    if python3 -c 'import sys' 2>/dev/null; then
+        python3 -I -c 'import json, sys
 d = json.load(open(sys.argv[1], encoding="utf-8"))
-sys.exit(0 if isinstance(d, list) and all(isinstance(x, str) for x in d) and "2026-10-24-pacote-por-versao" in d else 1)' \
-    "$HOME/.hangar/update-accepted.json" 2>/dev/null; then
+sys.exit(0 if isinstance(d, list) and all(isinstance(x, str) for x in d) and "2026-10-24-pacote-por-versao" in d else 1)' "$file" 2>/dev/null
+    else
+        grep -q '"2026-10-24-pacote-por-versao"' "$file" 2>/dev/null
+    fi
+}
+if ! aceito; then
     echo "migração pendente: espera o aviso ser aceito na tela de atualização"
     exit 0
 fi

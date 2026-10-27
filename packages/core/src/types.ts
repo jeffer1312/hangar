@@ -1071,7 +1071,7 @@ export interface Atualizacao {
   atras?: number;
   atualizacao_disponivel: boolean;
   /** Aviso importante ainda não aceito: oferece o Atualizar mesmo sem versão nova. */
-  aviso_pendente?: boolean;
+  pending_warning?: boolean;
   /** API de cliente do servidor publicado para esta máquina; ausente em servidor anterior = 1. */
   api_publicado?: number;
   mudancas: AtualizacaoMudanca[];

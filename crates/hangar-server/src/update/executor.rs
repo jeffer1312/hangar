@@ -435,12 +435,22 @@ pub async fn dev_mode<R: Restarter, H: HealthProbe>(parts: &Parts, request: &Dev
     // Desligar numa máquina que nunca teve pacote (migrou direto para o modo desenvolvedor): baixa o do canal antes.
     // O pid já no download: sem ele a tela daria a rodada por abandonada depois da janela de nascimento.
     let mut ui_warning = None;
-    if *request == DevRequest::Off && matches!(super::dev_mode::check(&parts.home, request), Ok(super::dev_mode::Checked::Download)) {
+    // Dentro do serviço a troca recusa de qualquer jeito: não vale baixar antes.
+    if *request == DevRequest::Off && !in_service_group
+        && matches!(super::dev_mode::check(&parts.home, request), Ok(super::dev_mode::Checked::Download)) {
+        // A trava da atualização só no download: a troca a pega de novo logo depois. Ocupada, a troca recusa com o motivo.
+        let Ok(lock) = UpdateLock::try_acquire(&parts.layout) else {
+            state.write(json!({"fase": "pronto", "ok": false, "erro": "uma atualização está rodando nesta máquina; tente de novo depois",
+                "codigo": super::dev_mode::BUSY, "voltou": false, "no_ar": true, "pid": std::process::id()}));
+            return false;
+        };
         state.write(json!({"fase": "rodando", "ok": null, "erro": null, "codigo": null, "voltou": null, "no_ar": null, "resgate": null,
             "pid": std::process::id(), "reinicio_erro": null, "request_id": null, "versao_para": null, "reiniciar_manual": false,
             "log": [], "avisos": []}));
         state.step("baixar");
-        match super::download_published(&parts.release, &parts.layout, &parts.home, settings).await {
+        let downloaded = super::download_published(&parts.release, &parts.layout, &parts.home, settings).await;
+        drop(lock);
+        match downloaded {
             Ok(warning) => ui_warning = warning,
             Err(e) => {
                 state.write(json!({"fase": "pronto", "ok": false, "erro": format!("o pacote do canal {} não baixou: {e}", parts.release.channel),
@@ -501,7 +511,8 @@ async fn migrate(parts: &Parts, checkout: Option<PathBuf>) -> bool {
     state.write(json!({"fase": "rodando", "ok": null, "erro": null, "codigo": null, "voltou": null, "no_ar": null, "resgate": null,
         "pid": std::process::id(), "reinicio_erro": null, "request_id": null, "versao_para": null, "reiniciar_manual": false,
         "log": [], "avisos": []}));
-    state.step("migrar");
+    // Um dos passos que a tela conhece (`state::STEPS`): chave fora da lista cairia no "Baixando".
+    state.step("trocar");
     let args: Vec<String> = checkout.map(|dir| vec!["--checkout".to_owned(), dir.display().to_string()]).unwrap_or_default();
     let (sender, receiver) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || { let _ = sender.send(super::migrate::run(&args)); });
@@ -521,8 +532,9 @@ async fn migrate(parts: &Parts, checkout: Option<PathBuf>) -> bool {
         Err((_, why)) => {
             let why = why.trim_start_matches("##HANGAR-FALHA##").trim().to_owned();
             tracing::warn!("update: migração: {why}");
-            // O motivo do `migrate::roll_back` diz o que da volta não se completou.
-            let (back, up) = (!(why.contains(", menos:") || why.contains("não parou")), !why.contains("não subiu"));
+            // Pelos fatos, não pelo texto: a volta completa apaga o registro parcial, e o servidor no ar responde.
+            let back = !parts.layout.hangar.join(super::migrate::PARTIAL).exists();
+            let up = !matches!(super::HttpHealth::new(&parts.health_url).read().await, Reading::Down(_));
             state.write(json!({"fase": "pronto", "ok": false, "erro": why, "codigo": "erro_migracao", "voltou": back, "no_ar": up, "pid": pid}));
             false
         }

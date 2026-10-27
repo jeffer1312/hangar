@@ -10,7 +10,7 @@ export type UpdateFollow = 'rodando' | 'esperando' | 'atualizado' | 'atualizado_
 
 export type UpdateSnapshot = {
   atualizacao_disponivel?: boolean;
-  aviso_pendente?: boolean;
+  pending_warning?: boolean;
   versoes?: Partial<Atualizacao['versoes']>;
   pre_voo?: Partial<Atualizacao['pre_voo']>;
   estado?: { fase?: string };
@@ -27,11 +27,11 @@ export function hasRealUpdate(snapshot: UpdateSnapshot): boolean {
 /** Mesmo pré-voo do nativo; o canal do app local não participa das outras máquinas. */
 export function classify(snapshot: UpdateSnapshot): UpdateClassification {
   // Aviso pendente pede a folha mesmo sem versão nova; quem decide se inicia é `afterAccept`.
-  if (!hasRealUpdate(snapshot) && snapshot.aviso_pendente !== true) return 'em_dia';
+  if (!hasRealUpdate(snapshot) && snapshot.pending_warning !== true) return 'em_dia';
   const pre = snapshot.pre_voo;
   // Aceitar o aviso não faz `git pull`: edição ou branch de trabalho não o seguram. Com versão nova, o `iniciar`
   // depois do aceite é que recusa, com o motivo.
-  const warning = snapshot.aviso_pendente === true;
+  const warning = snapshot.pending_warning === true;
   if (!warning && pre?.branch_de_trabalho === true) return 'travado:branch';
   if (!warning && ((pre?.sujo ?? 0) > 0 || (pre?.ahead ?? 0) > 0 || pre?.divergiu === true)) return 'travado:mudancas';
   if (snapshot.estado?.fase === 'rodando') return 'travado:rodando';

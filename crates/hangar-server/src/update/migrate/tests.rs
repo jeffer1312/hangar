@@ -621,3 +621,31 @@ fn migrate_front_command_moves_the_unit_aside_and_back() {
     assert_eq!(calls.lines().collect::<Vec<_>>(), ["--user disable --now hangar-frontend.service", "--user daemon-reload",
         "--user daemon-reload", "--user enable --now hangar-frontend.service"]);
 }
+
+/// O aviso da migração: migrada vale o aceite; não migrada com o passo já rodado volta mesmo aceita (a migração
+/// aceita falhou, ou o script não leu o aceite), menos enquanto migra.
+#[test]
+fn migrate_pending_mode_comes_back_until_the_machine_migrates() {
+    let home = tempfile::tempdir().unwrap();
+    let hangar = home.path().join(".hangar");
+    std::fs::create_dir_all(&hangar).unwrap();
+    let layout = Layout::new(home.path());
+    assert_eq!(pending_mode(home.path()), None, "nada rodou: sem aviso pendente");
+
+    std::fs::write(crate::update::offered_file(&layout), "x").unwrap();
+    assert_eq!(pending_mode(home.path()), Some(None));
+    crate::update::accept(&layout, &[STEP_ID.to_owned()]).unwrap();
+    assert_eq!(pending_mode(home.path()), Some(None), "aceita e não migrada: o aviso volta");
+    std::fs::write(hangar.join(PARTIAL), "{}").unwrap();
+    assert_eq!(pending_mode(home.path()), None, "migrando agora");
+    std::fs::remove_file(hangar.join(PARTIAL)).unwrap();
+
+    let record = |mode: &str, checkout: &str| std::fs::write(hangar.join(MARKER), serde_json::json!({"mode": mode, "date": "x",
+        "checkout": checkout, "version": null, "reason": null, "notes": [], "done": []}).to_string()).unwrap();
+    record("developer", "/c");
+    assert_eq!(pending_mode(home.path()), None, "migrada e aceita");
+    crate::update::unaccept(&layout, &[STEP_ID.to_owned()]).unwrap();
+    assert_eq!(pending_mode(home.path()), Some(Some(Mode::Developer)), "migrada sem ver o aviso");
+    record("package", "");
+    assert_eq!(pending_mode(home.path()), None, "instalação nova pelo pacote");
+}

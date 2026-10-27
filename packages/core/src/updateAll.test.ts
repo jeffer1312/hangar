@@ -33,14 +33,14 @@ describe('contrato compartilhado com o Rust', () => {
 });
 
 describe('aviso pendente e aceite', () => {
-  const pending = { atualizacao_disponivel: false, aviso_pendente: true, versoes: { repo: 'a', backend: 'a' } };
+  const pending = { atualizacao_disponivel: false, pending_warning: true, versoes: { repo: 'a', backend: 'a' } };
   it('aviso pendente pede a folha, mas não é versão nova', () => {
     expect(classify(pending)).toBe('iniciar');
-    expect(classify({ ...pending, aviso_pendente: false })).toBe('em_dia');
+    expect(classify({ ...pending, pending_warning: false })).toBe('em_dia');
     // Modo desenvolvedor com edição: o aceite não faz git pull, então a edição não segura o aviso.
     const dirty = { pre_voo: { sujo: 1, branch_de_trabalho: true } };
     expect(classify({ ...pending, ...dirty })).toBe('iniciar');
-    expect(classify({ ...pending, ...dirty, aviso_pendente: false, atualizacao_disponivel: true })).toBe('travado:branch');
+    expect(classify({ ...pending, ...dirty, pending_warning: false, atualizacao_disponivel: true })).toBe('travado:branch');
     expect(hasRealUpdate(pending)).toBe(false);
     expect(hasRealUpdate({ ...pending, atualizacao_disponivel: true })).toBe(true);
     expect(hasRealUpdate({ ...pending, versoes: { repo: 'b', backend: 'a' } })).toBe(true);
@@ -144,7 +144,7 @@ describe('API e execução por máquina', () => {
       return json({ ok: true, started: false });
     };
     read = (id, count) => {
-      if (id === 'stored') return json({ ...ready(), atualizacao_disponivel: false, aviso_pendente: true });
+      if (id === 'stored') return json({ ...ready(), atualizacao_disponivel: false, pending_warning: true });
       return json(count === 1 ? ready() : done());
     };
     const ids = ['launched', 'stored', 'refused', 'old', 'plain'];

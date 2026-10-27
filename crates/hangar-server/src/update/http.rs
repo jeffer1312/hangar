@@ -248,8 +248,9 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 /// tela acende o Atualizar por ele mesmo sem versão nova. `atualizacao_disponivel` fica como veio:
 /// é ele que diz se há versão nova de verdade.
 fn mark_pending_warning(body: &mut Value, home: &Path) {
-    if super::migrate::pending_warning(home, &crate::update_notes::notes_root(home)).is_some() {
-        body["aviso_pendente"] = true.into();
+    // Só sim ou não: a tela relê o status a cada poucos segundos, e o texto do aviso fica para as notas.
+    if super::migrate::pending_mode(home).is_some() {
+        body["pending_warning"] = true.into();
     }
 }
 
@@ -459,8 +460,7 @@ pub async fn accept(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 
 /// O checkout de onde este servidor roda (o motor `git` o sobe na `backend/`).
 fn server_checkout() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    let root = if cwd.file_name().is_some_and(|n| n == "backend") { cwd.parent()?.to_path_buf() } else { cwd };
+    let root = crate::update_notes::server_root();
     super::migrate::is_checkout(&root).then_some(root)
 }
 

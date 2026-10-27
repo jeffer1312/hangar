@@ -770,7 +770,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         // Só o aviso pendente: aceito, nada de `iniciar`.
         let (machine, server) = mock(vec![
-            ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": false, "aviso_pendente": true, "atras": 0})),
+            ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": false, "pending_warning": true, "atras": 0})),
             ("POST /api/update/accept ", 200, json!({"ok": true, "started": false})),
         ]);
         let mut states = Vec::new();
@@ -779,7 +779,7 @@ mod tests {
         assert_eq!(states.last(), Some(&Status::Current));
         // O aceite lançou a migração: segue o pid dele, sem `iniciar`.
         let (machine, server) = mock(vec![
-            ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": false, "aviso_pendente": true, "atras": 0, "estado": {"ts": "old"}})),
+            ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": false, "pending_warning": true, "atras": 0, "estado": {"ts": "old"}})),
             ("POST /api/update/accept ", 200, json!({"ok": true, "started": true, "pid": 7})),
             ("GET /api/atualizacao ", 200, json!({"estado": {"fase": "pronto", "ok": true, "ts": "new"}})),
         ]);
@@ -818,12 +818,12 @@ mod tests {
 
     #[test]
     fn update_all_pending_warning_alone_is_not_a_real_update() {
-        let warning = json!({"atualizacao_disponivel": false, "aviso_pendente": true, "atras": 0});
+        let warning = json!({"atualizacao_disponivel": false, "pending_warning": true, "atras": 0});
         assert!(behind(&warning), "o botão aparece");
         assert_eq!(classify(&warning), Classification::Start, "o lote abre a máquina para aceitar o aviso");
         assert!(!real_update(&warning), "sem versão nova, nada de iniciar");
-        assert!(real_update(&json!({"atualizacao_disponivel": true, "aviso_pendente": true, "atras": 0})), "índice fora: a flag vale");
-        assert!(real_update(&json!({"aviso_pendente": true, "versoes": {"repo": "b", "backend": "a"}})), "disco diferente do que está no ar");
+        assert!(real_update(&json!({"atualizacao_disponivel": true, "pending_warning": true, "atras": 0})), "índice fora: a flag vale");
+        assert!(real_update(&json!({"pending_warning": true, "versoes": {"repo": "b", "backend": "a"}})), "disco diferente do que está no ar");
         assert!(!real_update(&json!({"atualizacao_disponivel": false})));
         assert!(!behind(&json!({"atualizacao_disponivel": false})));
     }

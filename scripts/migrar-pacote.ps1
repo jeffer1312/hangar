@@ -22,8 +22,13 @@ $aceitos = Join-Path $HOME '.hangar\update-accepted.json'
 # Mesma leitura do servidor (`update::accepted`): so uma lista de textos vale; outro formato e nada aceito.
 $aceito = $false
 try {
-    $lista = Get-Content -Raw -LiteralPath $aceitos -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-    $aceito = ($lista -is [array]) -and -not ($lista | Where-Object { $_ -isnot [string] }) -and ($lista -contains '2026-10-24-pacote-por-versao')
+    $texto = Get-Content -Raw -LiteralPath $aceitos -ErrorAction Stop
+    # A lista se confere pelo texto: o PowerShell 7 desembrulha a lista de um item num texto solto. Item a
+    # item num foreach, não pelo pipeline, que descarta o null.
+    $obj = ConvertFrom-Json $texto -ErrorAction Stop
+    $lista = if ($obj -is [array]) { $obj } else { ,$obj }
+    $aceito = $texto.TrimStart().StartsWith('[') -and ($lista -contains '2026-10-24-pacote-por-versao')
+    foreach ($item in $lista) { if ($item -isnot [string]) { $aceito = $false } }
 } catch { $aceito = $false }
 if (-not $aceito) {
     Write-Output 'migracao pendente: espera o aviso ser aceito na tela de atualizacao'

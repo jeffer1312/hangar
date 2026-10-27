@@ -354,8 +354,8 @@ impl Plan {
 /// Servidor atrás: há atualização publicada a puxar, ou o disco não é o que está no ar. A versão do app não entra: quem
 /// diz se os dois se entendem é a API. O `-dirty` sai da comparação: qualquer edição depois do boot deixaria o servidor
 /// "atrás" para sempre.
-/// O aviso pendente (`aviso_pendente`) também abre o modal, para ser aceito, mesmo sem versão nova.
-fn behind(state: &Value) -> bool { real_update(state) || state["aviso_pendente"].as_bool() == Some(true) }
+/// O aviso pendente (`pending_warning`) também abre o modal, para ser aceito, mesmo sem versão nova.
+fn behind(state: &Value) -> bool { real_update(state) || state["pending_warning"].as_bool() == Some(true) }
 
 /// O que o `iniciar` tem a rodar: versão nova publicada, ou o disco diferente do que está no ar.
 pub(crate) fn real_update(state: &Value) -> bool {
@@ -404,7 +404,7 @@ fn plan(need: Option<u32>, server: Option<&Value>, run: Option<u32>) -> Plan {
         Some(state) if behind(state) => match hold(state) {
             // Aceitar o aviso não faz `git pull`: edição no checkout ou branch de trabalho não o seguram. Se houver
             // versão nova, o `iniciar` depois do aceite é que recusa, com o motivo.
-            Some(Hold::LocalChanges | Hold::WorkBranch(..)) if state["aviso_pendente"].as_bool() == Some(true) => ServerStep::Update,
+            Some(Hold::LocalChanges | Hold::WorkBranch(..)) if state["pending_warning"].as_bool() == Some(true) => ServerStep::Update,
             other => other.map_or(ServerStep::Update, ServerStep::Held),
         },
         _ => ServerStep::Skip,
@@ -1460,8 +1460,8 @@ mod tests {
     #[test]
     fn plan_pending_warning_is_not_held_by_local_changes() {
         let dirty = |extra: Value| { let mut s = server(extra); s["pre_voo"]["sujo"] = 1.into(); s };
-        assert_eq!(plan(None, Some(&dirty(serde_json::json!({"aviso_pendente": true}))), Some(2)).server, ServerStep::Update);
-        let mut work = dirty(serde_json::json!({"aviso_pendente": true}));
+        assert_eq!(plan(None, Some(&dirty(serde_json::json!({"pending_warning": true}))), Some(2)).server, ServerStep::Update);
+        let mut work = dirty(serde_json::json!({"pending_warning": true}));
         work["pre_voo"]["branch_de_trabalho"] = true.into();
         assert_eq!(plan(None, Some(&work), Some(2)).server, ServerStep::Update);
         assert_eq!(plan(None, Some(&dirty(serde_json::json!({"atualizacao_disponivel": true}))), Some(2)).server,

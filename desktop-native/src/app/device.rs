@@ -231,7 +231,7 @@ fn parse_version(value: &Value) -> ServerVersion {
 /// Mudanças à espera: commits novos, o servidor rodando código diferente do que está no disco, ou um aviso a aceitar.
 fn pending(value: &Value) -> usize {
     let behind = value.get("atras").and_then(Value::as_u64).unwrap_or(0) as usize;
-    let available = ["atualizacao_disponivel", "aviso_pendente"].iter().any(|key| value.get(*key).and_then(Value::as_bool) == Some(true));
+    let available = ["atualizacao_disponivel", "pending_warning"].iter().any(|key| value.get(*key).and_then(Value::as_bool) == Some(true));
     let stale = value.pointer("/versoes/repo") != value.pointer("/versoes/backend");
     if available || stale { behind.max(1) } else { 0 }
 }
@@ -1082,7 +1082,7 @@ mod tests {
         assert_eq!(pending(&v), 0);
         let stale = serde_json::json!({"versoes": {"repo": "b", "backend": "a"}, "atras": 0});
         assert_eq!(pending(&stale), 1);
-        let warning = serde_json::json!({"versoes": {"repo": "a", "backend": "a"}, "atras": 0, "atualizacao_disponivel": false, "aviso_pendente": true});
+        let warning = serde_json::json!({"versoes": {"repo": "a", "backend": "a"}, "atras": 0, "atualizacao_disponivel": false, "pending_warning": true});
         assert_eq!(pending(&warning), 1, "aviso a aceitar mostra o Atualizar");
     }
 }

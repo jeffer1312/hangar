@@ -95,7 +95,8 @@ impl Machine for Live {
     }
 
     async fn newer(&self, channel: &str) -> Result<Option<String>, String> {
-        let installed = super::installed(&self.layout()).and_then(|m| m.version.parse().ok());
+        // Canal trocado na tela: o publicado no outro vale mesmo com número menor, como no Atualizar.
+        let installed = super::installed(&self.layout()).filter(|m| m.channel == channel).and_then(|m| m.version.parse().ok());
         let release = Release::github(channel);
         super::check(&self.client, &release, &super::platform(), installed).await.map(|e| e.map(|e| e.version)).map_err(|e| e.to_string())
     }

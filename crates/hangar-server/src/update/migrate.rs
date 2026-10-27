@@ -163,25 +163,38 @@ fn facts(m: &Machine<'_>) -> Result<Facts, String> {
 /// sem ver o aviso (antes da trava do aceite) e a que tem a migração pendente (`migration-offered`).
 /// `mode` é o modo de agora; `null` antes de migrar. `root`: onde ler o passo (o `current` ou o checkout).
 pub fn pending_warning(home: &Path, root: &Path) -> Option<Value> {
-    let layout = Layout::new(home);
-    if super::accepted(&layout).contains(STEP_ID) { return None; }
-    let mode = match read_record(&home.join(".hangar").join(MARKER)) {
-        // Instalação nova pelo pacote, sem checkout: não houve migração a anunciar.
-        Some(record) if record.checkout.as_os_str().is_empty() || record.mode == Mode::NotMigrated => return None,
-        Some(record) => Some(record.mode),
-        None if super::offered_file(&layout).exists() => None,
-        None => return None,
-    };
+    let mode = pending_mode(home)?;
     let file = root.join("docs").join("atualizacoes").join(format!("{STEP_ID}.md"));
     // Sem o texto o aviso sai assim mesmo: sumir deixaria a migração pendente sem tela que a ofereça.
     let (title, body) = match std::fs::read_to_string(&file).map(|text| super::steps::frontmatter(&text)) {
         Ok((fields, body)) if fields.get("titulo").is_some_and(|t| !t.is_empty()) => (fields["titulo"].clone(), body),
         read => {
-            tracing::warn!(file = %file.display(), "aviso da migração sem o texto do passo ({:?}); vai com o título padrão", read.err());
+            // Uma vez por processo: a tela relê a cada poucos segundos.
+            static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(file = %file.display(), "aviso da migração sem o texto do passo ({:?}); vai com o título padrão", read.err());
+            }
             ("O Hangar passa a se atualizar por pacote".to_owned(), String::new())
         }
     };
     Some(serde_json::json!({"id": STEP_ID, "title": title, "text": body, "choice": "mode", "mode": mode}))
+}
+
+/// Se o aviso da migração está pendente, sem ler o texto dele: `Some(modo de agora)`, `Some(None)` antes de migrar.
+/// Migrada, vale o aceite. Não migrada com o passo já rodado (`migration-offered`), o aviso volta mesmo aceito:
+/// a migração aceita falhou, ou o script não conseguiu ler o aceite, e só a tela a oferece de novo.
+pub fn pending_mode(home: &Path) -> Option<Option<Mode>> {
+    let layout = Layout::new(home);
+    match read_record(&home.join(".hangar").join(MARKER)) {
+        // Instalação nova pelo pacote, sem checkout: não houve migração a anunciar.
+        Some(record) if record.checkout.as_os_str().is_empty() || record.mode == Mode::NotMigrated => None,
+        Some(_) if super::accepted(&layout).contains(STEP_ID) => None,
+        Some(record) => Some(Some(record.mode)),
+        // Migrando agora (o registro parcial existe): o executor a acompanha.
+        None if home.join(".hangar").join(PARTIAL).exists() => None,
+        None if super::offered_file(&layout).exists() => Some(None),
+        None => None,
+    }
 }
 
 pub(super) fn read_record(path: &Path) -> Option<Record> { serde_json::from_slice(&std::fs::read(path).ok()?).ok() }
