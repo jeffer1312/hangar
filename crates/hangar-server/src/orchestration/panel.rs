@@ -8,7 +8,9 @@ use std::{
     sync::{Arc, LazyLock},
     time::SystemTime,
 };
-static PANELS:LazyLock<super::snapshot::SnapshotCache<Vec<Option<(SystemTime,u64)>>,(Value,Value)>>=LazyLock::new(||super::snapshot::SnapshotCache::new(false));
+static PANELS: LazyLock<
+    super::snapshot::SnapshotCache<Vec<Option<(SystemTime, u64)>>, (Value, Value)>,
+> = LazyLock::new(|| super::snapshot::SnapshotCache::new(false));
 pub fn verdict(e: &Value) -> Option<&'static str> {
     match text(&e["resultado"]) {
         "aprova" | "corrige" => Some("approved"),
@@ -52,8 +54,18 @@ pub fn panel(
         Path::new(text(&cfg["plan"])),
         home,
     )));
-    let (mut out,aux)=PANELS.get(key,sig,||build(dir,home));
+    let (mut out, aux) = PANELS.get(key, sig, || build(dir, home));
     out = with_timing(out, &aux, runs::now());
+    attach_consumption(out, aux, dir, home, live, costs)
+}
+pub fn attach_consumption(
+    mut out: Value,
+    aux: Value,
+    dir: &Path,
+    home: &Path,
+    live: Vec<Value>,
+    costs: Arc<crate::costs::collect::Collector>,
+) -> Value {
     let names: Vec<_> = array(&out["team"])
         .iter()
         .map(|r| text(&r["name"]).to_owned())
@@ -426,7 +438,58 @@ pub fn with_timing(mut out: Value, aux: &Value, at: f64) -> Value {
     }
     out
 }
+pub trait Projection {
+    fn entry(&self, obj: &Value, dir: &Path) -> Result<Option<Value>, String>;
+    fn team(&self, cfg: &Value, st: &Value, events: &[Value]) -> Result<Vec<Value>, String>;
+    fn decisions(&self, entries: &[(Value, Value)], events: &[Value])
+    -> Result<Vec<Value>, String>;
+}
+pub struct NativeProjection;
+impl Projection for NativeProjection {
+    fn entry(&self, obj: &Value, dir: &Path) -> Result<Option<Value>, String> {
+        Ok(timeline::entry(obj, Some(dir)))
+    }
+    fn team(&self, cfg: &Value, st: &Value, events: &[Value]) -> Result<Vec<Value>, String> {
+        if events
+            .iter()
+            .any(|e| kind(e) == "task_inicio" && integer(&e["task"]).is_none())
+        {
+            return Err(
+                "TypeError: '<' not supported between instances of 'int' and 'NoneType'".into(),
+            );
+        }
+        Ok(team(cfg, st, events))
+    }
+    fn decisions(
+        &self,
+        entries: &[(Value, Value)],
+        events: &[Value],
+    ) -> Result<Vec<Value>, String> {
+        Ok(decisions(entries, events))
+    }
+}
+fn guarded<T>(
+    errors: &mut Vec<Value>,
+    name: &str,
+    fallback: T,
+    read: impl FnOnce() -> Result<T, String>,
+) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)) {
+        Ok(Ok(value)) => value,
+        result => {
+            let error = match result {
+                Ok(Err(error)) => error,
+                _ => "não foi possível ler este bloco".into(),
+            };
+            errors.push(json!({"file":name,"error":error}));
+            fallback
+        }
+    }
+}
 pub fn build(dir: &Path, home: &Path) -> (Value, Value) {
+    build_with(dir, home, &NativeProjection)
+}
+pub fn build_with(dir: &Path, home: &Path, projection: &dyn Projection) -> (Value, Value) {
     let mut errors = Vec::new();
     let cfg = match runs::json(&dir.join("orq.json")) {
         Ok(c) if c.is_object() => c,
@@ -448,10 +511,17 @@ pub fn build(dir: &Path, home: &Path) -> (Value, Value) {
     let events = read_rows(dir, "eventos.jsonl", &mut errors);
     let shadow = read_rows(dir, "jev-shadow.jsonl", &mut errors);
     let checks = read_rows(dir, "checks.jsonl", &mut errors);
-    let entries: Vec<_> = lines
-        .iter()
-        .filter_map(|obj| timeline::entry(obj, Some(dir)).map(|e| (obj.clone(), e)))
-        .collect();
+    let mut entries = Vec::new();
+    for obj in &lines {
+        if let Some(entry) = guarded(
+            &mut errors,
+            &tl.file_name().unwrap_or_default().to_string_lossy(),
+            None,
+            || projection.entry(obj, dir),
+        ) {
+            entries.push((obj.clone(), entry));
+        }
+    }
     let closed = match state::closes(dir) {
         Ok(c) => c,
         Err(e) => {
@@ -492,7 +562,16 @@ pub fn build(dir: &Path, home: &Path) -> (Value, Value) {
     } else {
         None
     };
-    let team = st.map(|st| team(&cfg, &st, &events)).unwrap_or_default();
+    let team = st
+        .map(|st| {
+            guarded(&mut errors, "team", Vec::new(), || {
+                projection.team(&cfg, &st, &events)
+            })
+        })
+        .unwrap_or_default();
+    let decisions = guarded(&mut errors, "decisions", Vec::new(), || {
+        projection.decisions(&entries, &events)
+    });
     let timing = bounds(&events);
     let mut models = serde_json::Map::new();
     for (_, e) in &entries {
@@ -504,6 +583,6 @@ pub fn build(dir: &Path, home: &Path) -> (Value, Value) {
     }
     let aux =
         json!({"since":begin["ts"],"until":timing["finished_at"],"models":models,"timing":timing});
-    let out = json!({"run":std::fs::canonicalize(dir).unwrap_or_else(|_|dir.into()).file_name().unwrap_or_default().to_string_lossy(),"gid":begin.get("gid").filter(|v|truthy(v)).unwrap_or(&json!("")),"errors":errors,"metadata":metadata,"empty":lines.is_empty()&&!events.iter().any(|e|kind(e)=="task_inicio"),"tasks":{"integrated":rows.iter().filter(|r|r["state"]=="integrated").count(),"total":plan.as_ref().map(Vec::len).unwrap_or_else(||rows.iter().filter_map(|r|r["n"].as_u64()).max().unwrap_or(0) as usize),"total_known":plan.is_some(),"rows":rows},"team":team,"decisions":decisions(&entries,&events),"automation":automation(&cfg,&entries,&shadow),"consumption":null,"integration":integration(&events,&closed,&checks)});
+    let out = json!({"run":std::fs::canonicalize(dir).unwrap_or_else(|_|dir.into()).file_name().unwrap_or_default().to_string_lossy(),"gid":begin.get("gid").filter(|v|truthy(v)).unwrap_or(&json!("")),"errors":errors,"metadata":metadata,"empty":lines.is_empty()&&!events.iter().any(|e|kind(e)=="task_inicio"),"tasks":{"integrated":rows.iter().filter(|r|r["state"]=="integrated").count(),"total":plan.as_ref().map(Vec::len).unwrap_or_else(||rows.iter().filter_map(|r|r["n"].as_u64()).max().unwrap_or(0) as usize),"total_known":plan.is_some(),"rows":rows},"team":team,"decisions":decisions,"automation":automation(&cfg,&entries,&shadow),"consumption":null,"integration":integration(&events,&closed,&checks)});
     (out, aux)
 }

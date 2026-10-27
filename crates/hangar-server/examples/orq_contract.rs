@@ -3,10 +3,12 @@ use hangar_server::orchestration::{
     self as orq, markdown as md, panel, policy, roles, runs, timeline,
 };
 use serde_json::{Value, json};
+#[path = "orq_contract/consumption.rs"]
+mod consumption;
 #[path = "orq_contract/http.rs"]
 mod http;
-#[path="orq_contract/consumption.rs"]
-mod consumption;
+#[path = "orq_contract/projection.rs"]
+mod projection;
 use std::{
     collections::BTreeSet,
     io::{self, Read},
@@ -35,28 +37,132 @@ fn evaluate(action: &str, v: &Value) -> Result<Value, String> {
     let text = txt(v, "texto");
     let headers = strings(&v["cabecalho"]);
     Ok(match action {
-        "identity.tmux"=>json!(orq::context::tmux_identity(&orq::py_string(&v["pid"]),v["started"].as_f64().unwrap_or_default(),txt(v,"session"),txt(v,"created"))),
-        "context.promote-failure"=>{let source=Path::new(txt(v,"source"));let destination=Path::new(txt(v,"destination"));let (content,version)=orq::read(source).map_err(|e|e.to_string())?;
-            orq::context::promote_source_with(source,destination,&content,version,version,|path,_text,_expected|{
-                if v["external"]==true{std::fs::write(path,"external editor").map_err(|e|e.to_string())?;}Err("unable to write pointer".into())
-            }).map_err(|e|e.message)?;Value::Null},
-        "snapshot.cache"=>{let cache=orq::snapshot::SnapshotCache::<Value,Value>::new(v["evict_updated"]==true);let mut count=0;json!(orq::array(&v["steps"]).iter().map(|step|{let value=cache.get(Path::new(txt(step,"key")).to_owned(),step["signature"].clone(),||{count+=1;step["value"].clone()});json!({"value":value,"count":count,"len":cache.len()})}).collect::<Vec<_>>())},
-        "runs.when"=>json!(runs::when(&v["value"]).map(|at|at.timestamp_micros()as f64/1e6)),
-        "timeline.history"=>json!(runs::lines(Path::new(txt(v,"path")),false).map_err(|e|e.to_string())?.iter().flat_map(|obj|timeline::parse_obj(obj,Path::new(txt(v,"path")).parent())).collect::<Vec<_>>()),
-        "context.resolve"=>orq::command("context",v)?,
-        "context.write"=>{let c=&v["context"];let context=orq::context::Context{gid:txt(c,"gid").into(),grouped:c["grouped"]==true,prefix:txt(c,"session_prefix").into(),path:txt(c,"path").into()};json!(orq::context::write(Path::new(txt(v,"home")),Path::new(txt(v,"pair_directory")),&context,text,v["mtime"].as_f64().unwrap_or(0.))?)},
-        "context.promote"=>{orq::context::promote(Path::new(txt(v,"home")),Path::new(txt(v,"pair_directory")),txt(v,"name"),txt(v,"gid"),v["mtime"].as_f64(),"tmux")?;Value::Null},
-        "command" => orq::command(txt(v,"operation"), &v["arguments"])?,
-        "timeline.path"=>json!(runs::timeline_path(Path::new(txt(v,"directory")))),
-        "timeline.parse" => json!(timeline::parse_obj(&v["obj"], v["directory"].as_str().map(Path::new))),
-        "panel.parts"=>{let(out,aux)=panel::build(Path::new(txt(v,"directory")),Path::new(txt(v,"home")));json!({"out":out,"aux":aux})},
-        "panel.build" => {let (out,aux)=panel::build(Path::new(txt(v,"directory")),Path::new(txt(v,"home")));panel::with_timing(out,&aux,v["at"].as_f64().unwrap_or_else(runs::now))},
-        "runs.root"=>json!(runs::root(Path::new(txt(v,"home")))),
-        "runs.list"=>json!(runs::list_directory_with(Path::new(txt(v,"directory")),|path|{if path.file_name().is_some_and(|n|n==txt(v,"stat_error")){Err(io::Error::other("stat negado"))}else{std::fs::metadata(path).map(|m|m.is_dir())}})),
-        "runs.detail"=>json!(runs::detail_directory(Path::new(txt(v,"directory")),txt(v,"name"))),
-        "runs.cards"=>json!(runs::cards(orq::array(&v["runs"]))),
-        "runs.phases"=>json!(strings(&v["gids"]).iter().map(|gid|runs::group_phase(Path::new(txt(v,"home")),gid)).collect::<Vec<_>>()),
-        "runs.phase"=>json!(runs::group_phase(Path::new(txt(v,"home")),txt(v,"gid"))),
+        "identity.tmux" => json!(orq::context::tmux_identity(
+            &orq::py_string(&v["pid"]),
+            v["started"].as_f64().unwrap_or_default(),
+            txt(v, "session"),
+            txt(v, "created")
+        )),
+        "context.promote-failure" => {
+            let source = Path::new(txt(v, "source"));
+            let destination = Path::new(txt(v, "destination"));
+            let (content, version) = orq::read(source).map_err(|e| e.to_string())?;
+            orq::context::promote_source_with(
+                source,
+                destination,
+                &content,
+                version,
+                version,
+                |path, _text, _expected| {
+                    if v["external"] == true {
+                        std::fs::write(path, "external editor").map_err(|e| e.to_string())?;
+                    }
+                    Err("unable to write pointer".into())
+                },
+            )
+            .map_err(|e| e.message)?;
+            Value::Null
+        }
+        "snapshot.cache" => {
+            let cache =
+                orq::snapshot::SnapshotCache::<Value, Value>::new(v["evict_updated"] == true);
+            let mut count = 0;
+            json!(
+                orq::array(&v["steps"])
+                    .iter()
+                    .map(|step| {
+                        let value = cache.get(
+                            Path::new(txt(step, "key")).to_owned(),
+                            step["signature"].clone(),
+                            || {
+                                count += 1;
+                                step["value"].clone()
+                            },
+                        );
+                        json!({"value":value,"count":count,"len":cache.len()})
+                    })
+                    .collect::<Vec<_>>()
+            )
+        }
+        "runs.when" => json!(runs::when(&v["value"]).map(|at| at.timestamp_micros() as f64 / 1e6)),
+        "timeline.history" => json!(
+            runs::lines(Path::new(txt(v, "path")), false)
+                .map_err(|e| e.to_string())?
+                .iter()
+                .flat_map(|obj| timeline::parse_obj(obj, Path::new(txt(v, "path")).parent()))
+                .collect::<Vec<_>>()
+        ),
+        "context.resolve" => orq::command("context", v)?,
+        "context.write" => {
+            let c = &v["context"];
+            let context = orq::context::Context {
+                gid: txt(c, "gid").into(),
+                grouped: c["grouped"] == true,
+                prefix: txt(c, "session_prefix").into(),
+                path: txt(c, "path").into(),
+            };
+            json!(orq::context::write(
+                Path::new(txt(v, "home")),
+                Path::new(txt(v, "pair_directory")),
+                &context,
+                text,
+                v["mtime"].as_f64().unwrap_or(0.)
+            )?)
+        }
+        "context.promote" => {
+            orq::context::promote(
+                Path::new(txt(v, "home")),
+                Path::new(txt(v, "pair_directory")),
+                txt(v, "name"),
+                txt(v, "gid"),
+                v["mtime"].as_f64(),
+                "tmux",
+            )?;
+            Value::Null
+        }
+        "command" => orq::command(txt(v, "operation"), &v["arguments"])?,
+        "timeline.path" => json!(runs::timeline_path(Path::new(txt(v, "directory")))),
+        "timeline.parse" => json!(timeline::parse_obj(
+            &v["obj"],
+            v["directory"].as_str().map(Path::new)
+        )),
+        "panel.parts" => {
+            let (out, aux) =
+                panel::build(Path::new(txt(v, "directory")), Path::new(txt(v, "home")));
+            json!({"out":out,"aux":aux})
+        }
+        "panel.build" => {
+            let temp = tempfile::tempdir().map_err(|e| e.to_string())?;
+            panel::panel(
+                Path::new(txt(v, "directory")),
+                Path::new(txt(v, "home")),
+                orq::array(&v["live"]).to_vec(),
+                std::sync::Arc::new(consumption::collector(temp.path())),
+            )
+        }
+        "runs.root" => json!(runs::root(Path::new(txt(v, "home")))),
+        "runs.list" => json!(runs::list_directory_with(
+            Path::new(txt(v, "directory")),
+            |path| {
+                if path.file_name().is_some_and(|n| n == txt(v, "stat_error")) {
+                    Err(io::Error::other("stat negado"))
+                } else {
+                    std::fs::metadata(path).map(|m| m.is_dir())
+                }
+            }
+        )),
+        "runs.detail" => json!(runs::detail_directory(
+            Path::new(txt(v, "directory")),
+            txt(v, "name")
+        )),
+        "runs.cards" => json!(runs::cards(orq::array(&v["runs"]))),
+        "runs.phases" => json!(
+            strings(&v["gids"])
+                .iter()
+                .map(|gid| runs::group_phase(Path::new(txt(v, "home")), gid))
+                .collect::<Vec<_>>()
+        ),
+        "runs.phase" => json!(runs::group_phase(Path::new(txt(v, "home")), txt(v, "gid"))),
         "markdown.normalizar" => json!(md::normalize(txt(v, "celula"))),
         "markdown.limpar" => json!(md::clean(txt(v, "celula"))),
         "markdown.validar_celula" => json!(md::validate(txt(v, "valor"))?),
@@ -116,7 +222,10 @@ fn evaluate(action: &str, v: &Value) -> Result<Value, String> {
         )),
         "roles.path" => orq::command("roles-file", v)?["path"].clone(),
         "policy.ler" => json!(policy::read(text)),
-        "policy.name"=>json!(policy::claude_name(Path::new(txt(v,"base")),Path::new(txt(v,"path")))),
+        "policy.name" => json!(policy::claude_name(
+            Path::new(txt(v, "base")),
+            Path::new(txt(v, "path"))
+        )),
         "policy.read-file" => json!(policy::read(
             &orq::read(Path::new(txt(v, "path")))
                 .map_err(|e| e.to_string())?
@@ -163,11 +272,16 @@ fn evaluate(action: &str, v: &Value) -> Result<Value, String> {
             ))
         }
         "timeline.entry" => {
-            if let Some(dir)=v["directory"].as_str(){json!(timeline::entry(&v["obj"],Some(Path::new(dir))))}
-            else if v.get("shadow").is_some(){let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
-            std::fs::write(dir.path().join("jev-shadow.jsonl"), txt(v, "shadow")).map_err(|e| e.to_string())?;
-            json!(timeline::entry(&v["obj"], Some(dir.path())))}
-            else {json!(timeline::entry(&v["obj"],None))}
+            if let Some(dir) = v["directory"].as_str() {
+                json!(timeline::entry(&v["obj"], Some(Path::new(dir))))
+            } else if v.get("shadow").is_some() {
+                let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+                std::fs::write(dir.path().join("jev-shadow.jsonl"), txt(v, "shadow"))
+                    .map_err(|e| e.to_string())?;
+                json!(timeline::entry(&v["obj"], Some(dir.path())))
+            } else {
+                json!(timeline::entry(&v["obj"], None))
+            }
         }
         "panel._task_rows" => json!(panel::task_rows(
             orq::array(&v["evs"]),
@@ -202,7 +316,12 @@ fn evaluate(action: &str, v: &Value) -> Result<Value, String> {
                 / 1e6,
         ),
         "panel._first_sentence" => json!(timeline::first_sentence(txt(v, "body"))),
-        _ => return http::evaluate(action,v).or_else(||consumption::evaluate(action,v)).unwrap_or_else(|| Err(format!("operação de prova desconhecida: {action}"))),
+        _ => {
+            return http::evaluate(action, v)
+                .or_else(|| consumption::evaluate(action, v))
+                .or_else(|| projection::evaluate(action, v))
+                .unwrap_or_else(|| Err(format!("operação de prova desconhecida: {action}")));
+        }
     })
 }
 fn answer(action: &str, value: &Value) -> Value {
@@ -212,12 +331,27 @@ fn answer(action: &str, value: &Value) -> Value {
     }
 }
 fn main() {
-    if std::env::args().nth(1).is_some_and(|arg|matches!(arg.as_str(),"list-panes"|"display-message")){eprintln!("no server running");std::process::exit(1)}
-    let _=tracing_subscriber::fmt().with_writer(std::io::stderr).with_ansi(false).without_time().try_init();
+    if std::env::args()
+        .nth(1)
+        .is_some_and(|arg| matches!(arg.as_str(), "list-panes" | "display-message"))
+    {
+        eprintln!("no server running");
+        std::process::exit(1)
+    }
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .without_time()
+        .try_init();
     let mut input = String::new();
     io::stdin().read_to_string(&mut input).unwrap();
     let value: Value = serde_json::from_str(&input).unwrap();
-    let out = if let Some(cases) = value["cases"].as_array() {
+    let out = if value["repetitions"].is_u64(){
+        let mut samples=Vec::new();let mut last=Vec::new();
+        for _ in 0..value["repetitions"].as_u64().unwrap(){let start=std::time::Instant::now();
+            last=orq::array(&value["cases"]).iter().map(|case|answer(orq::text(&case["action"]),&case["input"])).collect();samples.push(start.elapsed().as_secs_f64()*1000.);
+        }json!({"samples_ms":samples,"last":last})
+    }else if let Some(cases) = value["cases"].as_array() {
         json!(
             cases
                 .iter()

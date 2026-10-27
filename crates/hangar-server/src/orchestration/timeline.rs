@@ -6,19 +6,20 @@ use serde_json::{Value, json};
 use std::{
     fs,
     path::Path,
-    sync::{LazyLock, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     time::SystemTime,
 };
-static SHADOW:LazyLock<super::snapshot::SnapshotCache<Option<(SystemTime,u64)>,Vec<Value>>>=LazyLock::new(||super::snapshot::SnapshotCache::new(true));
+static SHADOW: LazyLock<super::snapshot::SnapshotCache<Option<(SystemTime, u64)>, Vec<Value>>> =
+    LazyLock::new(|| super::snapshot::SnapshotCache::new(true));
 
-fn regex(pattern: &str) -> Regex {
-    static REGEXES: LazyLock<Mutex<std::collections::HashMap<String, Regex>>> =
+fn regex(pattern: &str) -> Arc<Regex> {
+    static REGEXES: LazyLock<Mutex<std::collections::HashMap<String, Arc<Regex>>>> =
         LazyLock::new(Mutex::default);
     REGEXES
         .lock()
         .unwrap()
         .entry(pattern.to_owned())
-        .or_insert_with(|| Regex::new(pattern).expect("expressão fixa válida"))
+        .or_insert_with(|| Arc::new(Regex::new(pattern).expect("expressão fixa válida")))
         .clone()
 }
 fn task(text: &str) -> Value {
@@ -59,7 +60,9 @@ fn shadow(dir: &Path) -> Vec<Value> {
     let sig = fs::metadata(&path)
         .ok()
         .and_then(|m| Some((m.modified().ok()?, m.len())));
-    SHADOW.get(path.clone(),sig,||runs::lines(&path,false).unwrap_or_default())
+    SHADOW.get(path.clone(), sig, || {
+        runs::lines(&path, false).unwrap_or_default()
+    })
 }
 fn jev_for(dir: &Path, msg: &str, at: &Value) -> Value {
     let Some(at) = runs::when(at) else {
@@ -389,10 +392,22 @@ mod tests {
 }
 
 pub fn parse_obj(obj: &Value, dir: Option<&Path>) -> Vec<hangar_api::chat::ChatEvent> {
+    parse_obj_with(obj, dir, |obj, dir| Ok(entry(obj, dir)))
+}
+/// Uma falha no enriquecimento conserva o aviso cru e a identidade do evento.
+pub fn parse_obj_with(
+    obj: &Value,
+    dir: Option<&Path>,
+    enrich: impl FnOnce(&Value, Option<&Path>) -> Result<Option<Value>, String>,
+) -> Vec<hangar_api::chat::ChatEvent> {
     let Some(content) = obj["text"].as_str().filter(|s| !s.trim().is_empty()) else {
         return Vec::new();
     };
-    let enriched = entry(obj, dir).and_then(|v| v.as_object().cloned());
+    let enriched = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| enrich(obj, dir)))
+        .ok()
+        .and_then(Result::ok)
+        .flatten()
+        .and_then(|v| v.as_object().cloned());
     vec![hangar_api::chat::ChatEvent {
         kind: hangar_api::chat::ChatKind::Notice,
         id: event_id(obj),

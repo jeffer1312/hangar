@@ -23,15 +23,20 @@ static VETO: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         .map(|(_, v)| Regex::new(&format!("(?im){}", super::text(v))).unwrap())
         .collect()
 });
+static WAITING: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?im)\b(aguardo|espero|aguardando)\b").unwrap());
+static ALLOWED: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\b(veredito|parecer|revisor|a revis)").unwrap());
+static NOTED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?im)\bNOTED\b").unwrap());
+static ADDRESSED: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?im)para ti\b|\b[ée] teu\b|\b[ée] tua\b").unwrap());
 pub fn decide(text: &str) -> (&'static str, Option<String>) {
     if text.chars().count() > 600 || VETO.iter().any(|r| r.is_match(text)) {
         return ("wake", None);
     }
-    let waiting = Regex::new(r"(?im)\b(aguardo|espero|aguardando)\b").unwrap();
-    let allowed = Regex::new(r"(?i)\b(veredito|parecer|revisor|a revis)").unwrap();
-    for m in waiting.find_iter(text) {
+    for m in WAITING.find_iter(text) {
         let tail = text[m.end()..].split(['.', '\n']).next().unwrap_or("");
-        let ok = allowed.find_iter(tail).any(|a| {
+        let ok = ALLOWED.find_iter(tail).any(|a| {
             tail[..a.start()].chars().count() <= 30
                 && !(a.as_str().eq_ignore_ascii_case("revisor")
                     && tail[a.end()..].starts_with(" que"))
@@ -40,17 +45,14 @@ pub fn decide(text: &str) -> (&'static str, Option<String>) {
             return ("wake", None);
         }
     }
-    let noted = Regex::new(r"(?im)\bNOTED\b").unwrap();
-    if noted.find_iter(text).any(|m| {
+    if NOTED.find_iter(text).any(|m| {
         let prefix = &text[..m.start()];
         !prefix.ends_with("0 ")
             || prefix[..prefix.len().saturating_sub(2)]
                 .chars()
                 .next_back()
                 .is_some_and(|c| c.is_alphanumeric() || c == '_')
-    }) || Regex::new(r"(?im)para ti\b|\b[ée] teu\b|\b[ée] tua\b")
-        .unwrap()
-        .is_match(text)
+    }) || ADDRESSED.is_match(text)
     {
         return ("wake", None);
     }

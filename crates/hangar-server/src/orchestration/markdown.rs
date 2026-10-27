@@ -1,10 +1,14 @@
 //! O app altera a tabela escolhida e preserva a prosa do documento.
 use regex::Regex;
 use serde_json::{Value, json};
+use std::sync::LazyLock;
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 pub fn normalize(text: &str) -> String {
-    let whitespace=|c:char|c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c);
-    let plain = text.trim_matches(whitespace).trim_matches('`').replace("**", "");
+    let whitespace = |c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c);
+    let plain = text
+        .trim_matches(whitespace)
+        .trim_matches('`')
+        .replace("**", "");
     plain
         .trim_matches(whitespace)
         .nfkd()
@@ -53,8 +57,8 @@ fn cells(line: &str) -> Vec<&str> {
 }
 fn separator(line: &str) -> bool {
     let c = cells(line);
-    let rx = Regex::new(r"^\s*:?-{2,}:?\s*$").unwrap();
-    !c.is_empty() && c.iter().all(|c| rx.is_match(c))
+    static SEPARATOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*:?-{2,}:?\s*$").unwrap());
+    !c.is_empty() && c.iter().all(|c| SEPARATOR.is_match(c))
 }
 fn masked(text: &str) -> String {
     let mut rows = lines(text);
