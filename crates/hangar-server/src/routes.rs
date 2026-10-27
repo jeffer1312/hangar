@@ -34,6 +34,7 @@ const COMMENT_EVERY: Duration = Duration::from_secs(15);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct AppState {
+    pub omp_sync: Arc<std::sync::OnceLock<Arc<crate::omp_sync::Service>>>,
     pub interactions: Arc<crate::interactions::InteractionStore>,
     pub dictation_models: Arc<crate::dictation::catalog::Models>,
     /// Vagas para processos e chamadas de organização do ditado (catálogo sem cache e execução).
@@ -174,11 +175,14 @@ impl AppState {
                 .with_config(Arc::new(move || crate::runtime::codex_launch::runtime_config(&env))))
         };
         let groups = crate::groups::from_env(list.env().dirs.as_ref(), server_id.clone(),
-            Arc::new(crate::groups::orq::PythonOrq::new(cfg.upstream, cfg.internal_secret.clone(), http.clone())), list.clone(), diag.clone());
+            Arc::new(crate::groups::orq::PythonOrq::new(cfg.upstream, cfg.internal_secret.clone(), http.clone())
+                .with_paths(list.env().dirs.as_ref().map(|d| d.home.clone()).unwrap_or_default(),
+                    list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())), list.clone(), diag.clone());
         AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             interactions, plugin,
             transcription: Arc::default(),
+            omp_sync: Arc::default(),
             dictation_models: Arc::default(),
             dictation_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             transcription_slots: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -268,6 +272,17 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     state.voice.set_self(listener.local_addr()?, &state.cfg.auth_token);
     let public_v6 = state.public_v6.take();
     let state = Arc::new(state);
+    if crate::config::Config::runtime_instance().map_err(std::io::Error::other)?.is_some() {
+        let omp_sync = crate::omp_sync::Service::start(state.clone());
+        let _ = state.omp_sync.set(omp_sync.clone());
+        omp_sync.ready().await;
+        crate::provider_models::inbox::install_endpoint(state.clone()).await;
+        crate::provider_models::warm();
+        let policy_home = state.accounts.env.home.clone();
+        let policy_claude = state.accounts.env.claude_base.clone();
+        tokio::task::spawn_blocking(move || crate::orchestration::policy::migrate(&policy_home, &policy_claude)).await
+            .map_err(|_| std::io::Error::other("orq_policy_migrate_interrupted"))?;
+    }
     let _worktree_sweep=crate::AbortOnDrop(crate::worktree_policy::spawn(state.clone()));
     let _keyring_watch = crate::AbortOnDrop(crate::keyring::spawn(state.list.keyring.clone()));
     let v6_state = state.clone();
@@ -806,8 +821,33 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
 pub(crate) async fn pass_any(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    req: Request,
+    mut req: Request,
 ) -> Response {
+    if let Some(mut response) = crate::provider_info::wrong_method(req.method(), req.uri().path(), req.uri().query()) {
+        cors(req.headers(), response.headers_mut());
+        return response;
+    }
+    let models = crate::provider_models::matches(req.method(), req.uri().path())
+        || crate::provider_models::catalog_request(req.method(), req.uri().path(), req.uri().query());
+    let orchestration = crate::orchestration::matches(req.method(), req.uri().path());
+    let sync = crate::omp_sync::matches(req.method(), req.uri().path());
+    if models || orchestration || sync {
+        let (forward, caller) = who(&st, peer, &req);
+        let allowed = matches!(&caller, Some(Caller::Owner)) || (models && req.extensions().get::<SessionPath>()
+            .is_some_and(|path| caller.as_ref().is_some_and(|who| who.can(&path.session, req.method()))));
+        if !allowed {
+            return if caller.is_some() { StatusCode::FORBIDDEN.into_response() }
+                else { crate::share_reach::unauthorized(&st, &forward.client_ip) };
+        }
+        req.extensions_mut().insert(ConnectInfo(peer));
+        let headers = req.headers().clone();
+        let mut response = if models { crate::provider_models::serve(&st, req).await }
+            else if orchestration { crate::orchestration::serve(&st, req).await }
+            else if let Some(service) = st.omp_sync.get() { crate::omp_sync::serve(&st, service, req).await }
+            else { crate::session_write::json_response(StatusCode::SERVICE_UNAVAILABLE, serde_json::json!({"code":"omp_sync_unavailable"})) };
+        cors(&headers, response.headers_mut());
+        return response;
+    }
     // Anexos e contas do dono são do Rust; o anexo também do convidado da sessão (o porteiro já
     // limitou ao nível: par só baixa um arquivo).
     let uploads = crate::uploads::http::matches(req.method(), req.uri().path());
@@ -897,7 +937,7 @@ pub(crate) fn diag_req(req: &Request) -> String {
         .unwrap_or_default()
 }
 
-async fn history(
+pub(crate) async fn history(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<String>, PathRejection>,
@@ -915,6 +955,9 @@ async fn history(
             Ok(n) if n > 0 => usize::try_from(n).ok(),
             Ok(_) => None,
             // Texto ou vazio fica com o FastAPI e o 422 dele.
+            Err(_) if req.extensions().get::<crate::forwarded::ReadGuest>().is_some() => return crate::session_write::json_response(
+                StatusCode::UNPROCESSABLE_ENTITY, serde_json::json!({"detail":[{"type":"int_parsing","loc":["query","limit"],
+                "msg":"Input should be a valid integer, unable to parse string as an integer","input":v}]})),
             Err(_) => return pass(&st, req, &fwd).await,
         },
     };
@@ -978,7 +1021,7 @@ async fn history(
     resp
 }
 
-async fn events(
+pub(crate) async fn events(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<String>, PathRejection>,
@@ -990,7 +1033,7 @@ async fn events(
         _ => return pass(&st, req, &fwd).await,
     };
     // Convidado não recebe aviso de mod nem pedido de navegador, e não conta como app do dono.
-    let guest = matches!(who, Some(Caller::Guest(_)));
+    let guest = matches!(who, Some(Caller::Guest(_))) || req.extensions().get::<crate::forwarded::ReadGuest>().is_some_and(|guest| guest.0);
     let Ok(info) = st.info(&name).await else {
         return route_failed(&st, req.headers(), "rust.events_failed", &name, "internal_info", INFO_REASON);
     };

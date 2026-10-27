@@ -13,7 +13,6 @@ use serde_json::{json, Value};
 /// `settings.stall_seconds` (`CP_STALL_SECONDS`, padrão 300).
 const STALL_DEFAULT: f64 = 300.0;
 /// `runs.ACTIVE_S`: orquestração mexida há menos que isso está trabalhando.
-const ORQ_ACTIVE_S: f64 = 120.0;
 const ORQ_EVENTS: [&str; 6] = ["execucao_inicio", "task_inicio", "entrega", "veredito", "sessao_trocada", "execucao_fim"];
 /// `_STATUS_TAIL` do adaptador Codex.
 const STATUS_TAIL: u64 = 512 << 10;
@@ -193,28 +192,8 @@ fn watchdog(dir: &Path, now: f64) -> OrqRead<Value> {
 }
 
 /// `runs._held`: trava presa por alguém, lida em `/proc/locks` (pegar a trava faria o `advance` desistir).
-fn held(lock: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let Ok(ino) = std::fs::metadata(lock).map(|m| m.ino()) else { return false };
-        let Ok(locks) = std::fs::read(Path::new("/proc/locks")) else { return false };
-        let suffix = format!(":{ino}");
-        String::from_utf8_lossy(&locks).lines().any(|l| {
-            let f: Vec<&str> = l.split_whitespace().collect();
-            f.len() > 5 && f[1] == "FLOCK" && f[5].ends_with(&suffix)
-        })
-    }
-    #[cfg(not(unix))]
-    { let _ = lock; false }
-}
-
-/// `runs.activity`: trabalhando com a trava do `advance` presa ou com a linha do tempo mexida há pouco.
 fn orq_activity(timeline: &Path, now: f64) -> (&'static str, Option<f64>) {
-    let lock = timeline.parent().unwrap_or(Path::new("")).join("advance.lock");
-    let last = [modified(timeline), modified(&lock)].into_iter().flatten().reduce(f64::max);
-    let busy = held(&lock) || last.is_some_and(|l| now - l < ORQ_ACTIVE_S);
-    (if busy { "working" } else { "idle" }, last)
+    crate::orchestration::runs::activity(timeline, now)
 }
 
 /// A linha de uma execução: `Ok(None)` quando ela não está viva, `Err` quando um arquivo não leu.

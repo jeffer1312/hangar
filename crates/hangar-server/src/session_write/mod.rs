@@ -96,6 +96,11 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
     let (fwd, who) = who(st, peer, &req);
     let runtime = st.state.runtime.get().cloned();
     let name = session_name(req.uri().path()).filter(|n| who.as_ref().is_some_and(|c| c.can(n, req.method())));
+    if matches!(route, WriteRoute::Input | WriteRoute::Interrupt)
+        && let Some(name) = name.as_deref()
+        && let Some(response) = orchestration_guard(st, name, req.headers()).await {
+        return Err(response);
+    }
     let (Some(runtime), Some(name)) = (runtime, name) else {
         return Err(pass(st, req, &fwd).await);
     };
@@ -118,6 +123,19 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
             Err(response)
         }
     }
+}
+
+pub(crate) async fn orchestration_guard(st: &Arc<AppState>, name: &str, headers: &axum::http::HeaderMap) -> Option<Response> {
+    if !name.ends_with("-orq") { return None; }
+    let mut response = match crate::groups::orq::is_orchestrator(st, &[name.to_owned()]).await {
+        Ok(names) if names.is_empty() => return None,
+        Ok(_) => json_response(StatusCode::CONFLICT, detail_body("erro_sessao_orq",
+            "o orquestrador não recebe mensagens; fale com o árbitro", serde_json::json!({}))),
+        Err(_) => json_response(StatusCode::SERVICE_UNAVAILABLE, detail_body("orq_runs_unavailable",
+            "não foi possível conferir as execuções", serde_json::json!({}))),
+    };
+    cors(headers, response.headers_mut());
+    Some(response)
 }
 
 /// Recusa do Rust a uma sessão dele: esperar a conversa abrir é 409; o resto, 503.

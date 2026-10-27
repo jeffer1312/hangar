@@ -1,4 +1,5 @@
 import logging
+import hashlib
 import os
 import re
 import threading
@@ -681,14 +682,70 @@ def deliverable(name: str) -> bool:
 # Lock POR SESSAO serializando o send_prompt: dois /input quase simultaneos (ou /input + drain)
 # rodavam em threads digitando no MESMO tty — o texto de B aterrissava na janela de settle de A e o
 # Enter de A submetia os dois CONCATENADOS. setdefault e atomico no CPython (pior caso: Lock orfao).
-_send_locks: dict[str, threading.Lock] = {}
+class _SharedSendLock:
+    """Adapta a trava existente do sistema ao mesmo contrato de threading.Lock."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.local = threading.Lock()
+        self.file = None
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        from app.account_lifecycle import GuardMode, _try_lock
+
+        deadline = time.monotonic() + timeout if timeout >= 0 else None
+        if not self.local.acquire(blocking, timeout):
+            return False
+        file = None
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            file = self.path.open("a+b")
+            while not _try_lock(file, GuardMode.EXCLUSIVE):
+                if not blocking or deadline is not None and time.monotonic() >= deadline:
+                    file.close()
+                    self.local.release()
+                    return False
+                remaining = deadline - time.monotonic() if deadline is not None else 0.025
+                threading.Event().wait(min(0.025, max(0, remaining)))
+            self.file = file
+            return True
+        except BaseException:
+            if file is not None:
+                file.close()
+            self.local.release()
+            raise
+
+    def release(self):
+        if self.file is None:
+            raise RuntimeError("release unlocked lock")
+        file, self.file = self.file, None
+        try:
+            file.close()
+        finally:
+            self.local.release()
+
+    def locked(self) -> bool:
+        return self.local.locked()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *args):
+        self.release()
+
+
+_send_locks: dict[tuple[Path, str], _SharedSendLock] = {}
 
 # Providers cuja entrega NAO passa pelo teclado do pane — ver o guard no topo do `drain`.
 _SEM_TECLA = frozenset({"codex"})
 
 
-def _send_lock(name: str) -> threading.Lock:
-    return _send_locks.setdefault(name, threading.Lock())
+def _send_lock(name: str) -> _SharedSendLock:
+    home = Path.home()
+    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()
+    path = home / ".hangar" / "terminal-locks" / f"{digest}.lock"
+    return _send_locks.setdefault((home, name), _SharedSendLock(path))
 
 
 def _drain_pelo_plugin(name: str, q: PromptQueue, start_ts: float, jsonl: str | None = None) -> int:

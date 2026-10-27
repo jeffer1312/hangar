@@ -3,6 +3,9 @@
 fn main() -> std::process::ExitCode {
     // `open`/`resolve`: o lançador como comando de terminal, com runtime próprio (fora do `run`).
     let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
+    if matches!(args.first().map(String::as_str), Some("orq-info" | "provider-info")) {
+        return hangar_server::provider_info::cli(&args[0], &args[1..]);
+    }
     if args.first().is_some_and(|arg| arg == "orq-storage") {
         return hangar_server::orq_storage::cli(&args[1..]);
     }

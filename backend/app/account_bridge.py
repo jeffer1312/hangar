@@ -489,7 +489,7 @@ async def forward_public(request, target: str = "/__hangar_server/accounts/publi
 
 
 _HOP_BY_HOP = {"connection", "transfer-encoding", "keep-alive"}
-_STREAM_HEADERS = ("content-type", "x-filename", "range", "if-range", "if-none-match", "if-modified-since")
+_STREAM_HEADERS = ("content-type", "x-filename", "range", "if-range", "if-none-match", "if-modified-since", "last-event-id")
 
 
 async def forward_stream(request, *, guest: bool):

@@ -10,6 +10,9 @@ use serde_json::json;
 
 use crate::routes::AppState;
 
+#[derive(Clone)]
+pub(crate) struct ReadGuest(pub bool);
+
 pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, mut req: Request) -> Response {
     if !crate::workspace_routes::private_ok(&st, peer, req.headers()) {
         return StatusCode::NOT_FOUND.into_response();
@@ -23,7 +26,22 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         return StatusCode::BAD_REQUEST.into_response();
     };
     let method = req.method();
-    let owned = if method == Method::GET && path == crate::claude_customizations::CATALOG_PATH {
+    if let Some(response) = crate::provider_info::wrong_method(method, &path, req.uri().query()) { return response; }
+    let models = crate::provider_models::matches(method, &path)
+        || crate::provider_models::catalog_request(method, &path, req.uri().query());
+    let guest = req.headers().get("x-hangar-forwarded-guest").is_some_and(|v| v == "1");
+    let read = path.strip_prefix("/api/sessions/").and_then(|rest| rest.rsplit_once('/'))
+        .filter(|(name, route)| method == Method::GET && !name.contains('/') && matches!(*route, "history" | "events"))
+        .and_then(|(name, route)| percent_encoding::percent_decode_str(name).decode_utf8().ok().map(|name| (name.into_owned(), route == "events")));
+    let owned = if let Some((name, events)) = read {
+        match st.info(&name).await {
+            Ok(Some(info)) if info.provider == "orq" => Owned::Read(name, events, guest),
+            _ => return crate::session_write::json_response(StatusCode::NOT_FOUND, json!({"code":"forwarded_route_not_owned"})),
+        }
+    } else if models { Owned::Models }
+    else if crate::orchestration::matches(method, &path) && !guest { Owned::Orchestration }
+    else if crate::omp_sync::matches(method, &path) && !guest { Owned::OmpSync }
+    else if method == Method::GET && path == crate::claude_customizations::CATALOG_PATH {
         Owned::Catalog
     } else if matches!(*method, Method::GET | Method::PUT) && path == "/api/session-defaults" {
         Owned::SessionDefaults
@@ -68,6 +86,18 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     req.headers_mut().remove("x-hangar-path");
     req.headers_mut().remove("x-hangar-forwarded-guest");
     match owned {
+        Owned::Read(name, events, guest) => {
+            req.extensions_mut().insert(crate::session_write::bridge::BridgedOwner);
+            req.extensions_mut().insert(ReadGuest(guest));
+            if events { crate::routes::events(State(st), ConnectInfo(peer), Ok(axum::extract::Path(name)), req).await }
+            else { crate::routes::history(State(st), ConnectInfo(peer), Ok(axum::extract::Path(name)), req).await }
+        },
+        Owned::Models => crate::provider_models::serve(&st, req).await,
+        Owned::Orchestration => crate::orchestration::serve(&st, req).await,
+        Owned::OmpSync => match st.omp_sync.get() {
+            Some(service) => crate::omp_sync::serve(&st, service, req).await,
+            None => crate::session_write::json_response(StatusCode::SERVICE_UNAVAILABLE, json!({"code":"omp_sync_unavailable"})),
+        },
         Owned::Media(path, guest) => crate::session_media::serve_forwarded(&st, &path, req, guest).await
             .unwrap_or_else(|| crate::session_write::json_response(StatusCode::NOT_FOUND, json!({"code": "forwarded_route_not_owned"}))),
         Owned::JevDelivery => crate::session_write::delivery_timing::availability_reply(&st).await,
@@ -115,4 +145,4 @@ fn live_resume(method: &Method, path: &str) -> Option<String> {
 }
 
 /// As rotas do Rust que aceitam o repasse.
-enum Owned { Groups(bool), Conductor, Catalog, SessionDefaults, PushExpo, Commands, Mermaid, Prewarm, Nav, Plans, Worktrees, JevDelivery, ClientApi, ArchiveResume(String, String), Resume(String), Media(String, bool) }
+enum Owned { Read(String, bool, bool), Models, Orchestration, OmpSync, Groups(bool), Conductor, Catalog, SessionDefaults, PushExpo, Commands, Mermaid, Prewarm, Nav, Plans, Worktrees, JevDelivery, ClientApi, ArchiveResume(String, String), Resume(String), Media(String, bool) }

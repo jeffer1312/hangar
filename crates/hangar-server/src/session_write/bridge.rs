@@ -158,6 +158,10 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     req.headers_mut().remove(CLOSED_TRANSCRIPT);
     req.headers_mut().remove(RUST_LEAVES);
     let name = super::session_name(req.uri().path());
+    if owner && let Some(name) = name.as_deref()
+        && let Some(response) = super::orchestration_guard(&st, name, req.headers()).await {
+        return response;
+    }
     // Sem vigia (sem as pastas da lista), `kill_codex_terminal` é `None`.
     // Fechada de propósito não volta no próximo reboot, de qualquer agente.
     if let (true, Some(name), Some(dirs)) = (owner, name.as_deref(), st.list.env().dirs.as_ref()) {

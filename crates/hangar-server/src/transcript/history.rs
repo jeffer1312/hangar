@@ -81,7 +81,7 @@ impl InternalInfo {
         Some(HistoryRequest {
             provider: Provider::parse(&self.provider)?,
             jsonl: self.jsonl.clone()?,
-            queue: self.history.get("queue").and_then(Value::as_str).map(PathBuf::from),
+            queue: (self.provider != "orq").then(|| self.history.get("queue").and_then(Value::as_str).map(PathBuf::from)).flatten(),
             limit: limit.filter(|&n| n > 0),
             tail_window: TAIL_WINDOW,
         })
@@ -202,7 +202,7 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64) -> io::Result<Pa
     let mut rd = BufReader::new(file);
     rd.seek(SeekFrom::Start(offset))?;
     // Reescrita do `--resume`: só o Claude regrava o jsonl.
-    let mut rewrite = (req.provider != Provider::Codex).then(claude::RewriteFilter::default);
+    let mut rewrite = matches!(req.provider, Provider::Claude | Provider::ClaudeHeadless).then(claude::RewriteFilter::default);
     let mut held_ids = HashSet::new();
     let mut raw = Vec::new();
     let mut i = 0u64;
@@ -240,8 +240,15 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64) -> io::Result<Pa
                         continue;
                     }
                 }
-                let evs = if rewrite.is_some() { claude::parse_obj(obj, peer::name_of_pid) } else { codex::parse_rollout_obj(&value) };
-                (ts_of_obj(obj), evs)
+                let evs = match req.provider {
+                    Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(obj, peer::name_of_pid),
+                    Provider::Codex => codex::parse_rollout_obj(&value),
+                    Provider::Orq => crate::orchestration::timeline::parse_obj(&value, req.jsonl.parent()),
+                };
+                let ts = if req.provider == Provider::Orq {
+                    obj.get("ts").and_then(Value::as_str).and_then(py::iso_timestamp).unwrap_or(0.0)
+                } else { ts_of_obj(obj) };
+                (ts, evs)
             }
         };
         if line_ts > 0.0 {

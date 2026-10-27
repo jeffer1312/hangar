@@ -64,6 +64,7 @@ impl Binding {
         match (self.provider, self.headless) {
             (Provider::Claude, _) => Some(&STATE_EVENTS),
             (Provider::ClaudeHeadless, _) | (Provider::Codex, true) => Some(&FEED_EVENTS),
+            (Provider::Orq, _) => Some(&["state"]),
             _ => None,
         }
     }
@@ -648,6 +649,7 @@ impl Hub {
     /// Produtor da fila da geração dada; o anterior sai. Chamado sob a trava da ligação (ou com o hub
     /// ainda só deste chamador): duas trocas seguidas não deixam o da geração velha por último.
     fn start_queue_feed(self: &Arc<Self>, generation: u64, binding: &Binding) {
+        if binding.provider == Provider::Orq { return; }
         let Some(dir) = &self.ctx.queue_dir else {
             if crate::warn_limit::allow(None, "queue_feed_disabled") {
                 tracing::warn!(session = %self.name, code = "queue_feed_disabled", "fila: pasta da fila desconhecida; o chat fica sem as bolhas da fila");
@@ -672,6 +674,7 @@ impl Hub {
 
     /// Produtor do `stats` da geração dada, chamado junto com o da fila e sob a mesma trava.
     fn start_stats_feed(self: &Arc<Self>, generation: u64, binding: &Binding) {
+        if binding.provider == Provider::Orq { return; }
         let feed = tokio::spawn(crate::stats::run(Arc::downgrade(self), generation, binding.clone(), self.ctx.watchers.clone()));
         if let Some(old) = self.stats_feed.lock().unwrap().replace(feed.abort_handle()) {
             old.abort();

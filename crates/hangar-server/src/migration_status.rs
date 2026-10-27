@@ -103,6 +103,8 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         || (*method == Method::POST && matches!(path, "/api/atualizacao/iniciar" | "/api/atualizacao/reiniciar" | "/api/atualizacao/dev-mode")) { return true; }
     if *method == Method::POST && path == "/api/push/expo/subscribe" { return true; }
     if crate::orq_conductor::matches(method, path) { return true; }
+    if crate::orchestration::matches(method, path) || crate::provider_models::matches(method, path)
+        || crate::omp_sync::matches(method, path) { return true; }
     if crate::prewarm::http::matches(method, path) { return true; }
     if crate::nav_requests::matches(method, path) { return true; }
     if crate::loops::http::matches(method, path) { return true; }

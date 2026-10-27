@@ -143,6 +143,9 @@ impl StateEnv {
 /// por hub de Claude ou Codex sem terminal.
 pub fn spawner(env: Arc<StateEnv>) -> SpawnMonitor {
     Arc::new(move |hub: &Arc<Hub>| {
+        if hub.source_binding().is_some_and(|(_, binding)| binding.provider == crate::transcript::Provider::Orq) {
+            return tokio::spawn(orchestration_states(Arc::downgrade(hub)));
+        }
         // Sem terminal, ou Codex com terminal cujo ator é do Rust: o feed do runtime.
         if hub.runtime_feed() {
             let live = env.runtime.get().map(|registry| registry.live(&hub.name));
@@ -168,6 +171,33 @@ pub fn spawner(env: Arc<StateEnv>) -> SpawnMonitor {
             }
         })
     })
+}
+
+async fn orchestration_states(hub: Weak<Hub>) {
+    let Some(expected) = hub.upgrade().and_then(|hub| hub.source_binding()) else { return };
+    let mut previous = None;
+    loop {
+        let timeline = expected.1.jsonl.clone();
+        let state = match tokio::task::spawn_blocking(move || {
+            crate::orchestration::runs::activity(&timeline, wall_now()).0
+        }).await {
+            Ok(state) => state,
+            Err(_) => {
+                tracing::error!(code = "orq_state_read_failed", "orq: leitura de atividade interrompida");
+                return;
+            }
+        };
+        let Some(hub) = hub.upgrade() else { return };
+        if hub.source_binding().as_ref() != Some(&expected) { return; }
+        if previous != Some(state) {
+            let event = StateEvent { session: hub.name.clone(), state: state.into(), ..Default::default() };
+            let Ok(data) = serde_json::to_string(&event) else { return };
+            if !hub.publish_own_bound(&expected, "state", &data) { return; }
+            previous = Some(state);
+        }
+        drop(hub);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
 }
 
 static NEXT_OWNER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

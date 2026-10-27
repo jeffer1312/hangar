@@ -1,0 +1,515 @@
+{
+  "source_commit": "d2a42410f9fe6df4ea491b296c7fea7b98d8b844",
+  "generated_by": "python /tmp/hangar-orq-event-characterize.py",
+  "cases": [
+    {
+      "input": {
+        "ts": "2026-09-29T21:53:40-03:00",
+        "kind": "advance",
+        "text": "T1: abriu w-t1 (claude, opus[1m]) e w-review1 (claude, opus[1m]) e entregou o kick-off",
+        "task": 1
+      },
+      "expected": [
+        {
+          "kind": "notice",
+          "id": "orq:53e165567cabac7b",
+          "text": "T1: abriu w-t1 (claude, opus[1m]) e w-review1 (claude, opus[1m]) e entregou o kick-off",
+          "ts": 1790729620.0,
+          "orq": {
+            "kind": "advance",
+            "task": 1,
+            "line": {
+              "code": "opened",
+              "sessions": [
+                {
+                  "name": "w-t1",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                },
+                {
+                  "name": "w-review1",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                }
+              ]
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T1: abriu w-t1 (claude, opus[1m]) e w-review1 (claude, opus[1m]) e entregou o kick-off",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          }
+        }
+      ]
+    },
+    {
+      "input": {
+        "ts": "2026-09-29T21:53:48-03:00",
+        "kind": "woke",
+        "text": "acordou o árbitro: [vigia] ARMED over: w-arbiter (window 5min, journal /home/jefferson/.hangar/orq/2026-09-29-cad3e6fe/registro.md). This message IS the channel's proof — if you read it, the alarms arrive. Do not reply.",
+        "task": null
+      },
+      "expected": [
+        {
+          "kind": "notice",
+          "id": "orq:3dc960b66f2e9d72",
+          "text": "acordou o árbitro: [vigia] ARMED over: w-arbiter (window 5min, journal /home/jefferson/.hangar/orq/2026-09-29-cad3e6fe/registro.md). This message IS the channel's proof — if you read it, the alarms arrive. Do not reply.",
+          "ts": 1790729628.0,
+          "orq": {
+            "kind": "woke",
+            "task": null,
+            "line": null,
+            "origin": "notify",
+            "sender": "vigia",
+            "mark": null,
+            "alarm": true,
+            "rejected_round": null,
+            "body": "ARMED over: w-arbiter (window 5min, journal `/home/jefferson/.hangar/orq/2026-09-29-cad3e6fe/registro.md`). This message IS the channel's proof — if you read it, the alarms arrive. Do not reply.",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": {
+              "source": "alarm",
+              "rule": null,
+              "jev": null,
+              "regex": null,
+              "regex_agreed": null
+            }
+          }
+        }
+      ]
+    },
+    {
+      "input": {
+        "ts": "2026-09-29T21:58:08-03:00",
+        "kind": "advance",
+        "text": "T1 fechada → merge → integração verde",
+        "task": 1
+      },
+      "expected": [
+        {
+          "kind": "notice",
+          "id": "orq:aa3e9680d7821c53",
+          "text": "T1 fechada → merge → integração verde",
+          "ts": 1790729888.0,
+          "orq": {
+            "kind": "advance",
+            "task": 1,
+            "line": {
+              "code": "integrated",
+              "merge": true
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T1 fechada → merge → integração verde",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          }
+        }
+      ]
+    },
+    {
+      "input": {
+        "ts": "2026-09-29T21:58:29-03:00",
+        "kind": "advance",
+        "text": "T2: abriu w-t2 (codex, gpt-6.1-sol) e w-review2 (claude, opus[1m]) e entregou o kick-off",
+        "task": 2
+      },
+      "expected": [
+        {
+          "kind": "notice",
+          "id": "orq:20c4620fd9f206b8",
+          "text": "T2: abriu w-t2 (codex, gpt-6.1-sol) e w-review2 (claude, opus[1m]) e entregou o kick-off",
+          "ts": 1790729909.0,
+          "orq": {
+            "kind": "advance",
+            "task": 2,
+            "line": {
+              "code": "opened",
+              "sessions": [
+                {
+                  "name": "w-t2",
+                  "provider": "codex",
+                  "model": "gpt-6.1-sol"
+                },
+                {
+                  "name": "w-review2",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                }
+              ]
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T2: abriu w-t2 (codex, gpt-6.1-sol) e w-review2 (claude, opus[1m]) e entregou o kick-off",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          }
+        }
+      ]
+    },
+    {
+      "input": {
+        "ts": "2026-09-29T21:58:38-03:00",
+        "kind": "advance",
+        "text": "T3: abriu w-t3 (claude, opus[1m]) e w-review3 (claude, opus[1m]) e entregou o kick-off",
+        "task": 3
+      },
+      "expected": [
+        {
+          "kind": "notice",
+          "id": "orq:58aa2e332e9a66b4",
+          "text": "T3: abriu w-t3 (claude, opus[1m]) e w-review3 (claude, opus[1m]) e entregou o kick-off",
+          "ts": 1790729918.0,
+          "orq": {
+            "kind": "advance",
+            "task": 3,
+            "line": {
+              "code": "opened",
+              "sessions": [
+                {
+                  "name": "w-t3",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                },
+                {
+                  "name": "w-review3",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                }
+              ]
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T3: abriu w-t3 (claude, opus[1m]) e w-review3 (claude, opus[1m]) e entregou o kick-off",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          }
+        }
+      ]
+    },
+    {
+      "input": {
+        "ts": "2026-09-29T21:59:02-03:00",
+        "kind": "advance",
+        "text": "T4: abriu w-t4 (codex, gpt-6.1-sol) e w-review4 (claude, opus[1m]) e entregou o kick-off",
+        "task": 4
+      },
+      "expected": [
+        {
+          "kind": "notice",
+          "id": "orq:188fa5f79ac817aa",
+          "text": "T4: abriu w-t4 (codex, gpt-6.1-sol) e w-review4 (claude, opus[1m]) e entregou o kick-off",
+          "ts": 1790729942.0,
+          "orq": {
+            "kind": "advance",
+            "task": 4,
+            "line": {
+              "code": "opened",
+              "sessions": [
+                {
+                  "name": "w-t4",
+                  "provider": "codex",
+                  "model": "gpt-6.1-sol"
+                },
+                {
+                  "name": "w-review4",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                }
+              ]
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T4: abriu w-t4 (codex, gpt-6.1-sol) e w-review4 (claude, opus[1m]) e entregou o kick-off",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          }
+        }
+      ]
+    },
+    {
+      "input": {
+        "ts": "2026-09-29T22:01:05-03:00",
+        "kind": "advance",
+        "text": "T3 fechada → merge → integração verde",
+        "task": 3
+      },
+      "expected": [
+        {
+          "kind": "notice",
+          "id": "orq:621c72d22692043b",
+          "text": "T3 fechada → merge → integração verde",
+          "ts": 1790730065.0,
+          "orq": {
+            "kind": "advance",
+            "task": 3,
+            "line": {
+              "code": "integrated",
+              "merge": true
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T3 fechada → merge → integração verde",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          }
+        }
+      ]
+    },
+    {
+      "input": {
+        "ts": "2026-09-29T22:01:38-03:00",
+        "kind": "woke",
+        "text": "acordou o árbitro: [decisao] T4: StateEvent.problema_detalhe é documentado como detalhe cru do processo (core/types.ts:214); precedente web apenas primeira linha 80/300 chars, sem redigir segredo; core não oferece redator. Recorte pede detalhe expansível sem logs/segredos. Recomendo apresentar detalhe recebido somente se contrato do produtor garantir remoção de segredo; caso contrário preservar código traduzido e não expor bruto até saneamento por área autorizada. Autoriza detalhe recebido como dado já seguro, ou define redator mínimo/pendência? PendingPlan e AssistantBubble podem avançar enquanto isso.",
+        "task": null
+      },
+      "expected": [
+        {
+          "kind": "notice",
+          "id": "orq:4b0708fb64356927",
+          "text": "acordou o árbitro: [decisao] T4: StateEvent.problema_detalhe é documentado como detalhe cru do processo (core/types.ts:214); precedente web apenas primeira linha 80/300 chars, sem redigir segredo; core não oferece redator. Recorte pede detalhe expansível sem logs/segredos. Recomendo apresentar detalhe recebido somente se contrato do produtor garantir remoção de segredo; caso contrário preservar código traduzido e não expor bruto até saneamento por área autorizada. Autoriza detalhe recebido como dado já seguro, ou define redator mínimo/pendência? PendingPlan e AssistantBubble podem avançar enquanto isso.",
+          "ts": 1790730098.0,
+          "orq": {
+            "kind": "woke",
+            "task": 4,
+            "line": null,
+            "origin": "notify",
+            "sender": null,
+            "mark": "decisao",
+            "alarm": false,
+            "rejected_round": null,
+            "body": "`StateEvent.problema_detalhe` é documentado como detalhe cru do processo (`core/types.ts:214`); precedente web apenas primeira linha 80/300 chars, sem redigir segredo; core não oferece redator. Recorte pede detalhe expansível sem logs/segredos. Recomendo apresentar detalhe recebido somente se contrato do produtor garantir remoção de segredo; caso contrário preservar código traduzido e não expor bruto até saneamento por área autorizada. PendingPlan e AssistantBubble podem avançar enquanto isso.",
+            "question": "Autoriza detalhe recebido como dado já seguro, ou define redator mínimo/pendência?",
+            "parecer": null,
+            "error": null,
+            "decided_by": {
+              "source": "rule",
+              "rule": "mark",
+              "jev": null,
+              "regex": null,
+              "regex_agreed": null
+            }
+          }
+        }
+      ]
+    },
+    {
+      "input": {
+        "ts": "2026-09-29T22:11:19-03:00",
+        "kind": "advance",
+        "text": "T2 fechada → merge → integração verde",
+        "task": 2
+      },
+      "expected": [
+        {
+          "kind": "notice",
+          "id": "orq:cb4cc90882b48326",
+          "text": "T2 fechada → merge → integração verde",
+          "ts": 1790730679.0,
+          "orq": {
+            "kind": "advance",
+            "task": 2,
+            "line": {
+              "code": "integrated",
+              "merge": true
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T2 fechada → merge → integração verde",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          }
+        }
+      ]
+    },
+    {
+      "input": {
+        "ts": "2026-09-29T22:12:22-03:00",
+        "kind": "woke",
+        "text": "acordou o árbitro: [decisao] T4: MessageList.tsx:104 (fora dos Files) já passa planDisplayText(ev.text) para Codex, então proposedPlan na AssistantBubble sempre é null e o rótulo 'Plano proposto' nunca aparece. Incluir MessageList.tsx:104 em T4 (passar ev.text cru) ou deixar para T11? Parecer: /home/jefferson/.hangar/orq/2026-09-29-cad3e6fe/pareceres/task-4-r1-revisor.md (NOTED 1)",
+        "task": null
+      },
+      "expected": [
+        {
+          "kind": "notice",
+          "id": "orq:3be2905009d0e931",
+          "text": "acordou o árbitro: [decisao] T4: MessageList.tsx:104 (fora dos Files) já passa planDisplayText(ev.text) para Codex, então proposedPlan na AssistantBubble sempre é null e o rótulo 'Plano proposto' nunca aparece. Incluir MessageList.tsx:104 em T4 (passar ev.text cru) ou deixar para T11? Parecer: /home/jefferson/.hangar/orq/2026-09-29-cad3e6fe/pareceres/task-4-r1-revisor.md (NOTED 1)",
+          "ts": 1790730742.0,
+          "orq": {
+            "kind": "woke",
+            "task": 4,
+            "line": null,
+            "origin": "notify",
+            "sender": null,
+            "mark": "decisao",
+            "alarm": false,
+            "rejected_round": null,
+            "body": "`MessageList.tsx:104` (fora dos Files) já passa `planDisplayText(ev.text)` para Codex, então `proposedPlan` na AssistantBubble sempre é null e o rótulo 'Plano proposto' nunca aparece.",
+            "question": "Incluir `MessageList.tsx:104` em T4 (passar `ev.text` cru) ou deixar para T11?",
+            "parecer": "/home/jefferson/.hangar/orq/2026-09-29-cad3e6fe/pareceres/task-4-r1-revisor.md",
+            "error": null,
+            "decided_by": {
+              "source": "rule",
+              "rule": "mark",
+              "jev": null,
+              "regex": null,
+              "regex_agreed": null
+            }
+          }
+        }
+      ]
+    },
+    {
+      "input": {
+        "ts": "2026-09-29T22:12:48-03:00",
+        "kind": "woke",
+        "text": "acordou o árbitro: [decisao] T4 R1 reprovada: receita exige planDisplayText(text) para preservar prosa/links/caminhos fora do plano, em vez da fórmula literal da fonte planDisplayText(proposed ?? assistantText). Causa confirmada por leitura do helper+callers, sem execução funcional (lotes). Recomendo aceitar receita/prosa preservando resposta inteira. executor.md exige decisão antes de divergir de código literal; aguardo autorização da fórmula. Rótulo Codex inalcançável porque MessageList.tsx:104 já remove tags: recomendo deixar integração/rótulo para T11, sem ampliar Files desta T4. Parecer: /home/jefferson/.hangar/orq/2026-09-29-cad3e6fe/pareceres/task-4-r1-revisor.md",
+        "task": null
+      },
+      "expected": [
+        {
+          "kind": "notice",
+          "id": "orq:a4d668500a501197",
+          "text": "acordou o árbitro: [decisao] T4 R1 reprovada: receita exige planDisplayText(text) para preservar prosa/links/caminhos fora do plano, em vez da fórmula literal da fonte planDisplayText(proposed ?? assistantText). Causa confirmada por leitura do helper+callers, sem execução funcional (lotes). Recomendo aceitar receita/prosa preservando resposta inteira. executor.md exige decisão antes de divergir de código literal; aguardo autorização da fórmula. Rótulo Codex inalcançável porque MessageList.tsx:104 já remove tags: recomendo deixar integração/rótulo para T11, sem ampliar Files desta T4. Parecer: /home/jefferson/.hangar/orq/2026-09-29-cad3e6fe/pareceres/task-4-r1-revisor.md",
+          "ts": 1790730768.0,
+          "orq": {
+            "kind": "woke",
+            "task": 4,
+            "line": null,
+            "origin": "notify",
+            "sender": null,
+            "mark": "decisao",
+            "alarm": false,
+            "rejected_round": 1,
+            "body": "receita exige `planDisplayText(text)` para preservar prosa/links/caminhos fora do plano, em vez da fórmula literal da fonte `planDisplayText`(proposed ?? `assistantText`). Causa confirmada por leitura do helper+callers, sem execução funcional (lotes). Recomendo aceitar receita/prosa preservando resposta inteira. `executor.md` exige decisão antes de divergir de código literal; aguardo autorização da fórmula. Rótulo Codex inalcançável porque `MessageList.tsx:104` já remove tags: recomendo deixar integração/rótulo para T11, sem ampliar Files desta T4.",
+            "question": null,
+            "parecer": "/home/jefferson/.hangar/orq/2026-09-29-cad3e6fe/pareceres/task-4-r1-revisor.md",
+            "error": null,
+            "decided_by": {
+              "source": "rule",
+              "rule": "mark",
+              "jev": null,
+              "regex": null,
+              "regex_agreed": null
+            }
+          }
+        }
+      ]
+    },
+    {
+      "input": {
+        "ts": "2026-09-29T22:19:00-03:00",
+        "kind": "advance",
+        "text": "T4 fechada → merge → integração verde",
+        "task": 4
+      },
+      "expected": [
+        {
+          "kind": "notice",
+          "id": "orq:f4b7f0fb39d4cb0f",
+          "text": "T4 fechada → merge → integração verde",
+          "ts": 1790731140.0,
+          "orq": {
+            "kind": "advance",
+            "task": 4,
+            "line": {
+              "code": "integrated",
+              "merge": true
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T4 fechada → merge → integração verde",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          }
+        }
+      ]
+    },
+    {
+      "input": {
+        "ts": "2026-09-29T22:19:12-03:00",
+        "kind": "advance",
+        "text": "T5: abriu hangar-mobile-t5 (claude, opus[1m]) e hangar-mobile-review5 (claude, opus[1m]) e entregou o kick-off",
+        "task": 5
+      },
+      "expected": [
+        {
+          "kind": "notice",
+          "id": "orq:84cc21ab244ffe79",
+          "text": "T5: abriu hangar-mobile-t5 (claude, opus[1m]) e hangar-mobile-review5 (claude, opus[1m]) e entregou o kick-off",
+          "ts": 1790731152.0,
+          "orq": {
+            "kind": "advance",
+            "task": 5,
+            "line": {
+              "code": "opened",
+              "sessions": [
+                {
+                  "name": "hangar-mobile-t5",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                },
+                {
+                  "name": "hangar-mobile-review5",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                }
+              ]
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T5: abriu hangar-mobile-t5 (claude, opus[1m]) e hangar-mobile-review5 (claude, opus[1m]) e entregou o kick-off",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          }
+        }
+      ]
+    }
+  ]
+}

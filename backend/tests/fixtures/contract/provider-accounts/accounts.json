@@ -1,0 +1,133 @@
+{
+  "source_commit": "d2a42410f9fe6df4ea491b296c7fea7b98d8b844",
+  "generated_by": "python /tmp/hangar-provider-accounts-characterize.py",
+  "cases": [
+    {
+      "name": "same-key-different-provider-name",
+      "auth": {
+        "kimi-coding": {
+          "type": "api_key",
+          "key": "synthetic-a"
+        }
+      },
+      "models": {},
+      "kimi": "default_model=\"apikey/k3\"\n[providers.apikey]\ntype=\"kimi\"\napi_key=\"synthetic-a\"\nbase_url=\"https://example.invalid\"\n",
+      "engines": {},
+      "provider": "kimi-coding",
+      "expected": {
+        "pi": "kimi:apikey",
+        "kimi": "apikey"
+      }
+    },
+    {
+      "name": "engine-key",
+      "auth": {
+        "zen": {
+          "key": "synthetic-b"
+        }
+      },
+      "models": {},
+      "kimi": "",
+      "engines": {
+        "deepseek": {
+          "api_key": "synthetic-b",
+          "base_url": "https://example.invalid"
+        }
+      },
+      "provider": "zen",
+      "expected": {
+        "pi": "chave:deepseek",
+        "kimi": null
+      }
+    },
+    {
+      "name": "oauth-does-not-invent-an-account",
+      "auth": {
+        "codex": {
+          "type": "oauth",
+          "access": "synthetic"
+        }
+      },
+      "models": {},
+      "kimi": "",
+      "engines": {},
+      "provider": "codex",
+      "expected": {
+        "pi": null,
+        "kimi": null
+      }
+    },
+    {
+      "name": "manual-model-key",
+      "auth": {},
+      "models": {
+        "providers": {
+          "manual": {
+            "apiKey": "synthetic-a"
+          }
+        }
+      },
+      "kimi": "[providers.apikey]\ntype=\"kimi\"\napi_key=\"synthetic-a\"\nbase_url=\"https://example.invalid\"\n",
+      "engines": {},
+      "provider": "manual",
+      "expected": {
+        "pi": "kimi:apikey",
+        "kimi": null
+      }
+    },
+    {
+      "name": "auth-has-priority-over-models",
+      "auth": {
+        "manual": {
+          "key": "unknown"
+        }
+      },
+      "models": {
+        "providers": {
+          "manual": {
+            "apiKey": "synthetic-a"
+          }
+        }
+      },
+      "kimi": "[providers.apikey]\ntype=\"kimi\"\napi_key=\"synthetic-a\"\nbase_url=\"https://example.invalid\"\n",
+      "engines": {},
+      "provider": "manual",
+      "expected": {
+        "pi": null,
+        "kimi": null
+      }
+    },
+    {
+      "name": "kimi-key-has-priority-over-engine-key",
+      "auth": {
+        "shared": {
+          "key": "synthetic-a"
+        }
+      },
+      "models": {},
+      "kimi": "[providers.apikey]\ntype=\"kimi\"\napi_key=\"synthetic-a\"\nbase_url=\"https://example.invalid\"\n",
+      "engines": {
+        "engine": {
+          "api_key": "synthetic-a"
+        }
+      },
+      "provider": "shared",
+      "expected": {
+        "pi": "kimi:apikey",
+        "kimi": null
+      }
+    },
+    {
+      "name": "kimi-oauth-default-has-no-account",
+      "auth": {},
+      "models": {},
+      "kimi": "default_model=\"oauth/k3\"\n[providers.oauth]\ntype=\"oauth\"\n",
+      "engines": {},
+      "provider": null,
+      "expected": {
+        "pi": null,
+        "kimi": null
+      }
+    }
+  ]
+}

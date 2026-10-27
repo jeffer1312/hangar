@@ -76,9 +76,8 @@ from app.hook_installer import (
     ensure_subagent_hook_installed,
     ensure_state_hooks_installed,
 )
-from app import migracao_sidecars, orq_politica, resilient_accept, rust_server
+from app import migracao_sidecars, resilient_accept, rust_server
 from app.hook_state import hook_state
-from app.pi_inbox import escrever_endpoint
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
@@ -220,7 +219,6 @@ def main():
     # que lê ou escreve sidecar: os hooks, o endpoint do Pi e o hook_state logo abaixo já são
     # clientes dessas pastas — migrar depois deles seria migrar por cima de arquivo recém-escrito.
     migracao_sidecars.migrar(_state_dirs)
-    orq_politica.migrar()
     # Uma configuração do Jev: a chave antiga do Computer Use vira a dela e o MCP recebe endereço e modelo.
     # Modelo auxiliar único ANTES do repasse ao MCP: o `sync_jev` reescreve o `LLM_*` com o auxiliar, e
     # o legado precisa ter sido lido do MCP antes disso.
@@ -262,8 +260,6 @@ def main():
     # E pro Codex (hooks.json do ~/.codex) — ver app/codex_hook_installer.py.
     from app.codex_hook_installer import ensure_codex_state_hook_installed
     ensure_codex_state_hook_installed()
-    # Endereço pra extensão do Pi ligar de volta (ver pi_inbox.escrever_endpoint).
-    escrever_endpoint()
     hook_state.load_existing(_state_dirs)
     print_pairing(settings)
     # Windows: cliente que aborta no meio do accept nao pode fechar o listener (ver o modulo).
