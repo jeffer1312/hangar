@@ -34,6 +34,8 @@ const draftSchema = z.preprocess(legacyAttachment, z.object({
     text: z.string(),
     draftRevision: z.number().int().nonnegative(),
     status: z.enum(['sending', 'unknown', 'rejected']),
+    // Relógio do envio (ms): só mensagem da conversa posterior a ele confirma um envio incerto.
+    startedAt: z.number().optional(),
   }).nullable(),
 }));
 

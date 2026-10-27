@@ -309,6 +309,25 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     if (retiredQueuedIds.size) events = events.filter((e) => !retiredQueuedIds.has(e.id));
     const pending = events.reduce(reconcilePending, useChatStore.getState().pending);
     publishEvents(events, 'rebuild', { pending });
+    confirmSubmission(events);
+  }
+
+  // Envio incerto que a conversa já mostra chegou: o aviso sai, e o texto devolvido ao campo também.
+  function confirmSubmission(events: readonly ChatEvent[]): boolean {
+    let draft: ConversationDraft | null;
+    try { draft = readDraft(serverId, name); } catch { return false; }
+    const sent = draft?.submission;
+    if (!draft || !sent || sent.status !== 'unknown' || sent.startedAt === undefined) return false;
+    const probe = [{ id: 'submission', text: sent.text }];
+    // Folga para o relógio do celular adiantado em relação ao servidor.
+    const since = sent.startedAt / 1000 - 30;
+    const arrived = events.some((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-')
+      && e.ts != null && e.ts >= since && reconcilePending(probe, e).length === 0);
+    if (!arrived) return false;
+    const restored = draft.text.trim() === sent.text.trim();
+    writeDraft(serverId, name, { ...draft, submission: null, ...(restored ? { text: '', revision: draft.revision + 1 } : {}) });
+    useChatStore.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
+    return true;
   }
 
   // Destino desta conversa, nunca o servidor ativo: sem ele nenhuma leitura cai em outra máquina.
@@ -490,6 +509,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     const nextPending = curPending.length ? reconcilePending(curPending, ev) : curPending;
     const pendingPatch = nextPending.length !== curPending.length ? { pending: nextPending } : {};
     publishEvents(next, removedQueued ? 'replace' : 'append', pendingPatch);
+    if (ev.kind === 'user_msg') confirmSubmission([ev]);
     if (ev.kind === 'thinking' && useChatStore.getState().pensamento) limparPensamento();
     if (ev.kind === 'tool_use' && useChatStore.getState().ferramenta) limparFerramenta();
     // Swap prévia->bolha: o bloco real chegou, a prévia sai no MESMO flush.
@@ -1001,7 +1021,11 @@ function criarChatStore(serverId: string, name: string): ChatApi {
           if (isInputRejected(err)) useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
           throw err;
         }
-      }, draftRevision);
+      }, draftRevision).catch((error: unknown) => {
+        // A resposta se perdeu (app em segundo plano), mas a mensagem já está na conversa.
+        if (confirmSubmission(useChatStore.getState().events)) return;
+        throw error;
+      });
     },
   };
 }
@@ -1025,7 +1049,7 @@ export async function submitConversationDraft(serverId: string, name: string, te
       transcript: null, attachments: [], submission: null,
     };
     if (current.submission && current.submission.text.trim() !== text.trim()) throw new Error(m.composer_submission_recover_first());
-    const submission = { text, draftRevision: draftRevision ?? current.revision, status: 'sending' as const };
+    const submission = { text, draftRevision: draftRevision ?? current.revision, status: 'sending' as const, startedAt: Date.now() };
     // O campo pode já ter outra edição (primeiro input, pedido de plano): essa fica onde está.
     const fromField = draftRevision === undefined ? current.text.trim() === text.trim() : current.revision === draftRevision;
     // A fila já mostra a mensagem: texto e áudios enviados saem do campo antes da resposta.

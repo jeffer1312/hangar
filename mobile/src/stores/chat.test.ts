@@ -1866,3 +1866,53 @@ describe('envio Direto e Jev pelo mesmo rascunho', () => {
     expect(chat.use.getState().pending).toEqual([]);
   });
 });
+
+describe('envio incerto que a conversa confirma', () => {
+  function stubInput(input: () => Promise<Response>) {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/input')) return input();
+      const body = historyResponses[Math.min(historyCalls, historyResponses.length - 1)] ?? [];
+      historyCalls++;
+      return new Response(JSON.stringify(body), { status: 200 });
+    }));
+  }
+  const agora = () => Date.now() / 1000;
+
+  test('mensagem que aparece na conversa depois da queda apaga o aviso e o texto devolvido', async () => {
+    historyResponses = [[]];
+    stubInput(async () => { throw new TypeError('Network request failed'); });
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await tick();
+    await expect(chat.send('como está?')).rejects.toThrow(m.chat_envio_incerto());
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'como está?', submission: { status: 'unknown' } });
+    created[0].trigger('message', JSON.stringify(ev({ id: 'u:1', text: 'como está?', ts: agora() })));
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: '', submission: null });
+  });
+
+  test('mensagem igual de antes do envio não confirma', async () => {
+    historyResponses = [[]];
+    stubInput(async () => { throw new TypeError('Network request failed'); });
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await tick();
+    await expect(chat.send('ok')).rejects.toThrow(m.chat_envio_incerto());
+    created[0].trigger('message', JSON.stringify(ev({ id: 'u:velha', text: 'ok', ts: agora() - 3600 })));
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'ok', submission: { status: 'unknown' } });
+  });
+
+  test('mensagem que chega com o POST em voo: a queda depois não vira erro', async () => {
+    historyResponses = [[]];
+    let fail: ((error: Error) => void) | undefined;
+    stubInput(() => new Promise((_, reject) => { fail = reject; }));
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await tick();
+    const sending = chat.send('como está?');
+    await vi.waitFor(() => expect(fail).toBeDefined());
+    created[0].trigger('message', JSON.stringify(ev({ id: 'u:1', text: 'como está?', ts: agora() })));
+    fail!(new TypeError('Network request failed'));
+    await expect(sending).resolves.toBeUndefined();
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: '', submission: null });
+  });
+});
