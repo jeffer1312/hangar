@@ -677,7 +677,9 @@ async fn native_omp_context_and_marketplaces_in_isolated_home() {
     {
         for path in [home.join(".omp/natives"), home.join(".cache/omp/natives")] {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::os::unix::fs::symlink(&real, path).unwrap();
+            if !path.exists() {
+                std::os::unix::fs::symlink(&real, path).unwrap();
+            }
         }
     }
     let result_path = home.join("context-proof.json");
