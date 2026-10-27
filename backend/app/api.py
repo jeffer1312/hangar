@@ -510,8 +510,7 @@ async def _providers_pelo_rust(request: Request, call_next):
             require_auth(request)
         except HTTPException as error:
             return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
-        info = await _cached_info((read or write).group(1))
-        owned = info is not None and info.provider == "orq"
+        owned = True
     if not owned:
         return await call_next(request)
     if read:
@@ -522,12 +521,14 @@ async def _providers_pelo_rust(request: Request, call_next):
             return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
         if account_bridge.owner_mode() == "python":
             return JSONResponse({"detail": {"code": "providers_need_rust_server"}}, status_code=503)
-        return await account_bridge.forward_stream(request, guest=guest_of(request) is not None or guest_users.current.get() is not None)
+        response = await account_bridge.forward_stream(request, guest=guest_of(request) is not None or guest_users.current.get() is not None)
+        return await call_next(request) if response.status_code == 421 else response
     unavailable = (erro("orq_conductor_need_rust_server", "o condutor precisa do servidor Rust, que não está rodando")
                    if re.fullmatch(r"/api/orq/[^/]+/conductor", path) else
                    _groups_need_rust() if re.fullmatch(r"/api/sessions/[^/]+/orq/grupo", path) else
                    {"code": "providers_need_rust_server"})
-    return await _repasse_ao_rust(request, unavailable, "/__hangar_server/forwarded")
+    response = await _repasse_ao_rust(request, unavailable, "/__hangar_server/forwarded", limit=None)
+    return await call_next(request) if write and response.status_code == 421 else response
 
 
 @app.middleware("http")

@@ -223,6 +223,7 @@ def test_rota_do_condutor_connect_repassa_pedido(cli, monkeypatch):
 
     async def forward(request, target, **kwargs):
         calls.append((request.method, request.url.path, request.url.query, target))
+        assert kwargs == {"limit": None}
         return JSONResponse({"fixture": True})
 
     monkeypatch.setattr(account_bridge, "forward_public", forward)

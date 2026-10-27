@@ -39,7 +39,8 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     let owned = if let Some((name, events)) = read {
         match st.info(&name).await {
             Ok(Some(info)) if info.provider == "orq" => Owned::Read(name, events, guest),
-            _ => return crate::session_write::json_response(StatusCode::NOT_FOUND, json!({"code":"forwarded_route_not_owned"})),
+            Ok(_) => return StatusCode::MISDIRECTED_REQUEST.into_response(),
+            Err(_) => return crate::session_write::json_response(StatusCode::SERVICE_UNAVAILABLE, json!({"code":"forwarded_info_unavailable"})),
         }
     } else if let Some(name) = crate::session_write::session_name(&path).filter(|name| name.ends_with("-orq"))
         .filter(|_| method == Method::DELETE && path.strip_prefix("/api/sessions/").is_some_and(|rest| !rest.contains('/'))
@@ -94,8 +95,7 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     req.headers_mut().remove("x-hangar-forwarded-guest");
     match owned {
         Owned::OrchestrationGuard(name) => crate::session_write::orchestration_guard(&st, &name, req.headers()).await
-            .unwrap_or_else(|| crate::session_write::json_response(StatusCode::NOT_FOUND, crate::session_write::detail_body(
-                "erro_sessao_recado_nao_enfileirado", "sessão não encontrada — recado NÃO enfileirado", json!({})))),
+            .unwrap_or_else(|| StatusCode::MISDIRECTED_REQUEST.into_response()),
         Owned::Read(name, events, guest) => {
             req.extensions_mut().insert(crate::session_write::bridge::BridgedOwner);
             req.extensions_mut().insert(ReadGuest(guest));

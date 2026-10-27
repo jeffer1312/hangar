@@ -79,6 +79,7 @@ fn request(input: &Value, public: bool) -> Result<Value, String> {
             if input["forwarded"] == true {
                 let path = request.uri().path().to_owned();
                 let query = request.uri().query().map(|q|format!("?{q}")).unwrap_or_default();
+                request.headers_mut().remove("x-forwarded-for");
                 request.headers_mut().insert("x-hangar-path", path.parse().unwrap());
                 request.headers_mut().insert("x-hangar-internal", "fixture-internal".parse().unwrap());
                 *request.uri_mut() = format!("/__hangar_server/forwarded{query}").parse().unwrap();
@@ -106,7 +107,7 @@ fn request(input: &Value, public: bool) -> Result<Value, String> {
             }).await.map_err(|_| "o SSE não publicou estado no prazo".to_owned())??
         } else {
             let bytes = to_bytes(response.into_body(), 4 * 1024 * 1024).await.map_err(|e| e.to_string())?;
-            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?
+            if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).map_err(|e| e.to_string())? }
         };
         let body = if input["poll_panel"] == true && status == 200 {
             let first = body;
