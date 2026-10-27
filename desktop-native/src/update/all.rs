@@ -10,7 +10,7 @@ enum Classification { Start, Current, Held(Hold) }
 
 fn classify(snapshot: &Value) -> Classification {
     if !behind(snapshot) { return Classification::Current; }
-    hold(snapshot).map_or(Classification::Start, Classification::Held)
+    update_hold(snapshot).map_or(Classification::Start, Classification::Held)
 }
 
 #[derive(Clone, Debug, PartialEq)]

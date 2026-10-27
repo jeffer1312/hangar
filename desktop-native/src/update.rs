@@ -396,17 +396,21 @@ fn hold(state: &Value) -> Option<Hold> {
     None
 }
 
+/// O que segura o Atualizar desta máquina e de cada uma do lote. Aceitar o aviso não faz `git pull`: edição no
+/// checkout ou branch de trabalho não o seguram; se houver versão nova, o `iniciar` depois do aceite é que recusa.
+fn update_hold(state: &Value) -> Option<Hold> {
+    match hold(state) {
+        Some(Hold::LocalChanges | Hold::WorkBranch(..)) if state["pending_warning"].as_bool() == Some(true) => None,
+        other => other,
+    }
+}
+
 /// O que o "Atualizar tudo" faz: `need` é a API que a release do app exige, `server` o `GET /api/atualizacao` do servidor
 /// desta máquina (nenhum = não há servidor local) e `run` a API no ar (a do local, ou a do ativo sem local; `None` =
 /// desconhecida). O botão só aparece quando um clique consegue concluir.
 fn plan(need: Option<u32>, server: Option<&Value>, run: Option<u32>) -> Plan {
     let step = match server {
-        Some(state) if behind(state) => match hold(state) {
-            // Aceitar o aviso não faz `git pull`: edição no checkout ou branch de trabalho não o seguram. Se houver
-            // versão nova, o `iniciar` depois do aceite é que recusa, com o motivo.
-            Some(Hold::LocalChanges | Hold::WorkBranch(..)) if state["pending_warning"].as_bool() == Some(true) => ServerStep::Update,
-            other => other.map_or(ServerStep::Update, ServerStep::Held),
-        },
+        Some(state) if behind(state) => update_hold(state).map_or(ServerStep::Update, ServerStep::Held),
         _ => ServerStep::Skip,
     };
     let Some(need) = need else { return Plan { server: step, app: false } };
