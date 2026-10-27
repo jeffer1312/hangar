@@ -5,8 +5,6 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-const MAX_INPUT: u64 = 1024 * 1024;
-
 pub fn wrong_method(method: &axum::http::Method, path: &str, query: Option<&str>) -> Option<axum::response::Response> {
     use axum::http::{Method, StatusCode, header};
     if crate::orchestration::matches(method, path) || crate::provider_models::matches(method, path)
@@ -24,8 +22,7 @@ pub fn wrong_method(method: &axum::http::Method, path: &str, query: Option<&str>
 
 fn input() -> Result<Value, String> {
     let mut bytes = Vec::new();
-    std::io::stdin().take(MAX_INPUT + 1).read_to_end(&mut bytes).map_err(|_| "provider_input_unreadable")?;
-    if bytes.len() as u64 > MAX_INPUT { return Err("provider_input_too_large".into()); }
+    std::io::stdin().read_to_end(&mut bytes).map_err(|_| "provider_input_unreadable")?;
     serde_json::from_slice(&bytes).map_err(|_| "provider_input_invalid".into())
 }
 

@@ -52,6 +52,10 @@ class NativeClient:
         monkeypatch.setenv("PATH", programs)
         monkeypatch.setenv("HOME", str(self.home))
         monkeypatch.setenv("USERPROFILE", str(self.home))
+        for key, name in (("XDG_CONFIG_HOME", ".config"), ("XDG_DATA_HOME", ".local/share"),
+                          ("XDG_STATE_HOME", ".local/state"), ("XDG_CACHE_HOME", ".cache"),
+                          ("LOCALAPPDATA", "localappdata")):
+            monkeypatch.setenv(key, str(self.home / name))
         account_programs = directory / "account-programs"
         account_programs.mkdir()
         self.env = {"HOME": str(self.home), "USERPROFILE": str(self.home),
@@ -61,10 +65,17 @@ class NativeClient:
                      "omp_config": str(self.home / ".omp"), "omp_agent": str(self.home / ".omp/agent"),
                      "kimi_home": str(kimi)}
         self.enviados = []
+        self.public = False
+        self.upstream_response = {"status": 200, "body": {"ok": True, "delivered": True}}
+        self.deliveries = []
+        self.poll_panel = False
 
     def request(self, method, path, *, json=None, headers=None):
-        result = call("http.request", method=method, path=quote(path, safe="/%?=&"), body=json,
-                      home=self.home, env=self.env, dirs=self.dirs, mux=str(self.mux))
+        result = call("http.public" if self.public else "http.request", method=method, path=quote(path, safe="/%?=&"), body=json,
+                      home=self.home, env=self.env, dirs=self.dirs, mux=str(self.mux),
+                      upstream_response=self.upstream_response, authenticated=headers is not None,
+                      state_only=path.endswith("/events"), poll_panel=self.poll_panel)
+        self.deliveries.extend(result["deliveries"])
         self.enviados.extend((row["path"].split("/")[-2], row["body"]["text"])
                              for row in result["deliveries"] if row["method"] == "POST" and row["path"].endswith("/input"))
         return NativeResponse(result["status"], result["body"])
@@ -72,6 +83,7 @@ class NativeClient:
     def get(self, path, **kwargs): return self.request("GET", path, **kwargs)
     def put(self, path, **kwargs): return self.request("PUT", path, **kwargs)
     def post(self, path, **kwargs): return self.request("POST", path, **kwargs)
+    def delete(self, path, **kwargs): return self.request("DELETE", path, **kwargs)
 
 
 class NativePlan:

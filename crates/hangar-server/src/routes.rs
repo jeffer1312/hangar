@@ -1189,7 +1189,7 @@ mod tests {
                 let mut req = request(path, "198.51.100.50", false, token);
                 *req.method_mut() = Method::POST;
                 req.headers_mut().insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
-                *req.body_mut() = axum::body::Body::from("{}");
+                *req.body_mut() = axum::body::Body::from("[]");
                 let response = pass_any(State(state.clone()), ConnectInfo(peer), req).await;
                 assert_eq!(response.status(), expected, "{path}, token {token}");
             }
@@ -1220,7 +1220,7 @@ mod tests {
                 .header("x-hangar-internal", secret).header("x-hangar-path", path)
                 .header("x-hangar-forwarded-guest", if guest { "1" } else { "0" })
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from("{}")).unwrap();
+                .body(axum::body::Body::from("[]")).unwrap();
             let response = crate::forwarded::private(State(state.clone()), ConnectInfo(peer), req).await;
             assert_eq!(response.status(), expected, "{path}, convidado {guest}, segredo {secret}");
         }

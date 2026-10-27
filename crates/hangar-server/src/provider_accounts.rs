@@ -5,9 +5,10 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
+#[cfg(test)]
 use std::time::SystemTime;
 
-type Signature = Vec<Option<SystemTime>>;
+type Signature = Vec<Option<f64>>;
 type Mapping = HashMap<String, String>;
 type PiCache = HashMap<Vec<PathBuf>, (Signature, Mapping)>;
 
@@ -20,7 +21,15 @@ fn paths(env: &AccountEnvironment) -> Vec<PathBuf> {
 }
 
 fn signature(paths: &[PathBuf]) -> Signature {
-    paths.iter().map(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok()).collect()
+    paths.iter().map(|path| modified(path)).collect()
+}
+
+fn modified(path: &Path) -> Option<f64> {
+    let time = std::fs::metadata(path).and_then(|meta| meta.modified()).ok()?;
+    Some(match time.duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs_f64(),
+        Err(error) => -error.duration().as_secs_f64(),
+    })
 }
 
 fn json(path: &Path) -> Value {
@@ -72,10 +81,10 @@ pub fn pi_account(env: &AccountEnvironment, provider: Option<&str>) -> Option<St
 }
 
 pub fn kimi_account(env: &AccountEnvironment) -> Option<String> {
-    type KimiCache = HashMap<PathBuf, (SystemTime, Option<String>)>;
+    type KimiCache = HashMap<PathBuf, (f64, Option<String>)>;
     static CACHE: LazyLock<Mutex<KimiCache>> = LazyLock::new(Mutex::default);
     let path = paths(env).remove(2);
-    let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+    let modified = modified(&path)?;
     let mut cache = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some((previous, account)) = cache.get(&path) && *previous == modified {
         return account.clone();
@@ -109,6 +118,29 @@ mod tests {
     fn at(path: &Path, time: SystemTime) {
         std::fs::OpenOptions::new().write(true).open(path).unwrap()
             .set_times(std::fs::FileTimes::new().set_modified(time)).unwrap();
+    }
+
+    #[test]
+    fn source_timestamps_keep_the_python_float_precision() {
+        let fixture: Value = serde_json::from_str(include_str!("../../../backend/tests/fixtures/contract/provider-accounts/mtime.json")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let env = environment(home.path());
+        let kimi = home.path().join(".kimi-code/config.toml");
+        let auth = home.path().join(".pi/agent/auth.json");
+        for path in [&kimi, &auth] { std::fs::create_dir_all(path.parent().unwrap()).unwrap(); }
+        std::fs::write(&kimi, "default_model=\"apikey/k3\"\n[providers.apikey]\ntype=\"kimi\"\napi_key=\"synthetic\"\nbase_url=\"https://example.invalid\"\n").unwrap();
+        std::fs::write(&auth, r#"{"provider":{"key":"synthetic"}}"#).unwrap();
+        let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(fixture["stamp_ns"].as_u64().unwrap());
+        for path in [&kimi, &auth] { at(path, stamp); }
+        let read = || serde_json::json!({
+            "pi": pi_account(&env, Some("provider")),
+            "kimi": kimi_account(&env).map(|account| account.strip_prefix("kimi:").unwrap().to_owned()),
+        });
+        assert_eq!(read(), fixture["first"]);
+        std::fs::write(&kimi, "default_model=\"outro/k3\"\n[providers.outro]\ntype=\"kimi\"\napi_key=\"other\"\nbase_url=\"https://example.invalid\"\n").unwrap();
+        std::fs::write(&auth, r#"{"provider":{"key":"unknown"}}"#).unwrap();
+        for path in [&kimi, &auth] { at(path, stamp + std::time::Duration::from_nanos(fixture["delta_ns"].as_u64().unwrap())); }
+        assert_eq!(read(), fixture["after"]);
     }
 
     #[test]
