@@ -8,6 +8,7 @@ mod pair;
 use super::*;
 use std::{collections::HashMap, rc::Rc};
 use super::device::Remote;
+use crate::update::confirm::Launch;
 use add::{AddMachine, Found};
 use pair::Pair;
 use super::server_config::chip;
@@ -420,7 +421,7 @@ pub(super) enum MachinesReply {
     Announced(u64, Result<Value, Failure>),
     Restart(u64, Result<Value, Failure>),
     RestartEnd(u64, RestartEnd),
-    Upgrade(u64, Result<Value, Failure>),
+    Upgrade(u64, crate::update::confirm::Launch),
     UpgradeStep(Track, u64, u64, u64, String),
     UpgradeEnd(Track, u64, UpgradeEnd),
     DevMode(u64, Result<Value, Failure>),
@@ -547,6 +548,7 @@ impl Drop for Machines {
 
 impl Machines {
     fn track(&mut self, track: Track) -> &mut Upgrade { match track { Track::Update => &mut self.upgrade, Track::DevMode => &mut self.dev_switch } }
+    pub(super) fn dev_switch_busy(&self) -> bool { self.dev_switch.busy() }
     /// Um executor por vez no servidor: reiniciar, atualizar e trocar de modo se excluem.
     fn executor_busy(&self) -> bool { self.restart.asking || self.restart.waiting || self.upgrade.busy() || self.dev_switch.busy() }
 
@@ -875,7 +877,7 @@ impl Hangar {
         cx.notify();
     }
 
-    fn load_dev_mode(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn load_dev_mode(&mut self, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
         let seq = self.machines.dev_mode.start();
         let done = self.machines_send_later();
@@ -977,7 +979,7 @@ impl Hangar {
         self.confirm_server_update(Self::start_upgrade, window, cx);
     }
 
-    fn start_upgrade(&mut self, cx: &mut Context<Self>) {
+    fn start_upgrade(&mut self, acceptance: crate::update::confirm::Acceptance, real: bool, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
         if self.machines.upgrade.busy() || self.machines.restart.asking || self.machines.restart.waiting { return; }
         let u = &mut self.machines.upgrade;
@@ -985,7 +987,9 @@ impl Hangar {
         (u.asking, u.step, u.at, u.manual, u.error) = (true, None, None, false, None);
         u.warnings.clear();
         let (seq, done) = (u.seq, self.machines_send_later());
-        self.runtime.spawn(async move { done(MachinesReply::Upgrade(seq, api.server_post(&["atualizacao", "iniciar"], 30).await)).await });
+        self.runtime.spawn(async move {
+            done(MachinesReply::Upgrade(seq, crate::update::confirm::accept_then_start(&api, &acceptance, real).await)).await
+        });
         cx.notify();
     }
 
@@ -1124,13 +1128,16 @@ impl Hangar {
                 if seq != u.seq { return; }
                 u.asking = false;
                 match result {
-                    Ok(value) => {
+                    Launch::Started(Ok(value)) => {
                         if let Some(pid) = crate::update::update_process_id(&value) {
                             u.waiting = true;
                             self.wait_upgrade(Track::Update, Some(pid));
                         } else { u.error = Some(tr("invalid_response")); }
                     }
-                    Err(error) => u.error = Some(tr("update_refused").replace("{reason}", &Self::fetch_failure(&error))),
+                    Launch::Started(Err(error)) => u.error = Some(tr("update_refused").replace("{reason}", &Self::fetch_failure(&error))),
+                    Launch::AcceptFailed(text) => u.error = Some(text),
+                    // Só o aviso estava pendente: aceito, o servidor não tem o que rodar.
+                    Launch::Nothing => self.sync_updater(cx),
                 }
             }
             MachinesReply::DevMode(seq, result) => {
@@ -1174,7 +1181,8 @@ impl Hangar {
                         error.as_deref().map(|e| e.trim_end_matches('.')).unwrap_or("?"))),
                     UpgradeEnd::Unconfirmed => u.error = Some(tr("update_silent")),
                 }
-                if track == Track::DevMode { self.load_dev_mode(cx); }
+                // A atualização também troca de modo quando o aceite do aviso da migração a lançou.
+                self.load_dev_mode(cx);
                 self.sync_updater(cx);
                 if done { crate::update::confirm::show_pending(false, window, cx); }
             }
@@ -2049,47 +2057,7 @@ impl Hangar {
                 .when_some(m.web_ui_error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert("machines-web-ui-error", error))))
         });
 
-        // Convidado não troca; servidor sem a troca ou máquina sem migrar (`Ok(None)`) não oferece.
-        let dev_mode = (!self.active_invite() && !matches!(m.dev_mode.value, Some(Ok(None)))).then(|| {
-            let mode = m.dev_mode.ok().cloned().flatten();
-            let read_error = m.dev_mode.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !m.dev_mode.loading).cloned();
-            // Sem o modo depois de uma leitura boa: o interruptor aparece ligado e só desliga.
-            let lost = m.dev_mode_lost();
-            let d = &m.dev_switch;
-            let status = match &mode {
-                _ if d.busy() => d.step.as_ref().filter(|(_, total, _)| *total > 0).map(|(step, total, text)| tr("update_step")
-                    .replace("{step}", &step.to_string()).replace("{total}", &total.to_string()).replace("{text}", text))
-                    .unwrap_or_else(|| tr("dev_mode_switching")),
-                _ if lost => tr("dev_mode_unknown"),
-                Some(mode) => dev_mode_line(mode),
-                None if read_error.is_none() => tr("server_loading"),
-                None => tr("dev_mode_help"),
-            };
-            let developer = mode.as_ref().is_some_and(|mode| mode.developer);
-            // Para ligar é preciso a pasta; desligar volta para o pacote instalado.
-            let folder = (mode.is_some() && !developer).then(|| m.dev_folder.as_ref().map(|(input, _)| input.clone())).flatten();
-            let no_folder = folder.is_some() && self.dev_folder_value(cx).is_empty();
-            let toggle = Switch::new("machines-dev-mode").checked(developer || lost).accessibility_label(tr("dev_mode_title"))
-                .disabled((mode.is_none() && !lost) || m.dev_mode.loading || busy || no_folder)
-                .on_click(cx.listener(|this, on: &bool, window, cx| this.confirm_dev_mode(*on, window, cx)));
-            let done = if d.manual { Some((tr("dev_mode_done_manual"), theme::warning())) }
-                else { d.at.as_ref().map(|_| (tr("dev_mode_done"), theme::success())) };
-            let alert = |id: &'static str, text: String| div().id(id).role(Role::Alert).flex_1().text_size(px(12.5)).text_color(theme::danger())
-                .whitespace_normal().child(text);
-            settings_box().child(self.row_with(IconName::SquareTerminal, "dev_mode_title", div().whitespace_normal().child(status), mode.is_some() || lost,
-                    toggle.into_any_element()))
-                .when_some(folder, |el, input| el.child(div().px_4().pb_4().flex().flex_col().gap(px(6.))
-                    .child(div().text_size(px(12.5)).text_color(theme::muted()).child(tr("dev_mode_folder")))
-                    .child(Input::new(&input).small().disabled(busy).aria_label(tr("dev_mode_folder")))))
-                .when(!d.busy() && mode.is_some(), |el| el.child(div().px_4().pb_4().child(muted(tr("dev_mode_help")))))
-                .when_some(done.filter(|_| !d.busy()), |el, (text, color)| el.child(div().id("machines-dev-mode-done").role(Role::Status)
-                    .px_4().pb_4().text_size(px(12.5)).text_color(color).whitespace_normal().child(text)))
-                .when_some(read_error, |el, error| el.child(div().flex().items_center().gap(px(10.)).px_4().pb_4()
-                    .child(alert("machines-dev-mode-load-error", error))
-                    .child(Button::new("machines-dev-mode-retry").outline().small().label(tr("server_retry"))
-                        .on_click(cx.listener(|this, _, _, cx| this.load_dev_mode(cx))))))
-                .when_some(d.error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert("machines-dev-mode-error", error))))
-        });
+        let dev_mode = self.render_dev_mode(cx);
 
         let this = cx.entity().downgrade();
         let advanced_open = m.advanced;
@@ -2141,6 +2109,54 @@ impl Hangar {
             .children(dev_mode)
             .child(advanced)
             .child(remove)
+    }
+
+    /// O interruptor do modo desenvolvedor do servidor ativo, no detalhe desta máquina e na página Sobre. Convidado não
+    /// troca; servidor sem a troca ou máquina sem migrar (`Ok(None)`) não oferece.
+    pub(super) fn render_dev_mode(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let m = &self.machines;
+        if self.active_invite() || matches!(m.dev_mode.value, Some(Ok(None))) { return None; }
+        // A atualização pedida na página Sobre também ocupa o executor.
+        let busy = m.executor_busy() || self.device.run_active();
+        let muted = |text: String| div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(text);
+        let mode = m.dev_mode.ok().cloned().flatten();
+        let read_error = m.dev_mode.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !m.dev_mode.loading).cloned();
+        // Sem o modo depois de uma leitura boa: o interruptor aparece ligado e só desliga.
+        let lost = m.dev_mode_lost();
+        let d = &m.dev_switch;
+        let status = match &mode {
+            _ if d.busy() => d.step.as_ref().filter(|(_, total, _)| *total > 0).map(|(step, total, text)| tr("update_step")
+                .replace("{step}", &step.to_string()).replace("{total}", &total.to_string()).replace("{text}", text))
+                .unwrap_or_else(|| tr("dev_mode_switching")),
+            _ if lost => tr("dev_mode_unknown"),
+            Some(mode) => dev_mode_line(mode),
+            None if read_error.is_none() => tr("server_loading"),
+            None => tr("dev_mode_help"),
+        };
+        let developer = mode.as_ref().is_some_and(|mode| mode.developer);
+        // Para ligar é preciso a pasta; desligar volta para o pacote instalado.
+        let folder = (mode.is_some() && !developer).then(|| m.dev_folder.as_ref().map(|(input, _)| input.clone())).flatten();
+        let no_folder = folder.is_some() && self.dev_folder_value(cx).is_empty();
+        let toggle = Switch::new("machines-dev-mode").checked(developer || lost).accessibility_label(tr("dev_mode_title"))
+            .disabled((mode.is_none() && !lost) || m.dev_mode.loading || busy || no_folder)
+            .on_click(cx.listener(|this, on: &bool, window, cx| this.confirm_dev_mode(*on, window, cx)));
+        let done = if d.manual { Some((tr("dev_mode_done_manual"), theme::warning())) }
+            else { d.at.as_ref().map(|_| (tr("dev_mode_done"), theme::success())) };
+        let alert = |id: &'static str, text: String| div().id(id).role(Role::Alert).flex_1().text_size(px(12.5)).text_color(theme::danger())
+            .whitespace_normal().child(text);
+        Some(settings_box().child(self.row_with(IconName::SquareTerminal, "dev_mode_title", div().whitespace_normal().child(status), mode.is_some() || lost,
+                toggle.into_any_element()))
+            .when_some(folder, |el, input| el.child(div().px_4().pb_4().flex().flex_col().gap(px(6.))
+                .child(div().text_size(px(12.5)).text_color(theme::muted()).child(tr("dev_mode_folder")))
+                .child(Input::new(&input).small().disabled(busy).aria_label(tr("dev_mode_folder")))))
+            .when(!d.busy() && mode.is_some(), |el| el.child(div().px_4().pb_4().child(muted(tr("dev_mode_help")))))
+            .when_some(done.filter(|_| !d.busy()), |el, (text, color)| el.child(div().id("machines-dev-mode-done").role(Role::Status)
+                .px_4().pb_4().text_size(px(12.5)).text_color(color).whitespace_normal().child(text)))
+            .when_some(read_error, |el, error| el.child(div().flex().items_center().gap(px(10.)).px_4().pb_4()
+                .child(alert("machines-dev-mode-load-error", error))
+                .child(Button::new("machines-dev-mode-retry").outline().small().label(tr("server_retry"))
+                    .on_click(cx.listener(|this, _, _, cx| this.load_dev_mode(cx))))))
+            .when_some(d.error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert("machines-dev-mode-error", error)))))
     }
 }
 

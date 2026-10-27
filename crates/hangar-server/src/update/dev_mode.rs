@@ -93,6 +93,8 @@ pub const ROLLED_BACK: &str = "erro_dev_mode_voltou";
 #[derive(Debug)]
 pub enum Checked {
     Switch { target: PathBuf, manifest: Option<Manifest> },
+    /// Desligar sem pacote no disco: o executor baixa o do canal antes da troca.
+    Download,
     Already(String),
 }
 
@@ -123,12 +125,7 @@ pub fn check(home: &Path, request: &Request) -> Result<Checked, Failure> {
                 let version = super::installed(&layout).map_or_else(String::new, |m| m.version);
                 return Ok(Checked::Already(format!("o modo desenvolvedor já está desligado (pacote {version}); nada a fazer")));
             }
-            let platform = super::platform();
-            let none = || Failure::new("erro_dev_mode_sem_pacote", format!(
-                "nenhuma versão do pacote para {platform} em {}, e não há para onde voltar; no modo desenvolvedor o Atualizar só faz \
-                 `git pull`: para ter o pacote, desfaça a migração (`hangar-server migrate-package --undo`) e migre de novo com o \
-                 checkout limpo na main", layout.versions().display()));
-            let (dir, manifest) = newest_package(&layout, &platform).ok_or_else(none)?;
+            let Some((dir, manifest)) = newest_package(&layout, &super::platform()) else { return Ok(Checked::Download) };
             let target = super::real(&dir).map_err(|e| Failure::new("erro_dev_mode_sem_pacote", format!("{}: {e}", dir.display())))?;
             Ok(Checked::Switch { target, manifest: Some(manifest) })
         }
@@ -153,6 +150,9 @@ pub async fn switch<R: Restarter, H: HealthProbe>(home: &Path, state_dir: &Path,
     let (target, manifest) = match check(home, request)? {
         Checked::Already(text) => return Ok(Outcome::Already(text)),
         Checked::Switch { target, manifest } => (target, manifest),
+        // O executor baixa antes de chamar; chegar aqui sem pacote é o download que não deixou nada.
+        Checked::Download => return Err(Failure::new("erro_dev_mode_sem_pacote",
+            format!("nenhuma versão do pacote para {} em {} depois do download", super::platform(), layout.versions().display()))),
     };
     if in_service_group {
         return Err(Failure::new("erro_dev_mode_no_servico",
@@ -162,7 +162,8 @@ pub async fn switch<R: Restarter, H: HealthProbe>(home: &Path, state_dir: &Path,
         UpdateError::Locked => Failure::new(BUSY, "uma atualização está rodando nesta máquina; tente de novo depois"),
         e => Failure::new("erro_dev_mode_falhou", e.to_string()),
     })?;
-    if let Some(pid) = super::other_engine(&StateFile::new(state_dir), state_dir) {
+    // O próprio pid no estado é do download que o executor fez antes desta troca, não do motor git.
+    if let Some(pid) = super::other_engine(&StateFile::new(state_dir), state_dir).filter(|pid| *pid != std::process::id()) {
         return Err(Failure::new("erro_dev_mode_motor_git", format!("o motor git do Python está atualizando esta máquina (pid {pid}); tente de novo depois")));
     }
     on_step("trocar");
@@ -428,8 +429,13 @@ mod tests {
             let _held = crate::update::UpdateLock::try_acquire(&m.layout()).unwrap();
             refused(m.switch(Request::On(m.checkout.clone()), false, &health).await, "atualização está rodando");
         }
-        crate::update::StateFile::new(&m.state_dir()).write(json!({"fase": "rodando", "pid": std::process::id()}));
+        // Outro processo vivo: o próprio pid no estado é o download do executor, não o motor git.
+        let mut engine = if cfg!(windows) { std::process::Command::new("ping").args(["-n", "60", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn() }
+            else { std::process::Command::new("sleep").arg("60").spawn() }.unwrap();
+        crate::update::StateFile::new(&m.state_dir()).write(json!({"fase": "rodando", "pid": engine.id()}));
         refused(m.switch(Request::On(m.checkout.clone()), false, &health).await, "motor git");
+        engine.kill().unwrap();
+        engine.wait().unwrap();
         std::fs::remove_dir_all(m.state_dir()).unwrap();
 
         // Sem `current` a máquina não foi migrada: quem decide é a migração.
@@ -564,7 +570,7 @@ mod tests {
         m.switch(Request::On(m.checkout.clone()), false, &m.health(true, None)).await.unwrap();
         assert!(matches!(check(&m.home, &Request::On(m.checkout.clone())), Ok(Checked::Already(_))));
         std::fs::remove_dir_all(m.layout().versions()).unwrap();
-        assert_eq!(code(Request::Off), "erro_dev_mode_sem_pacote");
+        assert!(matches!(check(&m.home, &Request::Off), Ok(Checked::Download)), "sem pacote, desligar baixa o do canal");
 
         crate::update::remove_link(&m.layout().current()).unwrap();
         assert_eq!(code(Request::On(m.checkout.clone())), "erro_dev_mode_nao_migrado");

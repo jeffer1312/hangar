@@ -149,6 +149,7 @@ async fn run() {
             Err(e) => tracing::warn!(error = %e, "porta pública sem a guarda dual-stack: outro programa pode ocupá-la em IPv6"),
         }
     }
+    state.front = hangar_server::routes::front_address(&state.accounts.env.home, state.cfg.listen);
     state.costs.schedule_warmup(std::time::Duration::from_secs(30));
     hangar_server::pages::routes::spawn_sweep(state.list.clone(), state.pages.clone());
     // Só aqui, nunca no `serve_until`: os testes sobem servidores contra o tmux de verdade.

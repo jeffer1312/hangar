@@ -1070,6 +1070,8 @@ export interface Atualizacao {
   /** Commits em origin/main que ainda não estão aqui. */
   atras?: number;
   atualizacao_disponivel: boolean;
+  /** Aviso importante ainda não aceito: oferece o Atualizar mesmo sem versão nova. */
+  pending_warning?: boolean;
   /** API de cliente do servidor publicado para esta máquina; ausente em servidor anterior = 1. */
   api_publicado?: number;
   mudancas: AtualizacaoMudanca[];
@@ -1125,7 +1127,9 @@ export interface MigrationStatus {
 }
 
 /** `GET /api/update/notes`: o que a próxima atualização traz, lido antes de atualizar. */
-export interface UpdateWarning { id: string; title: string; text: string }
+export type UpdateMode = 'package' | 'developer';
+/** `choice: 'mode'` = o aviso da migração, que pede o modo; `mode` é o atual (`null` = não migrou). */
+export interface UpdateWarning { id: string; title: string; text: string; choice?: 'mode'; mode?: UpdateMode | null }
 export type UpdateNewsKind = 'new' | 'improvement' | 'fix';
 export type UpdateNewsPlatforms = 'desktop' | 'mobile' | 'all';
 export interface UpdateNews {
@@ -1137,4 +1141,5 @@ export interface UpdateNews {
   try_it: string | null;
   animation: string | null;
 }
-export interface UpdateNotes { target: string; warnings: UpdateWarning[]; news: UpdateNews[] }
+/** `incomplete`: o servidor não leu os avisos da versão nova (só o da migração, que é local). */
+export interface UpdateNotes { target: string; warnings: UpdateWarning[]; news: UpdateNews[]; incomplete?: boolean }

@@ -7,7 +7,33 @@ $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $PSScriptRoot)
 
 $marca = Join-Path $HOME '.hangar\migration.json'
+# A prova do passo: ele rodou, migrando agora ou deixando a migracao para a tela.
+try {
+    New-Item -ItemType Directory -Force -Path (Join-Path $HOME '.hangar') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $HOME '.hangar\migration-offered'), (Get-Date).ToString('o'))
+} catch {
+    Write-Output "##HANGAR-FALHA## nao consegui gravar $HOME\.hangar\migration-offered: $($_.Exception.Message)"
+    exit 1
+}
 if (Test-Path -LiteralPath $marca) { Write-Output "ja migrada: $marca"; exit 0 }
+# Sem o aviso aceito na tela (o motor ou o app antigo atualizando), nada muda: a versao nova mostra o
+# aviso com a escolha, e a migracao roda pela tela.
+$aceitos = Join-Path $HOME '.hangar\update-accepted.json'
+# Mesma leitura do servidor (`update::accepted`): so uma lista de textos vale; outro formato e nada aceito.
+$aceito = $false
+try {
+    $texto = Get-Content -Raw -LiteralPath $aceitos -ErrorAction Stop
+    # O PowerShell 7 enumera a lista de fora (uma lista de um item vira texto solto, e [[...]] vira a de dentro):
+    # -NoEnumerate a preserva. O 5 nao tem a opcao e ja a preserva. Item a item num foreach, nao pelo
+    # pipeline, que descarta o null; -ccontains porque o servidor compara o id com caixa.
+    $obj = if ($PSVersionTable.PSVersion.Major -ge 7) { ConvertFrom-Json $texto -NoEnumerate -ErrorAction Stop } else { ConvertFrom-Json $texto -ErrorAction Stop }
+    $aceito = ($obj -is [array]) -and ($obj -ccontains '2026-10-24-pacote-por-versao')
+    foreach ($item in $obj) { if ($item -isnot [string]) { $aceito = $false } }
+} catch { $aceito = $false }
+if (-not $aceito) {
+    Write-Output 'migracao pendente: espera o aviso ser aceito na tela de atualizacao'
+    exit 0
+}
 $pasta = Join-Path $HOME '.hangar\migrate'
 $bin = Join-Path $pasta 'hangar-server.exe'
 

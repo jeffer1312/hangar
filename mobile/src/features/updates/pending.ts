@@ -1,4 +1,4 @@
-import type { Server, UpdateNews } from '@hangar/core';
+import type { PreparedUpdateAll, Server, UpdateAcceptance, UpdateNews } from '@hangar/core';
 import { prefs } from '../../stores/prefs';
 
 // O que a folha "Atualizar?" mostrou, guardado por servidor até "O que chegou para você" exibir uma vez.
@@ -45,15 +45,23 @@ export function firstPendingServer(serverIds: readonly string[]): string | null 
   return null;
 }
 
+/** Aceite dos avisos lidos, por id de servidor; vazio quando nenhum aviso apareceu. */
+export type UpdateAcceptances = Record<string, UpdateAcceptance>;
+
 // A rota da folha não recebe callback: quem pede confirmação deixa o pedido aqui e espera a resposta.
-export type ConfirmRequest = { server: Server; count?: number; resolve: (ok: boolean) => void };
+// `machines`: no "Atualizar todas", os avisos de cada máquina, lidos por quem pediu.
+export type ConfirmRequest = { server: Server; count?: number; machines?: Promise<PreparedUpdateAll>;
+  resolve: (ok: boolean, accept?: UpdateAcceptances) => void };
 let request: ConfirmRequest | null = null;
 
-export function requestUpdateConfirm(server: Server, open: () => void, count?: number): Promise<boolean> {
+/** `null` = cancelou. */
+export function requestUpdateConfirm(server: Server, open: () => void, count?: number, machines?: Promise<PreparedUpdateAll>): Promise<UpdateAcceptances | null> {
   request?.resolve(false);
   return new Promise((resolve) => {
     let done = false;
-    request = { server, count, resolve: (ok) => { if (done) return; done = true; request = null; resolve(ok); } };
+    request = { server, count, machines, resolve: (ok, accept = {}) => {
+      if (done) return; done = true; request = null; resolve(ok ? accept : null);
+    } };
     open();
   });
 }

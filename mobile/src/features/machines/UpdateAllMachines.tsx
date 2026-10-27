@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { InteractionManager, Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { ownUpdatableServers, updateAll } from '@hangar/core';
+import { ownUpdatableServers, prepareUpdateAll, updateAll } from '@hangar/core';
 import type { Server, UpdateAllResult, UpdateAllState } from '@hangar/core';
 import { SectionCard } from '../config/SectionCard';
 import { SettingsRow } from '../config/SettingsRow';
@@ -11,7 +11,7 @@ import { MachineRow } from './MachineRows';
 import { haptic } from '../../ui/haptics';
 import { useRouter } from 'expo-router';
 import { useServers } from '../../stores/servers';
-import { firstPendingServer, requestUpdateConfirm, whatsNewHref } from '../updates/pending';
+import { clearPendingNews, firstPendingServer, requestUpdateConfirm, whatsNewHref } from '../updates/pending';
 import * as m from '../../paraglide/messages';
 
 function statusText(value: UpdateAllState): string {
@@ -58,25 +58,34 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
 
   const start = async () => {
     if (round.busy) { setOpen(true); return; }
-    // Os avisos e novidades são os do servidor ativo: a versão nova é a mesma em todas as máquinas.
+    // As novidades são as do servidor ativo (a versão nova é a mesma); os avisos, os de cada máquina.
     const notesServer = candidates.find((s) => s.id === activeId) ?? candidates[0];
-    if (!notesServer || !await requestUpdateConfirm(notesServer, () => router.push('/update-confirm' as never), candidates.length)) return;
+    if (!notesServer) return;
+    const prepared = prepareUpdateAll(candidates);
+    const accept = await requestUpdateConfirm(notesServer, () => router.push('/update-confirm' as never), candidates.length, prepared);
+    if (!accept) return;
+    // Quem não mostrou os avisos fica fora da rodada: atualizá-la passaria por cima do aceite.
+    const targets = (await prepared).run.map((entry) => entry.server);
+    // A folha já trava o Atualizar sem máquina para rodar; isto só cobre a corrida.
+    if (!targets.length) { clearPendingNews(notesServer.id); return; }
     setOpen(true);
     if (round.busy) return;
-    setRound({ busy: true, count: candidates.length, rows: [], error: '' });
+    setRound({ busy: true, count: targets.length, rows: [], error: '' });
     try {
-      const results = await updateAll(candidates, (id, state) => {
+      const results = await updateAll(targets, (id, state) => {
         const server = candidates.find((entry) => entry.id === id);
         if (!server) return;
         // O core só publica representantes depois de tirar endereços da mesma máquina.
         setRound({ rows: round.rows.some((row) => row.server.id === id)
           ? round.rows.map((row) => row.server.id === id ? { server, state } : row)
           : [...round.rows, { server, state }] });
-      });
+      }, { accept });
       setRound({ rows: results });
       if (!results.length || results.some((row) => needsAttention(row.state))) haptic.error();
       else haptic.success();
       const done = results.find((row) => row.server.id === notesServer.id);
+      // A folha guardou as novidades da ativa antes de saber se ela rodaria.
+      if (!done || done.state.status === 'em_dia' || done.state.status === 'travado') clearPendingNews(notesServer.id);
       // Abre ao fechar a folha de resultados: por cima dela, no iOS, ficaria escondida e a lista se perderia.
       if (done && (done.state.status === 'atualizado' || done.state.status === 'atualizado_manual') && firstPendingServer([notesServer.id])) {
         if (openRef.current) newsAfterClose.current = notesServer.id;
