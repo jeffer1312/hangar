@@ -1,4 +1,5 @@
 """Rotas de orquestração: política (GET/PUT) e papéis do grupo (GET/POST) e o kick-off do árbitro."""
+import os
 import pytest
 from orq_contract_client import roles as orq_papeis
 from orq_http_native import NativeClient, NativePlan as orq_start
@@ -20,7 +21,7 @@ def test_politica_put_e_get(cli, tmp_path):
     assert r.status_code == 200, r.text
     pol = cli.get("/api/orquestracao/politica", headers=H).json()["politica"]
     assert pol[0]["conta"] == "200-01" and pol[0]["modelos"] == ["opus[1m]"] and pol[0]["trocar"] is False
-    assert "`apikey` (kimi) — não liberada" in cli.policy.read_text()
+    assert "`apikey` (kimi) — não liberada" in cli.policy.read_text(encoding="utf-8")
     # mtime velho -> 409; modelo fora do catálogo -> 400; conta desconhecida -> 400
     assert cli.put("/api/orquestracao/politica/200-01", headers=H,
                    json={"provider": "claude", "mtime": 0.0}).status_code == 409
@@ -97,6 +98,7 @@ def test_find_plan_ignora_exemplo_e_plano_terminado(tmp_path):
     assert orq.find_plan(tmp_path)["path"] == str(tmp_path / "aberto.md")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a sonda de erro usa um executável shell POSIX")
 def test_prontidao_nao_confunde_git_quebrado_com_sem_plano(tmp_path, monkeypatch):
     """Git que falha (timeout, dono duvidoso) não é "não há plano": o recado de planejadora avisa
     que não deu para ler, senão ela escreve um plano novo por cima de um que existe."""
@@ -221,14 +223,14 @@ def test_sem_terminal_com_read_only_na_abertura_e_recusado(cli, tmp_path):
     # O árbitro escreve `--read-only` na célula de abertura; o painel não edita esse trecho.
     from dataclasses import replace
     regras = cli.rules
-    texto = regras.read_text()
+    texto = regras.read_text(encoding="utf-8")
     rev = next(x for x in orq_papeis.ler(texto) if x.papel == "revisor")
-    regras.write_text(orq_papeis.escrever_papel(texto, replace(rev, abertura_extra="--read-only")))
-    antes = regras.read_text()
+    regras.write_text(orq_papeis.escrever_papel(texto, replace(rev, abertura_extra="--read-only")), encoding="utf-8")
+    antes = regras.read_text(encoding="utf-8")
     got = cli.get("/api/sessions/exec/orq", headers=H).json()
     r = cli.post("/api/sessions/exec/orq/papeis", headers=H, json={
         "mtime": got["mtime"], "papeis": [
             {"papel": "revisor", "sessao": "rev", "provider": "claude", "conta": "200-01",
              "modelo": "opus[1m]", "esforco": "high", "headless": True}]})
     assert r.status_code == 400 and r.json()["detail"]["code"] == "erro_orq_headless_read_only"
-    assert regras.read_text() == antes
+    assert regras.read_text(encoding="utf-8") == antes

@@ -1,6 +1,7 @@
 """Provider `orq`: a linha do orquestrador na lista, a linha do tempo como conversa e as recusas."""
 import json
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -106,6 +107,7 @@ def test_list_with_state_reads_activity_and_never_touches_tmux(root, tmp_path, c
     assert state().state == "working"
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="a observação da trava usa /proc/locks no Linux")
 def test_a_held_advance_lock_is_working_whatever_its_age(tmp_path):
     # A merge plus the plan's Integração: outlasts ACTIVE_S; the lock is held the whole time.
     import fcntl
@@ -197,7 +199,9 @@ def test_a_parecer_cited_in_the_timeline_opens_through_the_file_route(root, tmp_
     monkeypatch.setattr(settings, "auth_token", "secret")
     import app.api as api
     panel = cli.get("/api/sessions/g1-orq/orq/panel", headers=H).json()
-    assert [x["parecer"] for x in panel["decisions"]] == [str(parecer)]
+    # A referência Python só reconhece caminhos POSIX no campo Parecer.
+    expected = None if os.name == "nt" else str(parecer)
+    assert [x["parecer"] for x in panel["decisions"]] == [expected]
     monkeypatch.setattr(api, "_cached_info_sync", lambda name: SessionInfo(
         name=name, jsonl=str(d / "timeline-2026-09-28-g1.jsonl"), cwd=str(root), provider="orq", tracked=True))
     r = TestClient(api.app).get("/api/sessions/g1-orq/file", params={"path": str(parecer)}, headers=H)
