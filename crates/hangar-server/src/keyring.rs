@@ -51,26 +51,36 @@ impl Keyring {
     fn backend(&self) -> std::sync::Arc<dyn Backend> { self.backend.read().unwrap_or_else(|e| e.into_inner()).clone() }
 
     /// Bloqueante.
-    pub fn refresh(&self) -> KeyringState {
+    pub fn refresh(&self) -> KeyringState { self.read().unwrap_or_else(|| self.current()) }
+
+    /// Bloqueante. `None` = não deu para ler; o último estado publicado fica.
+    fn read(&self) -> Option<KeyringState> {
         let Some(state) = self.backend().state() else {
             tracing::warn!(code = "keyring_state_unread", "estado do chaveiro não foi lido; fica o último");
-            return self.current();
+            return None;
         };
         self.tx.send_if_modified(|s| std::mem::replace(s, state) != state);
-        state
+        Some(state)
     }
 
     /// Bloqueante. Senha aceita e chaveiro ainda trancado é o daemon preso por um prompt que
-    /// falhou: reinicia e manda a senha de novo, uma vez.
+    /// falhou: reinicia e manda a senha de novo, uma vez. Leitura que não veio não conta como
+    /// trancado: reiniciar à toa trancaria o chaveiro que acabou de abrir.
     pub fn unlock(&self, password: &[u8]) -> Result<KeyringState, UnlockError> {
         let backend = self.backend();
         backend.unlock(password)?;
-        if self.refresh() == KeyringState::Locked {
-            if !backend.restart() { return Err(UnlockError::Failed); }
-            backend.unlock(password)?;
-            if self.refresh() == KeyringState::Locked { return Err(UnlockError::Failed); }
+        match self.read() {
+            Some(KeyringState::Locked) => {
+                if !backend.restart() { return Err(UnlockError::Failed); }
+                backend.unlock(password)?;
+                match self.read() {
+                    Some(KeyringState::Locked) | None => Err(UnlockError::Failed),
+                    Some(state) => Ok(state),
+                }
+            }
+            Some(state) => Ok(state),
+            None => Err(UnlockError::Failed),
         }
-        Ok(self.current())
     }
 }
 
@@ -308,6 +318,24 @@ mod tests {
         assert_eq!(k.refresh(), KeyringState::Locked);
         assert_eq!(k.current(), KeyringState::Locked);
         assert_eq!(k.refresh(), KeyringState::Absent);
+    }
+
+    /// Senha aceita e leitura que não veio: não reinicia o daemon (isso o trancaria de novo) e não
+    /// diz que abriu.
+    #[test]
+    fn an_unread_state_after_unlock_does_not_restart_the_daemon() {
+        struct Unread(std::sync::atomic::AtomicU32);
+        impl Backend for Unread {
+            fn state(&self) -> Option<KeyringState> { None }
+            fn unlock(&self, _: &[u8]) -> Result<(), UnlockError> { Ok(()) }
+            fn restart(&self) -> bool { self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst); true }
+        }
+        let backend = std::sync::Arc::new(Unread(std::sync::atomic::AtomicU32::new(0)));
+        let k = Keyring::system();
+        k.set_backend(backend.clone());
+        k.tx.send_replace(KeyringState::Locked);
+        assert_eq!(k.unlock(b"x"), Err(UnlockError::Failed));
+        assert_eq!(backend.0.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[test]
