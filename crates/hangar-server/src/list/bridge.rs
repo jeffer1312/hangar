@@ -270,6 +270,8 @@ pub struct ListBridge {
     live_jsonl: Mutex<Option<(Instant, HashSet<String>)>>,
     /// Pedidos de navegador do agente: a lista os publica, e sessão que acaba ou troca de nome os leva junto.
     pub nav: Arc<crate::nav_requests::NavStore>,
+    /// Chaveiro desta máquina: a lista do dono publica o estado dele.
+    pub keyring: Arc<crate::keyring::Keyring>,
 }
 
 /// Tarefa bloqueante que entrou em pânico: o hook já registrou onde; aqui fica qual operação.
@@ -287,7 +289,7 @@ impl ListBridge {
         let (caches, demoted) = (Arc::<Caches>::default(), Arc::<crate::state::demote::Demoted>::default());
         caches.classify.with(|c| c.hooks.set_demoted(demoted.clone()));
         let nav = Arc::new(crate::nav_requests::NavStore::load(env.dirs.as_ref().map(|d| d.home.as_path())));
-        Self { nav, env: Arc::new(env), local: Mutex::default(), shortcuts: Default::default(), facts, caches, runtime: std::sync::OnceLock::new(),
+        Self { nav, keyring: Arc::new(crate::keyring::Keyring::system()), env: Arc::new(env), local: Mutex::default(), shortcuts: Default::default(), facts, caches, runtime: std::sync::OnceLock::new(),
             shares: std::sync::OnceLock::new(), owner_clients: AtomicU32::new(0), seen: Mutex::default(),
             discovery: tokio::sync::Mutex::new(None),
             snapshot: tokio::sync::Mutex::new(None), git_running: Arc::default(),

@@ -8,6 +8,7 @@ pub mod orq_conductor;
 pub mod orq_storage;
 pub mod claude_customizations;
 pub mod jev_aux;
+pub mod keyring;
 pub mod claude_defaults;
 pub mod presence;
 pub mod watchdog;

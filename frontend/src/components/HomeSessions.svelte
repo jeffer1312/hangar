@@ -3,6 +3,7 @@
   import { stateColors } from '@hangar/core';
   import SessionCard from './SessionCard.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
+  import KeyringNotice from './KeyringNotice.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { createSessionListModel } from '../lib/sessionListModel.svelte';
   import { groupHomeSessions, homeSessionsView, type HomeState } from '../lib/homeSessions';
@@ -42,6 +43,9 @@
     {:else if manyServers}
       <p class="machine">{b.server.label}: {m.lista_carregando()}</p>
     {/if}
+  {/each}
+  {#each sessionsStore.byServer.filter((b) => b.keyringLocked && !b.server.invite) as b (b.server.id)}
+    <KeyringNotice server={b.server} />
   {/each}
   {#if deleteError}<p class="machine error" role="alert">{deleteError}</p>{/if}
 

@@ -17,6 +17,7 @@ import * as m from '../paraglide/messages';
   import BottomSheet from '../components/BottomSheet.svelte';
   import ConfirmSheet from '../components/ConfirmSheet.svelte';
   import Git from '../components/Git.svelte';
+  import KeyringNotice from '../components/KeyringNotice.svelte';
   import AttentionFeed from '../components/AttentionFeed.svelte';
   import AccountMenu from '../components/AccountMenu.svelte';
   import LiveVoiceButton from '../components/LiveVoiceButton.svelte';
@@ -547,6 +548,10 @@ import * as m from '../paraglide/messages';
         {/if}
       </div>
     {/if}
+    <!-- Fora da top-strip: ela só existe com 2+ servidores ou falha, e o chaveiro trancado vale com um só. -->
+    {#each ownBuckets.filter((b) => b.keyringLocked) as b (b.server.id)}
+      <KeyringNotice server={b.server} />
+    {/each}
     {#if loading && sessions.length === 0}
       <div class="empty-state">
         <div class="spinner-large" aria-label={m.comum_carregando()}>⟳</div>

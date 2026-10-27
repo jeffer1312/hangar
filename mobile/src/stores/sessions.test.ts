@@ -711,6 +711,20 @@ test('list_error com linhas na tela tira o erro anterior do servidor, como no PW
   rel();
 });
 
+test('evento keyring marca o chaveiro trancado do servidor e sobrevive à lista seguinte', async () => {
+  const rel = useSessions.getState().retain();
+  await settle();
+  created[0].trigger('keyring', JSON.stringify({ state: 'locked' }));
+  expect(useSessions.getState().byServer[0].keyringLocked).toBe(true);
+  created[0].trigger('sessions', JSON.stringify([{ name: 'viva', state: 'working' }]));
+  expect(useSessions.getState().byServer[0].keyringLocked).toBe(true);
+  created[0].trigger('keyring', '{torto');
+  expect(useSessions.getState().byServer[0].keyringLocked).toBe(true);
+  created[0].trigger('keyring', JSON.stringify({ state: 'unlocked' }));
+  expect(useSessions.getState().byServer[0].keyringLocked).toBe(false);
+  rel();
+});
+
 test('list_error sem lista na tela mantém o aviso de bloqueio do servidor', async () => {
   const rel = useSessions.getState().retain();
   await settle();

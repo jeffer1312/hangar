@@ -876,6 +876,11 @@ export async function getSessionDefaultsForServer(server: Server, provider: Prov
   return result.defaults;
 }
 
+// A senha só viaja no corpo, nunca na URL. Prazo largo: o servidor pode reiniciar o daemon do chaveiro.
+export function unlockKeyringForServer(s: Server, password: string): Promise<{ state: import('./sessions').KeyringState }> {
+  return apiFetchForServer(s, '/api/keyring/unlock', { method: 'POST', body: JSON.stringify({ password }) }, 45_000);
+}
+
 export function setClaudeDefaultsForServer(s: Server, body: ClaudeDefaultsBody): Promise<{ ok: boolean; written: string[] }> {
   return apiFetchForServer(s, '/api/claude/defaults', { method: 'POST', body: JSON.stringify(body) });
 }

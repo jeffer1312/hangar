@@ -10,6 +10,15 @@ const sess = (name: string, extra: Partial<SessionInfo> = {}): SessionInfo =>
 const slots = (m: Record<string, Slot>) => new Map(Object.entries(m));
 
 describe('aggregateSessions', () => {
+  it('chaveiro trancado marca o bucket do servidor, menos quando ele está fora do ar', () => {
+    const a = aggregateSessions([srv('a'), srv('b'), srv('c')], slots({
+      a: { sessions: [], error: null, keyring: 'locked' },
+      b: { sessions: [], error: null, keyring: 'unlocked' },
+      c: { sessions: [], error: 'offline', keyring: 'locked' },
+    }));
+    expect(a.byServer.map((b) => b.keyringLocked)).toEqual([true, false, false]);
+  });
+
   it('achata na ordem de servers e enriquece com serverId/label/color', () => {
     const a = aggregateSessions([srv('a'), srv('b')], slots({
       a: { sessions: [sess('x')], error: null },

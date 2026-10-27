@@ -34,6 +34,7 @@ import { leaveExternal } from '../pair/leaveExternal';
 import { pickKey } from '../pair/groupPairs';
 import { useIdentities } from '../pair/identities';
 import { ConversationList } from './ConversationList';
+import { KeyringNotice } from './KeyringNotice';
 import { RenameSheet } from './RenameSheet';
 import { WorktreeSheet } from '../worktrees/WorktreeSheet';
 import * as m from '../../paraglide/messages';
@@ -433,6 +434,8 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
       ) : <Text style={styles.emptyTxt}>{`${bucket.server.label}: ${m.lista_carregando()}`}</Text>}
     </View>
   )) : null;
+  const keyringNotices = byServer.filter((bucket) => bucket.keyringLocked)
+    .map((bucket) => <KeyringNotice key={bucket.server.id} server={bucket.server} />);
 
   let corpo: ReactNode;
   if (!ready) corpo = vazio(null, m.comum_carregando(), false, true);
@@ -512,6 +515,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
         {conversas ? null : <View style={styles.buscaLinha}>{campoBusca}{groupControl}</View>}
         {conversas ? null : buscarDentro}
         {machineStatus}
+        {keyringNotices}
         <View style={styles.corpo}>{corpo}</View>
         {home ? null : rodape}
       </View>

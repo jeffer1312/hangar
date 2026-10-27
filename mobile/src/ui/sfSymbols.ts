@@ -69,6 +69,7 @@ export const SF_SYMBOLS: Partial<Record<IconName, SFSymbol>> = {
   ListOrdered: 'list.number',
   ListTodo: 'checklist',
   ListTree: 'list.bullet.indent',
+  Lock: 'lock',
   LogOut: 'rectangle.portrait.and.arrow.right',
   Maximize2: 'arrow.up.left.and.arrow.down.right',
   MessageCircle: 'bubble.left',

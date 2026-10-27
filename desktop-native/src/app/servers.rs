@@ -89,6 +89,8 @@ impl Hangar {
         let active = self.server.as_deref().map(norm).unwrap_or_default();
         let wanted: Vec<ServerEntry> = self.servers.iter().filter(|s| !s.disabled && norm(&s.address) != active).cloned().collect();
         self.remote.retain(|key, _| wanted.iter().any(|s| &norm(&s.address) == key));
+        // Máquina desligada ou removida não deixa o aviso do chaveiro para trás.
+        self.keyring.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
         for s in &self.servers { api::route::seed(&s.address, s.invite, s.lan.as_ref()); }
         for entry in wanted {
             let key = norm(&entry.address);

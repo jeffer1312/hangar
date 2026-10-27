@@ -348,7 +348,7 @@ function createSessionsStore() {
         try {
           const sessions = JSON.parse(e.data);
           if (!Array.isArray(sessions)) throw new Error('sessions frame must be an array');
-          slots.set(s.id, { sessions, error: null });
+          slots.set(s.id, { sessions, error: null, keyring: slots.get(s.id)?.keyring });
           if (!s.invite) notePairs();
           if ((sessions as SessionInfo[]).some((session) => session.pair_owner || session.pair_peers?.some((peer) => peer.includes('::')))) {
             slotsNeedingIdentity.add(s.id);
@@ -370,8 +370,20 @@ function createSessionsStore() {
             codigo: 'json_invalido', tentativa }, s.baseUrl);
           // Frame malformado: sem isto o throw sobe no dispatch do EventSource e o slot congela em
           // silêncio (onerror não dispara pra erro de parse). Mantém a última lista boa e avisa.
-          slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: m.sessao_erro_servidor() });
+          const prev = slots.get(s.id);
+          slots.set(s.id, { sessions: prev?.sessions ?? null, error: m.sessao_erro_servidor(), keyring: prev?.keyring });
         }
+        recompute();
+      });
+      // Chaveiro `login` da máquina: vem na conexão e a cada troca. Dado torto é ignorado.
+      es.addEventListener('keyring', (e) => {
+        if (!isCurrent()) return;
+        arm();
+        let state: unknown;
+        try { state = JSON.parse((e as MessageEvent).data)?.state; } catch { return; }
+        if (state !== 'locked' && state !== 'unlocked' && state !== 'absent') return;
+        const prev = slots.get(s.id);
+        slots.set(s.id, { sessions: prev?.sessions ?? null, error: prev?.error ?? null, keyring: state });
         recompute();
       });
       // O agente abriu o navegador embutido de uma sessão (possivelmente fora da tela) — ver
@@ -402,7 +414,7 @@ function createSessionsStore() {
         // Com linhas na tela a lista boa continua e a falha fica só no diário (um erro anterior sai:
         // o servidor respondeu); sem linha nenhuma o erro distingue "não respondeu" de "não há sessão".
         if (sessions?.length && !slot?.error) return;
-        slots.set(s.id, { sessions, error: sessions?.length ? null : m.sessao_erro_servidor() });
+        slots.set(s.id, { sessions, error: sessions?.length ? null : m.sessao_erro_servidor(), keyring: slot?.keyring });
         recompute();
       });
       es.onerror = () => {

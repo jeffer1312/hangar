@@ -106,6 +106,8 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if crate::push::http::matches(method, path) { return true; }
     if crate::session_media::is_media(method, path) { return true; }
     if crate::accounts::http::matches(method, path) { return true; }
+    // Senha do chaveiro (`keyring::unlock_route`): nunca repassada.
+    if *method == Method::POST && path == "/api/keyring/unlock" { return true; }
     // SideStore no aparelho do cabo (`device_install::routes`): nunca repassado.
     if *method == Method::GET && matches!(path, "/api/device-install/devices" | "/api/device-install/progress") { return true; }
     if *method == Method::POST && matches!(path, "/api/device-install/trust" | "/api/device-install/start" | "/api/device-install/code" | "/api/device-install/certs") { return true; }

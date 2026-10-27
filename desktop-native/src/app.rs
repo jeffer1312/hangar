@@ -35,6 +35,7 @@ mod grouping;
 mod group_sheet;
 mod hangar_live;
 mod harness;
+mod keyring;
 mod viewer;
 mod window_tray;
 mod presence;
@@ -341,6 +342,8 @@ enum Payload {
     // Digitação num campo de mod: o lugar, a `key` e a identidade do campo que mandou; a volta libera o próximo pedido
     // da fila dele, e só a falha aparece.
     PluginInput(String, crate::plugin_ui::Control, EntityId, Result<Value, Failure>),
+    // Destrancar o chaveiro de uma máquina (chave `servers::norm`): a resposta é dela, não da conexão ativa.
+    Keyring(String, Result<Value, Failure>),
     // Lista de outra máquina: a geração dos SSE de lista, a chave do servidor e o que chegou.
     Remote(u64, String, servers::RemoteUpdate),
     HeadlessPlan(SessionKey, controls::PlanOutcome),
@@ -583,6 +586,9 @@ pub struct Hangar {
     queue: queue::QueueUi,
     /// Terminais de atalho vivos da máquina ativa (evento `shortcut_terminals`); as outras máquinas guardam no `RemoteList`.
     live_terms: Vec<terminal::LiveTerm>,
+    /// Máquinas (chave `servers::norm`, ativa e outras) com o chaveiro trancado, pelo evento `keyring` da lista de cada uma.
+    /// Só a queda do stream dela limpa: o servidor reenvia o estado ao reconectar.
+    keyring: HashMap<String, keyring::Prompt>,
     /// Cartão da pergunta aberto: (máquina, dono — vazio = No Hangar, terminal) e o diálogo que o mostra.
     question_open: Option<(String, String, String)>,
     question_card: Option<Entity<hangar_live::QuestionCard>>,
@@ -1061,7 +1067,7 @@ impl Hangar {
             history_installed: false, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
-            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), question_open: None, question_card: None,
+            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
@@ -1748,6 +1754,7 @@ impl Hangar {
             Payload::BackdropPicked(result) => { self.receive_picked_backdrop(result, window, cx); return; }
             Payload::BackdropRemoved(result) => { self.receive_removed_backdrop(result, window, cx); return; }
             Payload::Lan(address, lan) => { self.remember_lan(&address, lan); return; }
+            Payload::Keyring(key, result) => { self.receive_keyring(key, result, cx); return; }
             // Cada máquina responde por si: a troca do ativo não descarta a resposta.
             Payload::Presence(key, switched, result) => { self.receive_presence(key, switched, result, window, cx); return; }
             // Cada máquina tem a própria geração: a troca do ativo não derruba as listas das outras.
@@ -1756,10 +1763,20 @@ impl Hangar {
                     // Os terminais vivos dela (evento novo ou stream caído) acertam o chip, os blocos e o painel.
                     let live = matches!(&update, servers::RemoteUpdate::Stream(Update::Offline(_)))
                         || matches!(&update, servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "shortcut_terminals");
+                    // Chaveiro dela: o evento próprio ou a queda do stream (o estado volta reenviado na reconexão).
+                    let keyring = match &update {
+                        servers::RemoteUpdate::Stream(Update::Offline(_)) => Some(false),
+                        servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "keyring" => keyring::locked(&frame.data),
+                        _ => None,
+                    };
                     // Menu, renomear, fechar e grupo das linhas desta máquina acompanham a lista dela como os da ativa.
                     if self.receive_remote(generation, key.clone(), update, cx) { self.sidebar_sessions_changed(window, cx); }
                     self.remote_changed(&key, window, cx);
                     if live { self.live_changed(&key, window, cx); }
+                    if let Some(locked) = keyring && self.set_keyring(&key, locked, window, cx) {
+                        self.redraw(panes::Area::Nav, cx);
+                        cx.notify();
+                    }
                 }
                 return;
             }
@@ -1827,6 +1844,8 @@ impl Hangar {
                 else {
                     self.list_online = false;
                     self.list_error = Some(self.active_failure(&error));
+                    let server = self.active_key();
+                    if self.set_keyring(&server, false, window, cx) { self.redraw(panes::Area::Nav, cx); }
                     // Stream da lista caído: o chip e os blocos não mostram terminal velho dele.
                     if !std::mem::take(&mut self.live_terms).is_empty() {
                         let server = self.active_key();
@@ -1856,6 +1875,13 @@ impl Hangar {
                     true
                 }
                 else if frame.event == "nav" { self.receive_nav(frame.data, window, cx); true }
+                else if frame.event == "keyring" {
+                    let server = self.active_key();
+                    let state = keyring::locked(&frame.data);
+                    visible = state.is_some_and(|locked| self.set_keyring(&server, locked, window, cx));
+                    if visible { self.redraw(panes::Area::Nav, cx); }
+                    state.is_some()
+                }
                 else if frame.event == "shortcut_terminals" {
                     let list = terminal::parse_live_terms(&frame.data);
                     // Lista igual à de antes não redesenha; o tempo de "rodando" anda pelo relógio próprio.
@@ -2035,7 +2061,7 @@ impl Hangar {
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
                 | Payload::AppearanceSaved(..) | Payload::Backdrop(..) | Payload::BackdropPicked(..) | Payload::BackdropRemoved(..)
-                | Payload::Remote(..) | Payload::Lan(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
+                | Payload::Remote(..) | Payload::Lan(..) | Payload::Keyring(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
                 | Payload::Mermaid(..) => unreachable!(),
         }
         // Lista que trocou ou tirou a sessão aberta refaz a conversa.
@@ -5706,6 +5732,8 @@ impl Hangar {
                     };
                     let key = if by_machine { format!("machine/{}", m.key) } else { String::new() };
                     children.push((key, at, self.render_server_header(&id, &m.key, &label, count, invite, error, cx)));
+                    // Num servidor só, o aviso do chaveiro aparece embaixo da lista, junto da falha dela.
+                    if multi && let Some(notice) = self.render_keyring_notice(&m.key, false, cx) { children.push((String::new(), at, notice)); }
                     hidden = self.sidebar.is_collapsed(&format!("server:{}", m.key));
                     if !hidden { rows(list, m.remote.as_deref(), at, &mut children, window, cx); }
                 }
@@ -5798,6 +5826,7 @@ impl Hangar {
             .when_some(self.list_error.clone(), |el, text| el.child(div().px_4().py_1().flex().items_center().gap_2().text_xs().text_color(theme::warning())
                 .child(div().flex_1().min_w_0().child(text))
                 .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
+            .children((!multi).then(|| self.render_keyring_notice(&self.active_key(), false, cx)).flatten())
             // O CTA do rodapé da barra do web, com o recolher ao lado.
             .child(div().flex_shrink_0().px(px(8.)).pt(px(8.)).pb(px(8.)).flex().items_center().gap_2()
                 .child(self.new_session_button(false, cx))
@@ -5889,7 +5918,8 @@ impl Hangar {
                 .child(self.new_session_button(true, cx)))
             .when_some(self.list_error.clone(), |el, text| el.child(div().flex_shrink_0().max_w(px(260.)).flex().items_center().gap_1()
                 .child(div().min_w_0().truncate().text_xs().text_color(theme::warning()).child(text))
-                .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx)))))),
+                .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
+            .children(self.keyring_keys().iter().filter_map(|key| self.render_keyring_notice(key, true, cx)).collect::<Vec<_>>()),
             px(if floating { theme::PANEL_RADIUS } else { 0. }))
     }
 

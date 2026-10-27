@@ -187,6 +187,7 @@ impl Hangar {
                 .child(div().flex_1())
                 .when(invite, |el| el.child(div().text_size(px(10.)).text_color(theme::muted()).child(tr("invite_badge"))))
                 .child(div().text_xs().text_color(theme::faint()).child(sessions.len().to_string())))
+            .children(self.render_keyring_notice(key, false, cx))
             .child(div().id(SharedString::from(format!("machines-tray-list-{key}"))).relative().w_full().max_h(height).overflow_y_scroll()
                 .flex().flex_col().gap(px(5.))
                 .when(!loaded && error.is_none(), |el| el.child(div().p_2().text_xs().text_color(theme::muted()).child(tr("loading"))))
