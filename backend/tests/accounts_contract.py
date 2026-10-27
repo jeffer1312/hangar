@@ -10,6 +10,7 @@ from json import dumps
 import os
 from pathlib import Path
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -231,7 +232,7 @@ process.stdout.write(r);process.exit(r.includes('false')?1:0);"""
             executable = fixture / "claude"
             executable.write_text("#!/usr/bin/env node\n" + source, encoding="utf-8")
             executable.chmod(0o700)
-        environment["PATH"] = str(fixture) + os.pathsep + environment["PATH"]
+        environment["PATH"] = synthetic_cli_path(fixture)
         environment.update(ACCOUNT_HTTP_UPSTREAM=reference.base_url.removeprefix("http://"),
                            HANGAR_RUNTIME_INSTANCE="contract-instance")
         self.process = subprocess.Popen([str(binary), "--exact", "accounts_claude_login::http_probe_process", "--nocapture"],
@@ -254,6 +255,22 @@ process.stdout.write(r);process.exit(r.includes('false')?1:0);"""
         self.process.wait(timeout=15)
         self.process.stdout.close()
         self.process.stderr.close()
+
+
+def synthetic_cli_path(fixture: Path) -> str:
+    """Só o Node e os dublês: CLIs instaladas não podem aquecer usando a conta da prova."""
+    node = shutil.which("node")
+    assert node, "Node é necessário para os contratos de contas"
+    destination = fixture / ("node.exe" if os.name == "nt" else "node")
+    if not destination.exists():
+        if os.name == "nt":
+            try:
+                os.link(node, destination)
+            except OSError:
+                shutil.copy2(node, destination)
+        else:
+            destination.symlink_to(Path(node).resolve())
+    return str(fixture)
 
 
 class RustCodex(HttpTransport):
@@ -315,7 +332,7 @@ else send({id:m.id,error:{code:-32601,message:'método inesperado'}});
         else:
             (self.fixture / "codex.cmd").write_text("@node fixture\r\n", encoding="utf-8")
         environment = isolated_environment(reference.root)
-        environment["PATH"] = "" if missing_cli else str(self.fixture) + os.pathsep + environment["PATH"]
+        environment["PATH"] = "" if missing_cli else synthetic_cli_path(self.fixture)
         environment.update(ACCOUNT_HTTP_UPSTREAM=reference.base_url.removeprefix("http://"),
                            HANGAR_RUNTIME_INSTANCE="contract-instance")
         if device_url is not None:

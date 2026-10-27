@@ -184,9 +184,12 @@ def _sem_endereco_do_plugin_real():
 def _sem_orquestracoes_reais(tmp_path_factory):
     # O Rust resolve o cofre pela casa do processo; um patch no módulo Python não o isolaria.
     pasta = tmp_path_factory.mktemp("rust-home")
-    nomes = ("HOME", "USERPROFILE")
+    nomes = ("HOME", "USERPROFILE", "CARGO_HOME", "RUSTUP_HOME")
     anteriores = {nome: os.environ.get(nome) for nome in nomes}
-    for nome in nomes:
+    # A casa de dados muda; a instalação do compilador e seu cache continuam os do preparo.
+    os.environ.setdefault("CARGO_HOME", str(Path.home() / ".cargo"))
+    os.environ.setdefault("RUSTUP_HOME", str(Path.home() / ".rustup"))
+    for nome in ("HOME", "USERPROFILE"):
         os.environ[nome] = str(pasta)
     try:
         yield
