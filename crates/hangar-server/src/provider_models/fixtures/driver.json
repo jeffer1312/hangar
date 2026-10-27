@@ -1,0 +1,218 @@
+{
+  "source_commit": "d2a42410f9fe6df4ea491b296c7fea7b98d8b844",
+  "generator": "PYTHON=<Python com dependências do backend> bash crates/hangar-server/src/provider_models/fixtures/regenerate.sh <checkout da source_commit>",
+  "cases": [
+    {
+      "name": "model",
+      "alias": "apikey/k3",
+      "display": "K3",
+      "effort": null,
+      "frames": [
+        "prompt vazio\n",
+        "Select a model  (type to search)\nThinking (←→ to switch)\nLow [ High ] Max\n",
+        "Switched to K3 with thinking high for this session only."
+      ],
+      "keys": [
+        {
+          "key": "/model",
+          "literal": true
+        },
+        {
+          "key": "Enter",
+          "literal": false
+        },
+        {
+          "key": "apikey/k3",
+          "literal": true
+        },
+        {
+          "key": "M-s",
+          "literal": false
+        }
+      ],
+      "expected": {
+        "ok": {
+          "ok": true,
+          "result": "Switched to K3 with thinking high for this session only."
+        }
+      }
+    },
+    {
+      "name": "effort",
+      "alias": null,
+      "display": null,
+      "effort": "low",
+      "frames": [
+        "prompt vazio\n",
+        "Select a model  (type to search)\nThinking (←→ to switch)\nLow [ High ] Max\n",
+        "Select a model  (type to search)\nThinking (←→ to switch)\nLow [ High ] Max\n",
+        "Thinking set to low for this session only."
+      ],
+      "keys": [
+        {
+          "key": "/model",
+          "literal": true
+        },
+        {
+          "key": "Enter",
+          "literal": false
+        },
+        {
+          "key": "Left",
+          "literal": false
+        },
+        {
+          "key": "M-s",
+          "literal": false
+        }
+      ],
+      "expected": {
+        "ok": {
+          "ok": true,
+          "result": "Thinking set to low for this session only."
+        }
+      }
+    },
+    {
+      "name": "both",
+      "alias": "apikey/k3",
+      "display": "K3",
+      "effort": "max",
+      "frames": [
+        "prompt vazio\n",
+        "Select a model  (type to search)\nThinking (←→ to switch)\nLow [ High ] Max\n",
+        "Select a model  (type to search)\nThinking (←→ to switch)\nLow [ High ] Max\n",
+        "Switched to K3 with thinking max for this session only."
+      ],
+      "keys": [
+        {
+          "key": "/model",
+          "literal": true
+        },
+        {
+          "key": "Enter",
+          "literal": false
+        },
+        {
+          "key": "apikey/k3",
+          "literal": true
+        },
+        {
+          "key": "Right",
+          "literal": false
+        },
+        {
+          "key": "M-s",
+          "literal": false
+        }
+      ],
+      "expected": {
+        "ok": {
+          "ok": true,
+          "result": "Switched to K3 with thinking max for this session only."
+        }
+      }
+    },
+    {
+      "name": "wrong",
+      "alias": "apikey/k3",
+      "display": "K3",
+      "effort": null,
+      "frames": [
+        "prompt vazio\n",
+        "Select a model  (type to search)\nThinking (←→ to switch)\nLow [ High ] Max\n",
+        "Switched to K3-256k with thinking high for this session only."
+      ],
+      "keys": [
+        {
+          "key": "/model",
+          "literal": true
+        },
+        {
+          "key": "Enter",
+          "literal": false
+        },
+        {
+          "key": "apikey/k3",
+          "literal": true
+        },
+        {
+          "key": "M-s",
+          "literal": false
+        },
+        {
+          "key": "Escape",
+          "literal": false
+        }
+      ],
+      "expected": {
+        "error": {
+          "status": 409,
+          "detail": "o Kimi aplicou outra coisa (Switched to K3-256k with thinking high for this session only.)"
+        }
+      }
+    },
+    {
+      "name": "no_levels",
+      "alias": null,
+      "display": null,
+      "effort": "low",
+      "frames": [
+        "prompt vazio\n",
+        "Select a model\n",
+        "Select a model\n"
+      ],
+      "keys": [
+        {
+          "key": "/model",
+          "literal": true
+        },
+        {
+          "key": "Enter",
+          "literal": false
+        },
+        {
+          "key": "Escape",
+          "literal": false
+        }
+      ],
+      "expected": {
+        "error": {
+          "status": 409,
+          "detail": "este modelo nao tem niveis de pensamento no picker"
+        }
+      }
+    },
+    {
+      "name": "outside",
+      "alias": null,
+      "display": null,
+      "effort": "xhigh",
+      "frames": [
+        "prompt vazio\n",
+        "Select a model  (type to search)\nThinking (←→ to switch)\nLow [ High ] Max\n",
+        "Select a model  (type to search)\nThinking (←→ to switch)\nLow [ High ] Max\n"
+      ],
+      "keys": [
+        {
+          "key": "/model",
+          "literal": true
+        },
+        {
+          "key": "Enter",
+          "literal": false
+        },
+        {
+          "key": "Escape",
+          "literal": false
+        }
+      ],
+      "expected": {
+        "error": {
+          "status": 409,
+          "detail": "nivel xhigh nao aparece no picker deste modelo"
+        }
+      }
+    }
+  ]
+}
