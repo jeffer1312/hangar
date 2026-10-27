@@ -75,6 +75,26 @@ site/tools/record/enc.sh <cena> <lang>
 Worker de `hangar.dev.br/api/relatorio`: recebe o relatório do assistente de instalação, guarda no KV por 90 dias e manda
 e-mail. Projeto npm próprio (fora dos workspaces da raiz).
 
+Dois tipos de relatório, pelo campo `kind` do corpo:
+
+- **Instalação** (sem `kind`): carimbo `hangar-native/<versão>`, chave `<data>/<uuid>`, limite de 3 por minuto por IP.
+- **Diagnóstico** (`kind: "diagnostico"`, o "Reportar problema" das Configurações): o servidor do Hangar envia com o
+  carimbo `hangar-server/<versão>`. Chave `diag/<código>` (8 letras de `a-z2-7`), limite próprio de 1 por minuto por IP
+  (`DIAG_LIMITER`). Sem gravar no KV (falha ou teto do dia) a resposta é 503, nunca um código que não abre. A resposta
+  `201 {id, code, upload}` traz uma senha de uso único (10 min) para o envio do diário inteiro:
+  `PUT /api/relatorio/diario` com `x-hangar-stamp`, `x-hangar-code: <código>`, `x-hangar-upload: <senha>` e
+  `content-length` até 10 MiB. O corpo (gzip) vai ao KV sem ser aberto, em `diag/<código>/diario.jsonl.gz`.
+  Respostas: 201, 403 (carimbo, código ou senha errada/vencida/já usada), 411 (sem `content-length`), 413, 429, 503.
+
+O e-mail do diagnóstico chega com o assunto `[Hangar] diagnóstico <código> · <sistema>`. Para abrir o relatório e baixar o
+diário:
+
+```bash
+cd site/worker
+npx wrangler kv key get --binding REPORTS "diag/<código>" --remote
+npx wrangler kv key get --binding REPORTS "diag/<código>/diario.jsonl.gz" --remote > diario.jsonl.gz
+```
+
 ```bash
 cd site/worker && npm ci
 npm test            # só quando pedido
@@ -85,7 +105,8 @@ Pré-requisitos para publicar (nada disso está no repositório):
 
 1. Um namespace KV criado na conta; o `id` dele substitui o texto provisório de `kv_namespaces` em `worker/wrangler.jsonc`.
 2. Email Sending/Routing ativo para o domínio `hangar.dev.br`, com o endereço de destino já verificado.
-3. O segredo `REPORT_TO` (endereço de destino, `wrangler secret put REPORT_TO`) e a rota `hangar.dev.br/api/relatorio` na zona.
+3. O segredo `REPORT_TO` (endereço de destino, `wrangler secret put REPORT_TO`) e as rotas `hangar.dev.br/api/relatorio` e
+   `hangar.dev.br/api/relatorio/diario` na zona.
 
 ```bash
 cd site/worker && CLOUDFLARE_ACCOUNT_ID=<id da conta> npx wrangler deploy

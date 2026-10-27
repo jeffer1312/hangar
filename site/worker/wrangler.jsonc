@@ -5,13 +5,18 @@
   "compatibility_date": "2026-10-06",
   // Só a rota do site: sem subdomínio workers.dev aberto a robô.
   "workers_dev": false,
-  "routes": [{ "pattern": "hangar.dev.br/api/relatorio", "zone_name": "hangar.dev.br" }],
+  "routes": [
+    { "pattern": "hangar.dev.br/api/relatorio", "zone_name": "hangar.dev.br" },
+    { "pattern": "hangar.dev.br/api/relatorio/diario", "zone_name": "hangar.dev.br" }
+  ],
   "kv_namespaces": [{ "binding": "REPORTS", "id": "ba95d97d75a1454293131ea8b097518c" }],
   // O binding só aceita períodos de 10 ou 60 s: 3 envios por minuto por IP e 2 por minuto no total (chave fixa), para um
-  // IP só ou vários não esgotarem as escritas diárias do KV e a caixa de e-mail.
+  // IP só ou vários não esgotarem as escritas diárias do KV e a caixa de e-mail. O diagnóstico tem o seu, 1 por minuto
+  // por IP, e o global vale para os dois; o envio do diário inteiro usa o LIMITER.
   "ratelimits": [
     { "name": "LIMITER", "namespace_id": "1001", "simple": { "limit": 3, "period": 60 } },
-    { "name": "GLOBAL_LIMITER", "namespace_id": "1002", "simple": { "limit": 2, "period": 60 } }
+    { "name": "GLOBAL_LIMITER", "namespace_id": "1002", "simple": { "limit": 2, "period": 60 } },
+    { "name": "DIAG_LIMITER", "namespace_id": "1003", "simple": { "limit": 1, "period": 60 } }
   ],
   // Destinatário no segredo REPORT_TO: o repositório é público.
   "send_email": [{ "name": "MAILER" }],
