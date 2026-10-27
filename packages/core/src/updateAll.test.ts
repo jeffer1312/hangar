@@ -181,6 +181,8 @@ describe('API e execução por máquina', () => {
   it('quem não leu os avisos fica fora da rodada; o aceite de cada máquina chega ao POST dela', async () => {
     const bodies: Record<string, unknown> = {};
     accept = (id, body) => { bodies[id] = body; return json({ ok: true, started: false }); };
+    // A leitura com procurar antes dos avisos conta como a primeira.
+    read = (_id, count) => json(count <= 2 ? ready() : done());
     notes = (id) => id === 'down' ? Promise.reject(new TypeError('fixture-network'))
       : json({ target: 'v2', warnings: [{ id: 'mig', title: 't', text: 'x', choice: 'mode', mode: null }], news: [] });
     const prepared = await prepareUpdateAll(['p', 'd', 'down'].map((id) => server(id)), options);
@@ -188,9 +190,16 @@ describe('API e execução por máquina', () => {
       accept: { p: { ids: ['mig'], mode: 'package' }, d: { ids: ['mig'], mode: 'developer' } } });
     expect(prepared.failed.map((entry) => entry.id)).toEqual(['down']);
     expect(bodies).toEqual({ p: { ids: ['mig'], mode: 'package' }, d: { ids: ['mig'], mode: 'developer' } });
-    expect(calls.filter((path) => path.startsWith('down/') && !path.endsWith('/notes') && !path.endsWith('/identificador'))).toEqual([]);
+    expect(calls.filter((path) => path.startsWith('down/') && /\/(accept|iniciar)$/.test(path))).toEqual([]);
     expect(updates.has('down')).toBe(false);
     expect(final('p')?.status).toBe('atualizado');
+  });
+
+  it('aviso novo que o modal não mostrou recusa antes de aceitar ou iniciar', async () => {
+    notes = () => json({ target: 'v3', warnings: [{ id: 'mig', title: 't', text: 'x' }, { id: 'novo', title: 'n', text: 'y' }], news: [] });
+    await updateAll([server('late')], onChange, { ...options, accept: { late: { ids: ['mig'] } } });
+    expect(calls.filter((path) => /\/(accept|iniciar)$/.test(path))).toEqual([]);
+    expect(final('late')).toMatchObject({ status: 'falhou', error: m.update_new_warnings() });
   });
 
   it('identidade vazia ou falha não junta máquinas', async () => {

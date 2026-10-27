@@ -44,7 +44,8 @@ const render = () => act(async () => root.render(<MachineOperations server={serv
 describe('operações da máquina explícita', () => {
   it('confirma antes do POST e só conclui a atualização com o pid correto, mostrando progresso e avisos', async () => {
     let reads = 0;
-    mocks.fetch.mockImplementation(async (_url, init) => init?.method === 'POST' ? json({ ok: true, pid: 77 }) : json({ estado: [
+    mocks.fetch.mockImplementation(async (url: string, init) => init?.method === 'POST' ? json({ ok: true, pid: 77 })
+      : String(url).endsWith('/api/update/notes') ? json({ warnings: [] }) : json({ estado: [
       { pid: 88, fase: 'pronto', ok: true },
       { pid: 77, fase: 'rodando', passo: 2, total: 3, texto: 'fixture-progress' },
       { pid: 77, fase: 'pronto', ok: true, reiniciar_manual: true, avisos: ['fixture-warning'] },
@@ -101,6 +102,16 @@ describe('operações da máquina explícita', () => {
     await act(async () => { currentConfirmRequest()!.resolve(true, { [server.id]: { ids: ['mig'] } }); });
     expect(postCalls().map(([url]) => url)).toEqual([`${server.baseUrl}/api/update/accept`]);
     expect(el.textContent).toContain(m.update_accept_failed({ reason: '500: fixture-refused' }));
+  });
+
+  it('aviso que a folha não mostrou recusa antes de aceitar ou iniciar', async () => {
+    mocks.fetch.mockImplementation(async (url: string) => String(url).endsWith('/api/update/notes')
+      ? json({ warnings: [{ id: 'mig', title: 't', text: 'x' }, { id: 'fixture-new', title: 'n', text: 'y' }] })
+      : json({ atualizacao_disponivel: true, versoes: { repo: 'a', backend: 'a' }, estado: {} }));
+    await render(); await click(m.mobile_machines_update());
+    await act(async () => { currentConfirmRequest()!.resolve(true, { [server.id]: { ids: ['mig'] } }); });
+    expect(postCalls()).toEqual([]);
+    expect(el.textContent).toContain(m.update_new_warnings());
   });
 
   it('aceite que estoura o prazo mostra a falha e nunca dispara /iniciar depois', async () => {

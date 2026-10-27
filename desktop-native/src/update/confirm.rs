@@ -83,7 +83,15 @@ fn parse_notes(read: Result<Value, Failure>) -> Result<Option<Wire>, ()> {
 /// Os avisos de uma máquina do lote, com o nome dela; a versão e as novidades do modal são as do servidor desta máquina.
 pub(crate) async fn load_warnings(api: Result<Api, Failure>, server: String, label: String) -> Notes {
     let mut notes = Notes { server, ..Notes::default() }.labeled(label);
-    let read = match api { Ok(api) => api.server_read(&["update", "notes"], &[], 20).await, Err(error) => Err(error) };
+    let read = match api {
+        Ok(api) => {
+            // Busca o alvo antes, como na desta máquina: sem isso os avisos podem ser os da versão anterior. Falhou, segue
+            // com o alvo que ela tem; a releitura antes de iniciar (`unseen_warnings`) barra o que mudou.
+            let _ = api.server_read(&["atualizacao"], &[("procurar", "1")], 120).await;
+            api.server_read(&["update", "notes"], &[], 20).await
+        }
+        Err(error) => Err(error),
+    };
     match parse_notes(read) {
         Ok(wire) => if let Some(wire) = wire { notes.warnings = wire.warnings; notes.incomplete = wire.incomplete; },
         Err(()) => notes.failed = true,
@@ -107,12 +115,22 @@ fn after_accept(reply: Option<&Result<Value, Failure>>, real: bool) -> AfterAcce
     }
 }
 
+/// Aviso do alvo de agora que o modal não mostrou (versão publicada depois dele): recusa, nada é aceito nem iniciado.
+async fn unseen_warnings(api: &Api, shown: &[String]) -> Option<String> {
+    match parse_notes(api.server_read(&["update", "notes"], &[], 20).await) {
+        Ok(Some(wire)) if wire.warnings.iter().any(|w| !shown.contains(&w.id)) => Some(tr("update_new_warnings")),
+        Ok(_) => None,
+        Err(()) => Some(tr_shared("update_notes_failed", &[])),
+    }
+}
+
 /// `Started`: a resposta do pedido que lançou algo (o aceite ou o `iniciar`), tratada como a do `iniciar`.
 pub(crate) enum Launch { Started(Result<Value, Failure>), Nothing, AcceptFailed(String) }
 
 /// Aceita os avisos mostrados e, se o aceite não lançou nada, inicia a atualização quando há uma de verdade.
 pub(crate) async fn accept_then_start(api: &Api, acceptance: &Acceptance, real: bool) -> Launch {
-    let reply = if acceptance.ids.is_empty() { None } else {
+    if let Some(text) = unseen_warnings(api, &acceptance.ids).await { return Launch::AcceptFailed(text); }
+    let reply =if acceptance.ids.is_empty() { None } else {
         let mut body = serde_json::json!({"ids": acceptance.ids});
         if let Some(mode) = acceptance.mode { body["mode"] = mode.into(); }
         Some(api.server_send(reqwest::Method::POST, &["update", "accept"], Some(body), 30).await)

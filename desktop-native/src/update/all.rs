@@ -751,6 +751,7 @@ mod tests {
     fn update_all_executor_keeps_warnings_and_ignores_old_result_and_pid() {
         let (machine, server) = mock(vec![
             ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": true, "estado":{"ts":"old"}})),
+            ("GET /api/update/notes ", 200, json!({"warnings": []})),
             ("POST /api/atualizacao/iniciar ", 200, json!({"ok":true,"pid":123})),
             ("GET /api/atualizacao ", 200, json!({"estado":{"fase":"pronto","ok":true,"ts":"old"}})),
             ("GET /api/atualizacao ", 200, json!({"estado":{"fase":"rodando","passo":3,"total":9,"texto":"fixture-step"}})),
@@ -784,10 +785,12 @@ mod tests {
     #[test]
     fn update_all_accepts_the_warning_and_starts_only_a_real_update() {
         let acceptance = Acceptance { ids: vec!["2026-10-24-pacote-por-versao".into()], mode: Some("package"), incomplete: false };
+        let shown = || ("GET /api/update/notes ", 200, json!({"warnings": [{"id": "2026-10-24-pacote-por-versao", "title": "t"}]}));
         let runtime = tokio::runtime::Runtime::new().unwrap();
         // Só o aviso pendente: aceito, nada de `iniciar`.
         let (machine, server) = mock(vec![
             ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": false, "pending_warning": true, "atras": 0})),
+            shown(),
             ("POST /api/update/accept ", 200, json!({"ok": true, "started": false})),
         ]);
         let mut states = Vec::new();
@@ -797,6 +800,7 @@ mod tests {
         // O aceite lançou a migração: segue o pid dele, sem `iniciar`.
         let (machine, server) = mock(vec![
             ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": false, "pending_warning": true, "atras": 0, "estado": {"ts": "old"}})),
+            shown(),
             ("POST /api/update/accept ", 200, json!({"ok": true, "started": true, "pid": 7})),
             ("GET /api/atualizacao ", 200, json!({"estado": {"fase": "pronto", "ok": true, "ts": "new"}})),
         ]);
@@ -808,19 +812,30 @@ mod tests {
         // Aceite recusado: nada é iniciado.
         let (machine, server) = mock(vec![
             ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": true, "atras": 3})),
+            shown(),
             ("POST /api/update/accept ", 500, json!({"detail": "fixture-accept"})),
+        ]);
+        let mut states = Vec::new();
+        runtime.block_on(run_machine(machine, acceptance.clone(), |s, _| states.push(s)));
+        server.join().unwrap();
+        assert!(matches!(states.last(), Some(Status::Failed(error)) if error.contains("fixture-accept")), "{states:?}");
+        // Versão publicada depois do modal, com aviso que ele não mostrou: nada é aceito nem iniciado.
+        let (machine, server) = mock(vec![
+            ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel": true, "atras": 1})),
+            ("GET /api/update/notes ", 200, json!({"warnings": [{"id": "2026-10-24-pacote-por-versao", "title": "t"}, {"id": "fixture-new", "title": "n"}]})),
         ]);
         let mut states = Vec::new();
         runtime.block_on(run_machine(machine, acceptance, |s, _| states.push(s)));
         server.join().unwrap();
-        assert!(matches!(states.last(), Some(Status::Failed(error)) if error.contains("fixture-accept")), "{states:?}");
+        assert_eq!(states.last(), Some(&Status::Failed(tr("update_new_warnings"))), "{states:?}");
     }
 
     #[test]
     fn update_all_leaves_out_a_machine_whose_warnings_did_not_load() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        let (down, first) = mock(vec![("GET /api/update/notes ", 503, json!({"detail": "fixture-unavailable"}))]);
-        let (old, second) = mock(vec![("GET /api/update/notes ", 404, json!({"detail": "Not Found"}))]);
+        let search = || ("GET /api/atualizacao?procurar=1 ", 200, json!({}));
+        let (down, first) = mock(vec![search(), ("GET /api/update/notes ", 503, json!({"detail": "fixture-unavailable"}))]);
+        let (old, second) = mock(vec![search(), ("GET /api/update/notes ", 404, json!({"detail": "Not Found"}))]);
         let read = |m: &Machine| confirm::load_warnings(m.api.clone(), m.key.clone(), m.label.clone());
         let (a, b) = runtime.block_on(async { tokio::join!(read(&down), read(&old)) });
         first.join().unwrap(); second.join().unwrap();
@@ -852,6 +867,7 @@ mod tests {
         for status in [401, 403] {
             let (machine, server) = mock(vec![
                 ("GET /api/atualizacao?procurar=1 ", 200, json!({"atualizacao_disponivel":true,"estado":{"ts":"old"}})),
+                ("GET /api/update/notes ", 200, json!({"warnings": []})),
                 ("POST /api/atualizacao/iniciar ", 200, json!({"ok":true,"pid":123})),
                 ("GET /api/atualizacao ", status, json!({"detail":"fixture-auth-error"})),
             ]);

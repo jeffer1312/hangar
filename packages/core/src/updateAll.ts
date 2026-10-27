@@ -81,10 +81,17 @@ export function afterAccept(accepted: UpdateAcceptResult | null | undefined, sna
   return hasRealUpdate(snapshot) ? 'start' : 'done';
 }
 
+/** Aviso do alvo de agora que o modal não mostrou (versão publicada depois dele): lança, nada é aceito nem iniciado. */
+export async function refuseUnseenWarnings(server: Server, shown: readonly string[], fetcher?: typeof fetch): Promise<void> {
+  const notes = await getUpdateNotesEm(server, fetcher);
+  if (notes?.warnings?.some((warning) => !shown.includes(warning.id))) throw new Error(m.update_new_warnings());
+}
+
 /** Aceita os avisos e inicia conforme `afterAccept`; `null` = nada foi iniciado. Sem `snapshot`, relê o estado. */
 export async function acceptAndStart(server: Server, acceptance: UpdateAcceptance | undefined, snapshot?: UpdateSnapshot,
   fetcher?: typeof fetch): Promise<{ ok: boolean; pid: number } | null> {
-  const accepted = acceptance?.ids.length ? await acceptUpdateWarningsEm(server, acceptance.ids, acceptance.mode, fetcher) : undefined;
+  await refuseUnseenWarnings(server, acceptance?.ids ?? [], fetcher);
+  const accepted =acceptance?.ids.length ? await acceptUpdateWarningsEm(server, acceptance.ids, acceptance.mode, fetcher) : undefined;
   if (accepted?.started) return { ok: true, pid: accepted.pid! };
   const next = afterAccept(accepted, accepted === null ? {} : snapshot ?? await getAtualizacaoEm(server, false, fetcher));
   if (next === 'start' && acceptance?.incomplete) throw new Error(m.update_accept_incomplete());
@@ -120,6 +127,9 @@ export async function prepareUpdateAll(servers: readonly Server[], opts: Pick<Up
   const targets = await distinctMachines(servers, opts);
   const read = await Promise.all(targets.map(async (server): Promise<MachineNotes | null> => {
     try {
+      // Busca o alvo antes: sem isso os avisos podem ser os da versão anterior. Falhou, segue com o alvo que ela tem; a
+      // releitura antes de iniciar (`refuseUnseenWarnings`) barra o que mudou.
+      await getAtualizacaoEm(server, true, opts.fetch).catch(() => undefined);
       return { server, notes: await getUpdateNotesEm(server, opts.fetch) };
     } catch (error) {
       registerDiagnostic({ evento: 'update_all.notes_failed', nivel: 'aviso',

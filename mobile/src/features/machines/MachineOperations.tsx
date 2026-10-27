@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, View } from 'react-native';
-import { acceptUpdateWarningsEm, afterAccept, getAtualizacaoEm, iniciarAtualizacaoEm, reiniciarServidorEm, matchesRestartResult, type AtualizacaoEstado, type Server } from '@hangar/core';
+import { acceptUpdateWarningsEm, afterAccept, getAtualizacaoEm, iniciarAtualizacaoEm, refuseUnseenWarnings, reiniciarServidorEm, matchesRestartResult,type AtualizacaoEstado, type Server } from '@hangar/core';
 import { MachineGroup, MachineRow } from './MachineRows';
 import { ensureActive, reason } from './api';
 import { Notice, styles, useMachineAction } from './parts';
@@ -101,7 +101,9 @@ function OperationControls({ server }: { server: Server }) {
             if (operation === 'restart') return bounded(reiniciarServidorEm(server), signal, 15_000);
             // Um prazo por pedido, não sobre a cadeia: estourado, o /iniciar não sai depois da falha na tela.
             const acceptance = accept[server.id];
-            const accepted = acceptance ? await bounded(acceptUpdateWarningsEm(server, acceptance.ids, acceptance.mode), signal, 15_000) : undefined;
+            await bounded(refuseUnseenWarnings(server, acceptance?.ids ?? []), signal, 20_000);
+            ensureActive(signal);
+            const accepted =acceptance ? await bounded(acceptUpdateWarningsEm(server, acceptance.ids, acceptance.mode), signal, 15_000) : undefined;
             ensureActive(signal);
             if (accepted?.started) return { ok: true, pid: accepted.pid! };
             if (accepted && afterAccept(accepted, await bounded(getAtualizacaoEm(server), signal, 20_000)) === 'done') return null;
