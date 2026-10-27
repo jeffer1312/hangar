@@ -112,7 +112,6 @@ from app.codex_contas_login import CodexContasLogin
 from app.pair import PairLink
 from app.hook_state import hook_state
 from app import push
-from app.omp_plugin_sync import PluginSynchronizer, PluginSyncLoop
 from app.sync import sync_admin_router, sync_router
 from app.deploy import deploy_router
 from app import desktop_palette
@@ -295,14 +294,6 @@ async def _lifespan(app: FastAPI):
     app.state.codex_contas_login = codex_contas_login
     # Referência guardada: task sem dono pode ser coletada no meio.
     app.state.codex_auth_aquecer = asyncio.create_task(codex_contas_login.aquecer())
-    omp_sync = PluginSyncLoop(
-        PluginSynchronizer(home=Path.home(), claude_dir=_backend_config_base()),
-        enabled=settings.omp_plugin_sync_enabled,
-        interval=settings.omp_plugin_sync_interval,
-        permitted=automations_enabled,
-    )
-    app.state.omp_plugin_sync = omp_sync
-    await omp_sync.start()
     try:
         yield
     finally:
@@ -324,7 +315,6 @@ async def _lifespan(app: FastAPI):
         task.cancel()
         loop_monitor_task.cancel()
         prune_task.cancel()
-        await omp_sync.close()
         try:
             await task
         except asyncio.CancelledError:
@@ -442,16 +432,6 @@ async def _git_failed(request: Request, exc: GitError):
     code = getattr(exc, "code", None)
     detail = erro(code, exc.detail, motivo=exc.detail) if code else exc.detail
     return JSONResponse(status_code=exc.status, content={"detail": detail})
-
-
-@app.get("/api/omp/plugin-sync", dependencies=[Depends(require_auth)])
-async def omp_plugin_sync_status(request: Request):
-    service = getattr(request.app.state, "omp_plugin_sync", None)
-    if service is None:
-        return {"enabled": settings.omp_plugin_sync_enabled,
-                "state": "idle" if settings.omp_plugin_sync_enabled else "disabled",
-                "interval": settings.omp_plugin_sync_interval, "last_report": None}
-    return service.status()
 
 
 @app.exception_handler(tmux.MuxIndisponivel)

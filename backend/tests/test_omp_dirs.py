@@ -6,7 +6,6 @@ import pytest
 
 from app import harness_saude, oauth_codex, omp_dirs
 from app.adapters.pi import sessions
-from app.omp_plugin_sync import resolve_omp_directories
 
 
 @pytest.fixture
@@ -28,7 +27,7 @@ def test_sem_perfil_todos_apontam_para_omp_agent(home):
 def test_com_perfil_leitores_e_escritores_concordam(home, monkeypatch):
     monkeypatch.setenv("OMP_PROFILE", "trabalho")
     raiz = home / ".omp" / "profiles" / "trabalho" / "agent"
-    escritor = resolve_omp_directories(home, {"OMP_PROFILE": "trabalho"}, home).agent_dir
+    escritor = omp_dirs.agent_dir(home=home, env={"OMP_PROFILE": "trabalho"}, estrito=True)
     assert escritor == raiz
     assert sessions.sessions_root("omp") == raiz / "sessions"
     assert harness_saude._raiz_agente("omp") == raiz

@@ -240,11 +240,6 @@ def main():
         skill_bridge.rebuild(log=lambda m: print(f"[hangar] {m}"))
     except Exception as e:                            # noqa: BLE001 — nunca derruba a subida
         print(f"[hangar] AVISO: ponte de skills falhou ({e}); o app segue subindo")
-    if settings.omp_claude_context_enabled:
-        from app.omp_context import configure_claude_context
-        context_result = configure_claude_context(claude_dir=_backend_config_base(), enabled=True)
-        if context_result["errors"]:
-            print(f"[hangar] AVISO: contexto OMP não configurado: {context_result['errors']}")
     _passos_pendentes_da_versao()
     # Instala (idempotente, fail-soft) os hooks de estado e de AskUserQuestion.
     ensure_askq_hook_installed()
