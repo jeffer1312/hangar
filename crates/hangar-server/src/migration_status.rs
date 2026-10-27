@@ -98,6 +98,7 @@ pub fn area_of(path: &str) -> usize {
 /// GET registradas lá, mais os `matches` de Git/arquivos e de worktrees que o `pass_any` consulta.
 pub fn rust_route(method: &Method, path: &str) -> bool {
     if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/session-defaults" | "/api/web-ui") { return true; }
+    if (matches!(*method, Method::GET | Method::PUT) && path == "/api/update-channel") { return true; }
     if (*method == Method::GET && path == "/api/atualizacao")
         || (*method == Method::POST && matches!(path, "/api/atualizacao/iniciar" | "/api/atualizacao/reiniciar" | "/api/atualizacao/dev-mode")) { return true; }
     if *method == Method::POST && path == "/api/push/expo/subscribe" { return true; }
