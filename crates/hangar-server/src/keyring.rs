@@ -176,22 +176,53 @@ async fn watch(keyring: &Keyring) -> zbus::Result<()> {
     let conn = zbus::Connection::session().await?;
     let bus = zbus::fdo::DBusProxy::new(&conn).await?;
     let mut owners = bus.receive_name_owner_changed_with_args(&[(0, SECRETS)]).await?;
+    // Todos os sinais do serviço: a coleção `login` pode ser criada depois que o daemon pega o nome.
     let rule = zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal)
-        .interface("org.freedesktop.Secret.Service")?.member("CollectionChanged")?.build();
+        .interface("org.freedesktop.Secret.Service")?.build();
     let mut changes = zbus::MessageStream::for_match_rule(rule, &conn, None).await?;
     let props = zbus::proxy::Builder::<zbus::Proxy>::new(&conn).destination(SECRETS)?.path("/org/freedesktop/secrets/collection/login")?
         .interface("org.freedesktop.DBus.Properties")?.cache_properties(zbus::proxy::CacheProperties::No).build().await?;
+    // Releituras com atraso, contadas: leitura que falhou, ou daemon recém-subido que ainda não exportou a coleção.
+    let (mut again, mut failures): (u32, u32) = (0, 0);
     loop {
         if keyring.real.load(std::sync::atomic::Ordering::Relaxed) {
             match locked_state(&bus, &props).await {
-                Some(state) => keyring.publish(state),
-                None => tracing::warn!(code = "keyring_state_unread", "estado do chaveiro não foi lido; fica o último"),
+                Some(state) => { keyring.publish(state); failures = 0; }
+                None => {
+                    tracing::warn!(code = "keyring_state_unread", "estado do chaveiro não foi lido; fica o último");
+                    failures += 1;
+                    // Três falhas seguidas e para: daqui em diante só um sinal relê.
+                    if failures < 3 { again = again.max(1); }
+                }
             }
         }
         tokio::select! {
-            owner = owners.next() => if owner.is_none() { return Ok(()); },
-            change = changes.next() => match change { None => return Ok(()), Some(Err(error)) => return Err(error), Some(Ok(_)) => {} },
+            owner = owners.next() => {
+                if owner.is_none() { return Err(zbus::Error::Failure("o barramento encerrou o aviso de dono do chaveiro".into())); }
+                again = 3;
+            },
+            change = changes.next() => match change {
+                None => return Err(zbus::Error::Failure("o barramento encerrou os sinais do chaveiro".into())),
+                Some(Err(error)) => return Err(error),
+                Some(Ok(_)) => {}
+            },
+            _ = tokio::time::sleep(Duration::from_secs(2)), if again > 0 => { again -= 1; },
         }
+    }
+}
+
+/// Sem a coleção `login` ou sem o serviço: nada a destrancar. Acesso negado ou sem resposta não é ausência.
+#[cfg(target_os = "linux")]
+fn missing(error: &zbus::Error) -> bool {
+    use zbus::fdo::Error as Fdo;
+    match error {
+        zbus::Error::FDO(error) => matches!(**error, Fdo::UnknownObject(_) | Fdo::UnknownInterface(_) | Fdo::UnknownMethod(_)
+            | Fdo::ServiceUnknown(_) | Fdo::NameHasNoOwner(_)),
+        zbus::Error::MethodError(name, ..) => matches!(name.to_string().as_str(), "org.freedesktop.DBus.Error.UnknownObject"
+            | "org.freedesktop.DBus.Error.UnknownInterface" | "org.freedesktop.DBus.Error.UnknownMethod"
+            | "org.freedesktop.DBus.Error.ServiceUnknown" | "org.freedesktop.DBus.Error.NameHasNoOwner"
+            | "org.freedesktop.Secret.Error.NoSuchObject"),
+        _ => false,
     }
 }
 
@@ -205,8 +236,7 @@ async fn locked_state(bus: &zbus::fdo::DBusProxy<'_>, props: &zbus::Proxy<'_>) -
         "Get", zbus::proxy::MethodFlags::NoAutoStart.into(), &("org.freedesktop.Secret.Collection", "Locked"))).await.ok()?;
     match reply {
         Ok(Some(value)) => bool::try_from(value).ok().map(|locked| if locked { KeyringState::Locked } else { KeyringState::Unlocked }),
-        // Daemon sem a coleção `login`, ou saindo do barramento: nada a destrancar.
-        Err(zbus::Error::MethodError(..) | zbus::Error::FDO(_)) => Some(KeyringState::Absent),
+        Err(error) if missing(&error) => Some(KeyringState::Absent),
         _ => None,
     }
 }
