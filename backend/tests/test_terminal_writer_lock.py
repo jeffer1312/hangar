@@ -7,7 +7,7 @@ import pytest
 from app import terminal_input
 
 
-@pytest.mark.skipif(os.name == "nt", reason="A prova Unix usa flock; o Windows confere LockFileEx na suíte Rust.")
+@pytest.mark.skipif(os.name == "nt", reason="A prova usa flock do Unix.")
 def test_model_and_prompt_writers_share_the_operating_system_lock(tmp_path, monkeypatch):
     import fcntl
 

@@ -173,7 +173,7 @@ pub fn spawner(env: Arc<StateEnv>) -> SpawnMonitor {
     })
 }
 
-async fn orchestration_states(hub: Weak<Hub>) {
+pub(crate) async fn orchestration_states(hub: Weak<Hub>) {
     let Some(expected) = hub.upgrade().and_then(|hub| hub.source_binding()) else { return };
     let mut previous = None;
     loop {

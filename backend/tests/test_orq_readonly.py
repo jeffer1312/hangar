@@ -11,12 +11,17 @@ from unittest.mock import Mock
 
 import pytest
 
-from app import orq_readonly
+from app import providers_bridge
+
+
+def _prepare(cwd, *, home=None, env=None):
+    return providers_bridge.local("provider-info", op="read-only", cwd=str(cwd),
+                                  home=str(home or Path.home()), env=dict(os.environ) if env is None else env)
 
 
 @pytest.mark.skipif(sys.platform != "linux" or not shutil.which("bwrap"),
                     reason="prova Linux exige bubblewrap instalado")
-def test_child_cannot_write_worktree_or_git_but_can_save_report(tmp_path):
+def test_child_cannot_write_worktree_or_git_but_can_save_report(tmp_path, hangar_server_bin):
     repo = tmp_path / "repo"
     worktree = tmp_path / "worktree"
     subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
@@ -36,7 +41,7 @@ def test_child_cannot_write_worktree_or_git_but_can_save_report(tmp_path):
                    check=True, capture_output=True)
     alias = tmp_path / "alias"
     alias.symlink_to(worktree, target_is_directory=True)
-    prefix = orq_readonly.prepare(str(alias))
+    prefix = _prepare(alias)
     gitdir = Path(subprocess.check_output(
         ["git", "-C", str(worktree), "rev-parse", "--absolute-git-dir"], text=True).strip())
     report = tmp_path / "report.txt"
@@ -64,51 +69,49 @@ report.write_text('verified')
     assert report.read_text() == "verified"
 
 
-@pytest.mark.parametrize("platform,binary,message", [
-    ("win32", "/usr/bin/bwrap", "Linux"),
-    ("linux", None, "instale bwrap"),
-])
-def test_missing_support_refuses_before_process(monkeypatch, tmp_path, platform, binary, message):
-    monkeypatch.setattr(orq_readonly.sys, "platform", platform)
-    monkeypatch.setattr(orq_readonly.shutil, "which", lambda _: binary)
-    run = Mock()
-    monkeypatch.setattr(orq_readonly.subprocess, "run", run)
+def test_missing_support_refuses_before_process(tmp_path, hangar_server_bin):
+    message = "instale bwrap" if sys.platform == "linux" else "Linux"
     with pytest.raises(ValueError, match=message):
-        orq_readonly.prepare(str(tmp_path))
-    run.assert_not_called()
+        _prepare(tmp_path, env={"PATH": str(tmp_path)})
 
 
-def test_refused_probe_has_no_unprotected_fallback(monkeypatch, tmp_path):
-    monkeypatch.setattr(orq_readonly.sys, "platform", "linux")
-    monkeypatch.setattr(orq_readonly.shutil, "which", lambda _: "/usr/bin/bwrap")
-    monkeypatch.setattr(orq_readonly.subprocess, "run", Mock(side_effect=[
-        subprocess.CompletedProcess([], 128, "", "not a repository"),
-        subprocess.CompletedProcess([], 1, "", "user namespaces disabled"),
-    ]))
+def _fake_programs(tmp_path):
+    programs = tmp_path / "bin"
+    programs.mkdir()
+    marker = tmp_path / "bwrap-called"
+    for name, script in {
+        "git": "#!/bin/sh\nexit 128\n",
+        "bwrap": f"#!/bin/sh\n: > '{marker}'\necho 'user namespaces disabled' >&2\nexit 1\n",
+    }.items():
+        executable = programs / name
+        executable.write_text(script, encoding="utf-8")
+        executable.chmod(0o700)
+    return {"PATH": str(programs)}, marker
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="bubblewrap é exclusivo do Linux")
+def test_refused_probe_has_no_unprotected_fallback(tmp_path, hangar_server_bin):
+    env, marker = _fake_programs(tmp_path)
     with pytest.raises(ValueError, match="user namespaces disabled"):
-        orq_readonly.prepare(str(tmp_path))
+        _prepare(tmp_path, env=env)
+    assert marker.exists()
 
 
-def test_home_is_not_made_read_only(monkeypatch, tmp_path):
-    monkeypatch.setattr(orq_readonly.sys, "platform", "linux")
-    monkeypatch.setattr(orq_readonly.shutil, "which", lambda _: "/usr/bin/bwrap")
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    run = Mock(return_value=subprocess.CompletedProcess([], 128, "", "not a repository"))
-    monkeypatch.setattr(orq_readonly.subprocess, "run", run)
+@pytest.mark.skipif(sys.platform != "linux", reason="bubblewrap é exclusivo do Linux")
+def test_home_is_not_made_read_only(tmp_path, hangar_server_bin):
+    env, marker = _fake_programs(tmp_path)
     with pytest.raises(ValueError, match="HOME inteira"):
-        orq_readonly.prepare(str(tmp_path))
-    assert run.call_count == 1
+        _prepare(tmp_path, home=tmp_path, env=env)
+    assert not marker.exists()
 
 
-def test_runtime_inside_code_is_refused(monkeypatch, tmp_path):
-    monkeypatch.setattr(orq_readonly.sys, "platform", "linux")
-    monkeypatch.setattr(orq_readonly.shutil, "which", lambda _: "/usr/bin/bwrap")
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
-    run = Mock(return_value=subprocess.CompletedProcess([], 128, "", "not a repository"))
-    monkeypatch.setattr(orq_readonly.subprocess, "run", run)
+@pytest.mark.skipif(sys.platform != "linux", reason="bubblewrap é exclusivo do Linux")
+def test_runtime_inside_code_is_refused(tmp_path, hangar_server_bin):
+    env, marker = _fake_programs(tmp_path)
+    env["CODEX_HOME"] = str(tmp_path / ".codex")
     with pytest.raises(ValueError, match="runtime"):
-        orq_readonly.prepare(str(tmp_path))
-    assert run.call_count == 1
+        _prepare(tmp_path, home=tmp_path.parent, env=env)
+    assert not marker.exists()
 
 
 _SID = "33333333-3333-3333-3333-333333333333"
@@ -145,7 +148,7 @@ def test_read_only_transfer_source_is_refused_before_kill(monkeypatch, tmp_path)
     from app.adapters.claude_headless import sessions
 
     order = []
-    monkeypatch.setattr(orq_readonly, "prepare", Mock(side_effect=AssertionError("a origem não reabre protegida")))
+    monkeypatch.setattr(providers_bridge, "local", Mock(side_effect=AssertionError("a origem não reabre protegida")))
     reg = _protected_pane(monkeypatch, tmp_path, order)
     transfer_meta = {"session_id": _SID, "cwd": str(tmp_path), "pane_pid": 999, "key": "k", "transfer_id": "t"}
     with pytest.raises(ValueError, match="recrie com --read-only"):

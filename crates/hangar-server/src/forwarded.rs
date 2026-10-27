@@ -25,10 +25,10 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    let method = req.method();
-    if let Some(response) = crate::provider_info::wrong_method(method, &path, req.uri().query()) { return response; }
-    let models = crate::provider_models::matches(method, &path)
-        || crate::provider_models::catalog_request(method, &path, req.uri().query());
+    let method = req.method().clone();
+    if let Some(response) = crate::provider_info::wrong_method(&method, &path, req.uri().query()) { return response; }
+    let models = crate::provider_models::matches(&method, &path)
+        || crate::provider_models::catalog_request(&method, &path, req.uri().query());
     let guest = req.headers().get("x-hangar-forwarded-guest").is_some_and(|v| v == "1");
     let read = path.strip_prefix("/api/sessions/").and_then(|rest| rest.rsplit_once('/'))
         .filter(|(name, route)| method == Method::GET && !name.contains('/') && matches!(*route, "history" | "events"))
@@ -39,11 +39,11 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
             _ => return crate::session_write::json_response(StatusCode::NOT_FOUND, json!({"code":"forwarded_route_not_owned"})),
         }
     } else if models { Owned::Models }
-    else if crate::orchestration::matches(method, &path) && !guest { Owned::Orchestration }
-    else if crate::omp_sync::matches(method, &path) && !guest { Owned::OmpSync }
+    else if crate::orchestration::matches(&method, &path) && !guest { Owned::Orchestration }
+    else if crate::omp_sync::matches(&method, &path) && !guest { Owned::OmpSync }
     else if method == Method::GET && path == crate::claude_customizations::CATALOG_PATH {
         Owned::Catalog
-    } else if matches!(*method, Method::GET | Method::PUT) && path == "/api/session-defaults" {
+    } else if matches!(method, Method::GET | Method::PUT) && path == "/api/session-defaults" {
         Owned::SessionDefaults
     } else if method == Method::POST && path == "/api/push/expo/subscribe" {
         Owned::PushExpo
@@ -51,27 +51,27 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         Owned::JevDelivery
     } else if method == Method::GET && path == "/api/client-api" {
         Owned::ClientApi
-    } else if crate::orq_conductor::matches(method, &path) {
+    } else if crate::orq_conductor::matches(&method, &path) {
         Owned::Conductor
     } else if method == Method::GET && crate::commands::matches(&path) {
         Owned::Commands
     } else if method == Method::POST && path == crate::mermaid::PATH {
         Owned::Mermaid
-    } else if crate::prewarm::http::matches(method, &path) {
+    } else if crate::prewarm::http::matches(&method, &path) {
         Owned::Prewarm
-    } else if crate::nav_requests::matches(method, &path) {
+    } else if crate::nav_requests::matches(&method, &path) {
         Owned::Nav
-    } else if crate::worktree_routes::matches(method, &path) {
+    } else if crate::worktree_routes::matches(&method, &path) {
         Owned::Worktrees
-    } else if crate::plans::routes::matches(method, &path) {
+    } else if crate::plans::routes::matches(&method, &path) {
         Owned::Plans
-    } else if let Some((project, sid)) = archive_resume(method, &path) {
+    } else if let Some((project, sid)) = archive_resume(&method, &path) {
         Owned::ArchiveResume(project, sid)
-    } else if let Some(name) = live_resume(method, &path) {
+    } else if let Some(name) = live_resume(&method, &path) {
         Owned::Resume(name)
-    } else if crate::groups::federation::forwarded_route(method, &path) {
+    } else if crate::groups::federation::forwarded_route(&method, &path) {
         Owned::Groups(req.headers().get("x-hangar-forwarded-guest").is_some_and(|v| v == "1"))
-    } else if crate::session_media::is_media(method, &path) {
+    } else if crate::session_media::is_media(&method, &path) {
         Owned::Media(path.clone(), req.headers().get("x-hangar-forwarded-guest").is_some_and(|v| v == "1"))
     } else {
         return crate::session_write::json_response(StatusCode::NOT_FOUND, json!({"code": "forwarded_route_not_owned"}));

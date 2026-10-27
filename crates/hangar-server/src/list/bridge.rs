@@ -45,6 +45,7 @@ const LIVE_FRESH: Duration = Duration::from_secs(15);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONFIG_DIRS_TTL: Duration = Duration::from_secs(30);
 const MAX_BODY: usize = 64 * 1024;
+const MAX_PROVIDER_BODY: usize = 2 * 1024 * 1024;
 /// `git status` simultâneos da lista (`_git_pool`).
 const GIT_SLOTS: usize = 4;
 
@@ -1268,13 +1269,16 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         }
         StatusCode::BAD_REQUEST.into_response()
     };
-    let Ok(Ok(bytes)) = tokio::time::timeout(Duration::from_secs(6), to_bytes(req.into_body(), MAX_BODY)).await else {
+    let Ok(Ok(bytes)) = tokio::time::timeout(Duration::from_secs(6), to_bytes(req.into_body(), MAX_PROVIDER_BODY)).await else {
         return refused("list_bridge_body");
     };
     // Operação desconhecida aqui costuma ser Python e Rust de versões diferentes.
     let Ok(op) = serde_json::from_slice::<Operation>(&bytes) else {
         return refused("list_bridge_invalid_request");
     };
+    if bytes.len() > MAX_BODY && !matches!(&op, Operation::ProviderInbox(_)) {
+        return refused("list_bridge_body");
+    }
     let result = match op {
         Operation::ProviderInbox(arguments) => return match crate::provider_models::inbox::call(arguments).await {
             Ok(result) => reply(json!({"ok": true, "result": result})),

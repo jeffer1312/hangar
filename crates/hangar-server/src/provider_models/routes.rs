@@ -156,8 +156,8 @@ async fn session_catalog(
         .ok_or_else(|| catalog_error(&row.provider))?;
     Ok((value, config))
 }
-async fn global_catalog(st: &Arc<AppState>, request: &Request) -> Result<Value, ModelError> {
-    let query = query(request.uri().query());
+async fn global_catalog(st: &Arc<AppState>, raw_query: Option<String>) -> Result<Value, ModelError> {
+    let query = query(raw_query.as_deref());
     let provider = query.get("provider").map(String::as_str).unwrap_or("");
     if query.get("engine_account").is_some() {
         return Err(coded(
@@ -198,7 +198,7 @@ pub async fn serve(st: &Arc<AppState>, request: Request) -> Response {
         return super::inbox::websocket(st, peer, request).await;
     }
     let result = if request.uri().path() == "/api/model-options" {
-        global_catalog(st, &request).await
+        global_catalog(st, request.uri().query().map(str::to_owned)).await
     } else {
         session(st, request).await
     };

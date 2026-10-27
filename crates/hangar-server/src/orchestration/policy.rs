@@ -300,7 +300,7 @@ pub async fn inventory(st: &Arc<crate::routes::AppState>) -> Vec<Value> {
         let model_slots = tokio::sync::Semaphore::new(8);
         let slots = &model_slots;
         use futures_util::StreamExt;
-        let catalogs = futures_util::stream::iter(accounts.iter().map(|account| async move {
+        let catalogs = futures_util::stream::iter(accounts.clone().into_iter().map(|account| async move {
             st.dictation_models
                 .get(service, slots, "codex", &account.home, false)
                 .await

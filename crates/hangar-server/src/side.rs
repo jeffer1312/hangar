@@ -1396,6 +1396,41 @@ pub(crate) fn fake_monitors(pane: &'static str) -> (SpawnMonitor, Arc<std::sync:
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn orchestration_activity_is_published_by_its_hub_and_stops_with_the_old_life() {
+        use super::*;
+        let dir = tempfile::tempdir().unwrap();
+        let timeline = dir.path().join("timeline-run.jsonl");
+        std::fs::write(&timeline, "").unwrap();
+        let spawn: SpawnMonitor = Arc::new(|hub| tokio::spawn(crate::state::live::orchestration_states(Arc::downgrade(hub))));
+        let ctx = SideCtx { monitors: Some(spawn), ..test_ctx() };
+        let binding = |life: &str| Binding { provider: Provider::Orq, jsonl: timeline.clone(), key: "run".into(), headless: false, life: Some(life.into()) };
+        let lease = ctx.hubs.acquire("run-orq", binding("old"), &ctx);
+        assert_eq!(lease.hub.owned_events(), &["state"]);
+        let mut rx = lease.hub.tx.subscribe();
+        async fn next_state(rx: &mut broadcast::Receiver<Out>) -> String {
+            tokio::time::timeout(Duration::from_secs(4), async {
+                loop {
+                    if let Out::Side(bytes) = rx.recv().await.unwrap() {
+                        let text = String::from_utf8(bytes.to_vec()).unwrap();
+                        if text.starts_with("event: state") { return text; }
+                    }
+                }
+            }).await.unwrap()
+        }
+        assert!(next_state(&mut rx).await.contains("\"state\":\"working\""));
+        let old = std::time::UNIX_EPOCH + Duration::from_secs(1);
+        std::fs::OpenOptions::new().write(true).open(&timeline).unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old)).unwrap();
+        assert!(next_state(&mut rx).await.contains("\"state\":\"idle\""));
+        let stale = lease.hub.source_binding().unwrap();
+        lease.hub.close();
+        let fresh = ctx.hubs.acquire("run-orq", binding("new"), &ctx);
+        let mut rx = fresh.hub.tx.subscribe();
+        assert!(next_state(&mut rx).await.contains("\"state\":\"idle\""));
+        assert!(!fresh.hub.publish_own_bound(&stale, "state", "{\"state\":\"working\"}"));
+        fresh.hub.close();
+    }
     use super::*;
     use std::sync::atomic::AtomicU32;
 
