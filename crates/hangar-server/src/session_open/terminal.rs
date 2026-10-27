@@ -677,8 +677,8 @@ pub(crate) mod tests {
         assert!(private.windows(2).any(|w| w[0] == "-e" && w[1] == format!("CP_SESSION_KEY={}", "k".repeat(32))), "{joined}");
         assert_eq!(private[..6].join(" "), "/usr/bin/systemd-run --user --scope --collect -q --description=hangar:s1");
         std::fs::write(&file, contents.unwrap()).unwrap();
-        // O comando do pane, com `printenv` no lugar do agente.
-        let shell = private.last().unwrap().rsplit_once(" exec env ").map(|(head, _)| format!("{head} printenv TYPESAFE_API_KEY HANGAR_PLUGIN_TOKEN")).unwrap();
+        // O printenv do macOS aceita uma variável por chamada.
+        let shell = private.last().unwrap().rsplit_once(" exec env ").map(|(head, _)| format!("{head} printenv TYPESAFE_API_KEY && printenv HANGAR_PLUGIN_TOKEN")).unwrap();
         let out = std::process::Command::new("/bin/sh").args(["-c", &shell]).env_clear().output().unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout), "sk-a'b\nk.t\n", "{shell}");
         assert!(!file.exists());
