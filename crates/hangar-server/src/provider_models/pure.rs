@@ -5,7 +5,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
-    sync::LazyLock,
+    sync::{LazyLock, Mutex},
 };
 
 pub const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -33,17 +33,32 @@ pub fn sidecar_path(jsonl: &str, config: &Path) -> PathBuf {
     ))
 }
 pub fn pi_catalog(jsonl: &str, config: &Path) -> Option<Value> {
-    let data: Value = serde_json::from_slice(
-        &crate::runtime::queue::read_replaced(&sidecar_path(jsonl, config)).ok()?,
-    )
-    .ok()?;
+    parse_pi_catalog(&crate::runtime::queue::read_replaced(&sidecar_path(jsonl, config)).ok()?)
+}
+pub fn parse_pi_catalog(bytes: &[u8]) -> Option<Value> {
+    let data: Value = serde_json::from_slice(bytes).ok()?;
     (data.is_object() && data.get("models").is_some_and(Value::is_array)).then_some(data)
 }
+type CurrentProvider = (std::time::SystemTime, Option<String>);
+static CURRENT_PROVIDERS: LazyLock<Mutex<std::collections::HashMap<PathBuf, CurrentProvider>>> =
+    LazyLock::new(Mutex::default);
 pub fn pi_provider(jsonl: &str, config: &Path) -> Option<String> {
-    pi_catalog(jsonl, config)?["current"]["provider"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
+    let path = sidecar_path(jsonl, config);
+    let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+    let mut cache = CURRENT_PROVIDERS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((seen, provider)) = cache.get(&path).filter(|(seen, _)| *seen == modified) {
+        let _ = seen;
+        return provider.clone();
+    }
+    // A lista pede só o provedor; o catálogo inteiro permanece no disco até mudar de versão.
+    let provider = pi_catalog(jsonl, config).and_then(|v| {
+        v["current"]["provider"]
+            .as_str()
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned)
+    });
+    cache.insert(path, (modified, provider.clone()));
+    provider
 }
 pub fn pi_response(catalog: &Value) -> Value {
     json!({"models":catalog.get("models").cloned().unwrap_or(json!([])),"current":catalog.get("current"),"thinking":catalog.get("thinking"),"levels":catalog.get("levels").cloned().unwrap_or(json!([]))})
@@ -288,4 +303,13 @@ pub fn parse_thinking_row(pane: &str) -> Option<Value> {
         }
     }
     None
+}
+
+pub fn new_line_matches(
+    line: Option<&Value>,
+    before: Option<&Value>,
+    field: &str,
+    expected: &str,
+) -> bool {
+    line.is_some_and(|line| Some(line) != before && line[field].as_str() == Some(expected))
 }

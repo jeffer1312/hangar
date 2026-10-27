@@ -254,6 +254,16 @@ fn refuse_once(host: IpAddr, cause: &'static str) {
 
 /// A borda pública mantém a mesma restrição de self-connect da extensão, além do bearer.
 pub async fn websocket(st: &Arc<AppState>, peer: SocketAddr, request: Request) -> Response {
+    websocket_with(st, peer, request, INBOX.clone(), HEARTBEAT).await
+}
+
+pub(super) async fn websocket_with(
+    st: &Arc<AppState>,
+    peer: SocketAddr,
+    request: Request,
+    store: Arc<Store>,
+    heartbeat: Duration,
+) -> Response {
     use subtle::ConstantTimeEq;
     let params: HashMap<_, _> =
         form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
@@ -289,7 +299,7 @@ pub async fn websocket(st: &Arc<AppState>, peer: SocketAddr, request: Request) -
     };
     upgrade
         .max_message_size(4 * MAX_MESSAGE)
-        .on_upgrade(|socket| connection(INBOX.clone(), socket))
+        .on_upgrade(move |socket| connection(store, socket, heartbeat))
         .into_response()
 }
 async fn close(socket: &mut WebSocket, code: u16) {
@@ -300,9 +310,15 @@ async fn close(socket: &mut WebSocket, code: u16) {
         })))
         .await;
 }
-async fn connection(store: Arc<Store>, mut socket: WebSocket) {
-    let first = match tokio::time::timeout(HEARTBEAT, socket.recv()).await {
-        Ok(Some(Ok(Message::Text(s)))) if message_fits(&s) => s,
+async fn connection(store: Arc<Store>, mut socket: WebSocket, interval: Duration) {
+    let first = match tokio::time::timeout(interval, socket.recv()).await {
+        Ok(Some(Ok(Message::Text(s)))) => {
+            if !message_fits(&s) {
+                close(&mut socket, 1009).await;
+                return;
+            }
+            s
+        }
         _ => {
             close(&mut socket, 1008).await;
             return;
@@ -329,16 +345,16 @@ async fn connection(store: Arc<Store>, mut socket: WebSocket) {
     let (outgoing, mut recv) = mpsc::unbounded_channel();
     let line = store.register(&key, outgoing);
     let mut unanswered = 0;
-    let mut heartbeat = tokio::time::Instant::now() + HEARTBEAT;
+    let mut heartbeat = tokio::time::Instant::now() + interval;
     loop {
         tokio::select! {
           value=recv.recv()=>{let Some(value)=value else{break};if socket.send(Message::Text(value.to_string().into())).await.is_err(){break;}}
           inbound=tokio::time::timeout_at(heartbeat,socket.recv())=>{
             match inbound{
-              Err(_)=>{heartbeat=tokio::time::Instant::now()+HEARTBEAT;unanswered+=1;if unanswered>2{close(&mut socket,1000).await;break;}if socket.send(Message::Text(json!({"ping":true}).to_string().into())).await.is_err(){break;}}
-              Ok(Some(Ok(Message::Text(text))))=>{heartbeat=tokio::time::Instant::now()+HEARTBEAT;unanswered=0;if !message_fits(&text){close(&mut socket,1009).await;break;}let Ok(value)=serde_json::from_str::<Value>(&text)else{break};if !super::pure::truthy(&value["ping"])&&!super::pure::truthy(&value["pong"]){store.respond(&key,&value);}}
-              Ok(Some(Ok(Message::Ping(data))))=>{heartbeat=tokio::time::Instant::now()+HEARTBEAT;unanswered=0;if socket.send(Message::Pong(data)).await.is_err(){break;}}
-              Ok(Some(Ok(Message::Pong(_))))=>{heartbeat=tokio::time::Instant::now()+HEARTBEAT;unanswered=0;}
+              Err(_)=>{heartbeat=tokio::time::Instant::now()+interval;unanswered+=1;if unanswered>2{close(&mut socket,1000).await;break;}if socket.send(Message::Text(json!({"ping":true}).to_string().into())).await.is_err(){break;}}
+              Ok(Some(Ok(Message::Text(text))))=>{heartbeat=tokio::time::Instant::now()+interval;unanswered=0;if !message_fits(&text){close(&mut socket,1009).await;break;}let Ok(value)=serde_json::from_str::<Value>(&text)else{break};if !super::pure::truthy(&value["ping"])&&!super::pure::truthy(&value["pong"]){store.respond(&key,&value);}}
+              Ok(Some(Ok(Message::Ping(data))))=>{heartbeat=tokio::time::Instant::now()+interval;unanswered=0;if socket.send(Message::Pong(data)).await.is_err(){break;}}
+              Ok(Some(Ok(Message::Pong(_))))=>{heartbeat=tokio::time::Instant::now()+interval;unanswered=0;}
               _=>break,
             }
           }

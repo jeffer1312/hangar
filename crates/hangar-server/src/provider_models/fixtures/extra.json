@@ -1,0 +1,2204 @@
+{
+  "source_commit": "d2a42410f9fe6df4ea491b296c7fea7b98d8b844",
+  "generator": "Python characterize_extra.py <referência congelada> <fixtures>",
+  "source_files_sha256": {
+    "api.py": "664f9cfa0dfc6f3e4f723f363b3dbb724e665e69659e93f657aba6ea8e52f12a",
+    "pi_models.py": "b3a14b6bfccc6cd3a68dc2356fd1c1c890c06d7629468ab9c49de860c82b2a5b",
+    "kimi_models.py": "22c58f0295bc3c81a1aa21ef0d830d28ad10a3d6aa3153a90cdccde3585363b2",
+    "pi_inbox.py": "13d0477691d0021f6a8198ba94e0bc7c625c29fb13360203c8b8815db487ea25",
+    "pi_catalog.py": "feb0b7e5cd19ea345bec8ebc16ff284fb1121ce43de3339368d4ac4d373b3aad"
+  },
+  "bodies": [
+    {
+      "provider": "pi",
+      "content_type": null,
+      "body": "{}",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": null,
+      "body": "null",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "null"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": null,
+      "body": "[]",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "[]"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": null,
+      "body": "{\"model\":2}",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{\"model\":2}"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": null,
+      "body": "{",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/json",
+      "body": "{}",
+      "status": 200,
+      "expected": {
+        "provider": null,
+        "model": null,
+        "effort": null
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/json",
+      "body": "null",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/json",
+      "body": "[]",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/json",
+      "body": "{\"model\":2}",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 2
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/json",
+      "body": "{",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "text/plain",
+      "body": "{}",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "text/plain",
+      "body": "null",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "null"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "text/plain",
+      "body": "[]",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "[]"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "text/plain",
+      "body": "{\"model\":2}",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{\"model\":2}"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "text/plain",
+      "body": "{",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/vnd.fixture+json",
+      "body": "{}",
+      "status": 200,
+      "expected": {
+        "provider": null,
+        "model": null,
+        "effort": null
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/vnd.fixture+json",
+      "body": "null",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/vnd.fixture+json",
+      "body": "[]",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/vnd.fixture+json",
+      "body": "{\"model\":2}",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 2
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/vnd.fixture+json",
+      "body": "{",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/json; charset=utf-8",
+      "body": "{}",
+      "status": 200,
+      "expected": {
+        "provider": null,
+        "model": null,
+        "effort": null
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/json; charset=utf-8",
+      "body": "null",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/json; charset=utf-8",
+      "body": "[]",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/json; charset=utf-8",
+      "body": "{\"model\":2}",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 2
+          }
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "content_type": "application/json; charset=utf-8",
+      "body": "{",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": null,
+      "body": "{}",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": null,
+      "body": "null",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "null"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": null,
+      "body": "[]",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "[]"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": null,
+      "body": "{\"model\":2}",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{\"model\":2}"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": null,
+      "body": "{",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/json",
+      "body": "{}",
+      "status": 200,
+      "expected": {
+        "model": null,
+        "effort": null
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/json",
+      "body": "null",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/json",
+      "body": "[]",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/json",
+      "body": "{\"model\":2}",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 2
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/json",
+      "body": "{",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "text/plain",
+      "body": "{}",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "text/plain",
+      "body": "null",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "null"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "text/plain",
+      "body": "[]",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "[]"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "text/plain",
+      "body": "{\"model\":2}",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{\"model\":2}"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "text/plain",
+      "body": "{",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/vnd.fixture+json",
+      "body": "{}",
+      "status": 200,
+      "expected": {
+        "model": null,
+        "effort": null
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/vnd.fixture+json",
+      "body": "null",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/vnd.fixture+json",
+      "body": "[]",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/vnd.fixture+json",
+      "body": "{\"model\":2}",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 2
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/vnd.fixture+json",
+      "body": "{",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/json; charset=utf-8",
+      "body": "{}",
+      "status": 200,
+      "expected": {
+        "model": null,
+        "effort": null
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/json; charset=utf-8",
+      "body": "null",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/json; charset=utf-8",
+      "body": "[]",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/json; charset=utf-8",
+      "body": "{\"model\":2}",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 2
+          }
+        ]
+      }
+    },
+    {
+      "provider": "kimi",
+      "content_type": "application/json; charset=utf-8",
+      "body": "{",
+      "status": 422,
+      "expected": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "sockets": [
+    {
+      "name": "missing",
+      "close_code": 1008,
+      "pings": 0
+    },
+    {
+      "name": "first-large",
+      "close_code": 1009,
+      "pings": 0
+    },
+    {
+      "name": "later-large",
+      "close_code": 1009,
+      "pings": 0
+    },
+    {
+      "name": "heartbeat",
+      "close_code": 1000,
+      "pings": 2
+    }
+  ],
+  "routes": [
+    {
+      "provider": "pi",
+      "source": "present",
+      "endpoint": "pi",
+      "catalog": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "status": 200,
+      "expected": {
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ],
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ]
+      }
+    },
+    {
+      "provider": "pi",
+      "source": "present",
+      "endpoint": "kimi",
+      "catalog": {
+        "default": "p/one",
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ]
+      },
+      "status": 400,
+      "expected": {
+        "detail": {
+          "code": "erro_rota_so_kimi",
+          "params": {},
+          "msg": "esta rota só existe pra sessões Kimi"
+        }
+      }
+    },
+    {
+      "provider": "pi",
+      "source": "missing",
+      "endpoint": "pi",
+      "catalog": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "status": 409,
+      "expected": {
+        "detail": {
+          "code": "erro_catalogo_pi_indisponivel",
+          "params": {},
+          "msg": "catalogo do Pi indisponivel — rode ./scripts/install-claude-wrapper.sh e reinicie a sessao (extensao hangar-state.ts desatualizada)"
+        }
+      }
+    },
+    {
+      "provider": "pi",
+      "source": "missing",
+      "endpoint": "kimi",
+      "catalog": {
+        "default": "p/one",
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ]
+      },
+      "status": 400,
+      "expected": {
+        "detail": {
+          "code": "erro_rota_so_kimi",
+          "params": {},
+          "msg": "esta rota só existe pra sessões Kimi"
+        }
+      }
+    },
+    {
+      "provider": "omp",
+      "source": "present",
+      "endpoint": "pi",
+      "catalog": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "status": 200,
+      "expected": {
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ],
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ]
+      }
+    },
+    {
+      "provider": "omp",
+      "source": "present",
+      "endpoint": "kimi",
+      "catalog": {
+        "default": "p/one",
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ]
+      },
+      "status": 400,
+      "expected": {
+        "detail": {
+          "code": "erro_rota_so_kimi",
+          "params": {},
+          "msg": "esta rota só existe pra sessões Kimi"
+        }
+      }
+    },
+    {
+      "provider": "omp",
+      "source": "missing",
+      "endpoint": "pi",
+      "catalog": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "status": 409,
+      "expected": {
+        "detail": {
+          "code": "erro_catalogo_omp_indisponivel",
+          "params": {},
+          "msg": "catalogo do omp indisponivel — rode ./scripts/install-claude-wrapper.sh e feche e reabra a sessao (o /reload do omp nao recarrega a extensao)"
+        }
+      }
+    },
+    {
+      "provider": "omp",
+      "source": "missing",
+      "endpoint": "kimi",
+      "catalog": {
+        "default": "p/one",
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ]
+      },
+      "status": 400,
+      "expected": {
+        "detail": {
+          "code": "erro_rota_so_kimi",
+          "params": {},
+          "msg": "esta rota só existe pra sessões Kimi"
+        }
+      }
+    },
+    {
+      "provider": "kimi",
+      "source": "present",
+      "endpoint": "pi",
+      "catalog": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "status": 400,
+      "expected": {
+        "detail": {
+          "code": "erro_rota_so_pi",
+          "params": {},
+          "msg": "esta rota so existe pra sessoes Pi"
+        }
+      }
+    },
+    {
+      "provider": "kimi",
+      "source": "present",
+      "endpoint": "kimi",
+      "catalog": {
+        "default": "p/one",
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ]
+      },
+      "status": 200,
+      "expected": {
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ],
+        "default": "p/one"
+      }
+    },
+    {
+      "provider": "kimi",
+      "source": "missing",
+      "endpoint": "pi",
+      "catalog": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "status": 400,
+      "expected": {
+        "detail": {
+          "code": "erro_rota_so_pi",
+          "params": {},
+          "msg": "esta rota so existe pra sessoes Pi"
+        }
+      }
+    },
+    {
+      "provider": "kimi",
+      "source": "missing",
+      "endpoint": "kimi",
+      "catalog": {
+        "default": "p/one",
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ]
+      },
+      "status": 409,
+      "expected": {
+        "detail": {
+          "code": "erro_catalogo_kimi_indisponivel",
+          "params": {},
+          "msg": "catalogo do Kimi indisponível — ~/.kimi-code/config.toml ausente ou sem seções [models.*]"
+        }
+      }
+    },
+    {
+      "provider": "claude",
+      "source": "present",
+      "endpoint": "pi",
+      "catalog": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "status": 400,
+      "expected": {
+        "detail": {
+          "code": "erro_rota_so_pi",
+          "params": {},
+          "msg": "esta rota so existe pra sessoes Pi"
+        }
+      }
+    },
+    {
+      "provider": "claude",
+      "source": "present",
+      "endpoint": "kimi",
+      "catalog": {
+        "default": "p/one",
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ]
+      },
+      "status": 400,
+      "expected": {
+        "detail": {
+          "code": "erro_rota_so_kimi",
+          "params": {},
+          "msg": "esta rota só existe pra sessões Kimi"
+        }
+      }
+    },
+    {
+      "provider": "claude",
+      "source": "missing",
+      "endpoint": "pi",
+      "catalog": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "status": 400,
+      "expected": {
+        "detail": {
+          "code": "erro_rota_so_pi",
+          "params": {},
+          "msg": "esta rota so existe pra sessoes Pi"
+        }
+      }
+    },
+    {
+      "provider": "claude",
+      "source": "missing",
+      "endpoint": "kimi",
+      "catalog": {
+        "default": "p/one",
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ]
+      },
+      "status": 400,
+      "expected": {
+        "detail": {
+          "code": "erro_rota_so_kimi",
+          "params": {},
+          "msg": "esta rota só existe pra sessões Kimi"
+        }
+      }
+    }
+  ],
+  "validation": [
+    {
+      "op": "check_pi",
+      "input": [
+        {
+          "current": {
+            "provider": "p",
+            "id": "one",
+            "name": "One"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high"
+          ],
+          "models": [
+            {
+              "provider": "p",
+              "id": "one",
+              "name": "One",
+              "reasoning": true
+            }
+          ]
+        },
+        "p",
+        "one"
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "check_pi",
+      "input": [
+        {
+          "current": {
+            "provider": "p",
+            "id": "one",
+            "name": "One"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high"
+          ],
+          "models": [
+            {
+              "provider": "p",
+              "id": "one",
+              "name": "One",
+              "reasoning": true
+            }
+          ]
+        },
+        "p",
+        "missing"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "modelo fora do catalogo: p/missing"
+        }
+      }
+    },
+    {
+      "op": "check_pi",
+      "input": [
+        {
+          "current": {
+            "provider": "p",
+            "id": "one",
+            "name": "One"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high"
+          ],
+          "models": [
+            {
+              "provider": "p",
+              "id": "one",
+              "name": "One",
+              "reasoning": true
+            }
+          ]
+        },
+        "other",
+        "one"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "modelo fora do catalogo: other/one"
+        }
+      }
+    },
+    {
+      "op": "check_kimi",
+      "input": [
+        {
+          "default": "p/one",
+          "models": [
+            {
+              "alias": "p/one",
+              "provider": "p",
+              "id": "one",
+              "name": "One",
+              "context_length": 128000,
+              "efforts": [
+                "low",
+                "high"
+              ],
+              "default_effort": "high"
+            }
+          ]
+        },
+        "p/one"
+      ],
+      "expected": {
+        "ok": {
+          "alias": "p/one",
+          "provider": "p",
+          "id": "one",
+          "name": "One",
+          "context_length": 128000,
+          "efforts": [
+            "low",
+            "high"
+          ],
+          "default_effort": "high"
+        }
+      }
+    },
+    {
+      "op": "check_kimi",
+      "input": [
+        {
+          "default": "p/one",
+          "models": [
+            {
+              "alias": "p/one",
+              "provider": "p",
+              "id": "one",
+              "name": "One",
+              "context_length": 128000,
+              "efforts": [
+                "low",
+                "high"
+              ],
+              "default_effort": "high"
+            }
+          ]
+        },
+        "p/missing"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "modelo fora do catalogo: p/missing"
+        }
+      }
+    },
+    {
+      "op": "check_kimi",
+      "input": [
+        {
+          "default": "p/one",
+          "models": [
+            {
+              "alias": "p/one",
+              "provider": "p",
+              "id": "one",
+              "name": "One",
+              "context_length": 128000,
+              "efforts": [
+                "low",
+                "high"
+              ],
+              "default_effort": "high"
+            }
+          ]
+        },
+        "bad alias"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "alias invalido: 'bad alias'"
+        }
+      }
+    },
+    {
+      "op": "check_effort",
+      "input": [
+        {
+          "alias": "p/one",
+          "provider": "p",
+          "id": "one",
+          "name": "One",
+          "context_length": 128000,
+          "efforts": [
+            "low",
+            "high"
+          ],
+          "default_effort": "high"
+        },
+        "LOW"
+      ],
+      "expected": {
+        "ok": "low"
+      }
+    },
+    {
+      "op": "check_effort",
+      "input": [
+        {
+          "alias": "p/one",
+          "provider": "p",
+          "id": "one",
+          "name": "One",
+          "context_length": 128000,
+          "efforts": [
+            "low",
+            "high"
+          ],
+          "default_effort": "high"
+        },
+        "xhigh"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "nível fora do suporte de p/one: 'xhigh' (use um de low, high)"
+        }
+      }
+    },
+    {
+      "op": "check_effort",
+      "input": [
+        {
+          "efforts": []
+        },
+        "low"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "nível fora do suporte de None: 'low' (use um de nenhum — modelo sem níveis)"
+        }
+      }
+    }
+  ],
+  "posts": [
+    {
+      "provider": "pi",
+      "catalog": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "after": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "high",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "body": {},
+      "status": 422,
+      "expected": {
+        "detail": {
+          "code": "erro_model_effort_faltando",
+          "params": {},
+          "msg": "informe model (com provider) e/ou effort"
+        }
+      },
+      "effects": []
+    },
+    {
+      "provider": "pi",
+      "catalog": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "after": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "high",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "body": {
+        "model": "one"
+      },
+      "status": 422,
+      "expected": {
+        "detail": "provider obrigatorio junto com model"
+      },
+      "effects": []
+    },
+    {
+      "provider": "pi",
+      "catalog": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "after": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "high",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "body": {
+        "provider": "p",
+        "model": "missing"
+      },
+      "status": 422,
+      "expected": {
+        "detail": "modelo fora do catalogo: p/missing"
+      },
+      "effects": []
+    },
+    {
+      "provider": "pi",
+      "catalog": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "after": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "high",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "body": {
+        "effort": "wrong"
+      },
+      "status": 422,
+      "expected": {
+        "detail": "nivel desconhecido: 'wrong'"
+      },
+      "effects": []
+    },
+    {
+      "provider": "pi",
+      "catalog": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "after": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "high",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "body": {
+        "provider": "p",
+        "model": "one",
+        "effort": "high"
+      },
+      "status": 200,
+      "expected": {
+        "ok": true,
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "high",
+        "levels": [
+          "low",
+          "high"
+        ]
+      },
+      "effects": [
+        [
+          "fixture",
+          [
+            "/cp-model p one",
+            "/cp-think high"
+          ]
+        ]
+      ]
+    },
+    {
+      "provider": "kimi",
+      "catalog": {
+        "default": "p/one",
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ]
+      },
+      "after": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "high",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "body": {},
+      "status": 422,
+      "expected": {
+        "detail": {
+          "code": "erro_model_effort_faltando",
+          "params": {},
+          "msg": "informe model e/ou effort"
+        }
+      },
+      "effects": []
+    },
+    {
+      "provider": "kimi",
+      "catalog": {
+        "default": "p/one",
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ]
+      },
+      "after": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "high",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "body": {
+        "model": "p/missing"
+      },
+      "status": 422,
+      "expected": {
+        "detail": "modelo fora do catalogo: p/missing"
+      },
+      "effects": []
+    },
+    {
+      "provider": "kimi",
+      "catalog": {
+        "default": "p/one",
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ]
+      },
+      "after": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "high",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "body": {
+        "model": "p/one",
+        "effort": "xhigh"
+      },
+      "status": 422,
+      "expected": {
+        "detail": "nível fora do suporte de p/one: 'xhigh' (use um de low, high)"
+      },
+      "effects": []
+    },
+    {
+      "provider": "kimi",
+      "catalog": {
+        "default": "p/one",
+        "models": [
+          {
+            "alias": "p/one",
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "context_length": 128000,
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "default_effort": "high"
+          }
+        ]
+      },
+      "after": {
+        "current": {
+          "provider": "p",
+          "id": "one",
+          "name": "One"
+        },
+        "thinking": "high",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "models": [
+          {
+            "provider": "p",
+            "id": "one",
+            "name": "One",
+            "reasoning": true
+          }
+        ]
+      },
+      "body": {
+        "model": "p/one",
+        "effort": "low"
+      },
+      "status": 200,
+      "expected": {
+        "ok": true,
+        "current": {
+          "alias": "p/one",
+          "name": "One"
+        },
+        "effort": "low",
+        "result": "Switched to One with thinking low for this session only."
+      },
+      "effects": [
+        [
+          "fixture",
+          "p/one",
+          "One",
+          "low"
+        ]
+      ]
+    }
+  ]
+}

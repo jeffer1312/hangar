@@ -88,3 +88,6 @@ for case in bodies['cases']:
 save('body.json', bodies)
 print('Contratos regenerados exclusivamente pela referência Python: ' + revision)
 PY
+
+"${PYTHON:-python3}" "$fixtures/characterize_extra.py" "$reference" "$fixtures/extra.json"
+"${PYTHON:-python3}" "$fixtures/capture_legacy.py" "$reference" "$fixtures/legacy-calls.json"

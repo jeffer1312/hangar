@@ -277,10 +277,14 @@ pub async fn kimi_switch(
         let new_effort = thinking
             .as_ref()
             .filter(|v| Some(*v) != before_effort.as_ref());
-        let model_ok = alias.is_none() || new_model.is_some_and(|v| v["name"].as_str() == display);
-        let effort_ok = effort.is_none()
-            || new_effort.is_some_and(|v| v["level"].as_str() == effort)
-            || new_model.is_some_and(|v| v["level"].as_str() == effort);
+        let model_ok = alias.is_none()
+            || display.is_some_and(|name| {
+                pure::new_line_matches(switched.as_ref(), before_model.as_ref(), "name", name)
+            });
+        let effort_ok = effort.is_none_or(|level| {
+            pure::new_line_matches(thinking.as_ref(), before_effort.as_ref(), "level", level)
+                || pure::new_line_matches(switched.as_ref(), before_model.as_ref(), "level", level)
+        });
         if model_ok && effort_ok {
             return Ok(
                 json!({"ok":true,"result":switched.as_ref().or(thinking.as_ref()).and_then(|v|v.get("raw"))}),

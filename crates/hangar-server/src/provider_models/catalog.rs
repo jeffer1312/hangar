@@ -22,9 +22,33 @@ fn program(provider: &str) -> Option<PathBuf> {
     if !["pi", "omp"].contains(&provider) {
         return None;
     }
-    let environment: Vec<_> = std::env::vars().collect();
-    crate::runtime::process::resolve_program(provider, environment.iter().map(|(k, v)| (k, v)))
+    program_from(provider, &std::env::vars().collect::<Vec<_>>())
 }
+pub(super) fn program_from(provider: &str, environment: &[(String, String)]) -> Option<PathBuf> {
+    if !["pi", "omp"].contains(&provider) {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let path = environment
+            .iter()
+            .find(|(key, _)| key == "PATH")?
+            .1
+            .as_str();
+        std::env::split_paths(path)
+            .map(|dir| dir.join(provider))
+            .find(|file| {
+                std::fs::metadata(file)
+                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            })
+    }
+    #[cfg(not(unix))]
+    {
+        crate::runtime::process::resolve_program(provider, environment.iter().map(|(k, v)| (k, v)))
+    }
+}
+
 fn global_error(provider: &str, message: String, absent: bool) -> ModelError {
     let code = format!(
         "erro_{provider}_{}",
@@ -46,98 +70,107 @@ fn global_error(provider: &str, message: String, absent: bool) -> ModelError {
 }
 impl Source for Programs {
     fn read<'a>(&'a self, provider: &'a str) -> CatalogFuture<'a> {
-        Box::pin(async move {
-            let executable=program(provider).ok_or_else(||global_error(provider,format!("nao achei o executavel `{provider}` no PATH deste servidor — {}",if provider=="omp"{"instale o oh-my-pi ou ajuste o PATH do backend"}else{"instale o Pi (npm i -g @earendil-works/pi-coding-agent) ou ajuste o PATH do backend"}),true))?;
-            let args: Vec<&str> = if provider == "omp" {
-                vec!["models", "--json"]
-            } else {
-                vec!["--list-models"]
-            };
-            let mut command = crate::terminal_input::child_command(executable.as_os_str());
-            command
-                .args(&args)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true);
-            for key in crate::terminal_process::PRIVATE_ENV_KEYS {
-                command.env_remove(key);
-            }
-            let mut tree = crate::terminal_process::CommandTree::configure(&mut command)
-                .map_err(|e| global_error(provider, e.to_string(), false))?;
-            let mut child = command
-                .spawn()
-                .map_err(|e| global_error(provider, e.to_string(), false))?;
-            if let Err(error) = tree.attach(&child) {
-                crate::terminal_process::finish(&mut tree).await;
-                let _ = child.wait().await;
-                return Err(global_error(provider, error.to_string(), false));
-            }
-            let mut stdout = child.stdout.take().ok_or_else(|| {
-                global_error(provider, "saída do catálogo indisponível".into(), false)
-            })?;
-            let mut stderr = child.stderr.take().ok_or_else(|| {
-                global_error(provider, "erro do catálogo indisponível".into(), false)
-            })?;
-            let collected = tokio::time::timeout(Duration::from_secs(30), async {
-                let mut out = vec![];
-                let mut err = vec![];
-                let (a, b, c) = tokio::join!(
-                    stdout.read_to_end(&mut out),
-                    stderr.read_to_end(&mut err),
-                    crate::terminal_process::leader_exited(&mut child)
-                );
-                a?;
-                b?;
-                c?;
-                Ok::<_, std::io::Error>((out, err))
-            })
-            .await;
+        read_from(provider, std::env::vars().collect())
+    }
+}
+pub(super) fn read_from<'a>(
+    provider: &'a str,
+    environment: Vec<(String, String)>,
+) -> CatalogFuture<'a> {
+    Box::pin(async move {
+        let executable=program_from(provider, &environment).ok_or_else(||global_error(provider,format!("nao achei o executavel `{provider}` no PATH deste servidor — {}",if provider=="omp"{"instale o oh-my-pi ou ajuste o PATH do backend"}else{"instale o Pi (npm i -g @earendil-works/pi-coding-agent) ou ajuste o PATH do backend"}),true))?;
+        let args: Vec<&str> = if provider == "omp" {
+            vec!["models", "--json"]
+        } else {
+            vec!["--list-models"]
+        };
+        let mut command = crate::terminal_input::child_command(executable.as_os_str());
+        command
+            .env_clear()
+            .envs(environment)
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        for key in crate::terminal_process::PRIVATE_ENV_KEYS {
+            command.env_remove(key);
+        }
+        let mut tree = crate::terminal_process::CommandTree::configure(&mut command)
+            .map_err(|e| global_error(provider, e.to_string(), false))?;
+        let mut child = command
+            .spawn()
+            .map_err(|e| global_error(provider, e.to_string(), false))?;
+        if let Err(error) = tree.attach(&child) {
             crate::terminal_process::finish(&mut tree).await;
-            let status = child
-                .wait()
-                .await
-                .map_err(|e| global_error(provider, e.to_string(), false))?;
-            let (out, err) = match collected {
-                Ok(Ok(v)) => v,
-                Ok(Err(e)) => return Err(global_error(provider, e.to_string(), false)),
-                Err(_) => {
-                    return Err(global_error(
-                        provider,
-                        format!(
-                            "Command '[{}, {}]' timed out after 30 seconds",
-                            pure::repr(&executable.to_string_lossy()),
-                            args.iter()
-                                .map(|arg| pure::repr(arg))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                        false,
-                    ));
-                }
-            };
-            let stdout = String::from_utf8_lossy(&out);
-            let stderr = String::from_utf8_lossy(&err);
-            if !status.success() {
+            let _ = child.wait().await;
+            return Err(global_error(provider, error.to_string(), false));
+        }
+        let mut stdout = child.stdout.take().ok_or_else(|| {
+            global_error(provider, "saída do catálogo indisponível".into(), false)
+        })?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| global_error(provider, "erro do catálogo indisponível".into(), false))?;
+        let collected = tokio::time::timeout(Duration::from_secs(30), async {
+            let mut out = vec![];
+            let mut err = vec![];
+            let (a, b, c) = tokio::join!(
+                stdout.read_to_end(&mut out),
+                stderr.read_to_end(&mut err),
+                crate::terminal_process::leader_exited(&mut child)
+            );
+            a?;
+            b?;
+            c?;
+            Ok::<_, std::io::Error>((out, err))
+        })
+        .await;
+        crate::terminal_process::finish(&mut tree).await;
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| global_error(provider, e.to_string(), false))?;
+        let (out, err) = match collected {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => return Err(global_error(provider, e.to_string(), false)),
+            Err(_) => {
                 return Err(global_error(
                     provider,
-                    if stderr.trim().is_empty() {
-                        format!("{} falhou", args.join(" "))
-                    } else {
-                        stderr.trim().into()
-                    },
+                    format!(
+                        "Command '[{}, {}]' timed out after 30 seconds",
+                        pure::repr(&executable.to_string_lossy()),
+                        args.iter()
+                            .map(|arg| pure::repr(arg))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
                     false,
                 ));
             }
-            let models = if provider == "omp" {
-                pure::parse_omp(&stdout)
-            } else {
-                pure::parse_pi(&stdout)
-            };
-            validate_models(provider, &args.join(" "), &stdout, models)
-                .map_err(|m| global_error(provider, m, false))
-        })
-    }
+        };
+        let stdout = String::from_utf8_lossy(&out);
+        let stderr = String::from_utf8_lossy(&err);
+        if !status.success() {
+            return Err(global_error(
+                provider,
+                if stderr.trim().is_empty() {
+                    format!("{} falhou", args.join(" "))
+                } else {
+                    stderr.trim().into()
+                },
+                false,
+            ));
+        }
+        let models = if provider == "omp" {
+            pure::parse_omp(&stdout)
+        } else {
+            pure::parse_pi(&stdout)
+        };
+        validate_models(provider, &args.join(" "), &stdout, models)
+            .map_err(|m| global_error(provider, m, false))
+    })
 }
 pub fn validate_models(
     provider: &str,

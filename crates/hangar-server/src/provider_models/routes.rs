@@ -7,7 +7,7 @@ use super::{
 use crate::{list::mux::Pane, routes::AppState};
 use axum::{
     extract::{ConnectInfo, Request},
-    http::{Method, StatusCode},
+    http::{HeaderMap, Method, StatusCode},
     response::Response,
 };
 use hangar_api::session::SessionRow;
@@ -16,7 +16,7 @@ use std::{
     collections::HashMap,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, UNIX_EPOCH},
 };
 
@@ -60,8 +60,15 @@ pub fn catalog_request(method: &Method, path: &str, raw: Option<&str>) -> bool {
             .get("provider")
             .is_some_and(|p| ["pi", "omp", "kimi"].contains(&p.as_str()))
 }
+pub fn inbox_http_request(method: &Method, path: &str, headers: &HeaderMap) -> bool {
+    path == "/api/pi/inbox"
+        && (*method != Method::GET
+            || !headers
+                .get("upgrade")
+                .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket")))
+}
 pub fn allowed_method(path: &str, raw: Option<&str>) -> Option<Method> {
-    if path == "/api/pi/inbox" || catalog_request(&Method::GET, path, raw) {
+    if catalog_request(&Method::GET, path, raw) {
         return Some(Method::GET);
     }
     route(path).map(|(_, _, write)| if write { Method::POST } else { Method::GET })
@@ -183,6 +190,12 @@ async fn global_catalog(st: &Arc<AppState>, raw_query: Option<String>) -> Result
 /// A borda do servidor já decidiu quem pode usar a rota; o WebSocket confere ainda self-connect/token.
 pub async fn serve(st: &Arc<AppState>, request: Request) -> Response {
     if request.uri().path() == "/api/pi/inbox" {
+        if inbox_http_request(request.method(), request.uri().path(), request.headers()) {
+            return crate::session_write::json_response(
+                StatusCode::NOT_FOUND,
+                json!({"detail":"Not Found"}),
+            );
+        }
         let Some(peer) = request
             .extensions()
             .get::<ConnectInfo<std::net::SocketAddr>>()
@@ -210,9 +223,14 @@ pub async fn serve(st: &Arc<AppState>, request: Request) -> Response {
 async fn session(st: &Arc<AppState>, request: Request) -> Result<Value, ModelError> {
     let (name, provider, write) =
         route(request.uri().path()).ok_or_else(|| ModelError::text(404, "rota não encontrada"))?;
-    let (row, pid) = discovered(st, &name).await?;
-    validate_kind(&row, provider)?;
+    let content_type = request
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
     if !write {
+        let (row, pid) = discovered(st, &name).await?;
+        validate_kind(&row, provider)?;
         if provider == "pi" {
             return Ok(pure::pi_response(&session_catalog(st, &row, pid).await?.0));
         }
@@ -226,7 +244,9 @@ async fn session(st: &Arc<AppState>, request: Request) -> Result<Value, ModelErr
     let bytes = axum::body::to_bytes(request.into_body(), 64 * 1024)
         .await
         .map_err(|_| ModelError::text(413, "corpo grande demais"))?;
-    let body = parse_body(&bytes, provider)?;
+    let body = parse_http_body(&bytes, provider, content_type.as_deref())?;
+    let (row, _pid) = discovered(st, &name).await?;
+    validate_kind(&row, provider)?;
     let home = st.origins_home.clone();
     let lock_name = name.clone();
     let guard =
@@ -252,7 +272,7 @@ async fn session(st: &Arc<AppState>, request: Request) -> Result<Value, ModelErr
   let _guard=guard;st.list.invalidate();let(current,pid)=discovered(&st,&name).await?;
   if !same_life(&row,&current){return Err(coded(409,"erro_interacao_desatualizada","a sessão mudou enquanto esperava o teclado"));}
   if current.transfer_id.is_some(){return Err(coded(409,"erro_transferencia_em_andamento","a sessão está sendo transferida"));}
-  if provider=="kimi"&&st.term.is_active(&name){return Err(coded(409,"erro_terminal_aberto","feche o painel de terminal para usar este controle"));}
+  if provider=="kimi"&&st.term.is_active(&name){return Err(coded(409,"erro_terminal_aberto","Terminal aberto nesta sessao. Feche o painel pra responder por aqui."));}
   let io=NativeIo::new(st.clone(),current.clone(),pid).await?;let timing=Timing::default();
   if provider=="pi"{
    let (catalog,_)=session_catalog(&st,&current,pid).await?;let mut commands=vec![];
@@ -277,6 +297,29 @@ async fn session(st: &Arc<AppState>, request: Request) -> Result<Value, ModelErr
    Ok(json!({"ok":true,"current":target.as_ref().map(|t|json!({"alias":t["alias"],"name":t["name"]})),"effort":effort,"result":result["result"]}))
   }
  }).await.map_err(|_|coded(503,"provider_model_driver_failed","o controle de modelo falhou"))?
+}
+pub(super) fn parse_http_body(
+    bytes: &[u8],
+    provider: &str,
+    content_type: Option<&str>,
+) -> Result<Value, ModelError> {
+    let mime = content_type
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if bytes.is_empty()
+        || mime == "application/json"
+        || mime.starts_with("application/") && mime.ends_with("+json")
+    {
+        return parse_body(bytes, provider);
+    }
+    Err(ModelError {
+        status: 422,
+        detail: json!([{"type":"model_attributes_type","loc":["body"],"msg":"Input should be a valid dictionary or object to extract fields from","input":String::from_utf8_lossy(bytes)}]),
+    })
 }
 pub fn parse_body(bytes: &[u8], provider: &str) -> Result<Value, ModelError> {
     let missing = || ModelError {
@@ -529,11 +572,15 @@ fn modified(path: &Path) -> Option<f64> {
         .ok()
         .map(|v| v.as_secs_f64())
 }
+static KIMI_MARKERS: LazyLock<Mutex<HashMap<Vec<PathBuf>, crate::list::facts_files::HookStates>>> =
+    LazyLock::new(Mutex::default);
 pub fn kimi_working(config_dirs: &[PathBuf], jsonl: Option<&str>) -> bool {
     let Some(jsonl) = jsonl.filter(|j| !j.is_empty()) else {
         return false;
     };
-    let markers = crate::list::facts_files::HookStates::load(config_dirs);
+    let mut caches = KIMI_MARKERS.lock().unwrap_or_else(|e| e.into_inner());
+    let markers = caches.entry(config_dirs.to_vec()).or_default();
+    markers.refresh(config_dirs);
     let marker = markers.get_state(Some(&crate::locate::session_key(jsonl)), |_| false);
     let Some(marker) = marker else {
         return false;

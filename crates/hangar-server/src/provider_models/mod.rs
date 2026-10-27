@@ -3,7 +3,7 @@ pub mod driver;
 pub mod inbox;
 mod pure;
 mod routes;
-pub use routes::{allowed_method, catalog_request, matches, serve};
+pub use routes::{allowed_method, catalog_request, inbox_http_request, matches, serve};
 pub mod catalog;
 pub use catalog::{catalog, warm};
 pub use pure::{kimi_catalog, pi_catalog, pi_provider};
@@ -74,3 +74,6 @@ pub fn contract_case(op: &str, input: &Value) -> Value {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tests_extra;
