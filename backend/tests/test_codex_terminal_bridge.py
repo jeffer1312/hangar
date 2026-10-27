@@ -203,19 +203,18 @@ def test_connect_delete_without_the_list_closes_here(monkeypatch, failure):
 
 
 def test_connect_close_of_a_grouped_claude_leaves_the_group_from_here(monkeypatch):
-    """O Rust fecha o Claude do Connect sem sair do grupo: a saída vai pela ponte daqui, com a fase lida antes."""
+    """O Rust fecha o Claude do Connect; a saída do grupo vai pela ponte e lê a fase no Rust."""
     left = []
     monkeypatch.setattr(api_mod.registry, "kill", lambda name, closed_by_rust=False: [])
     monkeypatch.setattr(api_mod.closed_names, "record", lambda jsonl, name: None)
     monkeypatch.setattr(api_mod, "_sidecar_state", lambda name: "present")
-    monkeypatch.setattr(api_mod, "_route_facts", lambda name, body, route=None: {"phases": {"ct": "exec"}})
     monkeypatch.setattr(api_mod.groups_bridge, "rust_owns_groups", lambda: True)
     monkeypatch.setattr(api_mod.groups_bridge, "call", lambda op, **kw: left.append((op, kw)) or {"warnings": []})
     monkeypatch.setattr(runtime_coordinator, "rust_claude", lambda *args, **kw: (200, b'{"closed": true, "transcript": ""}'))
     _provider(monkeypatch, ct="claude")
     request = _request(api_mod.CONNECT_PORT, "/api/sessions/ct", body=b"", method="DELETE")
     assert asyncio.run(api_mod.kill_session("ct", request=request)) == {"ok": True, "warning": None}
-    assert left == [("group.leave", {"name": "ct", "phases": {"ct": "exec"}})]
+    assert left == [("group.leave", {"name": "ct", "phases": {}})]
 
 
 def test_claude_reopen_entering_the_connect_port_goes_to_the_rust(monkeypatch):
