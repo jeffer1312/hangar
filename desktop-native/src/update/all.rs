@@ -85,8 +85,10 @@ fn failure_text(error: &Failure) -> String { tr(&error.detail) }
 
 /// Só os representantes que a leitura dos avisos escolheu (`read`), menos os sem avisos lidos. Refazer a escolha aqui
 /// pode eleger outro endereço da mesma máquina (identidade que falhou numa das vezes), que rodaria sem o aceite.
+/// Uma por chave: endereços que se escrevem diferente podem dar a mesma chave, e a linha repetida nunca sai de "procurando".
 fn batch_machines<T>(machines: Vec<Machine>, read: &HashMap<String, T>, excluded: &HashSet<String>) -> Vec<Machine> {
-    machines.into_iter().filter(|m| read.contains_key(&m.key) && !excluded.contains(&m.key)).collect()
+    let mut seen = HashSet::new();
+    machines.into_iter().filter(|m| read.contains_key(&m.key) && !excluded.contains(&m.key) && seen.insert(m.key.clone())).collect()
 }
 
 fn own_servers(servers: &[ServerEntry]) -> Vec<ServerEntry> {
@@ -931,6 +933,8 @@ mod tests {
         assert!(batch_machines(raw(), &keys(&["rep"]), &excluded).is_empty(), "o outro endereço da excluída não roda");
         let kept = batch_machines(raw(), &keys(&["rep", "alias"]), &excluded);
         assert_eq!(kept.iter().map(|m| m.key.as_str()).collect::<Vec<_>>(), ["alias"], "lidos em separado: o lido segue");
+        let twice = batch_machines(vec![machine("alias"), machine("alias")], &keys(&["alias"]), &HashSet::new());
+        assert_eq!(twice.len(), 1, "a mesma chave duas vezes vira uma linha só");
     }
 
     #[test]
