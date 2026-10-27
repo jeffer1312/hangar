@@ -276,7 +276,9 @@ pub(crate) async fn read_only_envelope<'a>(env: &BTreeMap<String, String>, home:
     if !cfg!(target_os = "linux") { return Err(refuse("read-only exige Linux com bubblewrap (bwrap)".into())); }
     let bwrap = crate::runtime::process::resolve_program("bwrap", env)
         .ok_or_else(|| refuse("read-only exige bubblewrap: instale bwrap antes de criar a sessão".into()))?;
-    let root = Path::new(cwd).canonicalize().map_err(|e| refuse(format!("read-only não pôde preparar a proteção: {e}")))?;
+    let root = crate::accounts::environment::expand(cwd, home).canonicalize()
+        .map_err(|e| refuse(format!("read-only não pôde preparar a proteção: {e}")))?;
+    if !root.is_dir() { return Err(refuse("read-only exige um diretório de trabalho existente".into())); }
     let mut paths = vec![root.clone()];
     let git = run(["git", "-C", &root.to_string_lossy(), "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir",
         "--show-toplevel"].map(str::to_owned).into(), Duration::from_secs(5)).await;
@@ -296,8 +298,14 @@ pub(crate) async fn read_only_envelope<'a>(env: &BTreeMap<String, String>, home:
     runtimes.extend(config_dir.map(PathBuf::from));
     runtimes.extend(["CLAUDE_CONFIG_DIR", "CODEX_HOME", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "PI_CONFIG_DIR", "KIMI_CODE_HOME"]
         .iter().filter_map(|k| env.get(*k).filter(|v| !v.is_empty())).map(PathBuf::from));
-    let resolved = |p: &PathBuf| p.canonicalize().unwrap_or_else(|_| p.clone());
-    if runtimes.iter().any(|r| paths.iter().any(|p| resolved(r).starts_with(p))) {
+    let resolved = |p: &PathBuf| {
+        let expanded = crate::accounts::environment::expand(&p.to_string_lossy(), home);
+        let absolute = std::path::absolute(expanded)?;
+        crate::accounts::types::resolve_missing(&absolute)
+    };
+    let runtimes = runtimes.iter().map(resolved).collect::<Result<Vec<_>, _>>()
+        .map_err(|e| refuse(format!("read-only não pôde preparar a proteção: {e}")))?;
+    if runtimes.iter().any(|r| paths.iter().any(|p| r.starts_with(p))) {
         return Err(refuse("read-only recusado: o código protegido contém o runtime de um agente".into()));
     }
     paths.sort_by_key(|p| (p.components().count(), p.to_string_lossy().into_owned()));

@@ -41,8 +41,10 @@ fn dispatch(command: &str, args: &[String], value: &Value) -> Result<Value, Stri
             let cwd = value["cwd"].as_str().ok_or("provider_cwd_missing")?;
             let config = value["config_dir"].as_str();
             let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|_| "provider_runtime_failed")?;
-            let run = |argv, timeout| -> futures_util::future::BoxFuture<'_, crate::session_open::terminal::MuxOutput> {
-                Box::pin(crate::session_open::server::run_program(&env, argv, timeout))
+            let git_env = env.iter().filter(|(key, _)| !key.starts_with("GIT_")).map(|(key, value)| (key.clone(), value.clone())).collect();
+            let run = |argv: Vec<String>, timeout| -> futures_util::future::BoxFuture<'_, crate::session_open::terminal::MuxOutput> {
+                let environment = if argv.first().is_some_and(|program| program == "git") { &git_env } else { &env };
+                Box::pin(crate::session_open::server::run_program(environment, argv, timeout))
             };
             let prefix = runtime.block_on(crate::session_open::open::read_only_envelope(&env, Path::new(home), cwd, config, &run))
                 .map_err(|error| error.msg)?;

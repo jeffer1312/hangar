@@ -1438,29 +1438,13 @@ class SessionRegistry:
             if info.engine:
                 info.conta = (procinfo._env_var_of(pid_env, "CP_ENGINE_CREDENTIAL_ID")
                               if info.engine_account else f"chave:{info.engine}")
-            elif prov == "kimi":
-                # Sessão Kimi sem motor gasta o provider do default_model do config dela
-                # ("apikey/k3" -> conta "kimi:apikey"). Cache por mtime dentro de cotas — isto
-                # roda por sessão a cada varredura.
-                from app import cotas
-                padrao = cotas.provider_padrao_kimi()
-                info.conta = f"kimi:{padrao}" if padrao else None
-            elif prov in ("pi", "omp"):
-                # Sessão Pi/omp gasta a credencial do modelo escolhido NELA (o `current.provider` do
-                # sidecar do catálogo), que pode ser a mesma chave Kimi/motor que já é uma conta
-                # desta lista. Provider sem chave conhecida (OAuth do Codex, provedor só do Pi)
-                # segue None, e a pílula cai no pior-geral como antes.
-                from app import cotas, pi_models
-                cfg_pi = _config_dir_of(pid_env) if pid_env else None
-                atual = pi_models.provider_atual(jsonl, cfg_pi) if jsonl else None
-                info.conta = cotas.conta_de_provider_pi(atual)
             elif prov == "codex":
                 # A origem é a raiz do Codex, mesmo sem `auth.json`: a identidade da sessão não pode
                 # desaparecer só porque a conta está desconectada.
                 codex_home = str(codex_contas.default_home().resolve(strict=False))
                 info.codex_home = codex_home
                 info.conta = f"codex:{codex_home}"
-            else:
+            elif prov == "claude":
                 cdir = (_config_dir_of(pid_env) if pid_env else None) or (Path.home() / ".claude")
                 info.conta = f"claude:{Path(cdir).resolve()}"
             out.append(info)

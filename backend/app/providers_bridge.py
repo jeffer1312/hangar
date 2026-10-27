@@ -26,6 +26,10 @@ def local(command: str, operation: str | None = None, **arguments):
         response = json.loads(result.stdout)
     except ValueError:
         raise RuntimeError("providers_rust_invalid_response") from None
+    if not isinstance(response, dict):
+        raise RuntimeError("providers_rust_invalid_response")
     if result.returncode or response.get("ok") is not True:
         raise ValueError(response.get("error") or "providers_rust_failed")
+    if "result" not in response:
+        raise RuntimeError("providers_rust_invalid_response")
     return response["result"]

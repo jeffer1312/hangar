@@ -1097,8 +1097,7 @@ def test_list_conta_vem_do_processo_do_agente_nao_do_pane(tmp_path):
 
 
 def test_list_conta_em_pi_kimi(tmp_path):
-    """Pi sem motor: conta=None (fallback smart da pílula). Kimi sem motor: a conta é o provider
-    do default_model do config dele ("apikey/k3" -> "kimi:apikey"); sem provider, None."""
+    """A descoberta Python deixa a conta Pi/Kimi para a decoração da lista no Rust."""
     pane = {"name": "kk", "pid": 111, "cwd": "/home/u/p", "pane_id": "%1", "active": True}
 
     reg = SessionRegistry(projects_dir=tmp_path)
@@ -1109,16 +1108,13 @@ def test_list_conta_em_pi_kimi(tmp_path):
         out = reg.list()
     assert out[0].provider == "pi" and out[0].conta is None
 
-    from app import cotas
-    for padrao, esperado in (("apikey", "kimi:apikey"), (None, None)):
-        reg = SessionRegistry(projects_dir=tmp_path)
-        with patch.object(registry.tmux, "list_panes_all", return_value={"kk": [pane]}), \
-             patch.object(registry, "agente_do_pane", return_value=("kimi", 111)), \
-             patch.object(registry, "kimi_session_file", return_value="/x/s.jsonl"), \
-             patch.object(registry, "_engine_of", return_value=None), \
-             patch.object(cotas, "provider_padrao_kimi", return_value=padrao):
-            out = reg.list()
-        assert out[0].provider == "kimi" and out[0].conta == esperado
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "list_panes_all", return_value={"kk": [pane]}), \
+         patch.object(registry, "agente_do_pane", return_value=("kimi", 111)), \
+         patch.object(registry, "kimi_session_file", return_value="/x/s.jsonl"), \
+         patch.object(registry, "_engine_of", return_value=None):
+        out = reg.list()
+    assert out[0].provider == "kimi" and out[0].conta is None
 
 
 # --- Git fora do caminho que publica o estado ------------------------------------------------

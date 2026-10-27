@@ -1176,6 +1176,81 @@ mod tests {
     use super::*;
     use std::io::Read;
 
+    #[tokio::test]
+    async fn migrated_provider_routes_authenticate_before_validation_and_never_fall_back() {
+        let state = state_with_upstream().await;
+        let peer = "127.0.0.1:5000".parse().unwrap();
+        for path in ["/api/sessions/demo/pi/model", "/api/sessions/demo/kimi/model", "/api/sessions/demo/orq/papeis"] {
+            for (token, expected) in [("errado", StatusCode::UNAUTHORIZED), ("dono", StatusCode::UNPROCESSABLE_ENTITY)] {
+                let mut req = request(path, "198.51.100.50", false, token);
+                *req.method_mut() = Method::POST;
+                req.headers_mut().insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+                *req.body_mut() = axum::body::Body::from("{}");
+                let response = pass_any(State(state.clone()), ConnectInfo(peer), req).await;
+                assert_eq!(response.status(), expected, "{path}, token {token}");
+            }
+        }
+        let response = pass_any(State(state.clone()), ConnectInfo(peer), request("/api/omp/plugin-sync", "198.51.100.51", false, "dono")).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap(), serde_json::json!({"code":"omp_sync_unavailable"}));
+    }
+
+    #[tokio::test]
+    async fn migrated_provider_forwarding_checks_the_private_secret_and_preserves_guest_limits() {
+        let state = state_with_upstream().await;
+        let peer = "127.0.0.1:5000".parse().unwrap();
+        for (path, guest, secret, expected) in [
+            ("/api/sessions/demo/pi/model", false, "errado", StatusCode::NOT_FOUND),
+            ("/api/sessions/demo/pi/model", true, "s", StatusCode::UNPROCESSABLE_ENTITY),
+            ("/api/sessions/demo/orq/papeis", true, "s", StatusCode::NOT_FOUND),
+            ("/api/sessions/demo/orq/papeis", false, "s", StatusCode::UNPROCESSABLE_ENTITY),
+        ] {
+            let req = Request::builder().method(Method::POST).uri("/__hangar_server/forwarded")
+                .header("x-hangar-internal", secret).header("x-hangar-path", path)
+                .header("x-hangar-forwarded-guest", if guest { "1" } else { "0" })
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from("{}")).unwrap();
+            let response = crate::forwarded::private(State(state.clone()), ConnectInfo(peer), req).await;
+            assert_eq!(response.status(), expected, "{path}, convidado {guest}, segredo {secret}");
+        }
+    }
+
+    #[tokio::test]
+    async fn orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports() {
+        let dir = tempfile::tempdir().unwrap();
+        let timeline = dir.path().join("timeline.jsonl");
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../backend/tests/fixtures/contract/orq-events/events.json")).unwrap();
+        let lines = fixture["cases"].as_array().unwrap().iter().map(|case| format!("{}\n", case["input"])).collect::<String>();
+        std::fs::write(&timeline, lines).unwrap();
+        let mut state = Arc::try_unwrap(state_with_upstream().await).ok().unwrap();
+        state.side.locate = Arc::new(crate::locate::Fixed(Some(InternalInfo {
+            provider: "orq".into(), jsonl: Some(timeline), session_key: "run".into(),
+            history: serde_json::Value::Null, headless: false, lifecycle_id: Some("life".into()), cwd: None,
+        })));
+        let state = Arc::new(state);
+        let peer = "127.0.0.1:5000".parse().unwrap();
+        let public = history(State(state.clone()), ConnectInfo(peer), Ok(Path("run-orq".into())),
+            request("/api/sessions/run-orq/history", "198.51.100.52", false, "dono")).await;
+        assert_eq!(public.status(), StatusCode::OK);
+        let expected = axum::body::to_bytes(public.into_body(), 1024 * 1024).await.unwrap();
+        assert!(!serde_json::from_slice::<Vec<serde_json::Value>>(&expected).unwrap().is_empty());
+        for guest in [false, true] {
+            let req = Request::builder().uri("/__hangar_server/forwarded")
+                .header("x-hangar-internal", "s").header("x-hangar-path", "/api/sessions/run-orq/history")
+                .header("x-hangar-forwarded-guest", if guest { "1" } else { "0" })
+                .body(axum::body::Body::empty()).unwrap();
+            let response = crate::forwarded::private(State(state.clone()), ConnectInfo(peer), req).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap(), expected);
+        }
+        let req = Request::builder().uri("/__hangar_server/forwarded?limit=invalido")
+            .header("x-hangar-internal", "s").header("x-hangar-path", "/api/sessions/run-orq/history")
+            .body(axum::body::Body::empty()).unwrap();
+        let response = crate::forwarded::private(State(state), ConnectInfo(peer), req).await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
     /// Estado com um Python mínimo: `/ws` recusa com 403, `/limited` responde 429.
     async fn state_with_upstream() -> Arc<AppState> {
         use axum::routing::any;

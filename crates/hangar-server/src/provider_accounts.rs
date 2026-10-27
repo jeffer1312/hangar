@@ -170,7 +170,9 @@ mod tests {
             std::fs::write(home.path().join(".kimi-code/config.toml"), case["kimi"].as_str().unwrap()).unwrap();
             let env = environment(home.path());
             assert_eq!(serde_json::to_value(pi_account(&env, case["provider"].as_str())).unwrap(), case["expected"]["pi"], "{}", case["name"]);
-            assert_eq!(serde_json::to_value(kimi_account(&env)).unwrap(), case["expected"]["kimi"], "{}", case["name"]);
+            // O leitor Python devolvia o provider; a lista acrescentava o prefixo da conta.
+            let provider = kimi_account(&env).map(|account| account.strip_prefix("kimi:").unwrap().to_owned());
+            assert_eq!(serde_json::to_value(provider).unwrap(), case["expected"]["kimi"], "{}", case["name"]);
         }
     }
 }

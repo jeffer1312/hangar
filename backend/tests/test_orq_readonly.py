@@ -114,6 +114,27 @@ def test_runtime_inside_code_is_refused(tmp_path, hangar_server_bin):
     assert not marker.exists()
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="bubblewrap é exclusivo do Linux")
+def test_file_is_refused_before_the_probe(tmp_path, hangar_server_bin):
+    env, marker = _fake_programs(tmp_path)
+    source = tmp_path / "source.txt"
+    source.write_text("conteúdo", encoding="utf-8")
+    with pytest.raises(ValueError, match="diretório de trabalho existente"):
+        _prepare(source, env=env)
+    assert not marker.exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="bubblewrap é exclusivo do Linux")
+def test_tilde_runtime_inside_code_is_refused_before_the_probe(tmp_path, hangar_server_bin):
+    env, marker = _fake_programs(tmp_path)
+    source = tmp_path / "repo"
+    source.mkdir()
+    env["CODEX_HOME"] = "~/repo/ausente/../.codex"
+    with pytest.raises(ValueError, match="runtime"):
+        _prepare(source, home=tmp_path, env=env)
+    assert not marker.exists()
+
+
 _SID = "33333333-3333-3333-3333-333333333333"
 _PREFIX = ["/usr/bin/bwrap", "--bind", "/", "/", "--setenv", "HANGAR_ORQ_READ_ONLY", "1", "--"]
 

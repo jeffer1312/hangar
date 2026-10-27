@@ -1,4 +1,4 @@
-"""Fatos da lista que continuam do Python: só o estado e a conta das linhas Pi, omp e Kimi, que o
+"""Fatos da lista que continuam do Python: só o estado das linhas Pi, omp e Kimi, que o
 Rust pergunta quando a lista as tem (`POST /internal/list/facts`)."""
 import asyncio
 import json
@@ -32,30 +32,16 @@ def test_facts_compute_only_pi_omp_kimi_rows(monkeypatch):
     json.dumps(out)
 
 
-def test_facts_account_for_kimi_pi_omp_rows(monkeypatch):
-    from app import cotas, pi_models
-
+def test_facts_preserve_rust_accounts_for_kimi_pi_omp_rows(monkeypatch):
     async def keep(infos, state_only=False):
         return infos
 
     monkeypatch.setattr(sse._list_registry, "list_with_state", keep)
-    monkeypatch.setattr(cotas, "provider_padrao_kimi", lambda: "apikey")
-    seen = []
-
-    def atual(jsonl, cfg):
-        seen.append((jsonl, cfg))
-        return "kimi-coding"
-
-    monkeypatch.setattr(pi_models, "provider_atual", atual)
-    monkeypatch.setattr(cotas, "conta_de_provider_pi", lambda p: f"chave:{p}" if p else None)
-    monkeypatch.setattr(registry, "_config_dir_of", lambda pid: f"/cfg/{pid}")
-    out = _compute([_row("k", "kimi"), _row("p", "pi", jsonl="/t/p.jsonl"), _row("o", "omp")], pane_pids={"p": 41})
-    assert out["states"]["k"]["conta"] == "kimi:apikey"
-    assert out["states"]["p"]["conta"] == "chave:kimi-coding"
-    # O sidecar do catálogo mora na conta do pane da sessão.
-    assert seen == [("/t/p.jsonl", "/cfg/41")]
-    # Sem transcript não há catálogo: a conta fica vazia, como hoje.
-    assert out["states"]["o"]["conta"] is None
+    out = _compute([_row("k", "kimi", conta="kimi:apikey"),
+                    _row("p", "pi", jsonl="/t/p.jsonl", conta="chave:kimi-coding"),
+                    _row("o", "omp")], pane_pids={"p": 41})
+    assert set(out["states"]) == {"k", "p", "o"}
+    assert all("conta" not in state for state in out["states"].values())
 
 
 def test_demote_service_updates_map_and_file(tmp_path, monkeypatch):

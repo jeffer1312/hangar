@@ -3027,6 +3027,9 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
 
 ## Feed do condutor no Rust, watchdog compartilhado no Python
 
+Etapa histórica de 18/10/2026, substituída pela migração completa descrita em
+[Provedores e orquestração no Rust](#provedores-e-orquestração-no-rust).
+
 Em 18/10/2026, `GET /api/orq/{exec_id}/conductor` passou a montar registro, sombra do Jev e eventos
 no `hangar-server`. O contrato foi congelado executando `orq_conductor.py` e `orq.py` do commit
 `70d0b9ef4`, em `backend/tests/fixtures/contract/orq-conductor/`: o gerador registra a origem e o
@@ -3055,6 +3058,40 @@ NaN em probabilidades continua nulo; valor não finito em campo devolvido cru e 
 continuam erro HTTP, como a serialização Python. Erros originais de tipo de evento não hashável e
 inteiro grande demais para probabilidade permanecem recusas visíveis, sem feed parcial. O
 watchdog e os auxiliares ainda compartilhados com a timeline ficaram no Python.
+
+## Provedores e orquestração no Rust
+
+Em 27/10/2026, a migração levou o caminho inteiro dos catálogos e controles Pi/omp/Kimi, do
+sincronizador omp e do backend de orquestração ao `hangar-server`. O contrato de referência é o
+Python do commit `d2a42410f9fe6df4ea491b296c7fea7b98d8b844`; as fixtures em
+`backend/tests/fixtures/contract/` registram a origem e os comandos de caracterização.
+
+- `provider_models/` mantém os catálogos, a seleção e sua confirmação no agente. O inbox Pi
+  mantém registro, batimento, confirmação e limpeza no Rust. A escrita de modelo e a entrada
+  geral compartilham a mesma trava de arquivo por sessão, inclusive quando o consumidor de
+  entrada ainda é Python. O catálogo usa a conta do processo do agente.
+- `provider_accounts.rs` associa a credencial do modelo Pi/omp e o modelo padrão Kimi às fontes
+  de cota. A lista não aceita sobrescrever essa conta pelos fatos do Python.
+- `omp_sync/` mantém reconciliação conservadora, registro, contexto, kill switch, suspensão,
+  intervalo e encerramento do worker. A inicialização termina o contexto antes de iniciar a
+  rotina periódica; o encerramento espera o trabalho em andamento terminar.
+- `orchestration/` mantém política, papéis, contexto, plano, execuções, consumo, watchdog,
+  timeline e painéis. A conversa sintética `-orq` usa o parser e o hub compartilhado do Rust;
+  a vida da sessão limita o produtor de estado. O condutor lê os mesmos fatos em processo.
+  Grupos consultam fase e promoção em processo, sem `POST /internal/orq/*`.
+- O motor externo da skill continua sendo uma ferramenta Python. Seus leitores compartilhados
+  chamam `hangar-server orq-info`; a preparação read-only usa o mesmo envelope do lançador Rust.
+  Esses consumidores não mantêm uma segunda implementação dos leitores.
+
+As portas do Python preservam autenticação e transporte em um sentido. Falha no Rust é erro
+visível; o modo `python` não oferece os controles migrados. Os módulos Python correspondentes
+foram apagados. Transcript, classificação de estado e entrada geral de Pi/omp/Kimi continuam
+fora deste recorte. O protocolo interno foi elevado de 90 para 91 nos dois lados.
+
+A prova usa sessões e pastas descartáveis, sem enviar prompts a um LLM. Os contratos incluem
+efeitos em disco e no terminal, erros HTTP completos, cache por mtime, Unicode, exclusão entre
+escritores e comportamento do `Path`/`PATHEXT` no Windows. Medições de drivers isolados não
+demonstram ganho na interface; esta migração não afirma melhoria perceptível de desempenho.
 
 ## Sessão filha ligada a quem a abriu
 
