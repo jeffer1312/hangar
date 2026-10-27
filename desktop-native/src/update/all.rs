@@ -766,7 +766,7 @@ mod tests {
 
     #[test]
     fn update_all_accepts_the_warning_and_starts_only_a_real_update() {
-        let acceptance = Acceptance { ids: vec!["2026-10-24-pacote-por-versao".into()], mode: Some("package") };
+        let acceptance = Acceptance { ids: vec!["2026-10-24-pacote-por-versao".into()], mode: Some("package"), incomplete: false };
         let runtime = tokio::runtime::Runtime::new().unwrap();
         // Só o aviso pendente: aceito, nada de `iniciar`.
         let (machine, server) = mock(vec![

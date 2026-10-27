@@ -26,8 +26,9 @@ pub async fn route(State(state): State<Arc<AppState>>, ConnectInfo(peer): Connec
                 tracing::warn!("leitura dos avisos da atualização falhou no índice do pacote: {why}");
                 // O aviso da migração pendente é só de arquivos locais: sem o índice ele ainda sai, senão o
                 // Atualizar acenderia por ele e o modal não teria o que aceitar.
+                // `incomplete`: os avisos da versão nova não foram lidos; a tela aceita este e não inicia a atualização.
                 match crate::update::migrate::pending_warning(&home, &notes_root(&home)) {
-                    Some(warning) => json_response(StatusCode::OK, json!({"target": null, "warnings": [warning], "news": []})),
+                    Some(warning) => json_response(StatusCode::OK, json!({"target": null, "warnings": [warning], "news": [], "incomplete": true})),
                     None => unavailable(),
                 }
             }

@@ -95,10 +95,13 @@ impl Machine for Live {
     }
 
     async fn newer(&self, channel: &str) -> Result<Option<String>, String> {
-        // Canal trocado na tela: o publicado no outro vale mesmo com número menor, como no Atualizar.
-        let installed = super::installed(&self.layout()).filter(|m| m.channel == channel).and_then(|m| m.version.parse().ok());
+        // Canal trocado na tela: o publicado no outro vale mesmo com número menor, como no Atualizar; a mesma
+        // versão não é troca nenhuma.
+        let manifest = super::installed(&self.layout());
+        let installed = manifest.as_ref().filter(|m| m.channel == channel).and_then(|m| m.version.parse().ok());
         let release = Release::github(channel);
-        super::check(&self.client, &release, &super::platform(), installed).await.map(|e| e.map(|e| e.version)).map_err(|e| e.to_string())
+        let entry = super::check(&self.client, &release, &super::platform(), installed).await.map_err(|e| e.to_string())?;
+        Ok(entry.map(|e| e.version).filter(|v| manifest.as_ref().is_none_or(|m| *v != m.version)))
     }
 
     async fn working(&self) -> Result<bool, String> {

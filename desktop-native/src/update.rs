@@ -399,10 +399,13 @@ fn hold(state: &Value) -> Option<Hold> {
 /// O que segura o Atualizar desta máquina e de cada uma do lote. Aceitar o aviso não faz `git pull`: edição no
 /// checkout ou branch de trabalho não o seguram; se houver versão nova, o `iniciar` depois do aceite é que recusa.
 fn update_hold(state: &Value) -> Option<Hold> {
-    match hold(state) {
-        Some(Hold::LocalChanges | Hold::WorkBranch(..)) if state["pending_warning"].as_bool() == Some(true) => None,
-        other => other,
+    if state["pending_warning"].as_bool() != Some(true) { return hold(state); }
+    // Só a edição e a branch saem: rodando e o que falta no pré-voo continuam segurando.
+    let mut without_checkout = state.clone();
+    for (key, value) in [("sujo", Value::from(0)), ("ahead", 0.into()), ("divergiu", false.into()), ("branch_de_trabalho", false.into())] {
+        without_checkout["pre_voo"][key] = value;
     }
+    hold(&without_checkout)
 }
 
 /// O que o "Atualizar tudo" faz: `need` é a API que a release do app exige, `server` o `GET /api/atualizacao` do servidor
@@ -1470,6 +1473,14 @@ mod tests {
         assert_eq!(plan(None, Some(&work), Some(2)).server, ServerStep::Update);
         assert_eq!(plan(None, Some(&dirty(serde_json::json!({"atualizacao_disponivel": true}))), Some(2)).server,
             ServerStep::Held(Hold::LocalChanges));
+        // Rodando e o que falta seguram mesmo com o aviso e a edição.
+        let mut running = work.clone();
+        running["estado"]["fase"] = "rodando".into();
+        assert_eq!(plan(None, Some(&running), Some(2)).server, ServerStep::Held(Hold::Running));
+        let mut missing = work;
+        missing["pre_voo"]["pode"] = false.into();
+        missing["pre_voo"]["erro"] = "x".into();
+        assert!(matches!(plan(None, Some(&missing), Some(2)).server, ServerStep::Held(Hold::Missing(_))));
     }
 
     #[test]

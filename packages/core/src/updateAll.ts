@@ -3,6 +3,7 @@ import { isOwnMachine } from './machineImport';
 import { registrar as registerDiagnostic } from './diag';
 import type { Server } from './servers';
 import type { Atualizacao, AtualizacaoEstado, UpdateMode, UpdateNotes } from './types';
+import * as m from './paraglide/messages';
 
 export type UpdateHoldReason = 'branch' | 'mudancas' | 'rodando' | 'falta';
 export type UpdateClassification = 'iniciar' | 'em_dia' | `travado:${UpdateHoldReason}`;
@@ -69,7 +70,8 @@ export function ownUpdatableServers(list: readonly Server[]): Server[] {
 }
 
 /** O que a pessoa aceitou na folha para uma máquina: os ids lidos e, com o aviso da migração, o modo. */
-export interface UpdateAcceptance { ids: string[]; mode?: UpdateMode }
+/** `incomplete`: as notas vieram sem os avisos da versão nova; aceita-se, e nada de `iniciar` por cima deles. */
+export interface UpdateAcceptance { ids: string[]; mode?: UpdateMode; incomplete?: boolean }
 export type AfterAccept = 'started' | 'start' | 'done';
 
 /** `null` = servidor antigo, sem a rota: inicia como antes. Aceite gravado sem lançar inicia só com versão nova. */
@@ -85,7 +87,7 @@ export async function acceptAndStart(server: Server, acceptance: UpdateAcceptanc
   const accepted = acceptance?.ids.length ? await acceptUpdateWarningsEm(server, acceptance.ids, acceptance.mode, fetcher) : undefined;
   if (accepted?.started) return { ok: true, pid: accepted.pid! };
   const next = afterAccept(accepted, accepted === null ? {} : snapshot ?? await getAtualizacaoEm(server, false, fetcher));
-  return next === 'start' ? iniciarAtualizacaoEm(server, fetcher) : null;
+  return next === 'start' && !acceptance?.incomplete ? iniciarAtualizacaoEm(server, fetcher) : null;
 }
 
 /** As máquinas próprias, uma por identidade; `last` vence como representante da dele. */
@@ -190,6 +192,10 @@ export async function updateAll(
     const baseTs = snapshot.estado.ts;
     const startedAt = now();
     publish({ status: 'iniciando', warnings: [] });
+    // Aviso pendente sem aceite desta máquina: "em dia" esconderia a migração que segue pendente.
+    if (snapshot.pending_warning === true && !opts.accept?.[server.id]) {
+      return finish({ status: 'falhou', error: m.update_all_warning_not_accepted({ server: server.label }), warnings: [] });
+    }
     try {
       if (!await acceptAndStart(server, opts.accept?.[server.id], snapshot, opts.fetch)) return finish({ status: 'em_dia', warnings: [] });
     } catch (error) {

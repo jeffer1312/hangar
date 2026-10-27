@@ -1141,4 +1141,5 @@ export interface UpdateNews {
   try_it: string | null;
   animation: string | null;
 }
-export interface UpdateNotes { target: string; warnings: UpdateWarning[]; news: UpdateNews[] }
+/** `incomplete`: o servidor não leu os avisos da versão nova (só o da migração, que é local). */
+export interface UpdateNotes { target: string; warnings: UpdateWarning[]; news: UpdateNews[]; incomplete?: boolean }

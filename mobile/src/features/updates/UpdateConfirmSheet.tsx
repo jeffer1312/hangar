@@ -13,7 +13,8 @@ import { savePendingNews, type ConfirmRequest, type UpdateAcceptances } from './
 import * as m from '../../paraglide/messages';
 
 // `title` só no "Atualizar todas": os avisos vêm agrupados por máquina.
-type WarningGroup = { server: Server; title?: string; warnings: UpdateWarning[] };
+// `incomplete`: o servidor não leu os avisos da versão nova; o aceite vai sem `iniciar`.
+type WarningGroup = { server: Server; title?: string; warnings: UpdateWarning[]; incomplete?: boolean };
 // `runnable`: quantas máquinas vão rodar; no "Atualizar todas", só as que leram os avisos.
 type Loaded = { notes: ClientUpdateNotes | null; version: string; from: string; failed: boolean; groups: WarningGroup[]; unreachable: Server[]; runnable: number };
 
@@ -27,7 +28,7 @@ async function load(request: ConfirmRequest): Promise<Loaded> {
       const raw = await getUpdateNotesEm(request.server);
       const notes = raw ? forClient(raw, 'mobile') : null;
       return { ...version, notes, failed: false, unreachable: [], runnable: 1,
-        groups: notes?.warnings.length ? [{ server: request.server, warnings: notes.warnings }] : [] };
+        groups: notes?.warnings.length ? [{ server: request.server, warnings: notes.warnings, incomplete: raw?.incomplete === true }] : [] };
     } catch {
       return { ...loadFailed(request), ...version };
     }
@@ -37,7 +38,8 @@ async function load(request: ConfirmRequest): Promise<Loaded> {
   const source = run.find((entry) => entry.server.id === request.server.id && entry.notes) ?? run.find((entry) => entry.notes);
   return { ...version, notes: source?.notes ? forClient(source.notes, 'mobile') : null, failed: false, unreachable: failed, runnable: run.length,
     groups: run.filter((entry) => entry.notes?.warnings.length).map((entry) => ({
-      server: entry.server, title: m.update_all_warnings_from({ server: entry.server.label }), warnings: entry.notes!.warnings })) };
+      server: entry.server, title: m.update_all_warnings_from({ server: entry.server.label }), warnings: entry.notes!.warnings,
+      incomplete: entry.notes!.incomplete === true })) };
 }
 
 async function loadVersion(server: Server): Promise<{ version: string; from: string }> {
@@ -79,9 +81,10 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
     if (blocked) return;
     answered.current = true;
     savePendingNews(request.server.id, { cards: notes?.cards ?? [], fixes: notes?.fixes ?? [] }, loaded?.from);
-    const accept: UpdateAcceptances = Object.fromEntries(groups.map(({ server, warnings }) => [server.id, {
+    const accept: UpdateAcceptances = Object.fromEntries(groups.map(({ server, warnings, incomplete }) => [server.id, {
       ids: warnings.map((w) => w.id),
       ...(warnings.some((w) => w.choice === 'mode') ? { mode: modes[server.id] ?? 'package' } : {}),
+      ...(incomplete ? { incomplete: true } : {}),
     }]));
     request.resolve(true, accept);
     onClose();

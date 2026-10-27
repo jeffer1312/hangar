@@ -863,7 +863,7 @@ pub fn front_command(windows: bool, on: bool, checkout: &Path) -> String {
         let bak = "(Join-Path $env:USERPROFILE '.hangar\\hangar-frontend.task.xml')";
         let helper = ps_quote(&checkout.join("scripts").join("windows-tasks.ps1"));
         let action = if on {
-            format!("if (Test-Path -LiteralPath {bak}) {{ Register-ScheduledTask -TaskName hangar-frontend -Xml (Get-Content -Raw -LiteralPath {bak}) | Out-Null; \
+            format!("if (Test-Path -LiteralPath {bak}) {{ Register-ScheduledTask -TaskName hangar-frontend -Xml (Get-Content -Raw -LiteralPath {bak}) -Force | Out-Null; \
                 Remove-Item -LiteralPath {bak}; Start-ScheduledTask -TaskName hangar-frontend }}")
         } else {
             format!("if (Get-ScheduledTask -TaskName hangar-frontend -ErrorAction SilentlyContinue) {{ \

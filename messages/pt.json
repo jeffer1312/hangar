@@ -9197,6 +9197,7 @@
   "update_accept_failed": "O aceite do aviso não foi gravado: {reason}",
   "update_all_warnings_from": "Avisos de {server}",
   "update_all_warnings_failed": "{server}: não deu para ler os avisos; atualize essa máquina sozinha.",
+  "update_all_warning_not_accepted": "{server}: o aviso desta máquina não foi aceito; atualize-a sozinha para vê-lo.",
   "update_notes_loading": "Lendo os avisos desta atualização…",
   "update_notes_failed": "Não deu para ler os avisos desta atualização",
   "update_notes_important": "Importante",

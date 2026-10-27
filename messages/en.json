@@ -9197,6 +9197,7 @@
   "update_accept_failed": "The warning acceptance was not saved: {reason}",
   "update_all_warnings_from": "Warnings from {server}",
   "update_all_warnings_failed": "{server}: could not read its warnings; update that machine on its own.",
+  "update_all_warning_not_accepted": "{server}: this machine's warning was not accepted; update it on its own to see it.",
   "update_notes_loading": "Reading this update's notices…",
   "update_notes_failed": "Couldn't read this update's notices",
   "update_notes_important": "Important",

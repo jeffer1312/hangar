@@ -33,12 +33,15 @@ struct Warning {
 }
 
 #[derive(Deserialize)]
-struct Wire { #[serde(default)] warnings: Vec<Warning>, #[serde(default)] news: Vec<News> }
+struct Wire { #[serde(default)] warnings: Vec<Warning>, #[serde(default)] news: Vec<News>, #[serde(default)] incomplete: bool }
 
 /// O que o modal mostra além do texto de sempre. Servidor antigo (404) = tudo vazio, modal como antes. `label`: o nome da
 /// máquina quando o modal junta os avisos de várias ("Atualizar todas").
 #[derive(Clone, Default)]
-pub(crate) struct Notes { version: Option<String>, warnings: Vec<Warning>, news: Vec<News>, failed: bool, server: String, label: Option<String> }
+/// `incomplete`: o servidor não leu os avisos da versão nova (só o da migração, que é local); aceita-se o que veio, e
+/// nada de `iniciar` por cima de avisos que ninguém viu.
+pub(crate) struct Notes { version: Option<String>, warnings: Vec<Warning>, news: Vec<News>, failed: bool, incomplete: bool, server: String,
+    label: Option<String> }
 
 impl Notes {
     fn sections(&self) -> bool { self.failed || self.version.is_some() || !self.warnings.is_empty() || !self.news.is_empty() }
@@ -59,13 +62,14 @@ impl Notes {
     /// O que o OK aceita nesta máquina: os avisos mostrados e, se um deles pede, o modo escolhido.
     fn acceptance(&self, developer: bool) -> Acceptance {
         Acceptance { ids: self.warnings.iter().map(|w| w.id.clone()).collect(),
-            mode: self.asks_mode().then_some(if developer { "developer" } else { "package" }) }
+            mode: self.asks_mode().then_some(if developer { "developer" } else { "package" }), incomplete: self.incomplete }
     }
 }
 
 /// Os avisos que a pessoa aceitou numa máquina e a escolha do modo, quando um deles a pede. Vazio = nada a aceitar.
+/// `incomplete`: as notas vieram sem os avisos da versão nova; o aceite não é seguido de `iniciar`.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct Acceptance { pub(crate) ids: Vec<String>, pub(crate) mode: Option<&'static str> }
+pub(crate) struct Acceptance { pub(crate) ids: Vec<String>, pub(crate) mode: Option<&'static str>, pub(crate) incomplete: bool }
 
 /// Corpo da rota dos avisos: `Ok(None)` é o servidor anterior a ela (404), sem avisos.
 fn parse_notes(read: Result<Value, Failure>) -> Result<Option<Wire>, ()> {
@@ -81,7 +85,7 @@ pub(crate) async fn load_warnings(api: Result<Api, Failure>, server: String, lab
     let mut notes = Notes { server, ..Notes::default() }.labeled(label);
     let read = match api { Ok(api) => api.server_read(&["update", "notes"], &[], 20).await, Err(error) => Err(error) };
     match parse_notes(read) {
-        Ok(wire) => notes.warnings = wire.map(|w| w.warnings).unwrap_or_default(),
+        Ok(wire) => if let Some(wire) = wire { notes.warnings = wire.warnings; notes.incomplete = wire.incomplete; },
         Err(()) => notes.failed = true,
     }
     notes
@@ -113,7 +117,7 @@ pub(crate) async fn accept_then_start(api: &Api, acceptance: &Acceptance, real: 
         if let Some(mode) = acceptance.mode { body["mode"] = mode.into(); }
         Some(api.server_send(reqwest::Method::POST, &["update", "accept"], Some(body), 30).await)
     };
-    match after_accept(reply.as_ref(), real) {
+    match after_accept(reply.as_ref(), real && !acceptance.incomplete) {
         AfterAccept::Follow => Launch::Started(reply.unwrap_or(Ok(Value::Null))),
         AfterAccept::Start => Launch::Started(api.server_post(&["atualizacao", "iniciar"], 30).await),
         AfterAccept::Nothing => Launch::Nothing,
@@ -132,6 +136,7 @@ pub(crate) async fn load(api: Api) -> (Option<Value>, Notes) {
     match parse_notes(api.server_read(&["update", "notes"], &[], 20).await) {
         Ok(Some(wire)) => {
             notes.warnings = wire.warnings;
+            notes.incomplete = wire.incomplete;
             notes.news = wire.news.into_iter().filter(|n| matches!(n.platforms.as_str(), "desktop" | "all")).collect();
         }
         // Servidor antigo: modal como antes, sem a linha da versão.
@@ -369,7 +374,8 @@ pub(crate) fn open_preview(whats_new: bool, window: &mut Window, cx: &mut App) {
         news("worktrees", "A limpeza de worktrees reconhece as já mescladas", "fix", "", None, None),
     ];
     if whats_new { return open_whats_new(items, window, cx); }
-    let notes = Notes { version: Some("0.1.0.8242 → 0.1.0.8311".into()), news: items, server: "preview".into(), failed: false, label: None,
+    let notes = Notes { version: Some("0.1.0.8242 → 0.1.0.8311".into()), news: items, server: "preview".into(), failed: false,
+        incomplete: false, label: None,
         warnings: vec![Warning { id: "pacote".into(), title: "o Hangar passa a se atualizar por pacote".into(), choice: Some("mode".into()),
             text: "Depois desta atualização ele roda de uma versão pronta em `~/.hangar/current`, sem `git pull`, e volta sozinho para a \
                 anterior se a nova não subir.\n\nO seu checkout continua no disco, mas não é mais o que roda. Para editar o código ou abrir \
@@ -404,11 +410,16 @@ mod tests {
             {"id": "outro", "title": "t"}]});
         let wire = parse_notes(Ok(body)).unwrap().unwrap();
         let notes = Notes { warnings: wire.warnings, ..Notes::default() };
-        assert_eq!(notes.acceptance(false), Acceptance { ids: vec!["2026-10-24-pacote-por-versao".into(), "outro".into()], mode: Some("package") });
+        assert_eq!(notes.acceptance(false), Acceptance { ids: vec!["2026-10-24-pacote-por-versao".into(), "outro".into()], mode: Some("package"),
+            incomplete: false });
         assert_eq!(notes.acceptance(true).mode, Some("developer"));
         let plain = Notes { warnings: parse_notes(Ok(serde_json::json!({"warnings": [{"id": "a", "title": "t"}]}))).unwrap().unwrap().warnings,
             ..Notes::default() };
-        assert_eq!(plain.acceptance(true), Acceptance { ids: vec!["a".into()], mode: None }, "sem escolha, sem modo");
+        assert_eq!(plain.acceptance(true), Acceptance { ids: vec!["a".into()], mode: None, incomplete: false }, "sem escolha, sem modo");
+        // Sem o índice o servidor manda só o aviso local, marcado: o aceite sai, o `iniciar` não.
+        let partial = parse_notes(Ok(serde_json::json!({"warnings": [{"id": "a", "title": "t"}], "incomplete": true}))).unwrap().unwrap();
+        let partial = Notes { warnings: partial.warnings, incomplete: partial.incomplete, ..Notes::default() };
+        assert!(partial.acceptance(false).incomplete);
         assert_eq!(Notes::default().acceptance(false), Acceptance::default(), "sem avisos, nada a aceitar");
         assert!(parse_notes(Err(refused(Some(404), "Not Found"))).unwrap().is_none(), "servidor antigo: sem avisos");
         assert!(parse_notes(Err(refused(Some(503), "fixture"))).is_err());
