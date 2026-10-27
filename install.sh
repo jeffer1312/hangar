@@ -135,6 +135,9 @@ fail_with() { # fail_with <código ou vazio> <mensagem>
   [ -n "$1" ] && echo "##HANGAR-ERRO## $1"
   shift; fail "$*"
 }
+# O macOS não tem `timeout`; o perl do sistema faz o mesmo (alarm + exec, mesmo pid). Sem espaço no
+# código de propósito: o prazo entra sem aspas, e passa pelo sudo como um comando comum.
+if command -v timeout >/dev/null; then PRAZO=timeout; else PRAZO='perl -ealarm(shift);exec(@ARGV)||exit(127)'; fi
 # Vazio quando a internet responde: aí a falha é de outra coisa.
 net_code() {
   command -v curl >/dev/null || return 0
@@ -168,8 +171,11 @@ app_sudo() { # app_sudo <motivo> <comando…>
   fi
   err=$(mktemp)
   # Sudo recusado é resposta, não erro do instalador: sem isto o `set -e` sairia antes de ler a causa
-  # quando a app_sudo roda dentro de um cano (subshell). O `local -` devolve o -e na saída.
-  local -; set +e
+  # quando a app_sudo roda dentro de um cano (subshell). O -e volta só na saída, depois do último
+  # comando: guardado à mão porque o `local -` não existe no bash 3.2 do macOS.
+  local tinha_e=0 rc
+  case $- in *e*) tinha_e=1 ;; esac
+  set +e
   # A senha só autentica (-v); o comando roda depois pelo -n. Com `sudo -S <comando>` uma regra
   # NOPASSWD deixaria a senha na entrada do comando, e a saída dele se confundiria com a do sudo.
   for try in 1 2 3; do
@@ -186,10 +192,13 @@ app_sudo() { # app_sudo <motivo> <comando…>
     retry=--retry
   done
   rm -f "$err"
-  [ "${st[1]}" = 0 ] || return "${st[1]}"
+  if [ "${st[1]}" != 0 ]; then rc=${st[1]}
   # Sem credencial guardada, a única via seria a senha no stdin do comando: para aqui.
-  sudo -n true 2>/dev/null || { echo "$SUDO_NO_CACHE" >&2; return 1; }
-  sudo -n "$@"
+  elif ! sudo -n true 2>/dev/null; then echo "$SUDO_NO_CACHE" >&2; rc=1
+  else sudo -n "$@"; rc=$?
+  fi
+  [ "$tinha_e" = 1 ] && set -e
+  return "$rc"
 }
 # Causa de uma falha com sudo, pela saída do comando; vazio = desconhecida.
 sudo_error_code() { # sudo_error_code <arquivo com a saída>
@@ -438,6 +447,20 @@ if ! grep -q '^CP_SERVER_ID=.' "$ENV_FILE"; then
   fi
 fi
 
+# O app do Tailscale para macOS (App Store ou site) não põe o `tailscale` no PATH, e todo o resto daqui
+# fala com ele pelo comando. O atalho chama o executável de dentro do app, sem sudo.
+TS_MAC_BIN=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+if [ "$CHECK" = 0 ] && [ "$(uname -s)" = Darwin ] && ! command -v tailscale >/dev/null && [ -x "$TS_MAC_BIN" ]; then
+  mkdir -p "$HOME/.local/bin"
+  # Sem TAILSCALE_BE_CLI o executável do app decide pelo ambiente e pode abrir a janela em vez do CLI.
+  printf '#!/bin/sh\nTAILSCALE_BE_CLI=1 exec %s "$@"\n' "$TS_MAC_BIN" > "$HOME/.local/bin/tailscale"
+  chmod 755 "$HOME/.local/bin/tailscale"
+  export PATH="$HOME/.local/bin:$PATH"
+  ok "Tailscale: comando tailscale ligado ao app (~/.local/bin/tailscale)"
+fi
+# O sudo pode trocar o PATH (secure_path) e perder o ~/.local/bin: chamada com sudo leva o caminho inteiro.
+ts_bin() { command -v tailscale || echo tailscale; }
+
 QUER_TAILSCALE=0
 if [ "$TAILSCALE" = nao ]; then
   nota "Tailscale: não usar (--tailscale=nao), mesmo se já estiver instalado"
@@ -521,6 +544,30 @@ precisa_root() { # precisa_root <rótulo> <cmd> <pacote> <pra quê>
 [ "$UPDATE" = 1 ] && say "Modo --update: só o que um git pull não atualiza sozinho" || true
 mark_step preparar fazendo
 say "1/8 Dependências"
+# macOS: o tmux pronto do tmux/tmux-builds vai pro $HOME em segundos, sem sudo; o brew compila tudo
+# num Mac Intel. Download que falha ou binário que não roda (macOS antigo) deixa a vez para o brew.
+tmux_pronto_macos() {
+  local arq url tmp rc=1
+  case "$(uname -m)" in arm64) arq=arm64 ;; x86_64) arq=x86_64 ;; *) return 1 ;; esac
+  url=$(curl -fsSL --max-time 20 https://api.github.com/repos/tmux/tmux-builds/releases/latest 2>>"$LOG" \
+    | grep -o "https://[^\"]*-macos-$arq\.tar\.gz" | head -1) || true
+  [ -n "$url" ] || return 1
+  tmp=$(mktemp -d)
+  if curl -fsSL --max-time 120 -o "$tmp/tmux.tar.gz" "$url" 2>>"$LOG" && tar -xzf "$tmp/tmux.tar.gz" -C "$tmp" \
+     && "$tmp/tmux" -V >/dev/null 2>&1; then
+    mkdir -p "$HOME/.local/bin" && mv -f "$tmp/tmux" "$HOME/.local/bin/tmux" && rc=0
+  fi
+  rm -rf "$tmp"
+  return $rc
+}
+if [ "$(uname -s)" = Darwin ] && ! command -v tmux >/dev/null && [ "$CHECK" = 0 ] && [ "$UPDATE" = 0 ]; then
+  mark_item tmux fazendo tmux
+  if tmux_pronto_macos; then
+    export PATH="$HOME/.local/bin:$PATH"; hash -r 2>/dev/null || true
+  else
+    nota "tmux pronto do GitHub não serviu nesta máquina — vai pelo brew"
+  fi
+fi
 precisa_root "tmux"        tmux   tmux 'sem ele não existe sessão' || true
 CLAUDE_INSTALL='curl -fsSL https://claude.ai/install.sh | bash'
 ACHADOS=''
@@ -580,6 +627,39 @@ else
   ok "node $(node --version)"; mark_item node ok "Node $(node --version)"
 fi
 
+# Os scripts de instalação (registrar-mcp.py, ponte de skills) rodam no python3 do PATH, não no
+# venv do backend. O do macOS é 3.9 e não aceita a sintaxe deles; o uv põe um 3.14 em ~/.local/bin.
+py_ok() { python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; }
+PY_ATUAL=$(python3 -V 2>&1 | awk '{print $2}') || true
+if [ "$PACOTE" = 1 ]; then
+  # No pacote os scripts rodam no Python embutido, pelo atalho `python3` que a instalação cria.
+  ok "python3: o do pacote"; mark_item python3 ok "Python (do pacote)"
+elif py_ok; then
+  ok "python3 $PY_ATUAL"; mark_item python3 ok "Python $PY_ATUAL"
+elif [ "$CHECK" = 1 ]; then
+  falta "Python 3.10+ — os scripts de instalação usam o python3 (atual: ${PY_ATUAL:-nenhum})"
+  nota "uv python install 3.14 --default"; mark_item python3 fila "Python 3.10+"; PENDENTE+=("Python 3.10+")
+elif [ "$UPDATE" = 1 ]; then
+  # O --update é o hook do `git pull`: aviso, não barreira. Barrar travaria quem já usa num Python antigo.
+  falta "Python 3.10+ — os scripts de instalação usam o python3 (atual: ${PY_ATUAL:-nenhum})"
+  nota "uv python install 3.14 --default"; mark_item python3 pendente "Python 3.10+"
+elif ! command -v uv >/dev/null; then
+  erro "Python 3.10+ é necessário (atual: ${PY_ATUAL:-nenhum})"; nota "uv python install 3.14 --default"
+  mark_item python3 falhou "Python 3.10+"; PENDENTE+=("Python 3.10+")
+elif ask "Instalar o Python 3.14 pelo uv? (vai pro teu \$HOME, sem sudo)"; then
+  mark_item python3 fazendo "Python 3.10+"
+  uv python install 3.14 --default >/dev/null 2>>"$LOG" || true
+  export PATH="$HOME/.local/bin:$PATH"
+  hash -r 2>/dev/null || true
+  if py_ok; then ok "Python $(python3 -V 2>&1 | awk '{print $2}') instalado"; mark_item python3 ok "Python 3.10+"
+  else
+    erro "Python 3.10+ continua faltando"; mark_item python3 falhou "Python 3.10+"
+    DEPS_ERROR=${DEPS_ERROR:-$(net_code)}; PENDENTE+=("Python 3.10+")
+  fi
+else
+  erro "Python 3.10+ continua faltando"; mark_item python3 falhou "Python 3.10+"; PENDENTE+=("Python 3.10+")
+fi
+
 if command -v git >/dev/null; then ok "git"; mark_item git ok git
 else falta "git ausente — o painel de git e o chip de branch ficam vazios"; mark_item git pendente git; fi
 
@@ -596,7 +676,7 @@ ts_install() {
 }
 # O link do login sai no stderr do `tailscale up`; no --app ele vira marca e o app abre o navegador.
 tailscale_up() {
-  app_sudo "entrar na conta Tailscale" timeout 300 tailscale up 2>&1 | while IFS= read -r linha; do
+  app_sudo "entrar na conta Tailscale" $PRAZO 300 "$(ts_bin)" up 2>&1 | while IFS= read -r linha; do
     printf '%s\n' "$linha"
     case $linha in
       *https://login.tailscale.com/*)
@@ -805,7 +885,7 @@ if [ "$SEM_NATIVO" = 1 ]; then
 else
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) NATIVO_APP="$HOME/.local/bin/hangar-native" ;;
-  Darwin-arm64) NATIVO_APP="$HOME/Applications/Hangar.app" ;;
+  Darwin-arm64|Darwin-x86_64) NATIVO_APP="$HOME/Applications/Hangar.app" ;;
   *) NATIVO_APP= ;;
 esac
 if [ -z "$NATIVO_APP" ]; then
@@ -930,8 +1010,8 @@ publica_tailscale() { # grava CP_PUBLIC_URL com o https do tailnet; o serve prec
   ask_senha "Publicar agora (vai pedir a senha)?" || { nota "pulado — depois: ./install.sh"; return 1; }
   # No --app ninguém responde ao convite que o serve imprime com o HTTPS desligado: o teto devolve a
   # vez ao app, que mostra a pendência com "Conferir de novo".
-  [ "$APP" = 1 ] && teto='timeout 60'
-  if saida_serve=$(app_sudo "publicar o Hangar na Tailscale" $teto tailscale serve --bg "$PORTA_FIM" 2>&1) \
+  [ "$APP" = 1 ] && teto="$PRAZO 60"
+  if saida_serve=$(app_sudo "publicar o Hangar na Tailscale" $teto "$(ts_bin)" serve --bg "$PORTA_FIM" 2>&1) \
      && tailscale serve status --json 2>/dev/null | grep -q '"443"'; then
     grep -q '^CP_PUBLIC_URL=' "$ENV_FILE" 2>/dev/null && sed -i.bak '/^CP_PUBLIC_URL=/d' "$ENV_FILE" && rm -f "$ENV_FILE.bak"
     printf 'CP_PUBLIC_URL=https://%s\n' "$nome" >> "$ENV_FILE"
@@ -951,7 +1031,7 @@ operador_tailscale() {
   command -v tailscale >/dev/null || return 0
   sudo -n true 2>/dev/null || ask_senha "Liberar o Funnel para compartilhar sessão (vai pedir a senha)?" \
     || { nota "pulado — para compartilhar sessão: sudo tailscale set --operator=$u"; return 0; }
-  if app_sudo "liberar o compartilhamento de sessão" tailscale set --operator="$u" >/dev/null 2>&1; then ok "Tailscale: $u pode ligar o Funnel (compartilhar sessão)"
+  if app_sudo "liberar o compartilhamento de sessão" "$(ts_bin)" set --operator="$u" >/dev/null 2>&1; then ok "Tailscale: $u pode ligar o Funnel (compartilhar sessão)"
   else anota_problema "tailscale set --operator falhou — compartilhar sessão vai pedir: sudo tailscale set --operator=$u"; TS_STATE=pendente; fi
 }
 if [ -n "$TS_STATE" ]; then
@@ -968,11 +1048,32 @@ fi
 mark_step instalar fazendo
 say "7/8 Serviços, hangar-send e painel"
 # No --app ninguém vai subir o backend na mão: sem systemd de usuário o assistente não termina.
-if [ "$APP" = 1 ] && ! systemctl --user show-environment >/dev/null 2>&1; then
+if [ "$APP" = 1 ] && [ "$(uname -s)" != Darwin ] && ! systemctl --user show-environment >/dev/null 2>&1; then
   fail_with sem-systemd "sem systemd de usuário nesta máquina — o Hangar não tem como iniciar sozinho"
 fi
 SERV_N=${#PROBLEMAS[@]}
-if ! command -v systemctl >/dev/null; then
+# macOS: o serviço é um LaunchAgent (scripts/services-launchd.sh); o backend serve a interface.
+if [ "$(uname -s)" = Darwin ]; then
+  if [ -f "$HOME/Library/LaunchAgents/br.dev.hangar.backend.plist" ]; then
+    # O caminho do uv e do node ficam cravados no plist: re-rodar o grava de novo, e o script só
+    # reinicia quando ele mudou.
+    SETUP_RC=0
+    ./scripts/services-launchd.sh >/dev/null || SETUP_RC=$?
+    [ "$SETUP_RC" != 0 ] && anota_problema "services-launchd.sh falhou (exit $SETUP_RC)"
+    ./scripts/services-launchd.sh --ativo \
+      && ok "serviço atualizado (rodando)" \
+      || anota_problema "serviço atualizado mas o backend não está rodando"
+  elif [ "$UPDATE" = 1 ]; then
+    :   # não instala coisa nova num --update; isso é decisão, não atualização
+  elif [ "$SERVICES" = 1 ] && ask "Rodar o backend como serviço (sobe no login e volta sozinho se cair)?"; then
+    SETUP_RC=0
+    ./scripts/services-launchd.sh || SETUP_RC=$?
+    [ "$SETUP_RC" != 0 ] && anota_problema "services-launchd.sh falhou (exit $SETUP_RC)"
+    ./scripts/services-launchd.sh --ativo || anota_problema "serviço instalado mas o backend não está rodando"
+  else
+    nota "pulado — rodando na mão, fechar o terminal derruba o backend"
+  fi
+elif ! command -v systemctl >/dev/null; then
   nota "serviços: sem systemd nesta máquina — rode backend e frontend na mão"
 elif systemctl --user list-unit-files hangar-backend.service >/dev/null 2>&1 &&
      systemctl --user cat hangar-backend.service >/dev/null 2>&1; then
@@ -1123,9 +1224,16 @@ py_backend -c "from app import api, registry, procinfo, projects" \
   && { ok "o backend importa"; mark_item backend-importa ok "o servidor abre"; } \
   || fail "o backend não importa nesta máquina"
 
-py_backend -c "from app import procinfo; assert procinfo._TEM_PROC, 'sem /proc'" \
-  && ok "leitura de processo via /proc funcionando" \
-  || nota "sem /proc (macOS?) — o backend usa psutil, confira se ele foi instalado"
+if [ "$(uname -s)" = Linux ]; then
+  py_backend -c "from app import procinfo; assert procinfo._TEM_PROC, 'sem /proc'" \
+    && ok "leitura de processo via /proc funcionando" \
+    || nota "sem /proc — a leitura de processo do backend não vai funcionar"
+else
+  # Sem /proc (macOS) o backend lê processo pelo psutil: a prova é ele ler o próprio.
+  py_backend -c "import os, psutil; psutil.Process(os.getpid()).cmdline()" \
+    && ok "leitura de processo via psutil funcionando" \
+    || nota "o psutil não lê processo nesta máquina — rode: cd backend && uv sync"
+fi
 
 S="cp-fumaca-$$"
 if tmux new-session -d -s "$S" -c /tmp 'sh' 2>/dev/null; then

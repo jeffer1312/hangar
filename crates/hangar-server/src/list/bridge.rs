@@ -429,7 +429,7 @@ impl ListBridge {
         let (_, _, panes, children) = self.discovery(None).await?;
         let mine: Vec<Pane> = panes.iter().filter(|p| p.session == name).cloned().collect();
         let env = self.env.clone();
-        tokio::task::spawn_blocking(move || crate::state::agent_pane::resolve(&mine, &children, &|pid| env.procs.argv(pid).join(" ")))
+        tokio::task::spawn_blocking(move || crate::state::agent_pane::resolve(&mine, &children, &|pid| env.procs.argv(pid)))
             .await.map_err(|e| joined(e, "pane do agente interrompido"))
     }
 

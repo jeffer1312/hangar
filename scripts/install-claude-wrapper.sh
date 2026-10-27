@@ -79,8 +79,9 @@ ensure_block() {
   fi
   if grep -qF "$BEGIN_MARK" "$file"; then
     tmp="$(mktemp)"
-    awk -v b="$BEGIN_MARK" -v e="$END_MARK" -v p="$payload" '
-      $0==b {print; print p; skip=1; next}
+    # O bloco vai pelo ambiente: o awk do macOS recusa quebra de linha em -v.
+    PAYLOAD="$payload" awk -v b="$BEGIN_MARK" -v e="$END_MARK" '
+      $0==b {print; print ENVIRON["PAYLOAD"]; skip=1; next}
       $0==e {skip=0; print; next}
       skip {next}
       {print}
@@ -227,7 +228,10 @@ esac
 
 if [ "$DO_TMUX" = 1 ]; then
   echo "tmux config (~/.tmux.conf):"
-  ensure_block "$HOME/.tmux.conf" "$(cat <<'TMUXCONF'
+  # Heredoc numa função, não dentro de $( ): o bash 3.2 do macOS lê os apóstrofos do texto como
+  # aspas abertas e o script inteiro deixa de compilar.
+  tmux_conf_block() {
+    cat <<'TMUXCONF'
 # Truecolor for Claude Code inside tmux (TERM must NOT start with tmux/screen, or colors break).
 set -g default-terminal "xterm-256color"
 set -ga terminal-overrides ",xterm-kitty:Tc,xterm-256color:Tc"
@@ -252,7 +256,8 @@ set -g automatic-rename-format '#{b:pane_current_path}'
 set -g set-titles on
 set -g set-titles-string '#S'
 TMUXCONF
-)"
+  }
+  ensure_block "$HOME/.tmux.conf" "$(tmux_conf_block)"
   tmux source-file "$HOME/.tmux.conf" 2>/dev/null && echo "  reloaded ~/.tmux.conf" || true
 fi
 

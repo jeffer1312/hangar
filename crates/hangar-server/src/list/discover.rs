@@ -181,8 +181,20 @@ pub(crate) fn descendants(root: i64, children: &ChildrenMap) -> Vec<i64> {
     out
 }
 
-/// Processo da árvore que não é o REPL dono: daemon, host de pty e subagente.
-pub(crate) fn is_aux(cmd: &str) -> bool { cmd.contains("daemon") || cmd.contains("--bg-") || cmd.contains("--agent") }
+/// Processo da árvore que não é o REPL dono: `claude daemon`, host de pty (`--bg-*`) e subagente
+/// (`--agent`). Por argumento inteiro: o prompt inicial é um argumento só e pode citar essas palavras.
+pub(crate) fn is_aux(argv: &[String]) -> bool {
+    // Título de processo reescrito chega num elemento só: aí as palavras são os argumentos.
+    let words: Vec<&str> = match argv {
+        [one] => one.split_whitespace().collect(),
+        _ => argv.iter().map(String::as_str).collect(),
+    };
+    let Some((argv0, rest)) = words.split_first() else { return false };
+    basename(argv0).contains("daemon")
+        // Subcomando vem antes da primeira flag (`node cli.js daemon` incluído); o prompt, depois.
+        || rest.iter().take_while(|a| !a.starts_with('-')).any(|a| *a == "daemon")
+        || rest.iter().any(|a| a.starts_with("--bg-") || a.starts_with("--agent"))
+}
 
 fn split(cmd: &str) -> Vec<String> { cmd.split_whitespace().map(String::from).collect() }
 
@@ -227,7 +239,9 @@ impl Tree {
     fn iter(&self) -> impl Iterator<Item = (i64, &str)> { self.pids.iter().copied().zip(self.cmds.iter().map(String::as_str)) }
 
     /// Os candidatos a REPL principal, na ordem da descida.
-    fn repl(&self) -> impl Iterator<Item = (i64, &str)> { self.iter().filter(|(_, c)| !is_aux(c)) }
+    fn repl(&self) -> impl Iterator<Item = (i64, &str)> {
+        self.iter().zip(&self.argvs).filter(|(_, argv)| !is_aux(argv)).map(|(pc, _)| pc)
+    }
 
     fn repl_sid(&self) -> Option<String> { self.repl().find_map(|(_, c)| session_id(c)) }
 }
@@ -413,8 +427,8 @@ impl Resolver {
         if let Some((pid, tree)) = pane {
             // Transcripts que subagente ou daemon seguram abertos agora são de outra sessão lógica.
             let problems = &mut self.problems;
-            let aux_open: HashSet<String> = tree.iter()
-                .filter(|(_, c)| is_aux(c) && provider_from_argv(&split(c)).is_some())
+            let aux_open: HashSet<String> = tree.pids.iter().copied().zip(&tree.argvs)
+                .filter(|(_, argv)| is_aux(argv) && provider_from_argv(argv).is_some())
                 .filter_map(|(p, _)| open_jsonl(procs, p, &projects_of(procs, p, projects_dir), problems))
                 .map(|j| real(&j)).collect();
             // 1. fd aberto do REPL: o transcript ativo agora, inclusive depois de um /clear. Só um
@@ -537,8 +551,8 @@ fn newest_after_clear(projdir: &Path, sid_jsonl: String, exclude: &HashSet<Strin
 /// Agente estrito do pane (`agentpane._pane_do_agente`): nenhum casa = não é do agente.
 fn pane_has_agent(procs: &dyn ProcessView, pid: i64, children: &ChildrenMap) -> bool {
     descendants(pid, children).into_iter().any(|p| {
-        let cmd = procs.argv(p).join(" ");
-        !is_aux(&cmd) && cmd.split_whitespace().next().is_some_and(|a| exec_provider(basename(a)).is_some())
+        let argv = procs.argv(p);
+        !is_aux(&argv) && argv.first().is_some_and(|a| exec_provider(basename(a)).is_some())
     })
 }
 
@@ -563,9 +577,9 @@ fn agent_pane<'p>(panes: &[&'p Pane], procs: &dyn ProcessView, children: &Childr
 /// O argv íntegro, não o cmdline separado por espaço: no Windows o caminho do node tem espaço.
 fn agent_of_pane(tree: Option<&Tree>) -> (&'static str, Option<i64>) {
     tree.into_iter()
-        .flat_map(|t| t.pids.iter().zip(&t.argvs).zip(&t.cmds))
-        .filter(|(_, cmd)| !is_aux(cmd))
-        .find_map(|((p, argv), _)| provider_from_argv(argv).map(|prov| (prov, Some(*p))))
+        .flat_map(|t| t.pids.iter().zip(&t.argvs))
+        .filter(|(_, argv)| !is_aux(argv))
+        .find_map(|(p, argv)| provider_from_argv(argv).map(|prov| (prov, Some(*p))))
         .unwrap_or(("claude", None))
 }
 
@@ -902,5 +916,18 @@ mod tests {
         assert_eq!(provider_from_argv(&v(&["node", "/n/node_modules/@e/pi-coding-agent/dist/cli.js"])), Some("pi"));
         assert_eq!(provider_from_argv(&v(&["node", "mcp.js"])), None);
         assert_eq!(provider_from_argv(&[]), None);
+    }
+
+    #[test]
+    fn aux_is_a_flag_or_subcommand_not_prompt_text() {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(is_aux(&v(&["/usr/bin/claude", "daemon", "start"])));
+        assert!(is_aux(&v(&["claude", "--bg-pty-host", "/tmp/cc-daemon-1/s"])));
+        assert!(is_aux(&v(&["claude", "--agent", "x"])));
+        assert!(is_aux(&v(&["node", "/n/@anthropic-ai/claude-code/cli.js", "daemon"])));
+        assert!(is_aux(&v(&["claude --bg-pty-host /tmp/cc-daemon-1/s"])), "título reescrito num elemento só");
+        let prompt = "prefira um daemon isolado; gnome-keyring-daemon --unlock e --agent x";
+        assert!(!is_aux(&v(&["claude", "--session-id", "a", "--permission-mode", "bypassPermissions", prompt])));
+        assert!(!is_aux(&v(&["claude", "--session-id", "a", "daemon"])), "prompt `daemon` no fim não é subcomando");
     }
 }

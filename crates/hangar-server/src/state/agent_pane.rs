@@ -11,23 +11,23 @@ use crate::list::procs::ChildrenMap;
 
 pub const TTL: Duration = Duration::from_secs(60);
 
-fn agent_tree(pid: i64, children: &ChildrenMap, cmdline: &dyn Fn(i64) -> String) -> bool {
+fn agent_tree(pid: i64, children: &ChildrenMap, argv_of: &dyn Fn(i64) -> Vec<String>) -> bool {
     descendants(pid, children).into_iter().any(|p| {
-        let cmd = cmdline(p);
-        !is_aux(&cmd) && cmd.split_whitespace().next().is_some_and(|argv0| exec_provider(basename(argv0)).is_some())
+        let argv = argv_of(p);
+        !is_aux(&argv) && argv.first().is_some_and(|argv0| exec_provider(basename(argv0)).is_some())
     })
 }
 
 /// Alvo do pane do agente entre os panes da sessão; `None` = vale `=nome:` (um pane só, nenhum
 /// pane de agente ou sem alvo preciso). Com dois panes de agente vence o ativo, como na lista.
-pub fn resolve(panes: &[Pane], children: &ChildrenMap, cmdline: &dyn Fn(i64) -> String) -> Option<String> {
+pub fn resolve(panes: &[Pane], children: &ChildrenMap, argv_of: &dyn Fn(i64) -> Vec<String>) -> Option<String> {
     if panes.len() <= 1 {
         return None;
     }
     let mut ordered: Vec<&Pane> = panes.iter().collect();
     ordered.sort_by_key(|p| !p.active);
     let found = ordered.into_iter()
-        .find(|p| p.pid.is_some_and(|pid| agent_tree(i64::from(pid), children, cmdline)));
+        .find(|p| p.pid.is_some_and(|pid| agent_tree(i64::from(pid), children, argv_of)));
     match found {
         Some(p) => p.target(),
         None => {
@@ -87,7 +87,7 @@ mod tests {
             }).collect();
             let children: ChildrenMap = row["children"].as_object().unwrap().iter()
                 .map(|(k, v)| (k.parse().unwrap(), serde_json::from_value(v.clone()).unwrap())).collect();
-            let cmdline = |pid: i64| row["cmdline"][pid.to_string()].as_str().unwrap_or("").to_owned();
+            let cmdline = |pid: i64| row["cmdline"][pid.to_string()].as_str().unwrap_or("").split_whitespace().map(str::to_owned).collect::<Vec<_>>();
             // O golden vem do Python no Linux (`%N`); no Windows o alvo do mesmo pane é `=s:w.p`.
             let expected = row["expected"].as_str().and_then(|id| panes.iter().find(|p| p.pane_id == id).and_then(Pane::target));
             assert_eq!(resolve(&panes, &children, &cmdline), expected, "{}", row["name"]);

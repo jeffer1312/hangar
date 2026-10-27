@@ -170,11 +170,41 @@ impl PairDir {
         Ok(())
     }
 
+    /// Guarda a versão do registro antes de apagá-lo: o gid pode voltar a ser entre máquinas.
     pub fn remove_record(&self, gid: &str) -> Result<(), StoreError> {
+        match self.record(gid) {
+            Ok(Some(record)) => self.raise_issued(gid, record.version)?,
+            Ok(None) => {}
+            Err(error) => tracing::warn!(code = "groups_record_unreadable", %gid, %error, "groups: registro torto apagado sem guardar a versão"),
+        }
         match std::fs::remove_file(self.record_path(gid)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
             _ => Ok(()),
         }
+    }
+
+    /// Fora de `.json` para o `records()` não o ler como registro.
+    fn issued_path(&self) -> PathBuf { self.groups_dir().join("issued.versions") }
+
+    fn read_issued(&self) -> Result<std::collections::BTreeMap<String, u64>, StoreError> {
+        match std::fs::read(self.issued_path()) {
+            Ok(raw) => Ok(serde_json::from_slice(&raw)?),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Maior versão que esta dona já deu a `gid`, também depois de o registro sair. Quem já foi
+    /// participante lembra essa versão e descarta como atrasado o que vier abaixo dela.
+    pub fn issued(&self, gid: &str) -> Result<u64, StoreError> { Ok(self.read_issued()?.get(gid).copied().unwrap_or(0)) }
+
+    fn raise_issued(&self, gid: &str, version: u64) -> Result<(), StoreError> {
+        let mut issued = self.read_issued()?;
+        if issued.get(gid).is_some_and(|v| *v >= version) { return Ok(()) }
+        issued.insert(gid.to_owned(), version);
+        std::fs::create_dir_all(self.groups_dir())?;
+        replace_durable(&self.issued_path(), &serde_json::to_vec(&issued)?)?;
+        Ok(())
     }
 
     /// Registros válidos por ordem de gid; torto fica de fora com aviso, como o sidecar.

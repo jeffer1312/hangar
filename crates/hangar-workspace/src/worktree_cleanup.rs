@@ -391,11 +391,17 @@ fn tree_stamp(root: &Path) -> Result<(String, u64)> {
             for entry in
                 std::fs::read_dir(&path).map_err(|_| error(409, "pasta da worktree ilegível"))?
             {
-                stack.push(
-                    entry
-                        .map_err(|_| error(409, "pasta da worktree ilegível"))?
-                        .path(),
-                );
+                let child = entry
+                    .map_err(|_| error(409, "pasta da worktree ilegível"))?
+                    .path();
+                // Dependência instalada se regenera e estourava o teto de leitura; repositório com o
+                // mesmo nome continua lido.
+                if child.file_name().is_some_and(|n| n == "node_modules")
+                    && !child.join(".git").exists()
+                {
+                    continue;
+                }
+                stack.push(child);
             }
         }
     }
@@ -646,6 +652,23 @@ pub fn remove_candidate_with_guard(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tree_stamp_skips_node_modules_but_not_a_repository_named_like_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let deps = dir.path().join("mobile/node_modules/pkg");
+        std::fs::create_dir_all(&deps).unwrap();
+        std::fs::write(dir.path().join("src.ts"), "a").unwrap();
+        let before = tree_stamp(dir.path()).unwrap().0;
+        std::fs::write(deps.join("index.js"), "x").unwrap();
+        assert_eq!(tree_stamp(dir.path()).unwrap().0, before, "dependência instalada não é mudança da worktree");
+        std::fs::write(dir.path().join("src.ts"), "ab").unwrap();
+        assert_ne!(tree_stamp(dir.path()).unwrap().0, before);
+        let nested = dir.path().join("node_modules");
+        std::fs::create_dir_all(nested.join(".git")).unwrap();
+        let with_repo = tree_stamp(dir.path()).unwrap().0;
+        std::fs::write(nested.join("work.rs"), "x").unwrap();
+        assert_ne!(tree_stamp(dir.path()).unwrap().0, with_repo, "repositório com nome de artefato continua lido");
+    }
     fn git(dir: &Path, args: &[&str]) {
         let o = crate::git::command(dir, args).unwrap();
         assert_eq!(o.code, 0, "{}", o.stderr);

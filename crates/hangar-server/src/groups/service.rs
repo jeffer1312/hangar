@@ -70,7 +70,7 @@ pub struct JoinOutcome {
 
 pub struct GroupService {
     dir: Arc<PairDir>,
-    lock: Mutex<()>,
+    lock: Arc<Mutex<()>>,
     orq: Arc<dyn OrqFacts>,
     server_id: String,
     /// Avisa a lista de que o disco do grupo mudou: sem isso ela só relê no prazo da descoberta.
@@ -81,7 +81,7 @@ pub struct GroupService {
 
 impl GroupService {
     pub fn new(dir: PairDir, orq: Arc<dyn OrqFacts>, server_id: String) -> Self {
-        Self { dir: Arc::new(dir), lock: Mutex::new(()), orq, server_id, on_change: None, diary: None }
+        Self { dir: Arc::new(dir), lock: Arc::new(Mutex::new(())), orq, server_id, on_change: None, diary: None }
     }
 
     pub fn with_diary(mut self, diary: crate::diag::DiagClient) -> Self {
@@ -310,6 +310,9 @@ impl GroupService {
         let _guard = self.lock.lock().await;
         work.await
     }
+
+    /// O mesmo lock, para a fila entre máquinas, que roda fora do serviço.
+    pub(super) fn lock_handle(&self) -> Arc<Mutex<()>> { self.lock.clone() }
 
     /// `restore` de quem já segura o lock.
     async fn restore_blocking(&self, before: Snapshot) -> Result<(), GroupError> {

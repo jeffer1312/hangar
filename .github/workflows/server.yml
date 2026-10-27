@@ -72,6 +72,13 @@ jobs:
             target: ""
             dir: target
             experimental: true
+          # Mac Intel em runner Intel: os testes rodam na arquitetura que vai usar o binário.
+          - os: macos-15-intel
+            platform: macos-x86_64
+            exe: ""
+            target: ""
+            dir: target
+            experimental: true
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.experimental }}
     concurrency:
@@ -123,8 +130,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             crates/target/debug
-          key: server-v3-${{ runner.os }}-dev-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
-          restore-keys: server-v3-${{ runner.os }}-dev-
+          key: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-
       # Os testes do hangar-api leem as amostras de backend/tests/fixtures/, que vêm no mesmo checkout.
       # --no-fail-fast: sem ele o cargo para no primeiro executável que falha e esconde os outros.
       - run: cargo test --locked --workspace --no-fail-fast
@@ -163,7 +170,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          PREFIXO: server-v3-${{ runner.os }}-dev-
+          PREFIXO: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-
           CHAVE: ${{ steps.cache-dev.outputs.cache-primary-key }}
         run: &apagar-antigos |
           set -o pipefail
@@ -209,8 +216,8 @@ jobs:
           path: &cache-perfil |
             crates/target/${{ env.PERFIL }}
             crates/target/x86_64-unknown-linux-gnu/${{ env.PERFIL }}
-          key: &chave-perfil server-v3-${{ runner.os }}-${{ env.PERFIL }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
-          restore-keys: &chave-perfil-parcial server-v3-${{ runner.os }}-${{ env.PERFIL }}-
+          key: &chave-perfil server-v3-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: &chave-perfil-parcial server-v3-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
       - if: matrix.target != ''
         run: rustup target add ${{ matrix.target }}
       # Zig baixado direto (sha256 do index.json do ziglang.org): o repositório só libera actions da GitHub,
@@ -271,7 +278,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          PREFIXO: server-v3-${{ runner.os }}-${{ env.PERFIL }}-
+          PREFIXO: server-v3-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
           CHAVE: ${{ steps.cache-perfil.outputs.cache-primary-key }}
         run: *apagar-antigos
 
@@ -285,7 +292,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux-x86_64, windows-x86_64, macos-aarch64]
+        platform: [linux-x86_64, windows-x86_64, macos-aarch64, macos-x86_64]
     runs-on: ubuntu-latest
     concurrency:
       group: server-publish-${{ github.ref_name }}-${{ matrix.platform }}
@@ -537,7 +544,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          PREFIXO: server-v3-${{ runner.os }}-${{ env.PERFIL }}-
+          PREFIXO: server-v3-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
           CHAVE: ${{ steps.consulta.outputs.cache-primary-key }}
         run: *apagar-antigos
 

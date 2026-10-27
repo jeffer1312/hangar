@@ -59,6 +59,8 @@ def platform_key() -> str | None:
         return "windows-x86_64"
     if sys.platform == "darwin" and machine == "arm64":
         return "macos-aarch64"
+    if sys.platform == "darwin" and machine == "x86_64":
+        return "macos-x86_64"
     return None
 
 

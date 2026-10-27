@@ -256,7 +256,7 @@ def test_machine_without_build_returns_none(monkeypatch, tmp_path, events):
     ("win32", "AMD64", "windows-x86_64"),
     ("darwin", "arm64", "macos-aarch64"),
     ("linux", "aarch64", None),
-    ("darwin", "x86_64", None),
+    ("darwin", "x86_64", "macos-x86_64"),
 ])
 def test_platform_key(monkeypatch, plat, machine, key):
     # Troca os nomes do módulo, não o `sys`/`platform` globais (ver windows.md, os.name e pathlib).

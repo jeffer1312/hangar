@@ -15,6 +15,7 @@ FORCAR=0; [ "${1:-}" = --forcar ] && FORCAR=1
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) PACOTE=Hangar-linux-x86_64.tar.gz; APP="$HOME/.local/bin/hangar-native" ;;
   Darwin-arm64) PACOTE=Hangar-macos-aarch64.zip; APP="$HOME/Applications/Hangar.app" ;;
+  Darwin-x86_64) PACOTE=Hangar-macos-x86_64.zip; APP="$HOME/Applications/Hangar.app" ;;
   *) PACOTE= ;;
 esac
 
