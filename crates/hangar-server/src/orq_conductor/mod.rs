@@ -125,7 +125,7 @@ fn py_repr(v: &Value, marker: &str) -> String {
     }
 }
 pub(crate) fn python_string(value:&Value)->String { py_str(value,MARK) }
-fn py_str(v: &Value, marker: &str) -> String {
+pub(crate) fn py_str(v: &Value, marker: &str) -> String {
     match v {
         Value::String(s)
             if integer_text(s, marker).is_none()
@@ -221,16 +221,9 @@ fn integer_text<'a>(value: &'a str, marker: &str) -> Option<&'a str> {
         .strip_prefix("integer:")?
         .strip_suffix(';')
 }
-fn integer_value(text: &str, marker: &str) -> Option<Value> {
-    let n = text.parse::<num_bigint::BigInt>().ok()?;
-    let canonical = n.to_string();
-    if let Ok(n) = canonical.parse::<i64>() {
-        return Some(json!(n));
-    }
-    if let Ok(n) = canonical.parse::<u64>() {
-        return Some(json!(n));
-    }
-    Some(Value::String(format!("{marker}integer:{canonical};")))
+fn integer_value(text: &str, _marker: &str) -> Option<Value> {
+    let canonical = text.parse::<num_bigint::BigInt>().ok()?.to_string();
+    Some(Value::Number(canonical.parse().ok()?))
 }
 fn int(v: &Value, marker: &str) -> Value {
     match v {
@@ -239,7 +232,7 @@ fn int(v: &Value, marker: &str) -> Value {
         _ => Value::Null,
     }
 }
-fn decimal(c: char) -> Option<u8> {
+pub(crate) fn decimal(c: char) -> Option<u8> {
     let n = c as u32;
     const STARTS: &[u32] = &[
         0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66,
@@ -316,7 +309,7 @@ fn key_follows(bytes: &[u8], after: usize) -> bool {
         .find(|byte| !matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
         == Some(&b':')
 }
-fn load(text: &str, marker: &str) -> Option<Value> {
+pub(crate) fn load(text: &str, marker: &str) -> Option<Value> {
     let bytes = text.as_bytes();
     let (mut i, mut inside, mut escape) = (0, false, false);
     let mut raw = String::new();
@@ -398,18 +391,10 @@ fn load(text: &str, marker: &str) -> Option<Value> {
             i += ch.len_utf8()
         }
     }
-    fn decode(raw: &str) -> Option<Value> {
-        use serde::Deserialize;
-        let mut decoder = serde_json::Deserializer::from_str(raw);
-        decoder.disable_recursion_limit();
-        let value = Value::deserialize(&mut decoder).ok()?;
-        decoder.end().ok()?;
-        Some(value)
-    }
-    decode(&raw).or_else(|| {
+    pyjson::decode_raw(&raw).or_else(|| {
         raw.contains("\\u")
             .then(|| {
-                decode(&pyjson::mark_lone_surrogates_using(&raw, |code| {
+                pyjson::decode_raw(&pyjson::mark_lone_surrogates_using(&raw, |code| {
                     format!("{marker}surrogate:{code:04x};")
                 }))
             })

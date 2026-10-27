@@ -28,6 +28,10 @@ impl ModelError {
         }
     }
     pub fn response(self) -> axum::response::Response {
+        if self.status == 500 {
+            use axum::response::IntoResponse;
+            return (axum::http::StatusCode::INTERNAL_SERVER_ERROR,"Internal Server Error").into_response();
+        }
         crate::session_write::json_response(
             axum::http::StatusCode::from_u16(self.status)
                 .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
@@ -47,7 +51,7 @@ pub fn contract_case(op: &str, input: &Value) -> Value {
     let s = input.as_str().unwrap_or("");
     let result: Result<Value, ModelError> = match op {
         "parse_pi" => Ok(json!(pure::parse_pi(s))),
-        "parse_omp" => Ok(json!(pure::parse_omp(s))),
+        "parse_omp" => pure::parse_omp(s).map(|v|json!(v)),
         "model_command" => {
             pure::model_command(input[0].as_str().unwrap(), input[1].as_str().unwrap())
                 .map(Value::String)

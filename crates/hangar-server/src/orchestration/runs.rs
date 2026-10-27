@@ -26,18 +26,20 @@ pub fn timeline_path(dir: &Path) -> PathBuf {
         resolved.file_name().unwrap_or_default().to_string_lossy()
     ))
 }
+fn decode_json(raw: &[u8]) -> io::Result<Value> {
+    let text = std::str::from_utf8(raw).map_err(|e|io::Error::new(io::ErrorKind::InvalidData,e))?;
+    super::codec::loads(text).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData,serde_json::from_slice::<Value>(raw).err().map(|e|e.to_string()).unwrap_or_else(||"JSON inválido".into()))
+    })
+}
 pub fn optional_json(path: &Path) -> io::Result<Option<Value>> {
     match fs::read(path) {
-        Ok(raw) => serde_json::from_slice(&raw)
-            .map(Some)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
+        Ok(raw) => decode_json(&raw).map(Some),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
     }
 }
-pub fn json(path: &Path) -> io::Result<Value> {
-    serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)
-}
+pub fn json(path: &Path) -> io::Result<Value> { decode_json(&fs::read(path)?) }
 pub fn lines(path: &Path, strict: bool) -> io::Result<Vec<Value>> {
     let raw = match fs::read(path) {
         Ok(raw) => raw,
@@ -47,7 +49,7 @@ pub fn lines(path: &Path, strict: bool) -> io::Result<Vec<Value>> {
     Ok(
         crate::transcript::py::splitlines(&String::from_utf8_lossy(&raw))
             .iter()
-            .filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
+            .filter_map(|l| super::codec::loads(l.trim()))
             .filter(Value::is_object)
             .collect(),
     )
@@ -73,7 +75,7 @@ pub fn current_end(events: &[Value]) -> Option<&Value> {
     for e in events {
         if kind(e) == "execucao_fim" {
             end = Some(e)
-        } else if e["task"].is_i64() || e["task"].is_u64() {
+        } else if super::integer(&e["task"]).is_some() {
             end = None
         }
     }
@@ -103,7 +105,7 @@ pub fn iso(value: &Value) -> Value {
         .unwrap_or(Value::Null)
 }
 pub fn pid_alive(value: &Value) -> bool {
-    if !cfg!(target_os = "linux") || (!value.is_i64() && !value.is_u64()) {
+    if !cfg!(target_os = "linux") || super::integer(value).is_none() {
         true
     } else {
         PathBuf::from(format!("/proc/{value}")).exists()
@@ -329,7 +331,7 @@ pub fn summary(id: &str, ev: &[Value]) -> Value {
         .cloned()
         .unwrap_or_default();
     let end = current_end(ev);
-    let mut by: BTreeMap<i128, Vec<Value>> = BTreeMap::new();
+    let mut by: BTreeMap<super::Integer, Vec<Value>> = BTreeMap::new();
     let mut loose = Vec::new();
     for e in ev {
         if let Some(n) = super::integer(&e["task"]) {
@@ -354,7 +356,7 @@ pub fn summary(id: &str, ev: &[Value]) -> Value {
             .filter(|e| kind(e) == "entrega" || (kind(e) == "veredito" && e["fase"] != "codigo"))
             .filter_map(|e| super::integer(&e["rodada"]))
             .max()
-            .unwrap_or(0);
+            .unwrap_or_default();
         returns += verdicts
             .iter()
             .filter(|e| matches!(text(&e["resultado"]), "devolvido" | "reprova" | "corrige"))
@@ -396,25 +398,25 @@ pub fn cards(runs: &[Value]) -> Vec<Value> {
             if reviewer.is_empty() {
                 continue;
             }
-            let c=cards.entry(reviewer.to_owned()).or_insert(json!({"par":reviewer,"aceitas":0,"nao_aceitas":0,"aprovadas_primeira":0,"_rod":0.,"_rod_n":0.}));
+            let c=cards.entry(reviewer.to_owned()).or_insert(json!({"par":reviewer,"aceitas":0,"nao_aceitas":0,"aprovadas_primeira":0,"_rod":0,"_rod_n":0}));
             let accepted = t["resultado"] == "aprova";
             super::increment(c, if accepted { "aceitas" } else { "nao_aceitas" }, 1);
-            let rnd = t["rodadas"].as_i64().unwrap_or(0);
+            let rnd = super::integer(&t["rodadas"]).unwrap_or_default();
             if accepted && rnd == 1 {
                 super::increment(c, "aprovadas_primeira", 1)
             }
-            if rnd >= 1 {
-                c["_rod"] = json!(c["_rod"].as_f64().unwrap_or(0.) + rnd as f64);
-                c["_rod_n"] = json!(c["_rod_n"].as_f64().unwrap_or(0.) + 1.);
+            if rnd.0 >= num_bigint::BigInt::from(1) {
+                c["_rod"] = json!(super::Integer(super::integer(&c["_rod"]).unwrap_or_default().0 + rnd.0));
+                super::increment(c,"_rod_n",1);
             }
         }
     }
     let mut out: Vec<_> = cards
         .into_values()
         .map(|mut c| {
-            let n = c["_rod_n"].as_f64().unwrap_or(0.);
-            c["rodadas_media"] = json!(if n > 0. {
-                super::round(c["_rod"].as_f64().unwrap_or(0.) / n, 1)
+            let n = c["_rod_n"].as_u64().unwrap_or(0);
+            c["rodadas_media"] = json!(if n > 0 {
+                super::round(super::positive_mean(&super::integer(&c["_rod"]).unwrap_or_default(),n), 1)
             } else {
                 0.
             });

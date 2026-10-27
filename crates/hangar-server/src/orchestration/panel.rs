@@ -87,23 +87,23 @@ pub fn attach_consumption(
     }
     out
 }
-pub fn task_rows(events: &[Value], plan: &[Value], integrated: &BTreeSet<i128>) -> Vec<Value> {
-    let mut titles: BTreeMap<i128, Value> = plan
+pub fn task_rows(events: &[Value], plan: &[Value], integrated: &BTreeSet<super::Integer>) -> Vec<Value> {
+    let mut titles: BTreeMap<super::Integer, Value> = plan
         .iter()
         .filter_map(|t| Some((integer(&t["n"])?, t["title"].clone())))
         .collect();
-    let mut deciding = BTreeMap::<i128, (&str, Value)>::new();
+    let mut deciding = BTreeMap::<super::Integer, (&str, Value)>::new();
     for e in events {
         let Some(n) = integer(&e["task"]) else {
             continue;
         };
-        titles.entry(n).or_insert(json!(""));
+        titles.entry(n.clone()).or_insert(json!(""));
         let rnd = integer(&e["rodada"]).map(|n| json!(n)).unwrap_or_default();
         match kind(e) {
             "task_inicio" => {
                 if !truthy(&titles[&n]) {
                     titles.insert(
-                        n,
+                        n.clone(),
                         e.get("titulo")
                             .filter(|v| truthy(v))
                             .cloned()
@@ -148,9 +148,9 @@ pub fn task_rows(events: &[Value], plan: &[Value], integrated: &BTreeSet<i128>) 
         .collect()
 }
 pub fn team(cfg: &Value, st: &Value, events: &[Value]) -> Vec<Value> {
-    let mut roles: BTreeMap<i128, Value> = BTreeMap::new();
+    let mut roles: BTreeMap<super::Integer, Value> = BTreeMap::new();
     let mut last = IndexMap::<String, Value>::new();
-    let mut slots = BTreeMap::<String, (i128, &str)>::new();
+    let mut slots = BTreeMap::<String, (super::Integer, &str)>::new();
     let mut arbiter = cfg["arbiter"].clone();
     let mut before = Vec::new();
     for e in events {
@@ -196,7 +196,7 @@ pub fn team(cfg: &Value, st: &Value, events: &[Value]) -> Vec<Value> {
                     for (key, role) in [("executor", "executor"), ("par", "reviewer")] {
                         if row[key] == e["de"] {
                             row[key] = e["para"].clone();
-                            slots.insert(text(&e["de"]).into(), (*n, role));
+                            slots.insert(text(&e["de"]).into(), (n.clone(), role));
                             if let Some(who) = e["para"].as_str() {
                                 last.insert(
                                     who.into(),
@@ -215,11 +215,11 @@ pub fn team(cfg: &Value, st: &Value, events: &[Value]) -> Vec<Value> {
     for n in before.into_iter().rev() {
         rows.push(json!({"name":n,"role":"arbiter","task":null,"last":null,"current":false}))
     }
-    let mut replaced = BTreeMap::<i128, Vec<Value>>::new();
+    let mut replaced = BTreeMap::<super::Integer, Vec<Value>>::new();
     for pair in array(&st["replaced"]) {
         let old = text(&pair[0]);
         if let Some((n, role)) = slots.get(old) {
-            replaced.entry(*n).or_default().push(
+            replaced.entry(n.clone()).or_default().push(
                 json!({"name":old,"role":role,"task":n,"last":last.get(old),"current":false}),
             );
         }
@@ -228,9 +228,9 @@ pub fn team(cfg: &Value, st: &Value, events: &[Value]) -> Vec<Value> {
         .as_object()
         .into_iter()
         .flatten()
-        .filter_map(|(n, v)| n.parse::<i128>().ok().map(|n| (n, v)))
+        .filter_map(|(n, v)| n.parse::<super::Integer>().ok().map(|n| (n, v)))
         .collect();
-    state_roles.sort_by_key(|(n, _)| std::cmp::Reverse(*n));
+    state_roles.sort_by_key(|(n, _)| std::cmp::Reverse(n.clone()));
     for (n, row) in state_roles {
         for (key, role) in [("executor", "executor"), ("par", "reviewer")] {
             if let Some(who) = row[key]
@@ -249,7 +249,7 @@ pub fn team(cfg: &Value, st: &Value, events: &[Value]) -> Vec<Value> {
     rows
 }
 pub fn decisions(entries: &[(Value, Value)], events: &[Value]) -> Vec<Value> {
-    let mut later = BTreeMap::<i128, Vec<chrono::DateTime<chrono::Local>>>::new();
+    let mut later = BTreeMap::<super::Integer, Vec<chrono::DateTime<chrono::Local>>>::new();
     for e in events {
         if matches!(kind(e), "entrega" | "veredito" | "integrada") {
             if let (Some(n), Some(ts)) = (integer(&e["task"]), runs::when(&e["ts"])) {
@@ -346,7 +346,7 @@ pub fn automation(cfg: &Value, entries: &[(Value, Value)], shadow: &[Value]) -> 
     }
     json!({"mode":{"jev":cfg.get("jev").unwrap_or(&json!("shadow")),"regex":cfg.get("regex").unwrap_or(&json!("shadow"))},"woke":woke,"alone":alone,"dropped_by_jev":dropped,"advanced":{"would_drop":would,"disagree":disagree,"judged":judged,"min_confidence":lowest,"by_rule":rule}})
 }
-pub fn integration(events: &[Value], closes: &IndexMap<i128, Value>, checks: &[Value]) -> Value {
+pub fn integration(events: &[Value], closes: &IndexMap<super::Integer, Value>, checks: &[Value]) -> Value {
     let begin = events
         .iter()
         .find(|e| kind(e) == "execucao_inicio")
@@ -355,7 +355,7 @@ pub fn integration(events: &[Value], closes: &IndexMap<i128, Value>, checks: &[V
     let last = events.iter().rev().find(|e| kind(e) == "integrada");
     let outcome = closes
         .last()
-        .and_then(|(n, c)| state::outcome(events, *n, c))
+        .and_then(|(n, c)| state::outcome(events, n.clone(), c))
         .and_then(|s| match s.as_str() {
             "integrada" => Some("green"),
             "integracao_vermelha" => Some("red"),
@@ -374,7 +374,7 @@ pub fn integration(events: &[Value], closes: &IndexMap<i128, Value>, checks: &[V
             latest.insert(n, c);
         }
     }
-    json!({"branch":begin["branch"],"last":last.map(|e|json!({"task":e["task"],"commit":text(&e["commit"]).chars().take(7).collect::<String>(),"ts":e["ts"]})),"outcome":outcome,"red_log":red,"delivery_checks":{"ok":latest.values().filter(|c|truthy(&c["ok"])).count(),"total":latest.len(),"failing":latest.iter().filter(|(_,c)|!truthy(&c["ok"])).map(|(n,_)|*n).collect::<Vec<_>>()}})
+    json!({"branch":begin["branch"],"last":last.map(|e|json!({"task":e["task"],"commit":text(&e["commit"]).chars().take(7).collect::<String>(),"ts":e["ts"]})),"outcome":outcome,"red_log":red,"delivery_checks":{"ok":latest.values().filter(|c|truthy(&c["ok"])).count(),"total":latest.len(),"failing":latest.iter().filter(|(_,c)|!truthy(&c["ok"])).map(|(n,_)|n.clone()).collect::<Vec<_>>()}})
 }
 pub fn bounds(events: &[Value]) -> Value {
     let begin = events
@@ -532,7 +532,7 @@ pub fn build_with(dir: &Path, home: &Path, projection: &dyn Projection) -> (Valu
     let integrated = closed
         .iter()
         .filter_map(|(n, c)| {
-            (state::outcome(&events, *n, c).as_deref() == Some("integrada")).then_some(*n)
+            (state::outcome(&events, n.clone(), c).as_deref() == Some("integrada")).then_some(n.clone())
         })
         .collect();
     let begin = events
@@ -583,6 +583,6 @@ pub fn build_with(dir: &Path, home: &Path, projection: &dyn Projection) -> (Valu
     }
     let aux =
         json!({"since":begin["ts"],"until":timing["finished_at"],"models":models,"timing":timing});
-    let out = json!({"run":std::fs::canonicalize(dir).unwrap_or_else(|_|dir.into()).file_name().unwrap_or_default().to_string_lossy(),"gid":begin.get("gid").filter(|v|truthy(v)).unwrap_or(&json!("")),"errors":errors,"metadata":metadata,"empty":lines.is_empty()&&!events.iter().any(|e|kind(e)=="task_inicio"),"tasks":{"integrated":rows.iter().filter(|r|r["state"]=="integrated").count(),"total":plan.as_ref().map(Vec::len).unwrap_or_else(||rows.iter().filter_map(|r|r["n"].as_u64()).max().unwrap_or(0) as usize),"total_known":plan.is_some(),"rows":rows},"team":team,"decisions":decisions,"automation":automation(&cfg,&entries,&shadow),"consumption":null,"integration":integration(&events,&closed,&checks)});
+    let out = json!({"run":std::fs::canonicalize(dir).unwrap_or_else(|_|dir.into()).file_name().unwrap_or_default().to_string_lossy(),"gid":begin.get("gid").filter(|v|truthy(v)).unwrap_or(&json!("")),"errors":errors,"metadata":metadata,"empty":lines.is_empty()&&!events.iter().any(|e|kind(e)=="task_inicio"),"tasks":{"integrated":rows.iter().filter(|r|r["state"]=="integrated").count(),"total":plan.as_ref().map(|v|json!(v.len())).unwrap_or_else(||json!(rows.iter().filter_map(|r|integer(&r["n"])).max().unwrap_or_default())),"total_known":plan.is_some(),"rows":rows},"team":team,"decisions":decisions,"automation":automation(&cfg,&entries,&shadow),"consumption":null,"integration":integration(&events,&closed,&checks)});
     (out, aux)
 }

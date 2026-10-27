@@ -1,6 +1,7 @@
 //! Orquestração: contratos, histórico e linha do tempo lidos no próprio servidor.
 mod body;
 mod common;
+pub mod codec;
 pub mod markdown;
 pub use common::*;
 pub mod consumption;

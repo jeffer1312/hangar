@@ -23,7 +23,7 @@ pub fn wrong_method(method: &axum::http::Method, path: &str, query: Option<&str>
 fn input() -> Result<Value, String> {
     let mut bytes = Vec::new();
     std::io::stdin().read_to_end(&mut bytes).map_err(|_| "provider_input_unreadable")?;
-    serde_json::from_slice(&bytes).map_err(|_| "provider_input_invalid".into())
+    std::str::from_utf8(&bytes).ok().and_then(crate::orchestration::codec::loads).ok_or_else(|| "provider_input_invalid".into())
 }
 
 fn dispatch(command: &str, args: &[String], value: &Value) -> Result<Value, String> {
@@ -64,6 +64,6 @@ pub fn cli(command: &str, args: &[String]) -> ExitCode {
         Ok(result) => (ExitCode::SUCCESS, json!({"ok": true, "result": result})),
         Err(message) => (ExitCode::from(2), json!({"ok": false, "error": message})),
     };
-    if writeln!(std::io::stdout().lock(), "{value}").is_err() { return ExitCode::from(1); }
+    if writeln!(std::io::stdout().lock(), "{}", crate::orchestration::codec::dumps(&value, false)).is_err() { return ExitCode::from(1); }
     code
 }

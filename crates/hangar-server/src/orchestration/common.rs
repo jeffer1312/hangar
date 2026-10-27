@@ -114,13 +114,82 @@ pub fn truthy(v: &Value) -> bool {
         Value::Object(o) => !o.is_empty(),
     }
 }
-pub fn integer(v: &Value) -> Option<i128> {
-    v.as_i64()
-        .map(i128::from)
-        .or_else(|| v.as_u64().map(i128::from))
+/// Identidade numérica da Task sem limitar o inteiro que o Python gravou.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct Integer(pub num_bigint::BigInt);
+impl std::fmt::Display for Integer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl std::str::FromStr for Integer {
+    type Err = num_bigint::ParseBigIntError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse().map(Self)
+    }
+}
+impl serde::Serialize for Integer {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.to_string()
+            .parse::<serde_json::Number>()
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+impl PartialEq<i32> for Integer {
+    fn eq(&self, other: &i32) -> bool {
+        self.0 == num_bigint::BigInt::from(*other)
+    }
+}
+pub fn integer(v: &Value) -> Option<Integer> {
+    match v {
+        Value::Number(n) => n.to_string().parse().ok(),
+        _ => None,
+    }
+}
+/// `int(str)`: sinal e separadores só nas posições aceitas, com algarismos decimais Unicode.
+pub fn literal_integer(text: &str) -> Option<Integer> {
+    let text = text.trim();
+    let (sign, digits) = text
+        .strip_prefix('-')
+        .map(|s| ("-", s))
+        .or_else(|| text.strip_prefix('+').map(|s| ("", s)))
+        .unwrap_or(("", text));
+    let mut normalized = sign.to_owned();
+    let mut previous_digit = false;
+    let mut count = 0;
+    for c in digits.chars() {
+        if c == '_' && previous_digit {
+            previous_digit = false;
+            continue;
+        }
+        let digit = crate::orq_conductor::decimal(c)?;
+        normalized.push(char::from(b'0' + digit));
+        previous_digit = true;
+        count += 1;
+        if count > 4300 {
+            return None;
+        }
+    }
+    (previous_digit && count > 0)
+        .then(|| normalized.parse().ok())
+        .flatten()
+}
+/// A coerção da linha do tempo e dos rótulos também aceita bool e float finito.
+pub fn coerced_integer(value: &Value) -> Option<Integer> {
+    match value {
+        Value::Bool(v) => Some(Integer(num_bigint::BigInt::from(u8::from(*v)))),
+        Value::Number(n) => integer(value).or_else(|| {
+            n.as_f64()
+                .filter(|n| n.is_finite())
+                .and_then(|n| format!("{:.0}", n.trunc()).parse().ok())
+        }),
+        Value::String(s) => literal_integer(s),
+        _ => None,
+    }
 }
 pub fn py_string(v: &Value) -> String {
-    crate::orq_conductor::python_string(v)
+    super::codec::python_string(v)
 }
 
 pub fn increment(v: &mut Value, key: &str, n: i64) {
@@ -142,4 +211,35 @@ pub fn sha256(s: &str) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// Divisão de contadores inteiros com um arredondamento para f64, como a divisão longa do Python.
+pub fn positive_mean(sum: &Integer, count: u64) -> f64 {
+    use num_bigint::BigUint;
+    if count == 0 || sum.0 <= num_bigint::BigInt::default() {
+        return 0.;
+    }
+    let numerator = sum.0.magnitude();
+    let denominator = BigUint::from(count);
+    let mut exponent = numerator.bits() as i64 - denominator.bits() as i64;
+    if if exponent >= 0 {
+        numerator < &(&denominator << exponent as usize)
+    } else {
+        &(numerator << (-exponent) as usize) < &denominator
+    } {
+        exponent -= 1;
+    }
+    let shift = 52 - exponent;
+    let (a, b) = if shift >= 0 {
+        (numerator << shift as usize, denominator)
+    } else {
+        (numerator.clone(), denominator << (-shift) as usize)
+    };
+    let mut quotient = &a / &b;
+    let twice_remainder = (&a % &b) << 1usize;
+    if twice_remainder > b || (twice_remainder == b && quotient.bit(0)) {
+        quotient += 1u8;
+    }
+    quotient.to_u64_digits().first().copied().unwrap_or(0) as f64
+        * 2f64.powi((exponent - 52) as i32)
 }

@@ -814,7 +814,7 @@ fn legacy_pytest_inputs_contract_replays_every_captured_python_assertion_input()
         let text = |index: usize| args[index].as_str().unwrap_or("");
         let result: Result<Value, ModelError> = match case["op"].as_str().unwrap() {
             "parse" => Ok(json!(pure::parse_pi(text(0)))),
-            "parse_omp" => Ok(json!(pure::parse_omp(text(0)))),
+            "parse_omp" => pure::parse_omp(text(0)).map(|v|json!(v)),
             "pi_model_command" => pure::model_command(text(0), text(1)).map(Value::String),
             "pi_think_command" => pure::think_command(text(0)).map(Value::String),
             "pi_check_known" => pure::check_pi(&args[0], text(1), text(2)).map(|_| Value::Null),

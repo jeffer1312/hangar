@@ -9,8 +9,19 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
     time::SystemTime,
 };
-static SHADOW: LazyLock<super::snapshot::SnapshotCache<Option<(SystemTime, u64)>, Vec<Value>>> =
-    LazyLock::new(|| super::snapshot::SnapshotCache::new(true));
+#[derive(Default)]
+struct ShadowSnapshot {
+    signature: Option<(SystemTime, u64)>,
+    rows: Vec<Value>,
+    warned: bool,
+}
+static SHADOW: LazyLock<Mutex<IndexMap<std::path::PathBuf, ShadowSnapshot>>> = LazyLock::new(Mutex::default);
+fn shadow_warning(snapshot: &mut ShadowSnapshot, path: &Path, error: &str) {
+    if !snapshot.warned {
+        snapshot.warned = true;
+        tracing::warn!(path = %path.display(), error, "jev-shadow.jsonl ilegível");
+    }
+}
 
 fn regex(pattern: &str) -> Arc<Regex> {
     static REGEXES: LazyLock<Mutex<std::collections::HashMap<String, Arc<Regex>>>> =
@@ -26,7 +37,7 @@ fn task(text: &str) -> Value {
     regex(r"\bT(\d+)\b|\bTask (\d+)\b")
         .captures(text)
         .and_then(|m| m.get(1).or_else(|| m.get(2)))
-        .and_then(|m| m.as_str().parse::<u64>().ok())
+        .and_then(|m| super::literal_integer(m.as_str()))
         .map(|n| json!(n))
         .unwrap_or_default()
 }
@@ -37,33 +48,38 @@ fn number(v: &Value) -> Value {
         .unwrap_or_default()
 }
 fn integer(v: &Value) -> Value {
-    if v.is_boolean() {
-        return json!(u8::from(v == true));
-    }
-    v.as_i64()
-        .map(|n| json!(n))
-        .or_else(|| v.as_u64().map(|n| json!(n)))
-        .or_else(|| {
-            v.as_f64()
-                .filter(|n| n.is_finite())
-                .map(|n| json!(n.trunc() as i64))
-        })
-        .or_else(|| {
-            v.as_str()
-                .and_then(|s| s.trim().parse::<i64>().ok())
-                .map(|n| json!(n))
-        })
-        .unwrap_or_default()
+    super::coerced_integer(v).map(|n|json!(n)).unwrap_or_default()
 }
 fn shadow(dir: &Path) -> Vec<Value> {
     let path = dir.join("jev-shadow.jsonl");
-    let sig = fs::metadata(&path)
-        .ok()
-        .and_then(|m| Some((m.modified().ok()?, m.len())));
-    SHADOW.get(path.clone(), sig, || {
-        runs::lines(&path, false).unwrap_or_default()
-    })
+    let mut cache = SHADOW.lock().unwrap_or_else(|e|e.into_inner());
+    if cache.len() >= 16 && !cache.contains_key(&path) { cache.shift_remove_index(0); }
+    let snapshot = cache.entry(path.clone()).or_default();
+    let signature = match fs::metadata(&path).and_then(|m|Ok((m.modified()?,m.len()))) {
+        Ok(sig) => Some(sig),
+        Err(error) => {
+            if error.kind() != std::io::ErrorKind::NotFound { shadow_warning(snapshot,&path,&error.to_string()); }
+            None
+        }
+    };
+    if snapshot.signature != signature {
+        snapshot.rows = match signature {
+            None => Vec::new(),
+            Some((_,size)) => match fs::read(&path) {
+                Ok(bytes) => {
+                    let raw = String::from_utf8_lossy(&bytes);
+                    let lines = crate::transcript::py::splitlines(&raw);
+                    if size > 0 && lines.is_empty() { shadow_warning(snapshot,&path,"arquivo existe e não foi lido"); }
+                    lines.into_iter().filter_map(super::codec::loads).filter(Value::is_object).collect()
+                }
+                Err(error) => { shadow_warning(snapshot,&path,&error.to_string()); Vec::new() }
+            }
+        };
+        snapshot.signature = signature;
+    }
+    snapshot.rows.clone()
 }
+
 fn jev_for(dir: &Path, msg: &str, at: &Value) -> Value {
     let Some(at) = runs::when(at) else {
         return Value::Null;
@@ -212,7 +228,7 @@ fn code(s: &str) -> String {
         let before = s[..m.start()].chars().next_back();
         let after = s[m.end()..].chars().next();
         let good_before = before.is_none_or(|c| c.is_whitespace() || "([\"'".contains(c));
-        let good_after = after.is_some_and(|c| c.is_whitespace() || ",;:.)]\"'(".contains(c));
+        let good_after = after.is_none_or(|c| c.is_whitespace() || ",;:.)]\"'(".contains(c));
         if good_before && good_after {
             out.push_str(&s[last..m.start()]);
             out.push('`');
@@ -225,7 +241,7 @@ fn code(s: &str) -> String {
     out
 }
 pub fn event_id(obj: &Value) -> String {
-    let dumped = crate::transcript::pyjson::dumps(obj, true);
+    let dumped = super::codec::dumps(obj, true);
     format!(
         "orq:{}",
         &sha1_smol::Sha1::from(dumped.as_bytes())

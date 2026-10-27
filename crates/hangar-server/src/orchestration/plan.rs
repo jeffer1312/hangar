@@ -32,7 +32,7 @@ pub fn tasks(text: &str) -> Vec<Value> {
         .map(|c| c.trim().to_lowercase())
         .collect();
     let backtick = Regex::new("`([^`]+)`").unwrap();
-    rows.iter().skip(2).filter_map(|line|{let c:Vec<_>=line.trim().trim_matches('|').split('|').map(str::trim).collect();let get=|key:&str|header.iter().position(|h|h==key).and_then(|i|c.get(i)).copied().unwrap_or("");let n=get("#").parse::<u64>().ok()?;let risk=get("risk").trim_matches('`').to_lowercase();let roteiro=get("roteiro").trim_matches('`');Some(json!({"n":n,"title":get("what it is"),"files":backtick.captures_iter(get("files")).map(|m|m[1].to_owned()).collect::<Vec<_>>(),"verification":get("verification"),"wave":get("wave"),"risk":if matches!(risk.as_str(),""|"-"|"—"){""}else{&risk},"roteiro":if matches!(roteiro,""|"-"|"—"){""}else{roteiro}}))}).collect()
+    rows.iter().skip(2).filter_map(|line|{let c:Vec<_>=line.trim().trim_matches('|').split('|').map(str::trim).collect();let get=|key:&str|header.iter().position(|h|h==key).and_then(|i|c.get(i)).copied().unwrap_or("");let digits=get("#");if !digits.chars().all(|c|crate::orq_conductor::decimal(c).is_some()){return None}let n=super::literal_integer(digits)?;let risk=get("risk").trim_matches('`').to_lowercase();let roteiro=get("roteiro").trim_matches('`');Some(json!({"n":n,"title":get("what it is"),"files":backtick.captures_iter(get("files")).map(|m|m[1].to_owned()).collect::<Vec<_>>(),"verification":get("verification"),"wave":get("wave"),"risk":if matches!(risk.as_str(),""|"-"|"—"){""}else{&risk},"roteiro":if matches!(roteiro,""|"-"|"—"){""}else{roteiro}}))}).collect()
 }
 pub fn sha(text: &str) -> String {
     let rx = Regex::new(r"(?m)^Preparado: .* · sha ([0-9a-f]{12})[ \t]*(?:\n|$)").unwrap();

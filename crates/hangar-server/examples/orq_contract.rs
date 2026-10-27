@@ -345,7 +345,7 @@ fn main() {
         .try_init();
     let mut input = String::new();
     io::stdin().read_to_string(&mut input).unwrap();
-    let value: Value = serde_json::from_str(&input).unwrap();
+    let value: Value = orq::codec::loads(&input).unwrap();
     let out = if value["repetitions"].is_u64(){
         let mut samples=Vec::new();let mut last=Vec::new();
         for _ in 0..value["repetitions"].as_u64().unwrap(){let start=std::time::Instant::now();
@@ -361,5 +361,5 @@ fn main() {
     } else {
         answer(orq::text(&value["action"]), &value["input"])
     };
-    println!("{out}");
+    println!("{}", orq::codec::dumps(&out,false));
 }

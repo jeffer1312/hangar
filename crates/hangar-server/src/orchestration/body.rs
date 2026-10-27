@@ -241,6 +241,7 @@ pub fn parse(bytes: &[u8]) -> Result<Value, (axum::http::StatusCode, Value)> {
             json!({"detail":"There was an error parsing the body"}),
         )
     })?;
+    if let Some(value) = super::codec::loads(text) { return Ok(value); }
     serde_json::from_str(text).map_err(|e|{
         let raw=e.to_string();let eof=e.is_eof();
         let previous:usize=text.split_inclusive('\n').take(e.line().saturating_sub(1)).map(str::len).sum();

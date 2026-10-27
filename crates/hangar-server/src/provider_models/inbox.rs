@@ -331,9 +331,9 @@ async fn connection(store: Arc<Store>, mut socket: WebSocket, interval: Duration
             return;
         }
     };
-    let first: Value = match serde_json::from_str(&first) {
-        Ok(v) => v,
-        Err(_) => {
+    let first: Value = match crate::transcript::pyjson::loads_lossless(&first) {
+        Some(v) => v,
+        None => {
             close(&mut socket, 1008).await;
             return;
         }
@@ -359,7 +359,7 @@ async fn connection(store: Arc<Store>, mut socket: WebSocket, interval: Duration
           inbound=tokio::time::timeout_at(heartbeat,socket.recv())=>{
             match inbound{
               Err(_)=>{heartbeat=tokio::time::Instant::now()+interval;unanswered+=1;if unanswered>2{close(&mut socket,1000).await;break;}if socket.send(Message::Text(json!({"ping":true}).to_string().into())).await.is_err(){break;}}
-              Ok(Some(Ok(Message::Text(text))))=>{heartbeat=tokio::time::Instant::now()+interval;unanswered=0;if !message_fits(&text){close(&mut socket,1009).await;break;}let Ok(value)=serde_json::from_str::<Value>(&text)else{break};if !super::pure::truthy(&value["ping"])&&!super::pure::truthy(&value["pong"]){store.respond(&key,&value);}}
+              Ok(Some(Ok(Message::Text(text))))=>{heartbeat=tokio::time::Instant::now()+interval;unanswered=0;if !message_fits(&text){close(&mut socket,1009).await;break;}let Some(value)=crate::transcript::pyjson::loads_lossless(&text)else{break};if !super::pure::truthy(&value["ping"])&&!super::pure::truthy(&value["pong"]){store.respond(&key,&value);}}
               Ok(Some(Ok(Message::Ping(data))))=>{heartbeat=tokio::time::Instant::now()+interval;unanswered=0;if socket.send(Message::Pong(data)).await.is_err(){break;}}
               Ok(Some(Ok(Message::Pong(_))))=>{heartbeat=tokio::time::Instant::now()+interval;unanswered=0;}
               _=>break,
@@ -379,9 +379,9 @@ pub async fn private(st: &Arc<AppState>, peer: SocketAddr, request: Request) -> 
         Ok(v) => v,
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
-    let value: Value = match serde_json::from_slice(&bytes) {
-        Ok(v) => v,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    let value: Value = match std::str::from_utf8(&bytes).ok().and_then(crate::transcript::pyjson::loads_lossless) {
+        Some(v) => v,
+        None => return StatusCode::BAD_REQUEST.into_response(),
     };
     match call(value).await {
         Ok(value) => crate::session_write::json_response(StatusCode::OK, value),

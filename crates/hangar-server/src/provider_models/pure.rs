@@ -36,15 +36,19 @@ pub fn pi_catalog(jsonl: &str, config: &Path) -> Option<Value> {
     parse_pi_catalog(&crate::runtime::queue::read_replaced(&sidecar_path(jsonl, config)).ok()?)
 }
 pub fn parse_pi_catalog(bytes: &[u8]) -> Option<Value> {
-    let data: Value = serde_json::from_slice(bytes).ok()?;
+    let data = crate::transcript::pyjson::loads_lossless(std::str::from_utf8(bytes).ok()?)?;
     (data.is_object() && data.get("models").is_some_and(Value::is_array)).then_some(data)
 }
-type CurrentProvider = (std::time::SystemTime, Option<String>);
+type CurrentProvider = (f64, Option<String>);
 static CURRENT_PROVIDERS: LazyLock<Mutex<std::collections::HashMap<PathBuf, CurrentProvider>>> =
     LazyLock::new(Mutex::default);
 pub fn pi_provider(jsonl: &str, config: &Path) -> Option<String> {
     let path = sidecar_path(jsonl, config);
-    let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+    let time = std::fs::metadata(&path).ok()?.modified().ok()?;
+    let modified = match time.duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs_f64(),
+        Err(error) => -error.duration().as_secs_f64(),
+    };
     let mut cache = CURRENT_PROVIDERS.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((seen, provider)) = cache.get(&path).filter(|(seen, _)| *seen == modified) {
         let _ = seen;
@@ -70,22 +74,7 @@ pub fn parse_pi(output: &str) -> Vec<Value> {
     }).collect()
 }
 fn integer(value: &Value) -> BigInt {
-    let raw = match value {
-        Value::Bool(v) => return BigInt::from(u8::from(*v)),
-        Value::Number(v) => {
-            if v.is_f64() {
-                return v
-                    .as_f64()
-                    .filter(|v| v.is_finite())
-                    .and_then(|v| format!("{:.0}", v.trunc()).parse().ok())
-                    .unwrap_or_default();
-            }
-            v.to_string()
-        }
-        Value::String(v) => v.trim().replace('_', ""),
-        _ => return BigInt::default(),
-    };
-    raw.parse().unwrap_or_default()
+    crate::orchestration::coerced_integer(value).map(|n|n.0).unwrap_or_default()
 }
 fn label(value: &Value) -> String {
     let n = integer(value);
@@ -99,19 +88,25 @@ fn label(value: &Value) -> String {
         n.to_string()
     }
 }
-pub fn parse_omp(output: &str) -> Vec<Value> {
-    let Ok(value) = serde_json::from_str::<Value>(output) else {
-        return vec![];
+pub fn parse_omp(output: &str) -> Result<Vec<Value>, ModelError> {
+    let Some(value) = crate::orchestration::codec::loads(output) else {
+        return Ok(vec![]);
     };
     let entries: Vec<&Value> = match value.get("models") {
         Some(Value::Array(v)) => v.iter().collect(),
         _ => vec![],
     };
-    entries.into_iter().filter(|m|m.is_object()&&truthy(&m["provider"])&&truthy(&m["id"])).map(|m| {
+    let mut out = Vec::new();
+    for m in entries.into_iter().filter(|m|m.is_object()&&truthy(&m["provider"])&&truthy(&m["id"])) {
+        if ["contextWindow","maxTokens"].iter().any(|key|crate::orchestration::codec::infinite(&m[*key])) {
+            return Err(ModelError::text(500,"cannot convert float infinity to integer"));
+        }
         let image=match m.get("input"){Some(Value::String(s))=>s.contains("image"),Some(Value::Array(v))=>v.contains(&json!("image")),Some(Value::Object(m))=>m.contains_key("image"),_=>false};
-        json!({"provider":m["provider"],"id":m["id"],"context":label(&m["contextWindow"]),"max_out":label(&m["maxTokens"]),"thinking":truthy(&m["thinking"]),"images":image})
-    }).collect()
+        out.push(json!({"provider":m["provider"],"id":m["id"],"context":label(&m["contextWindow"]),"max_out":label(&m["maxTokens"]),"thinking":truthy(&m["thinking"]),"images":image}));
+    }
+    Ok(out)
 }
+
 pub fn kimi_catalog(home: &Path) -> Option<Value> {
     read_kimi(&home.join(".kimi-code/config.toml"))
 }
@@ -312,4 +307,17 @@ pub fn new_line_matches(
     expected: &str,
 ) -> bool {
     line.is_some_and(|line| Some(line) != before && line[field].as_str() == Some(expected))
+}
+
+#[cfg(test)]
+mod numeric_contract_tests {
+    #[test]
+    fn python_context_labels_reject_invalid_separators_and_accept_unicode_digits() {
+        let f:serde_json::Value=serde_json::from_str(include_str!("../orchestration/fixtures/bigint.json")).unwrap();
+        for case in f["labels"].as_array().unwrap() {
+            let result = super::parse_omp(case["raw"].as_str().unwrap());
+            if case.get("error").is_some(){assert_eq!(result.unwrap_err().status,500);}
+            else {assert_eq!(serde_json::json!(result.unwrap()),case["output"],"{case}");}
+        }
+    }
 }

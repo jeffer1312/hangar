@@ -3,7 +3,7 @@ use super::{integer, kind, runs, text, truthy};
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use std::path::Path;
-pub fn closes(dir: &Path) -> Result<IndexMap<i128, Value>, String> {
+pub fn closes(dir: &Path) -> Result<IndexMap<super::Integer, Value>, String> {
     let mut out = IndexMap::new();
     for e in runs::lines(&dir.join("closed.jsonl"), true).map_err(|e| e.to_string())? {
         if let Some(n) = integer(&e["task"]) {
@@ -15,7 +15,7 @@ pub fn closes(dir: &Path) -> Result<IndexMap<i128, Value>, String> {
     }
     Ok(out)
 }
-pub fn closed(dir: &Path) -> Result<IndexMap<i128, Value>, String> {
+pub fn closed(dir: &Path) -> Result<IndexMap<super::Integer, Value>, String> {
     let mut out = IndexMap::new();
     for value in runs::lines(&dir.join("closed.jsonl"), true).map_err(|e| e.to_string())? {
         if let Some(n) = integer(&value["task"]) {
@@ -33,10 +33,10 @@ pub fn at_or_after(at: &Value, reference: &Value) -> bool {
         _ => true,
     }
 }
-pub fn outcome(events: &[Value], n: i128, close: &Value) -> Option<String> {
+pub fn outcome(events: &[Value], n: super::Integer, close: &Value) -> Option<String> {
     events
         .iter()
-        .filter(|e| integer(&e["task"]) == Some(n) && at_or_after(&e["ts"], &close["ts"]))
+        .filter(|e| integer(&e["task"]) == Some(n.clone()) && at_or_after(&e["ts"], &close["ts"]))
         .filter(|e| {
             matches!(kind(e), "integrada" | "conflito" | "integracao_vermelha")
                 || (kind(e) == "advance_falhou" && e["passo"] == "integrate")
@@ -53,10 +53,10 @@ pub fn read(dir: &Path) -> Result<Value, String> {
     let closed = closed(dir)?;
     Ok(reduce(&cfg, &ev, &closed, runs::now()))
 }
-pub fn reduce(cfg: &Value, events: &[Value], closed: &IndexMap<i128, Value>, now: f64) -> Value {
+pub fn reduce(cfg: &Value, events: &[Value], closed: &IndexMap<super::Integer, Value>, now: f64) -> Value {
     let mut arbiter = cfg["arbiter"].clone();
-    let mut roles: IndexMap<i128, Value> = IndexMap::new();
-    let mut last: IndexMap<i128, Value> = IndexMap::new();
+    let mut roles: IndexMap<super::Integer, Value> = IndexMap::new();
+    let mut last: IndexMap<super::Integer, Value> = IndexMap::new();
     let mut waits: IndexMap<String, Value> = IndexMap::new();
     let mut replaced = Vec::new();
     let mut ended = false;
@@ -74,7 +74,7 @@ pub fn reduce(cfg: &Value, events: &[Value], closed: &IndexMap<i128, Value>, now
                 roles.get(&n).cloned().unwrap_or_default()
             };
             waits.retain(|who, w| {
-                integer(&w["task"]) != Some(n)
+                integer(&w["task"]) != Some(n.clone())
                     && !(w["task"].is_null()
                         && (row["executor"] == who.as_str() || row["par"] == who.as_str()))
             });
@@ -82,7 +82,7 @@ pub fn reduce(cfg: &Value, events: &[Value], closed: &IndexMap<i128, Value>, now
         match t {
             "task_inicio" => {
                 if let Some(n) = integer(&e["task"]) {
-                    roles.insert(n, json!({"executor":e["executor"],"par":e["par"]}));
+                    roles.insert(n.clone(), json!({"executor":e["executor"],"par":e["par"]}));
                     last.insert(n, e.clone());
                 }
             }
@@ -122,7 +122,7 @@ pub fn reduce(cfg: &Value, events: &[Value], closed: &IndexMap<i128, Value>, now
         }
     }
     let mut owners = Vec::<String>::new();
-    let mut open = Vec::<i128>::new();
+    let mut open = Vec::<super::Integer>::new();
     for (n, e) in last {
         if closed
             .get(&n)
@@ -130,7 +130,7 @@ pub fn reduce(cfg: &Value, events: &[Value], closed: &IndexMap<i128, Value>, now
         {
             continue;
         }
-        open.push(n);
+        open.push(n.clone());
         let row = roles.get(&n).cloned().unwrap_or_default();
         let owner = if kind(&e) == "entrega" {
             if row["par"] == "subagente" {

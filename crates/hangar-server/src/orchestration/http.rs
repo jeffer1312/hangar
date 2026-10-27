@@ -75,7 +75,7 @@ pub fn matches(method: &Method, path: &str) -> bool {
     route(method, path).is_some()
 }
 fn fail(status: StatusCode, code: &str, msg: &str) -> Response {
-    crate::session_write::json_response(
+    super::codec::response(
         status,
         crate::session_write::detail_body(code, msg, json!({})),
     )
@@ -89,9 +89,9 @@ fn invalid() -> Response {
 }
 fn body<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Response> {
     let value = super::body::parse(bytes)
-        .map_err(|(status, value)| crate::session_write::json_response(status, value))?;
+        .map_err(|(status, value)| super::codec::response(status, value))?;
     let value = super::body::validate(std::any::type_name::<T>(), &value)
-        .map_err(|v| crate::session_write::json_response(StatusCode::UNPROCESSABLE_ENTITY, v))?;
+        .map_err(|v| super::codec::response(StatusCode::UNPROCESSABLE_ENTITY, v))?;
     serde_json::from_value(value).map_err(|_| invalid())
 }
 fn changed(e: &str) -> Response {
@@ -113,7 +113,7 @@ fn missing() -> Response {
     )
 }
 fn good(v: Value) -> Response {
-    crate::session_write::json_response(StatusCode::OK, v)
+    super::codec::response(StatusCode::OK, v)
 }
 fn dirs(st: &AppState) -> (PathBuf, PathBuf, String) {
     let env = &st.accounts.env;
@@ -397,7 +397,7 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
         match runtime.ingress().enter(&name, st.write_gate_wait).await {
             Ok(p) => Some(p),
             Err(_) => {
-                return crate::session_write::json_response(
+                return super::codec::response(
                     StatusCode::CONFLICT,
                     crate::session_write::busy_body(),
                 );
@@ -537,7 +537,7 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
                     })
                     .collect();
                 if !bad.is_empty() {
-                    return crate::session_write::json_response(
+                    return super::codec::response(
                         StatusCode::BAD_REQUEST,
                         crate::session_write::detail_body(
                             "erro_orq_modelo_desconhecido",
@@ -824,7 +824,7 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
             let (status, reply) =
                 crate::session_write::input::deliver_reply(st, &name, &message).await;
             if !status.is_success() {
-                return crate::session_write::json_response(
+                return super::codec::response(
                     StatusCode::CONFLICT,
                     crate::session_write::detail_body(
                         "erro_orq_comecar_falhou",

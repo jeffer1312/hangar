@@ -340,7 +340,8 @@ pub fn parse_body(bytes: &[u8], provider: &str) -> Result<Value, ModelError> {
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Err(missing());
     }
-    let value:Value=serde_json::from_slice(bytes).map_err(|error| {
+    let value:Value=std::str::from_utf8(bytes).ok().and_then(crate::transcript::pyjson::loads_lossless)
+        .map(Ok).unwrap_or_else(||serde_json::from_slice(bytes)).map_err(|error| {
         let text=String::from_utf8_lossy(bytes);
         let reason=error.to_string();
         let message=if reason.contains("key must be a string") || (error.is_eof() && text.trim_end().ends_with('{')) {
@@ -550,7 +551,7 @@ pub fn kimi_turn_open(path: &Path) -> Option<bool> {
             if start > 0 && index == 0 {
                 continue;
             }
-            let Ok(value) = serde_json::from_slice::<Value>(line) else {
+            let Some(value) = std::str::from_utf8(line).ok().and_then(crate::transcript::pyjson::loads_lossless) else {
                 continue;
             };
             match value["type"].as_str() {

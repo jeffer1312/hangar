@@ -164,7 +164,7 @@ pub(super) fn read_from<'a>(
             ));
         }
         let models = if provider == "omp" {
-            pure::parse_omp(&stdout)
+            pure::parse_omp(&stdout)?
         } else {
             pure::parse_pi(&stdout)
         };
