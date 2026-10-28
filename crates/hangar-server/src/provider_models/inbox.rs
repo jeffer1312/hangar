@@ -201,7 +201,10 @@ impl Store {
         let Some(line) = self.get(key) else {
             return "sem-linha";
         };
-        let _serial = line.serial.lock().await;
+        // Sem vez na linha dentro do prazo, nada sai: a ponte do Python desiste antes e a fila reenviaria.
+        let Ok(_serial) = tokio::time::timeout(deadline, line.serial.lock()).await else {
+            return "deferred";
+        };
         let id = id
             .filter(|v| !v.is_empty())
             .map(str::to_owned)

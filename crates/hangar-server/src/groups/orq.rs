@@ -149,12 +149,12 @@ impl OrqFacts for PythonOrq {
                 self.mux.clone(),
             );
             tokio::task::spawn_blocking(move || {
-                let _lock = crate::orchestration::context::WRITE_LOCK.lock().unwrap();
+                let _lock = crate::orchestration::context::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
                 use crate::orchestration::context::PromotionError;
                 crate::orchestration::context::promote_classified(&home, &pair, &name, &gid, None, &mux)
                     .map_err(|error| match error {
                         PromotionError::IdentityUnavailable(message) => PromoteError::IdentityUnavailable(message),
-                        PromotionError::Conflict(message) => PromoteError::Conflict(message),
+                        PromotionError::Conflict(message) | PromotionError::Changed(message) => PromoteError::Conflict(message),
                     })
             })
             .await

@@ -494,7 +494,7 @@ _PROVIDER_ROUTES = re.compile(r"^/api/sessions/[^/]+/(pi/models?|kimi/models?|or
 
 
 @app.middleware("http")
-async def _providers_pelo_rust(request: Request, call_next):
+async def _providers_via_rust(request: Request, call_next):
     path = request.url.path
     owned = (_PROVIDER_ROUTES.fullmatch(path) is not None
              or path == "/api/omp/plugin-sync"

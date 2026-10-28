@@ -1739,3 +1739,33 @@ def test_send_prompt_pi_nao_ganha_a_limpeza_do_claude(monkeypatch):
          patch.object(terminal_input, "send_keys") as sk:
         assert TerminalInput().send_prompt("pi-x", "mensagem nova", provider="pi") == "deferred"
     sk.assert_not_called()
+
+
+def test_ponte_do_inbox_fora_vale_sem_linha_e_entrega_incerta(monkeypatch):
+    """Rust fora: sem linha (digita as teclas) e entrega sem confirmação fica na fila, nunca 500."""
+    import importlib.util
+    from app import list_bridge
+
+    # O conftest troca `inbox_call` em todo teste; uma cópia nova do módulo traz a função real.
+    spec = importlib.util.find_spec("app.providers_bridge")
+    providers_bridge = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(providers_bridge)
+
+    import urllib.error
+
+    def fora(*a, **k):
+        raise list_bridge.ListBridgeError("list_bridge_unavailable") from urllib.error.URLError(ConnectionRefusedError())
+
+    monkeypatch.setattr(list_bridge, "_request", fora)
+    assert providers_bridge.inbox_call("line", name="pi-x", pane="%1") == {"line": None}
+    assert providers_bridge.inbox_call("question", key="k", what="editor") == {"value": None}
+    assert providers_bridge.inbox_call("deliver", key="k", text="oi", msg_id="m") == {"disposition": "deferred"}
+
+    def lento(*a, **k):
+        raise list_bridge.ListBridgeError("list_bridge_unavailable") from TimeoutError()
+
+    monkeypatch.setattr(list_bridge, "_request", lento)
+    # Rust de pé e lento: a linha pode existir, então não vira tecla.
+    with pytest.raises(list_bridge.ListBridgeError):
+        providers_bridge.inbox_call("line", name="pi-x", pane="%1")
+    assert providers_bridge.inbox_call("deliver", key="k", text="oi", msg_id="m") == {"disposition": "deferred"}

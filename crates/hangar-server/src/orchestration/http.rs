@@ -560,7 +560,7 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
             }
             let item_account = text(&item["conta"]).to_owned();
             let result = blocking(move || {
-                let _lock = context::WRITE_LOCK.lock().unwrap();
+                let _lock = context::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
                 let path = policy::path(&home);
                 let (content, _) = super::read(&path).map_err(|e| e.to_string())?;
                 let p = policy::Policy {
@@ -591,7 +591,7 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
                 Err(e) => return e,
             };
             let base = st.accounts.env.claude_base.clone();
-            match blocking(move||{let _lock=context::WRITE_LOCK.lock().unwrap();let ctx=context::resolve(&home,&pair,&name,&mux)?;let(content,mtime)=super::read(&ctx.path).map_err(|e|e.to_string())?;let roles=roles::read(&content);let arbiter=roles.iter().find(|r|super::markdown::normalize(&r.papel)=="arbitro").and_then(|r|roles::live(r,&live));let cwd=live.iter().find(|r|r["name"]==name).and_then(|r|r["cwd"].as_str());let ready=plan::readiness(cwd,ctx.grouped,!roles.is_empty());let roles:Vec<_>=roles.iter().map(|r|{let mut v=serde_json::to_value(r).unwrap();v["viva"]=json!(roles::live(r,&live));v["id_cota"]=json!(policy::quota_id(&home,&base,&r.provider,&r.conta));v}).collect();Ok::<_,String>(json!({"gid":ctx.gid,"grouped":ctx.grouped,"session_prefix":ctx.prefix,"session_identity":context::identity(&home,&name,&mux).ok(),"arquivo":ctx.path,"mtime":mtime,"prontidao":ready,"arbitro":arbiter,"papeis":roles}))}).await{Ok(Ok(v))=>good(v),Ok(Err(e))=>changed(&e),Err(e)=>e}
+            match blocking(move||{let _lock=context::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());let ctx=context::resolve(&home,&pair,&name,&mux)?;let(content,mtime)=super::read(&ctx.path).map_err(|e|e.to_string())?;let roles=roles::read(&content);let arbiter=roles.iter().find(|r|super::markdown::normalize(&r.papel)=="arbitro").and_then(|r|roles::live(r,&live));let cwd=live.iter().find(|r|r["name"]==name).and_then(|r|r["cwd"].as_str());let ready=plan::readiness(cwd,ctx.grouped,!roles.is_empty());let roles:Vec<_>=roles.iter().map(|r|{let mut v=serde_json::to_value(r).unwrap();v["viva"]=json!(roles::live(r,&live));v["id_cota"]=json!(policy::quota_id(&home,&base,&r.provider,&r.conta));v}).collect();Ok::<_,String>(json!({"gid":ctx.gid,"grouped":ctx.grouped,"session_prefix":ctx.prefix,"session_identity":context::identity(&home,&name,&mux).ok(),"arquivo":ctx.path,"mtime":mtime,"prontidao":ready,"arbitro":arbiter,"papeis":roles}))}).await{Ok(Ok(v))=>good(v),Ok(Err(e))=>changed(&e),Err(e)=>e}
         }
         Route::Roles(name) | Route::Role(name) if method == Method::POST => {
             let b = if bulk_roles {
@@ -721,7 +721,7 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
                 new.push(r);
             }
             match blocking(move || {
-                let _lock = context::WRITE_LOCK.lock().unwrap();
+                let _lock = context::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
                 context::write(&home, &pair, &ctx, &content, b.mtime)
             })
             .await
@@ -740,7 +740,7 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
             };
             let missing_role=format!("não há linha para {} nesta configuração",crate::transcript::py::py_repr(&json!(b.papel)));
             match blocking(move || {
-                let _lock = context::WRITE_LOCK.lock().unwrap();
+                let _lock = context::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
                 let ctx = context::resolve(&home, &pair, &name, &mux)?;
                 let (content, _) = super::read(&ctx.path).map_err(|e| e.to_string())?;
                 let content = roles::remove(&content, &b.papel, &b.vez)?;
@@ -773,8 +773,8 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
             };
             let result = groups
                 .locked(async {
-                    blocking(move || -> Result<Value, String> {
-                        let _lock = context::WRITE_LOCK.lock().unwrap();
+                    blocking(move || {
+                        let _lock = context::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
                         context::associate(&home, &pair, &name, &b.gid, b.mtime, &mux)
                     })
                     .await
@@ -782,7 +782,12 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
                 .await;
             match result {
                 Ok(Ok(v)) => good(v),
-                Ok(Err(e)) => changed(&e),
+                Ok(Err(context::AssociateError::Invalid(e))) => {
+                    fail(StatusCode::CONFLICT, "erro_orq_celula_invalida", &e)
+                }
+                Ok(Err(context::AssociateError::Changed(e))) => {
+                    fail(StatusCode::CONFLICT, "erro_orq_arquivo_mudou", &e)
+                }
                 Err(e) => e,
             }
         }
@@ -803,7 +808,7 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
             };
             let name2 = name.clone();
             let ready = match blocking(move || {
-                let _lock = context::WRITE_LOCK.lock().unwrap();
+                let _lock = context::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
                 let ctx = context::resolve(&home, &pair, &name2, &mux)?;
                 let (content, _) = super::read(&ctx.path).map_err(|e| e.to_string())?;
                 let ready = plan::readiness(

@@ -2,6 +2,18 @@
 use serde::{Deserialize, Deserializer, de::{self, DeserializeOwned, MapAccess, Visitor}};
 use serde_json::value::RawValue;
 
+/// Float que atravessa o buffer do serde (enum com tag, `flatten`): com `arbitrary_precision` o
+/// número chega como mapa, que `f64` recusa e `Number` aceita.
+pub(crate) fn float<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    serde_json::Number::deserialize(deserializer)?
+        .as_f64()
+        .ok_or_else(|| de::Error::custom("número fora do alcance de f64"))
+}
+
+pub(crate) fn float32<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
+    float(deserializer).map(|value| value as f32)
+}
+
 pub(crate) struct Fields(Vec<(String, Box<RawValue>)>);
 
 impl<'de> Deserialize<'de> for Fields {

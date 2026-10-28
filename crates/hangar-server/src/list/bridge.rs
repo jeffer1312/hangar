@@ -1218,7 +1218,9 @@ async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListE
             let home = bridge.dirs()?.home;
             let (orq, failed) = tokio::task::spawn_blocking(move || local_facts::orq_rows(&home, wall_now())).await
                 .map_err(|e| joined(e, "orquestrações interrompidas"))?;
-            if failed { return Err(fail("list_orq_unavailable", "orquestrações ilegíveis")); }
+            if failed {
+                bridge.facts.diag.report("rust.list_orq_unavailable", "", "list_orq_unavailable", "orquestração ilegível; fica a última linha boa");
+            }
             found.extend(orq);
             rows(&found)
         },

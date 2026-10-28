@@ -274,7 +274,7 @@ async fn execute(
                     let home = st.accounts.env.home.clone();
                     let mux = st.list.env().capture_program.to_string_lossy().into_owned();
                     tokio::task::spawn_blocking(move || {
-                        let _lock = crate::orchestration::context::WRITE_LOCK.lock().unwrap();
+                        let _lock = crate::orchestration::context::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
                         crate::orchestration::context::associate(
                             &home, &root, &name, &gid, mtime, &mux,
                         )
@@ -288,11 +288,11 @@ async fn execute(
                 .map_err(group_failed)?;
             let (status, body) = match done {
                 Ok(body) => (200, body),
-                Err(msg) if !msg.contains("mudou desde") => (
+                Err(crate::orchestration::context::AssociateError::Invalid(msg)) => (
                     409,
                     json!({"detail": {"code": "erro_orq_celula_invalida", "params": {}, "msg": msg}}),
                 ),
-                Err(msg) => (
+                Err(crate::orchestration::context::AssociateError::Changed(msg)) => (
                     409,
                     json!({"detail": {"code": "erro_orq_arquivo_mudou", "params": {}, "msg": msg}}),
                 ),

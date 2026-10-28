@@ -6,9 +6,24 @@ import subprocess
 from app import rust_bins
 
 
+# Sem o Rust a linha da extensão caiu junto: sem linha digita as teclas, entrega incerta fica na fila.
+_WITHOUT_RUST = {"line": {"line": None}, "question": {"value": None}, "deliver": {"disposition": "deferred"}}
+
+
+def _rust_down(error) -> bool:
+    reason = getattr(error.__cause__, "reason", error.__cause__)
+    return error.code == "list_bridge_off" or isinstance(reason, ConnectionRefusedError)
+
+
 def inbox_call(operation: str, **arguments):
     from app import list_bridge
-    return list_bridge._request("providers.inbox", {"op": operation, **arguments}, timeout=6)
+    try:
+        return list_bridge._request("providers.inbox", {"op": operation, **arguments}, timeout=10)
+    except list_bridge.ListBridgeError as error:
+        # Com o Rust de pé, prazo estourado não prova que não há linha: digitar duplicaria a entrega.
+        if operation == "deliver" or _rust_down(error):
+            return _WITHOUT_RUST[operation]
+        raise
 
 
 def local(command: str, operation: str | None = None, **arguments):

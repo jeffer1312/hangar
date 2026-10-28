@@ -296,6 +296,12 @@ pub fn resolve(home: &Path, pair_dir: &Path, name: &str, mux: &str) -> Result<Co
         path,
     })
 }
+/// Inválido pede correção; mudou pede recarregar e tentar de novo.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AssociateError {
+    Invalid(String),
+    Changed(String),
+}
 pub fn associate(
     home: &Path,
     pair: &Path,
@@ -303,28 +309,33 @@ pub fn associate(
     gid: &str,
     expected: f64,
     mux: &str,
-) -> Result<Value, String> {
+) -> Result<Value, AssociateError> {
+    use AssociateError::{Changed, Invalid};
     if !real_group(home, pair, gid, true) {
-        return Err("grupo de orquestração de destino não existe".into());
+        return Err(Invalid("grupo de orquestração de destino não existe".into()));
     }
-    let current = resolve(home, pair, name, mux)?;
+    // Ambiguidade, identidade e grupo sem confirmação não se resolvem recarregando.
+    let current = resolve(home, pair, name, mux).map_err(Invalid)?;
     if current.grouped {
         if current.gid != gid {
-            return Err("o time já pertence a outro grupo".into());
+            return Err(Invalid("o time já pertence a outro grupo".into()));
         }
-        let (_, mtime) = super::read(&current.path).map_err(|e| e.to_string())?;
+        let (_, mtime) = super::read(&current.path).map_err(|e| Changed(e.to_string()))?;
         if (mtime - expected).abs() > 1e-6 {
-            return Err("o time mudou desde a leitura — recarregue".into());
+            return Err(Changed("o time mudou desde a leitura — recarregue".into()));
         }
         return Ok(reply(&current, mtime));
     }
-    let (content, _) = super::read(&current.path).map_err(|e| e.to_string())?;
+    let (content, _) = super::read(&current.path).map_err(|e| Changed(e.to_string()))?;
     if content.is_empty() || mark(&content, "group").is_some() {
-        return Err("configure o time deste trabalho antes de associá-lo".into());
+        return Err(Invalid("configure o time deste trabalho antes de associá-lo".into()));
     }
-    promote(home, pair, name, gid, Some(expected), mux)?;
-    let next = resolve(home, pair, name, mux)?;
-    let (_, mtime) = super::read(&next.path).map_err(|e| e.to_string())?;
+    promote_classified(home, pair, name, gid, Some(expected), mux).map_err(|e| match e {
+        PromotionError::Changed(m) => Changed(m),
+        PromotionError::IdentityUnavailable(m) | PromotionError::Conflict(m) => Invalid(m),
+    })?;
+    let next = resolve(home, pair, name, mux).map_err(Invalid)?;
+    let (_, mtime) = super::read(&next.path).map_err(|e| Changed(e.to_string()))?;
     Ok(reply(&next, mtime))
 }
 pub fn write(
@@ -360,11 +371,15 @@ pub fn write(
 pub enum PromotionError {
     IdentityUnavailable(String),
     Conflict(String),
+    /// Arquivo mudou ou falhou no meio da leitura ou da troca: recarregar resolve.
+    Changed(String),
 }
 impl std::fmt::Display for PromotionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::IdentityUnavailable(message) | Self::Conflict(message) => formatter.write_str(message),
+            Self::IdentityUnavailable(message) | Self::Conflict(message) | Self::Changed(message) => {
+                formatter.write_str(message)
+            }
         }
     }
 }
@@ -389,14 +404,14 @@ pub fn promote_classified(
     mtime: Option<f64>,
     mux: &str,
 ) -> Result<(), PromotionError> {
-    use PromotionError::{Conflict, IdentityUnavailable};
+    use PromotionError::{Changed, Conflict, IdentityUnavailable};
     if !runs::valid_id(gid) || gid.starts_with("draft-") || gid == "padrao" {
         return Err(Conflict("grupo de destino inválido".into()));
     }
     let source = pair_dir.join(format!("regras-{}.md", draft(home, name, mux).map_err(IdentityUnavailable)?));
-    let (content, current) = super::read(&source).map_err(|e| Conflict(e.to_string()))?;
+    let (content, current) = super::read(&source).map_err(|e| Changed(e.to_string()))?;
     if mtime.is_some_and(|t| (t - current).abs() > 1e-6) {
-        return Err(Conflict("o arquivo mudou desde a leitura — recarregue".into()));
+        return Err(Changed("o arquivo mudou desde a leitura — recarregue".into()));
     }
     if let Some(target) = mark(&content, "group") {
         return if target == gid || ended(home, pair_dir, &target) {
@@ -410,7 +425,7 @@ pub fn promote_classified(
     }
     let dest = pair_dir.join(format!("regras-{gid}.md"));
     promote_source(&source, &dest, &content, current, mtime.unwrap_or(current))
-        .map_err(|e| Conflict(e.message))
+        .map_err(|e| if e.changed { Changed(e.message) } else { Conflict(e.message) })
 }
 
 pub struct PromotionFailure {

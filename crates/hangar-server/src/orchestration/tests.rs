@@ -341,6 +341,27 @@ fn or061_promotion_moves_one_record() {
     );
 }
 #[test]
+fn or061_promotion_failure_kind_comes_from_the_cause_not_the_text() {
+    let d = tempfile::tempdir().unwrap();
+    let side = d.path().join(".hangar/claude-headless");
+    let pair = d.path().join("pairs");
+    fs::create_dir_all(&side).unwrap();
+    fs::create_dir_all(&pair).unwrap();
+    fs::write(side.join("planner.json"), "{\"key\":\"key\"}").unwrap();
+    let ctx = context::resolve(d.path(), &pair, "planner", "missing-mux").unwrap();
+    let mtime = write(&ctx.path, "# Contrato\n", Some(0.)).unwrap();
+    assert!(matches!(
+        context::promote_classified(d.path(), &pair, "planner", "g", Some(mtime + 5.), "missing-mux"),
+        Err(context::PromotionError::Changed(_))
+    ));
+    let source = d.path().join("source.md");
+    fs::write(&source, "# Contrato\n").unwrap();
+    // Escrita da marca que falha com "mudou desde" exige conferência manual, não recarregar.
+    let failure = context::promote_source_with(&source, &pair.join("regras-h.md"), "# Contrato\n", 1., 1.,
+        |_, _, _| Err("o contrato mudou desde a leitura".into())).unwrap_err();
+    assert!(!failure.changed);
+}
+#[test]
 fn or066_compare_and_swap_has_one_winner() {
     let d = tempfile::tempdir().unwrap();
     let path = Arc::new(d.path().join("record.md"));

@@ -261,7 +261,9 @@ async fn session(st: &Arc<AppState>, request: Request) -> Result<Value, ModelErr
     let home = st.origins_home.clone();
     let lock_name = name.clone();
     let guard =
-        tokio::task::spawn_blocking(move || crate::terminal_lock::acquire(&home, &lock_name))
+        tokio::task::spawn_blocking(move || {
+            crate::terminal_lock::acquire(&home, &lock_name, std::time::Duration::from_secs(10))
+        })
             .await
             .map_err(|_| {
                 coded(
@@ -270,7 +272,9 @@ async fn session(st: &Arc<AppState>, request: Request) -> Result<Value, ModelErr
                     "não consegui reservar o teclado",
                 )
             })?
-            .map_err(|_| {
+            .map_err(|e| if e.kind() == std::io::ErrorKind::WouldBlock {
+                coded(409, "provider_keyboard_busy", "o teclado da sessão seguiu ocupado; tente de novo")
+            } else {
                 coded(
                     503,
                     "provider_keyboard_lock_failed",
