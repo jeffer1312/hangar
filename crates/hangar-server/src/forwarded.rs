@@ -47,7 +47,8 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         .filter(|_| method == Method::DELETE && path.strip_prefix("/api/sessions/").is_some_and(|rest| !rest.contains('/'))
             || method == Method::POST && (path.ends_with("/input") || path.ends_with("/interrupt"))) {
         Owned::OrchestrationGuard(name)
-    } else if models { Owned::Models }
+    } else if crate::dictation::http::matches(&method, &path) { Owned::Dictation(guest) }
+    else if models { Owned::Models }
     else if crate::orchestration::matches(&method, &path) && !guest { Owned::Orchestration }
     else if crate::omp_sync::matches(&method, &path) && !guest { Owned::OmpSync }
     else if method == Method::GET && path == crate::claude_customizations::CATALOG_PATH {
@@ -104,6 +105,7 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
             if events { crate::routes::events(State(st), ConnectInfo(peer), Ok(axum::extract::Path(name)), req).await }
             else { crate::routes::history(State(st), ConnectInfo(peer), Ok(axum::extract::Path(name)), req).await }
         },
+        Owned::Dictation(guest) => crate::dictation::http::serve(&st, req, guest, None).await,
         Owned::Models => crate::provider_models::serve(&st, req).await,
         Owned::Orchestration => crate::orchestration::serve(&st, req).await,
         Owned::OmpSync => match st.omp_sync.get() {
@@ -157,4 +159,4 @@ fn live_resume(method: &Method, path: &str) -> Option<String> {
 }
 
 /// As rotas do Rust que aceitam o repasse.
-enum Owned { Static, Read(String, bool, bool), OrchestrationGuard(String), Models, Orchestration, OmpSync, Groups(bool), Conductor, Catalog, SessionDefaults, PushExpo, Commands, Mermaid, Prewarm, Nav, Plans, Worktrees, JevDelivery, ClientApi, ArchiveResume(String, String), Resume(String), Media(String, bool) }
+enum Owned { Static, Dictation(bool), Read(String, bool, bool), OrchestrationGuard(String), Models, Orchestration, OmpSync, Groups(bool), Conductor, Catalog, SessionDefaults, PushExpo, Commands, Mermaid, Prewarm, Nav, Plans, Worktrees, JevDelivery, ClientApi, ArchiveResume(String, String), Resume(String), Media(String, bool) }

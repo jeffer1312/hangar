@@ -28,7 +28,7 @@ EDITAVEIS: dict[str, type] = {
     "transcription_base_url": str,  # base OpenAI-compatible; vazio = serviço padrão
     "transcription_model": str,     # modelo de áudio; vazio = whisper-large-v3-turbo
     # Lista ordenada de serviços de transcrição com reserva automática. Vazia ou ausente = o
-    # serviço único das três chaves acima. Ver transcribe.transcribe_with_provider.
+    # serviço único das três chaves acima.
     "transcription_providers": list,
     "upload_retention_days": int,  # dias que um anexo sobrevive
     "notify_finished": bool,

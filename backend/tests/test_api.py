@@ -1462,15 +1462,16 @@ def test_do_notify_awaiting_no_match_is_noop(monkeypatch):
 
 
 def test_relimpar_aplica_outro_estilo_sem_audio(api_client, monkeypatch):
-    # Trocar de estilo NAO reenvia o audio: a Whisper ja rodou e o cru veio no `raw`. O endpoint so
-    # chama a limpeza de novo — nao ha sessao, nem cwd, nem upload envolvidos.
+    from starlette.responses import JSONResponse
+    from app import account_bridge
     visto = {}
 
-    def fake_limpar(texto, estilo_pedido=None, **options):
-        visto["texto"], visto["estilo"] = texto, estilo_pedido
-        return {"text": "**Objetivo**\nfalar.", "raw": texto, "aviso": None, "estilo_aplicado": "briefing", "organization_mode": "external_api"}
+    async def forward(request, *, guest=False):
+        visto.update(await request.json())
+        return JSONResponse({"text": "**Objetivo**\nfalar.", "raw": visto["texto"]})
 
-    monkeypatch.setattr(api_mod.dictation_bridge, "organize", fake_limpar)
+    monkeypatch.setattr(account_bridge, "owner_mode", lambda: "rust")
+    monkeypatch.setattr(account_bridge, "forward_stream", forward)
     r = api_client.post("/api/ditado/relimpar",
                         json={"texto": "eu queria falar sobre uma coisa aqui", "estilo": "briefing"},
                         headers=_h())
@@ -1480,9 +1481,16 @@ def test_relimpar_aplica_outro_estilo_sem_audio(api_client, monkeypatch):
 
 
 def test_status_dos_servicos_de_transcricao(api_client, monkeypatch):
+    from starlette.responses import JSONResponse
+    from app import account_bridge
     linhas = [{"id": "el", "name": "ElevenLabs", "kind": "elevenlabs",
                "waiting_until": 1900000000.0, "reason": "sem cota (402)"}]
-    monkeypatch.setattr(api_mod, "providers_status", lambda: linhas)
+
+    async def forward(request, *, guest=False):
+        return JSONResponse({"providers": linhas})
+
+    monkeypatch.setattr(account_bridge, "owner_mode", lambda: "rust")
+    monkeypatch.setattr(account_bridge, "forward_stream", forward)
     r = api_client.get("/api/transcription/providers/status", headers=_h())
     assert r.status_code == 200
     assert r.json() == {"providers": linhas}

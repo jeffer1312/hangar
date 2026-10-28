@@ -14,7 +14,7 @@ fn failure(error: TranscriptionError) -> Response {
     response(json!({"ok":false,"error":error}), status)
 }
 
-async fn configuration(state: &AppState) -> Result<ConfigSnapshot, TranscriptionError> {
+pub(crate) async fn configuration(state: &AppState) -> Result<ConfigSnapshot, TranscriptionError> {
     let failed = || TranscriptionError { status: 503, code: "transcription_config_unavailable".into(),
         detail: "A configuração de transcrição não está disponível.".into() };
     let request = axum::http::Request::get(format!("http://{}/internal/transcription/config", state.cfg.upstream))

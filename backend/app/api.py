@@ -38,7 +38,6 @@ from app.fs import FsError, allowed_roots, list_roots, make_dir, scan_dir
 from app.model_picker import PickerError
 from app.mensagens import erro
 from app import claude_models
-from app import dictation_bridge
 from app import claude_customizations
 from app import cliproxy
 from app import codex_models
@@ -68,8 +67,6 @@ from app.adapters.codex import sessions as codex_sessions
 from app.sse import invalidate_recent_list, merged_events, nav_confirmar, nav_pendente
 from app.state import corrige_ocioso_kimi, forget_frame, menu_codex
 from app.uploads import MAX_BYTES
-from app.transcribe import (transcribe_with_provider, providers_status, Transcription,
-                            TranscribeError, DICTATION_LIMITS)
 from app.config import (list_config_dirs, _backend_config_base, settings,
                         resolve_scan_roots,
                         automations_enabled, resolve_bind_ip, variaveis_env)
@@ -5489,40 +5486,16 @@ async def engine_cliproxy_management_key(body: CliproxyManagementBody):
     return await asyncio.to_thread(_cliproxy_naming)
 
 
+async def _forward_dictation(request: Request):
+    from app import account_bridge
+    if account_bridge.owner_mode() == "python":
+        raise HTTPException(503, detail={"code": "dictation_need_rust_server"})
+    return await account_bridge.forward_stream(request, guest=_convidado(request))
+
+
 @app.post("/api/dictation/transcribe", dependencies=[Depends(require_auth)])
-async def transcribe_dictation(request: Request, estilo: str | None = None, limpar: bool = True,
-                               organization_mode: str | None = None, organization_model: str | None = None,
-                               include_recent_messages: bool | None = None):
-    # Antes de existir uma sessão, o áudio não tem uma pasta onde ser guardado.
-    clen = request.headers.get("content-length")
-    if clen and clen.isdigit() and int(clen) > 100 * 1024 * 1024:
-        raise HTTPException(413, detail=erro("erro_arquivo_grande", "arquivo maior que 100 MiB"))
-    data = await request.body()
-    filename = request.headers.get("x-filename") or request.query_params.get("name")
-    try:
-        t = await asyncio.to_thread(transcribe_with_provider, data, filename, DICTATION_LIMITS)
-    except TranscribeError as e:
-        raise HTTPException(e.status, e.payload())
-    if not limpar:
-        return _with_provider({"text": t.text}, t)
-    result = await asyncio.to_thread(dictation_bridge.organize, t.text, estilo, mode=organization_mode,
-                                    model=organization_model, include_recent_messages=include_recent_messages,
-                                    harness_allowed=not _convidado(request))
-    return _with_provider(result, t)
-
-
-def _with_provider(result: dict, t: Transcription) -> dict:
-    """Junta à resposta quem transcreveu. O aviso da reserva vem antes do da limpeza e nenhum dos
-    dois some; `estilo_aplicado` já foi decidido só pelo aviso da limpeza."""
-    out = {**result, "provider": t.provider}
-    if t.aviso:
-        out["aviso_transcricao"] = t.aviso
-    avisos = [a for a in (t.aviso, result.get("aviso")) if a]
-    if avisos:
-        out["aviso"] = " · ".join(avisos)
-    return out
-
-
+async def transcribe_dictation(request: Request):
+    return await _forward_dictation(request)
 
 
 class RelimparBody(_StrictBody):
@@ -5550,53 +5523,29 @@ async def relimpar_ditado(body: RelimparBody, request: Request):
         viewer = guest_users.current.get()
         if viewer is not None and not guest_users.visible_to(viewer, body.session):
             raise HTTPException(403, "A conversa de destino não está autorizada.")
-    return await asyncio.to_thread(dictation_bridge.organize, body.texto, body.estilo,
-                                  mode=body.organization_mode, model=body.organization_model,
-                                  session=body.session, generation=body.generation,
-                                  account=body.organization_account,
-                                  include_recent_messages=body.include_recent_messages, recent_messages=body.recent_messages,
-                                  harness_allowed=not _convidado(request))
+    return await _forward_dictation(request)
 
 
 @app.get("/api/dictation/models", dependencies=[Depends(require_auth)])
 async def dictation_models(request: Request, session: str, fresh: bool = False):
     if _convidado(request) or request.scope.get("server", (None, None))[1] == 8768:
         raise HTTPException(403, "O catálogo de organização é exclusivo do dono.")
-    try:
-        return await asyncio.to_thread(dictation_bridge.request, "catalog", {"session": session, "fresh": fresh})
-    except dictation_bridge.BridgeError as error:
-        raise HTTPException(error.status, detail={"code": error.code, "msg": error.detail}) from None
+    return await _forward_dictation(request)
 
 
 @app.get("/api/transcription/providers/status", dependencies=[Depends(require_auth)])
-def transcription_providers_status(request: Request):
-    """Espera por cota de cada serviço de transcrição, para a tela de configuração. `def` e não
-    `async`: lê um arquivo, e o FastAPI já roda isso na threadpool."""
+async def transcription_providers_status(request: Request):
     if _convidado(request):
         raise HTTPException(403, "A configuração de transcrição é exclusiva do dono.")
-    try:
-        return {"providers": providers_status()}
-    except TranscribeError as e:
-        raise HTTPException(e.status, e.payload())
+    return await _forward_dictation(request)
 
 
 @app.post("/api/transcription/providers/{provider_id}/test", dependencies=[Depends(require_auth)])
 async def test_transcription_provider(provider_id: str, request: Request):
-    from app import transcription_bridge
     if _convidado(request):
         raise HTTPException(403, "O teste de transcrição é exclusivo do dono.")
-    if not transcription_bridge.owned_by_rust():
-        raise HTTPException(503, detail={"code": "transcription_rust_unavailable", "msg": "O teste requer o servidor Rust disponível."})
-    data = bytearray()
-    async for chunk in request.stream():
-        if len(data) + len(chunk) > 100 * 1024 * 1024:
-            raise HTTPException(413, "O áudio excede o limite de 100 MiB.")
-        data.extend(chunk)
-    filename = request.headers.get("x-filename") or "audio.wav"
-    try:
-        return await asyncio.to_thread(transcription_bridge.transcribe, bytes(data), filename, "dictation", provider_id)
-    except transcription_bridge.BridgeError as e:
-        raise HTTPException(e.status, detail={"code": e.code, "params": {}, "msg": e.detail})
+    return await _forward_dictation(request)
+
 
 
 class PensamentoPtBody(_StrictBody):

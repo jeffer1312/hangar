@@ -830,6 +830,9 @@ pub(crate) async fn pass_any(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     mut req: Request,
 ) -> Response {
+    if crate::dictation::http::matches(req.method(), req.uri().path()) {
+        return crate::dictation::http::public(st, peer, req).await;
+    }
     if crate::provider_models::inbox_http_request(req.method(), req.uri().path(), req.headers()) {
         return crate::session_write::json_response(StatusCode::NOT_FOUND, serde_json::json!({"detail":"Not Found"}));
     }
