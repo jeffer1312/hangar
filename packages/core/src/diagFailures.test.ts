@@ -168,6 +168,13 @@ describe('sendDiagReportAll', () => {
     expect(sent[2][1].group).toBe('bbbb3333');
   });
 
+  it('reenvio das que falharam entra no código do envio anterior', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(ok('cccc4444'));
+    const res = await sendDiagReportAll([serverC], { client: 'pwa 1.0' }, 'aaaa2222');
+    expect(res.code).toBe('aaaa2222');
+    expect(bodies(fetchMock)[0][1].group).toBe('aaaa2222');
+  });
+
   it('nenhuma deu certo: sem código, com o motivo de cada uma', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(erro(429, 'diag_report_rate_limited')).mockResolvedValueOnce(erro(502, 'diag_report_unreachable'));
     const res = await sendDiagReportAll([serverA, serverB], { client: 'pwa 1.0' });

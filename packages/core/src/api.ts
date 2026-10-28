@@ -494,8 +494,9 @@ export interface DiagReportAllResult {
 
 /** Um relatório por máquina, uma por vez: as seguintes levam o código da primeira que deu certo, e o
  *  servidor de relatórios as junta nele. Uma por vez porque ele grava a lista do envio relendo-a. */
-export async function sendDiagReportAll(servers: Server[], input: { text?: string; client: string }): Promise<DiagReportAllResult> {
-  let code: string | null = null;
+export async function sendDiagReportAll(servers: Server[], input: { text?: string; client: string }, group?: string): Promise<DiagReportAllResult> {
+  // `group`: o código de um envio anterior, para reenviar só às máquinas que falharam nele.
+  let code: string | null = group ?? null;
   const results: DiagReportAllResult['results'] = [];
   for (const server of servers) {
     const result = await sendDiagReport(server, { ...input, ...(code ? { group: code } : {}) });

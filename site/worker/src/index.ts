@@ -156,14 +156,20 @@ interface Group { code: string; members: string[] }
  *  aceito como grupo abriria outro de 8 e encadearia envios sem limite por IP. A lista nasce no segundo relatório. */
 async function readGroup(deps: Deps, code: string): Promise<Group | null> {
 	if (!DIAG_CODE.test(code)) return null;
-	const list = await deps.reports.get(`diag/${code}/group`);
-	if (list !== null) {
-		const members: unknown = JSON.parse(list);
-		return Array.isArray(members) ? { code, members: members.filter((m): m is string => typeof m === "string") } : null;
+	try {
+		const list = await deps.reports.get(`diag/${code}/group`);
+		if (list !== null) {
+			const members: unknown = JSON.parse(list);
+			return Array.isArray(members) ? { code, members: members.filter((m): m is string => typeof m === "string") } : null;
+		}
+		const lead = await deps.reports.get(`diag/${code}`);
+		if (lead === null) return null;
+		return (JSON.parse(lead) as { group?: unknown }).group === code ? { code, members: [code] } : null;
+	} catch (e: unknown) {
+		// Registro ilegível não abre grupo: o envio paga o limite por IP e volta 400, com o motivo no log.
+		logErr("grupo ilegível", `diag/${code}`, e);
+		return null;
 	}
-	const lead = await deps.reports.get(`diag/${code}`);
-	if (lead === null) return null;
-	return (JSON.parse(lead) as { group?: unknown }).group === code ? { code, members: [code] } : null;
 }
 
 async function handleReport(request: Request, deps: Deps): Promise<Response> {
@@ -226,10 +232,12 @@ async function storeDiagnostic(report: Report, request: Request, deps: Deps, gro
 	try {
 		// Senha primeiro: se o relatório falhar, sobra só ela, que vence em 10 min, e não um relatório órfão de 90 dias.
 		await deps.reports.put(`${id}/upload`, upload, { expirationTtl: UPLOAD_TTL_SECONDS });
-		await deps.reports.put(id, record(report, request, group?.code ?? code), { expirationTtl: TTL_SECONDS });
+		// A lista antes do relatório, como a senha: se o relatório falhar, sobra só um código na lista que não abre
+		// nada, e não um relatório fora do envio que a máquina reenviaria em duplicata.
 		// shortcut: ler e regravar a lista perde um membro se duas máquinas chegarem juntas; o app manda uma por vez e
 		// cada relatório guarda o `group`.
 		if (group) await deps.reports.put(`diag/${group.code}/group`, JSON.stringify([...group.members, code]), { expirationTtl: TTL_SECONDS });
+		await deps.reports.put(id, record(report, request, group?.code ?? code), { expirationTtl: TTL_SECONDS });
 	} catch (e: unknown) {
 		logErr("kv falhou", id, e);
 		return json(503, { erro: "armazenamento" });

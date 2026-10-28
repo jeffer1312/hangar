@@ -112,7 +112,10 @@ const REPORT_TEXT_MAX: usize = 2000;
 /// Relatório de diagnóstico (`POST /api/diag/report`), um por máquina: o envio em curso ou o desfecho do último.
 /// `code`: o da primeira máquina que deu certo, que junta as outras; `missed`: as que não foram, com o rótulo.
 #[derive(Clone, Debug, PartialEq)]
-enum Report { Sending, Done { code: Option<String>, diary_sent: bool, copied: bool, missed: Vec<(String, Outcome)>, total: usize } }
+enum Report { Sending, Done { code: Option<String>, diary_sent: bool, copied: bool, missed: Vec<Missed>, total: usize } }
+
+/// Máquina que não foi: id da entrada (para o reenvio), rótulo e desfecho.
+type Missed = (String, String, Outcome);
 
 /// O desfecho de uma máquina.
 #[derive(Clone, Debug, PartialEq)]
@@ -122,11 +125,14 @@ pub(super) enum Outcome { Sent { code: String, diary_sent: bool }, Failed { code
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum ReportScope { #[default] All, This, Pick }
 
-fn report_done(results: Vec<(String, Outcome)>) -> Report {
-    let total = results.len();
-    let code = results.iter().find_map(|(_, o)| match o { Outcome::Sent { code, .. } => Some(code.clone()), _ => None });
-    let diary_sent = results.iter().all(|(_, o)| !matches!(o, Outcome::Sent { diary_sent: false, .. }));
-    let missed = results.into_iter().filter(|(_, o)| matches!(o, Outcome::Failed { .. })).collect();
+/// `prev`: o envio anterior (código, diário, quantas máquinas) quando isto é o reenvio das que falharam nele.
+fn report_done(results: Vec<Missed>, prev: Option<(String, bool, usize)>) -> Report {
+    let total = prev.as_ref().map_or(results.len(), |(_, _, total)| *total);
+    let code = prev.as_ref().map(|(code, _, _)| code.clone())
+        .or_else(|| results.iter().find_map(|(_, _, o)| match o { Outcome::Sent { code, .. } => Some(code.clone()), _ => None }));
+    let diary_sent = prev.as_ref().is_none_or(|(_, sent, _)| *sent)
+        && results.iter().all(|(_, _, o)| !matches!(o, Outcome::Sent { diary_sent: false, .. }));
+    let missed = results.into_iter().filter(|(_, _, o)| matches!(o, Outcome::Failed { .. })).collect();
     Report::Done { code, diary_sent, copied: false, missed, total }
 }
 
@@ -233,7 +239,7 @@ pub(super) enum DeviceReply {
     Started(u64, Launch),
     Tick(u64, Result<Value, Failure>),
     Migration(u64, Result<Value, Failure>),
-    Report(Vec<(String, Outcome)>),
+    Report(Vec<Missed>, Option<(String, bool, usize)>),
 }
 
 /// Valor em dólar na moeda escolhida. Real sem cotação fica em dólar.
@@ -389,22 +395,29 @@ impl Hangar {
         if text.chars().count() > REPORT_TEXT_MAX { return; }
         let machines = self.diag_report_machines();
         let scope = self.device.report_scope;
+        // Envio com código e máquinas que não foram: o reenvio vai só a elas, no mesmo código.
+        let prev = match &self.device.report {
+            Some(Report::Done { code: Some(code), diary_sent, missed, total, .. }) if !missed.is_empty() =>
+                Some(((code.clone(), *diary_sent, *total), missed.iter().map(|(id, _, _)| id.clone()).collect::<Vec<_>>())),
+            _ => None,
+        };
+        let connect = |s: &ServerEntry| (s.id.clone(), s.label.clone(),
+            if self.is_active_key(&servers::norm(&s.address)) { Ok(api.clone()) } else { crate::api::Api::new(&s.address, &s.token) });
         // A da tela vai pela conexão de agora (rota local incluída); as outras, por uma conexão nova.
-        let targets: Vec<(String, Result<crate::api::Api, Failure>)> = if machines.len() < 2 || scope == ReportScope::This {
-            vec![(self.server_label(cx), Ok(api))]
-        } else {
-            machines.iter().filter(|s| scope == ReportScope::All || self.diag_report_picked(s))
-                .map(|s| (s.label.clone(), if self.is_active_key(&servers::norm(&s.address)) { Ok(api.clone()) } else { crate::api::Api::new(&s.address, &s.token) }))
-                .collect()
+        let targets: Vec<(String, String, Result<crate::api::Api, Failure>)> = match &prev {
+            Some((_, ids)) => machines.iter().filter(|s| ids.contains(&s.id)).map(connect).collect(),
+            None if machines.len() < 2 || scope == ReportScope::This => vec![(String::new(), self.server_label(cx), Ok(api.clone()))],
+            None => machines.iter().filter(|s| scope == ReportScope::All || self.diag_report_picked(s)).map(connect).collect(),
         };
         if targets.is_empty() { return; }
+        let prev = prev.map(|(prev, _)| prev);
         let client = format!("native {} {}-{}", crate::update::CURRENT, std::env::consts::OS, std::env::consts::ARCH);
         self.device.report = Some(Report::Sending);
         let done = self.device_send_later();
         self.runtime.spawn(async move {
-            let mut group: Option<String> = None;
+            let mut group: Option<String> = prev.as_ref().map(|(code, _, _)| code.clone());
             let mut results = Vec::new();
-            for (label, api) in targets {
+            for (id, label, api) in targets {
                 let outcome = match api {
                     Ok(api) => {
                         let mut body = json!({"client": client, "failures": api.recent_failures()});
@@ -415,9 +428,9 @@ impl Hangar {
                     Err(error) => report_outcome(Err(error)),
                 };
                 if let (None, Outcome::Sent { code, .. }) = (&group, &outcome) { group = Some(code.clone()); }
-                results.push((label, outcome));
+                results.push((id, label, outcome));
             }
-            done(DeviceReply::Report(results)).await
+            done(DeviceReply::Report(results, prev)).await
         });
         cx.notify();
     }
@@ -621,8 +634,8 @@ impl Hangar {
                     }
                 }
             }
-            DeviceReply::Report(results) => {
-                self.device.report = Some(report_done(results));
+            DeviceReply::Report(results, prev) => {
+                self.device.report = Some(report_done(results, prev));
             }
             DeviceReply::Migration(seq, result) => {
                 self.device.migration.finish(seq, result.map(|v| super::migration::parse(&v)).map_err(|e| Self::failure(&e)));
@@ -909,9 +922,9 @@ impl Hangar {
         let note = |text: String, color: Hsla| div().text_size(px(13.)).text_color(color).whitespace_normal().child(text);
         let send = |id: &'static str, label: &'static str| Button::new(id).primary().small().label(tr(label)).loading(sending)
             .disabled(sending || over).on_click(cx.listener(|this, _, _, cx| this.send_report(cx)));
-        let missed_notes = |missed: &[(String, Outcome)], total: usize| div().flex().flex_col().gap(px(4.))
+        let missed_notes = |missed: &[Missed], total: usize| div().flex().flex_col().gap(px(4.))
             .when(total > 1 && !missed.is_empty(), |el| el.child(note(tr("settings_diary_report_machines_failed"), theme::danger())))
-            .children(missed.iter().filter_map(|(label, outcome)| match outcome {
+            .children(missed.iter().filter_map(|(_, label, outcome)| match outcome {
                 Outcome::Failed { code, retry } => {
                     let reason = report_failure_text(code, *retry);
                     Some(note(if total > 1 { tr("settings_diary_report_machine_failed").replace("{server}", label).replace("{reason}", &reason) } else { reason }, theme::danger()))
@@ -936,9 +949,11 @@ impl Hangar {
                             }))))
                     .when(!diary_sent, |el| el.child(note(tr("settings_diary_report_diary_failed"), theme::warning())))
                     .child(missed_notes(missed, *total))
+                    .when(missed.iter().any(|(_, _, o)| matches!(o, Outcome::Failed { retry: true, .. })),
+                        |el| el.child(div().child(send("diary-report-retry", "settings_diary_report_retry"))))
             }
             Some(Report::Done { code: None, missed, total, .. }) => {
-                let retry = missed.iter().any(|(_, o)| matches!(o, Outcome::Failed { retry: true, .. }));
+                let retry = missed.iter().any(|(_, _, o)| matches!(o, Outcome::Failed { retry: true, .. }));
                 div().flex().flex_col().gap(px(8.))
                     .child(missed_notes(missed, *total))
                     .when(retry, |el| el.child(div().child(send("diary-report-retry", "settings_diary_report_retry"))))
@@ -1313,9 +1328,13 @@ mod tests {
         use super::{Outcome, Report, report_done};
         let sent = |code: &str, diary_sent| Outcome::Sent { code: code.into(), diary_sent };
         let down = Outcome::Failed { code: "network".into(), retry: true };
-        let report = report_done(vec![("PC".into(), down.clone()), ("VM 1".into(), sent("bbbb3333", true)), ("VM 2".into(), sent("cccc4444", false))]);
-        assert_eq!(report, Report::Done { code: Some("bbbb3333".into()), diary_sent: false, copied: false, missed: vec![("PC".into(), down.clone())], total: 3 });
-        let none = report_done(vec![("PC".into(), down.clone())]);
-        assert_eq!(none, Report::Done { code: None, diary_sent: true, copied: false, missed: vec![("PC".into(), down)], total: 1 });
+        let pc = || ("pc".to_owned(), "PC".to_owned(), down.clone());
+        let report = report_done(vec![pc(), ("v1".into(), "VM 1".into(), sent("bbbb3333", true)), ("v2".into(), "VM 2".into(), sent("cccc4444", false))], None);
+        assert_eq!(report, Report::Done { code: Some("bbbb3333".into()), diary_sent: false, copied: false, missed: vec![pc()], total: 3 });
+        let none = report_done(vec![pc()], None);
+        assert_eq!(none, Report::Done { code: None, diary_sent: true, copied: false, missed: vec![pc()], total: 1 });
+        // Reenvio só da que falhou: mantém o código, o total e o diário do envio anterior.
+        let retried = report_done(vec![("pc".into(), "PC".into(), sent("dddd5555", true))], Some(("bbbb3333".into(), false, 3)));
+        assert_eq!(retried, Report::Done { code: Some("bbbb3333".into()), diary_sent: false, copied: false, missed: vec![], total: 3 });
     }
 }

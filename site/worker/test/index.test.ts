@@ -463,6 +463,15 @@ describe("POST /api/relatorio with x-hangar-group (one report per machine)", () 
 		expect(calls.limits).toEqual(["diagnostico"]);
 	});
 
+	it("a corrupt group record refuses the group instead of failing with 500", async () => {
+		await env.REPORTS.put("diag/abcdefgh/group", "{quebrado");
+		const { d, calls } = deps();
+		const res = await handle(member("abcdefgh"), d);
+		expect(res.status).toBe(400);
+		expect(await res.json()).toEqual({ erro: "grupo" });
+		expect(calls.limits).toEqual(["diagnostico"]);
+	});
+
 	it("still pays the per-IP limit for an unknown group", async () => {
 		const { d } = deps(false);
 		expect((await handle(member("abcdefgh"), d)).status).toBe(429);

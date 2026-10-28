@@ -39,6 +39,17 @@
     enviando = false;
   }
 
+  // Envio que já tem código e máquinas que não foram: reenvia só a elas, no mesmo código.
+  async function reenviarFalhas() {
+    if (!resultado?.code || enviando) return;
+    const anterior = resultado;
+    const falhas = anterior.results.filter((r) => !r.result.ok).map((r) => r.server);
+    enviando = true;
+    const novo = await sendDiagReportAll(falhas, { text: texto, client: `pwa ${__HANGAR_VERSION__}` }, anterior.code ?? undefined);
+    resultado = { code: anterior.code, results: [...anterior.results.filter((r) => r.result.ok), ...novo.results] };
+    enviando = false;
+  }
+
   function motivo(r: DiagReportResult): string {
     return r.ok ? '' : r.kind === 'unsupported' ? m.config_diag_report_unsupported()
       : r.kind === 'rate_limited' ? m.config_diag_report_rate_limited()
@@ -48,6 +59,9 @@
   const falhas = $derived(resultado?.results.filter((r) => !r.result.ok) ?? []);
   const diarioFalhou = $derived(resultado?.results.some((r) => r.result.ok && r.result.diary === 'failed') ?? false);
   const soSemSuporte = $derived(!!resultado && resultado.code === null && falhas.every((r) => !r.result.ok && r.result.kind === 'unsupported'));
+  const reenviaveis = $derived(falhas.some((r) => !r.result.ok && r.result.kind !== 'unsupported'));
+  // Quantas máquinas o envio teve, não a escolha de agora: trocar a escolha depois não muda o texto do erro.
+  const varias = $derived((resultado?.results.length ?? 0) > 1);
 
   async function copiar(code: string) {
     if (!(await copyText(code))) return;
@@ -156,6 +170,11 @@
           </button>
         </div>
         {#if diarioFalhou}<p class="rep-msg aviso">{m.config_diag_report_diary_failed()}</p>{/if}
+        {#if reenviaveis}
+          <button class="btn primario" onclick={reenviarFalhas} disabled={enviando}>
+            {enviando ? m.config_diag_report_sending() : m.config_diag_report_retry()}
+          </button>
+        {/if}
       {:else}
         {#if maquinas.length > 1}
           <fieldset class="rep-escopo" disabled={enviando}>
@@ -185,10 +204,10 @@
       {/if}
       {#if falhas.length}
         <div class="erro" role="alert">
-          {#if alvos.length > 1}<p>{m.config_diag_report_machines_failed()}</p>{/if}
+          {#if varias}<p>{m.config_diag_report_machines_failed()}</p>{/if}
           <ul class="rep-falhas">
             {#each falhas as f (f.server.id)}
-              <li>{alvos.length > 1 ? m.config_diag_report_machine_failed({ server: f.server.label, reason: motivo(f.result) }) : motivo(f.result)}</li>
+              <li>{varias ? m.config_diag_report_machine_failed({ server: f.server.label, reason: motivo(f.result) }) : motivo(f.result)}</li>
             {/each}
           </ul>
         </div>

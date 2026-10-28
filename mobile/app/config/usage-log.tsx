@@ -47,7 +47,8 @@ function context(line: LinhaDiag): string {
 
 type Failure = { code: string; kind: DiagReportFailureKind };
 type Missed = { server: Server; failure: Failure };
-type Report = { state: 'sending' } | { state: 'done'; code: string | null; diary: 'sent' | 'failed'; missed: Missed[] };
+/** `total`: máquinas do envio, para o texto do erro não mudar com a escolha feita depois. */
+type Report = { state: 'sending' } | { state: 'done'; code: string | null; diary: 'sent' | 'failed'; missed: Missed[]; total: number };
 type Scope = 'all' | 'this' | 'pick';
 
 const CLIENT = `expo ${runtimeVersion ?? 'dev'} ${Platform.OS}`;
@@ -85,19 +86,23 @@ function ReportSection({ server }: { server: Server }) {
     : scope === 'all' ? machines : machines.filter((s) => picked[s.id] ?? s.id === server.id);
 
   const send = async () => {
-    if (report?.state === 'sending' || !targets.length) return;
+    if (report?.state === 'sending') return;
+    // Envio com código e máquinas que não foram: o reenvio vai só a elas, no mesmo código.
+    const prev = report?.state === 'done' && report.code && report.missed.length ? report : null;
+    const to = prev ? prev.missed.map((x) => x.server) : targets;
+    if (!to.length) return;
     const now = ++generation.current;
     setReport({ state: 'sending' });
     setCopied(false);
-    const result = await sendDiagReportAll(targets, { text, client: CLIENT });
+    const result = await sendDiagReportAll(to, { text, client: CLIENT }, prev?.code ?? undefined);
     if (now !== generation.current) return;
     const missed = result.results.flatMap(({ server: s, result: r }) => r.ok ? [] : [{ server: s, failure: { code: r.code, kind: r.kind } }]);
-    const diary = result.results.some(({ result: r }) => r.ok && r.diary === 'failed') ? 'failed' : 'sent';
+    const diary = prev?.diary === 'failed' || result.results.some(({ result: r }) => r.ok && r.diary === 'failed') ? 'failed' : 'sent';
     if (result.code) {
       haptic.success();
-      setText('');
+      if (!missed.length) setText('');
     } else if (missed[0]) toast.erro(failureText(missed[0].failure));
-    setReport({ state: 'done', code: result.code, diary, missed });
+    setReport({ state: 'done', code: result.code, diary, missed, total: prev ? prev.total : to.length });
   };
 
   const copy = async (code: string) => {
@@ -115,6 +120,8 @@ function ReportSection({ server }: { server: Server }) {
   const diaryFailed = report?.state === 'done' && report.diary === 'failed';
   const missed = report?.state === 'done' ? report.missed : [];
   const unsupported = report?.state === 'done' && !report.code && missed.every((x) => x.failure.kind === 'unsupported');
+  const several = report?.state === 'done' && report.total > 1;
+  const retryMissed = !!sentCode && missed.some((x) => x.failure.kind !== 'unsupported');
   return (
     <SectionCard icon="LifeBuoy" title={m.native_settings_diary_report_title()}>
       {many ? (
@@ -165,12 +172,12 @@ function ReportSection({ server }: { server: Server }) {
         ) : null}
         {missed.length ? (
           <View accessibilityRole="alert" style={styles.sent}>
-            {targets.length > 1 ? (
+            {several ? (
               <Text style={[styles.noteText, { color: theme.tokens.status.error }]}>{m.native_settings_diary_report_machines_failed()}</Text>
             ) : null}
             {missed.map((x) => (
               <Text key={x.server.id} style={[styles.noteText, { color: theme.tokens.status.error }]}>
-                {targets.length > 1 ? m.native_settings_diary_report_machine_failed({ server: x.server.label, reason: failureText(x.failure) }) : failureText(x.failure)}
+                {several ? m.native_settings_diary_report_machine_failed({ server: x.server.label, reason: failureText(x.failure) }) : failureText(x.failure)}
               </Text>
             ))}
           </View>
@@ -182,13 +189,14 @@ function ReportSection({ server }: { server: Server }) {
               label={copied ? m.native_settings_diary_report_copied() : m.native_settings_diary_report_copy()}
               onPress={() => { void copy(sentCode); }}
             />
-          ) : (
+          ) : null}
+          {sentCode && !retryMissed ? null : (
             <Pill
               icon={report?.state === 'done' ? 'RefreshCw' : 'Send'}
               label={sending ? m.native_settings_diary_report_sending()
                 : report?.state === 'done' ? m.native_settings_diary_report_retry()
                 : m.native_settings_diary_report_send()}
-              disabled={sending || unsupported || !targets.length}
+              disabled={sending || unsupported || (!retryMissed && !targets.length)}
               onPress={() => { void send(); }}
             />
           )}

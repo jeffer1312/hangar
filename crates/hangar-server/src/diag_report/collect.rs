@@ -409,11 +409,16 @@ pub(crate) async fn sessions(st: &crate::routes::AppState, s: &Scrubber) -> Sess
         let mut out = Vec::new();
         for (key, name, waiting) in counted {
             let mut fact = runtime_fact(snapshots.get(&key).unwrap_or(&Value::Null), waiting, s);
-            if let Ok(Some(target)) = registry.terminal_target(&name).await {
-                let record = target.metadata.config_dir.join("sessions").join(format!("{}.json", target.metadata.agent_pid));
-                fact.native_record = tokio::fs::try_exists(record).await.ok();
-                fact.plugin = registry.plugin().ok().and_then(|plugin| plugin
-                    .pull_status(&crate::terminal_facts::LocalTerminalFacts::binding(&target), std::time::Instant::now()).ok());
+            match registry.terminal_target(&name).await {
+                Ok(Some(target)) => {
+                    let record = target.metadata.config_dir.join("sessions").join(format!("{}.json", target.metadata.agent_pid));
+                    fact.native_record = tokio::fs::try_exists(record).await.ok();
+                    fact.plugin = registry.plugin().ok().and_then(|plugin| plugin
+                        .pull_status(&crate::terminal_facts::LocalTerminalFacts::binding(&target), std::time::Instant::now()).ok());
+                }
+                Ok(None) => {}
+                // O relatório sem a linha do plugin é o que diz "não consegui ler"; o motivo fica no log.
+                Err(error) => tracing::warn!(session = %name, code = %error.code, "relatório: alvo do terminal ilegível"),
             }
             out.push((clean(s, &name, VALUE_MAX), fact));
         }
