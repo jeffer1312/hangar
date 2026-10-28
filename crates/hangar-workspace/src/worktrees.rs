@@ -489,7 +489,7 @@ impl Probe {
     }
 }
 
-/// Arquivos ignorados (pastas nunca) que só existem aqui; cópia idêntica à da principal fica de fora.
+/// Ignorados que serão perdidos: diretórios inteiros e arquivos sem cópia idêntica na principal.
 fn ignored_lost(probe: &mut Probe, path: &str, main: &str) -> Vec<String> {
     let out = probe
         .ok(
@@ -506,7 +506,7 @@ fn ignored_lost(probe: &mut Probe, path: &str, main: &str) -> Vec<String> {
         .unwrap_or_default();
     let mut lost = out
         .split('\0')
-        .filter(|rel| !rel.is_empty() && !rel.ends_with('/'))
+        .filter(|rel| !rel.is_empty())
         .filter(|rel| !same_file(&Path::new(path).join(rel), &Path::new(main).join(rel)))
         .map(str::to_owned)
         .collect::<Vec<_>>();

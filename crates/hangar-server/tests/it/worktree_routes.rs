@@ -54,6 +54,57 @@ fn scene() -> tempfile::TempDir {
 }
 
 #[tokio::test]
+async fn initialized_submodule_and_ignored_directories_require_visible_confirmation() {
+    let dir = scene();
+    let root = hangar_workspace::real(dir.path());
+    let repo = root.join("repo");
+    let path = root.join("with-submodules");
+    let source = root.join("submodule-source");
+    std::fs::create_dir(&source).unwrap();
+    git(&source, &["init", "-b", "main"]);
+    git(&source, &["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "--allow-empty", "-m", "Base"]);
+    for name in ["Hooks", "Src/shared"] {
+        git(&repo, &["-c", "protocol.file.allow=always", "submodule", "add", source.to_str().unwrap(), name]);
+    }
+    std::fs::write(repo.join(".gitignore"), ".claude/\nSrc/bin/\ndocs/\n").unwrap();
+    git(&repo, &["add", ".gitignore"]);
+    git(&repo, &["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "-am", "Submódulos"]);
+    git(&repo, &["worktree", "add", "-b", "with-submodules", path.to_str().unwrap()]);
+    git(&path, &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "Hooks"]);
+    for name in [".claude", "Src/bin", "docs"] {
+        std::fs::create_dir_all(path.join(name)).unwrap();
+        std::fs::write(path.join(name).join("local.txt"), "conteúdo local").unwrap();
+    }
+    let f = fixture(&root, true).await;
+    let c = client();
+    let mut url = reqwest::Url::parse(&format!("http://{}/api/worktrees/detail", f.addr)).unwrap();
+    url.query_pairs_mut().append_pair("path", path.to_str().unwrap());
+    let detail: Value = c.get(url).bearer_auth(OWNER).send().await.unwrap().json().await.unwrap();
+    assert_eq!(detail["dirty"], 0);
+    for name in [".claude/", "Src/bin/", "docs/"] {
+        assert!(detail["ignored"].as_array().unwrap().iter().any(|v| v == name), "{detail}");
+    }
+    for confirm in [false, true] {
+        let response = c.post(format!("http://{}/api/worktrees/delete", f.addr)).bearer_auth(OWNER)
+            .json(&serde_json::json!({"repo":repo,"path":path,"confirm":confirm,"keep_branch":true}))
+            .send().await.unwrap();
+        let status = response.status();
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(status, if confirm { 200 } else { 409 }, "{body}");
+        if !confirm {
+            assert_eq!(std::fs::read_to_string(path.join("docs/local.txt")).unwrap(), "conteúdo local");
+            assert!(path.join("Hooks/.git").exists());
+        } else {
+            assert_eq!(body["removed"], path.to_string_lossy().as_ref());
+            assert_eq!(body["branch_deleted"], false);
+        }
+    }
+    assert!(!path.exists());
+    git(&repo, &["show-ref", "--verify", "refs/heads/with-submodules"]);
+    assert!(repo.join("Hooks/.git").exists());
+}
+
+#[tokio::test]
 async fn residual_detail_and_manual_delete_keep_identity_files_and_branch_until_confirmation() {
     let dir = scene();
     let root = hangar_workspace::real(dir.path());

@@ -8276,6 +8276,7 @@
   "worktree_cleanup_running": "Limpando worktrees",
   "worktree_cleanup_done": "Limpeza concluída",
   "worktree_cleanup_failed": "Falhas na limpeza: {n}",
+  "worktree_result_uncertain": "Não foi possível confirmar o resultado. Atualize a lista de worktrees antes de tentar de novo.",
   "worktree_cleanup_summary": "Concluídas: {feitas}/{total} · Pastas: {pastas} · Registros: {registros}\nEspaço liberado: {tamanho}",
   "worktree_cleanup_background": "Você pode continuar usando o Hangar. A limpeza segue em segundo plano.",
   "worktree_cleanup_connection": "Abrir Conexão",

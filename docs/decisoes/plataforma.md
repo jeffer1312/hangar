@@ -2289,6 +2289,16 @@ locks, sessões e revalidação. Nenhuma prova apaga uma pasta residual do ambie
 
 ### Base publicada e elegibilidade
 
+**Diretórios ignorados na confirmação (28/10/2026):** `ls-files --others --ignored
+--directory` devolve diretórios com `/` no fim. O inventário descartava essas linhas, e uma
+worktree limpa com submódulo inicializado e apenas diretórios ignorados parecia não perder
+nada: o cliente enviava `confirm=false`, e o Git recusava a remoção do submódulo. A lista
+agora conserva os diretórios inteiros; a confirmação existente autoriza seu descarte.
+O teste HTTP usa Git e disco descartáveis, um submódulo inicializado e outro não inicializado:
+o detalhe lista as pastas, a tentativa sem confirmação conserva os arquivos e a confirmação
+conclui preservando a branch. No nativo, resposta de falha conserva o motivo do servidor;
+resultado incerto orienta reconferir a lista de worktrees antes de repetir.
+
 **Regra:** `branch.<branch>.hangar-base` tem prioridade. Sem ela, a base vem da referência
 nomeada de criação no reflog; `HEAD`, hashes e o upstream da própria branch não informam o
 destino. Sem origem recuperável, permanece o fallback para a branch do checkout principal.
