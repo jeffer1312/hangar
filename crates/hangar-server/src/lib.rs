@@ -147,6 +147,9 @@ pub async fn serve_until_with_guest(
     // Lida na subida: no Windows o executável é aberto pela junction, que a troca de versão move.
     let _ = update::running_package();
     let cfg = state.cfg.clone();
+    let remote_browser = state.remote_browser.clone();
+    let browser_dir = state.hangar_dir.join("nav");
+    let browser_list = state.list.clone();
     let transcription = state.transcription.clone();
     let omp_sync = state.omp_sync.clone();
     let codex_logins=state.accounts.codex_logins.clone();
@@ -229,6 +232,7 @@ pub async fn serve_until_with_guest(
         () = stop => Ok(()),
     }
     }.await;
+    remote_browser.shutdown(&browser_dir, &browser_list).await;
     if let Some(service) = omp_sync.get() { service.close().await; }
     transcription.shutdown().await;
     if let Some((stop,task))=refresh_loop {

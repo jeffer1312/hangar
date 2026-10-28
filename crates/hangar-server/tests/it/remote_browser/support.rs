@@ -28,6 +28,11 @@ pub const SECRET: &str = "remote-browser-test-internal";
 
 #[cfg(unix)]
 pub async fn isolated(test: &str, inspect: impl FnOnce(&Path)) -> bool {
+    isolated_with_timeout(test, Duration::from_secs(20), inspect).await
+}
+
+#[cfg(unix)]
+pub async fn isolated_with_timeout(test: &str, deadline: Duration, inspect: impl FnOnce(&Path)) -> bool {
     if std::env::var("HANGAR_REMOTE_BROWSER_TEST").as_deref() == Ok(test) { return false; }
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
@@ -44,7 +49,7 @@ pub async fn isolated(test: &str, inspect: impl FnOnce(&Path)) -> bool {
         .env("CP_CLAUDE_CONFIG_DIRS", home.join(".claude")).env("HANGAR_LIST_DIRS", dirs_json(&home))
         .env("HANGAR_SHARES_FILE", home.join("shares.json"))
         .env("PATH", format!("{}:/usr/bin:/bin", bin.display()));
-    let output = tokio::time::timeout(Duration::from_secs(20), command.output()).await
+    let output = tokio::time::timeout(deadline, command.output()).await
         .expect("processo de ensaio não encerrou").unwrap();
     crate::assert_ran_one(&output.stdout);
     assert!(output.status.success(), "ensaio isolado falhou: {} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));

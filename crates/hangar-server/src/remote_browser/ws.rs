@@ -53,6 +53,10 @@ fn quoted(text: &str) -> String {
     )
 }
 impl Failure {
+    pub(super) fn exception(kind: &str, message: String) -> Self {
+        let repr = format!("{kind}({})", quoted(&message));
+        Self { message, repr, transport_closed: false }
+    }
     pub(super) fn plain(message: impl Into<String>) -> Self {
         let message = message.into();
         let repr = format!("RuntimeError({})", quoted(&message));
@@ -109,11 +113,12 @@ pub async fn public(
     if !crate::share::gate::is_websocket(&req) {
         return crate::routes::pass_any(State(st), ConnectInfo(peer), req).await;
     }
-    let (ip, _) = st.cfg.trusted.resolve(peer.ip(), req.headers());
+    let (ip, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
     let guest = caller(&req)
         .and_then(Caller::grant)
         .map(|grant| grant.sessions.get(&name) == Some(&Kind::Share));
-    if guest == Some(false)
+    if (guest.is_none() && super::login::refused(&st, req.headers(), req.uri().query(), https).await)
+        || guest == Some(false)
         || access::websocket(
             &st.auth,
             &ip,
@@ -205,9 +210,12 @@ async fn serve(st: Arc<AppState>, name: String, req: Request, forwarded: bool) -
     let Ok(upgrade) = WebSocketUpgrade::from_request_parts(&mut parts, &()).await else {
         return StatusCode::BAD_REQUEST.into_response();
     };
+    let Some(connection) = st.remote_browser.connections.enter() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "remote_browser_stopping").into_response();
+    };
     upgrade
         .max_message_size(32 * 1024 * 1024)
-        .on_upgrade(move |socket| run(st, name, life, socket, url, token, sc, width, quality, watcher))
+        .on_upgrade(move |socket| run(st, name, life, socket, url, token, sc, width, quality, watcher, connection))
 }
 fn number(query: Option<&str>, key: &str, minimum: i64, maximum: i64, default: i64) -> i64 {
     let Some(raw) = crate::auth::query_param(query, key) else {
@@ -257,6 +265,7 @@ async fn run(
     width: i64,
     quality: i64,
     watcher: Option<Watcher>,
+    mut connection: super::shutdown::Connection,
 ) {
     let (writer, mut reader) = socket.split();
     let output = Arc::new(Mutex::new(writer));
@@ -266,25 +275,36 @@ async fn run(
         quality,
     }));
     let mut owner = None;
-    let mut cdp = match Cdp::connect(&url, token.as_deref()).await {
-        Ok(cdp) => Some(cdp),
-        Err(error) => {
+    let mut stopping = false;
+    let connected = tokio::select! {
+        connected = Cdp::connect(&url, token.as_deref()) => Some(connected),
+        () = connection.stopped() => { stopping = true; None },
+    };
+    let mut cdp = match connected {
+        None => None,
+        Some(Ok(cdp)) => Some(cdp),
+        Some(Err(error)) => {
             report(&output, &name, error).await;
             None
         }
     };
+    let mut restoring = None;
     if let Some(cdp) = cdp.as_mut() {
-        let result = async {
+        let result = tokio::select! {
+        result = async {
             let mut current = sc["url"].clone();
             if input::truth(&sc["targetId"]) {
-                if let Ok(answer) = cdp.cmd(
+                match cdp.cmd(
                     "Runtime.evaluate",
                     json!({"expression": "location.href", "returnByValue": true}),
                     Duration::from_secs(5),
                 ).await {
-                    if answer["result"]["result"]["value"].as_str().is_some_and(|value| !value.is_empty()) {
-                        current = answer["result"]["result"]["value"].clone();
+                    Ok(answer) => {
+                        if answer["result"]["result"]["value"].as_str().is_some_and(|value| !value.is_empty()) {
+                            current = answer["result"]["result"]["value"].clone();
+                        }
                     }
+                    Err(error) => tracing::debug!(target:"hangar.navsock", "navsock: url atual falhou: {}", error.repr),
                 }
             }
             send(&output, json!({"t": "url", "url": current})).await?;
@@ -299,7 +319,13 @@ async fn run(
                     Ok(())
                 }
             }
-        }.await;
+        } => result,
+        () = connection.stopped() => { stopping = true; Ok(()) },
+        };
+        if stopping {
+            // O Supervisor pode sair antes do prazo de Close do CDP; a devolução começa já.
+            restoring = Some(restore(&st, &name, owner));
+        }
         cdp.close().await;
         if let Err(error) = result {
             report(&output, &name, error).await;
@@ -308,17 +334,24 @@ async fn run(
     let _ = tokio::time::timeout(Duration::from_secs(10), async {
         let mut writer = output.lock().await;
         let _ = writer.send(Message::Close(Some(CloseFrame {
-            code: 1000,
+            code: if connection.is_stopping() { 1012 } else { 1000 },
             reason: "".into(),
         }))).await;
         // O Close recebido já enfileira a resposta, mesmo quando outro envio é recusado.
         let _ = writer.close().await;
     }).await;
     // A devolução sobrevive ao cancelamento da conexão que impôs o tamanho.
+    let restoring = restoring.unwrap_or_else(|| restore(&st, &name, owner));
+    if restoring.await.is_err() {
+        tracing::warn!(target:"hangar.navsock", "navsock {name}: tarefa de devolver layout não terminou");
+    }
+}
+fn restore(st: &AppState, name: &str, owner: Option<u64>) -> tokio::task::JoinHandle<()> {
     let restore = st.remote_browser.clone();
     let dir = st.hangar_dir.join("nav");
     let list = st.list.clone();
-    let _ = tokio::spawn(async move { restore.restore(&dir, &name, owner, &list).await }).await;
+    let name = name.to_owned();
+    tokio::spawn(async move { restore.restore(&dir, &name, owner, &list).await })
 }
 async fn report(output: &Output, name: &str, error: Failure) {
     tracing::warn!(target:"hangar.navsock","navsock {name}: {}",error.repr);

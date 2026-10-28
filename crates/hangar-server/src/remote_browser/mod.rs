@@ -7,3 +7,5 @@ mod cdp;
 mod input;
 mod frames;
 mod shell;
+mod login;
+mod shutdown;

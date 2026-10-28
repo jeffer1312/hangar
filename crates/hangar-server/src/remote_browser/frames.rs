@@ -104,7 +104,7 @@ async fn screenshot(cdp: &Cdp, output: &Output, view: &Arc<Mutex<View>>) -> Resu
         Err(error) if error.transport_closed => {
             return Err(Failure::connection("o navegador desta sessão fechou"));
         }
-        Err(_) => {}
+        Err(error) => tracing::debug!(target:"hangar.navsock", "navsock: print falhou: {}", error.repr),
     }
     tokio::time::sleep(Duration::from_millis(400)).await;
     Ok(())

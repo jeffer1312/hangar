@@ -112,8 +112,8 @@ impl Cdp {
             tokio_tungstenite::connect_async_with_config(request, Some(cfg), false),
         )
         .await
-        .map_err(|_| Failure::timeout())?
-        .map_err(|_| Failure::connection("o navegador desta sessão fechou"))?;
+        .map_err(|_| Failure::exception("TimeoutError", "timed out during opening handshake".into()))?
+        .map_err(|error| opening_failure(error, url))?;
         let (send, mut receive) = mpsc::unbounded_channel();
         let pending: Pending = Arc::default();
         let waiters = pending.clone();
@@ -242,6 +242,25 @@ impl Cdp {
                 let _ = task.await;
             }
         }
+    }
+}
+fn opening_failure(error: tokio_tungstenite::tungstenite::Error, url: &str) -> Failure {
+    use tokio_tungstenite::tungstenite::Error;
+    match error {
+        Error::Http(response) => Failure::exception("InvalidStatus",
+            format!("server rejected WebSocket connection: HTTP {}", response.status().as_u16())),
+        Error::Io(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+            let port = url.parse::<axum::http::Uri>().ok().and_then(|uri| uri.port_u16()).unwrap_or(80);
+            let detail = format!("Connect call failed ('127.0.0.1', {port})");
+            let code = error.raw_os_error().unwrap_or(0);
+            let kind = if cfg!(windows) { "WinError" } else { "Errno" };
+            let mut failure = Failure::exception("ConnectionRefusedError", format!("[{kind} {code}] {detail}"));
+            failure.repr = format!("ConnectionRefusedError({code}, \"{detail}\")");
+            failure
+        }
+        // O erro de handshake não carrega cabeçalhos/corpo: eles podem conter a credencial.
+        Error::Io(error) => Failure::exception("OSError", error.to_string()),
+        other => Failure::exception("InvalidHandshake", other.to_string()),
     }
 }
 impl Drop for Cdp {

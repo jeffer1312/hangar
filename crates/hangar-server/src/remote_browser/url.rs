@@ -30,7 +30,9 @@ pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         }
     } else {
         let (ip,https) = st.cfg.trusted.resolve(peer.ip(),req.headers());
-        match access::http(&st.auth,&ip,req.headers(),req.uri().query(),https,Instant::now()) {
+        if super::login::refused(&st, req.headers(), req.uri().query(), https).await {
+            json_response(StatusCode::FORBIDDEN,detail_body("erro_fora_do_convidado","fora do acesso do convidado",json!({})))
+        } else { match access::http(&st.auth,&ip,req.headers(),req.uri().query(),https,Instant::now()) {
             Ok(()) => serve(&st,req.uri().path()).await,
             Err(AccessError::Unauthorized) => json_response(StatusCode::UNAUTHORIZED,
                 detail_body("erro_nao_autorizado","unauthorized",json!({}))),
@@ -40,7 +42,7 @@ pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
                 response.headers_mut().insert("retry-after",axum::http::HeaderValue::from_static("30"));
                 response
             },
-        }
+        } }
     };
     let mut response = response;
     crate::routes::cors(req.headers(),response.headers_mut());

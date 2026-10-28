@@ -1,0 +1,84 @@
+{
+  "source_commit": "ba2db1021ab7fb801eca50a50f9509dcb825ac7e",
+  "source_sha256": {
+    "backend/app/navsock.py": "76dc90655e1aa7371a8c4ee5a83dd2abf6cf7bd3606929d9a93daf70915b7dc2",
+    "backend/app/navshell.py": "f9dc19c79208868f469ff8cc0384be3a2a83fd1472e55f85d3f3a069641c57fc"
+  },
+  "generator": "/home/jefferson/Projetos/hangar/backend/.venv/bin/python /tmp/generate_hangar_browser_shutdown_reference.py",
+  "python_version": "3.14.8",
+  "websockets_version": "16.0",
+  "isolation": "filho env_clear/HOME/config/cwd temporários; dois servidoresHTTP/WS de loopback próprios; desktop permanece aberto durante parada do servidororiginal",
+  "limits": [
+    "Um caso Linux, sem sessão ou desktop reais.",
+    "Parada normal do Uvicorn original; não representa queda abrupta do processo ou orquestração inteira do Supervisor.",
+    "O prazo5s é limite de conclusão do ensaio responsivo, não reduz timeout45s do controlador."
+  ],
+  "observed": {
+    "events_before_stop": [
+      {
+        "t": "url",
+        "url": "http://contract.test/original"
+      },
+      {
+        "t": "q",
+        "d": "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",
+        "w": 800,
+        "h": 600
+      },
+      {
+        "t": "layout",
+        "resposta": "layout: 900x700"
+      }
+    ],
+    "cmd": [
+      {
+        "authorization": "Bearer remote-browser-contract-desktop",
+        "body": {
+          "chave": "contract::nav-contract",
+          "verbo": "layout",
+          "args": []
+        },
+        "receiver_pid": 123
+      },
+      {
+        "authorization": "Bearer remote-browser-contract-desktop",
+        "body": {
+          "chave": "contract::nav-contract",
+          "verbo": "layout",
+          "args": [
+            "900",
+            "700"
+          ]
+        },
+        "receiver_pid": 123
+      },
+      {
+        "authorization": "Bearer remote-browser-contract-desktop",
+        "body": {
+          "chave": "contract::nav-contract",
+          "verbo": "layout",
+          "args": []
+        },
+        "receiver_pid": 123
+      },
+      {
+        "authorization": "Bearer remote-browser-contract-desktop",
+        "body": {
+          "chave": "contract::nav-contract",
+          "verbo": "layout",
+          "args": [
+            "mobile"
+          ]
+        },
+        "receiver_pid": 123
+      }
+    ],
+    "desktop_layout": "mobile",
+    "client_close": {
+      "code": 1012,
+      "reason": ""
+    },
+    "record_after_stop": null,
+    "viewer_closed_by_test_before_stop": false
+  }
+}

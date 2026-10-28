@@ -25,6 +25,7 @@ pub(super) struct LayoutChange {
 }
 
 pub struct Layouts {
+    pub(super) connections: Arc<super::shutdown::Connections>,
     slots: Mutex<HashMap<String, Slot>>,
     next: AtomicU64,
     pub(super) http: reqwest::Client,
@@ -32,6 +33,7 @@ pub struct Layouts {
 impl Default for Layouts {
     fn default() -> Self {
         Self {
+            connections: Arc::default(),
             slots: Mutex::default(),
             next: AtomicU64::new(1),
             http: reqwest::Client::builder()
@@ -47,6 +49,17 @@ pub(super) fn label(answer: &str) -> Option<&str> {
     answer.strip_prefix("layout:").map(str::trim)
 }
 impl Layouts {
+    pub async fn shutdown(&self, dir: &Path, list: &ListBridge) {
+        self.connections.stop();
+        let slots: Vec<_> = self.slots.lock().unwrap().iter()
+            .map(|(name, slot)| (name.clone(), slot.clone())).collect();
+        let restore = futures_util::future::join_all(slots.into_iter().map(|(name, slot)| async move {
+            let owner = slot.lock().await.as_ref().map(|record| record.owner);
+            self.restore(dir, &name, owner, list).await;
+        }));
+        // Alcança também quem já estava fechando o CDP quando a parada chegou.
+        tokio::join!(self.connections.shutdown(), restore);
+    }
     fn slot(&self, name: &str) -> Slot {
         self.slots
             .lock()
@@ -79,7 +92,7 @@ impl Layouts {
             let original = match record.as_ref().filter(|record| {
                 record.controller == controller
                     && (record.owner == id
-                        || record.life.as_deref().zip(life).is_some_and(|(old, new)| old == new))
+                        || record.life.as_deref().zip(life).is_none_or(|(old, new)| old == new))
             }) {
                 Some(record) => record.original.clone(),
                 None => {
