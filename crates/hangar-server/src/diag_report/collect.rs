@@ -74,10 +74,10 @@ pub(crate) struct DiaryEntry {
 }
 
 impl DiaryEntry {
-    /// `hh:mm:ss evento nível código sessão motivo`; campo vazio vira `-`.
+    /// `MM-DD hh:mm:ss evento nível código sessão motivo`; campo vazio vira `-`.
     pub(crate) fn compact(&self) -> String {
         let dash = |v: &str| if v.is_empty() { "-".to_owned() } else { v.to_owned() };
-        let line = format!("{} {} {} {} {} {}", self.at.format("%H:%M:%S"), dash(&self.event), dash(&self.level),
+        let line = format!("{} {} {} {} {} {}", self.at.format("%m-%d %H:%M:%S"), dash(&self.event), dash(&self.level),
             dash(&self.code), dash(&self.session), self.reason);
         line.trim_end().to_owned()
     }
@@ -178,7 +178,7 @@ pub(crate) fn reduce_server_line(line: &str, since: DateTime<Utc>, s: &Scrubber)
         let value = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(value);
         if LOG_FIELDS.contains(key) { fields.entry(key).or_insert_with(|| tidy(value, VALUE_MAX)); }
     }
-    let mut out = format!("{} {} {}", at.with_timezone(&Local).format("%H:%M:%S"), &c[2], tidy(message, MESSAGE_MAX));
+    let mut out = format!("{} {} {}", at.with_timezone(&Local).format("%m-%d %H:%M:%S"), &c[2], tidy(message, MESSAGE_MAX));
     for key in LOG_FIELDS {
         if let Some(value) = fields.get(key) { out += &format!(" {key}={value}"); }
     }
