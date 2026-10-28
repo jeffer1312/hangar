@@ -1,4 +1,4 @@
-"""Lista de worktrees: o Rust (menos `git` por worktree, em paralelo) sai igual ao `worktrees.py`."""
+"""Paridade com o legado, com o inventário explícito de diretórios ignorados no Rust."""
 import json
 import os
 import shutil
@@ -106,6 +106,10 @@ def _infos(scene):
 
 def _legacy_status(value):
     value = dict(value)
+    if Path(value["path"]).name == "repo-dirty":
+        # O legado omite pastas; o Rust precisa mostrá-las antes de autorizar seu descarte.
+        assert value["ignored"] == [".env", "build/"]
+        value["ignored"] = [".env"]
     reference = f"refs/heads/{value['branch']}" if value["branch"] else "HEAD"
     cwd = value["path"] if value["exists"] else value["repo"]
     expected_head = git_ops._run(cwd, "rev-parse", "--verify", reference).stdout.strip()
@@ -138,7 +142,7 @@ def test_list_matches_python(scene):
     # O cenário cobre cada ramo da situação, para a igualdade acima valer alguma coisa.
     assert by["repo-merged"]["merged"] and not by["repo-squash"]["merged"]
     assert not by["repo-fresh"]["merged"] and not by["repo-dirty"]["merged"]
-    assert by["repo-dirty"]["dirty"] == 2 and by["repo-dirty"]["ignored"] == [".env"]
+    assert by["repo-dirty"]["dirty"] == 2 and by["repo-dirty"]["ignored"] == [".env", "build/"]
     assert by["repo-dirty"]["sessions"] == ["dentro"] and by["repo-dirty"]["closed"] == 1
     assert by["repo-merged"]["closed"] == 1 and by["repo-based"]["sessions"] == ["pela-worktree"]
     assert by["repo-based"]["base"] == "feat-dirty" and by["repo-based"]["behind"] == 1
