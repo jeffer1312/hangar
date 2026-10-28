@@ -296,8 +296,9 @@ impl AccountService {
                     found.push(resolved(&path));
                 }
             }
+            // Empate (sem `projects`) desempata pelo caminho: a ordem do disco muda de máquina para máquina.
             found.sort_by_cached_key(|path| {
-                std::cmp::Reverse(projects_mtime(&path.join("projects")))
+                (std::cmp::Reverse(projects_mtime(&path.join("projects"))), path.clone())
             });
             let base = resolved(&self.env.claude_base);
             if !found.contains(&base) && !storage::pending(&base) {
