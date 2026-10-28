@@ -1142,7 +1142,7 @@ $modulos = "$raiz\frontend\node_modules"
 $marcaArq = "$raiz\frontend\dist\.cp-build-stamp"
 
 # MESMA regra do services-setup.sh do Linux: instalacao NOVA nao registra servico de frontend — o
-# backend ja serve o `frontend\dist` na raiz (api.py, `_UIStatic`), entao a tarefa era um SEGUNDO
+# servidor Rust já serve o `frontend\dist` na raiz, então a tarefa era um SEGUNDO
 # servidor pro mesmo arquivo. Quem JA tem a tarefa registrada continua com ela: trocar a porta muda
 # a ORIGEM, e origem nova = localStorage vazio (cp_servers com os tokens, tema, layout do canvas).
 # Ninguem perde configuracao por causa de um `git pull`. Decidido AQUI, e nao no passo 7, porque o

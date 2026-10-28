@@ -19,6 +19,10 @@ impl Fixture {
     }
 
     async fn start_with(upstream: std::net::SocketAddr) -> Self {
+        Self::start_router(upstream, false).await
+    }
+
+    async fn start_router(upstream: std::net::SocketAddr, private: bool) -> Self {
         let home = tempfile::tempdir().unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -30,7 +34,7 @@ impl Fixture {
             ("HOME".into(), home.path().to_string_lossy().into_owned()),
             ("USERPROFILE".into(), home.path().to_string_lossy().into_owned()),
         ].into()));
-        let router = hangar_server::routes::router(Arc::new(state));
+        let router = if private { hangar_server::routes::terminal_router(Arc::new(state)) } else { hangar_server::routes::router(Arc::new(state)) };
         let task = tokio::spawn(async move {
             axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap();
         });
@@ -110,6 +114,7 @@ async fn revalidation_with_the_etag_is_a_304() {
     let etag = fixture.get("/").await.headers()["etag"].clone();
     let again = reqwest::Client::new().get(format!("{}/", fixture.base)).header("if-none-match", etag).send().await.unwrap();
     assert_eq!(again.status(), 304);
+    assert_eq!(again.headers()["cache-control"], "no-cache");
 }
 
 #[tokio::test]
@@ -142,7 +147,7 @@ async fn the_setting_is_owner_only_and_validated() {
 }
 
 #[tokio::test]
-async fn a_missing_ui_folder_goes_to_python_as_before() {
+async fn a_missing_ui_folder_is_a_rust_404() {
     let python = axum::Router::new().fallback(|| async { "python" });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream = listener.local_addr().unwrap();
@@ -150,8 +155,8 @@ async fn a_missing_ui_folder_goes_to_python_as_before() {
     let fixture = Fixture::start_with(upstream).await;
     write(&fixture.root().join("manifest.json"), &json!({"version": "0.1.0.1", "commit": "c", "channel": "main", "dist_key": KEY}).to_string());
     let index = fixture.get("/").await;
-    assert_eq!(index.status(), 200);
-    assert_eq!(index.text().await.unwrap(), "python");
+    assert_eq!(index.status(), 404);
+    assert_eq!(index.json::<Value>().await.unwrap()["detail"], "Not Found");
     task.abort();
 }
 
@@ -164,7 +169,7 @@ async fn revalidation_accepts_lists_weak_tags_and_star_and_gzip_has_its_own_etag
     let get = |headers: Vec<(&'static str, String)>| raw_get(address.clone(), "/assets/big.js", headers);
     let plain = get(vec![]).await;
     assert_eq!(plain.0, 200);
-    assert_eq!(plain.1["accept-ranges"], "none");
+    assert_eq!(plain.1["accept-ranges"], "bytes");
     assert_eq!(plain.1["vary"], "Accept-Encoding");
     assert!(!plain.1.contains_key("content-encoding"));
     let plain_tag = plain.1["etag"].clone();
@@ -310,4 +315,108 @@ async fn fetch_refuses_a_key_that_is_not_a_sha256_and_a_key_never_published() {
     assert_eq!(hangar_server::ui::fetch_from(&client, &base, KEY, ui.path()).await.unwrap_err().code, "ui_key_not_published");
     assert_eq!(entries(ui.path()), Vec::<String>::new());
     task.abort();
+}
+
+#[tokio::test]
+async fn static_python_contract() {
+    let fixture = Fixture::start().await;
+    let data: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/web_static/reference.json")).unwrap();
+    for (name, content) in data["files"].as_object().unwrap() {
+        let path = fixture.root().join("frontend/dist").join(name);
+        write(&path, content.as_str().unwrap());
+        std::fs::File::options().write(true).open(path).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1700000000))).unwrap();
+    }
+    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    for case in data["cases"].as_array().unwrap() {
+        let mut request = client.request(case["method"].as_str().unwrap().parse().unwrap(), format!("{}{}",fixture.base,case["path"].as_str().unwrap())).header("accept-encoding","identity");
+        for (k,v) in case["headers"].as_object().unwrap() { request=request.header(k,v.as_str().unwrap()); }
+        let response=request.send().await.unwrap();
+        assert_eq!(response.status().as_u16(),case["status"].as_u64().unwrap() as u16,"{}",case["name"]);
+        for (k,v) in case["response_headers"].as_object().unwrap() {
+            let boundary=response.headers().get("content-type").and_then(|h|h.to_str().ok()).and_then(|h|h.split_once("boundary=")).map(|(_,b)|b);
+            let expected=v.as_str().unwrap().replace("http://testserver",&fixture.base).replace("BOUNDARY",boundary.unwrap_or("BOUNDARY"));
+            assert_eq!(response.headers().get(k).and_then(|h|h.to_str().ok()),Some(expected.as_str()),"{}: {k}",case["name"]);
+        }
+        let boundary=response.headers().get("content-type").and_then(|h|h.to_str().ok()).and_then(|h|h.split_once("boundary=")).map(|(_,b)|b.to_owned());
+        let mut body=response.text().await.unwrap();
+        if let Some(boundary)=boundary { body=body.replace(&boundary,"BOUNDARY"); }
+        assert_eq!(body,case["body"].as_str().unwrap(),"{}",case["name"]);
+    }
+    fixture.task.abort();
+    while !fixture.task.is_finished() { tokio::task::yield_now().await; }
+}
+
+#[tokio::test]
+async fn static_missing_and_symlinks_never_reach_python_and_replacement_is_live() {
+    let fixture = Fixture::start().await;
+    assert_eq!(fixture.get("/").await.status(),404);
+    let dist=fixture.root().join("frontend/dist");
+    write(&dist.join("index.html"),"primeiro");
+    assert_eq!(fixture.get("/").await.text().await.unwrap(),"primeiro");
+    write(&dist.join("index.html"),"segundo");
+    assert_eq!(fixture.get("/").await.text().await.unwrap(),"segundo");
+    write(&dist.join("404.html"),"ausente");
+    let missing=fixture.get("/unknown").await;
+    assert_eq!(missing.status(),404);
+    assert_eq!(missing.text().await.unwrap(),"ausente");
+    #[cfg(unix)] {
+        write(&fixture.root().join("secret.txt"),"segredo");
+        std::os::unix::fs::symlink(fixture.root().join("secret.txt"),dist.join("escape.txt")).unwrap();
+        let escaped = fixture.get("/escape.txt").await;
+        assert_eq!(escaped.status(),404);
+        assert_eq!(escaped.text().await.unwrap(),"ausente");
+    }
+    fixture.task.abort();
+    while !fixture.task.is_finished() { tokio::task::yield_now().await; }
+}
+
+#[test]
+fn static_external_paths_and_ranges_do_not_panic() {
+    use proptest::prelude::*;
+    let runtime=tokio::runtime::Runtime::new().unwrap();
+    let fixture=runtime.block_on(Fixture::start());
+    write(&fixture.root().join("frontend/dist/assets/app.js"),"0123456789");
+    let mut runner=proptest::test_runner::TestRunner::new(proptest::test_runner::Config::with_cases(48));
+    runner.run(&("[a-zA-Z0-9.%/_:-]{0,96}","[a-z0-9=, -]{0,128}"),|(path,range)| {
+        let response=runtime.block_on(fixture.get(&format!("/assets/{path}")));
+        prop_assert!(!response.status().is_server_error());
+        let response=runtime.block_on(reqwest::Client::new().get(format!("{}/assets/app.js",fixture.base)).header("range",range).send()).unwrap();
+        prop_assert!([200,206,400,416].contains(&response.status().as_u16()));
+        Ok(())
+    }).unwrap();
+    fixture.task.abort();
+    runtime.block_on(async { while !fixture.task.is_finished() { tokio::task::yield_now().await; } });
+}
+
+#[tokio::test]
+async fn static_private_transport_is_authenticated_and_never_forwards() {
+    let fixture=Fixture::start_router(crate::refused_address(),true).await;
+    write(&fixture.root().join("frontend/dist/sub/index.html"),"sub");
+    let client=reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    let request=||client.get(format!("{}/__hangar_server/forwarded?x=1",fixture.base))
+        .header("x-hangar-path","/sub").header("x-hangar-static-origin","https://connect.example");
+    assert_eq!(request().send().await.unwrap().status(),404);
+    let response=request().header("x-hangar-internal","fixture-internal").send().await.unwrap();
+    assert_eq!(response.status(),307);
+    assert_eq!(response.headers()["location"],"https://connect.example/sub/?x=1");
+    assert_eq!(request().header("x-hangar-internal","fixture-internal").header("x-hangar-forwarded-guest","1").send().await.unwrap().status(),404);
+    let missing=client.get(format!("{}/__hangar_server/forwarded",fixture.base)).header("x-hangar-path","/missing")
+        .header("x-hangar-internal","fixture-internal").send().await.unwrap();
+    assert_eq!(missing.status(),404);
+    fixture.task.abort();
+    while !fixture.task.is_finished() { tokio::task::yield_now().await; }
+}
+
+/// Sonda de uso HTTP isolada: o roteiro de medição encerra por SIGINT e espera a limpeza.
+#[tokio::test]
+#[ignore = "Executada pelo roteiro fixtures/contract/web_static/measure.py"]
+async fn static_http_probe() {
+    let fixture=Fixture::start().await;
+    write(&fixture.root().join("frontend/dist/index.html"),"<p>tela</p>");
+    write(&fixture.root().join("frontend/dist/assets/app.js"),&"const value = 1;\n".repeat(4096));
+    assert_eq!(fixture.get("/").await.status(),200);
+    println!("STATIC_PROBE {}",fixture.base);
+    tokio::signal::ctrl_c().await.unwrap();
+    fixture.task.abort();
+    while !fixture.task.is_finished() { tokio::task::yield_now().await; }
 }

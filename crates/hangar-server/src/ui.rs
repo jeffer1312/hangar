@@ -77,104 +77,198 @@ fn manifest_key(root: &Path) -> Option<String> {
     manifest.get("dist_key")?.as_str().filter(|k| valid_key(k)).map(str::to_owned)
 }
 
-/// Fallback da 8765: serve o que é da tela e repassa o resto ao Python.
-pub async fn fallback(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if matches!(*req.method(), Method::GET | Method::HEAD)
-        && let Some(rel) = relative(req.uri().path())
-    {
-        let (home, headers) = (st.accounts.env.home.clone(), req.headers().clone());
-        if let Ok(Some(resp)) = tokio::task::spawn_blocking(move || serve(&home, &rel, &headers)).await {
-            return resp;
+/// Caminhos da tela, inclusive recusas de método e arquivo ausente, pertencem ao Rust.
+pub fn matches(_method: &Method, path: &str) -> bool {
+    let decoded = percent_encoding::percent_decode_str(path).decode_utf8_lossy();
+    let path = decoded.as_ref();
+    !["/api", "/internal", "/__hangar_server", "/mcp", "/convite", "/par", "/docs", "/redoc", "/openapi.json"].iter()
+        .any(|p| path == *p || path.strip_prefix(p).is_some_and(|rest| rest.starts_with('/')))
+}
+
+pub async fn fallback(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, mut req: Request) -> Response {
+    if matches(req.method(), req.uri().path()) {
+        req.headers_mut().remove("x-hangar-static-origin");
+        let scheme = if gate(&st, peer, &req).0.https { "https" } else { "http" };
+        if let Some(origin) = req.headers().get(header::HOST).and_then(|v|v.to_str().ok())
+            .and_then(|host|format!("{scheme}://{host}").parse::<HeaderValue>().ok()) {
+            req.headers_mut().insert("x-hangar-static-origin",origin);
         }
+        return serve_request(&st, req).await;
     }
     crate::routes::pass_any(State(st), ConnectInfo(peer), req).await
 }
 
-/// Componentes do caminho pedido; `None` para a API e para caminho que sairia da pasta.
-fn relative(path: &str) -> Option<Vec<String>> {
-    let api = ["/api", "/internal", "/__hangar_server", "/mcp"].iter()
-        .any(|p| path == *p || path.strip_prefix(p).is_some_and(|rest| rest.starts_with('/')));
-    if api { return None; }
-    let decoded = percent_encoding::percent_decode_str(path).decode_utf8().ok()?;
-    let parts: Vec<String> = decoded.split('/').filter(|c| !c.is_empty()).map(str::to_owned).collect();
-    let safe = parts.iter().all(|c| c != "." && c != ".." && !c.contains(['\\', ':', '\0']));
-    safe.then_some(parts)
-}
-
-/// `None` = não é da tela (o Python responde). Desligada, a raiz diz o motivo; sem a pasta, a raiz
-/// segue ao Python como antes e o motivo vai só ao log.
-fn serve(home: &Path, rel: &[String], headers: &HeaderMap) -> Option<Response> {
-    let dir = dist_dir(home)?;
-    let mut file = rel.iter().fold(dir, |p, c| p.join(c));
-    if file.is_dir() {
-        file = file.join("index.html");
-    }
-    let exists = file.is_file();
-    if !exists && !rel.is_empty() {
-        return None;
-    }
-    let on = enabled(home).unwrap_or_else(|e| {
-        tracing::warn!("web-ui.json ilegível, tela web segue ligada: {e}");
-        true
-    });
-    if !on {
-        let mut resp = detail(StatusCode::NOT_FOUND, "web_ui_disabled", "a tela web está desligada nesta máquina", json!({}));
-        cors(headers, resp.headers_mut());
-        return Some(resp);
-    }
-    if !exists {
-        tracing::warn!(code = "web_ui_missing", file = %file.display(), "tela web ausente, a raiz segue ao Python");
-        return None;
-    }
-    file_response(&file, headers)
-}
-
-/// Como o `_UIStatic` do Python: HTML revalida sempre (`no-cache` com ETag), `assets/` tem hash no
-/// nome e é imutável; o resto sem diretiva.
-fn file_response(file: &Path, headers: &HeaderMap) -> Option<Response> {
-    let meta = std::fs::metadata(file).ok()?;
-    let modified = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).unwrap_or_default();
-    let cache = if file.extension().is_some_and(|e| e == "html") {
-        Some("no-cache")
-    } else if file.parent().and_then(Path::file_name).is_some_and(|n| n == "assets") {
-        Some("public, max-age=31536000, immutable")
-    } else {
-        None
+/// O repasse privado chega aqui diretamente; nenhuma falha devolve o pedido ao Python.
+pub(crate) async fn serve_request(st: &AppState, req: Request) -> Response {
+    if let Some(response) = crate::share::gate::preflight(&req) { return response; }
+    let (home, method, uri, headers) = (st.accounts.env.home.clone(), req.method().clone(), req.uri().clone(), req.headers().clone());
+    let cors_headers = headers.clone();
+    let head = method == Method::HEAD;
+    let mut response = match tokio::task::spawn_blocking(move || serve(&home, &method, &uri, &headers)).await {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(code="web_ui_read_failed", "leitura da tela web falhou: {error}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
     };
-    let media = mime_guess::from_path(file).first_or_octet_stream().to_string();
-    let media = if media.starts_with("text/") { format!("{media}; charset=utf-8") } else { media };
-    let mut resp = Response::new(Body::empty());
-    resp.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_str(&media).ok()?);
-    // O corpo sai antes da tag: a versão gzip é outra representação e tem tag própria.
-    let body = maybe_gzip(headers, resp.headers_mut(), std::fs::read(file).ok()?);
-    let gz = if resp.headers().contains_key(header::CONTENT_ENCODING) { "-gz" } else { "" };
-    let etag = format!("\"{:x}-{:x}{gz}\"", modified.as_nanos(), meta.len());
-    if not_modified(headers, &etag) {
-        let kept = std::mem::take(resp.headers_mut());
-        resp = StatusCode::NOT_MODIFIED.into_response();
-        *resp.headers_mut() = kept;
-        resp.headers_mut().remove(header::CONTENT_TYPE);
-        resp.headers_mut().remove(header::CONTENT_ENCODING);
-    } else {
-        *resp.body_mut() = Body::from(body);
+    cors(&cors_headers, response.headers_mut());
+    if head { *response.body_mut() = Body::empty(); }
+    response
+}
+
+fn static_error(status: StatusCode, message: &str) -> Response {
+    json_response(status, json!({"detail":message}))
+}
+
+fn filesystem_error(error: io::Error) -> Response {
+    #[cfg(unix)]
+    let too_long = error.raw_os_error() == Some(libc::ENAMETOOLONG);
+    #[cfg(windows)]
+    let too_long = error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_FILENAME_EXCED_RANGE as i32);
+    #[cfg(not(any(unix, windows)))]
+    let too_long = false;
+    if too_long { return static_error(StatusCode::NOT_FOUND, "Not Found"); }
+    match error.kind() {
+        io::ErrorKind::NotFound | io::ErrorKind::InvalidInput | io::ErrorKind::NotADirectory => static_error(StatusCode::NOT_FOUND,"Not Found"),
+        io::ErrorKind::PermissionDenied => static_error(StatusCode::UNAUTHORIZED,"Unauthorized"),
+        _ => {
+            tracing::warn!(code="web_ui_read_failed", "arquivo da tela não pôde ser lido: {error}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+        }
     }
-    let out = resp.headers_mut();
-    out.insert(header::ETAG, HeaderValue::from_str(&etag).ok()?);
-    out.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
-    out.insert(header::ACCEPT_RANGES, HeaderValue::from_static("none"));
-    if let Some(cache) = cache {
-        out.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+}
+
+fn relative(path: &str) -> Option<Vec<String>> {
+    let decoded = percent_encoding::percent_decode_str(path).decode_utf8().ok()?;
+    let mut parts = Vec::new();
+    for part in decoded.split('/') {
+        match part {
+            "" | "." => {},
+            ".." => { parts.pop()?; },
+            other if other.contains(['\\', ':', '\0']) => return None,
+            other => parts.push(other.to_owned()),
+        }
     }
-    cors(headers, out);
-    Some(resp)
+    Some(parts)
+}
+
+fn contained(root: &Path, file: &Path) -> io::Result<PathBuf> {
+    let real = file.canonicalize()?;
+    if real.starts_with(root) { Ok(real) } else { Err(io::ErrorKind::NotFound.into()) }
+}
+
+fn serve(home: &Path, method: &Method, uri: &axum::http::Uri, headers: &HeaderMap) -> Response {
+    if !matches!(*method, Method::GET | Method::HEAD) { return static_error(StatusCode::METHOD_NOT_ALLOWED,"Method Not Allowed"); }
+    let Some(parts) = relative(uri.path()) else { return static_error(StatusCode::NOT_FOUND,"Not Found"); };
+    if !enabled(home).unwrap_or_else(|error| { tracing::warn!("web-ui.json ilegível: {error}"); true }) {
+        return detail(StatusCode::NOT_FOUND,"web_ui_disabled","a tela web está desligada nesta máquina",json!({}));
+    }
+    let Some(dir) = dist_dir(home) else { return static_error(StatusCode::NOT_FOUND,"Not Found"); };
+    let root = match dir.canonicalize() { Ok(root) => root, Err(error) => return filesystem_error(error) };
+    let requested = parts.iter().fold(root.clone(), |p,c| p.join(c));
+    let selected = contained(&root, &requested).and_then(|file| {
+        if file.is_dir() { contained(&root,&file.join("index.html")).map(|index|(index,true)) }
+        else { Ok((file,false)) }
+    });
+    let (file, directory) = match selected {
+        Ok(found) => found,
+        Err(error) if matches!(error.kind(),io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => {
+            if let Ok(file) = contained(&root,&root.join("404.html")) {
+                return file_response(&file, headers, true).unwrap_or_else(filesystem_error);
+            }
+            return static_error(StatusCode::NOT_FOUND,"Not Found");
+        }
+        Err(error) => return filesystem_error(error),
+    };
+    if directory && !uri.path().ends_with('/') {
+        let origin = headers.get("x-hangar-static-origin").and_then(|v|v.to_str().ok()).map(str::to_owned)
+            .or_else(|| headers.get(header::HOST).and_then(|v|v.to_str().ok()).map(|host|format!("http://{host}"))).unwrap_or_default();
+        let query = uri.query().map(|q|format!("?{q}")).unwrap_or_default();
+        let location = format!("{origin}{}/{query}",uri.path());
+        return (StatusCode::TEMPORARY_REDIRECT, [(header::LOCATION,location)]).into_response();
+    }
+    file_response(&file,headers,false).unwrap_or_else(filesystem_error)
+}
+
+fn file_response(path: &Path, headers: &HeaderMap, missing: bool) -> io::Result<Response> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() { return Err(io::ErrorKind::NotFound.into()); }
+    let modified = meta.modified()?.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let last = chrono::DateTime::<chrono::Utc>::from_timestamp(modified.as_secs() as i64,0)
+        .map(|t|t.format("%a, %d %b %Y %H:%M:%S GMT").to_string()).unwrap_or_default();
+    let guessed = mime_guess::from_path(path).first_or_octet_stream().to_string();
+    let media = match path.extension().and_then(|e| e.to_str()) {
+        Some("js" | "mjs") => "text/javascript",
+        Some("ico") => "image/vnd.microsoft.icon",
+        _ => &guessed,
+    };
+    let media = if media.starts_with("text/") { format!("{media}; charset=utf-8") } else { media.into() };
+    let mut response = Response::new(Body::empty());
+    response.headers_mut().insert(header::CONTENT_TYPE,media.parse().unwrap());
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let size = bytes.len() as u64;
+    // Range usa a representação original; o gzip conserva o validador próprio já publicado.
+    if !headers.contains_key(header::RANGE) { bytes = maybe_gzip(headers,response.headers_mut(),bytes); }
+    let gz = if response.headers().contains_key(header::CONTENT_ENCODING) { "-gz" } else { "" };
+    let etag = format!("\"{:x}-{:x}{gz}\"",modified.as_nanos(),size);
+    response.headers_mut().insert(header::ETAG,etag.parse().unwrap());
+    response.headers_mut().insert(header::LAST_MODIFIED,last.parse().unwrap());
+    response.headers_mut().insert(header::ACCEPT_RANGES,HeaderValue::from_static("bytes"));
+    response.headers_mut().insert(header::VARY,HeaderValue::from_static("Accept-Encoding"));
+    if !missing {
+        if path.extension().is_some_and(|e|e=="html") { response.headers_mut().insert(header::CACHE_CONTROL,HeaderValue::from_static("no-cache")); }
+        else if path.parent().and_then(Path::file_name).is_some_and(|n|n=="assets") { response.headers_mut().insert(header::CACHE_CONTROL,HeaderValue::from_static("public, max-age=31536000, immutable")); }
+        let fresh = if headers.contains_key(header::IF_NONE_MATCH) { not_modified(headers,&etag) }
+            else { headers.get(header::IF_MODIFIED_SINCE).and_then(|v|v.to_str().ok()).and_then(|s|chrono::DateTime::parse_from_rfc2822(s).ok())
+                .is_some_and(|t| t.timestamp()>=modified.as_secs() as i64) };
+        if fresh {
+            *response.status_mut()=StatusCode::NOT_MODIFIED;
+            response.headers_mut().remove(header::CONTENT_TYPE);
+            response.headers_mut().remove(header::CONTENT_ENCODING);
+            response.headers_mut().remove(header::ACCEPT_RANGES);
+            response.headers_mut().remove(header::LAST_MODIFIED);
+            return Ok(response);
+        }
+    }
+    if missing { *response.status_mut()=StatusCode::NOT_FOUND; }
+    if let Some(range) = headers.get(header::RANGE).and_then(|v|v.to_str().ok())
+        .filter(|_|headers.get(header::IF_RANGE).is_none_or(|v|v==etag.as_str() || v==last.as_str())) {
+        use crate::workspace_routes::RangeError;
+        let ranges = match crate::workspace_routes::ranges(range,size) {
+            Ok(ranges) => ranges,
+            Err(RangeError::Malformed(message)) => return Ok((StatusCode::BAD_REQUEST,[(header::CONTENT_TYPE,"text/plain; charset=utf-8")],message).into_response()),
+            Err(RangeError::Unsatisfiable) => return Ok((StatusCode::RANGE_NOT_SATISFIABLE,[(header::CONTENT_RANGE,format!("bytes */{size}")),(header::CONTENT_TYPE,"text/plain; charset=utf-8".into())],"").into_response()),
+        };
+        *response.status_mut()=StatusCode::PARTIAL_CONTENT;
+        if ranges.len()==1 {
+            let (start,end)=ranges[0];
+            response.headers_mut().insert(header::CONTENT_RANGE,format!("bytes {start}-{}/{}",i128::from(end)-1,size).parse().unwrap());
+            bytes=bytes[start as usize..end as usize].to_vec();
+        } else {
+            let boundary="hangar-static-range";
+            let mut multipart=Vec::new();
+            for (start,end) in ranges {
+                multipart.extend_from_slice(format!("--{boundary}\r\nContent-Type: {media}\r\nContent-Range: bytes {start}-{}/{}\r\n\r\n",i128::from(end)-1,size).as_bytes());
+                multipart.extend_from_slice(&bytes[start as usize..end as usize]);
+                multipart.extend_from_slice(b"\r\n");
+            }
+            multipart.extend_from_slice(format!("--{boundary}--").as_bytes());
+            bytes=multipart;
+            response.headers_mut().insert(header::CONTENT_TYPE,format!("multipart/byteranges; boundary={boundary}").parse().unwrap());
+        }
+    }
+    response.headers_mut().insert(header::CONTENT_LENGTH,bytes.len().to_string().parse().unwrap());
+    *response.body_mut()=Body::from(bytes);
+    Ok(response)
 }
 
 /// `If-None-Match` em comparação fraca: lista separada por vírgula, `W/` e `*`.
 fn not_modified(headers: &HeaderMap, etag: &str) -> bool {
-    headers.get_all(header::IF_NONE_MATCH).iter().filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
-        .map(|t| t.trim())
-        .any(|t| t == "*" || t.trim_start_matches("W/") == etag)
+    headers.get_all(header::IF_NONE_MATCH).iter().filter_map(|v|v.to_str().ok()).flat_map(|v|v.split(','))
+        .any(|v|v.trim()=="*" || v.trim().trim_start_matches("W/")==etag)
 }
 
 /// `GET`/`PUT /api/web-ui` com `{"web_ui": bool}`: só o dono.

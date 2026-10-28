@@ -4064,7 +4064,7 @@ export async function applyConfigSyncForServer(s: Server, items: readonly Config
 
 // Compartilhar sessão (dono). Todas no servidor ATIVO: a Sidebar usa `withServer`.
 /** O link do Funnel só volta depois de abrir de fora (o servidor confere até 3 min); 404/405 =
- * backend sem o Rust (em produção o StaticFiles do Python responde 405 ao POST). */
+ * backend antigo sem essa rota. */
 export async function createShare(name: string, local = false, server?: Server | null, signal?: AbortSignal): Promise<ShareCreated> {
   return postFunnel(`/api/sessions/${encodeURIComponent(name)}/share${local ? '?local=true' : ''}`, undefined, server, signal, true);
 }

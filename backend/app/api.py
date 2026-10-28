@@ -22,7 +22,6 @@ from typing import Annotated, Literal, Optional
 from fastapi import FastAPI, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import ClientDisconnect
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -8347,52 +8346,6 @@ async def tts_audio(h: str):
     return FileResponse(caminho, media_type=media_type)
 
 
-# ── Interface (dist do frontend) ────────────────────────────────────────────────────────────────
-# POR ÚLTIMO, depois de TODAS as rotas: o mount na raiz casa qualquer caminho, então registrado
-# antes engoliria /api. Serve o build do Vite — arquivos estáticos comuns; o Vite em si não roda
-# aqui e não precisa. Com isto o 8765 entrega tela E API num endereço só, e o servidor de
-# desenvolvimento deixa de ser infraestrutura: vira ferramenta de quem mexe no layout.
-#
-# Medido em 05/08/2026: o `tailscale serve` publicava só o 5173, então parar o front (um `npm run
-# dev`, que nem servia a tela usada — ela vem da VPS) derrubava a API do celular junto, com 502 em
-# /api/sessions/events e o backend vivo o tempo todo.
-#
-# Ausente = instalação com --no-frontend, ou repo sem build. Sobe igual, só não serve tela.
-class _UIStatic(StaticFiles):
-    """`index.html` sempre revalida; o resto (nome com hash) segue cacheável à vontade.
-
-    O `StaticFiles` manda só `etag`/`last-modified`, sem `cache-control` — e sem essa diretiva o
-    navegador aplica FRESCOR HEURÍSTICO: serve o `index.html` que ele guardou sem nem perguntar ao
-    servidor. Como o nome dos bundles tem hash, a página velha continua pedindo o CSS/JS velho: o
-    build novo está no disco, servido corretamente, e a tela não muda. Fica parecendo bug de CSS.
-
-    Medido em 10/08/2026: uma aba NOVA em 127.0.0.1:8765 carregou `index-DYyp82gq.css` enquanto
-    `curl /` na mesma máquina entregava `index-CDPetMR_.css`; só `reloadIgnoringCache` consertou.
-    Custou uma investigação inteira de "costura vertical na sidebar" que já estava consertada no
-    código. A janela do Electron carrega deste mesmo endereço, então ela sofria igual.
-
-    `no-cache` NÃO é `no-store`: o arquivo continua guardado, só volta a perguntar antes de usar —
-    e com o ETag a resposta vira um 304 de algumas dezenas de bytes. Os assets ficam de fora de
-    propósito; o hash no nome já os torna imutáveis, e revalidar cada um seria pagar ida e volta
-    por arquivo sem ganhar nada.
-
-    Decide pelo CAMINHO, não pelo `content-type` da resposta pronta: quando o pedido chega com
-    `If-None-Match` batendo, o starlette devolve um `NotModifiedResponse`, que copia só uma lista
-    fixa de headers e NÃO inclui o `content-type` — olhar o header ali deixaria justamente a
-    resposta de revalidação sem diretiva nenhuma. Navegador nenhum regride por isso (o 304 mescla
-    com o que ele já guardou), mas um proxy na frente do backend, sim — e tem um: a tela do celular
-    passa por Traefik.
-    """
-
-    def file_response(self, full_path, *args, **kwargs) -> Response:  # type: ignore[no-untyped-def]
-        resp = super().file_response(full_path, *args, **kwargs)
-        if str(full_path).endswith(".html"):
-            resp.headers["cache-control"] = "no-cache"
-        elif Path(full_path).parent.name == "assets":
-            resp.headers["cache-control"] = "public, max-age=31536000, immutable"
-        return resp
-
-
 # O MCP `hangar` é do Rust; sem ele, o código próprio. Antes do estático em "/", que responderia 405.
 @app.api_route("/mcp", methods=["GET", "POST", "DELETE"], dependencies=[Depends(require_auth)])
 @app.api_route("/mcp/", methods=["GET", "POST", "DELETE"], dependencies=[Depends(require_auth)])
@@ -8400,6 +8353,12 @@ async def mcp_needs_rust():
     raise HTTPException(503, detail=erro("mcp_needs_rust_server", "o MCP do Hangar precisa do servidor Rust"))
 
 
-_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
-if _DIST.is_dir():
-    app.mount("/", _UIStatic(directory=_DIST, html=True), name="ui")
+@app.api_route("/{path:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+async def web_static_forward(path: str, request: Request):
+    """A tela nas portas Python vem do Rust; as rotas registradas têm precedência."""
+    from app import account_bridge
+    if path.split("/", 1)[0] in {"api", "internal", "__hangar_server", "mcp", "convite", "par", "docs", "redoc", "openapi.json"}:
+        raise HTTPException(404, "Not Found")
+    if account_bridge.owner_mode() == "python":
+        return JSONResponse({"detail": {"code": "web_ui_needs_rust_server"}}, status_code=503)
+    return await account_bridge.forward_stream(request, guest=False, static_origin=True)

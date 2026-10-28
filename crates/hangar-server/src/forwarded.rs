@@ -20,7 +20,7 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     // O Starlette manda o caminho já decodificado: cada segmento volta a ser escapado, senão um
     // nome de sessão com espaço não vira URI e um `%` seria decodificado duas vezes.
     let Some(path) = req.headers().get("x-hangar-path").and_then(|v| std::str::from_utf8(v.as_bytes()).ok())
-        .filter(|p| p.starts_with("/api/"))
+        .filter(|p| p.starts_with("/api/") || p.starts_with('/') && crate::ui::matches(req.method(), p))
         .map(|p| p.split('/').map(crate::groups::exit::segment).collect::<Vec<_>>().join("/"))
     else {
         return StatusCode::BAD_REQUEST.into_response();
@@ -36,7 +36,8 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     let read = path.strip_prefix("/api/sessions/").and_then(|rest| rest.rsplit_once('/'))
         .filter(|(name, route)| method == Method::GET && name.ends_with("-orq") && !name.contains('/') && matches!(*route, "history" | "events"))
         .and_then(|(name, route)| percent_encoding::percent_decode_str(name).decode_utf8().ok().map(|name| (name.into_owned(), route == "events")));
-    let owned = if let Some((name, events)) = read {
+    let owned = if crate::ui::matches(&method, &path) && !guest { Owned::Static }
+    else if let Some((name, events)) = read {
         match st.info(&name).await {
             Ok(Some(info)) if info.provider == "orq" => Owned::Read(name, events, guest),
             Ok(_) => return StatusCode::MISDIRECTED_REQUEST.into_response(),
@@ -94,6 +95,7 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     req.headers_mut().remove("x-hangar-path");
     req.headers_mut().remove("x-hangar-forwarded-guest");
     match owned {
+        Owned::Static => crate::ui::serve_request(&st, req).await,
         Owned::OrchestrationGuard(name) => crate::session_write::orchestration_guard(&st, &name, req.headers()).await
             .unwrap_or_else(|| StatusCode::MISDIRECTED_REQUEST.into_response()),
         Owned::Read(name, events, guest) => {
@@ -155,4 +157,4 @@ fn live_resume(method: &Method, path: &str) -> Option<String> {
 }
 
 /// As rotas do Rust que aceitam o repasse.
-enum Owned { Read(String, bool, bool), OrchestrationGuard(String), Models, Orchestration, OmpSync, Groups(bool), Conductor, Catalog, SessionDefaults, PushExpo, Commands, Mermaid, Prewarm, Nav, Plans, Worktrees, JevDelivery, ClientApi, ArchiveResume(String, String), Resume(String), Media(String, bool) }
+enum Owned { Static, Read(String, bool, bool), OrchestrationGuard(String), Models, Orchestration, OmpSync, Groups(bool), Conductor, Catalog, SessionDefaults, PushExpo, Commands, Mermaid, Prewarm, Nav, Plans, Worktrees, JevDelivery, ClientApi, ArchiveResume(String, String), Resume(String), Media(String, bool) }
