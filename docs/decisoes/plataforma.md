@@ -303,6 +303,12 @@ erros acumulados de query, avisos e seleção de provedor; os testes públicos R
 também autorização, limites, conta e referência da conversa. A contagem de MCP inclui a
 requisição externa ao serviço, separada das rotas que suas ferramentas chamam.
 
+Diferença aprovada na migração: áudio acima de 100 MiB enviado em blocos, sem
+`Content-Length`, recebe 413 `request body too large`, como o tamanho declarado. O Python
+retornava 500 nesse caso; as capturas originais foram preservadas. Outros erros de leitura
+mantêm seu tratamento. Catálogo, status dos provedores e transcrição/teste conservam os tetos
+públicos de 60, 15 e 180 segundos, incluindo espera por configuração e consultas concorrentes.
+
 Em 09/10/2026, a issue 116 separou instalação e execução do Whisper: o usuário instala
 whisper.cpp, modelo e FFmpeg, e informa seus caminhos no servidor escolhido. O Hangar inicia
 um processo próprio em loopback, comprova que a porta pertence a ele, serializa inferências e

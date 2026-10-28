@@ -315,6 +315,10 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   repassa e, sem Rust, responde 503 `web_ui_needs_rust_server`. HTML revalida também no 304;
   assets preservam cache imutável, e GET/HEAD, Range e Last-Modified mantêm o contrato HTTP.
   O caminho real fica dentro da pasta da tela, inclusive quando há links simbólicos.
+  No Windows, nome inválido ou longo demais retorna 404. A ausência normal de `web-ui.json`
+  não usa a espera por substituição da fila: ela acrescentava cerca de 50 ms a cada arquivo.
+  O caminho HTTP relê a opção sob a mesma trava do escritor, sem cache e sem confundir uma
+  gravação concorrente com a configuração padrão ligada.
 
 ## Pacote por versão em vez de `git pull` (24/10/2026)
 
