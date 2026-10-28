@@ -69,6 +69,9 @@ pub enum OperationKind {
     Input, Steer, SteerQueue, Interrupt, AnswerQuestions, Select, SetModel, SetEffort, SetServiceTier,
     SetPermissionMode, Compact, Clear, ListModels, ListSkills, ReadRateLimits, ReadSettings,
     SetMode, SkipQuestion, Restart, OpenTerminal, Reload, Cwd, Detach,
+    /// Codex: encerra um comando que ficou rodando (`thread/backgroundTerminals/terminate`).
+    TerminateTerminal,
+    ReadSubagent, SubagentMessage,
     /// Interna: só o ator a cria, a partir da entrada reservada que a fila devolveu.
     DispatchAsyncAnswer,
 }
@@ -196,6 +199,8 @@ pub struct LiveState {
     pub preview: String,
     pub thinking: String,
     pub tool: String,
+    /// Codex: objeto JSON `{item: rabo da saída}` dos comandos rodando.
+    pub output: String,
     /// Erro durável do ator: (código, frase).
     pub error: Option<(String, String)>,
 }

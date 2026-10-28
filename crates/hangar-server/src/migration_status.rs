@@ -165,7 +165,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     }
     // Rotas só do Codex, modos de permissão do Claude e as reaberturas (troca de modo, recarregar, conta,
     // conta ChatGPT fixa): o Rust atende as sessões dele.
-    if *method == Method::POST && matches!(tail, Some("model" | "service-tier" | "codex/mode" | "codex/plan/implement" | "question/skip" | "codex-permissions"
+    if *method == Method::POST && matches!(tail, Some("model" | "service-tier" | "codex/mode" | "codex/plan/implement" | "codex/terminate" | "question/skip" | "codex-permissions"
         | "permission-mode" | "modo-execucao" | "recarregar" | "conta" | "engine/model" | "model-effort" | "bastao" | "resume" | "rename")) {
         return true;
     }

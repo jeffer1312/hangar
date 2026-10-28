@@ -12,7 +12,7 @@ import { mount, unmount, tick } from 'svelte';
 import ActivitySheet from './ActivitySheet.svelte';
 import * as m from '../paraglide/messages';
 import * as apiLib from '@hangar/core';
-import type { SubagentRun } from '@hangar/core';
+import type { CodexSubagents, SubagentRun } from '@hangar/core';
 
 vi.mock('@hangar/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@hangar/core')>()),
@@ -60,6 +60,26 @@ function montar(atividade: unknown = SEM_ATIVIDADE) {
 
 beforeEach(() => { vi.clearAllMocks(); api.getWorkflows.mockResolvedValue([]); });
 afterEach(() => { document.body.innerHTML = ''; });
+
+it.each(['failed', null] as const)('o detalhe Codex mostra %s sem afirmar conclusão', async state => {
+  const run = { ...sub('child'), agentPath: '/root/review', state: 'finished' as const, finished: true };
+  const states: CodexSubagents = { child: { agent_path: '/root/review', state, ended_at: null, can_message: false, message_blocked: null } };
+  api.getSubagent.mockResolvedValue({ ...run, events: [] });
+  const target = document.createElement('div');
+  document.body.appendChild(target);
+  const comp = mount(ActivitySheet, { target, props: {
+    open: true, codex: true, sessionName: 'sess', activity: SEM_ATIVIDADE, onClose: vi.fn(), nativeSubs: [run], nativeStates: states,
+  } });
+  try {
+    await tick(); await tick();
+    document.querySelector<HTMLButtonElement>('.agent-row.openable')!.click();
+    await tick(); await tick(); await tick();
+    const meta = document.querySelector('.ag-meta');
+    expect(meta?.textContent).toContain(state === 'failed' ? m.atividade_sub_falhou() : m.atividade_estado_indisponivel());
+    expect(meta?.textContent).not.toContain(m.atividade_sub_concluido());
+    expect(api.getSubagents).not.toHaveBeenCalled();
+  } finally { await unmount(comp); target.remove(); }
+});
 
 describe('ActivitySheet — subagentes do disco', () => {
   it('lista o subagente que o transcript não menciona', async () => {

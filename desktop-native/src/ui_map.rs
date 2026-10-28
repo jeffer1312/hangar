@@ -5,19 +5,25 @@
 
 use gpui_kit::{ElementId, ElementRecord, Window};
 use serde_json::{json, Value};
+use std::io::Write;
 use std::path::PathBuf;
 
 pub fn install(window: &mut Window) {
-    let paths = std::env::var_os("HANGAR_NATIVE_UI_MAP").map(PathBuf::from).map(|path| {
+    let mut paths = std::env::var_os("HANGAR_NATIVE_UI_MAP").map(PathBuf::from).map(|path| {
         let tmp = { let mut name = path.clone().into_os_string(); name.push(".tmp"); PathBuf::from(name) };
         (path, tmp)
     });
-    let frames = std::env::var_os("HANGAR_NATIVE_FRAME_TIMES").is_some();
+    let mut frames = std::env::var_os("HANGAR_NATIVE_FRAME_TIMES").is_some();
     if paths.is_none() && !frames { return; }
     let epoch = std::time::Instant::now();
     let (mut last, mut seq) = (Value::Null, 0u64);
     window.set_element_map_sink(move |records| {
-        if frames { eprintln!("frame {}", epoch.elapsed().as_micros()); }
+        if frames {
+            if let Err(error) = write_trace(&mut std::io::stderr().lock(), format_args!("frame {}", epoch.elapsed().as_micros())) {
+                frames = false;
+                crate::log_line(&format!("registro de quadros desativado após falha no stderr: {error}"));
+            }
+        }
         let Some((path, tmp)) = &paths else { return };
         let elements = snapshot(records);
         if elements == last { return; }
@@ -27,9 +33,16 @@ pub fn install(window: &mut Window) {
         // ponytail: grava no próprio quadro, bloqueando; só vale para prova, nunca ligado no uso.
         match std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &path)) {
             Ok(()) => last = elements,
-            Err(error) => eprintln!("mapa de elementos não gravado em {}: {error}", path.display()),
+            Err(error) => {
+                crate::log_line(&format!("mapa de elementos desativado após falha em {}: {error}", path.display()));
+                paths = None;
+            }
         }
     });
+}
+
+fn write_trace(writer: &mut impl Write, line: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+    writeln!(writer, "{line}")
 }
 
 fn snapshot(records: &[ElementRecord]) -> Value {
@@ -54,6 +67,19 @@ mod tests {
     // O glob pode trazer o `test` da gpui, que colide com o atributo padrão; o nome explícito vence o glob.
     use core::prelude::v1::test;
     use gpui_kit::{bounds, point, px, size, EntityId};
+
+    #[test]
+    fn frame_trace_returns_failure_without_panicking_when_writer_is_full() {
+        struct Full;
+        impl Write for Full {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> { Err(std::io::Error::from_raw_os_error(28)) }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        assert_eq!(write_trace(&mut Full, format_args!("frame {}", 100)).unwrap_err().raw_os_error(), Some(28));
+        let mut output = Vec::new();
+        write_trace(&mut output, format_args!("frame {}", 100)).unwrap();
+        assert_eq!(output, b"frame 100\n");
+    }
 
     #[test]
     fn snapshot_keeps_ids_bounds_and_visibility_without_view_ids() {

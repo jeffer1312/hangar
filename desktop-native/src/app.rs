@@ -421,7 +421,7 @@ fn delivery_is_current(connection: u64, selection: Option<u64>, current_connecti
 }
 /// `offset`: onde a fonte deste pedaço começa na fonte inteira da resposta desenhada em pedaços (`{id}#s0`…).
 struct RichText { source: String, view: Entity<TextViewState>, _observer: Subscription, touched: u64, row: String, offset: Option<usize> }
-enum ChatUpdate { Message(ChatEvent), Preview(Preview), State(SessionState), Question(Option<Ask>), Thinking(String), LiveTool(Option<LiveTool>), Reset }
+enum ChatUpdate { Message(ChatEvent), Preview(Preview), State(SessionState), Question(Option<Ask>), Thinking(String), LiveTool(Option<LiveTool>), CommandOutput(HashMap<String, String>), Reset }
 
 #[derive(Default)]
 struct SystemNotifications {
@@ -2267,6 +2267,7 @@ impl Hangar {
             "message" | "queue_confirmed" => serde_json::from_value(data).map(ChatUpdate::Message),
             "preview" => serde_json::from_value(data).map(ChatUpdate::Preview),
             "state" => serde_json::from_value(data).map(ChatUpdate::State),
+            "saida" => serde_json::from_value(data).map(ChatUpdate::CommandOutput),
             "ask_question" if data.is_null() => Ok(ChatUpdate::Question(None)),
             "ask_question" => serde_json::from_value(data.clone()).map(|payload| ChatUpdate::Question(Some(Ask::new(payload, &data)))),
             "reset" => Ok(ChatUpdate::Reset),
@@ -2363,6 +2364,7 @@ impl Hangar {
             // O mesmo estado repetido não redesenha: a conversa guardada sairia do cache à toa.
             ChatUpdate::State(state) if *state == self.chat.state && self.chat.ask.is_none() => Changed::Nothing,
             ChatUpdate::State(_) => Changed::Screen,
+            ChatUpdate::CommandOutput(_) => Changed::Nothing,
             ChatUpdate::Preview(_) | ChatUpdate::Thinking(_) | ChatUpdate::LiveTool(_) => Changed::Tail,
             _ => Changed::Rows,
         };
@@ -2418,7 +2420,9 @@ impl Hangar {
                     && self.action_feedback.get(&key).is_some_and(|(text, _)| *text == tr("option_sent")) {
                     self.action_feedback.remove(&key);
                 }
+                let native_changed = self.chat.state.codex_subagents != state.codex_subagents;
                 self.chat.update_state(state);
+                if native_changed { self.sync_codex_subagents(cx); self.sync_rows(cx); }
                 self.sync_working_row(cx);
                 if turned { self.restart_subagent_count(cx); }
                 self.sync_activity(cx);
@@ -2431,6 +2435,10 @@ impl Hangar {
                     self.defer_live_clear(Live::Thinking, cx);
                     self.defer_live_clear(Live::Tool, cx);
                 }
+            }
+            ChatUpdate::CommandOutput(output) => {
+                self.chat.command_output = output;
+                self.sync_activity(cx);
             }
             ChatUpdate::Question(ask) => if self.chat.update_ask(ask) { self.ask_form = AskForm::default(); },
             ChatUpdate::Thinking(text) => {
@@ -3467,6 +3475,8 @@ impl Hangar {
     fn sync_rows(&mut self, cx: &mut Context<Self>) {
         let a = appearance::get();
         let stable = self.chat.take_unsynced();
+        self.conversation.require_agent_states(self.provider().0 == "codex");
+        self.conversation.set_agent_states(self.codex_agent_states());
         let delta = self.conversation.update(&self.chat.events, stable, conversation::View {
             thinking: a.thinking_tools, tasks: a.task_list,
             merge_thinking: a.tool_look == appearance::ToolLook::Tree,
@@ -3515,7 +3525,9 @@ impl Hangar {
         if !self.visible_preview.text.is_empty() { ids.push(PREVIEW.into()); signatures.push(String::new()); }
         if opening { ids.push(landing::OPENING.into()); signatures.push(String::new()); }
         if self.working_row_shown() { ids.push(WORKING.into()); signatures.push(String::new()); }
-        for agent in self.conversation.running_agents() { ids.push(format!("{PINNED}{}", events[agent.call].id)); signatures.push(String::new()); }
+        for agent in self.conversation.running_agents().filter(|agent| self.subagent_pin_running(agent)) {
+            ids.push(format!("{PINNED}{}", events[agent.call].id)); signatures.push(String::new());
+        }
         let patch = row_patch::RowPatch::between(from, &self.row_ids[from..], &self.row_signatures[from..],
             &ids, &signatures, if rebuilt.is_some() { items - from } else { 0 });
         let prefix = patch.remove.start;
@@ -5165,7 +5177,8 @@ impl Hangar {
                 _ => tr("unknown"),
             };
             let mut notes = Vec::new();
-            if event.desistiu == Some(true) || event.id.starts_with("held:") || event.hook_error.is_some() {
+            if (event.desistiu == Some(true) || event.id.starts_with("held:") || event.hook_error.is_some())
+                && !(event.kind == "notice" && matches!(event.text.as_deref(), Some("hook_prompt" | "hook_failed"))) {
                 notes.push(event.hook_error.clone().unwrap_or_else(|| tr("delivery_failed")));
             }
             // Só entrada desistida sai da fila; o backend recusa descartar o que ainda está por entregar.
@@ -6383,6 +6396,13 @@ fn select_text_body(snapshot: &str, option: usize, text: &str) -> Option<Value> 
 fn display_body(event: &ChatEvent) -> String {
     match event.kind.as_str() {
         // Skill injetada: o corpo é o SKILL.md, que a linha recolhida só mostra ao abrir.
+        "notice" if matches!(event.text.as_deref(), Some("hook_prompt" | "hook_failed")) => {
+            let title = activity::web(if event.text.as_deref() == Some("hook_failed") { "notice_hook_failed" } else { "notice_hook_prompt" });
+            match event.hook_error.as_deref().filter(|detail| !detail.is_empty()) {
+                Some(detail) => format!("{title}\n\n{}", conversation::fenced(detail)),
+                None => title,
+            }
+        }
         "notice" => event.loaded_skill().map(|skill| skill.body).unwrap_or_else(|| tr(&event.body())),
         "assistant_msg" => interaction::plan_display(&event.body()),
         // Anexos viram cartões próprios; o texto mostra só a legenda.
@@ -7117,6 +7137,7 @@ impl Hangar {
                 }))))))
             .when_some(delivery_note, |el, (note, warning)| el.child(in_column(div().py_1().text_xs().text_color(if warning { theme::warning() } else { theme::muted() }).child(note))))
             .when_some(stop_note, |el, (note, warning)| el.child(in_column(div().py_1().text_xs().text_color(if warning { theme::warning() } else { theme::muted() }).child(note))))
+            .when_some(self.render_codex_commands_chip(cx), |el, chip| el.child(in_column(chip)))
             .children(plugin_space)
             .map(|el| match orq {
                 Some(orq) => el.child(in_column(self.render_orq_footer(&orq, cx))),
@@ -7605,6 +7626,21 @@ impl Render for Hangar {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hook_notice_title_comes_from_text_and_keeps_the_cause_visible() {
+        for (text, label, detail) in [
+            ("hook_prompt", "notice_hook_prompt", "Continue reviewing the result"),
+            ("hook_failed", "notice_hook_failed", "hook exited with code 127 (falhou 3× seguidas)"),
+        ] {
+            let event = serde_json::from_value(serde_json::json!({
+                "id": "local-1", "kind": "notice", "text": text, "hook_error": detail
+            })).unwrap();
+            let body = super::display_body(&event);
+            assert!(body.starts_with(&super::activity::web(label)));
+            assert!(body.contains(detail));
+            assert_eq!(body.matches(detail).count(), 1);
+        }
+    }
     use super::{message_card, preview_step, safe_markdown, stream_motion, working_tokens, working_verb};
     use crate::{api::dto::ChatEvent, cards::Card, i18n::tr};
     use std::{collections::HashSet, time::Duration};

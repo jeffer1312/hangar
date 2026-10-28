@@ -360,6 +360,15 @@ pub async fn skip_question(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
     answer(&ctx, skip_answer(&sent))
 }
 
+/// `/codex/terminate`: encerra um comando que o Codex deixou rodando (`codex_commands` do estado).
+pub async fn terminate(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let (ctx, bytes) = admitted!(st, peer, req);
+    let Some(body) = object(&bytes, ctx.headers()).and_then(|f| strings(&f, "process_id", None)) else { return invalid_body(ctx.headers()) };
+    let sent = run(&ctx, OperationKind::TerminateTerminal, json!({"process_id": body["process_id"]})).await;
+    log_outcome(&ctx.name, "terminate", &sent, "encerrar comando do Codex não confirmado; a rota responde 409 erro_codex_controle");
+    answer(&ctx, model_answer(&sent))
+}
+
 pub async fn commands(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (ctx, _) = admitted!(st, peer, req);
     let sent = run(&ctx, OperationKind::ListSkills, json!({})).await;

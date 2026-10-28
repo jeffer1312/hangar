@@ -70,7 +70,15 @@ pub fn is_search(name: Option<&str>) -> bool {
 
 fn is_task_call(name: Option<&str>) -> bool { matches!(name, Some("TaskCreate" | "TaskUpdate")) }
 
-fn is_agent_call(name: Option<&str>) -> bool { matches!(name, Some("Agent" | "AgentSwarm")) }
+pub(crate) fn is_codex_agent_spawn(name: Option<&str>) -> bool {
+    matches!(name, Some("spawn_agent" | "collaboration.spawn_agent" | "multi_agent.spawn_agent" | "functions.spawn_agent"))
+}
+
+fn is_codex_agent_followup(name: Option<&str>) -> bool {
+    matches!(name, Some("followup_task" | "collaboration.followup_task" | "multi_agent.followup_task" | "functions.followup_task"))
+}
+
+pub(crate) fn is_agent_call(name: Option<&str>) -> bool { matches!(name, Some("Agent" | "AgentSwarm")) || is_codex_agent_spawn(name) }
 
 /// Página publicada pelo agente: servidor `hangar`, tool `html_render`, separados por `__`, `.` ou `/`, com o
 /// `mcp__` do Claude e do Codex opcional. Mesma regra do `packages/core/src/htmlPage.ts`.
@@ -231,8 +239,34 @@ pub struct AgentRun {
     pub subagent_type: Option<String>, pub model: Option<String>, pub prompt: Option<String>, pub running: bool,
     /// O `agentId` que o resultado do Agent traz: o nome do arquivo do subagente no disco.
     pub agent_id: Option<String>,
+    pub agent_path: Option<String>,
     pub started_at: Option<f64>,
     pub finished_at: Option<f64>,
+}
+
+fn codex_agent_identity(text: &str) -> (Option<String>, Option<String>) {
+    let Ok(value) = serde_json::from_str::<Value>(text) else { return (None, None) };
+    let id = value.get("agent_id").and_then(Value::as_str);
+    let path = value.get("task_name").or_else(|| value.get("agent_path")).and_then(Value::as_str)
+        .or_else(|| id.filter(|id| id.starts_with('/')));
+    (id.filter(|id| !id.starts_with('/')).map(str::to_owned), path.map(str::to_owned))
+}
+
+fn agent_run(event: &ChatEvent, call: usize, id: &str) -> AgentRun {
+    let text = |key: &str| event.tool_input.as_ref().and_then(|v| v.get(key)).and_then(Value::as_str).map(str::to_owned);
+    let codex = is_codex_agent_spawn(event.tool_name.as_deref());
+    let desc = if codex { text("task_name").or_else(|| text("description")).or_else(|| text("agent_type")) }
+        else { text("description").or_else(|| text("subagent_type")) }
+        .unwrap_or_else(|| crate::i18n::tr_web("atividade_agente", &HashMap::new()).unwrap_or_else(|| "Agente".into()));
+    let items = event.tool_input.as_ref().and_then(|v| v.get("items")).and_then(Value::as_array).map_or(0, Vec::len);
+    let description = if items > 0 {
+        let params = HashMap::from([("desc".to_owned(), desc.clone()), ("n".to_owned(), items.to_string())]);
+        crate::i18n::tr_web("atividade_swarm_itens", &params).unwrap_or(desc)
+    } else { desc };
+    let prompt = text(if codex { "message" } else { "prompt" })
+        .filter(|prompt| !codex || !prompt.starts_with("gAAAA"));
+    AgentRun { call, id: id.to_owned(), description, subagent_type: text(if codex { "agent_type" } else { "subagent_type" }),
+        model: text("model"), prompt, running: false, agent_id: None, agent_path: None, started_at: event.ts, finished_at: None }
 }
 
 impl AgentRun {
@@ -329,6 +363,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
     // SendMessage a um agentId esperando o resultado: tool_use_id -> (agentId, hora do envio). Recusado não retoma.
     let mut resume_pending: HashMap<&str, Vec<(String, Option<f64>)>> = HashMap::new();
     let mut agent_calls: HashSet<&str> = HashSet::new();
+    let mut codex_calls: HashSet<&str> = HashSet::new();
     let mut agent_ids: HashMap<&str, &str> = HashMap::new();
     let mut agent_descs: HashMap<&str, String> = HashMap::new();
     let mut agents = Vec::new();
@@ -368,6 +403,21 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                     continue;
                 }
                 let text = event.result.as_deref().unwrap_or("");
+                if codex_calls.contains(id) && event.is_error != Some(true) {
+                    let (agent_id, agent_path) = codex_agent_identity(text);
+                    let key = agent_id.as_ref().or(agent_path.as_ref()).cloned();
+                    if let Some(agent) = agents.iter_mut().find(|agent| agent.id == id) {
+                        agent.agent_id = agent_id;
+                        agent.agent_path = agent_path;
+                    }
+                    if let Some(key) = key {
+                        if let Some(at) = finished_early.remove(&key) { record_completion(&mut resulted, id, at); }
+                        background.insert(key, id);
+                    } else {
+                        record_completion(&mut resulted, id, event.ts);
+                    }
+                    continue;
+                }
                 // Só o resultado de um Agent é lido: a conta é refeita a cada evento e as saídas de ferramenta são grandes.
                 if agent_calls.contains(id) {
                     // O campo estruturado vence o texto, que muda entre versões do Claude Code.
@@ -394,6 +444,12 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
             }
             "user_msg" => {
                 let text = event.text.as_deref().unwrap_or("");
+                if let Some(notice) = crate::cards::codex_subagent(text) {
+                    if matches!(notice.status.as_str(), "completed" | "errored" | "failed" | "shutdown" | "not_found") {
+                        finish(notice.agent_path, event.ts, &background, &mut resulted, &mut finished_early);
+                    }
+                    continue;
+                }
                 if !text.contains("<task-notification>") { continue; }
                 if interim_notification(text) { continue; }
                 let Some(task) = text.split_once("<task-id>").and_then(|(_, rest)| rest.split_once("</task-id>")).map(|(id, _)| id.trim()) else { continue };
@@ -402,6 +458,13 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
             "tool_use" => {
                 let input = event.tool_input.as_ref();
                 let text = |key: &str| input.and_then(|v| v.get(key)).and_then(Value::as_str).map(str::to_owned);
+                if is_codex_agent_followup(event.tool_name.as_deref()) {
+                    if let Some(target) = text("target").or_else(|| text("agent_id"))
+                        && background.contains_key(&target) && let Some(send) = tool_key(event) {
+                        resume_pending.entry(send).or_default().push((target, event.ts));
+                    }
+                    continue;
+                }
                 // Tarefas não dependem do id da chamada.
                 match event.tool_name.as_deref() {
                     Some("TodoWrite") => { if let Some(list) = whole_list(input, "todos", "content") { whole = Some(list); } continue; }
@@ -440,19 +503,11 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                 }
                 let Some(id) = tool_key(event) else { continue };
                 match event.tool_name.as_deref() {
-                    Some("Agent" | "AgentSwarm") => {
-                        let items = input.and_then(|v| v.get("items")).and_then(Value::as_array).map_or(0, Vec::len);
-                        let desc = text("description").or_else(|| text("subagent_type"))
-                            .unwrap_or_else(|| crate::i18n::tr_web("atividade_agente", &HashMap::new()).unwrap_or_else(|| "Agente".into()));
-                        let description = if items > 0 {
-                            let params = HashMap::from([("desc".to_owned(), desc.clone()), ("n".to_owned(), items.to_string())]);
-                            crate::i18n::tr_web("atividade_swarm_itens", &params).unwrap_or(desc)
-                        } else { desc };
+                    name if is_agent_call(name) => {
                         agent_calls.insert(id);
+                        if is_codex_agent_spawn(name) { codex_calls.insert(id); }
                         if let Some(raw) = text("description") { agent_descs.insert(id, raw); }
-                        agents.push(AgentRun { call: i, id: id.to_owned(), description, subagent_type: text("subagent_type"),
-                            model: text("model"), prompt: text("prompt"), running: false, agent_id: None,
-                            started_at: event.ts, finished_at: None });
+                        agents.push(agent_run(event, i, id));
                     }
                     Some("Bash") if input.and_then(|v| v.get("run_in_background")).and_then(Value::as_bool) == Some(true) => {
                         shell_pending.insert(id);
@@ -469,7 +524,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
     for agent in &mut agents {
         agent.running = !resulted.contains_key(agent.id.as_str());
         agent.finished_at = resulted.get(agent.id.as_str()).copied().flatten();
-        agent.agent_id = agent_ids.get(agent.id.as_str()).map(|a| (*a).to_owned());
+        if let Some(id) = agent_ids.get(agent.id.as_str()) { agent.agent_id = Some((*id).to_owned()); }
     }
     for shell in &mut shells { shell.running = !resulted.contains_key(shell.id.as_str()); }
     agents.sort_by_key(|a| !a.running);
@@ -611,6 +666,11 @@ pub fn summarize_input(name: Option<&str>, input: Option<&Map<String, Value>>) -
         Some(other) => other.to_string(),
     };
     let first = |keys: &[&str]| keys.iter().map(|k| text(k)).find(|v| !v.is_empty()).unwrap_or_default();
+    if is_codex_agent_spawn(name) {
+        let label = ["task_name", "description", "agent_type"].iter().filter_map(|key| map.get(*key).and_then(Value::as_str))
+            .find(|value| !value.trim().is_empty() && !value.starts_with("gAAAA")).unwrap_or_default();
+        return one_line(label, SUMMARY_MAX);
+    }
     let found = match name.unwrap_or("") {
         "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => first(&["file_path", "path", "notebook_path"]),
         "Bash" | "BashOutput" => first(&["command"]),
@@ -887,6 +947,10 @@ mod tests {
         assert_eq!(summarize_input(Some("Bash"), json!({"command": "ls   -la\n/tmp"}).as_object()), "ls -la /tmp");
         assert_eq!(summarize_input(Some("Grep"), json!({"pattern": "foo", "path": "src"}).as_object()), "\"foo\" src");
         assert_eq!(summarize_input(Some("mcp_x"), json!({"other": 3}).as_object()), "3");
+        for name in ["spawn_agent", "collaboration.spawn_agent", "multi_agent.spawn_agent", "functions.spawn_agent"] {
+            assert_eq!(summarize_input(Some(name), json!({"message":"gAAAA-ciphertext","task_name":"review","description":"Revisar"}).as_object()), "review");
+            assert_eq!(summarize_input(Some(name), json!({"message":"gAAAA-ciphertext"}).as_object()), "");
+        }
     }
 
     fn agent(id: &str, tool: &str, input: Value) -> ChatEvent { with_input(call(id, tool, "Agent"), input) }

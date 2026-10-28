@@ -1,16 +1,17 @@
 <script lang="ts">
   import { useSessionServer } from '../lib/sessionServer';
-  import { getWorkflows, getWorkflow, getWorkflowAgent, getSubagents, getSubagent } from '@hangar/core';
+  import { codexSubagentState, getWorkflows, getWorkflow, getWorkflowAgent, getSubagents, getSubagent, matchAgentSubagent, projectCodexSubagent } from '@hangar/core';
   import * as m from '../paraglide/messages';
   import ModalDialog from './ModalDialog.svelte';
   import PlanPanel from './PlanPanel.svelte';
+  import CodexCommands from './CodexCommands.svelte';
   import { renderMarkdown } from '../lib/markdown';
   import { formatarIntervalo } from '../lib/contaEstado';
   import MessageList from './MessageList.svelte';
   import Spinner from './Spinner.svelte';
   import { pollSequential } from '../lib/pollSequential';
   import { onDestroy, tick } from 'svelte';
-  import type { Activity, TaskStatus } from '@hangar/core';
+  import type { Activity, AgentRun, TaskStatus, CodexCommand, CodexSubagents } from '@hangar/core';
   import type { WorkflowSummary, WorkflowDetail, WorkflowAgentDetail, SubagentRun, SessionInfo, PlanDetail, ShellVivo } from '@hangar/core';
 
   interface Props {
@@ -23,6 +24,7 @@
     // explícito o painel apareceria duplicado no desktop.
     showPlan?: boolean;
     session?: SessionInfo | null;
+    codex?: boolean;
     planDetail?: PlanDetail | null;
     planLoading?: boolean;
     planError?: boolean;
@@ -31,6 +33,14 @@
     // de um /clear); a outra sabe o que EXISTE agora. Sem chave comum pra cruzar as duas, então
     // cada uma aparece com o seu nome em vez de virar um número só que mente nos dois sentidos.
     processos?: ShellVivo[];
+    commands?: CodexCommand[];
+    commandOutput?: Record<string, string>;
+    readOnly?: boolean;
+    nativeSubs?: SubagentRun[];
+    nativeStates?: CodexSubagents;
+    nativeReady?: boolean;
+    nativeError?: string;
+    onRetryNative?: () => void;
     // Docado: a aba do painel da direita no desktop, sem o embrulho de modal. O conteúdo é o
     // mesmo; muda quem segura a caixa e o fechar (a aba não fecha, troca).
     docado?: boolean;
@@ -38,8 +48,9 @@
     // chave que a lista usa — o cartão não conhece o `agentId` do disco.
     abrirAgente?: { prompt?: string; titulo: string } | null;
   }
-  let { open, activity, sessionName, onClose, showPlan = false, session = null, planDetail = null, planLoading = false, planError = false, processos = [], docado = false, abrirAgente = null }: Props = $props();
+  let { open, activity, sessionName, onClose, showPlan = false, session = null, codex = false, planDetail = null, planLoading = false, planError = false, processos = [], commands = [], commandOutput = {}, readOnly = false, nativeSubs, nativeStates, nativeReady = true, nativeError = '', onRetryNative, docado = false, abrirAgente = null }: Props = $props();
   const sessionServer = useSessionServer();
+  const usesNativeSubs = $derived(nativeSubs !== undefined);
 
   // Pedido de fora ("abre neste agente"): dispara UMA vez por pedido. Sem a marca, voltar pra lista
   // com o `‹` seria desfeito no próximo ciclo do efeito e o painel ficaria preso no agente.
@@ -68,13 +79,13 @@
       agentDetail = null;
       resetPromptView();
       stopSubPoll();
-      subDetail = null;
+      rawSubDetail = null;
       return;
     }
     getWorkflows(sessionName, sessionServer()).then((w) => (workflows = w)).catch(() => {});
     subError = '';
-    getSubagents(sessionName, sessionServer())
-      .then((s) => (subs = s))
+    if (!codex || !usesNativeSubs) getSubagents(sessionName, sessionServer())
+      .then((s) => (loadedSubs = s))
       .catch(() => (subError = m.atividade_erro_subagentes()));
   });
 
@@ -111,7 +122,7 @@
   function back() {
     if (level === 'subagent') {
       stopSubPoll();
-      subDetail = null;
+      rawSubDetail = null;
       level = 'list';
       return;
     }
@@ -125,7 +136,15 @@
     }
   }
 
-  const runningAgents = $derived(activity.agents.filter((a) => a.kind === 'agent' && a.running));
+  const runningAgents = $derived(activity.agents.filter((a) => {
+    if (codex && !nativeReady && codexSubagentState(nativeStates, a.agentId, a.agentPath)?.state !== 'running') return false;
+    if (a.kind !== 'agent') return false;
+    if (codex || session?.provider === 'codex') return a.running;
+    const sub = matchSub(a);
+    if (sub?.state) return sub.state === 'running';
+    if (sub?.finished !== undefined) return !sub.finished;
+    return a.running;
+  }));
   const shellsVivos = $derived(activity.shells.filter((s) => s.running));
   // Relógio do "há N min" dos shells. 20s de passo porque a menor unidade que a frase mostra é o
   // minuto (formatarIntervalo), e ele só corre com a folha ABERTA — um timer vivo com a folha
@@ -143,8 +162,10 @@
   // O transcript PROPRIO do subagente (<session-dir>/subagents/agent-<id>.jsonl) nao entra no jsonl
   // do pai: o pai so tem o pedido e, no fim, o resultado. O backend le esse arquivo e devolve as
   // ultimas ferramentas chamadas — que e o "o que ele esta fazendo agora" de verdade.
-  let subs = $state<SubagentRun[]>([]);
-  let subDetail = $state<SubagentRun | null>(null);
+  let loadedSubs = $state<SubagentRun[]>([]);
+  const subs = $derived(nativeSubs ?? loadedSubs);
+  let rawSubDetail = $state<SubagentRun | null>(null);
+  const subDetail = $derived(rawSubDetail ? projectCodexSubagent(rawSubDetail, nativeStates) : null);
   let pararSub: (() => void) | null = null;
   // Falha de rede NAO pode virar "nao ha nada": sem isto, a lista de subagentes ficava vazia e a
   // linha do agente simplesmente nao abria nada no clique — indistinguivel de bug de toque.
@@ -158,14 +179,8 @@
   // (fontes oficiais: docs, GitHub..."), e o match pegava sempre o primeiro da lista. Compara o
   // prompt INTEIRO normalizado; so se nao houver igual cai pra um prefixo longo, e nesse caso vence
   // o de escrita mais recente (a lista ja vem ordenada por mtime).
-  const norm = (t: string) => t.replace(/\s+/g, ' ').trim().toLowerCase();
-  function matchSub(prompt: string | undefined): SubagentRun | null {
-    if (!prompt) return null;
-    const full = norm(prompt);
-    const exact = subs.find((s) => s.prompt && norm(s.prompt) === full);
-    if (exact) return exact;
-    const head = full.slice(0, 400);
-    return subs.find((s) => s.prompt && norm(s.prompt).startsWith(head)) ?? null;
+  function matchSub(agent: AgentRun | string | undefined, runs = subs): SubagentRun | null {
+    return matchAgentSubagent(runs, typeof agent === 'object' ? agent : { id: '', prompt: agent }) ?? null;
   }
 
   // Título de um subagente que só o disco conhece: a primeira linha do prompt dele. O prompt de
@@ -174,7 +189,7 @@
   function tituloBaseDoSub(s2: SubagentRun): string {
     const linhas = (s2.prompt ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
     const util = linhas.find((l) => !/^base directory for this skill:/i.test(l) && !l.startsWith('#'));
-    return (util ?? linhas[0] ?? s2.agentId).slice(0, 90);
+    return (util ?? linhas[0] ?? s2.agentPath?.split('/').filter(Boolean).at(-1) ?? s2.nickname ?? s2.agentId).slice(0, 90);
   }
 
   // O AgentSwarm do Kimi dispara N subagentes com o MESMO prompt de abertura — o que muda (o item
@@ -194,9 +209,9 @@
     // dizendo "não achei" sobre um agente que achou.
     subError = '';
     subTitle = tituloDoSub(s2);
-    subDetail = s2;
+    rawSubDetail = s2;
     level = 'subagent';
-    iniciarSubPoll(s2);
+    if (!codex) iniciarSubPoll(s2);
   }
 
 // Subagentes que só o DISCO conhece. O transcript do pai não os menciona quando quem forkou foi
@@ -207,7 +222,7 @@
   // Só entram os que NÃO casam com uma linha já listada acima (o casamento é pelo prompt), pra o
   // mesmo subagente não aparecer duas vezes com dois rótulos diferentes.
   const orfaos = $derived(
-    subs.filter((s2) => !activity.agents.some((a) => matchSub(a.prompt)?.agentId === s2.agentId)),
+    subs.filter((s2) => !runningAgents.some((a) => matchSub(a)?.agentId === s2.agentId)),
   );
 
   // O subagente aberto ainda trabalha? Kimi e Pi dizem no arquivo do filho (`finished`); no Claude
@@ -216,28 +231,31 @@
   const subRodando = $derived.by((): boolean | null => {
     const d = subDetail;
     if (!d || d.ilegivel) return null;
+    if (codex && d.problema) return null;
+    if (d.state) return d.state === 'running';
     if (d.finished !== undefined) return !d.finished;
-    const pai = activity.agents.find((a) => matchSub(a.prompt)?.agentId === d.agentId);
+    const pai = activity.agents.find((a) => matchSub(a)?.agentId === d.agentId);
     return pai ? pai.running : null;
   });
 
-  async function openSubagent(prompt: string | undefined, title: string) {
+  async function openSubagent(prompt: AgentRun | string | undefined, title: string) {
     if (subs.length === 0) {
       try {
-        subs = await getSubagents(sessionName, sessionServer());
+        loadedSubs = await getSubagents(sessionName, sessionServer());
         subError = '';
       } catch {
         subError = m.atividade_erro_subagentes();
         return;   // clique que nao faz nada e pior que erro: some sem explicar
       }
     }
-    const match = matchSub(prompt);
+    const candidates = typeof prompt === 'object' ? [] : activity.agents.filter(a => a.prompt === prompt && a.description === title);
+    const match = matchSub(candidates.length === 1 ? candidates[0] : prompt, subs.length ? subs : loadedSubs);
     if (!match) {
       // Agora isto chega de um CLIQUE no cartão da conversa, não só da lista (onde o casamento por
       // prompt já tinha acontecido). Sem avisar, clicar num agente que não casa deixaria a tela no
       // agente ANTERIOR — pior que vazio: é a conversa errada com cara de certa.
       subError = m.atividade_agente_nao_achado();
-      subDetail = null;
+      rawSubDetail = null;
       level = 'list';
       // O poll é do agente que estava aberto antes: voltando pra lista ele seguiria batendo no
       // backend a cada 2,5s, invisível.
@@ -245,9 +263,9 @@
       return;
     }
     subTitle = title;
-    subDetail = match;
+    rawSubDetail = match;
     level = 'subagent';
-    iniciarSubPoll(match);
+    if (!codex) iniciarSubPoll(match);
   }
 
   // O ciclo de leitura do transcript do subagente. Extraído do openSubagent (18/08) porque agora há
@@ -266,9 +284,11 @@
       try {
         const d = await getSubagent(sessionName, alvo.agentId, 200, sessionServer());
         if (g !== geracaoSub) return;
-        subDetail = d;
+        rawSubDetail = d;
         subFails = 0;
         subError = '';
+        const state = projectCodexSubagent(d, nativeStates).state;
+        if (codex && state !== 'running') stopSubPoll();
       } catch (e) {
         if (g !== geracaoSub) return;
         // Uma falha isolada e normal (o arquivo some quando o agente termina) -> mantem o ultimo
@@ -285,6 +305,14 @@
     pararSub = pollSequential(tick, 2500);
   }
   let subTitle = $state('');
+  let lastNativeLifecycle = '';
+  $effect(() => {
+    if (!codex || level !== 'subagent' || !subDetail) { lastNativeLifecycle = ''; return; }
+    const lifecycle = JSON.stringify([subDetail.agentId, subDetail.state, subDetail.endedAt]);
+    if (lifecycle === lastNativeLifecycle) return;
+    lastNativeLifecycle = lifecycle;
+    iniciarSubPoll(subDetail);
+  });
   // A MessageList so ancora no fim quando ela mesma controla o scroll da tela; aqui ela vive numa
   // caixa dentro do modal, entao a primeira pintura ficava no TOPO — no prompt, nao no que o agente
   // acabou de fazer. Empurra pro fim a cada atualizacao.
@@ -294,6 +322,7 @@
   // mais estreita, e amarrava esta folha à classe interna do componente do chat.
   let subChatEl = $state<HTMLElement | null>(null);
   function stopSubPoll() {
+    geracaoSub += 1;
     if (pararSub) { pararSub(); pararSub = null; }
     subFails = 0;
   }
@@ -441,8 +470,12 @@
         <!-- O aviso fica FORA dos níveis: ele nasce de uma leitura que pode falhar em qualquer um
              deles, e preso a dois níveis a falha sumia calada pra quem estava num workflow. -->
         {#if subError}<p class="activity-error">⚠ {subError}</p>{/if}
+        {#if nativeError}<p class="activity-error" role="alert">{nativeError}</p>
+          {#if onRetryNative}<button onclick={onRetryNative}>{m.sync_retry()}</button>{/if}
+        {/if}
         {#if level === 'list'}
           <div class="activity">
+            {#if !nativeReady && !nativeError}<p class="activity-empty">{m.native_activity_loading()}</p>{/if}
             <!-- plan_hidden junto: com "nenhum plano" escolhido, o plan_name some e o painel — que
                  é onde fica o seletor pra voltar ao automático — desmontaria junto. -->
             {#if showPlan && (session?.plan_name || session?.plan_hidden)}
@@ -477,10 +510,10 @@
               <div class="section">
                 <span class="section-label">{m.atividade_rodando_agora()}</span>
                 {#each runningAgents as a (a.id)}
-                  {@const sub = matchSub(a.prompt)}
+                  {@const sub = matchSub(a)}
                   <svelte:element this={sub ? 'button' : 'div'} class="agent-row" class:openable={!!sub}
                                   role={sub ? 'button' : undefined} tabindex={sub ? 0 : undefined}
-                                  onclick={sub ? () => openSubagent(a.prompt, a.description) : undefined}>
+                                  onclick={sub ? () => openSubagent(a, a.description) : undefined}>
                     <span class="ring-spin" aria-hidden="true"></span>
                     <span class="agent-body">
                       <span class="agent-head">
@@ -520,7 +553,7 @@
                         <!-- Ilegivel nao mostra "0 chamadas": os campos vem zerados porque o
                              transcript nao foi lido, e 0 ali seria afirmar que ele nao fez nada. -->
                         {#if s2.ilegivel}{m.atividade_sub_ilegivel()}
-                        {:else}{#if s2.finished}{m.atividade_sub_concluido()} · {/if}{m.atividade_chamadas({ n: s2.toolCalls })}{#if s2.recent.length} · {s2.recent[s2.recent.length - 1].name}{/if}{/if}
+                        {:else}{#if s2.state === 'failed' || s2.failed}{m.atividade_sub_falhou()} · {:else if s2.finished}{m.atividade_sub_concluido()} · {/if}{m.atividade_chamadas({ n: s2.toolCalls })}{#if s2.recent.length} · {s2.recent[s2.recent.length - 1].name}{/if}{/if}
                       </span>
                     </span>
                     <span class="agent-arrow" aria-hidden="true">›</span>
@@ -581,6 +614,8 @@
               </div>
             {/if}
 
+            {#key sessionName}<CodexCommands {commands} output={commandOutput} {sessionName} {readOnly} />{/key}
+
             {#if activity.tasks.length > 0}
               <div class="section">
                 <span class="section-label">{m.atividade_tarefas()}</span>
@@ -593,7 +628,7 @@
               </div>
             {/if}
 
-            {#if workflows.length === 0 && activity.tasks.length === 0 && runningAgents.length === 0 && orfaos.length === 0 && shellsVivos.length === 0 && processos.length === 0}
+            {#if nativeReady && workflows.length === 0 && activity.tasks.length === 0 && runningAgents.length === 0 && orfaos.length === 0 && shellsVivos.length === 0 && processos.length === 0 && commands.length === 0}
               <p class="activity-empty">{m.atividade_vazio()}</p>
             {/if}
           </div>
@@ -614,7 +649,11 @@
                 <div class="ag-meta">
                   <!-- Antes isto era um "◐ Rodando" fixo no HTML, então um subagente que terminou
                        há horas abria dizendo que ainda estava trabalhando. -->
-                  {#if subRodando === false}
+                  {#if subDetail.state === 'failed' || subDetail.failed}
+                    <span>{m.atividade_sub_falhou()}</span>
+                  {:else if codex && subRodando === null}
+                    <span>{m.atividade_estado_indisponivel()}</span>
+                  {:else if subRodando === false}
                     <span class="ok">✓ {m.atividade_sub_concluido()}</span>
                   {:else}
                     <span class="rodando">◐ {m.atividade_rodando()}</span>

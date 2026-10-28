@@ -3,6 +3,25 @@ import { expect, it, vi } from 'vitest';
 import { mount, tick, unmount } from 'svelte';
 import type { ChatEvent, StateEvent } from '@hangar/core';
 import MessageList from './MessageList.svelte';
+import * as m from '../paraglide/messages';
+
+it.each(['hook_prompt', 'hook_failed'])('o título do aviso %s vem do tipo, com a causa preservada', async text => {
+  const target = document.createElement('div');
+  document.body.appendChild(target);
+  const detail = 'hook-detail-127';
+  const component = mount(MessageList, { target, props: {
+    events: [{ id: 'hook-1', kind: 'notice', text, hook_error: detail }], pending: [],
+    sessionName: 's', dockH: 0, stateEvent: { session: 's', state: 'idle' },
+    onSelectOption: () => {}, onCancel: () => {},
+  } });
+  try {
+    await tick();
+    const notice = target.querySelector('.notice-hook');
+    expect(notice?.textContent).toContain(text === 'hook_failed' ? m.notice_hook_failed() : m.notice_hook_prompt());
+    expect(notice?.textContent).toContain(detail);
+    expect(notice?.textContent?.split(detail)).toHaveLength(2);
+  } finally { await unmount(component); target.remove(); }
+});
 
 it('preserva o texto ao voltar, anima só o streaming novo e conclui inteiro ao parar', async () => {
   const frames = new Map<number, FrameRequestCallback>();

@@ -688,6 +688,37 @@ describe('ActivitySheet real', () => {
     expect(api.getSubagents).toHaveBeenCalledTimes(2);
   });
 
+  it('retomada nativa do Codex atualiza a lista e o detalhe já concluído', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    vi.setSystemTime(new Date(2026, 9, 17, 12, 0, 0));
+    stores.chat.events = [
+      { id: 'spawn', kind: 'tool_use', tool_use_id: 'native', tool_name: 'spawn_agent', tool_input: { task_name: 'revisar-painel', agent_type: 'worker' } },
+      { id: 'created', kind: 'tool_result', tool_use_id: 'native', result: '{"task_name":"/root/revisar-painel"}' },
+      { id: 'complete', kind: 'user_msg', text: '<subagent_notification>{"agent_path":"/root/revisar-painel","status":{"completed":"ok"}}</subagent_notification>' },
+    ];
+    const finished: SubagentRun = { ...sub, agentId: 'native-thread', agentPath: '/root/revisar-painel', prompt: null, state: 'finished',
+      endedAt: new Date().toISOString(), events: [] };
+    api.getSubagents.mockResolvedValue([finished]);
+    api.getSubagent.mockResolvedValue(finished);
+    const { el, render } = await mount();
+    await click(el, 'revisar-painel');
+    const listed = api.getSubagents.mock.calls.length;
+    const detailed = api.getSubagent.mock.calls.length;
+    api.getSubagents.mockResolvedValue([{ ...finished, state: 'running' }]);
+    api.getSubagent.mockResolvedValue({ ...finished, state: 'running', events: [{ id: 'resumed', kind: 'assistant_msg', text: 'Retomada confirmada' }] });
+    stores.chat.events = [...stores.chat.events,
+      { id: 'followup', kind: 'tool_use', tool_use_id: 'followup', tool_name: 'followup_task', tool_input: { target: '/root/revisar-painel', message: 'continue' } },
+      { id: 'accepted', kind: 'tool_result', tool_use_id: 'followup', result: '{}' },
+    ];
+    await render();
+    expect(api.getSubagents.mock.calls.length).toBeGreaterThan(listed);
+    expect(api.getSubagent.mock.calls.length).toBeGreaterThan(detailed);
+    expect(el.textContent).toContain('Retomada confirmada');
+    const beforeTick = api.getSubagents.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(api.getSubagents.mock.calls.length).toBeGreaterThan(beforeTick);
+  });
+
   it('Android mantém cabeçalho no conteúdo com títulos, badges e voltar em todos os níveis', async () => {
     platform.OS = 'android';
     const { el } = await mount();

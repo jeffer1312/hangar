@@ -2,8 +2,9 @@
 import { act, createElement, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { AgentRun, ChatEvent, SubagentRun } from '@hangar/core';
+import { projectSubagentActivity, type Activity, type AgentRun, type ChatEvent, type CodexSubagents, type SubagentRun } from '@hangar/core';
 import { AgentesRodando } from './LiveWork';
+import { useAgentSubagents } from '../features/activity/useAgentSubagents';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const api = vi.hoisted(() => ({ getSubagents: vi.fn(), registrarDiag: vi.fn() }));
@@ -125,4 +126,114 @@ it('permite tentar de novo após timeout e ignora a resposta atrasada anterior',
   await act(async () => pending.resolve([sub]));
   expect(el.textContent).not.toContain('gpt-6.1-sol');
   expect(el.querySelector('[role="alert"]')).toBeNull();
+});
+
+it('Codex aguarda a descoberta, acompanha o state e não consulta a lista a cada cinco segundos', async () => {
+  function Monitor({ states }: { states: CodexSubagents }) {
+    const snapshot = useAgentSubagents('a', 'sess', true, 'conversation', true, states);
+    return createElement('output', null, `${snapshot.loaded}:${snapshot.subs[0]?.state ?? ''}`);
+  }
+  const pending = Promise.withResolvers<SubagentRun[]>();
+  api.getSubagents.mockReturnValue(pending.promise);
+  const el = document.createElement('div');
+  const root = createRoot(el);
+  roots.push(root);
+  const state = { agent_path: '/root/review', state: 'running' as const, ended_at: null, can_message: false, message_blocked: null };
+  const render = (states: CodexSubagents) => act(async () => root.render(createElement(Monitor, { states })));
+  await render({ 'sub-1': state });
+  expect(el.textContent).toBe('false:');
+  await act(async () => pending.resolve([{ ...sub, state: 'running' }]));
+  expect(el.textContent).toBe('true:running');
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(api.getSubagents).toHaveBeenCalledTimes(1);
+  await render({ 'sub-1': { ...state, state: 'finished', ended_at: 1000 } });
+  expect(el.textContent).toBe('true:finished');
+  expect(api.getSubagents).toHaveBeenCalledTimes(1);
+  api.getSubagents.mockResolvedValue([{ ...sub, state: 'running' }]);
+  await render({ 'sub-1': { ...state, state: 'finished', ended_at: 1000 }, other: state });
+  expect(api.getSubagents).toHaveBeenCalledTimes(2);
+  expect(el.textContent).toBe('true:finished');
+});
+
+it('Codex tenta novamente após falha inicial e para as consultas ao recuperar', async () => {
+  function Monitor() {
+    const snapshot = useAgentSubagents('a', 'sess', true, 'conversation', true);
+    return createElement('output', null, `${snapshot.loaded}:${snapshot.error ? 'error' : snapshot.subs[0]?.state ?? ''}`);
+  }
+  api.getSubagents.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([{ ...sub, state: 'finished' }]);
+  const el = document.createElement('div');
+  const root = createRoot(el);
+  roots.push(root);
+  await act(async () => root.render(createElement(Monitor)));
+  expect(el.textContent).toBe('false:error');
+  await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+  expect(el.textContent).toBe('true:finished');
+  const calls = api.getSubagents.mock.calls.length;
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(api.getSubagents).toHaveBeenCalledTimes(calls);
+});
+
+it('acompanhamento se recupera do timeout com todos os cartões concluídos e ocultos', async () => {
+  function Monitor() {
+    const { subs } = useAgentSubagents('a', 'sess', true);
+    return createElement('output', null, subs[0]?.state);
+  }
+  api.getSubagents.mockResolvedValue([{ ...sub, state: 'finished' }]);
+  const el = document.createElement('div');
+  const root = createRoot(el);
+  roots.push(root);
+  await act(async () => root.render(createElement(Monitor)));
+  expect(el.textContent).toBe('finished');
+  expect(el.querySelector('button')).toBeNull();
+  const pending = Promise.withResolvers<SubagentRun[]>();
+  api.getSubagents.mockReturnValue(pending.promise);
+  await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+  expect(el.textContent).toBe('finished');
+  api.getSubagents.mockResolvedValue([{ ...sub, state: 'running' }]);
+  await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+  expect(el.textContent).toBe('running');
+  await act(async () => pending.resolve([{ ...sub, state: 'finished' }]));
+  expect(el.textContent).toBe('running');
+});
+
+it('/clear invalida filho do mesmo caminho, inclusive resposta tardia, timeout e desativação', async () => {
+  const raw: Activity = { tasks: [], agents: [{ ...agent, agentPath: '/root/review' }], shells: [],
+    total: 0, done: 0, inProgress: 0, runningAgents: 1, runningShells: 0 };
+  function Monitor({ conversation, enabled }: { conversation: string; enabled: boolean }) {
+    const { subs } = useAgentSubagents('a', 'sess', enabled, conversation);
+    return createElement('output', null, `${subs[0]?.agentId ?? 'empty'}:${projectSubagentActivity(raw, subs).runningAgents}`);
+  }
+  const old = { ...sub, agentId: 'old-child', agentPath: '/root/review', state: 'finished' as const };
+  api.getSubagents.mockResolvedValue([old]);
+  const el = document.createElement('div');
+  const root = createRoot(el);
+  roots.push(root);
+  const render = (conversation: string, enabled = true) => act(async () => root.render(createElement(Monitor, { conversation, enabled })));
+  await render('before-clear');
+  expect(el.textContent).toBe('old-child:0');
+  const oldRequest = Promise.withResolvers<SubagentRun[]>();
+  api.getSubagents.mockReturnValue(oldRequest.promise);
+  await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+  const newRequest = Promise.withResolvers<SubagentRun[]>();
+  api.getSubagents.mockReturnValue(newRequest.promise);
+  await render('after-clear');
+  expect(el.textContent).toBe('empty:1');
+  await act(async () => oldRequest.resolve([old]));
+  expect(el.textContent).toBe('empty:1');
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+  expect(el.textContent).toBe('empty:1');
+  const current = { ...old, agentId: 'new-child', state: 'running' as const };
+  api.getSubagents.mockResolvedValue([current]);
+  await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+  expect(el.textContent).toBe('new-child:1');
+  await act(async () => newRequest.resolve([old]));
+  expect(el.textContent).toBe('new-child:1');
+  await render('after-clear', false);
+  expect(el.textContent).toBe('empty:1');
+  const reopened = Promise.withResolvers<SubagentRun[]>();
+  api.getSubagents.mockReturnValue(reopened.promise);
+  await render('after-clear');
+  expect(el.textContent).toBe('empty:1');
+  await act(async () => reopened.resolve([current]));
+  expect(el.textContent).toBe('new-child:1');
 });

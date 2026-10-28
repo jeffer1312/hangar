@@ -167,6 +167,8 @@ pub struct Thread {
     pub path:Option<String>,
     pub status:ThreadStatus,
     pub turns:Vec<Turn>,
+    pub parent_thread_id:Option<String>,
+    pub can_accept_direct_input:Option<bool>,
     #[serde(deserialize_with = "present")] pub model:Option<Option<String>>,
     #[serde(deserialize_with = "present")] pub reasoning_effort:Option<Option<String>>,
 }
@@ -208,6 +210,7 @@ wire!(pub struct ThreadTokenUsage { pub last:TokenUsageBreakdown, pub total:Toke
 // ---------- itens ----------
 
 wire!(pub struct AsyncUserInputQuestion { pub title:String, pub options:Option<Vec<Value>> });
+wire!(pub struct CollabAgentState { pub status:String });
 
 #[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
 #[cfg_attr(test,derive(schemars::JsonSchema))]
@@ -225,8 +228,15 @@ pub enum ThreadItem {
         #[serde(default)] questions:Option<Vec<AsyncUserInputQuestion>> },
     UserMessage { #[serde(default)] id:String, #[serde(default)] content:Vec<UserInput> },
     Reasoning { #[serde(default)] id:String },
-    CommandExecution { #[serde(default)] id:String, #[serde(default)] process_id:Option<String> },
+    CommandExecution { #[serde(default)] id:String, #[serde(default)] process_id:Option<String>,
+        #[serde(default)] command:String, #[serde(default)] command_actions:Vec<CommandAction> },
     ContextCompaction { #[serde(default)] id:String },
+    CollabAgentToolCall { #[serde(default)] id:String, #[serde(default)] tool:String,
+        #[serde(default)] status:String, #[serde(default)] sender_thread_id:String,
+        #[serde(default)] receiver_thread_ids:Vec<String>,
+        #[serde(default)] agents_states:std::collections::BTreeMap<String,CollabAgentState> },
+    SubAgentActivity { #[serde(default)] id:String, #[serde(default)] kind:String,
+        #[serde(default)] agent_thread_id:String, #[serde(default)] agent_path:String },
     #[default] #[serde(other)] Unknown,
 }
 
@@ -260,6 +270,13 @@ wire!(pub struct ErrorNotification { pub thread_id:String, pub error:TurnError, 
 wire!(pub struct HookOutputEntry { pub kind:String, pub text:Option<String> });
 wire!(pub struct HookRunSummary { pub event_name:String, pub status:String, pub source_path:Option<String>, pub entries:Vec<HookOutputEntry> });
 wire!(pub struct HookCompletedNotification { pub thread_id:String, pub run:HookRunSummary });
+wire!(pub struct CommandAction { pub command:Option<String> });
+// `warning` e `guardianWarning` têm a mesma forma.
+wire!(pub struct WarningNotification { pub message:String, pub thread_id:Option<String> });
+wire!(pub struct ConfigWarningNotification { pub summary:String, pub details:Option<String>, pub path:Option<String> });
+wire!(pub struct DeprecationNoticeNotification { pub summary:String, pub details:Option<String> });
+wire!(pub struct McpServerStatusUpdatedNotification { pub name:String, pub status:String, pub error:Option<String>, pub thread_id:Option<String> });
+wire!(pub struct CommandExecutionOutputDeltaNotification { pub thread_id:String, pub turn_id:String, pub item_id:String, pub delta:String });
 
 #[derive(Clone,Debug,PartialEq,Deserialize)]
 #[cfg_attr(test,derive(schemars::JsonSchema))]
@@ -283,6 +300,12 @@ pub enum ServerNotification {
     #[serde(rename = "account/login/completed")] AccountLoginCompleted(AccountLoginCompletedNotification),
     #[serde(rename = "error")] Error(ErrorNotification),
     #[serde(rename = "hook/completed")] HookCompleted(HookCompletedNotification),
+    #[serde(rename = "item/commandExecution/outputDelta")] CommandExecutionOutputDelta(CommandExecutionOutputDeltaNotification),
+    #[serde(rename = "warning")] Warning(WarningNotification),
+    #[serde(rename = "guardianWarning")] GuardianWarning(WarningNotification),
+    #[serde(rename = "configWarning")] ConfigWarning(ConfigWarningNotification),
+    #[serde(rename = "deprecationNotice")] DeprecationNotice(DeprecationNoticeNotification),
+    #[serde(rename = "mcpServer/startupStatus/updated")] McpServerStatusUpdated(McpServerStatusUpdatedNotification),
     /// Método que o Hangar não usa: ignorado sem erro.
     #[serde(skip)] Unknown,
 }
@@ -352,6 +375,12 @@ decoder!(ServerNotification,{
     "account/login/completed" => AccountLoginCompleted(AccountLoginCompletedNotification),
     "error" => Error(ErrorNotification),
     "hook/completed" => HookCompleted(HookCompletedNotification),
+    "item/commandExecution/outputDelta" => CommandExecutionOutputDelta(CommandExecutionOutputDeltaNotification),
+    "warning" => Warning(WarningNotification),
+    "guardianWarning" => GuardianWarning(WarningNotification),
+    "configWarning" => ConfigWarning(ConfigWarningNotification),
+    "deprecationNotice" => DeprecationNotice(DeprecationNoticeNotification),
+    "mcpServer/startupStatus/updated" => McpServerStatusUpdated(McpServerStatusUpdatedNotification),
 });
 decoder!(ServerRequest,{
     "item/commandExecution/requestApproval" => CommandExecutionApproval(CommandExecutionRequestApprovalParams),
@@ -408,6 +437,21 @@ mod tests {
         assert!(matches!(&item,ThreadItem::AgentMessage { delivery:Some(d),questions:Some(questions),.. } if d == "async" && questions[0].title == "Q"));
         let item:ThreadItem = serde_json::from_value(json!({"type":"imageGeneration","id":"z"})).unwrap();
         assert!(matches!(item,ThreadItem::Unknown));
+    }
+
+    #[test]
+    fn native_subagent_items_and_direct_input_capability_are_preserved() {
+        let item:ThreadItem=serde_json::from_value(json!({"type":"collabAgentToolCall","tool":"spawnAgent",
+            "status":"completed","senderThreadId":"root","receiverThreadIds":["child"],
+            "agentsStates":{"child":{"status":"running"}}})).unwrap();
+        assert!(matches!(item,ThreadItem::CollabAgentToolCall {receiver_thread_ids,agents_states,..}
+            if receiver_thread_ids==["child"] && agents_states["child"].status=="running"));
+        let item:ThreadItem=serde_json::from_value(json!({"type":"subAgentActivity","kind":"completed",
+            "agentThreadId":"child","agentPath":"/root/task"})).unwrap();
+        assert!(matches!(item,ThreadItem::SubAgentActivity {kind,agent_thread_id,..} if kind=="completed" && agent_thread_id=="child"));
+        let thread:Thread=serde_json::from_value(json!({"id":"child","parentThreadId":"root","canAcceptDirectInput":false})).unwrap();
+        assert_eq!(thread.parent_thread_id.as_deref(),Some("root"));
+        assert_eq!(thread.can_accept_direct_input,Some(false));
     }
 
     #[test]

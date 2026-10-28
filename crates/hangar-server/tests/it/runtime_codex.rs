@@ -2616,3 +2616,110 @@ fn stop_whose_turn_completed_is_lost_leaves_working_through_the_silent_turn_prob
     line(&mut engine,idle_thread(&probe["id"]),71.6);
     assert_eq!(engine.view()["state"],"idle");
 }
+
+#[test]
+fn plugin_hook_refused_after_update_is_trusted_again_through_the_session_connection() {
+    let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":true,"initialized":true,"ready":true,
+        "cwd":"/home/u","codex_home":"/home/u/.codex"}),1,clock(10.0));
+    let refused = json!({"method":"hook/completed","params":{"threadId":"thread-1","run":{"eventName":"postToolUse","status":"failed",
+        "sourcePath":"/home/u/.codex/plugins/cache/m/p/local/hooks/hooks.json",
+        "entries":[{"kind":"error","text":"plugin contents changed; hook approval required"}]}}});
+    let list = frames(&line(&mut engine,refused.clone(),11.0));
+    assert_eq!(list.len(),1);
+    assert_eq!(list[0]["method"],"hooks/list");
+    assert_eq!(list[0]["params"]["cwds"],json!(["/home/u"]));
+    // Os outros hooks do mesmo lote falham antes da resposta: uma conferência só.
+    assert!(frames(&line(&mut engine,refused,11.1)).is_empty());
+
+    let hooks = json!([
+        {"key":"p@m:hooks/hooks.json:post_tool_use:0:0","currentHash":"sha256:decl/sha256:content","source":"plugin","trustStatus":"modified","enabled":true},
+        {"key":"/home/u/.codex/hooks.json:stop:0:0","currentHash":"sha256:account","source":"project","trustStatus":"trusted","enabled":true},
+        {"key":"/home/u/repo/.codex/hooks.json:stop:0:0","currentHash":"sha256:repo","source":"project","trustStatus":"untrusted","enabled":true},
+        {"key":"p@m:hooks/hooks.json:stop:0:0","currentHash":"sha256:off","source":"plugin","trustStatus":"modified","enabled":false}]);
+    let write = frames(&line(&mut engine,json!({"id":list[0]["id"],"result":{"data":[{"cwd":"/home/u","hooks":hooks}]}}),11.2));
+    assert_eq!(write.len(),1);
+    assert_eq!(write[0]["method"],"config/batchWrite");
+    assert_eq!(write[0]["params"]["reloadUserConfig"],true);
+    assert_eq!(write[0]["params"]["edits"],json!([
+        {"keyPath":"\"hooks\".\"state\".\"p@m:hooks/hooks.json:post_tool_use:0:0\".\"trusted_hash\"","value":"sha256:decl/sha256:content","mergeStrategy":"replace"},
+        {"keyPath":"\"hooks\".\"state\".\"/home/u/.codex/hooks.json:stop:0:0\".\"trusted_hash\"","value":"sha256:account","mergeStrategy":"replace"}]));
+    assert!(frames(&line(&mut engine,json!({"id":write[0]["id"],"result":{}}),11.3)).is_empty());
+}
+
+fn hook_notices(effects:&[Effect]) -> Vec<String> {
+    effects.iter().filter_map(|e|match e { Effect::Policy { kind,payload,.. } if kind == "local_output" => payload["hook_error"].as_str().map(str::to_owned),_=>None }).collect()
+}
+
+#[test]
+fn failed_hook_shows_once_in_the_conversation_and_the_repeat_count_closes_the_turn() {
+    let mut engine = engine();
+    line(&mut engine,json!({"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1"}}}),10.0);
+    let failed = |hook:&str| json!({"method":"hook/completed","params":{"threadId":"thread-1","turnId":"turn-1","run":{"eventName":"preToolUse",
+        "status":"failed","sourcePath":format!("/home/u/.codex/plugins/cache/m/{hook}/1.0/hooks/hooks.json"),
+        "entries":[{"kind":"error","text":"hook exited with code 127"}]}}});
+    assert_eq!(hook_notices(&line(&mut engine,failed("lint"),10.1)),["lint · preToolUse: hook exited with code 127"]);
+    // Outro hook que falha entre as repetições não quebra a sequência do primeiro.
+    assert_eq!(hook_notices(&line(&mut engine,failed("outro"),10.2)).len(),1);
+    assert!(hook_notices(&line(&mut engine,failed("lint"),10.3)).is_empty());
+    assert!(hook_notices(&line(&mut engine,failed("lint"),10.4)).is_empty());
+    let done = line(&mut engine,json!({"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}),11.0);
+    assert_eq!(hook_notices(&done),["lint · preToolUse: hook exited with code 127 (3× seguidas)"]);
+    assert!(done.iter().any(|e|matches!(e,Effect::Policy { kind,payload,.. } if kind == "local_output" && payload["notice"] == "hook_failed")));
+    // Hook de outra conversa (subagente) não entra nesta.
+    let other = json!({"method":"hook/completed","params":{"threadId":"thread-2","run":{"eventName":"stop","status":"failed","entries":[]}}});
+    assert!(hook_notices(&line(&mut engine,other,11.1)).is_empty());
+}
+
+#[test]
+fn command_that_outlives_its_turn_stays_listed_with_its_output_until_it_exits() {
+    let mut engine = engine();
+    line(&mut engine,json!({"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1"}}}),10.0);
+    line(&mut engine,json!({"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"commandExecution",
+        "id":"exec-1","processId":"4242","command":"/usr/bin/bash -lc 'npm run dev'","commandActions":[{"type":"unknown","command":"npm run dev"}]}}}),10.5);
+    let commands = engine.view()["codex_commands"].clone();
+    assert_eq!(commands[0]["process_id"],"4242");
+    assert_eq!(commands[0]["command"],"npm run dev");
+    assert_eq!(commands[0]["background"],false);
+    let effects = line(&mut engine,json!({"method":"item/commandExecution/outputDelta","params":{"threadId":"thread-1","turnId":"turn-1",
+        "itemId":"exec-1","delta":"ready on :5173\n"}}),10.6);
+    assert_eq!(published(&effects,"output"),[json!({"exec-1":"ready on :5173\n"}).to_string()]);
+    line(&mut engine,json!({"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}),11.0);
+    line(&mut engine,json!({"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-2"}}}),12.0);
+    assert_eq!(engine.view()["codex_commands"][0]["background"],true,"o turno seguinte não apaga o comando que segue vivo");
+    // O rabo fica nos últimos 16 000 bytes.
+    let effects = line(&mut engine,json!({"method":"item/commandExecution/outputDelta","params":{"threadId":"thread-1","turnId":"turn-1",
+        "itemId":"exec-1","delta":"x".repeat(20_000)}}),12.1);
+    let tail:Value = serde_json::from_str(&published(&effects,"output")[0]).unwrap();
+    assert_eq!(tail["exec-1"].as_str().unwrap().len(),16_000);
+    let effects = line(&mut engine,json!({"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1",
+        "item":{"type":"commandExecution","id":"exec-1","processId":"4242"}}}),13.0);
+    assert!(engine.view().get("codex_commands").is_none());
+    assert_eq!(published(&effects,"output"),[""]);
+}
+
+#[test]
+fn terminate_asks_the_codex_to_end_only_a_command_it_is_still_running() {
+    let mut engine = engine();
+    line(&mut engine,json!({"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1"}}}),10.0);
+    line(&mut engine,json!({"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"commandExecution",
+        "id":"exec-1","processId":"4242","command":"sleep 120"}}}),10.5);
+    let sent = frames(&engine.command(command(OperationKind::TerminateTerminal,json!({"process_id":"4242"})),clock(11.0)).unwrap());
+    assert_eq!(sent[0]["method"],"thread/backgroundTerminals/terminate");
+    assert_eq!(sent[0]["params"],json!({"threadId":"thread-1","processId":"4242"}));
+    assert!(engine.command(op("op-2",OperationKind::TerminateTerminal,json!({"process_id":"999"})),clock(11.1)).is_err());
+}
+
+#[test]
+fn codex_warnings_and_failed_mcp_server_show_once_in_the_conversation() {
+    let mut engine = engine();
+    let notes = |effects:&[Effect]| effects.iter().filter_map(|e|match e { Effect::Policy { kind,payload,.. } if kind == "local_output" => payload["text"].as_str().map(str::to_owned),_=>None }).collect::<Vec<_>>();
+    let warning = json!({"method":"warning","params":{"message":"Modelo sem suporte a imagem","threadId":"thread-1"}});
+    assert_eq!(notes(&line(&mut engine,warning.clone(),10.0)),["Aviso do Codex: Modelo sem suporte a imagem"]);
+    assert!(notes(&line(&mut engine,warning,10.1)).is_empty());
+    let mcp = json!({"method":"mcpServer/startupStatus/updated","params":{"name":"figma","status":"failed","error":"connection refused"}});
+    assert_eq!(notes(&line(&mut engine,mcp,10.2)),["O servidor MCP `figma` não subiu: connection refused"]);
+    let ready = json!({"method":"mcpServer/startupStatus/updated","params":{"name":"figma","status":"ready"}});
+    assert!(notes(&line(&mut engine,ready,10.3)).is_empty());
+    let elsewhere = json!({"method":"warning","params":{"message":"de outra conversa","threadId":"thread-9"}});
+    assert!(notes(&line(&mut engine,elsewhere,10.4)).is_empty());
+}

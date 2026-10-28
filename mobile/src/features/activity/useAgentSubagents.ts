@@ -1,17 +1,26 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import { getSubagents, registrarDiag, type SubagentRun } from '@hangar/core';
+import { getSubagents, projectCodexSubagent, registrarDiag, type CodexSubagents, type SubagentRun } from '@hangar/core';
 import { useServers } from '../../stores/servers';
 import { ActivityTimeout, useActivityRequest } from './useActivityRequest';
 import * as m from '../../paraglide/messages';
 
 const EMPTY: SubagentRun[] = [];
+export type AgentSubagents = ReturnType<typeof useAgentSubagents>;
 
-export function useAgentSubagents(serverId: string | undefined, name: string | undefined, enabled: boolean) {
+export function useAgentSubagents(serverId: string | undefined, name: string | undefined, enabled: boolean, conversation?: string, codex = false, states?: CodexSubagents) {
   const server = useServers(state => state.servers.find(item => item.id === serverId));
-  const key = `${serverId}::${name}`;
-  const [snapshot, setSnapshot] = useState({ key, subs: EMPTY, error: '' });
+  const source = JSON.stringify([serverId, name, conversation, codex]);
+  const nativeIds = Object.entries(states ?? {}).map(([id, state]) => `${id}:${state.agent_path ?? ''}`).sort().join('|');
+  const epoch = useRef({ source, enabled, value: 0 });
+  if (epoch.current.source !== source || epoch.current.enabled !== enabled) {
+    epoch.current = { source, enabled, value: epoch.current.value + 1 };
+  }
+  const key = JSON.stringify([source, epoch.current.value]);
+  const activeKey = useRef<string | null>(null);
+  activeKey.current = enabled ? key : null;
+  const [snapshot, setSnapshot] = useState({ key, subs: EMPTY, error: '', loaded: false });
   const [attempt, setAttempt] = useState(0);
   const read = useActivityRequest();
   const retry = useCallback(() => {
@@ -23,37 +32,49 @@ export function useAgentSubagents(serverId: string | undefined, name: string | u
     if (!enabled || !server || !name) return;
     let stopped = false;
     let busy = false;
-    let timedOut = false;
-    // A consulta repete a cada 5 s: a mesma falha vai ao diário uma vez.
+    let retryAfter = 0;
+    let timeouts = 0;
+    let failureRetry: ReturnType<typeof setTimeout> | undefined;
+    // A mesma falha vai ao diário uma vez.
     let logged = '';
     const refresh = async () => {
-      if (stopped || busy || timedOut || AppState.currentState !== 'active') return;
+      if (stopped || busy || Date.now() < retryAfter || AppState.currentState !== 'active') return;
+      clearTimeout(failureRetry);
       busy = true;
       try {
         const subs = await read(getSubagents(name, server));
+        if (stopped || activeKey.current !== key) return;
+        timeouts = 0;
+        retryAfter = 0;
         if (!stopped) setSnapshot(current => {
-          const models = (rows: SubagentRun[]) => rows.map(sub => [sub.agentId, sub.prompt, sub.model]);
-          if (current.key === key && !current.error && JSON.stringify(models(current.subs)) === JSON.stringify(models(subs))) return current;
-          return { key, subs, error: '' };
+          const models = (rows: SubagentRun[]) => rows.map(sub => [sub.agentId, sub.agentPath, sub.prompt, sub.model, sub.state, sub.finished, sub.endedAt]);
+          if (current.key === key && current.loaded && !current.error && JSON.stringify(models(current.subs)) === JSON.stringify(models(subs))) return current;
+          return { key, subs, error: '', loaded: true };
         });
       } catch (error) {
-        timedOut = error instanceof ActivityTimeout;
+        if (stopped || activeKey.current !== key) return;
+        const timedOut = error instanceof ActivityTimeout;
+        if (timedOut) retryAfter = Date.now() + Math.min(60_000, 5_000 * 2 ** Math.min(timeouts++, 4));
         const detail = error instanceof Error ? error.message : String(error);
         if (!timedOut && detail !== logged) {
           logged = detail;
           registrarDiag({ evento: 'activity.subagents_failed', nivel: 'erro', codigo: 'subagents_read_failed', detalhe: detail });
         }
-        if (!stopped) setSnapshot(current => ({ key, subs: current.key === key ? current.subs : EMPTY,
+        if (!stopped) setSnapshot(current => ({ key, subs: current.key === key ? current.subs : EMPTY, loaded: current.key === key && current.loaded,
           error: error instanceof ActivityTimeout ? error.message : m.atividade_erro_subagentes() }));
+        if (codex) failureRetry = setTimeout(() => void refresh(), Math.max(5_000, retryAfter - Date.now()));
       } finally {
         busy = false;
       }
     };
     void refresh();
-    const timer = setInterval(() => { void refresh(); }, 5_000);
-    const appState = AppState.addEventListener('change', state => { if (state === 'active') void refresh(); });
-    return () => { stopped = true; clearInterval(timer); appState.remove(); };
-  }, [enabled, server, name, key, read, attempt]));
+    const timer = codex ? undefined : setInterval(() => { void refresh(); }, 5_000);
+    const appState = AppState.addEventListener('change', state => { if (state === 'active') { retryAfter = 0; void refresh(); } });
+    return () => { stopped = true; clearInterval(timer); clearTimeout(failureRetry); appState.remove(); };
+  }, [enabled, server, name, key, read, attempt, codex, nativeIds]));
 
-  return { ...(snapshot.key === key ? snapshot : { key, subs: EMPTY, error: '' }), retry };
+  const current = enabled && snapshot.key === key;
+  const raw = current ? snapshot.subs : EMPTY;
+  const subs = useMemo(() => codex ? raw.map(run => projectCodexSubagent(run, states)) : raw, [raw, codex, states]);
+  return { key, subs, error: current ? snapshot.error : '', loaded: current && snapshot.loaded, retry };
 }

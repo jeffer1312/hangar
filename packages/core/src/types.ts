@@ -230,7 +230,26 @@ export interface ChatEvent {
   skill?: { name: string; path?: string | null; body: string } | null;
 }
 
+export interface CodexCommand {
+  id: string;
+  process_id: string;
+  command: string;
+  started_at: number;
+  background: boolean;
+}
+
+export interface CodexSubagent {
+  agent_path: string | null;
+  state: 'running' | 'finished' | 'failed' | null;
+  ended_at: number | null;
+  can_message: boolean;
+  message_blocked: string | null;
+}
+export type CodexSubagents = Record<string, CodexSubagent>;
+
 export interface StateEvent {
+  codex_subagents?: CodexSubagents;
+  codex_commands?: CodexCommand[];
   interaction_id?: string | null;
   codex_service_tier?: string | null;
   codex_buffering?: boolean;
@@ -340,6 +359,8 @@ export interface WorkflowAgent {
 // Subagente solto (tool Agent), lido do transcript dele em <session-dir>/subagents/.
 export interface SubagentRun {
   agentId: string;
+  agentPath?: string | null;
+  nickname?: string | null;
   agentType: string | null;
   prompt: string | null;
   startedAt: string;

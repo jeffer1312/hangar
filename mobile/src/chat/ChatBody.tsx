@@ -10,7 +10,9 @@ import { useSessions } from '../stores/sessions';
 import { confirmFirstInput, readFirstInput, useNewConversation } from '../stores/newConversation';
 import { ChatHeader } from './ChatHeader';
 import { LoopChip } from './LoopChip';
+import { CodexCommandsChip } from './LiveWork';
 import { useActivity } from '../features/activity/useActivity';
+import { useAgentSubagents } from '../features/activity/useAgentSubagents';
 import { MessageList } from './MessageList';
 import { pararTts } from './BubbleActions';
 import { Composer } from './Composer';
@@ -27,7 +29,7 @@ import { SessionProblem, showsSessionProblem } from './SessionProblem';
 import { SessionPickerSheet } from './SessionPickerSheet';
 import { useLiveVoice } from '../features/voice/liveVoiceStore';
 import { PlanActions } from './PlanActions';
-import { askPayloadFromToolUse, fetchSessionsForServer, isOrq, selectOptionForServer, submitSelectedForServer, interrupt, recarregarSessao, implementCodexPlan, setPermissionMode } from '@hangar/core';
+import { askPayloadFromToolUse, fetchSessionsForServer, isOrq, selectOptionForServer, submitSelectedForServer, interrupt, recarregarSessao, implementCodexPlan, setPermissionMode, projectSubagentActivity } from '@hangar/core';
 import { createEventProjection } from './eventProjection';
 import type { Provider, SessionInfo } from '@hangar/core';
 import * as m from '../paraglide/messages';
@@ -137,8 +139,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
   const turnSeen = chat.use((s) => s.turnSeen);
   // Mesma fonte do painel Atividade: um Agent em background devolve resultado na hora e só o fold
   // sabe que ele segue rodando.
-  const activity = useActivity(events, eventsRevision);
-  const agentesRodando = useMemo(() => activity.agents.filter((a) => a.running), [activity]);
+  const transcriptActivity = useActivity(events, eventsRevision);
   const loading = chat.use((s) => s.loading);
   const error = chat.use((s) => s.error);
   const olderFailed = chat.use((s) => s.olderFailed);
@@ -245,6 +246,14 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
     };
   }, [ready, servidorSumiu, serverId, name]);
   const provider: Provider | null = codexPreThread ? 'codex' : rowsProvider ?? fetchedSession?.provider ?? null;
+  const agentConversation = useMemo(() => events.find(event => event.kind !== 'notice' && !event.id.startsWith('queued-'))?.id,
+    [events, eventsRevision]);
+  const agentSubagents = useAgentSubagents(serverId, name,
+    transcriptActivity.agents.some(agent => agent.kind === 'agent' && (provider === 'codex' || agent.running))
+      || Object.keys(stateEvent?.codex_subagents ?? {}).length > 0, agentConversation, provider === 'codex', stateEvent?.codex_subagents);
+  const activity = useMemo(() => provider === 'codex' ? projectSubagentActivity(transcriptActivity, agentSubagents.subs, undefined, stateEvent?.codex_subagents) : transcriptActivity,
+    [provider, transcriptActivity, agentSubagents.subs, stateEvent?.codex_subagents]);
+  const agentesRodando = useMemo(() => provider === 'codex' && !agentSubagents.loaded ? [] : activity.agents.filter((agent) => agent.running), [activity, provider, agentSubagents.loaded]);
   const { queuePanel, pendingAsk, proposedPlan, replyPlan } = useMemo(
     () => projectEvents(events, eventsRevision, provider, serverQueue),
     [projectEvents, events, eventsRevision, provider, serverQueue],
@@ -601,6 +610,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
               stateEvent={stateEvent}
               turnSeen={turnSeen}
               agentesRodando={agentesRodando}
+              agentSubagents={agentSubagents}
               onAbrirAgentes={onAbrirAgentes}
               queuePanel={queuePanel}
               canQuote={!servidorSumiu && fetchedSession !== null && !dead && !orq && !soLeitura}
@@ -608,6 +618,8 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
           )}
         </View>
         <ComposerDock onLayout={(e) => setDockH(e.nativeEvent.layout.height)}>
+        {!servidorSumiu && !dead && stateEvent?.codex_commands?.length
+          ? <CodexCommandsChip commands={stateEvent.codex_commands} onPress={onAbrirAgentes} /> : null}
         {sseRecusado && !servidorSumiu && !codexPreThread ? (
           <View style={styles.sseRecusado} accessibilityRole="alert">
             <Text style={styles.sseRecusadoTexto}>{m.chat_sse_recusado()}</Text>
