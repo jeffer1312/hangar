@@ -328,9 +328,13 @@ impl Batch {
     }
 }
 
-/// O 503 é recusa do servidor antes de mexer em algo e mostra o motivo; sem resposta ou 500/502/504 a ação pode ter ocorrido.
+/// A resposta preserva o motivo; sem conclusão conhecida, a pessoa reconfere a lista antes de repetir.
 fn answered_failure(e: Failure) -> String {
-    Hangar::failure(&Failure { uncertain: e.uncertain && e.status != Some(503), ..e })
+    if e.uncertain && e.status != Some(503) {
+        let warning = tr_shared("worktree_result_uncertain", &[]);
+        return if e.status.is_some() { format!("{}\n{warning}", tr(&e.detail)) } else { warning };
+    }
+    Hangar::failure(&Failure { uncertain: false, ..e })
 }
 
 /// Um pedido por worktree, com a semântica do lote: perde arquivos só a que a confirmação mostrou perdendo.
@@ -2030,6 +2034,15 @@ mod tests {
         let s = st(json!({"path": "/r/x", "repo": "/r", "exists": true, "branch": "x", "base": "main", "merged": false,
                           "ahead": 2, "dirty": 3, "ignored": [".env.local"], "sessions": [], "closed": 0}));
         assert_eq!(lost_files(&s).len(), 2);
+    }
+
+    #[test]
+    fn cleanup_failure_keeps_the_server_reason_when_the_result_is_uncertain() {
+        let reason = "fatal: working trees containing submodules cannot be moved or removed";
+        let failure = crate::api::Failure { status: Some(500), detail: reason.into(), uncertain: true, retry_after: None, code: None };
+        let message = super::answered_failure(failure);
+        assert!(message.contains(reason), "{message}");
+        assert!(message.contains(&tr_shared("worktree_result_uncertain", &[])), "{message}");
     }
 
     #[test]
