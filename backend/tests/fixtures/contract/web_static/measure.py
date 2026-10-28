@@ -40,7 +40,7 @@ def python_server():
 
 
 def measure(command):
-    import httpx
+    import httpx2 as httpx
     import psutil
     with tempfile.TemporaryDirectory() as home:
         process = subprocess.Popen(command, cwd=ROOT, env={**os.environ, 'HOME':home, 'USERPROFILE':home},
