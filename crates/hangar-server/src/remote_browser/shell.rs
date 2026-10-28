@@ -1,8 +1,45 @@
 //! O controlador relê seu endereço e credencial a cada comando.
 use super::{input, ws::Failure};
 use serde_json::{Value, json};
-use std::path::Path;
+use std::{error::Error, io, path::Path};
 const NOT_OPEN: &str = "o app desktop não está aberto nesta máquina";
+
+fn unavailable(error: reqwest::Error, before_headers: bool) -> Failure {
+    let connecting = error.is_connect();
+    let mut causes = vec![error.to_string()];
+    let mut refused = None;
+    let mut incomplete = false;
+    let mut cause = error.source();
+    while let Some(current) = cause {
+        causes.push(current.to_string());
+        if let Some(current) = current.downcast_ref::<io::Error>() {
+            if connecting && current.kind() == io::ErrorKind::ConnectionRefused {
+                if let Some(code) = current.raw_os_error() {
+                    let message = current.to_string();
+                    let suffix = format!(" (os error {code})");
+                    let message = message.strip_suffix(&suffix).unwrap_or(&message);
+                    let kind = if cfg!(windows) { "WinError" } else { "Errno" };
+                    refused = Some(format!("<urlopen error [{kind} {code}] {message}>"));
+                }
+            }
+        }
+        if let Some(current) = current.downcast_ref::<hyper::Error>() {
+            incomplete |= current.is_incomplete_message();
+        }
+        cause = current.source();
+    }
+    let reason = if error.is_timeout() {
+        if connecting { "<urlopen error timed out>".to_owned() } else { "timed out".to_owned() }
+    } else if let Some(reason) = refused {
+        reason
+    } else if before_headers && incomplete {
+        // Um corpo interrompido não é a ausência de resposta HTTP.
+        "Remote end closed connection without response".to_owned()
+    } else {
+        causes.join(": ")
+    };
+    Failure::plain(format!("o app desktop não respondeu: {reason}"))
+}
 
 pub(super) fn sidecar(dir: &Path, name: &str, target: bool) -> Option<Value> {
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
@@ -74,10 +111,10 @@ pub(super) async fn verb(
         .body(json!({"chave":key,"verbo":"layout","args":args}).to_string())
         .send()
         .await
-        .map_err(|e| Failure::plain(format!("o app desktop não respondeu: {e}")))?;
+        .map_err(|error| unavailable(error, true))?;
     let bytes = response
         .bytes()
         .await
-        .map_err(|e| Failure::plain(format!("o app desktop não respondeu: {e}")))?;
+        .map_err(|error| unavailable(error, false))?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
