@@ -713,10 +713,12 @@ mod tests {
     #[tokio::test]
     async fn remote_session_posts_to_the_peer_only_what_was_passed() {
         use axum::routing::{get, post};
+        // O axum do projeto não tem a feature `json`.
+        let reply = |v: Value| ([(axum::http::header::CONTENT_TYPE, "application/json")], v.to_string());
         let seen: Arc<Mutex<Option<(String, Value)>>> = Arc::default();
         let sink = seen.clone();
         let app = Router::new()
-            .route("/api/claude-configs", get(|| async { axum::Json(json!([
+            .route("/api/claude-configs", get(move || async move { reply(json!([
                 {"path": "/home/r/.claude", "label": "default", "active": true},
                 {"path": "/home/r/.claude-work", "label": "trabalho", "active": false}])) }))
             .route("/api/sessions", post(move |h: HeaderMap, b: String| {
@@ -724,7 +726,7 @@ mod tests {
                 async move {
                     let auth = h.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or_default().to_owned();
                     *sink.lock().unwrap() = Some((auth, serde_json::from_str(&b).unwrap()));
-                    axum::Json(json!({"name": "filha", "cwd": "/home/r", "provider": "claude", "headless": true,
+                    reply(json!({"name": "filha", "cwd": "/home/r", "provider": "claude", "headless": true,
                         "config_dir": "/home/r/.claude-work", "account_source": "explicit"}))
                 }
             }));
