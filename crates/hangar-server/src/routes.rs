@@ -45,6 +45,7 @@ pub struct AppState {
     pub command_catalog: Arc<crate::commands::Service>,
     pub cfg: Config,
     pub auth: Auth,
+    pub remote_browser: Arc<crate::remote_browser::layout::Layouts>,
     pub http: HttpClient,
     pub side: SideCtx,
     pub terminal: crate::terminal_control::TerminalPool,
@@ -184,6 +185,7 @@ impl AppState {
         AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             interactions, plugin,
+            remote_browser: Arc::default(),
             transcription: Arc::default(),
             omp_sync: Arc::default(),
             dictation_models: Arc::default(),
@@ -484,6 +486,7 @@ fn session_routes<H, T>(fallback: H) -> Router<Arc<AppState>>
 where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
     Router::new()
         .route("/api/sessions/{name}/term", get(crate::term::session_ws).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/nav-remoto", get(crate::remote_browser::ws::public).head(fallback.clone()).fallback(fallback.clone()))
         // Outro método nessas rotas (preflight OPTIONS, HEAD) segue ao Python.
         .route("/api/sessions", get(crate::list::hub::list).post(crate::session_open::create).fallback(fallback.clone()))
         .route("/api/sessions/events", get(crate::list::hub::events).fallback(fallback.clone()))
@@ -571,6 +574,7 @@ fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> 
     router.route("/__hangar_server/term", get(crate::term::private_ws))
         .route("/__hangar_server/state/{name}/events", get(crate::side::private_events))
         .route("/__hangar_server/voice", get(crate::voice::routes::private_ws))
+        .route("/__hangar_server/remote-browser", get(crate::remote_browser::ws::private))
         .with_state(state)
         .merge(share)
 }

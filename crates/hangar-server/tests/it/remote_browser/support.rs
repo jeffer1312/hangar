@@ -86,7 +86,11 @@ pub struct Server {
 
 impl Server {
     pub async fn owner(app: Router) -> Self {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        Self::at(app, "127.0.0.1:0".parse().unwrap()).await
+    }
+
+    pub async fn at(app: Router, address: SocketAddr) -> Self {
+        let listener = tokio::net::TcpListener::bind(address).await.expect("porta exclusiva do ensaio indisponível");
         let address = listener.local_addr().unwrap();
         let (stop, stopped) = oneshot::channel();
         let task = tokio::spawn(async move {

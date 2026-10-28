@@ -1,334 +1,23 @@
-"""Acesso remoto ao navegador embutido da sessão: quadros para fora, toque e tecla para dentro.
-
-NÃO é um espelho nem uma cópia. É O navegador da sessão — o mesmo que o agente dirige pelo
-`hangar-preview` —, visto de outra tela. Quem olha pelo celular vê o que está acontecendo aqui e,
-se quiser, mexe: o clique dele e o meu chegam no mesmo lugar.
-
-Três decisões que valem saber:
-
-*  **O backend fala CDP**, por um de dois caminhos, conforme quem é dono do navegador:
-   - Electron: direto em `127.0.0.1:9223`, porta que `shell/main.cjs` abre, num segundo cliente ao
-     lado do `webContents.debugger` que o shell já mantém anexado. O Chromium aceita os dois.
-   - App nativo (Windows): ele não abre porta de depuração; o servidor local dele (`_srv.json`)
-     repassa em `/cdp` uma lista fechada de comandos do mesmo protocolo, com o mesmo Bearer do
-     `/cmd`. Ali só um espectador por navegador: o que chega depois assume.
-   O `/cmd` não serve para quadro: é pergunta-e-resposta, não fluxo.
-*  **O layout (desktop/celular) NÃO vai por aqui** — vai pelo verbo `layout` do shell. A emulação se
-   perde ao navegar e é o controlador de lá que sabe repor (`aplicarViewport`/`aoNavegar`); aplicar
-   por fora criaria uma segunda fonte de verdade que a primeira navegação desfaz, calada.
-*  **Com o painel do navegador fechado no desktop o view perde o compositor** e o screencast para de
-   emitir. Aí o caminho é `Page.captureScreenshot` em laço — mais lento (a emulação de tamanho que o
-   controlador aplica no modo oculto é o que o mantém respondendo).
-"""
+"""Portas Python: autorização e transporte do navegador remoto ao Rust."""
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import itertools
-import json
 import logging
 import secrets
 import time
-from collections.abc import Callable
-from pathlib import Path
-from typing import Any, Optional
 from urllib.parse import urlencode
 
-import websockets
 from fastapi import WebSocket, WebSocketDisconnect
+from uvicorn.protocols.utils import ClientDisconnected
 
-from app import tmux
+from app import list_bridge
 from app.auth import _LOOPBACK, _blocked, _record_fail
 from app.config import settings
 
 _log = logging.getLogger("hangar.navsock")
+UNAVAILABLE = "remote_browser_needs_rust"
 
-CDP_HOST = "127.0.0.1:9223"
-# 12 quadros/s: acima disso o ganho é imperceptível numa tela de celular e a conta pelo túnel da VPS
-# fica cara (medido: 42 KiB por quadro; a 60/s são 2,5 MiB/s).
-INTERVALO_QUADRO = 1 / 12
-# Sem quadro de screencast por este tempo = view sem compositor (painel fechado no desktop). Cai pro
-# print em laço.
-ESPERA_SCREENCAST = 1.5
-INTERVALO_PRINT = 0.4
-TETO_MSG_CLIENTE = 64 * 1024
-
-
-def _pasta_nav() -> Path:
-    return Path.home() / ".hangar" / "nav"
-
-
-def alvo_da_sessao(name: str, *, exige_alvo: bool = True) -> Optional[dict[str, Any]]:
-    """Sidecar do navegador daquela sessão: `targetId` e `url`. `None` quando não há navegador.
-
-    O shell grava um arquivo por navegador; a chave é `<servidor>::<sessão>`, e o mesmo casamento
-    por sufixo que `GET /api/sessions/{name}/navegador` usa vale aqui.
-    `exige_alvo=False` aceita sidecar sem `targetId` (o do app nativo, que não expõe alvo CDP).
-    """
-    pasta = _pasta_nav()
-    if not pasta.is_dir():
-        return None
-    for arq in pasta.glob("*.json"):
-        if arq.name.startswith("_"):        # _srv.json e _pendentes.json não são navegador
-            continue
-        try:
-            sc = json.loads(arq.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
-            _log.warning("sidecar de navegador ilegivel %s: %s", arq, e)
-            continue
-        if not isinstance(sc, dict):
-            continue
-        chave = str(sc.get("chave", ""))
-        if (chave == name or chave.endswith(f"::{name}")) and (sc.get("targetId") or not exige_alvo):
-            return sc
-    return None
-
-
-class _Cdp:
-    """Cliente CDP mínimo: manda comando, casa resposta por id, entrega evento por fila."""
-
-    def __init__(self, url: str, headers: Optional[dict[str, str]] = None):
-        self._url = url
-        self._headers = headers
-        self._ws: Any = None
-        self._id = 0
-        self._pendentes: dict[int, asyncio.Future] = {}
-        self.eventos: asyncio.Queue = asyncio.Queue(maxsize=64)
-        self._bomba: Optional[asyncio.Task] = None
-        # O loop só guarda referência FRACA de task: sem este conjunto, o coletor pode levar embora
-        # uma task de input antes de ela rodar, e a tecla some sem erro nenhum.
-        self._soltas: set[asyncio.Task] = set()
-
-    async def __aenter__(self) -> "_Cdp":
-        # max_size alto: um quadro jpeg em base64 de tela cheia passa de 1 MiB.
-        self._ws = await websockets.connect(self._url, additional_headers=self._headers,
-                                            max_size=32 * 1024 * 1024,
-                                            open_timeout=5, ping_interval=20)
-        self._bomba = asyncio.create_task(self._bombear())
-        return self
-
-    async def __aexit__(self, *_exc) -> None:
-        for t in list(self._soltas):
-            t.cancel()
-        if self._bomba:
-            self._bomba.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._bomba
-        if self._ws:
-            await self._ws.close()
-
-    async def _bombear(self) -> None:
-        try:
-            async for bruto in self._ws:
-                msg = json.loads(bruto)
-                ident = msg.get("id")
-                if ident is not None:
-                    fut = self._pendentes.pop(ident, None)
-                    if fut and not fut.done():
-                        fut.set_result(msg)
-                elif msg.get("method"):
-                    # Fila cheia = consumidor atrasado. Descarta o MAIS VELHO: num fluxo de quadros
-                    # o antigo não interessa, e travar aqui pararia o CDP inteiro.
-                    if self.eventos.full():
-                        with contextlib.suppress(asyncio.QueueEmpty):
-                            self.eventos.get_nowait()
-                    self.eventos.put_nowait(msg)
-        except (asyncio.CancelledError, websockets.ConnectionClosed):
-            pass
-        finally:
-            for fut in self._pendentes.values():
-                if not fut.done():
-                    fut.set_exception(ConnectionError("CDP fechou"))
-            self._pendentes.clear()
-
-    async def cmd(self, metodo: str, params: Optional[dict] = None,
-                  espera: float = 10.0) -> dict:
-        self._id += 1
-        ident = self._id
-        fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._pendentes[ident] = fut
-        try:
-            # O `send` dentro do try: falhando com o CDP já fechado, o `finally` é o que impede a
-            # entrada em `_pendentes` de ficar pra sempre — e cada input mandado depois da queda
-            # deixaria uma.
-            await self._ws.send(json.dumps({"id": ident, "method": metodo, "params": params or {}}))
-            return await asyncio.wait_for(fut, timeout=espera)
-        finally:
-            self._pendentes.pop(ident, None)
-
-    def envia(self, metodo: str, params: Optional[dict] = None) -> asyncio.Task:
-        """Comando sem esperar resposta — o caminho do input, onde a latência é o produto."""
-        t = asyncio.create_task(_calado(self.cmd(metodo, params)))
-        self._soltas.add(t)
-        t.add_done_callback(self._soltas.discard)
-        return t
-
-
-def _conexao(sc: dict[str, Any]) -> Optional[_Cdp]:
-    """Cliente CDP do navegador daquele sidecar, ou `None` quando nenhum dono o atende.
-
-    Com `targetId` é o Electron. Com `pid` é o app nativo, e só se o `_srv.json` for do MESMO
-    processo: os dois abertos juntos disputam esse arquivo, e o token de um não abre o outro.
-    """
-    if sc.get("targetId"):
-        return _Cdp(f"ws://{CDP_HOST}/devtools/page/{sc['targetId']}")
-    if not sc.get("pid") or not sc.get("chave"):
-        return None
-    from app import navshell
-    try:
-        srv = navshell._servidor()
-    except navshell.ShellIndisponivel:
-        return None
-    if srv.get("pid") != sc.get("pid"):
-        return None
-    url = f"ws://127.0.0.1:{int(srv['porta'])}/cdp?{urlencode({'chave': sc['chave']})}"
-    return _Cdp(url, {"Authorization": f"Bearer {srv['token']}"})
-
-
-async def _calado(coro) -> None:
-    with contextlib.suppress(Exception):
-        await coro
-
-
-# ── entrada vinda de quem está olhando ──────────────────────────────────────────
-# Coordenadas chegam em FRAÇÃO da tela (0..1), não em pixel: o celular não sabe (nem precisa saber)
-# o tamanho do viewport do outro lado, e ele muda quando o layout troca.
-
-_BOTOES = {"left", "right", "middle", "none"}
-# Código virtual e texto das teclas nomeadas: a mesma tabela do `press` do nativo e do shell.
-_TECLAS: dict[str, tuple[int, Optional[str]]] = {
-    "Enter": (13, "\r"), "Tab": (9, None), "Escape": (27, None), "Backspace": (8, None),
-    "Delete": (46, None), "ArrowUp": (38, None), "ArrowDown": (40, None), "ArrowLeft": (37, None),
-    "ArrowRight": (39, None), "Home": (36, None), "End": (35, None), "PageUp": (33, None),
-    "PageDown": (34, None),
-}
-
-
-def _px(valor: Any, tamanho: int) -> int:
-    try:
-        f = float(valor)
-    except (TypeError, ValueError):
-        return 0
-    return int(max(0.0, min(1.0, f)) * tamanho)
-
-
-async def _aplicar_entrada(cdp: _Cdp, msg: dict, largura: int, altura: int) -> None:
-    tipo = msg.get("t")
-    if tipo == "m":
-        acao = {"press": "mousePressed", "release": "mouseReleased",
-                "move": "mouseMoved"}.get(str(msg.get("acao")))
-        if not acao:
-            return
-        botao = str(msg.get("b", "left"))
-        cdp.envia("Input.dispatchMouseEvent", {
-            "type": acao,
-            "x": _px(msg.get("x"), largura), "y": _px(msg.get("y"), altura),
-            "button": botao if botao in _BOTOES else "left",
-            "clickCount": 1 if acao != "mouseMoved" else 0,
-            "modifiers": int(msg.get("mod") or 0),
-        })
-    elif tipo == "w":
-        cdp.envia("Input.dispatchMouseEvent", {
-            "type": "mouseWheel",
-            "x": _px(msg.get("x"), largura), "y": _px(msg.get("y"), altura),
-            "deltaX": float(msg.get("dx") or 0), "deltaY": float(msg.get("dy") or 0),
-            "button": "none", "clickCount": 0, "modifiers": 0,
-        })
-    elif tipo == "txt":
-        texto = str(msg.get("s") or "")[:4096]
-        if texto:
-            cdp.envia("Input.insertText", {"text": texto})
-    elif tipo == "k":
-        tecla = str(msg.get("key") or "")[:32]
-        if not tecla:
-            return
-        # Tecla nomeada leva o código virtual: só com `key` o evento chega à página, mas o Chromium
-        # não executa a edição (Backspace não apaga, Enter não envia). Texto comum vai por
-        # `insertText`, não por tecla.
-        evento: dict[str, Any] = {"key": tecla, "modifiers": int(msg.get("mod") or 0),
-                                  "windowsVirtualKeyCode": int(msg.get("code") or 0)}
-        texto = None
-        if tecla in _TECLAS:
-            vk, texto = _TECLAS[tecla]
-            evento.update(code=tecla, windowsVirtualKeyCode=vk)
-        for acao in ("keyDown", "keyUp"):
-            extra = {"text": texto, "unmodifiedText": texto} if texto and acao == "keyDown" else {}
-            cdp.envia("Input.dispatchKeyEvent", {"type": acao, **evento, **extra})
-
-
-# ── quadros ────────────────────────────────────────────────────────────────────
-
-# `reason` do `Inspector.detached` que o app nativo manda quando outro aparelho assume a tela.
-_MOTIVOS_DESLIGOU = {"replaced_by_another_viewer": "a tela remota foi aberta em outro aparelho"}
-
-async def _fluxo_de_quadros(cdp: _Cdp, ws: WebSocket, estado: dict) -> None:
-    """Screencast enquanto o view compõe; print em laço quando ele não compõe."""
-    await cdp.cmd("Page.enable")
-    # O quadro sai no tamanho que a tela de quem olha aguenta, não no tamanho da página: mandar
-    # 1400px de largura pra um iPhone é pagar banda por pixel que a tela dele não mostra, e a conta
-    # é paga no túnel da VPS. A qualidade padrão (45) já basta pra ler texto nesse tamanho.
-    largura = int(estado.get("pedida") or 0) or 1400
-    # Um quadro a cada 5 (12 por segundo a 60 Hz), o ritmo que o laço abaixo envia: o resto o Chromium nem
-    # codificaria, e no app nativo atravessaria o pipe à toa.
-    await cdp.cmd("Page.startScreencast", {"format": "jpeg", "quality": _qualidade(estado),
-                                           "maxWidth": largura, "maxHeight": largura,
-                                           "everyNthFrame": 5})
-    ultimo_envio = 0.0
-    espera = ESPERA_SCREENCAST
-    while True:
-        try:
-            msg = await asyncio.wait_for(cdp.eventos.get(), timeout=espera)
-        except asyncio.TimeoutError:
-            # Sem compositor: o print é o único caminho, e ele é caro — por isso só entra aqui. A espera
-            # pelo screencast já foi paga: dali em diante só se confere a fila entre um print e outro.
-            await _print_avulso(cdp, ws, estado)
-            espera = 0.01
-            continue
-        metodo = msg.get("method")
-        if metodo == "Page.screencastFrame":
-            espera = ESPERA_SCREENCAST
-            p = msg.get("params") or {}
-            # O ACK é obrigatório: sem ele o Chromium para de emitir. Vai SEMPRE, mesmo no quadro
-            # que a gente descarta por taxa — descartar é decisão nossa, não motivo pra travar.
-            cdp.envia("Page.screencastFrameAck", {"sessionId": p.get("sessionId")})
-            meta = p.get("metadata") or {}
-            estado["w"] = int(meta.get("deviceWidth") or estado["w"])
-            estado["h"] = int(meta.get("deviceHeight") or estado["h"])
-            agora = time.monotonic()
-            if agora - ultimo_envio < INTERVALO_QUADRO:
-                continue
-            ultimo_envio = agora
-            await ws.send_text(json.dumps({"t": "q", "d": p.get("data"),
-                                           "w": estado["w"], "h": estado["h"]}))
-        elif metodo == "Page.frameNavigated":
-            frame = (msg.get("params") or {}).get("frame") or {}
-            if not frame.get("parentId"):
-                await ws.send_text(json.dumps({"t": "url", "url": frame.get("url")}))
-        elif metodo == "Inspector.detached":
-            motivo = (msg.get("params") or {}).get("reason")
-            raise ConnectionError(_MOTIVOS_DESLIGOU.get(str(motivo), "o navegador desta sessão fechou"))
-
-
-async def _print_avulso(cdp: _Cdp, ws: WebSocket, estado: dict) -> None:
-    try:
-        r = await cdp.cmd("Page.captureScreenshot", {"format": "jpeg", "quality": max(55, _qualidade(estado))},
-                          espera=20)
-    except websockets.ConnectionClosed as e:
-        # CDP morreu (o navegador fechou). Sem relevantar, o laço ficava tentando pra sempre: sem
-        # quadro, sem erro na tela e sem nunca terminar o handler.
-        raise ConnectionError("o navegador desta sessão fechou") from e
-    except Exception as e:
-        _log.debug("navsock: print falhou: %r", e)
-        await asyncio.sleep(INTERVALO_PRINT)
-        return
-    dado = ((r.get("result") or {}).get("data"))
-    if dado:
-        await ws.send_text(json.dumps({"t": "q", "d": dado, "w": estado["w"], "h": estado["h"],
-                                       "lento": True}))
-    await asyncio.sleep(INTERVALO_PRINT)
-
-
-# ── handler ────────────────────────────────────────────────────────────────────
 
 async def _autorizado(ws: WebSocket) -> bool:
     host = ws.client.host if ws.client else ""
@@ -338,199 +27,104 @@ async def _autorizado(ws: WebSocket) -> bool:
         return False
     from app.guest_header import guest_of
     if guest_of(ws) is not None:
-        return True                               # o porteiro ja conferiu token e sessao
-    tok = ws.query_params.get("token", "")
-    if not settings.auth_token or not secrets.compare_digest(tok.encode(),
-                                                             settings.auth_token.encode()):
+        return True
+    token = ws.query_params.get("token", "")
+    if not settings.auth_token or not secrets.compare_digest(token.encode(), settings.auth_token.encode()):
         if host not in _LOOPBACK:
             _record_fail(host, agora)
         await ws.close(code=1008)
         return False
-    # Sem Origin: ela barra credencial ambiente, e página estranha não tem o `?token=`.
     return True
 
 
-def _qualidade(estado: dict) -> int:
-    """JPEG pedido por quem olha (`q`); sem pedido, o 45 que basta ao celular e poupa o túnel."""
-    return int(estado.get("qualidade") or 45)
+async def _unavailable(ws: WebSocket) -> None:
+    await ws.accept()
+    await ws.close(code=1013, reason=UNAVAILABLE)
 
 
-def _qualidade_pedida(ws: WebSocket) -> int:
-    try:
-        pedida = int(ws.query_params.get("q", "0"))
-    except ValueError:
-        return 0
-    return max(30, min(90, pedida)) if pedida > 0 else 0
-
-
-def _largura_pedida(ws: WebSocket) -> int:
-    """Largura útil da tela de quem está olhando, em pixels de verdade. 0 = não disse."""
-    try:
-        return max(0, min(1400, int(ws.query_params.get("w", "0"))))
-    except ValueError:
-        return 0
-
-
-async def _url_atual(cdp: _Cdp, sc: dict) -> Optional[str]:
-    if not sc.get("targetId"):
-        # O nativo regrava o sidecar a cada navegação, e o repasse dele não abre `Runtime.evaluate`.
-        return sc.get("url")
-    try:
-        r = await cdp.cmd("Runtime.evaluate", {"expression": "location.href",
-                                               "returnByValue": True}, espera=5)
-        valor = (((r.get("result") or {}).get("result")) or {}).get("value")
-        if isinstance(valor, str) and valor:
-            return valor
-    except Exception as e:
-        _log.debug("navsock: url atual falhou: %r", e)
-    return sc.get("url")
-
-
-async def nav_ws(ws: WebSocket, name: str,
-                 existe: Callable[[str], bool] = tmux.has_session) -> None:
-    """`existe` é a checagem da rota que abre o navegador (`_session_exists`), que conhece também
-    a sessão sem terminal: só o tmux recusava a tela remota de uma sessão que tem navegador."""
+async def nav_ws(ws: WebSocket, name: str, existe=None) -> None:
     if not await _autorizado(ws):
         return
-    # `to_thread` nos dois: varrer os sidecars e perguntar ao tmux são disco e processo, e este é o
-    # mesmo event loop que serve o SSE de todas as sessões (incidente de 2026-07-23 no CLAUDE.md).
-    if not await asyncio.to_thread(existe, name):
-        await ws.close(code=1008, reason="sessao nao existe")
+    from websockets.asyncio.client import connect
+    from websockets.exceptions import ConnectionClosed, InvalidStatus
+    from websockets.protocol import State
+    endpoint = list_bridge.endpoint()
+    if endpoint is None:
+        await _unavailable(ws)
         return
-    # Com Electron e nativo abertos juntos, o do Electron (com alvo) vem primeiro: a 9223 dele não
-    # depende de quem ganhou o `_srv.json`.
-    sc = (await asyncio.to_thread(alvo_da_sessao, name)
-          or await asyncio.to_thread(alvo_da_sessao, name, exige_alvo=False))
-    conexao = await asyncio.to_thread(_conexao, sc) if sc else None
-    if not sc or not conexao:
-        await ws.close(code=1008, reason="sessao sem navegador")
-        return
-    await ws.accept()
-    estado = {"w": 1280, "h": 800, "pedida": _largura_pedida(ws), "qualidade": _qualidade_pedida(ws)}
+    address, secret = endpoint
+    raw_query = ws.scope.get("query_string", b"").decode("ascii")
+    query = raw_query + "&" if raw_query else ""
+    query += urlencode({"name": name})
     try:
-        async with conexao as cdp:
-            # A url do sidecar é a da última vez que o shell gravou; quem sabe a de agora é a
-            # página. Sem isto a barra abre mostrando o endereço anterior até alguém navegar.
-            await ws.send_text(json.dumps({"t": "url", "url": await _url_atual(cdp, sc)}))
-            saida = asyncio.create_task(_fluxo_de_quadros(cdp, ws, estado))
-            entrada = asyncio.create_task(_ler_cliente(cdp, ws, estado, name))
-            prontas, pendentes = await asyncio.wait({saida, entrada},
-                                                    return_when=asyncio.FIRST_COMPLETED)
-            for t in pendentes:
-                t.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await t
-            # A que TERMINOU tem o motivo: engolir aqui era ficar sem o aviso na tela e sem log de
-            # uma queda de verdade — quem trata é o `except` lá embaixo.
-            for t in prontas:
-                await t
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        _log.warning("navsock %s: %r", name, e)
-        with contextlib.suppress(Exception):
-            await ws.send_text(json.dumps({"t": "erro", "m": str(e)}))
+        upstream = await connect(f"ws://{address}/__hangar_server/remote-browser?{query}",
+                                 additional_headers={"x-hangar-internal": secret}, proxy=None,
+                                 compression=None, ping_interval=None, max_size=32 * 1024 * 1024,
+                                 open_timeout=5, close_timeout=2)
+    except InvalidStatus as error:
+        if error.response.status_code == 403:
+            reason = bytes(error.response.body or b"").decode("utf-8", "replace")
+            await ws.close(code=1008, reason=reason)
+        else:
+            await _unavailable(ws)
+        return
+    except Exception as error:
+        _log.warning("navsock: transporte indisponível (%s)", type(error).__name__)
+        await _unavailable(ws)
+        return
+
+    client_close = (1000, "")
+
+    async def from_client():
+        nonlocal client_close
+        while True:
+            message = await ws.receive()
+            if message["type"] == "websocket.disconnect":
+                client_close = (message.get("code", 1000), message.get("reason") or "")
+                return
+            if (text := message.get("text")) is not None:
+                await upstream.send(text)
+            elif (data := message.get("bytes")) is not None:
+                await upstream.send(data)
+
+    async def from_rust():
+        async for message in upstream:
+            if isinstance(message, str):
+                await ws.send_text(message)
+            else:
+                await ws.send_bytes(message)
+
+    tasks: set[asyncio.Task] = set()
+    rust_closed = False
+    code, reason = 1000, ""
+    try:
+        await ws.accept()
+        tasks = {asyncio.create_task(from_client()), asyncio.create_task(from_rust())}
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     finally:
-        with contextlib.suppress(Exception):
-            await ws.close()
-        # Protegida: o servidor parando no meio não deixa a página presa no tamanho de quem saiu.
-        await asyncio.shield(_devolver_layout(name, estado))
-
-
-async def _ler_cliente(cdp: _Cdp, ws: WebSocket, estado: dict, name: str) -> None:
-    while True:
-        bruto = await ws.receive_text()
-        if len(bruto) > TETO_MSG_CLIENTE:
-            continue
         try:
-            msg = json.loads(bruto)
-        except ValueError:
-            continue
-        if not isinstance(msg, dict):
-            continue
-        if msg.get("t") == "layout" and ("w" in msg or "h" in msg):
-            await _layout_do_espectador(name, msg, estado, ws)
-            continue
-        if msg.get("t") == "layout":
-            await _trocar_layout(name, str(msg.get("modo") or ""), ws)
-            continue
-        await _aplicar_entrada(cdp, msg, estado["w"], estado["h"])
-
-
-TETO_LAYOUT = 8192
-# Tamanho imposto por espectador, por sessão: (conexão dona, layout de antes, layout imposto). Uma
-# entrada só, de quem impôs por último; o "de antes" passa de um espectador ao seguinte.
-_imposto: dict[str, tuple[int, str, str]] = {}
-_travas: dict[str, asyncio.Lock] = {}
-_conexoes = itertools.count(1)
-
-
-def _rotulo(resposta: str) -> Optional[str]:
-    return resposta.removeprefix("layout:").strip() if resposta.startswith("layout:") else None
-
-
-def _args_layout(rotulo: str) -> list[str]:
-    return [rotulo] if rotulo in ("desktop", "mobile") else rotulo.split("x")
-
-
-async def _layout_do_espectador(name: str, msg: dict, estado: dict, ws: WebSocket) -> None:
-    """A página toma o tamanho da tela de quem olha; o fim da conexão devolve o de antes."""
-    try:
-        w, h = int(msg.get("w") or 0), int(msg.get("h") or 0)
-    except (TypeError, ValueError):
-        return
-    if not (1 <= w <= TETO_LAYOUT and 1 <= h <= TETO_LAYOUT):
-        return
-    from app import navshell
-    estado.setdefault("dono", next(_conexoes))
-    try:
-        async with _travas.setdefault(name, asyncio.Lock()):
-            anterior = _imposto.get(name)
-            antes = anterior[1] if anterior else None
-            if antes is None:
-                atual = await asyncio.to_thread(navshell.verbo, name, "layout", [])
-                antes = _rotulo(atual)
-                if antes is None:
-                    await ws.send_text(json.dumps({"t": "erro", "m": atual}))
-                    return
-            resposta = await asyncio.to_thread(navshell.verbo, name, "layout", [str(w), str(h)])
-            if _rotulo(resposta) is not None:
-                _imposto[name] = (estado["dono"], antes, f"{w}x{h}")
-                # No modo de print o screencast não atualiza o tamanho, e o clique é convertido por ele.
-                estado["w"], estado["h"] = w, h
-    except Exception as e:
-        await ws.send_text(json.dumps({"t": "erro", "m": str(e)}))
-        return
-    await ws.send_text(json.dumps({"t": "layout", "resposta": resposta}))
-
-
-async def _devolver_layout(name: str, estado: dict) -> None:
-    """Só o dono do tamanho imposto devolve o de antes, e só se ninguém trocou o layout depois dele."""
-    from app import navshell
-    try:
-        async with _travas.setdefault(name, asyncio.Lock()):
-            registro = _imposto.get(name)
-            if not registro or registro[0] != estado.get("dono"):
-                return
-            del _imposto[name]
-            atual = await asyncio.to_thread(navshell.verbo, name, "layout", [])
-            if _rotulo(atual) != registro[2]:
-                return
-            resposta = await asyncio.to_thread(navshell.verbo, name, "layout", _args_layout(registro[1]))
-            if _rotulo(resposta) is None:
-                _log.warning("navsock %s: layout de antes (%s) não voltou: %s", name, registro[1], resposta)
-    except Exception as e:
-        _log.warning("navsock %s: layout de antes não voltou: %r", name, e)
-
-
-async def _trocar_layout(name: str, modo: str, ws: WebSocket) -> None:
-    """Vai pelo servidor do shell, não por CDP — ver a nota no topo do módulo."""
-    if modo not in ("mobile", "desktop"):
-        return
-    from app import navshell
-    try:
-        resposta = await asyncio.to_thread(navshell.verbo, name, "layout", [modo])
-    except Exception as e:
-        await ws.send_text(json.dumps({"t": "erro", "m": str(e)}))
-        return
-    await ws.send_text(json.dumps({"t": "layout", "modo": modo, "resposta": resposta}))
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.wait(tasks)
+            for task in tasks:
+                error = None if task.cancelled() else task.exception()
+                if error is not None and not isinstance(error, (ConnectionClosed, WebSocketDisconnect, ClientDisconnected)):
+                    _log.warning("navsock: transporte terminou com %s", type(error).__name__)
+            rust_closed = upstream.state is not State.OPEN
+            if rust_closed:
+                code, reason = upstream.close_code, upstream.close_reason or ""
+            close_code, close_reason = client_close
+            if close_code in (1005, 1006, None):
+                close_code = 1000
+            await upstream.close(code=close_code, reason=close_reason)
+        finally:
+            if upstream.state is not State.CLOSED:
+                upstream.transport.abort()
+    if rust_closed:
+        if code == 1005:
+            code = 1000
+        elif code in (1006, None):
+            code, reason = 1011, UNAVAILABLE
+        with contextlib.suppress(RuntimeError, WebSocketDisconnect, ClientDisconnected):
+            await ws.close(code=code, reason=reason)

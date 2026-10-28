@@ -1,0 +1,368 @@
+//! WebSocket do navegador existente, servido diretamente nas portas Rust.
+use super::{
+    access,
+    cdp::Cdp,
+    frames::{self, View},
+    input, shell,
+};
+use crate::{
+    routes::AppState,
+    share::{
+        caller::{Caller, caller},
+        gate::Watcher,
+        store::Kind,
+    },
+};
+use axum::{
+    extract::{
+        ConnectInfo, FromRequestParts, Path, Request, State,
+        ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
+    },
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use futures_util::{
+    SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
+};
+use serde_json::{Value, json};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::sync::Mutex;
+
+pub(super) struct Failure {
+    pub message: String,
+    pub repr: String,
+    pub transport_closed: bool,
+}
+fn quoted(text: &str) -> String {
+    let quote = if text.contains('\'') && !text.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    format!(
+        "{quote}{}{quote}",
+        text.replace('\\', "\\\\")
+            .replace(quote, &format!("\\{quote}"))
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+    )
+}
+impl Failure {
+    pub(super) fn plain(message: impl Into<String>) -> Self {
+        let message = message.into();
+        let repr = format!("RuntimeError({})", quoted(&message));
+        Self {
+            message,
+            repr,
+            transport_closed: false,
+        }
+    }
+    pub(super) fn connection(message: &str) -> Self {
+        Self {
+            message: message.into(),
+            repr: format!("ConnectionError({})", quoted(message)),
+            transport_closed: false,
+        }
+    }
+    pub(super) fn value(message: String) -> Self {
+        let repr = format!("ValueError({})", quoted(&message));
+        Self {
+            message,
+            repr,
+            transport_closed: false,
+        }
+    }
+    pub(super) fn closed() -> Self {
+        let mut error = Self::connection("CDP fechou");
+        error.transport_closed = true;
+        error
+    }
+    pub(super) fn timeout() -> Self {
+        Self {
+            message: String::new(),
+            repr: "TimeoutError()".into(),
+            transport_closed: false,
+        }
+    }
+}
+pub(super) type Output = Arc<Mutex<SplitSink<WebSocket, Message>>>;
+pub(super) async fn send(output: &Output, value: Value) -> Result<(), Failure> {
+    output
+        .lock()
+        .await
+        .send(Message::Text(value.to_string().into()))
+        .await
+        .map_err(|_| Failure::plain("WebSocket fechou"))
+}
+
+pub async fn public(
+    State(st): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    req: Request,
+) -> Response {
+    if !crate::share::gate::is_websocket(&req) {
+        return crate::routes::pass_any(State(st), ConnectInfo(peer), req).await;
+    }
+    let (ip, _) = st.cfg.trusted.resolve(peer.ip(), req.headers());
+    let guest = caller(&req)
+        .and_then(Caller::grant)
+        .map(|grant| grant.sessions.get(&name) == Some(&Kind::Share));
+    if guest == Some(false)
+        || access::websocket(
+            &st.auth,
+            &ip,
+            req.uri().query(),
+            guest == Some(true),
+            Instant::now(),
+        )
+        .is_err()
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    serve(st, name, req, false).await
+}
+pub async fn private(
+    State(st): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    req: Request,
+) -> Response {
+    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(name) = crate::auth::query_param(req.uri().query(), "name") else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    serve(st, name, req, true).await
+}
+fn refuse(reason: &'static str, forwarded: bool) -> Response {
+    if forwarded {
+        (StatusCode::FORBIDDEN, reason).into_response()
+    } else {
+        StatusCode::FORBIDDEN.into_response()
+    }
+}
+async fn serve(st: Arc<AppState>, name: String, req: Request, forwarded: bool) -> Response {
+    match st.list.discovered_session(&name).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return refuse("sessao nao existe", forwarded),
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "remote_browser_discovery_unavailable",
+            )
+                .into_response();
+        }
+    }
+    let dir = st.hangar_dir.join("nav");
+    let lookup = dir.clone();
+    let lookup_name = name.clone();
+    let target = tokio::task::spawn_blocking(move || {
+        let sc = shell::sidecar(&lookup, &lookup_name, true)
+            .or_else(|| shell::sidecar(&lookup, &lookup_name, false))?;
+        if input::truth(&sc["targetId"]) {
+            return Some((
+                format!(
+                    "ws://127.0.0.1:9223/devtools/page/{}",
+                    shell::string_field(&sc, "targetId")
+                ),
+                None,
+                sc,
+            ));
+        }
+        if !input::truth(&sc["pid"]) || !input::truth(&sc["chave"]) {
+            return None;
+        }
+        let srv = shell::server(&lookup).ok()?;
+        if srv["pid"] != sc["pid"] {
+            return None;
+        }
+        let port = input::integer(&srv["porta"]).ok()?;
+        let query = form_urlencoded::Serializer::new(String::new())
+            .append_pair("chave", &shell::string_field(&sc, "chave"))
+            .finish();
+        Some((
+            format!("ws://127.0.0.1:{port}/cdp?{query}"),
+            Some(shell::string_field(&srv, "token")),
+            sc,
+        ))
+    })
+    .await
+    .ok()
+    .flatten();
+    let Some((url, token, sc)) = target else {
+        return refuse("sessao sem navegador", forwarded);
+    };
+    let width = number(req.uri().query(), "w", 0, 1400, 0);
+    let quality = number(req.uri().query(), "q", 30, 90, 45);
+    let watcher = req.extensions().get::<Watcher>().cloned();
+    let (mut parts, _) = req.into_parts();
+    let Ok(upgrade) = WebSocketUpgrade::from_request_parts(&mut parts, &()).await else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    upgrade
+        .max_message_size(32 * 1024 * 1024)
+        .on_upgrade(move |socket| run(st, name, socket, url, token, sc, width, quality, watcher))
+}
+fn number(query: Option<&str>, key: &str, minimum: i64, maximum: i64, default: i64) -> i64 {
+    let Some(raw) = crate::auth::query_param(query, key) else {
+        return default;
+    };
+    let Some(raw) = input::normalize_numeric_separators(&raw) else {
+        return default;
+    };
+    let mut digits = raw.trim().chars().peekable();
+    let negative = digits.peek() == Some(&'-');
+    if matches!(digits.peek().copied(), Some('+' | '-')) {
+        digits.next();
+    }
+    let mut magnitude = 0i64;
+    let mut has_digit = false;
+    while let Some(character) = digits.next() {
+        let Some(digit) = character.to_digit(10) else {
+            return default;
+        };
+        // O valor fica limitado, mas o restante da entrada ainda precisa ser validado.
+        magnitude = magnitude
+            .saturating_mul(10)
+            .saturating_add(i64::from(digit))
+            .min(maximum);
+        has_digit = true;
+    }
+    if !has_digit {
+        return default;
+    }
+    if key == "q" && (negative || magnitude == 0) {
+        default
+    } else if negative {
+        minimum
+    } else {
+        magnitude.clamp(minimum, maximum)
+    }
+}
+#[allow(clippy::too_many_arguments)]
+async fn run(
+    st: Arc<AppState>,
+    name: String,
+    socket: WebSocket,
+    url: String,
+    token: Option<String>,
+    sc: Value,
+    width: i64,
+    quality: i64,
+    watcher: Option<Watcher>,
+) {
+    let (writer, mut reader) = socket.split();
+    let output = Arc::new(Mutex::new(writer));
+    let view = Arc::new(Mutex::new(View {
+        size: (1280, 800),
+        width,
+        quality,
+    }));
+    let mut owner = None;
+    let mut cdp = match Cdp::connect(&url, token.as_deref()).await {
+        Ok(cdp) => Some(cdp),
+        Err(error) => {
+            report(&output, &name, error).await;
+            None
+        }
+    };
+    if let Some(cdp) = cdp.as_mut() {
+        let result = async {
+            let mut current = sc["url"].clone();
+            if input::truth(&sc["targetId"]) {
+                if let Ok(answer) = cdp.cmd(
+                    "Runtime.evaluate",
+                    json!({"expression": "location.href", "returnByValue": true}),
+                    Duration::from_secs(5),
+                ).await {
+                    if answer["result"]["result"]["value"].as_str().is_some_and(|value| !value.is_empty()) {
+                        current = answer["result"]["result"]["value"].clone();
+                    }
+                }
+            }
+            send(&output, json!({"t": "url", "url": current})).await?;
+            tokio::select! {
+                result = frames::run(cdp, &output, &view) => result,
+                result = read(&st, &name, cdp, &mut reader, &output, &view, &mut owner) => result,
+                _ = Watcher::ended(watcher.as_ref()) => {
+                    let _ = output.lock().await.send(Message::Close(Some(CloseFrame {
+                        code: 4410,
+                        reason: "convite encerrado".into(),
+                    }))).await;
+                    Ok(())
+                }
+            }
+        }.await;
+        cdp.close().await;
+        if let Err(error) = result {
+            report(&output, &name, error).await;
+        }
+    }
+    let _ = output.lock().await.send(Message::Close(None)).await;
+    // A devolução sobrevive ao cancelamento da conexão que impôs o tamanho.
+    let restore = st.remote_browser.clone();
+    let dir = st.hangar_dir.join("nav");
+    let _ = tokio::spawn(async move { restore.restore(&dir, &name, owner).await }).await;
+}
+async fn report(output: &Output, name: &str, error: Failure) {
+    tracing::warn!(target:"hangar.navsock","navsock {name}: {}",error.repr);
+    let _ = send(output, json!({"t":"erro","m":error.message})).await;
+}
+async fn read(
+    st: &AppState,
+    name: &str,
+    cdp: &Cdp,
+    reader: &mut SplitStream<WebSocket>,
+    output: &Output,
+    view: &Arc<Mutex<View>>,
+    owner: &mut Option<u64>,
+) -> Result<(), Failure> {
+    while let Some(message) = reader.next().await {
+        let raw = match message {
+            Ok(Message::Text(raw)) => raw,
+            Ok(Message::Close(_)) | Err(_) => return Ok(()),
+            Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => continue,
+            Ok(Message::Binary(_)) => return Err(Failure::plain("text")),
+        };
+        if raw.chars().count() > 65536 {
+            continue;
+        }
+        let Ok(message) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if !message.is_object() {
+            continue;
+        }
+        if message["t"] == "layout" {
+            let result = st
+                .remote_browser
+                .apply(
+                    &st.hangar_dir.join("nav"),
+                    name,
+                    &message,
+                    owner,
+                )
+                .await;
+            match result {
+                Ok(Some(change)) => {
+                    if let Some(dimensions) = change.dimensions {
+                        view.lock().await.size = dimensions;
+                    }
+                    send(output, change.event).await?;
+                }
+                Ok(None) => {}
+                Err(error) => send(output, json!({"t":"erro","m":error.message})).await?,
+            }
+        } else {
+            let size = view.lock().await.size;
+            input::apply(cdp, &message, size.0, size.1)?;
+        }
+    }
+    Ok(())
+}
