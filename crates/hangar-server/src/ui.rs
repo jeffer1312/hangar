@@ -41,6 +41,8 @@ fn fail(code: &'static str, detail: impl std::fmt::Display) -> FetchError { Fetc
 #[serde(deny_unknown_fields)]
 struct Setting { web_ui: bool }
 
+static SETTING_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn setting_path(home: &Path) -> PathBuf { home.join(".hangar").join("web-ui.json") }
 
 /// A chave é um sha256 em hexadecimal minúsculo: vira nome de pasta, nada mais passa.
@@ -52,6 +54,17 @@ pub fn enabled(home: &Path) -> io::Result<bool> {
         Ok(bytes) => serde_json::from_slice::<Setting>(&bytes).map(|s| s.web_ui).map_err(io::Error::other),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(true),
         Err(e) => Err(e),
+    }
+}
+
+/// A ausência é o padrão; a trava impede confundi-la com a troca feita pela rota de configuração.
+fn enabled_for_request(home: &Path) -> io::Result<bool> {
+    let _guard = SETTING_WRITE.lock().map_err(|_| io::Error::other("trava da configuração indisponível"))?;
+    match std::fs::read(setting_path(home)) {
+        Ok(bytes) => serde_json::from_slice::<Setting>(&bytes).map(|s| s.web_ui).map_err(io::Error::other),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(error) if cfg!(windows) && error.kind() == io::ErrorKind::PermissionDenied => enabled(home),
+        Err(error) => Err(error),
     }
 }
 
@@ -124,7 +137,10 @@ fn filesystem_error(error: io::Error) -> Response {
     #[cfg(unix)]
     let too_long = error.raw_os_error() == Some(libc::ENAMETOOLONG);
     #[cfg(windows)]
-    let too_long = error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_FILENAME_EXCED_RANGE as i32);
+    let too_long = error.raw_os_error().is_some_and(|code| [
+        windows_sys::Win32::Foundation::ERROR_FILENAME_EXCED_RANGE as i32,
+        windows_sys::Win32::Foundation::ERROR_INVALID_NAME as i32,
+    ].contains(&code));
     #[cfg(not(any(unix, windows)))]
     let too_long = false;
     if too_long { return static_error(StatusCode::NOT_FOUND, "Not Found"); }
@@ -160,7 +176,7 @@ fn contained(root: &Path, file: &Path) -> io::Result<PathBuf> {
 fn serve(home: &Path, method: &Method, uri: &axum::http::Uri, headers: &HeaderMap) -> Response {
     if !matches!(*method, Method::GET | Method::HEAD) { return static_error(StatusCode::METHOD_NOT_ALLOWED,"Method Not Allowed"); }
     let Some(parts) = relative(uri.path()) else { return static_error(StatusCode::NOT_FOUND,"Not Found"); };
-    if !enabled(home).unwrap_or_else(|error| { tracing::warn!("web-ui.json ilegível: {error}"); true }) {
+    if !enabled_for_request(home).unwrap_or_else(|error| { tracing::warn!("web-ui.json ilegível: {error}"); true }) {
         return detail(StatusCode::NOT_FOUND,"web_ui_disabled","a tela web está desligada nesta máquina",json!({}));
     }
     let Some(dir) = dist_dir(home) else { return static_error(StatusCode::NOT_FOUND,"Not Found"); };
@@ -315,6 +331,7 @@ pub async fn setting(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     let home = st.accounts.env.home.clone();
     let result = tokio::task::spawn_blocking(move || {
         if let Some(save) = save {
+            let _guard = SETTING_WRITE.lock().map_err(|_| io::Error::other("trava da configuração indisponível"))?;
             let path = setting_path(&home);
             std::fs::create_dir_all(path.parent().expect("pasta do arquivo"))?;
             crate::runtime::queue::atomic_write(&path, &serde_json::to_vec(&save)?)?;

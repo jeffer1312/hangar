@@ -420,3 +420,37 @@ async fn static_http_probe() {
     fixture.task.abort();
     while !fixture.task.is_finished() { tokio::task::yield_now().await; }
 }
+
+#[cfg(windows)]
+#[tokio::test]
+async fn static_windows_invalid_filename_is_not_found() {
+    let fixture = Fixture::start().await;
+    let dist = fixture.root().join("frontend/dist");
+    write(&dist.join("index.html"), "tela");
+    let name = "x".repeat(300);
+    let error = dist.join(&name).canonicalize().unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(windows_sys::Win32::Foundation::ERROR_INVALID_NAME as i32));
+    let response = fixture.get(&format!("/{name}")).await;
+    assert_eq!(response.status(), 404);
+    assert_eq!(response.json::<Value>().await.unwrap(), json!({"detail":"Not Found"}));
+}
+
+#[tokio::test]
+async fn static_disabled_setting_stays_disabled_during_atomic_replacement() {
+    let fixture = Fixture::start().await;
+    write(&fixture.root().join("frontend/dist/index.html"), "tela");
+    assert_eq!(fixture.setting(Some(json!({"web_ui": false}))).await.status(), 200);
+    let writer = async {
+        for _ in 0..24 {
+            assert_eq!(fixture.setting(Some(json!({"web_ui": false}))).await.status(), 200);
+        }
+    };
+    let reader = async {
+        for _ in 0..48 {
+            assert_eq!(code(fixture.get("/").await).await, "web_ui_disabled");
+        }
+    };
+    tokio::join!(writer, reader);
+    assert_eq!(fixture.setting(Some(json!({"web_ui": true}))).await.status(), 200);
+    assert_eq!(fixture.get("/").await.text().await.unwrap(), "tela");
+}
