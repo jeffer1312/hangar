@@ -44,7 +44,7 @@ import { useServers } from './servers';
 import { readDraft, writeDraft } from './drafts';
 import {
   _resetNewConversationForTests, abandonUnknownAttempt, adoptCandidate, beginAttempt, discardAttempt, recoverAttempt,
-  restoreAttempt, useNewConversation, sendFirstInput, readFirstInput, confirmFirstInput, autoSessionName,
+  restoreAttempt, useNewConversation, sendFirstInput, readFirstInput, confirmFirstInput, autoSessionName, retryOnSuggestedAccount,
 } from './newConversation';
 
 const serverA = { id: 'server-a', label: 'A', baseUrl: 'http://a', token: 'secret-a' };
@@ -209,6 +209,33 @@ describe('newConversation', () => {
     await recoverAttempt('server-a');
     expect(issue()?.kind).toBe('rejected');
     expect(adoptCandidate('server-a', attempt()!.id)).toBe(false);
+  });
+
+  it('409 por cota volta ao rascunho; repetir na sugerida mantém nome, texto e escolhas e troca só a conta', async () => {
+    const params = { conta: 'pessoal', conta_id: 'acc-a', uso: '99', sugerida: 'trabalho', sugerida_id: 'acc-b', retry: { codex_account: 'acc-b' } };
+    calls.create.mockImplementation(async (_s, body) => ({ name: body.name, state: 'idle' }));
+    calls.create.mockRejectedValueOnce(Object.assign(httpError(409),
+      { code: 'erro_conta_sem_cota', envelope: { code: 'erro_conta_sem_cota', msg: 'x', params } }));
+    await beginAttempt('server-a', { ...input, body: { ...input.body, codex_account: 'acc-a', model: 'gpt' } });
+    expect(attempt()).toMatchObject({ phase: 'draft', text: 'oi' });
+    expect(issue()).toMatchObject({ kind: 'quota', refusal: { conta: 'pessoal', sugerida: 'trabalho', retry: { codex_account: 'acc-b' } } });
+
+    await retryOnSuggestedAccount('server-a');
+
+    const [first, second] = calls.create.mock.calls.map((c) => c[1]);
+    expect(second).toEqual({ ...first, codex_account: 'acc-b' });
+    expect(attempt()).toMatchObject({ phase: 'created', sessionName: first.name });
+    expect(issue()).toBeNull();
+  });
+
+  it('409 por cota sem sugerida só mostra o motivo e não repete nada', async () => {
+    const params = { conta: 'pessoal', conta_id: 'acc-a', uso: '100', sugerida: '', sugerida_id: '' };
+    calls.create.mockRejectedValue(Object.assign(httpError(409),
+      { code: 'erro_conta_sem_cota', envelope: { code: 'erro_conta_sem_cota', msg: 'x', params } }));
+    await beginAttempt('server-a', input);
+    expect(issue()).toMatchObject({ kind: 'quota', refusal: { retry: null } });
+    await retryOnSuggestedAccount('server-a');
+    expect(calls.create).toHaveBeenCalledOnce();
   });
 
   it('o nome automático das outras telas pula a lista e os recusados, e diz se a lista respondeu', async () => {

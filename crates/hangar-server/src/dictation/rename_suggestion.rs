@@ -348,7 +348,7 @@ mod tests {
         record::write(home.path(), &born).unwrap();
         forget_after_rename(home.path(), &born.key).unwrap();
         let after = record::read(home.path(), &born.key).unwrap().unwrap();
-        assert_eq!((after.name_auto, after.rename_suggestion), (Some(false), None));
+        assert_eq!((after.name_auto, after.rename_suggestion.as_deref()), (Some(false), None));
         assert!(!is_generic(Some(&after), "hangar-2", "/w/hangar"));
         forget_after_rename(home.path(), "sem-formato").unwrap();
     }

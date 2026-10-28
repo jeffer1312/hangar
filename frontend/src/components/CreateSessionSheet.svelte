@@ -6,7 +6,7 @@
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
   import CodexContextControl from './CodexContextControl.svelte';
   import { getCodexAccountsForServer, createSessionForServer, codexAccountMessage, defaultCodexAccount, patchConfig,
-    getConfigForServer, patchConfigForServer, type CodexAccount } from '@hangar/core';
+    getConfigForServer, patchConfigForServer, quotaRefusal, withQuotaRetry, type CodexAccount, type QuotaRefusal } from '@hangar/core';
   import IconFolder from './icons/IconFolder.svelte';
   import { getSessions, listClaudeConfigs, getClaudeAccountSuggestion, getEngines, getProviders, criarConta, apagarConta, accountHolders, type AccountHolders, accountDeletedNotice,
            getArchivePorCwd, resumeArchivedConversation, getArchiveHistory, getBastao, passarBastao,
@@ -145,6 +145,8 @@
   let loading = $state(false);
   let contextBusy = $state(false);
   let error = $state('');
+  // Recusa por cota com conta sugerida: o botão repete a criação nela, com tudo o mais igual.
+  let quota = $state<QuotaRefusal | null>(null);
   let passo = $state('');
   let segundos = $state(0);
 
@@ -789,6 +791,7 @@
       takenNames = new Set();
       hasSameFolder = false;
       error = '';
+      quota = null;
       checking = false;
       loading = false;
       manualOpen = false;
@@ -856,6 +859,7 @@
     picked = p;
     worktreeChoice = null;
     error = '';
+    quota = null;
     checking = true;
     try {
       const sessions = await getSessions();
@@ -878,6 +882,7 @@
     takenNames = new Set();
     hasSameFolder = false;
     error = '';
+    quota = null;
   }
 
   // Conversas RETOMAVEIS da pasta escolhida. Filtra pela CONTA e pelo AGENTE selecionados: o
@@ -1067,7 +1072,8 @@
   const showFast = $derived(!conversaAlvo && !bastao && (provider === 'codex' || (provider === 'claude' && !!proxyAccounts)));
   const tierForCreation = $derived(showFast && fastAvailable ? fastChoice : null);
 
-  async function create() {
+  /** `useSuggested`: repete a criação recusada por cota na conta que o servidor sugeriu. */
+  async function create(useSuggested = false) {
     if (contextBusy || loading || codexUnavailable || proxyBlocked) return;
     if (!picked || !name.trim()) return;
     // Guarda de verdade, não só o `disabled` do botão: o precedente aqui é a sonda de provider
@@ -1077,6 +1083,9 @@
     if (providers[provider] && !providers[provider].disponivel) return;
     loading = true;
     error = '';
+    const refused = useSuggested ? quota : null;
+    quota = null;
+    const conta = refused?.retry?.config_dir ?? contaDoPedido;
     const g = codexGeneration, server = codexServer, account = codexAccount;
     const baton = bastao;
     const requestedHeadless = headlessInherited ? undefined : semTerminal;
@@ -1115,7 +1124,7 @@
         codexProgress = m.codex_ui_abrindo_sessao();
         if (!baton) {
           await salvarPadraoJev();
-          const result = await createSessionForServer(server, body);
+          const result = await createSessionForServer(server, refused ? withQuotaRetry(body, refused) : body);
           if (g !== codexGeneration || !open || codexAccount !== account) return;
           onClose();
           window.location.hash = `#/chat/${encodeURIComponent(server.id)}/${encodeURIComponent(result.name)}`;
@@ -1128,10 +1137,10 @@
         const r = await passarBastao(baton.name, {
           name: body.name,
           cwd: body.cwd,
-          config_dir: body.provider === 'claude' ? contaDoPedido : null,
+          config_dir: body.provider === 'claude' ? conta : null,
           provider: body.provider,
           remember_provider: rememberProvider,
-          ...(body.provider === 'codex' ? { codex_account: account } : {}),
+          ...(body.provider === 'codex' ? { codex_account: refused?.retry?.codex_account ?? account } : {}),
           engine: body.provider === 'claude' ? (engine || null) : null,
           ...(opening?.engine_account ? { engine_account: opening.engine_account } : {}),
           model: body.model,
@@ -1155,13 +1164,13 @@
       await salvarPadraoJev();
       if (provider === 'claude' && semTerminal) {
         // Os dois argumentos do fim só existem aqui: perfil (só omp) vazio e a flag sem terminal.
-        await onCreate(name.trim(), picked, contaDoPedido, provider, engine || null, modeloCriacao || null,
+        await onCreate(name.trim(), picked, conta, provider, engine || null, modeloCriacao || null,
                        esforco || null, permissao || null, null, requestedHeadless, (!engine && subagente) || null, jev, worktreeChoice, ...extra);
       } else if (provider === 'claude' && !engine && subagente) {
-        await onCreate(name.trim(), picked, contaDoPedido, provider, null, modeloCriacao || null,
+        await onCreate(name.trim(), picked, conta, provider, null, modeloCriacao || null,
                        esforco || null, permissao || null, null, requestedHeadless, subagente, jev, worktreeChoice, ...extra);
       } else {
-        await onCreate(name.trim(), picked, provider === 'claude' ? contaDoPedido : null, provider,
+        await onCreate(name.trim(), picked, provider === 'claude' ? conta : null, provider,
                        provider === 'claude' ? (engine || null) : null, modeloCriacao || null, esforco || null,
                        provider === 'claude' ? (permissao || null) : null,
                        // Explícitos até o fim: a cadeia posicional passou a ter o `jev` no 12º, e
@@ -1173,7 +1182,9 @@
       onClose();
     } catch (err) {
       if (body.provider === 'codex' && g !== codexGeneration) return;
-      error = err instanceof Error ? err.message : m.criar_sessao_erro();
+      const q = quotaRefusal(err);
+      quota = q?.retry ? q : null;
+      error = q ? q.text : err instanceof Error ? err.message : m.criar_sessao_erro();
     } finally {
       pararAcompanhamento();
       if (body.provider !== 'codex' || g === codexGeneration) loading = false;
@@ -1704,6 +1715,10 @@
         {#if error}
           <p class="error-msg" role="alert">{error}</p>
         {/if}
+        {#if quota && !loading && !conversaAlvo}
+          {@const q = quota}
+          <button class="ghost-btn" onclick={() => create(true)}>{m.open_quota_use({ conta: q.sugerida })}</button>
+        {/if}
         <!-- UMA acao primaria: com uma conversa escolhida no check acima, o botao CONTINUA aquela
              conversa em vez de criar uma sessao nova. Dois botoes lado a lado deixariam a tela
              perguntando duas coisas ao mesmo tempo. -->
@@ -1716,7 +1731,7 @@
               : m.criar_retomar_acao()}
           </button>
         {:else}
-          <button class="primary-btn" onclick={create} disabled={loading || headlessSaving || headlessLoading || contextBusy || codexUnavailable || proxyBlocked || !name.trim() || providersCarregando || bastaoSemServidor || (providers[provider] && !providers[provider].disponivel)}>
+          <button class="primary-btn" onclick={() => create()} disabled={loading || headlessSaving || headlessLoading || contextBusy || codexUnavailable || proxyBlocked || !name.trim() || providersCarregando || bastaoSemServidor || (providers[provider] && !providers[provider].disponivel)}>
             {loading ? m.criar_criando() : (bastao ? m.bastao_acao() : m.sessao_nova())}
           </button>
           {#if loading}

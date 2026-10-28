@@ -772,6 +772,22 @@ impl Api {
         r.json().await.map_err(|_| Failure::transport(true))
     }
 
+    /// `POST /api/sessions`: o 409 de conta sem cota volta como `Opening::Quota`, com a conta que o servidor sugere.
+    pub async fn open_session(&self, body: Value, seconds: u64) -> Result<Opening, Failure> {
+        let r = self.client.post(self.server_url(&["sessions"], &[])).json(&body).timeout(Duration::from_secs(seconds)).send().await
+            .map_err(|e| Failure::lost("POST", &e, true))?;
+        if r.status() == StatusCode::CONFLICT {
+            let url = r.url().clone();
+            let body = r.json::<Value>().await.ok();
+            if let Some(refusal) = body.as_ref().and_then(quota_refusal) { return Ok(Opening::Quota(refusal)); }
+            let code = envelope_code(body.as_ref());
+            recent::record("POST", &url, 409, code.as_deref());
+            return Err(Failure { status: Some(409), detail: failure_detail(body, 409).chars().take(500).collect(), retry_after: None, uncertain: false, code });
+        }
+        let r = Self::checked_as(r, true, "POST").await?;
+        r.json().await.map(Opening::Done).map_err(|_| Failure::transport(true))
+    }
+
     /// DELETE de conta: o 409 de conta em uso com a lista do que a prende volta como `Removed::Held`.
     pub async fn remove_account(&self, path: &[&str], query: &[(&str, &str)], seconds: u64) -> Result<Removed, Failure> {
         let r = self.client.delete(self.server_url(path, query)).timeout(Duration::from_secs(seconds)).send().await
@@ -975,6 +991,38 @@ pub fn account_holders(body: &Value) -> Option<AccountHolders> {
     if !matches!(detail.get("code")?.as_str()?, "erro_sessao_usa_conta" | "erro_processos_usam_conta") { return None; }
     let holders: AccountHolders = serde_json::from_value(detail.get("params")?.clone()).ok()?;
     (!holders.sessions.is_empty() || !holders.processes.is_empty()).then_some(holders)
+}
+
+/// Abrir sessão: aberta, ou recusada porque a conta pedida está sem cota.
+pub enum Opening { Done(Value), Quota(QuotaRefusal) }
+
+/// A recusa 409 `erro_conta_sem_cota`. `retry` são os campos que repetem o pedido na conta sugerida; sem ela, todas estão sem cota.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuotaRefusal { pub account: String, pub usage: String, pub suggested: String, pub retry: Option<serde_json::Map<String, Value>> }
+
+impl QuotaRefusal {
+    /// A frase da recusa; sem sugerida, ela já diz que não há outra conta.
+    pub fn text(&self) -> String {
+        let title = crate::i18n::tr_shared("open_quota_title", &[("conta", &self.account), ("uso", &self.usage)]);
+        if self.retry.is_some() { title } else { format!("{title} {}", crate::i18n::tr_shared("open_quota_none", &[])) }
+    }
+}
+
+pub fn quota_refusal(body: &Value) -> Option<QuotaRefusal> {
+    let detail = body.get("detail")?;
+    if detail.get("code")?.as_str()? != "erro_conta_sem_cota" { return None; }
+    let params = detail.get("params")?;
+    let text = |key: &str| match params.get(key) {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => n.as_f64().map(|n| n.round().to_string()).unwrap_or_default(),
+        _ => String::new(),
+    };
+    // Só a conta Claude ou Codex que o servidor mandou, não-vazia; outro campo nunca entra no pedido.
+    let retry = params.get("retry").and_then(Value::as_object).and_then(|r| ["config_dir", "codex_account"].into_iter()
+        .find_map(|key| r.get(key).and_then(Value::as_str).filter(|v| !v.is_empty()).map(|v| (key, v.to_owned()))))
+        .map(|(key, value)| serde_json::Map::from_iter([(key.to_owned(), Value::String(value))]));
+    let suggested = if retry.is_some() { Some(text("sugerida")).filter(|s| !s.is_empty()).unwrap_or_else(|| text("sugerida_id")) } else { String::new() };
+    Some(QuotaRefusal { account: text("conta"), usage: text("uso"), suggested, retry })
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -1501,5 +1549,24 @@ mod tests {
         assert_eq!(account_holders(&empty), None);
         let other = json!({"detail": {"code": "erro_conta_cheia", "params": {"sessoes": ["web"]}}});
         assert_eq!(account_holders(&other), None);
+    }
+
+    /// A recusa por cota leva só a conta sugerida ao pedido repetido; sem sugerida, nada a repetir; outro 409 não é ela.
+    #[test]
+    fn quota_refusal_carries_only_the_suggested_account() {
+        let claude = json!({"detail": {"code": "erro_conta_sem_cota", "msg": "x", "params": {"conta": "pessoal", "conta_id": "/c1",
+            "uso": "97", "sugerida": "trabalho", "sugerida_id": "/c2", "retry": {"config_dir": "/c2", "model": "intruso"}}}});
+        let refusal = quota_refusal(&claude).unwrap();
+        assert_eq!((refusal.account.as_str(), refusal.usage.as_str(), refusal.suggested.as_str()), ("pessoal", "97", "trabalho"));
+        assert_eq!(refusal.retry, Some(serde_json::Map::from_iter([("config_dir".to_owned(), json!("/c2"))])));
+        let codex = json!({"detail": {"code": "erro_conta_sem_cota", "params": {"conta": "a", "uso": 100, "sugerida": "b",
+            "retry": {"codex_account": "acc-b"}}}});
+        let refusal = quota_refusal(&codex).unwrap();
+        assert_eq!((refusal.usage.as_str(), refusal.retry.unwrap()["codex_account"].as_str()), ("100", Some("acc-b")));
+        let none = json!({"detail": {"code": "erro_conta_sem_cota", "params": {"conta": "a", "uso": "100", "sugerida": "", "sugerida_id": ""}}});
+        let refusal = quota_refusal(&none).unwrap();
+        assert_eq!((refusal.retry, refusal.suggested.as_str()), (None, ""));
+        let other = json!({"detail": {"code": "erro_nome_em_uso", "params": {"retry": {"config_dir": "/c2"}}}});
+        assert_eq!(quota_refusal(&other), None);
     }
 }

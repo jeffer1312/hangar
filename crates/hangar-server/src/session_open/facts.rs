@@ -450,10 +450,32 @@ impl OpenFacts for LocalFacts {
             .map(|(account, _)| CodexLogin { id: account.id, is_default: account.is_default }).collect())
     }
 
-    fn claude_quotas(&self) -> Vec<Value> {
-        // Sem leitura, nada muda: a conta fica como estava (como o Python sem o Rust).
-        let rows = self.runtime.block_on(self.accounts.quotas(None, false, true)).unwrap_or(Value::Null);
-        rows.as_array().into_iter().flatten().filter(|row| row["provedor"] == "claude").cloned().collect()
+    fn quotas(&self, network: bool) -> Vec<Value> {
+        // Nos testes a rede iria à Anthropic com o token falso das fixtures; o comando `open` dos testes
+        // de integração é outro processo e desliga pelo ambiente.
+        let offline = cfg!(test) || !crate::accounts::quotas::open_network_read()
+            || self.env().base.get("HANGAR_QUOTA_NETWORK").is_some_and(|v| v == "0");
+        let rows = if network && !offline {
+            self.runtime.block_on(self.accounts.quotas_within(None, false, std::time::Duration::from_secs(5), None)).0
+        } else {
+            self.runtime.block_on(self.accounts.quotas(None, false, true))
+        };
+        // Sem leitura, a regra não sabe a cota e quem chama registra isso.
+        rows.unwrap_or(Value::Null).as_array().into_iter().flatten()
+            .filter(|row| matches!(row["provedor"].as_str(), Some("claude" | "codex"))).cloned().collect()
+    }
+
+    fn spent_accounts(&self) -> BTreeMap<String, f64> {
+        // O mesmo arquivo da troca automática por limite (`limit_switch::Spent`); ilegível = nenhuma.
+        std::fs::read(self.accounts.quota_path().with_file_name("limit-spent.json")).ok()
+            .and_then(|raw| serde_json::from_slice(&raw).ok()).unwrap_or_default()
+    }
+
+    fn quota_unknown(&self, name: &str, account: &str) {
+        tracing::warn!(code = "open_quota_unknown", session = name, account, "cota da conta desconhecida na abertura; a sessão segue nela");
+        crate::diag::record_blocking(crate::diag::diary_dir_in(self.env()).as_deref(),
+            &[json!({"evento": "rust.open_quota_unknown", "nivel": "aviso", "sessao": name, "conta": account, "codigo": "open_quota_unknown"})],
+            "cota desconhecida na abertura");
     }
 
     fn existing_dir(&self, cwd: &str) -> Option<String> {

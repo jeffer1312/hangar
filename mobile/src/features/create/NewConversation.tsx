@@ -23,7 +23,7 @@ import { removeDraftAttachment, retainDraftAttachment } from '../../chat/draftAt
 import { withoutUpload } from '../../stores/drafts';
 import { superficie } from '../../theme/superficie';
 import {
-  adoptCandidate, attemptAttachment, beginAttempt, discardAttempt, recoverAttempt, restoreAttempt, sendFirstInput,
+  adoptCandidate, attemptAttachment, beginAttempt, discardAttempt, recoverAttempt, restoreAttempt, retryOnSuggestedAccount, sendFirstInput,
   useNewConversation, type NewConversationInput,
 } from '../../stores/newConversation';
 import { HomeIntroMark } from './HomeAmbient';
@@ -277,6 +277,15 @@ export function NewConversation({
     } finally { submitting.current = false; }
   };
 
+  const openOnSuggested = async () => {
+    if (submitting.current) return;
+    submitting.current = true;
+    try {
+      await retryOnSuggestedAccount(serverId);
+      await advanceOnce();
+    } finally { submitting.current = false; }
+  };
+
   const adopt = async (picked: PickedAttachment) => {
     let kept: PickedAttachment;
     try {
@@ -405,6 +414,12 @@ export function NewConversation({
         ) : null}
 
         {issue ? <Text style={styles.error} accessibilityRole="alert">{issue.message}</Text> : null}
+        {issue?.kind === 'quota' && issue.refusal.retry ? (
+          <Pressable accessibilityRole="button" accessibilityState={{ disabled: busy, busy }} onPress={() => void openOnSuggested()}
+            disabled={busy} style={[styles.secondary, busy && styles.disabled]}>
+            <Text style={styles.secondaryTxt}>{m.open_quota_use({ conta: issue.refusal.sugerida })}</Text>
+          </Pressable>
+        ) : null}
         {!body && !blocked && !pending ? <Text style={styles.hint}>{m.nova_conversa_sem_destino()}</Text> : null}
       </ScrollView>
       </Animated.View>

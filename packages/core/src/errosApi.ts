@@ -514,6 +514,9 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_retomar: (p) => m.erro_retomar({ erro: String(p.erro ?? '') }),
   erro_conta_so_claude: () => m.erro_conta_so_claude(),
   erro_conta_cheia: (p) => m.erro_conta_cheia({ conta: String(p.conta ?? ''), pct: String(Math.round(Number(p.pct ?? 0))) }),
+  // Com sugerida o cliente oferece o botão; sem ela a frase diz que não há para onde ir.
+  erro_conta_sem_cota: (p) => [m.open_quota_title({ conta: String(p.conta ?? ''), uso: String(Math.round(Number(p.uso ?? 0))) }),
+    p.retry ? '' : m.open_quota_none()].filter(Boolean).join(' '),
   erro_conversa_ja_na_conta: () => m.erro_conversa_ja_na_conta(),
   erro_troca_conta: (p) => m.erro_troca_conta({ erro: String(p.erro ?? '') }),
   erro_troca_conta_parada: (p) => m.erro_troca_conta_parada({ erro: String(p.erro ?? '') }),

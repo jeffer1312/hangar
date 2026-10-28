@@ -88,6 +88,7 @@ fn catalog_and_native_login_routes_belong_to_rust() {
 
 fn isolated_service(home: &std::path::Path) -> hangar_server::accounts::AccountService {
     use hangar_server::accounts::{AccountService, environment::AccountEnvironment};
+    hangar_server::accounts::quotas::disable_open_network_read();
     AccountService::new(AccountEnvironment::from_map(
         [
             ("HOME".into(), home.to_string_lossy().into_owned()),

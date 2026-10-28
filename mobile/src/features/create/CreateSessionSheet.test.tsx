@@ -1644,7 +1644,9 @@ describe('CreateSessionSheet Codex', () => {
   it.each([
     ['sem escolha, a conta ativa não vai (D-003: o servidor decide)', null, null, null],
     ['a conta ativa escolhida à mão vai', null, 'Conta A', '/a'],
-    ['a conta lembrada de uma escolha anterior vai', '/b', null, '/b'],
+    // R20: a lembrada aparece selecionada, mas mandada viraria escolha e a esgotada seria recusada.
+    ['a conta lembrada de uma escolha anterior não vai', '/b', null, null],
+    ['a conta lembrada tocada de novo nesta tela vai', '/b', 'Conta B', '/b'],
   ])('%s', async (_case, remembered, pick, expected) => {
     calls.configs.mockResolvedValue([{ path: '/a', label: 'Conta A', active: true }, { path: '/b', label: 'Conta B', active: false }]);
     if (remembered) localStorage.setItem(`create.choices.v1:${server.id}`, JSON.stringify({ configDir: remembered }));

@@ -3038,6 +3038,19 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
   herdados como antes. Convidado não recebe o padrão do dono. Registro ilegível vira aviso e a
   abertura segue sem ele. No Codex com terminal o modo salvo entra como o herdado (o pedido
   explícito continua recusado).
+- **Abertura nunca nasce numa conta sem cota (28/10/2026).** Em 28/10, às 15:03, uma sessão aberta
+  sem conta escolhida nasceu numa conta com 100% nos 7 dias, e a troca automática só a tirou de lá
+  depois que bateu o limite. A causa foi a regra dos 95%: ela lia só o cache, e uma leitura com token
+  vencido apagava o 100%, de modo que, sem número, a conta passava calada. Hoje:
+  - o cache guarda a última leitura boa também quando a nova vem `expirada`;
+  - sem cota conhecida, a abertura faz uma leitura de 5 s e considera o `limit-spent.json`. Se ainda
+    não souber, segue e registra `rust.open_quota_unknown` no diário;
+  - a regra vale também para conta Codex;
+  - conta escolhida na tela com 95% ou mais recebe 409 `erro_conta_sem_cota`, com `retry` (os campos
+    da criação a trocar). Os três clientes oferecem "Abrir em Y" com um clique;
+  - o Expo só manda a conta lembrada quando ela foi tocada.
+
+  Nos testes, a leitura pela rede é desligada (`disable_open_network_read`, `HANGAR_QUOTA_NETWORK=0`).
 
 ## WebSocket do dono com token não confere Origin (17/10/2026)
 
