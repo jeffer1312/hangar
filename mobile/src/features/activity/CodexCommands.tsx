@@ -11,30 +11,38 @@ export function CodexCommands({ commands, name, serverId, server, readOnly = fal
 }) {
   const { theme } = useUnistyles();
   const [opened, setOpened] = useState<string | null>(null);
-  const [pending, setPending] = useState<string | null>(null);
+  const [pending, setPending] = useState<string[]>([]);
+  const pendingIds = useRef(new Set<string>());
   const [error, setError] = useState('');
   const output = chatStore(serverId, name).use(state => opened ? state.commandOutput[opened] ?? '' : '');
   const sequence = useRef(0);
   useEffect(() => () => { sequence.current += 1; }, []);
   useEffect(() => {
-    if (pending && !commands.some(command => command.id === pending)) {
-      sequence.current += 1;
-      setPending(null);
+    if (pending.some(id => !commands.some(command => command.id === id))) {
+      for (const id of pendingIds.current) {
+        if (!commands.some(command => command.id === id)) pendingIds.current.delete(id);
+      }
+      setPending([...pendingIds.current]);
     }
     if (opened && !commands.some(command => command.id === opened)) setOpened(null);
   }, [commands, pending, opened]);
 
   async function stop(command: CodexCommand) {
-    if (!server || pending || readOnly) return;
-    const request = ++sequence.current;
-    setPending(command.id);
+    if (!server || pendingIds.current.has(command.id) || readOnly) return;
+    const request = sequence.current;
+    pendingIds.current.add(command.id);
+    setPending([...pendingIds.current]);
     setError('');
     try {
       await terminateCodexCommand(name, command.process_id, server);
     } catch (error) {
-      if (sequence.current !== request) return;
-      setPending(null);
+      if (sequence.current !== request || !pendingIds.current.has(command.id)) return;
       setError(error instanceof Error ? error.message : m.codex_command_stop_failed());
+    } finally {
+      if (sequence.current === request) {
+        pendingIds.current.delete(command.id);
+        setPending([...pendingIds.current]);
+      }
     }
   }
 
@@ -52,10 +60,10 @@ export function CodexCommands({ commands, name, serverId, server, readOnly = fal
             <Text style={styles.meta}>pid {command.process_id} · {command.background ? m.codex_terminals_count({ n: 1 }) : m.native_tool_running()}</Text>
           </View>
         </Pressable>
-        {!readOnly ? <Pressable onPress={() => void stop(command)} disabled={!server || pending !== null} style={styles.stop}
-          accessibilityRole="button" accessibilityState={{ disabled: !server || pending !== null }}
+        {!readOnly ? <Pressable onPress={() => void stop(command)} disabled={!server || pending.includes(command.id)} style={styles.stop}
+          accessibilityRole="button" accessibilityState={{ disabled: !server || pending.includes(command.id) }}
           accessibilityLabel={m.codex_command_stop_label({ command: command.command })}>
-          <Text style={styles.action}>{pending === command.id ? m.codex_command_stopping() : m.codex_command_stop()}</Text>
+          <Text style={styles.action}>{pending.includes(command.id) ? m.codex_command_stopping() : m.codex_command_stop()}</Text>
         </Pressable> : null}
       </View>
       {opened === command.id ? <ScrollView style={styles.output} nestedScrollEnabled>

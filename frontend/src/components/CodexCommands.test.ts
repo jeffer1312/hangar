@@ -25,8 +25,34 @@ it('abre saída literal, envia o process_id e aguarda o state remover o comando'
     await tick(); await Promise.resolve(); await tick();
     expect(terminateCodexCommand).toHaveBeenCalledWith('sess', '4242', server);
     expect(target.textContent).toContain(command.command);
-    expect(target.querySelector<HTMLButtonElement>('.stop')?.disabled).toBe(true);
-    expect(target.textContent).toContain(m.codex_command_stopping());
+    expect(target.querySelector<HTMLButtonElement>('.stop')?.disabled).toBe(false);
+    expect(target.querySelector('.stop')?.textContent).toContain(m.codex_command_stop());
+  } finally { await unmount(component); }
+});
+
+it('aguarda cada pedido sem bloquear o encerramento dos outros comandos', async () => {
+  let finishA!: (value: { ok: true }) => void;
+  let finishB!: (value: { ok: true }) => void;
+  vi.mocked(terminateCodexCommand)
+    .mockImplementationOnce(() => new Promise(resolve => { finishA = resolve; }))
+    .mockImplementationOnce(() => new Promise(resolve => { finishB = resolve; }));
+  const target = document.createElement('div');
+  const commands = [
+    { id: 'exec-a', process_id: '4242', command: 'npm run dev', started_at: 1, background: true },
+    { id: 'exec-b', process_id: '4243', command: 'npm run watch', started_at: 2, background: true },
+  ];
+  const component = mount(CodexCommands, { target, props: { commands, output: {}, sessionName: 'sess' } });
+  const buttons = () => [...target.querySelectorAll<HTMLButtonElement>('.stop')];
+  try {
+    buttons()[0].click(); await tick();
+    expect(buttons().map(button => button.disabled)).toEqual([true, false]);
+    buttons()[1].click(); await tick();
+    expect(buttons().map(button => button.disabled)).toEqual([true, true]);
+    finishA({ ok: true }); await Promise.resolve(); await tick();
+    expect(buttons().map(button => button.disabled)).toEqual([false, true]);
+    finishB({ ok: true }); await Promise.resolve(); await tick();
+    expect(buttons().map(button => button.disabled)).toEqual([false, false]);
+    expect(terminateCodexCommand).toHaveBeenCalledTimes(2);
   } finally { await unmount(component); }
 });
 

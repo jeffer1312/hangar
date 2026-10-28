@@ -794,7 +794,14 @@ impl Engine {
     /// Plugin ou `hooks.json` sincronizado pelo Hangar mudou com a sessão aberta e o Codex passou a
     /// recusar o hook. Só a conexão desta sessão recarrega a confiança que o app-server dela tem em memória.
     fn trust_synced_hooks(&mut self,effects:&mut Vec<Effect>) {
-        if self.rpc.values().any(|rpc|!rpc.timed_out && rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust")) { return; }
+        let trust = |rpc:&&Rpc|rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust");
+        if self.rpc.values().filter(trust).any(|rpc|!rpc.timed_out) { return; }
+        // A rodada anterior estourou o prazo: a recusa passa a aparecer, em vez de ficar em silêncio a cada hook.
+        if self.rpc.values().filter(trust).any(|rpc|rpc.timed_out) {
+            self.hook_trust_settled = true;
+            self.hook_notice("hook_failed","o Codex não respondeu à reaprovação dos hooks alterados",effects);
+            return;
+        }
         let cwds:Vec<Value> = self.metadata["cwd"].as_str().map(Value::from).into_iter().collect();
         self.counter += 1;
         self.rpc(format!("hook_trust:{}:{}",self.generation,self.counter),"hooks/list",json!({"cwds":cwds}),
@@ -1963,7 +1970,8 @@ impl Engine {
                 self.fail_clear(next["parent"].as_str().unwrap_or(""),next["kind"] == "clear_thread",line["error"]["message"].clone(),effects);
                 return Ok(());
             }
-            if rpc.method == "thread/backgroundTerminals/terminate" {
+            // Só o encerramento que o Stop pediu sozinho; o Encerrar do usuário recebe o erro na própria resposta.
+            if rpc.method == "thread/backgroundTerminals/terminate" && rpc.operation_id.starts_with("terminate:") {
                 let text = format!("O comando do turno interrompido não foi encerrado ({}): {}",
                     rpc.params["processId"].as_str().unwrap_or("?"),line["error"]["message"].as_str().unwrap_or("erro do Codex"));
                 self.policy("local_output",json!({"text":text}),effects);
@@ -2202,8 +2210,8 @@ impl Engine {
                 }
                 Some("terminate_after") => {
                     // O interrupt fecha o turno mas deixa vivo o comando que ele rodava.
+                    // O comando sai da lista no `item/completed` dele: se o encerramento falhar, ele segue à vista.
                     for process in next["processes"].as_array().into_iter().flatten().filter_map(Value::as_str) {
-                        self.running_commands.retain(|_,running|running.process != process);
                         self.counter += 1;
                         let operation_id = format!("terminate:{}:{}",self.generation,self.counter);
                         let request = ClientRequest::ThreadBackgroundTerminalsTerminate(wire::ThreadBackgroundTerminalsTerminateParams {

@@ -225,10 +225,12 @@ export function createActivityFolder(): ActivityFolder {
         const agent = agents.find(agent => agent.id === e.tool_use_id);
         const identity = codexAgentIdentity(r);
         if (agent) Object.assign(agent, identity);
-        const key = identity.agentId ?? identity.agentPath;
-        if (key) {
-          bgAgent.set(key, e.tool_use_id);
-          if (completedIds.delete(key)) resulted.add(e.tool_use_id);
+        const keys = [identity.agentId, identity.agentPath].filter((key): key is string => !!key);
+        if (keys.length) {
+          for (const key of keys) {
+            bgAgent.set(key, e.tool_use_id);
+            if (completedIds.delete(key)) resulted.add(e.tool_use_id);
+          }
         } else {
           resulted.add(e.tool_use_id);
         }

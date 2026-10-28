@@ -10,25 +10,28 @@
   } = $props();
   const sessionServer = useSessionServer();
   let opened = $state<string | null>(null);
-  let pending = $state<string | null>(null);
+  let pending = $state<string[]>([]);
   let error = $state('');
   let sequence = 0;
   onDestroy(() => { sequence += 1; });
   $effect(() => {
-    if (pending && !commands.some(command => command.id === pending)) { sequence += 1; pending = null; }
+    if (pending.some(id => !commands.some(command => command.id === id))) {
+      pending = pending.filter(id => commands.some(command => command.id === id));
+    }
     if (opened && !commands.some(command => command.id === opened)) opened = null;
   });
   async function stop(command: CodexCommand) {
     const server = sessionServer();
-    if (!server || pending || readOnly) return;
-    const request = ++sequence;
-    pending = command.id;
+    if (!server || pending.includes(command.id) || readOnly) return;
+    const request = sequence;
+    pending = [...pending, command.id];
     error = '';
     try { await terminateCodexCommand(sessionName, command.process_id, server); }
     catch (cause) {
-      if (sequence !== request) return;
-      pending = null;
+      if (sequence !== request || !pending.includes(command.id)) return;
       error = cause instanceof Error ? cause.message : m.codex_command_stop_failed();
+    } finally {
+      if (sequence === request) pending = pending.filter(id => id !== command.id);
     }
   }
 </script>
@@ -47,9 +50,9 @@
             </span>
           </button>
           {#if !readOnly}
-            <button class="stop" disabled={pending !== null || !sessionServer()} onclick={() => void stop(command)}
+            <button class="stop" disabled={pending.includes(command.id) || !sessionServer()} onclick={() => void stop(command)}
               aria-label={m.codex_command_stop_label({ command: command.command })}>
-              {pending === command.id ? m.codex_command_stopping() : m.codex_command_stop()}
+              {pending.includes(command.id) ? m.codex_command_stopping() : m.codex_command_stop()}
             </button>
           {/if}
         </div>

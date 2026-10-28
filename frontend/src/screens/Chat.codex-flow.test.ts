@@ -160,6 +160,7 @@ it('digita, enfileira, orienta e reconcilia a mensagem definitiva sem duplicaç�
 });
 
 it('não sobrepõe consultas de subagentes mesmo se o estado mudar durante a resposta', async () => {
+  harness.provider = 'claude';
   let responder!: (lista: Awaited<ReturnType<typeof api.getSubagents>>) => void;
   vi.mocked(api.getSubagents).mockImplementationOnce(() => new Promise(resolve => { responder = resolve; }));
   const intervalos = vi.spyOn(globalThis, 'setInterval');
@@ -172,6 +173,27 @@ it('não sobrepõe consultas de subagentes mesmo se o estado mudar durante a res
   expect(api.getSubagents).toHaveBeenCalledTimes(1);
   responder([]);
   await flush();
+});
+
+it.each(['claude', 'codex'] as const)('preserva a descoberta de subagentes ao chegar histórico antigo de %s e a renova no reset', async provider => {
+  harness.provider = provider;
+  let finishHistory!: (value: Awaited<ReturnType<typeof api.getHistoryDesde>>) => void;
+  vi.mocked(api.getHistoryDesde).mockReturnValueOnce(new Promise(resolve => { finishHistory = resolve; }));
+  await montar();
+  await emit('state', { session: 'codex-flow', state: 'idle' });
+  const reads = vi.mocked(api.getSubagents).mock.calls.length;
+  expect(reads).toBeGreaterThan(0);
+  const tail = { id: 'tail', kind: 'assistant_msg', ts: 2, text: 'mensagem atual' } as const;
+  await emit('message', tail);
+  expect(api.getSubagents).toHaveBeenCalledTimes(reads);
+  finishHistory({ eventos: [
+    { id: 'older', kind: 'assistant_msg', ts: 1, text: 'mensagem antiga' }, tail,
+  ], etag: 'history-v1' });
+  await flush();
+  expect(document.body.textContent).toContain('mensagem antiga');
+  expect(api.getSubagents).toHaveBeenCalledTimes(reads);
+  await emit('reset', {});
+  expect(api.getSubagents).toHaveBeenCalledTimes(reads + 1);
 });
 
 it('abrir uma conversa Claude não consulta o seletor de modelos', async () => {

@@ -3,7 +3,7 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-nati
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { codexSubagentState, formatElapsed, getSubagents, getWorkflow, getWorkflowAgent, getWorkflows, projectSubagentActivity, projectCodexSubagent, isCodexAgentSpawn } from '@hangar/core';
-import type { AgentRun, SubagentRun, WorkflowDetail, WorkflowAgentDetail, WorkflowSummary } from '@hangar/core';
+import type { AgentRun, CodexCommand, ShellVivo, SubagentRun, WorkflowDetail, WorkflowAgentDetail, WorkflowSummary } from '@hangar/core';
 import { chatStore } from '../../stores/chat';
 import { useServers } from '../../stores/servers';
 import { useSessions } from '../../stores/sessions';
@@ -22,6 +22,8 @@ import { Icon } from '../../ui/Icon';
 import { CodexCommands } from './CodexCommands';
 
 type Level = 'list' | 'workflow' | 'agent' | 'subagent';
+const EMPTY_SHELLS: ShellVivo[] = [];
+const EMPTY_COMMANDS: CodexCommand[] = [];
 
 interface Props {
   serverId: string;
@@ -41,8 +43,8 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   const events = chat.use((s) => s.events);
   const eventsRevision = chat.use((s) => s.eventsRevision);
   // Processos vivos lidos do sistema pelo backend (vêm no `state` do stream que o chat já mantém).
-  const processos = chat.use((s) => s.stateEvent?.shells) ?? [];
-  const commands = chat.use((s) => s.stateEvent?.codex_commands) ?? [];
+  const processos = chat.use((s) => s.stateEvent?.shells) ?? EMPTY_SHELLS;
+  const commands = chat.use((s) => s.stateEvent?.codex_commands) ?? EMPTY_COMMANDS;
   const nativeStates = chat.use((s) => s.stateEvent?.codex_subagents);
   const readOnly = useSessions(state => state.rows.find(row => row.serverId === serverId && row.name === name)?.guest_kind === 'pair');
   const transcriptActivity = useActivity(events, eventsRevision);

@@ -1939,7 +1939,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   const liveSubagentRuns = $derived(subagentRuns.map(run => projectCodexSubagent(run, stateEvent?.codex_subagents)));
   const codexAgentIds = $derived(Object.entries(stateEvent?.codex_subagents ?? {}).map(([id, state]) => `${id}:${state.agent_path ?? ''}`).sort().join('|'));
   const activity = $derived(isCodex ? projectSubagentActivity(transcriptActivity, liveSubagentRuns, undefined, stateEvent?.codex_subagents) : transcriptActivity);
-  const activityConversation = $derived(events[0]?.id);
+  let activityConversation = $state(0);
   // O shell de fundo conta junto: pro app "o que está rodando aqui" é uma coisa só. O terminal já
   // mostrava ("5 shells still running") e o app não mostrava nada.
   const activityBadge = $derived(activity.inProgress + (isCodex && !subagentsLoaded ? 0 : activity.runningAgents) + activity.runningShells);
@@ -2681,6 +2681,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
       // A cauda do transcript antigo fica sob a chave dele e nunca mais é lida — a chave é o
       // `jsonl`, e o /clear abre outro. Não há o que apagar aqui.
       etagCauda = null;
+      activityConversation += 1;
       events = [];
       sugestao = '';        // era do contexto que o /clear acabou de apagar
       pluginBand = null;    // idem: o mod redesenha para a conversa nova

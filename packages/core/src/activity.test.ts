@@ -54,6 +54,22 @@ describe('subagentes nativos do Codex', () => {
     const notice: ChatEvent = { id: 'done', kind: 'user_msg', text: '<subagent_notification>{"agent_path":"/root/review","status":{"completed":"ok"}}</subagent_notification>' };
     expect(run([spawn(), started, notice]).runningAgents).toBe(0);
   });
+
+  it.each([false, true])('fecha pelo caminho quando o lançamento também traz UUID (aviso antes: %s)', before => {
+    const both: ChatEvent = { ...started, result: '{"agent_id":"thread-uuid","task_name":"/root/review"}' };
+    const notice: ChatEvent = { id: 'done', kind: 'user_msg', text: '<subagent_notification>{"agent_path":"/root/review","status":{"completed":"ok"}}</subagent_notification>' };
+    const events = before ? [spawn(), notice, both] : [spawn(), both, notice];
+    const folder = createActivityFolder();
+    for (const event of events) folder.push(event);
+    expect(folder.snapshot().runningAgents).toBe(0);
+    folder.reset(events);
+    expect(folder.snapshot().runningAgents).toBe(0);
+    folder.push({ id: 'send', kind: 'tool_use', tool_use_id: 'send', tool_name: 'followup_task', tool_input: { target: 'thread-uuid', message: 'Continue' } });
+    folder.push({ id: 'sent', kind: 'tool_result', tool_use_id: 'send', result: 'ok' });
+    expect(folder.snapshot().runningAgents).toBe(1);
+    folder.push({ ...notice, id: 'done-again' });
+    expect(folder.snapshot().runningAgents).toBe(0);
+  });
 });
 
 describe('activity — pareamento de agente background', () => {

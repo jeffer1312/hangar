@@ -352,7 +352,7 @@ pub(super) struct ActivityPanel {
     commands: Vec<CodexCommand>,
     command_output: HashMap<String, String>,
     command_open: Option<String>,
-    command_pending: Option<String>,
+    command_pending: HashSet<String>,
     command_error: Option<String>,
     command_view: Option<(String, Entity<TextViewState>)>,
     read_only: bool,
@@ -392,7 +392,7 @@ pub(super) struct ActivityPanel {
 impl ActivityPanel {
     fn new(cx: &mut Context<Self>) -> Self {
         Self { link: None, key: None, shown: false, activity: Activity::default(), processes: Vec::new(), subs: Vec::new(), native_states: None, seq: 0,
-            commands: Vec::new(), command_output: HashMap::new(), command_open: None, command_pending: None,
+            commands: Vec::new(), command_output: HashMap::new(), command_open: None, command_pending: HashSet::new(),
             command_error: None, command_view: None, read_only: false,
             loading: false, failed: false, lines: Lines::default(), clock: None, scroll: ScrollHandle::new(), opened: None, detail_seq: 0,
             poll: None, notice: None, pending: None, conversation: cx.new(|_| SubConversation::new()), back_focus: cx.focus_handle().tab_stop(true),
@@ -495,16 +495,16 @@ impl ActivityPanel {
             self.command_open = None;
             self.command_view = None;
         }
-        if self.command_pending.as_ref().is_some_and(|id| !commands.iter().any(|command| &command.id == id)) { self.command_pending = None; }
+        self.command_pending.retain(|id| commands.iter().any(|command| &command.id == id));
         cx.notify();
     }
 
     fn stop_command(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.read_only || self.command_pending.is_some() { return; }
+        if self.read_only || self.command_pending.contains(id) { return; }
         let (Some(link), Some(key)) = (self.link.clone(), self.key.clone()) else { return; };
         let Some(command) = self.commands.iter().find(|command| command.id == id) else { return; };
         let (id, process_id) = (command.id.clone(), command.process_id.clone());
-        self.command_pending = Some(id.clone());
+        self.command_pending.insert(id.clone());
         self.command_error = None;
         link.runtime.spawn(async move {
             let result = link.api.act(&key.name, &["codex", "terminate"], Some(json!({"process_id": process_id})), false, 15).await;
@@ -514,12 +514,11 @@ impl ActivityPanel {
     }
 
     fn receive_command_stopped(&mut self, key: &SessionKey, id: &str, result: Result<Value, Failure>, cx: &mut Context<Self>) {
-        if self.key.as_ref() != Some(key) || self.command_pending.as_deref() != Some(id) { return; }
+        if self.key.as_ref() != Some(key) || !self.command_pending.remove(id) { return; }
         if let Err(failure) = result {
-            self.command_pending = None;
             self.command_error = Some(if failure.status.is_none() { tr(&failure.detail) } else { failure.detail });
-            cx.notify();
         }
+        cx.notify();
     }
 
     pub(super) fn set_plugin_servers(&mut self, servers: &[String], cx: &mut Context<Self>) {
@@ -560,7 +559,7 @@ impl ActivityPanel {
             (self.subs, self.failed, self.loading) = (Vec::new(), false, false);
             if other {
                 self.close_detail(cx); (self.notice, self.pending) = (None, None);
-                self.command_open = None; self.command_pending = None; self.command_error = None; self.command_view = None;
+                self.command_open = None; self.command_pending.clear(); self.command_error = None; self.command_view = None;
             }
             self.key = Some(key);
             self.link = Some(link);
@@ -838,8 +837,8 @@ impl ActivityPanel {
                     })))
                 .when(!self.read_only, |row| row.child(Button::new(SharedString::from(format!("command-stop-{}", command.id))).small().ghost()
                     .accessibility_label(web_with("codex_command_stop_label", "command", command.command.clone()))
-                    .label(web(if self.command_pending.as_ref() == Some(&command.id) { "codex_command_stopping" } else { "codex_command_stop" }))
-                    .disabled(self.command_pending.is_some())
+                    .label(web(if self.command_pending.contains(&command.id) { "codex_command_stopping" } else { "codex_command_stop" }))
+                    .disabled(self.command_pending.contains(&command.id))
                     .on_click(cx.listener(move |this, _, _, cx| this.stop_command(&stop_id, cx))))))
                 .child(now_text(format!("pid {} · {}", command.process_id, if command.background { web_with("codex_terminals_count", "n", "1".into()) } else { web("native_tool_running") })));
             if open {
@@ -1668,26 +1667,32 @@ mod tests {
     }
 
     #[gpui::test]
-    fn command_stop_waits_for_state_and_rejects_another_conversation(cx: &mut gpui::TestAppContext) {
+    fn command_stop_clears_each_request_and_rejects_another_conversation(cx: &mut gpui::TestAppContext) {
         use gpui::AppContext;
         let panel = cx.new(super::ActivityPanel::new);
         panel.update(cx, |panel, cx| {
             let key = super::SessionKey { server: "server-b".into(), name: "session".into(), jsonl: "thread-1".into() };
             let other = super::SessionKey { jsonl: "thread-2".into(), ..key.clone() };
             let command = super::CodexCommand { id: "exec-a".into(), process_id: "4242".into(), command: "npm run dev".into(), background: true, ..Default::default() };
+            let second = super::CodexCommand { id: "exec-b".into(), process_id: "4243".into(), ..command.clone() };
             panel.key = Some(key.clone());
-            panel.set_commands(&[command.clone()], &super::HashMap::from([("exec-a".into(), "old".into())]), false, cx);
-            panel.command_pending = Some(command.id.clone());
+            panel.set_commands(&[command.clone(), second.clone()], &super::HashMap::from([("exec-a".into(), "old".into())]), false, cx);
+            panel.command_pending.extend([command.id.clone(), second.id.clone()]);
             panel.command_open = Some(command.id.clone());
-            panel.receive_command_stopped(&key, &command.id, Ok(serde_json::json!({"ok": true})), cx);
-            assert_eq!(panel.commands, [command.clone()]);
-            assert_eq!(panel.command_pending.as_deref(), Some("exec-a"));
             panel.receive_command_stopped(&other, &command.id, Err(super::Failure::local("late-error")), cx);
             assert!(panel.command_error.is_none());
+            assert!(panel.command_pending.contains(&command.id));
+            panel.receive_command_stopped(&key, &command.id, Ok(serde_json::json!({"ok": true})), cx);
+            assert_eq!(panel.commands, [command.clone(), second.clone()]);
+            assert!(!panel.command_pending.contains(&command.id));
+            assert!(panel.command_pending.contains(&second.id));
+            panel.receive_command_stopped(&key, &second.id, Err(super::Failure::local("stop-failed")), cx);
+            assert!(panel.command_error.is_some());
+            assert!(panel.command_pending.is_empty());
             panel.set_commands(&[command], &super::HashMap::new(), false, cx);
             assert!(panel.command_output.is_empty());
             panel.set_commands(&[], &super::HashMap::new(), false, cx);
-            assert!(panel.command_pending.is_none());
+            assert!(panel.command_pending.is_empty());
             assert!(panel.command_open.is_none());
         });
     }

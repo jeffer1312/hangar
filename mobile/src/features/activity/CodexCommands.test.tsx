@@ -41,9 +41,29 @@ it('mostra a saída literal atualizada e não remove o comando só porque o POST
   await act(async () => buttons()[1].click());
   expect(terminateCodexCommand).toHaveBeenCalledWith('sess', '4242', server);
   expect(target.textContent).toContain(command.command);
-  expect(buttons()[1].disabled).toBe(true);
+  expect(buttons()[1].disabled).toBe(false);
   await render([]);
   expect(target.textContent).toBe('');
+});
+
+it('libera cada pedido sem bloquear os outros comandos', async () => {
+  let finishA!: (value: { ok: true }) => void;
+  let finishB!: (value: { ok: true }) => void;
+  vi.mocked(terminateCodexCommand)
+    .mockImplementationOnce(() => new Promise(resolve => { finishA = resolve; }))
+    .mockImplementationOnce(() => new Promise(resolve => { finishB = resolve; }));
+  const { target, render } = await mount();
+  await render([command, { ...command, id: 'exec-b', process_id: '4243', command: 'npm run watch' }]);
+  const buttons = () => [...target.querySelectorAll<HTMLButtonElement>('button')].filter((_, index) => index % 2 === 1);
+  await act(async () => buttons()[0].click());
+  expect(buttons().map(button => button.disabled)).toEqual([true, false]);
+  await act(async () => buttons()[1].click());
+  expect(buttons().map(button => button.disabled)).toEqual([true, true]);
+  await act(async () => finishA({ ok: true }));
+  expect(buttons().map(button => button.disabled)).toEqual([false, true]);
+  await act(async () => finishB({ ok: true }));
+  expect(buttons().map(button => button.disabled)).toEqual([false, false]);
+  expect(terminateCodexCommand).toHaveBeenCalledTimes(2);
 });
 
 it('mantém o comando e expõe a falha ao encerrar', async () => {
