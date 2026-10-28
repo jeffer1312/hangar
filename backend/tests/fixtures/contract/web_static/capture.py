@@ -18,6 +18,14 @@ namespace = dict(StaticFiles=StaticFiles, Path=Path, Response=Response)
 exec(compile(ast.Module(body=[node], type_ignores=[]), '<referência>', 'exec'), namespace)
 files = {'index.html': '<p>tela</p>', 'assets/app.js': '0123456789', 'sub/index.html': '<p>sub</p>', 'sw.js': 'worker', 'note.txt': 'texto', 'favicon.ico': 'icone', 'manifest.webmanifest': '{}', 'LICENSE': 'licença'}
 cases = [('root','GET','/',{}),('head','HEAD','/',{}),('asset','GET','/assets/app.js',{}),('worker','GET','/sw.js',{}),('favicon','GET','/favicon.ico',{}),('manifest','GET','/manifest.webmanifest',{}),('unknown-mime','GET','/LICENSE',{}),('missing','GET','/missing',{}),('long-name','GET','/'+('x'*300),{}),('method','POST','/',{}),('directory','GET','/sub?x=1',{'x-hangar-static-origin':'https://forged.example'}),('sub','GET','/sub/',{}),('range','GET','/assets/app.js',{'range':'bytes=2-5'}),('suffix','GET','/assets/app.js',{'range':'bytes=-3'}),('open','GET','/assets/app.js',{'range':'bytes=7-'}),('invalid-range','GET','/assets/app.js',{'range':'bytes=99-'}),('wrong-unit','GET','/assets/app.js',{'range':'items=0-1'}),('empty-range','GET','/assets/app.js',{'range':'bytes=x'}),('if-range-miss','GET','/assets/app.js',{'range':'bytes=0-1','if-range':'"other"'}),('range-empty','GET','/assets/app.js',{'range':'bytes=5-4'}),('range-negative','GET','/assets/app.js',{'range':'bytes=-0'}),('range-many','GET','/assets/app.js',{'range':'bytes=0-1,8-9'}),('ims','GET','/',{'if-modified-since':'Tue, 14 Nov 2023 22:13:20 GMT'}),('inm-wins','GET','/',{'if-modified-since':'Tue, 14 Nov 2023 22:13:20 GMT','if-none-match':'"other"'})]
+huge = '9' * 46
+cases.extend([
+ ('range-huge-end', 'GET', '/assets/app.js', {'range':f'bytes=0-{huge}'}),
+ ('range-huge-start-mixed', 'GET', '/assets/app.js', {'range':f'bytes=0-1,{huge}-'}),
+ ('range-huge-suffix', 'GET', '/assets/app.js', {'range':f'bytes=-{huge}'}),
+ ('ims-rfc850', 'GET', '/', {'if-modified-since':'Tuesday, 14-Nov-23 22:13:20 GMT'}),
+ ('ims-asctime', 'GET', '/', {'if-modified-since':'Tue Nov 14 22:13:20 2023'}),
+])
 with tempfile.TemporaryDirectory() as tmp:
  root=Path(tmp)
  for name,text in files.items():

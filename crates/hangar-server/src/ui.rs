@@ -222,8 +222,8 @@ fn file_response(path: &Path, headers: &HeaderMap, missing: bool) -> io::Result<
         if path.extension().is_some_and(|e|e=="html") { response.headers_mut().insert(header::CACHE_CONTROL,HeaderValue::from_static("no-cache")); }
         else if path.parent().and_then(Path::file_name).is_some_and(|n|n=="assets") { response.headers_mut().insert(header::CACHE_CONTROL,HeaderValue::from_static("public, max-age=31536000, immutable")); }
         let fresh = if headers.contains_key(header::IF_NONE_MATCH) { not_modified(headers,&etag) }
-            else { headers.get(header::IF_MODIFIED_SINCE).and_then(|v|v.to_str().ok()).and_then(|s|chrono::DateTime::parse_from_rfc2822(s).ok())
-                .is_some_and(|t| t.timestamp()>=modified.as_secs() as i64) };
+            else { headers.get(header::IF_MODIFIED_SINCE).and_then(|v|v.to_str().ok()).and_then(http_date_timestamp)
+                .is_some_and(|timestamp| timestamp>=modified.as_secs() as i64) };
         if fresh {
             *response.status_mut()=StatusCode::NOT_MODIFIED;
             response.headers_mut().remove(header::CONTENT_TYPE);
@@ -237,7 +237,7 @@ fn file_response(path: &Path, headers: &HeaderMap, missing: bool) -> io::Result<
     if let Some(range) = headers.get(header::RANGE).and_then(|v|v.to_str().ok())
         .filter(|_|headers.get(header::IF_RANGE).is_none_or(|v|v==etag.as_str() || v==last.as_str())) {
         use crate::workspace_routes::RangeError;
-        let ranges = match crate::workspace_routes::ranges(range,size) {
+        let ranges = match crate::workspace_routes::ranges(&bounded_range_numbers(range),size) {
             Ok(ranges) => ranges,
             Err(RangeError::Malformed(message)) => return Ok((StatusCode::BAD_REQUEST,[(header::CONTENT_TYPE,"text/plain; charset=utf-8")],message).into_response()),
             Err(RangeError::Unsatisfiable) => return Ok((StatusCode::RANGE_NOT_SATISFIABLE,[(header::CONTENT_RANGE,format!("bytes */{size}")),(header::CONTENT_TYPE,"text/plain; charset=utf-8".into())],"").into_response()),
@@ -263,6 +263,33 @@ fn file_response(path: &Path, headers: &HeaderMap, missing: bool) -> io::Result<
     response.headers_mut().insert(header::CONTENT_LENGTH,bytes.len().to_string().parse().unwrap());
     *response.body_mut()=Body::from(bytes);
     Ok(response)
+}
+
+/// Clientes antigos também enviam as formas RFC 850 e asctime de data HTTP.
+fn http_date_timestamp(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc2822(value).ok().map(|date| date.timestamp())
+        .or_else(|| ["%A, %d-%b-%y %H:%M:%S GMT", "%a %b %e %H:%M:%S %Y"].iter()
+            .find_map(|format| chrono::NaiveDateTime::parse_from_str(value, format).ok())
+            .map(|date| date.and_utc().timestamp()))
+}
+
+/// O Python aceita inteiros arbitrários; acima de u64 todos têm a mesma relação com o arquivo.
+fn bounded_range_numbers(value: &str) -> String {
+    let mut result = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c.is_ascii_digit() {
+            let mut number = u64::from(c as u8 - b'0');
+            while chars.peek().is_some_and(char::is_ascii_digit) {
+                let digit = chars.next().unwrap() as u8 - b'0';
+                number = number.saturating_mul(10).saturating_add(u64::from(digit));
+            }
+            result.push_str(&number.to_string());
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 /// `If-None-Match` em comparação fraca: lista separada por vírgula, `W/` e `*`.
