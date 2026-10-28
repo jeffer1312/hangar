@@ -174,7 +174,23 @@ impl Scene {
         let home = isolated.join("home");
         assert_eq!(std::env::var_os("HOME"), Some(home.clone().into_os_string()), "HOME fora do ensaio");
         let root = tempfile::tempdir_in(&isolated).unwrap();
-        let script = crate::list_support::sessions(root.path(), 1);
+        let discovery = crate::list_support::sessions(root.path(), 1);
+        let script = root.path().join("remote-browser-mux");
+        // A lista e o porteiro consultam formatos diferentes do mesmo terminal de ensaio.
+        crate::write_executable(&script, format!(r#"#!/bin/sh
+if [ "$1" = display-message ] && [ "$5" = '#{{session_created}}' ]; then
+    printf 'display-message\n' >> '{log}'
+    [ "$2" = -p ] && [ "$3" = -t ] && [ "$4" = '=s0:' ] || exit 1
+    printf '1\n'
+    exit 0
+fi
+if [ "$1" = has-session ]; then
+    printf 'has-session\n' >> '{log}'
+    [ "$2" = -t ] && [ "$3" = '=s0' ]
+    exit $?
+fi
+exec '{discovery}' "$@"
+"#, log = root.path().join("calls.log").display(), discovery = discovery.display()));
         // O multiplexador de ensaio e o construtor leem as mesmas fontes temporárias.
         let source = root.path().join("home/.claude");
         std::fs::rename(source.join("projects"), home.join(".claude/projects")).unwrap();
