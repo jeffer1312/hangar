@@ -26,11 +26,21 @@ def _env(monkeypatch, tmp_path):
 
 
 def _python_routes(path):
-    # Pela tabela de rotas e não pelo status: com `frontend/dist` presente o estático montado em "/"
-    # responde 405 ao POST que nenhuma rota atende.
+    # O repasse estático ocupa o fallback, mas recusa estes caminhos antes de chamar o Rust.
     from starlette.routing import Match, Mount
     scope = {"type": "http", "path": path, "method": "POST", "root_path": ""}
-    return [r for r in api_mod.app.router.routes if not isinstance(r, Mount) and r.matches(scope)[0] != Match.NONE]
+    return [r for r in api_mod.app.router.routes if not isinstance(r, Mount)
+            and getattr(r, "endpoint", None) is not api_mod.web_static_forward
+            and r.matches(scope)[0] != Match.NONE]
+
+
+@pytest.mark.parametrize("path", ["/internal/sessions/s1/release", "/internal/sessions/s1/born", "/internal/guests/claim"])
+def test_static_fallback_refuses_removed_internal_routes(monkeypatch, path):
+    from app import account_bridge
+    monkeypatch.setattr(account_bridge, "forward_stream", lambda *a, **kw: pytest.fail("rota interna não pode ser repassada pelo estático"))
+    response = TestClient(api_mod.app).post(path)
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not Found"}
 
 
 def test_release_and_birth_are_all_rust():
