@@ -603,20 +603,8 @@ async fn dictation_public_chunked_audio_limit_uses_approved_413() {
         .iter()
         .filter(|case| case["transport"] == "chunked")
     {
-        let chunk = bytes::Bytes::from(vec![b'x'; 1024 * 1024]);
-        let stream = futures_util::stream::iter(
-            (0..101).map(move |_| Ok::<_, std::io::Error>(chunk.clone())),
-        );
-        let response = reqwest::Client::new()
-            .post(format!("{}{}", server.base, case["path"].as_str().unwrap()))
-            .bearer_auth("owner")
-            .header("content-type", "application/json")
-            .header("origin", "https://hangar.test")
-            .body(reqwest::Body::wrap_stream(stream))
-            .timeout(std::time::Duration::from_secs(60))
-            .send()
-            .await
-            .unwrap();
+        let (status, headers, text) =
+            chunked_response(&server, case["path"].as_str().unwrap(), false).await;
         // A diferença aprovada corrige somente áudio; a captura Python continua imutável.
         let audio = case["path"] != "/api/ditado/relimpar";
         let expected_status = if audio {
@@ -630,14 +618,9 @@ async fn dictation_public_chunked_audio_limit_uses_approved_413() {
             case["response"].clone()
         };
         if audio {
-            assert_eq!(response.headers()["access-control-allow-origin"], "*");
-            assert_eq!(
-                response.headers()["content-type"],
-                "text/plain; charset=utf-8"
-            );
+            assert_eq!(headers["access-control-allow-origin"], "*");
+            assert_eq!(headers["content-type"], "text/plain; charset=utf-8");
         }
-        let status = response.status().as_u16();
-        let text = response.text().await.unwrap();
         let body = serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text));
         if json!(status) != expected_status || body != expected_body {
             differences.push(
@@ -708,5 +691,97 @@ async fn dictation_public_180_second_deadline_cancels_both_audio_routes() {
             200,
             "a tentativa seguinte ficou presa à anterior"
         );
+    }
+}
+
+// A resposta pode chegar antes de terminar o envio. No Windows, reqwest pode priorizar
+// BodyWrite/10053 mesmo com o413 completo recebido; a prova lê os dois sentidos separados.
+async fn chunked_response(
+    server: &PublicServer,
+    path: &str,
+    stalled: bool,
+) -> (u16, std::collections::HashMap<String, String>, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let socket = tokio::net::TcpStream::connect(server.base.strip_prefix("http://").unwrap())
+        .await
+        .unwrap();
+    let (mut reader, mut writer) = socket.into_split();
+    let path = path.to_owned();
+    let (crossed, ready) = tokio::sync::oneshot::channel();
+    let upload = tokio::spawn(async move {
+        writer.write_all(format!("POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer owner\r\nOrigin: https://hangar.test\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").as_bytes()).await?;
+        let chunk = vec![b'x'; 1024 * 1024];
+        for _ in 0..100 {
+            writer.write_all(b"100000\r\n").await?;
+            writer.write_all(&chunk).await?;
+            writer.write_all(b"\r\n").await?;
+        }
+        writer.write_all(b"100000\r\nx").await?;
+        let _ = crossed.send(());
+        if stalled {
+            std::future::pending::<()>().await;
+        }
+        writer.write_all(&chunk[1..]).await?;
+        writer.write_all(b"\r\n0\r\n\r\n").await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), ready)
+        .await
+        .unwrap()
+        .unwrap();
+    let response = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let mut wire = Vec::new();
+        loop {
+            wire.push(reader.read_u8().await.unwrap());
+            if wire.ends_with(b"\r\n\r\n") {
+                break;
+            }
+            assert!(wire.len() < 16384);
+        }
+        let header = String::from_utf8(wire).unwrap();
+        let mut lines = header.split("\r\n");
+        let status: u16 = lines
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let headers: std::collections::HashMap<String, String> = lines
+            .filter_map(|line| line.split_once(':'))
+            .map(|(key, value)| (key.to_ascii_lowercase(), value.trim().to_owned()))
+            .collect();
+        let length: usize = headers["content-length"].parse().unwrap();
+        assert!(length < 16384);
+        let mut body = vec![0; length];
+        reader.read_exact(&mut body).await.unwrap();
+        (status, headers, String::from_utf8(body).unwrap())
+    })
+    .await;
+    if stalled {
+        upload.abort();
+    } else {
+        // O erro de escrita não substitui a resposta HTTP completa exigida acima.
+        let _sent = tokio::time::timeout(std::time::Duration::from_secs(2), upload)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    response.expect("a resposta HTTP não chegou completa em2s após ultrapassar o limite")
+}
+
+#[tokio::test]
+async fn dictation_public_chunked_limit_does_not_wait_for_upload_end() {
+    let server = PublicServer::start().await;
+    for path in [
+        "/api/dictation/transcribe",
+        "/api/transcription/providers/fixture/test",
+    ] {
+        let (status, headers, body) = chunked_response(&server, path, true).await;
+        assert_eq!(status, 413);
+        assert_eq!(headers["access-control-allow-origin"], "*");
+        assert_eq!(headers["content-type"], "text/plain; charset=utf-8");
+        assert_eq!(body, "request body too large");
+        assert!(server.heard.lock().unwrap().is_empty());
     }
 }
