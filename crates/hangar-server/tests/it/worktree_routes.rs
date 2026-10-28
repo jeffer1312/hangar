@@ -105,6 +105,38 @@ async fn initialized_submodule_and_ignored_directories_require_visible_confirmat
 }
 
 #[tokio::test]
+async fn initialized_submodule_alone_is_listed_as_loss() {
+    let dir = scene();
+    let root = hangar_workspace::real(dir.path());
+    let repo = root.join("repo");
+    let path = root.join("only-submodule");
+    let source = root.join("submodule-source");
+    std::fs::create_dir(&source).unwrap();
+    git(&source, &["init", "-b", "main"]);
+    git(&source, &["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "--allow-empty", "-m", "Base"]);
+    git(&repo, &["-c", "protocol.file.allow=always", "submodule", "add", source.to_str().unwrap(), "Hooks"]);
+    git(&repo, &["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "-am", "Submódulo"]);
+    git(&repo, &["worktree", "add", "-b", "only-submodule", path.to_str().unwrap()]);
+    git(&path, &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "Hooks"]);
+    let f = fixture(&root, true).await;
+    let c = client();
+    let mut url = reqwest::Url::parse(&format!("http://{}/api/worktrees/detail", f.addr)).unwrap();
+    url.query_pairs_mut().append_pair("path", path.to_str().unwrap());
+    let detail: Value = c.get(url).bearer_auth(OWNER).send().await.unwrap().json().await.unwrap();
+    assert_eq!(detail["dirty"], 0, "{detail}");
+    assert_eq!(detail["ignored"], serde_json::json!(["Hooks/"]), "{detail}");
+    for confirm in [false, true] {
+        let response = c.post(format!("http://{}/api/worktrees/delete", f.addr)).bearer_auth(OWNER)
+            .json(&serde_json::json!({"repo":repo,"path":path,"confirm":confirm,"keep_branch":true}))
+            .send().await.unwrap();
+        let status = response.status();
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(status, if confirm { 200 } else { 409 }, "{body}");
+    }
+    assert!(!path.exists());
+}
+
+#[tokio::test]
 async fn residual_detail_and_manual_delete_keep_identity_files_and_branch_until_confirmation() {
     let dir = scene();
     let root = hangar_workspace::real(dir.path());

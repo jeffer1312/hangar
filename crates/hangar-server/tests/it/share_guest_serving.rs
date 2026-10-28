@@ -733,6 +733,8 @@ async fn convidado_de_par_ve_o_grupo_dentro_do_acesso() {
     let s0 = row(&rows, "s0");
     assert_eq!((&s0["pair_gid"], &s0["pair_peers"], &s0["pair_task"]), (&json!("g1"), &json!(["s1"]), &json!("T")));
     assert_eq!(row(&rows, "s1")["pair_peers"], json!(["s0"]));
+    let temp_name = dir.path().file_name().unwrap().to_str().unwrap();
+    assert!(!serde_json::to_string(&rows).unwrap().replace(temp_name, "").contains("s2"), "{rows}");
     for field in ["pair_external", "pair_externals", "then_target"] {
         assert_eq!(s0[field], Value::Null, "{field}");
     }

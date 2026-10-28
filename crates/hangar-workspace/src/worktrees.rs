@@ -489,8 +489,17 @@ impl Probe {
     }
 }
 
-/// Ignorados que serão perdidos: diretórios inteiros e arquivos sem cópia idêntica na principal.
+/// O que o `--force` apaga sem estar no status: ignorados (diretórios inteiros e arquivos sem
+/// cópia idêntica na principal) e submódulos inicializados, cujo conteúdo o Git não remove sem força.
 fn ignored_lost(probe: &mut Probe, path: &str, main: &str) -> Vec<String> {
+    let submodules = probe
+        .ok(path, &["ls-files", "--stage", "-z"])
+        .unwrap_or_default()
+        .split('\0')
+        .filter_map(|entry| entry.strip_prefix("160000 ")?.split_once('\t').map(|(_, rel)| rel.to_owned()))
+        .filter(|rel| Path::new(path).join(rel).join(".git").exists())
+        .map(|rel| format!("{rel}/"))
+        .collect::<Vec<_>>();
     let out = probe
         .ok(
             path,
@@ -509,6 +518,7 @@ fn ignored_lost(probe: &mut Probe, path: &str, main: &str) -> Vec<String> {
         .filter(|rel| !rel.is_empty())
         .filter(|rel| !same_file(&Path::new(path).join(rel), &Path::new(main).join(rel)))
         .map(str::to_owned)
+        .chain(submodules)
         .collect::<Vec<_>>();
     lost.sort();
     lost

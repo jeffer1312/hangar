@@ -2287,17 +2287,22 @@ As provas usam Git e disco reais descartáveis, chamadas HTTP ao servidor de tes
 componentes dos três clientes. Cobrem confirmação, preservação da branch, retomada, reentrada,
 locks, sessões e revalidação. Nenhuma prova apaga uma pasta residual do ambiente em uso.
 
-### Base publicada e elegibilidade
+### Diretórios ignorados e submódulos na confirmação
 
-**Diretórios ignorados na confirmação (28/10/2026):** `ls-files --others --ignored
---directory` devolve diretórios com `/` no fim. O inventário descartava essas linhas, e uma
-worktree limpa com submódulo inicializado e apenas diretórios ignorados parecia não perder
-nada: o cliente enviava `confirm=false`, e o Git recusava a remoção do submódulo. A lista
-agora conserva os diretórios inteiros; a confirmação existente autoriza seu descarte.
-O teste HTTP usa Git e disco descartáveis, um submódulo inicializado e outro não inicializado:
-o detalhe lista as pastas, a tentativa sem confirmação conserva os arquivos e a confirmação
+**Regra:** a lista do que será perdido inclui os diretórios ignorados inteiros e cada
+submódulo inicializado (`<caminho>/`); a confirmação existente autoriza o descarte deles.
+
+**Por quê (28/10/2026):** `ls-files --others --ignored --directory` devolve diretórios com
+`/` no fim, e o inventário descartava essas linhas. Uma worktree limpa com submódulo
+inicializado parecia não perder nada: o cliente enviava `confirm=false`, e o Git recusava a
+remoção do submódulo com 500. Com `confirm=true`, o `--force` apagava o conteúdo do
+submódulo sem mostrá-lo antes. Os testes HTTP usam Git e disco descartáveis: um com submódulo
+e pastas ignoradas, outro só com o submódulo inicializado. Nos dois, o detalhe lista o que
+some, a tentativa sem confirmação recusa com 409 e conserva os arquivos, e a confirmação
 conclui preservando a branch. No nativo, resposta de falha conserva o motivo do servidor;
 resultado incerto orienta reconferir a lista de worktrees antes de repetir.
+
+### Base publicada e elegibilidade
 
 **Regra:** `branch.<branch>.hangar-base` tem prioridade. Sem ela, a base vem da referência
 nomeada de criação no reflog; `HEAD`, hashes e o upstream da própria branch não informam o
