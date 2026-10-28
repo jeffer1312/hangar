@@ -179,6 +179,71 @@ async fn recreated_session_source_does_not_inherit_the_previous_original() {
 }
 
 #[tokio::test]
+async fn changing_active_target_keeps_original_layout_owner() {
+    if isolated("changing_active_target_keeps_original_layout_owner").await { return; }
+    let reference = support::contract("transport");
+    let case = reference["cases"].as_array().unwrap().iter()
+        .find(|case| case["name"] == "layout_size").unwrap();
+    let scene = Scene::new().await;
+    seed_session(&scene);
+    let before = life(&scene, "nav-contract").await;
+    let desktop = Desktop::new(&json!({})).await;
+    desktop.publish(&scene, KEY);
+    let (mut client, mut events) = ready(&scene).await;
+    impose(&mut client, &mut events, &case["inputs"]["messages"][0]).await;
+
+    // Simula só a publicação de outra aba ativa; o controlador e a vida permanecem iguais.
+    let source = scene.nav_dir().join("browser.json");
+    let mut sidecar: Value = serde_json::from_slice(&std::fs::read(&source).unwrap()).unwrap();
+    sidecar["targetId"] = json!("same-controller-next-active-target");
+    std::fs::write(source, sidecar.to_string()).unwrap();
+    assert_eq!(life(&scene, "nav-contract").await, before);
+    client.close(None).await.unwrap();
+    ended(&mut client).await;
+    desktop.wait_closed(1).await;
+    desktop.wait_requests(case["expected"]["cmd"].as_array().unwrap().len()).await;
+    assert_eq!(desktop.requests(), *case["expected"]["cmd"].as_array().unwrap());
+    assert_eq!(desktop.current_layout(), case["expected"]["desktop_layout"].as_str().unwrap());
+    scene.upstream.assert_no_browser_or_discovery_calls();
+    desktop.server.close().await;
+    scene.close().await;
+}
+
+#[tokio::test]
+async fn late_restore_rechecks_cached_session_life() {
+    if isolated("late_restore_rechecks_cached_session_life").await { return; }
+    let scene = Scene::new().await;
+    seed_session(&scene);
+    let desktop = Desktop::new(&json!({})).await;
+    desktop.publish(&scene, KEY);
+    let (mut client, mut events) = ready(&scene).await;
+    impose(&mut client, &mut events, &json!({"t": "layout", "w": 900, "h": 700})).await;
+    let requests = desktop.requests();
+    assert_eq!(arguments(&requests), vec![json!([]), json!(["900", "700"])]);
+
+    // Guarda uma leitura fresca ANTES da substituição; depois dela, só o produto pode reler.
+    scene.state.list.invalidate();
+    let before = life(&scene, "nav-contract").await;
+    let source = session_source(&scene, "nav-contract");
+    let mut replacement: Value = serde_json::from_slice(&std::fs::read(&source).unwrap()).unwrap();
+    replacement["key"] = json!("nav-contract-cached-replacement-key");
+    replacement["session_id"] = json!("nav-contract-cached-replacement-transcript");
+    let after = hangar_server::list::links::session_life(replacement["key"].as_str(), None).unwrap();
+    assert_ne!(after, before, "a fonte nova demonstra outra vida sem atualizar a lista");
+    std::fs::write(source, replacement.to_string()).unwrap();
+    // Mesmo controlador, token e chave do navegador: a recusa depende da vida da sessão.
+    desktop.detach(0, "target_closed");
+    ended(&mut client).await;
+    desktop.wait_closed(1).await;
+    desktop.assert_no_new_requests(&requests).await;
+    assert_eq!(desktop.current_layout(), "900x700");
+    assert_eq!(life(&scene, "nav-contract").await, after);
+    scene.upstream.assert_no_browser_or_discovery_calls();
+    desktop.server.close().await;
+    scene.close().await;
+}
+
+#[tokio::test]
 async fn renamed_session_source_keeps_its_life_and_refuses_the_old_route() {
     if isolated("renamed_session_source_keeps_its_life_and_refuses_the_old_route").await { return; }
     let scene = Scene::new().await;

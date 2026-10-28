@@ -1,5 +1,6 @@
 //! Posse do tamanho imposto: o último espectador conserva o original.
 use super::{input, shell, ws::Failure};
+use crate::list::bridge::ListBridge;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -14,6 +15,8 @@ struct Record {
     owner: u64,
     original: String,
     imposed: String,
+    controller: shell::Controller,
+    life: Option<String>,
 }
 type Slot = Arc<tokio::sync::Mutex<Option<Record>>>;
 pub(super) struct LayoutChange {
@@ -56,6 +59,7 @@ impl Layouts {
         &self,
         dir: &Path,
         name: &str,
+        life: Option<&str>,
         message: &Value,
         owner: &mut Option<u64>,
     ) -> Result<Option<LayoutChange>, Failure> {
@@ -71,10 +75,15 @@ impl Layouts {
             let id = *owner.get_or_insert_with(|| self.next.fetch_add(1, Ordering::Relaxed));
             let slot = self.slot(name);
             let mut record = slot.lock().await;
-            let original = match record.as_ref() {
+            let controller = shell::controller(dir, name).await?;
+            let original = match record.as_ref().filter(|record| {
+                record.controller == controller
+                    && (record.owner == id
+                        || record.life.as_deref().zip(life).is_some_and(|(old, new)| old == new))
+            }) {
                 Some(record) => record.original.clone(),
                 None => {
-                    let answer = shell::verb(&self.http, dir, name, &[]).await?;
+                    let answer = controller.verb(&self.http, &[]).await?;
                     let Some(label) = label(&answer) else {
                         return Ok(Some(LayoutChange {
                             event: json!({"t":"erro","m":answer}),
@@ -84,18 +93,18 @@ impl Layouts {
                     label.to_owned()
                 }
             };
-            let answer = shell::verb(
-                &self.http,
-                dir,
-                name,
-                &[width.to_string(), height.to_string()],
-            )
-            .await?;
+            let imposed_controller = shell::controller(dir, name).await?;
+            let answer = imposed_controller
+                .verb(&self.http, &[width.to_string(), height.to_string()])
+                .await?;
             let dimensions = if label(&answer).is_some() {
-                *record = Some(Record {
+                // Um original consultado no desktop anterior não pertence ao substituto.
+                *record = (controller == imposed_controller).then_some(Record {
                     owner: id,
                     original,
                     imposed: format!("{width}x{height}"),
+                    controller,
+                    life: life.map(str::to_owned),
                 });
                 Some((width, height))
             } else {
@@ -117,7 +126,13 @@ impl Layouts {
             }))
         }
     }
-    pub(super) async fn restore(&self, dir: &Path, name: &str, owner: Option<u64>) {
+    pub(super) async fn restore(
+        &self,
+        dir: &Path,
+        name: &str,
+        owner: Option<u64>,
+        list: &ListBridge,
+    ) {
         let slot = self.slot(name);
         let mut record = slot.lock().await;
         if record.as_ref().is_none_or(|r| Some(r.owner) != owner) {
@@ -125,7 +140,10 @@ impl Layouts {
         }
         let record = record.take().unwrap();
         let result = async {
-            let current = shell::verb(&self.http, dir, name, &[]).await?;
+            let Some(controller) = record.current(dir, name, list).await? else {
+                return Ok::<_, Failure>(());
+            };
+            let current = controller.verb(&self.http, &[]).await?;
             if label(&current) != Some(record.imposed.as_str()) {
                 return Ok::<_, Failure>(());
             }
@@ -134,7 +152,10 @@ impl Layouts {
             } else {
                 record.original.split('x').map(str::to_owned).collect()
             };
-            let answer = shell::verb(&self.http, dir, name, &args).await?;
+            let Some(controller) = record.current(dir, name, list).await? else {
+                return Ok(());
+            };
+            let answer = controller.verb(&self.http, &args).await?;
             if label(&answer).is_none() {
                 tracing::warn!(target: "hangar.navsock",
                     "navsock {name}: layout de antes ({}) não voltou: {answer}", record.original);
@@ -144,5 +165,30 @@ impl Layouts {
         if let Err(error) = result {
             tracing::warn!(target:"hangar.navsock","navsock {name}: layout de antes não voltou: {}",error.message);
         }
+    }
+}
+
+impl Record {
+    async fn current(
+        &self,
+        dir: &Path,
+        name: &str,
+        list: &ListBridge,
+    ) -> Result<Option<shell::Controller>, Failure> {
+        let controller = shell::controller(dir, name).await?;
+        if controller != self.controller {
+            return Ok(None);
+        }
+        if let Some(life) = self.life.as_ref() {
+            // Uma recriação já publicada não pode usar a vida guardada pela lista.
+            list.invalidate();
+            match list.discovered_session(name).await {
+                Ok(Some((row, _))) if row.lifecycle_id.as_ref() != Some(life) => return Ok(None),
+                Err(_) => return Err(Failure::plain("remote_browser_discovery_unavailable")),
+                _ => {}
+            }
+        }
+        // O envio usa este mesmo destino; não relê por nome depois de conferir.
+        Ok(Some(controller))
     }
 }

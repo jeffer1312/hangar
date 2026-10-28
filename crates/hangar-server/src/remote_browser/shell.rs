@@ -85,36 +85,62 @@ pub(super) fn server(dir: &Path) -> Result<Value, Failure> {
     }
     Ok(value)
 }
+#[derive(Clone, PartialEq)]
+pub(super) struct Controller {
+    port: i64,
+    token: String,
+    pid: Value,
+    key: String,
+    browser_pid: Value,
+}
+
+pub(super) async fn controller(dir: &Path, name: &str) -> Result<Controller, Failure> {
+    let dir = dir.to_owned();
+    let name = name.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let srv = server(&dir)?;
+        let sc = sidecar(&dir, &name, false)
+            .filter(|sc| input::truth(&sc["chave"]))
+            .ok_or_else(|| Failure::plain("esta sessão não tem navegador aberto"))?;
+        Ok(Controller {
+            port: input::integer(&srv["porta"])?,
+            token: string_field(&srv, "token"),
+            pid: srv["pid"].clone(),
+            key: string_field(&sc, "chave"),
+            browser_pid: sc["pid"].clone(),
+        })
+    })
+    .await
+    .map_err(|_| Failure::plain(NOT_OPEN))?
+}
+
+impl Controller {
+    pub(super) async fn verb(
+        &self,
+        http: &reqwest::Client,
+        args: &[String],
+    ) -> Result<String, Failure> {
+        let response = http
+            .post(format!("http://127.0.0.1:{}/cmd", self.port))
+            .bearer_auth(&self.token)
+            .header("content-type", "application/json")
+            .body(json!({"chave":self.key,"verbo":"layout","args":args}).to_string())
+            .send()
+            .await
+            .map_err(|error| unavailable(error, true))?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| unavailable(error, false))?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+}
+
 pub(super) async fn verb(
     http: &reqwest::Client,
     dir: &Path,
     name: &str,
     args: &[String],
 ) -> Result<String, Failure> {
-    let dir = dir.to_owned();
-    let name = name.to_owned();
-    let (srv, key) = tokio::task::spawn_blocking(move || {
-        let srv = server(&dir)?;
-        let key = sidecar(&dir, &name, false)
-            .filter(|sc| input::truth(&sc["chave"]))
-            .map(|sc| string_field(&sc, "chave"))
-            .ok_or_else(|| Failure::plain("esta sessão não tem navegador aberto"))?;
-        Ok::<_, Failure>((srv, key))
-    })
-    .await
-    .map_err(|_| Failure::plain(NOT_OPEN))??;
-    let port = input::integer(&srv["porta"])?;
-    let response = http
-        .post(format!("http://127.0.0.1:{port}/cmd"))
-        .bearer_auth(string_field(&srv, "token"))
-        .header("content-type", "application/json")
-        .body(json!({"chave":key,"verbo":"layout","args":args}).to_string())
-        .send()
-        .await
-        .map_err(|error| unavailable(error, true))?;
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| unavailable(error, false))?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    controller(dir, name).await?.verb(http, args).await
 }

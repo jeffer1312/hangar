@@ -148,8 +148,8 @@ fn refuse(reason: &'static str, forwarded: bool) -> Response {
     }
 }
 async fn serve(st: Arc<AppState>, name: String, req: Request, forwarded: bool) -> Response {
-    match st.list.discovered_session(&name).await {
-        Ok(Some(_)) => {}
+    let life = match st.list.discovered_session(&name).await {
+        Ok(Some((row, _))) => row.lifecycle_id,
         Ok(None) => return refuse("sessao nao existe", forwarded),
         Err(_) => {
             return (
@@ -158,7 +158,7 @@ async fn serve(st: Arc<AppState>, name: String, req: Request, forwarded: bool) -
             )
                 .into_response();
         }
-    }
+    };
     let dir = st.hangar_dir.join("nav");
     let lookup = dir.clone();
     let lookup_name = name.clone();
@@ -207,7 +207,7 @@ async fn serve(st: Arc<AppState>, name: String, req: Request, forwarded: bool) -
     };
     upgrade
         .max_message_size(32 * 1024 * 1024)
-        .on_upgrade(move |socket| run(st, name, socket, url, token, sc, width, quality, watcher))
+        .on_upgrade(move |socket| run(st, name, life, socket, url, token, sc, width, quality, watcher))
 }
 fn number(query: Option<&str>, key: &str, minimum: i64, maximum: i64, default: i64) -> i64 {
     let Some(raw) = crate::auth::query_param(query, key) else {
@@ -249,6 +249,7 @@ fn number(query: Option<&str>, key: &str, minimum: i64, maximum: i64, default: i
 async fn run(
     st: Arc<AppState>,
     name: String,
+    life: Option<String>,
     socket: WebSocket,
     url: String,
     token: Option<String>,
@@ -289,7 +290,7 @@ async fn run(
             send(&output, json!({"t": "url", "url": current})).await?;
             tokio::select! {
                 result = frames::run(cdp, &output, &view) => result,
-                result = read(&st, &name, cdp, &mut reader, &output, &view, &mut owner) => result,
+                result = read(&st, &name, life.as_deref(), cdp, &mut reader, &output, &view, &mut owner) => result,
                 _ = Watcher::ended(watcher.as_ref()) => {
                     let _ = output.lock().await.send(Message::Close(Some(CloseFrame {
                         code: 4410,
@@ -316,15 +317,18 @@ async fn run(
     // A devolução sobrevive ao cancelamento da conexão que impôs o tamanho.
     let restore = st.remote_browser.clone();
     let dir = st.hangar_dir.join("nav");
-    let _ = tokio::spawn(async move { restore.restore(&dir, &name, owner).await }).await;
+    let list = st.list.clone();
+    let _ = tokio::spawn(async move { restore.restore(&dir, &name, owner, &list).await }).await;
 }
 async fn report(output: &Output, name: &str, error: Failure) {
     tracing::warn!(target:"hangar.navsock","navsock {name}: {}",error.repr);
     let _ = send(output, json!({"t":"erro","m":error.message})).await;
 }
+#[allow(clippy::too_many_arguments)]
 async fn read(
     st: &AppState,
     name: &str,
+    life: Option<&str>,
     cdp: &Cdp,
     reader: &mut SplitStream<WebSocket>,
     output: &Output,
@@ -353,6 +357,7 @@ async fn read(
                 .apply(
                     &st.hangar_dir.join("nav"),
                     name,
+                    life,
                     &message,
                     owner,
                 )

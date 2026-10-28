@@ -393,6 +393,28 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Logs {
             .push(json!({"level":"WARNING","message":visitor.0}));
     }
 }
+fn d02_expected(case: &Value) -> Value {
+    let mut expected = case["expected"].clone();
+    let original = expected["cmd"].as_array().unwrap();
+    let change = &case["inputs"]["source_change"];
+    assert_eq!(original.len(), 4, "D02 precisa continuar preso à restauração antiga");
+    assert_eq!(expected["desktop_layout"], "mobile");
+    assert_eq!(original[0]["receiver_pid"], change["old_desktop_pid"]);
+    assert_eq!(original[0]["body"]["args"], json!([]));
+    assert_eq!(original[1]["receiver_pid"], change["old_desktop_pid"]);
+    assert_eq!(original[1]["body"]["args"], json!(["900", "700"]));
+    assert_eq!(original[2]["receiver_pid"], change["new_desktop_pid"]);
+    assert_eq!(original[2]["body"]["chave"], change["key"]);
+    assert_eq!(original[2]["body"]["args"], json!([]));
+    assert_eq!(original[3]["receiver_pid"], change["new_desktop_pid"]);
+    assert_eq!(original[3]["body"]["chave"], change["key"]);
+    assert_eq!(original[3]["body"]["args"], json!(["mobile"]));
+    // D02 muda somente os dois comandos tardios e o layout que eles alteravam.
+    expected["cmd"] = json!(&original[..2]);
+    expected["desktop_layout"] = json!("900x700");
+    expected
+}
+
 async fn frozen_case(name: &str) {
     let exact = format!("remote_browser::transport::{name}");
     if support::isolated(&exact, |root| {
@@ -411,7 +433,15 @@ async fn frozen_case(name: &str) {
         .find(|c| c["name"] == corpus_name)
         .unwrap();
     let inputs = &case["inputs"];
-    let expected = &case["expected"];
+    let changes_d02 = matches!(name,
+        "same_name_new_browser_receives_old_restore" | "same_key_new_desktop_receives_old_restore");
+    let expected_d02;
+    let expected = if changes_d02 {
+        expected_d02 = d02_expected(case);
+        &expected_d02
+    } else {
+        &case["expected"]
+    };
     let logs = Logs(Arc::new(Mutex::new(vec![])));
     use tracing_subscriber::prelude::*;
     tracing::subscriber::set_global_default(tracing_subscriber::registry().with(logs.clone()))
@@ -602,6 +632,9 @@ async fn frozen_case(name: &str) {
                 d.closed >= 1 && d.requests.len() >= expected["cmd"].as_array().unwrap().len()
             })
             .await;
+        if changes_d02 {
+            desktop.assert_no_new_requests(expected["cmd"].as_array().unwrap()).await;
+        }
         let mut actual = desktop.result(events, logs.0.lock().unwrap().clone());
         if expected.get("close").is_some() {
             actual["close"] = closed.unwrap_or(json!({"code":1000,"reason":""}));
