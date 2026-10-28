@@ -246,8 +246,9 @@ fn quota_switch(selected: Option<&str>, accounts: &[(&str, bool, Option<&QuotaLi
         .reduce(f64::max);
     let current = usage(accounts.iter().find(|a| Some(a.0) == selected)?.2)?;
     if current < QUOTA_LIMIT { return None; }
+    // Destino só com leitura atual, como no servidor: a guardada de conta expirada vale só para a escolhida.
     accounts.iter().filter(|a| Some(a.0) != selected)
-        .filter_map(|&(path, active, quota)| Some((usage(quota)?, active, path)))
+        .filter_map(|&(path, active, quota)| Some((usage(quota.filter(|q| q.state == "lida"))?, active, path)))
         .filter(|a| a.0 < current)
         .min_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1))).map(|(_, _, path)| path.to_owned())
 }
@@ -1556,6 +1557,10 @@ mod tests {
         let expired: QuotaLine = serde_json::from_value(serde_json::json!({"id": "claude:/a", "estado": "expirada",
             "janelas": [{"rotulo": "5h", "pct": 100.0}]})).unwrap();
         assert_eq!(switch(Some("/a"), &[("/a", true, Some(&expired)), ("/c", false, Some(&free))]), Some("/c".into()));
+        // Mas não serve de destino.
+        let expired_low: QuotaLine = serde_json::from_value(serde_json::json!({"id": "claude:/b", "estado": "expirada",
+            "janelas": [{"rotulo": "7d", "pct": 10.0}]})).unwrap();
+        assert_eq!(switch(Some("/a"), &[("/a", true, Some(&used(97.))), ("/b", false, Some(&expired_low))]), None);
         // Janela que já virou não conta: os 100% guardados são de antes do reset.
         let renewed = quota(serde_json::json!([{"rotulo": "5h", "pct": 100.0, "reset_ts": 500.0}]));
         assert_eq!(switch(Some("/a"), &[("/a", true, Some(&renewed)), ("/c", false, Some(&free))]), None);

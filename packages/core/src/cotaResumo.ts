@@ -83,7 +83,9 @@ export function contaComFolga(
   if (usoAtual === null || usoAtual < COTA_LIMITE) return null;
   let best: { uso: number; ativa: boolean; path: string } | null = null;
   for (const conta of contas) {
-    const uso = conta.path === atual ? null : usoDaConta(cotaDaConta(cotas, conta.path), agora);
+    // Destino só com leitura atual, como no servidor: a guardada de conta expirada vale só para a atual.
+    const cota = conta.path === atual ? undefined : cotaDaConta(cotas, conta.path);
+    const uso = cota?.estado === 'lida' ? usoDaConta(cota, agora) : null;
     if (uso === null || uso >= usoAtual) continue;
     const ativa = !!conta.active;
     if (!best || uso < best.uso || (uso === best.uso && ativa && !best.ativa)) best = { uso, ativa, path: conta.path };

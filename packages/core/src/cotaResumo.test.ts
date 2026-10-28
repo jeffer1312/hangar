@@ -50,6 +50,8 @@ describe('contaComFolga', () => {
     expect(contaComFolga('/a', contas('/a', '/c'), [cota('/a', [{ rotulo: '7d opus', pct: 100, por_modelo: true }]), usada('/c', 20)])).toBe('/c');
     // A última leitura guardada de conta expirada conta, como no servidor.
     expect(contaComFolga('/a', contas('/a', '/b'), [cota('/a', cheia, 'expirada'), usada('/b', 10)])).toBe('/b');
+    // Mas não serve de destino.
+    expect(contaComFolga('/a', contas('/a', '/b'), [usada('/a', 97), cota('/b', [{ rotulo: '7d', pct: 10 }], 'expirada')])).toBeNull();
   });
   it('todas a 95% ou mais: a de mais folga, se tiver mais que a atual', () => {
     expect(contaComFolga('/a', contas('/a', '/b', '/c'), [usada('/a', 99), usada('/b', 98), usada('/c', 96)])).toBe('/c');
