@@ -1,0 +1,253 @@
+//! Uma bomba CDP associa respostas por ID sem parar o fluxo de eventos.
+use super::ws::Failure;
+use futures_util::{SinkExt, StreamExt};
+use serde_json::{Value, json};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
+use tokio::{
+    sync::{Notify, mpsc, oneshot},
+    task::JoinHandle,
+};
+use tokio_tungstenite::{
+    MaybeTlsStream, WebSocketStream,
+    tungstenite::{
+        Message,
+        client::IntoClientRequest,
+        protocol::{CloseFrame, WebSocketConfig, frame::coding::CloseCode},
+    },
+};
+
+type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, Failure>>>>>;
+#[derive(Default)]
+struct Events {
+    queue: Mutex<VecDeque<Value>>,
+    ready: Notify,
+}
+impl Events {
+    fn push(&self, value: Value) {
+        let mut q = self.queue.lock().unwrap();
+        if q.len() == 64 {
+            q.pop_front();
+        }
+        q.push_back(value);
+        drop(q);
+        self.ready.notify_one();
+    }
+    async fn next(&self) -> Value {
+        loop {
+            let ready = self.ready.notified();
+            if let Some(value) = self.queue.lock().unwrap().pop_front() {
+                return value;
+            }
+            ready.await;
+        }
+    }
+}
+enum Out {
+    Command(Value),
+    Close,
+}
+pub(super) struct Cdp {
+    next: AtomicU64,
+    send: mpsc::UnboundedSender<Out>,
+    pending: Pending,
+    events: Arc<Events>,
+    task: Option<JoinHandle<()>>,
+}
+struct Waiting {
+    pending: Pending,
+    id: u64,
+}
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        self.pending.lock().unwrap().remove(&self.id);
+    }
+}
+struct PumpEnd(Pending);
+impl Drop for PumpEnd {
+    fn drop(&mut self) {
+        for (_, reply) in self.0.lock().unwrap().drain() {
+            let _ = reply.send(Err(Failure::connection("CDP fechou")));
+        }
+    }
+}
+async fn closing(
+    socket: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    frame: Option<CloseFrame>,
+) {
+    let _ = socket.close(frame).await;
+    let _ = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(message) = socket.next().await {
+            match message {
+                Ok(Message::Close(_)) | Err(_) => break,
+                _ => {}
+            }
+        }
+    })
+    .await;
+}
+impl Cdp {
+    pub(super) async fn connect(url: &str, token: Option<&str>) -> Result<Self, Failure> {
+        let mut request = url
+            .into_client_request()
+            .map_err(|_| Failure::connection("o navegador desta sessão fechou"))?;
+        if let Some(token) = token {
+            let mut header = format!("Bearer {token}")
+                .parse::<axum::http::HeaderValue>()
+                .map_err(|_| Failure::plain("credencial do navegador inválida"))?;
+            header.set_sensitive(true);
+            request.headers_mut().insert("authorization", header);
+        }
+        let cfg = WebSocketConfig::default()
+            .max_message_size(Some(32 * 1024 * 1024))
+            .max_frame_size(Some(32 * 1024 * 1024));
+        let (mut socket, _) = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio_tungstenite::connect_async_with_config(request, Some(cfg), false),
+        )
+        .await
+        .map_err(|_| Failure::timeout())?
+        .map_err(|_| Failure::connection("o navegador desta sessão fechou"))?;
+        let (send, mut receive) = mpsc::unbounded_channel();
+        let pending: Pending = Arc::default();
+        let waiters = pending.clone();
+        let events = Arc::new(Events::default());
+        let output = events.clone();
+        let task = tokio::spawn(async move {
+            let _end = PumpEnd(waiters.clone());
+            let mut next_ping = tokio::time::Instant::now() + Duration::from_secs(20);
+            let mut pong: Option<(Vec<u8>, tokio::time::Instant)> = None;
+            let mut ping_id = 0u64;
+            loop {
+                tokio::select! {
+                    outgoing = receive.recv() => match outgoing {
+                        Some(Out::Command(value)) => {
+                            if socket.send(Message::Text(value.to_string().into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        _ => {
+                            closing(&mut socket, None).await;
+                            break;
+                        }
+                    },
+                    incoming = socket.next() => {
+                        match incoming {
+                            Some(Ok(Message::Text(raw))) => {
+                                let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+                                    break;
+                                };
+                                if let Some(id) = value.get("id").filter(|v| !v.is_null()) {
+                                    if let Some(id) = id.as_u64() {
+                                        if let Some(reply) = waiters.lock().unwrap().remove(&id) {
+                                            let _ = reply.send(Ok(value));
+                                        }
+                                    }
+                                } else if value.get("method").is_some_and(super::input::truth) {
+                                    output.push(value);
+                                }
+                            }
+                            Some(Ok(Message::Ping(bytes))) => {
+                                if socket.send(Message::Pong(bytes)).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Some(Ok(Message::Pong(bytes))) => {
+                                if pong.as_ref().is_some_and(|(sent, _)| sent.as_slice() == bytes.as_ref()) {
+                                    pong = None;
+                                }
+                            }
+                            Some(Ok(Message::Close(_))) => {
+                                let _ = socket.flush().await;
+                                break;
+                            }
+                            None | Some(Err(_)) => break,
+                            _ => {}
+                        }
+                    },
+                    _ = tokio::time::sleep_until(pong.as_ref().map(|(_, until)| *until).unwrap_or(next_ping)), if pong.is_some() => {
+                        closing(&mut socket, Some(CloseFrame {
+                            code: CloseCode::Error,
+                            reason: "keepalive ping timeout".into(),
+                        })).await;
+                        break;
+                    },
+                    _ = tokio::time::sleep_until(next_ping), if pong.is_none() => {
+                        ping_id = ping_id.wrapping_add(1);
+                        let payload = ping_id.to_be_bytes().to_vec();
+                        if socket.send(Message::Ping(payload.clone().into())).await.is_err() {
+                            break;
+                        }
+                        next_ping += Duration::from_secs(20);
+                        pong = Some((payload, tokio::time::Instant::now() + Duration::from_secs(20)));
+                    }
+                }
+            }
+        });
+        Ok(Self {
+            next: AtomicU64::new(0),
+            send,
+            pending,
+            events,
+            task: Some(task),
+        })
+    }
+    fn command(&self, method: &str, params: Value, id: u64) -> Value {
+        json!({"id":id,"method":method,"params":if super::input::truth(&params){params}else{json!({})}})
+    }
+    pub(super) fn send(&self, method: &str, params: Value) {
+        let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        let _ = self
+            .send
+            .send(Out::Command(self.command(method, params, id)));
+    }
+    pub(super) async fn cmd(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, Failure> {
+        let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        let (send, receive) = oneshot::channel();
+        self.pending.lock().unwrap().insert(id, send);
+        let _waiting = Waiting {
+            pending: self.pending.clone(),
+            id,
+        };
+        self.send
+            .send(Out::Command(self.command(method, params, id)))
+            .map_err(|_| Failure::closed())?;
+        tokio::time::timeout(timeout, receive)
+            .await
+            .map_err(|_| Failure::timeout())?
+            .map_err(|_| Failure::connection("CDP fechou"))?
+    }
+    pub(super) async fn event(&self) -> Value {
+        self.events.next().await
+    }
+    pub(super) async fn close(&mut self) {
+        let _ = self.send.send(Out::Close);
+        if let Some(mut task) = self.task.take() {
+            if tokio::time::timeout(Duration::from_secs(10), &mut task)
+                .await
+                .is_err()
+            {
+                task.abort();
+                let _ = task.await;
+            }
+        }
+    }
+}
+impl Drop for Cdp {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
