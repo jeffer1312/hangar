@@ -387,12 +387,10 @@ async fn dictation_public_audio_edges_match_python() {
     let endpoint = format!("http://{}", server.state.cfg.upstream);
     let before = directory_snapshot(server._directory.path());
     let mut differences = Vec::new();
-    for case in fixture["cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|c| !c["id"].as_str().unwrap().ends_with("limit"))
-    {
+    for case in fixture["cases"].as_array().unwrap().iter().filter(|c| {
+        !c["id"].as_str().unwrap().ends_with("limit")
+            && !c["id"].as_str().unwrap().ends_with("_timeout")
+    }) {
         server.heard.lock().unwrap().clear();
         let mut providers = vec![
             json!({"id":"fixture","name":"fixture","kind":"openai","base_url":endpoint,"model":"fixture"}),
@@ -629,4 +627,66 @@ async fn dictation_public_chunked_limits_preserve_original_errors() {
         assert!(server.heard.lock().unwrap().is_empty());
     }
     assert!(differences.is_empty(), "{differences:#?}");
+}
+
+#[tokio::test]
+async fn dictation_public_180_second_deadline_cancels_both_audio_routes() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../backend/tests/fixtures/contract/dictation_public/edges.json"
+    ))
+    .unwrap();
+    for case in fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|case| case["timeout_seconds"] == 180)
+    {
+        let server = PublicServer::start().await;
+        let endpoint = format!("http://{}", server.state.cfg.upstream);
+        *server.config.lock().unwrap() = json!({"dictation_max_minutes":10,"providers":[{"id":"fixture","kind":"openai","base_url":format!("{endpoint}/stall")}],"organization":{"dictation_organization_mode":"none"}});
+        let url = format!("{}{}", server.base, case["path"].as_str().unwrap());
+        let response = tokio::spawn(async move {
+            reqwest::Client::new()
+                .post(url)
+                .bearer_auth("owner")
+                .body("audio")
+                .send()
+                .await
+                .unwrap()
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while server.heard.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(181)).await;
+        let response = tokio::time::timeout(std::time::Duration::from_secs(2), response)
+            .await
+            .expect("a rota deixou passar o teto público de180s")
+            .unwrap();
+        assert_eq!(json!(response.status().as_u16()), case["status"]);
+        assert_eq!(response.json::<Value>().await.unwrap(), case["response"]);
+        assert_eq!(
+            server.state.transcription_slots.available_permits(),
+            4,
+            "a tentativa vencida reteve sua vaga"
+        );
+        tokio::time::resume();
+        server.config.lock().unwrap()["providers"][0]["base_url"] = json!(endpoint);
+        let response = reqwest::Client::new()
+            .post(format!("{}{}", server.base, case["path"].as_str().unwrap()))
+            .bearer_auth("owner")
+            .body("audio")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            200,
+            "a tentativa seguinte ficou presa à anterior"
+        );
+    }
 }

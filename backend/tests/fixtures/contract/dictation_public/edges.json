@@ -247,6 +247,34 @@
       "status": 500,
       "response": "Internal Server Error",
       "calls": []
+    },
+    {
+      "id": "public_timeout",
+      "path": "/api/dictation/transcribe",
+      "headers": {},
+      "status": 503,
+      "response": {
+        "detail": {
+          "code": "transcription_rust_unavailable",
+          "params": {},
+          "msg": "Não foi possível confirmar a transcrição no Rust. O áudio foi preservado para tentar novamente."
+        }
+      },
+      "timeout_seconds": 180
+    },
+    {
+      "id": "provider_timeout",
+      "path": "/api/transcription/providers/fixture/test",
+      "headers": {},
+      "status": 503,
+      "response": {
+        "detail": {
+          "code": "transcription_rust_unavailable",
+          "params": {},
+          "msg": "Não foi possível confirmar a transcrição no Rust. O áudio foi preservado para tentar novamente."
+        }
+      },
+      "timeout_seconds": 180
     }
   ]
 }

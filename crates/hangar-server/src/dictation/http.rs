@@ -159,23 +159,29 @@ pub async fn serve(
             Ok(v) => v,
             Err(_) => return audio_body_error(),
         };
-        let Ok(_slot) = st.transcription_slots.clone().try_acquire_owned() else {
-            return busy();
-        };
-        let config = match crate::transcription::routes::configuration(st).await {
-            Ok(v) => v,
-            Err(e) => return failure(e),
-        };
-        st.transcription.configure(config).await;
-        return match st
-            .transcription
-            .transcribe_provider(&provider, data, Some(filename))
-            .await
-        {
+        let result = within_public_deadline(async {
+            let _slot = st
+                .transcription_slots
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| TranscriptionError {
+                    status: 503,
+                    code: "transcription_busy".into(),
+                    detail: "As vagas de transcrição estão ocupadas. Tente novamente.".into(),
+                })?;
+            let config = crate::transcription::routes::configuration(st).await?;
+            st.transcription.configure(config).await;
+            st.transcription
+                .transcribe_provider(&provider, data, Some(filename))
+                .await
+        })
+        .await;
+        return match result {
             Ok(result) => reply(200, json!(result)),
             Err(error) => failure(error),
         };
     }
+
     let mut errors = Vec::new();
     let clean = boolean(&query, "limpar", true, &mut errors);
     let include = query
@@ -195,13 +201,17 @@ pub async fn serve(
         Ok(v) => v,
         Err(_) => return audio_body_error(),
     };
-    let transcription =
-        match crate::transcription::routes::transcribe_here(st, data, filename, Profile::Dictation)
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => return failure(e),
-        };
+    let transcription = match within_public_deadline(crate::transcription::routes::transcribe_here(
+        st,
+        data,
+        filename,
+        Profile::Dictation,
+    ))
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => return failure(e),
+    };
     let result = if !clean {
         json!({"text":transcription.text})
     } else {
@@ -332,4 +342,18 @@ fn declared_too_large(req: &Request) -> bool {
 // Preserva a resposta pública do middleware original até a mudança de contrato ser aprovada.
 fn audio_body_error() -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+}
+
+/// O prazo público inclui configuração e todas as tentativas; cancelar solta o future e sua vaga.
+async fn within_public_deadline<F>(
+    operation: F,
+) -> Result<crate::transcription::model::Transcription, TranscriptionError>
+where
+    F: std::future::Future<
+            Output = Result<crate::transcription::model::Transcription, TranscriptionError>,
+        >,
+{
+    tokio::time::timeout(std::time::Duration::from_secs(180),operation).await.unwrap_or_else(|_|Err(TranscriptionError{
+        status:503,code:"transcription_rust_unavailable".into(),detail:"Não foi possível confirmar a transcrição no Rust. O áudio foi preservado para tentar novamente.".into(),
+    }))
 }

@@ -78,6 +78,12 @@ try:
         except urllib.error.HTTPError as error: response=error
         content=response.read().decode()
         cases.append({'id':'reorganize_real_limit' if 'relimpar' in path else 'provider_real_limit','path':path,'headers':{},'transport':'chunked','status':response.status,'response':json.loads(content) if response.headers.get('content-type','').startswith('application/json') else content,'calls':list(calls)})
+    from unittest.mock import patch
+    for path in ['/api/dictation/transcribe','/api/transcription/providers/fixture/test']:
+        with patch.object(transcription_bridge._opener,'open',side_effect=TimeoutError) as network:
+            response=client.post(path,content=b'audio',headers={'Authorization':'Bearer fixture-owner'})
+        assert network.call_args.kwargs['timeout']==180
+        cases.append({'id':'public_timeout' if '/dictation/' in path else 'provider_timeout','path':path,'headers':{},'status':response.status_code,'response':response.json(),'timeout_seconds':180})
     assert not list(Path(scratch.name).rglob('*.wav'))
 
 finally:
