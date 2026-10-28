@@ -97,6 +97,7 @@ pub fn area_of(path: &str) -> usize {
 /// O Rust atende este pedido do dono sem repassar? Mesma decisão do `routes::router`: as rotas
 /// GET registradas lá, mais os `matches` de Git/arquivos e de worktrees que o `pass_any` consulta.
 pub fn rust_route(method: &Method, path: &str) -> bool {
+    if crate::ui::matches(method, path) || crate::dictation::http::matches(method, path) { return true; }
     // O serviço MCP responde também aos métodos recusados, sem repasse ao Python.
     if matches!(path, "/mcp" | "/mcp/") { return true; }
     if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/session-defaults" | "/api/web-ui") { return true; }
@@ -495,6 +496,14 @@ mod tests {
             }
         }
         assert!(!rust_route(&Method::POST, "/mcp/unknown"));
+        for (method, path) in [
+            (Method::GET, "/"), (Method::HEAD, "/assets/app.js"),
+            (Method::POST, "/api/dictation/transcribe"), (Method::POST, "/api/ditado/relimpar"),
+            (Method::GET, "/api/dictation/models"), (Method::GET, "/api/transcription/providers/status"),
+            (Method::POST, "/api/transcription/providers/x/test"),
+        ] {
+            assert!(rust_route(&method, path), "rota migrada ainda marcada como Python: {method} {path}");
+        }
         for path in ["/api/voice", "/api/voice/settings", "/api/transcription/providers/status", "/api/tts/audio/example"] {
             assert_eq!(AREAS[area_of(path)], "dictation", "área de {path}");
         }
@@ -519,6 +528,25 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_external_request_is_counted_once() {
+        // O construtor lê configurações: um processo isolado evita alterar o ambiente dos outros testes.
+        if std::env::var_os("HANGAR_MCP_COUNTER_CHILD").is_none() {
+            let home = tempfile::tempdir().unwrap();
+            let proof = home.path().join("counter-checked");
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child.env_clear()
+                .env("HANGAR_MCP_COUNTER_CHILD", "1")
+                .env("HANGAR_MCP_COUNTER_PROOF", &proof)
+                .env("HOME", home.path()).env("USERPROFILE", home.path())
+                .env("LOCALAPPDATA", home.path()).env("APPDATA", home.path())
+                .env("XDG_CONFIG_HOME", home.path()).env("XDG_CACHE_HOME", home.path())
+                .env("TMPDIR", home.path()).env("TEMP", home.path()).env("TMP", home.path());
+            if let Some(root) = std::env::var_os("SystemRoot") { child.env("SystemRoot", root); }
+            let output = child.args(["--exact", "migration_status::tests::mcp_external_request_is_counted_once", "--nocapture"])
+                .output().unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(proof.is_file(), "o processo filho não executou a prova do contador");
+            return;
+        }
         use tower_service::Service;
         let state = Arc::new(AppState::new(crate::config::Config {
             listen: "127.0.0.1:0".parse().unwrap(),
@@ -537,6 +565,7 @@ mod tests {
         assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
         let after = totals().0[area("mcp")];
         assert_eq!([after[0] - before[0], after[1] - before[1]], [1, 0]);
+        std::fs::write(std::env::var_os("HANGAR_MCP_COUNTER_PROOF").unwrap(), b"ok").unwrap();
     }
 
     #[test]
