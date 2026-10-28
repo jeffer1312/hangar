@@ -151,6 +151,21 @@ def test_original_get_accepts_emoji_name_over_real_http(border_http):
         assert json.loads(response.read()) == {"url": "https://example.invalid/ação"}
 
 
+@pytest.mark.parametrize("border", ["original"], indirect=True)
+def test_original_head_refuses_before_authentication_over_real_http(border_http):
+    fixture = json.loads((Path(__file__).parent / "fixtures/contract/remote-browser/url-extra.json").read_text())
+    want = fixture["head"]
+    for headers in ({}, {"Authorization": "Bearer " + OWNER}):
+        request = urllib.request.Request(border_http + "/api/sessions/session/navegador", method="HEAD", headers=headers)
+        with pytest.raises(urllib.error.HTTPError) as denied:
+            urllib.request.urlopen(request)
+        response = denied.value
+        observed = {"status": response.code, "body": response.read().decode("utf-8"),
+                    "headers": {key: response.headers[key] for key in want["headers"]}}
+        assert observed == want
+        print("HEAD original:", json.dumps(observed, ensure_ascii=False))
+
+
 @pytest.mark.parametrize("mode,configured,code", [
     ("python", True, "browser_need_rust_server"),
     ("pending", False, "account_bridge_unavailable"),

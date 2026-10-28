@@ -56,10 +56,14 @@ def capture(root):
             (nav / "case.json").write_text(raw, encoding="utf-8")
             response = client.get("/api/sessions/session/navegador", headers={"authorization": "Bearer contract-owner-token"})
             cases.append({"name": name, "raw": raw, "status": response.status_code, "body": response.text})
+        response = client.head("/api/sessions/session/navegador", headers={"authorization": "Bearer contract-owner-token"})
+        head = {"status": response.status_code, "body": response.text,
+                "headers": {key: response.headers[key] for key in ("allow", "content-type", "content-length")}}
     return {"source_commit": SOURCE,
             "generator": "backend/.venv/bin/python backend/tests/fixtures/contract/remote-browser/generate_url_extra.py --output backend/tests/fixtures/contract/remote-browser/url-extra.json",
             "python_version": sys.version.split()[0], "platform": sys.platform,
             "original_get": {"source": original_get, "sha256": hashlib.sha256(original_get.encode("utf-8")).hexdigest()},
+            "head": head,
             "seam": "GET original completo por AST e autenticação FastAPI real, exportados por git archive da base; corpo HTTP literal.",
             "limits": ["Sem lifespan, porteiros Rust ou navegador gráfico.", "Erros não tratados mantêm 500 Internal Server Error, sem correção do comportamento Python.", "HOME, contas, configuração e cwd temporários, antes dos imports; nenhum servidor externo."],
             "cases": cases}

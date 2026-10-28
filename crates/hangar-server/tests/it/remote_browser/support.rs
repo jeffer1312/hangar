@@ -8,6 +8,7 @@ use axum::Router;
 use axum::body::to_bytes;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use hangar_server::auth::TrustedHosts;
 use hangar_server::config::Config;
@@ -135,11 +136,16 @@ pub struct RefusingServer { pub server: Server, pub attempts: Arc<Mutex<Vec<Atte
 
 impl RefusingServer {
     pub async fn new() -> Self {
-        async fn refuse(State(attempts): State<Arc<Mutex<Vec<Attempt>>>>, req: Request) -> (StatusCode, &'static str) {
+        async fn refuse(State(attempts): State<Arc<Mutex<Vec<Attempt>>>>, req: Request) -> Response {
             let (parts, body) = req.into_parts();
             let body = to_bytes(body, 1024 * 1024).await.unwrap();
+            let head = parts.method == axum::http::Method::HEAD;
             attempts.lock().unwrap().push(Attempt { path: parts.uri.to_string(), headers: parts.headers, body: body.to_vec() });
-            (StatusCode::SERVICE_UNAVAILABLE, "remote_browser_test_upstream_refused")
+            if head {
+                return (StatusCode::METHOD_NOT_ALLOWED, [("allow","GET"),("content-type","application/json")],
+                    r#"{"detail":"Method Not Allowed"}"#).into_response();
+            }
+            (StatusCode::SERVICE_UNAVAILABLE, "remote_browser_test_upstream_refused").into_response()
         }
         let attempts = Arc::new(Mutex::new(Vec::new()));
         let server = Server::owner(Router::new().fallback(refuse).with_state(attempts.clone())).await;

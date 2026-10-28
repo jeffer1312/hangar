@@ -7,6 +7,15 @@
     "source": "@app.get(\"/api/sessions/{name}/navegador\", dependencies=[Depends(require_auth)])\ndef navegador_da_sessao(name: str):\n    \"\"\"URL que o navegador embutido (app desktop) da sessão está mostrando, pelo sidecar que o shell\n    grava em ~/.hangar/nav/ — o mesmo que `scripts/hangar-preview` lê. Sem navegador: url null.\"\"\"\n    pasta = Path.home() / \".hangar\" / \"nav\"\n    if pasta.is_dir():\n        for arq in pasta.glob(\"*.json\"):\n            try:\n                sc = json.loads(arq.read_text(encoding=\"utf-8\"))\n            except (OSError, ValueError) as e:\n                _log.warning(\"sidecar de navegador ilegivel %s: %s\", arq, e)\n                continue\n            chave = sc.get(\"chave\", \"\") if isinstance(sc, dict) else \"\"\n            if chave == name or chave.endswith(f\"::{name}\"):\n                return {\"url\": sc.get(\"url\")}\n    return {\"url\": None}\n",
     "sha256": "88f867648644975058ed482d98cbacefc63d11e944121ea85a7c161bf538c2c7"
   },
+  "head": {
+    "status": 405,
+    "body": "",
+    "headers": {
+      "allow": "GET",
+      "content-type": "application/json",
+      "content-length": "31"
+    }
+  },
   "seam": "GET original completo por AST e autenticação FastAPI real, exportados por git archive da base; corpo HTTP literal.",
   "limits": [
     "Sem lifespan, porteiros Rust ou navegador gráfico.",

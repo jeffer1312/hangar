@@ -76,6 +76,41 @@ fn owner_headers() -> HeaderMap {
     headers
 }
 
+#[tokio::test]
+async fn head_keeps_the_python_method_refusal() {
+    if support::isolated("remote_browser::url::head_keeps_the_python_method_refusal", |root| {
+        assert!(!root.join("git.calls").exists());
+    }).await { return; }
+    let scene = Scene::new().await;
+    std::fs::write(scene.nav_dir().join("native.json"),json!({"chave":"session","url":"https://example.invalid/"}).to_string()).unwrap();
+    let before = snapshot(&scene.nav_dir());
+    let want = support::contract("url-extra")["head"].clone();
+    let client = reqwest::Client::new();
+    let mut differences = Vec::new();
+    for token in [None,Some(OWNER)] {
+        let request = client.head(format!("http://{}/api/sessions/session/navegador",scene.owner.address));
+        let response = if let Some(token) = token { request.bearer_auth(token) } else { request }.send().await.unwrap();
+        let status = response.status().as_u16();
+        let headers = response.headers().clone();
+        let body = response.text().await.unwrap();
+        if json!(status) != want["status"] || body != want["body"].as_str().unwrap() {
+            differences.push(format!("HEAD com credencial={}: ({status},{body:?}) != ({},{})",token.is_some(),want["status"],want["body"]));
+        }
+        for (key,value) in want["headers"].as_object().unwrap() {
+            if headers.get(key).and_then(|value|value.to_str().ok()) != value.as_str() {
+                differences.push(format!("HEAD com credencial={}: header {key}: {:?} != {value}",token.is_some(),headers.get(key)));
+            }
+        }
+    }
+    assert_eq!(snapshot(&scene.nav_dir()),before);
+    let paths: Vec<_> = scene.upstream.paths().into_iter().filter(|path|path.ends_with("/navegador")).collect();
+    if paths != ["/api/sessions/session/navegador","/api/sessions/session/navegador"] {
+        differences.push(format!("HEAD não seguiu ao encaminhamento existente: {paths:?}"));
+    }
+    scene.close().await;
+    assert!(differences.is_empty(),"{}",differences.join("\n"));
+}
+
 // Quebra se o handler mudar seleção, recarga, URL de topo ou autenticação dos casos congelados.
 #[tokio::test]
 async fn frozen_get_cases_match_status_json_headers_and_files() {
