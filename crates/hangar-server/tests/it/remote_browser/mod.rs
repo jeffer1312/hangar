@@ -1,4 +1,5 @@
 mod access;
+mod commands;
 mod guest;
 mod identity;
 mod transport;
