@@ -143,7 +143,8 @@ impl RefusingServer {
         async fn refuse(State(attempts): State<Arc<Mutex<Vec<Attempt>>>>, req: Request) -> Response {
             let (parts, body) = req.into_parts();
             let body = to_bytes(body, 1024 * 1024).await.unwrap();
-            let head = parts.method == axum::http::Method::HEAD;
+            let head = parts.method == axum::http::Method::HEAD
+                && parts.uri.path().ends_with("/navegador");
             attempts.lock().unwrap().push(Attempt { path: parts.uri.to_string(), headers: parts.headers, body: body.to_vec() });
             if head {
                 return (StatusCode::METHOD_NOT_ALLOWED, [("allow","GET"),("content-type","application/json")],

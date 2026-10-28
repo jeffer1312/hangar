@@ -304,7 +304,15 @@ async fn run(
             report(&output, &name, error).await;
         }
     }
-    let _ = output.lock().await.send(Message::Close(None)).await;
+    let _ = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut writer = output.lock().await;
+        let _ = writer.send(Message::Close(Some(CloseFrame {
+            code: 1000,
+            reason: "".into(),
+        }))).await;
+        // O Close recebido já enfileira a resposta, mesmo quando outro envio é recusado.
+        let _ = writer.close().await;
+    }).await;
     // A devolução sobrevive ao cancelamento da conexão que impôs o tamanho.
     let restore = st.remote_browser.clone();
     let dir = st.hangar_dir.join("nav");
