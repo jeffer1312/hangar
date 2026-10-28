@@ -87,7 +87,7 @@ pub async fn tool_progress(
     RoutePath((name, id)): RoutePath<(String, String)>,
     req: Request,
 ) -> Response {
-    let (fwd, caller) = who(&st, peer, &req);
+    let (fwd, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !caller.is_some_and(|c| c.can(&name, req.method())) {
         return pass(&st, req, &fwd).await;
     }
@@ -187,7 +187,7 @@ pub async fn transcript_image(
     RoutePath((name, uuid, idx)): RoutePath<(String, String, String)>,
     req: Request,
 ) -> Response {
-    let (fwd, caller) = who(&st, peer, &req);
+    let (fwd, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     // A imagem de uma conversa transferida é lida pelo Python, como o histórico dela.
     if !caller.is_some_and(|c| c.can(&name, req.method())) || uuid.starts_with("transfer:") {
         return pass(&st, req, &fwd).await;
@@ -434,7 +434,7 @@ pub async fn bash_output_route(
     RoutePath(name): RoutePath<String>,
     req: Request,
 ) -> Response {
-    let (fwd, caller) = who(&st, peer, &req);
+    let (fwd, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !caller.is_some_and(|c| c.can(&name, req.method())) {
         return pass(&st, req, &fwd).await;
     }

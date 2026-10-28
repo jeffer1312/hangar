@@ -524,7 +524,7 @@ impl Tools {
             .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}));
         let mut env: Vec<(String, String)> = std::env::vars()
             .filter(|(k, _)| k != "TYPESAFE_API_KEY" && !k.starts_with("JEV_")
-                && !matches!(k.as_str(), "CP_AUTH_TOKEN" | "HANGAR_INTERNAL_SECRET" | "HANGAR_RUNTIME_INSTANCE"))
+                && !matches!(k.as_str(), "CP_AUTH_TOKEN" | "HANGAR_INTERNAL_SECRET" | "HANGAR_RUNTIME_INSTANCE" | "HANGAR_AUTH_CONTEXT"))
             .collect();
         env.extend(crate::session_open::claude::jev_pairs(true, &runtime));
         if !env.iter().any(|(k, v)| k == "TYPESAFE_API_KEY" && !v.is_empty()) { return Err(JEV_UNCONFIGURED.into()); }

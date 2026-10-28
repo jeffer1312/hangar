@@ -116,7 +116,8 @@ jobs:
       - name: Compilar contratos Rust usados pelo pytest
         working-directory: crates
         run: |
-          cargo build --locked -p hangar-server
+          cargo build --locked -p hangar-server -p hangar-auth
+          python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so
           cargo build --locked -p hangar-server --example orq_contract
           cargo build --locked -p hangar-workspace --example workspace_contract
           cargo test --locked -p hangar-server --no-run --test it

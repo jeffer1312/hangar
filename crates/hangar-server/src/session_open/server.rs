@@ -229,7 +229,7 @@ pub async fn run_program(env: &BTreeMap<String, String>, argv: Vec<String>, time
     let Some(exe) = crate::runtime::process::resolve_program(program, env) else { return failed(format!("{program} não está no PATH")) };
     let mut command = tokio::process::Command::new(exe);
     command.args(args).env_clear().stdin(std::process::Stdio::null()).kill_on_drop(true)
-        .envs(env.iter().filter(|(k, _)| !matches!(k.as_str(), "CP_AUTH_TOKEN" | "HANGAR_INTERNAL_SECRET" | "HANGAR_RUNTIME_INSTANCE")));
+        .envs(env.iter().filter(|(k, _)| !matches!(k.as_str(), "CP_AUTH_TOKEN" | "HANGAR_INTERNAL_SECRET" | "HANGAR_RUNTIME_INSTANCE" | "HANGAR_AUTH_CONTEXT")));
     match tokio::time::timeout(timeout, command.output()).await {
         Ok(Ok(out)) => MuxOutput { code: out.status.code(), stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned() },
@@ -500,7 +500,7 @@ pub(crate) fn reply(error: &OpenError) -> Response {
 /// corpo intacto (corpo que não é pedido válido também: o 422 é o dele).
 pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (started, diag) = (Instant::now(), crate::routes::diag_req(&req));
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let (mut parts, body) = req.into_parts();
     // Só o Rust diz ao Python que já olhou.
     parts.headers.remove(DECLINED);
@@ -544,7 +544,7 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 /// `GET /api/sessions/creation-progress?name=`: o passo da criação em curso, do dono e do convidado com
 /// login (as duas pontas que criam). O resto segue ao Python, que recusa.
 pub async fn creation_progress(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let guest = !owner && crate::auth::presented_token(req.headers(), req.uri().query(), req.method(), fwd.https)
         .and_then(|token| login_guest(&AccountEnvironment::capture().claude_base, &token)).is_some();
     if !owner && !guest { return crate::routes::pass(&st, req, &fwd).await; }
@@ -562,7 +562,7 @@ pub(super) fn baton_step(asked: &Value) -> &'static str {
 /// `POST /api/sessions/{name}/bastao` do dono: o Python monta e grava o dossiê (é dele) e devolve o
 /// pedido de abertura da sucessora em vez de abrir; o Rust a abre com o kick-off como primeira mensagem.
 pub async fn bastao(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let (mut parts, body) = req.into_parts();
     parts.headers.remove(DECLINED);
     let Ok(bytes) = to_bytes(body, crate::session_write::BODY_LIMIT).await else {
@@ -663,7 +663,7 @@ pub async fn resume_archived(st: &Arc<AppState>, project: &str, sid: &str, body:
 pub async fn archive_resume(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>,
                             axum::extract::Path((project, sid)): axum::extract::Path<(String, String)>, req: Request) -> Response {
     let (started, diag) = (Instant::now(), crate::routes::diag_req(&req));
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return crate::routes::pass(&st, req, &fwd).await; }
     let headers = req.headers().clone();
     let Ok(bytes) = to_bytes(req.into_body(), crate::session_write::BODY_LIMIT).await else {

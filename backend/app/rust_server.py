@@ -32,7 +32,7 @@ _log = logging.getLogger("hangar.rust_server")
 HEALTH_PATH = "/__hangar_server/health"
 # Versão do contrato interno (rotas /internal, canal privado do estado, ambiente). Tem de casar com o
 # `protocol` da saúde (hangar_server::INTERNAL_PROTOCOL); outro número = o Python atende sozinho.
-RUST_SERVER_PROTOCOL = 93
+RUST_SERVER_PROTOCOL = 94
 START_TIMEOUT = 10.0
 OP_TIMEOUT_S = 75
 CRASH_WINDOW = 60.0
@@ -71,6 +71,15 @@ def wanted_binary(enabled: bool) -> Path | None:
     found = rust_bins.find_bin("hangar-server", "CP_RUST_SERVER_BIN")
     if found is None:
         diag.registrar("hangar_server.reserva", "aviso", codigo="sem_binario")
+    else:
+        from app import shared_auth
+        from app.config import settings
+        try:
+            shared_auth.activate(found, settings.auth_token, 0)
+        except (OSError, ValueError, AttributeError, shared_auth.Unavailable):
+            _log.error("hangar-server sem par válido da biblioteca de autenticação")
+            diag.registrar("hangar_server.reserva", "aviso", codigo="auth_pair_invalid")
+            return None
     return found
 
 
@@ -373,8 +382,11 @@ class Supervisor:
         if self.port != GUEST_PORT:
             host = "0.0.0.0" if self.host in ("0.0.0.0", "::") else "127.0.0.1"
             guest["HANGAR_SERVER_GUEST_LISTEN"] = listen_addr(host, GUEST_PORT)
-        env = {k: v for k, v in os.environ.items() if k != "HANGAR_SERVER_GUEST_LISTEN"}
-        return {**env, **lists, **groups, **guest,
+        from app import shared_auth
+        context = shared_auth.current()
+        auth_env = context.child_env(self.binary) if context is not None else {}
+        env = {k: v for k, v in os.environ.items() if k not in ("HANGAR_SERVER_GUEST_LISTEN", "HANGAR_AUTH_CONTEXT")}
+        return {**env, **lists, **groups, **guest, **auth_env,
                 "HANGAR_SERVER_LISTEN": listen_addr(self.host, self.port),
                 "HANGAR_SERVER_UPSTREAM": f"127.0.0.1:{self.upstream_port}",
                 "HANGAR_INTERNAL_SECRET": secret,
@@ -395,7 +407,12 @@ class Supervisor:
             from app.runtime_process import cleanup
             await asyncio.to_thread(cleanup, self.proc)
             _close_stdin(self.proc)
-        env = self._env()
+        from app import shared_auth
+        try:
+            env = await asyncio.to_thread(self._env)
+        except (OSError, ValueError, shared_auth.Unavailable):
+            diag.registrar("hangar_server.partida", "erro", codigo="auth_pair_invalid")
+            return "protocol"
         self.proc = _spawn(self.binary, env)
         try:
             ready = await asyncio.wait_for(asyncio.to_thread(_runtime_ready, self.proc,
@@ -577,6 +594,8 @@ async def serve(server: uvicorn.Server, sockets: list[socket.socket], binary: Pa
     """O uvicorn interno e o hangar-server juntos. `False` = a porta pública ficou sem dono.
 
     `kw` é o da porta pública: a lista `forwarded_allow_ips` do dono vai ao filho e à reserva."""
+    from app import shared_auth
+    await asyncio.to_thread(shared_auth.activate, binary, token, sockets[0].getsockname()[1])
     serving = asyncio.create_task(server.serve(sockets=sockets))
     # O filho só nasce com o uvicorn interno de pé: antes disso todo repasse dele daria 502.
     while not server.started and not serving.done():
@@ -710,6 +729,8 @@ def run(app: str, kw: dict, binary: Path, token: str, sockets: list[socket.socke
                                 loop_factory=config.get_loop_factory())
     finally:
         runtime_coordinator.expect_rust(False)
+        from app import shared_auth
+        shared_auth.shutdown()
     if not server.started:
         return 3
     return 0 if public_ok else 1

@@ -85,9 +85,9 @@ pub async fn report_route(
         if crate::routes::on_guest_port(&req) || headers.contains_key("x-hangar-guest") {
             break 'r detail(StatusCode::FORBIDDEN, "diag_report_forbidden", "só o dono envia o relatório", Value::Null);
         }
-        let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+        let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
         if !owner {
-            st.auth.record_fail(&fwd.client_ip);
+            if let Err(e) = st.auth.record_failure(&fwd.client_ip).await { return crate::auth::unavailable(e); }
             break 'r detail(StatusCode::UNAUTHORIZED, "unauthorized", "token do dono ausente ou errado", Value::Null);
         }
         let input = match axum::body::to_bytes(req.into_body(), BODY_IN_MAX).await {

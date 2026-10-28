@@ -179,7 +179,7 @@ fn not_modified(headers: &HeaderMap, etag: &str) -> bool {
 
 /// `GET`/`PUT /api/web-ui` com `{"web_ui": bool}`: só o dono.
 pub async fn setting(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if !gate(&st, peer, &req).1 {
+    if !(match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).1 {
         return detail(StatusCode::FORBIDDEN, "web_ui_owner_only", "só o dono pode ler ou mudar a tela web", json!({}));
     }
     let save = if req.method() == Method::PUT {

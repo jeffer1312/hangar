@@ -136,7 +136,7 @@ pub(crate) const CATALOG_PATH: &str = "/api/claude/customizations";
 /// `GET /api/claude/customizations`: o catálogo de plugins e skills da pasta na conta, com o
 /// contrato da rota do Python. O dono entra aqui; Connect chega pela ponte `crate::forwarded`.
 pub async fn catalog_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (forward, owner) = crate::routes::gate(&st, peer, &req);
+    let (forward, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner {
         return crate::routes::pass(&st, req, &forward).await;
     }
@@ -1065,7 +1065,7 @@ mod tests {
     #[test]
     fn metadata_command_removes_private_environment_without_changing_account_credentials() {
         use std::ffi::OsStr;
-        let secrets = ["HANGAR_INTERNAL_SECRET", "CP_AUTH_TOKEN", "HANGAR_RUNTIME_INSTANCE", "HANGAR_PLUGIN_TOKEN"];
+        let secrets = ["HANGAR_INTERNAL_SECRET", "CP_AUTH_TOKEN", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT", "HANGAR_PLUGIN_TOKEN"];
         let mut command = tokio::process::Command::new("claude");
         for key in secrets { command.env(key, "must-not-inherit"); }
         command.env("ANTHROPIC_AUTH_TOKEN", "account-only");

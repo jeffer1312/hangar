@@ -176,7 +176,7 @@ pub(crate) async fn reopen_in(st:&Arc<AppState>,runtime:&Arc<crate::runtime::gat
 }
 
 pub async fn targets_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<SocketAddr>,req:Request) -> Response {
-    let (fwd,owner)=gate(&st,peer,&req);
+    let (fwd,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let runtime=st.state.runtime.get().cloned();
     let (Some(runtime),true,Some(name))=(runtime,owner,session_name(req.uri().path())) else {return pass(&st,req,&fwd).await};
     let env=runtime.codex_environment();
@@ -198,7 +198,7 @@ pub async fn targets_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conn
 }
 
 pub async fn switch_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<SocketAddr>,req:Request) -> Response {
-    let (fwd,owner)=gate(&st,peer,&req);
+    let (fwd,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let runtime=st.state.runtime.get().cloned();
     let (Some(runtime),true,Some(name))=(runtime,owner,session_name(req.uri().path())) else {return pass(&st,req,&fwd).await};
     let (parts,body)=req.into_parts();

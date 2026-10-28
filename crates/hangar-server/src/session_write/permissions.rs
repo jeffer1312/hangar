@@ -28,7 +28,7 @@ fn result(reply:crate::runtime::protocol::RuntimeReply)->(StatusCode,Value) {
     (StatusCode::CONFLICT,detail_body(code,"não consegui confirmar o modo de permissão; confira a sessão",params))
 }
 async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response {
-    let (forward,owner)=gate(&st,peer,&req);
+    let (forward,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let Some(runtime)=st.state.runtime.get().cloned().filter(|_|owner) else {return pass(&st,req,&forward).await;};
     let Some(name)=session_name(req.uri().path()) else {return pass(&st,req,&forward).await;};
     // Claude com terminal ainda sem ator aqui: o Rust o adota agora, em vez de mandar ao Python.

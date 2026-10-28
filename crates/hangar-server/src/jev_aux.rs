@@ -104,7 +104,7 @@ async fn models_reply(st: &AppState, req: Request) -> Response {
 }
 
 pub async fn cliproxy(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return pass(&st, req, &fwd).await; }
     let mut resp = cliproxy_reply(st.accounts.env.home.clone()).await;
     cors(req.headers(), resp.headers_mut());
@@ -112,7 +112,7 @@ pub async fn cliproxy(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connec
 }
 
 pub async fn models(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return pass(&st, req, &fwd).await; }
     let headers = req.headers().clone();
     let mut resp = models_reply(&st, req).await;

@@ -65,7 +65,7 @@ pub(crate) fn open(cfg: &TermConfig, target: &str, cols: u16, rows: u16, slot: A
     // `TMUX` herdado faz o attach recusar ("sessions should be nested") quando o servidor sobe de
     // dentro de um pane.
     for name in ["NOTIFY_SOCKET", "INVOCATION_ID", "LISTEN_FDS", "LISTEN_PID", "LISTEN_FDNAMES", "PSMUX_SESSION",
-                 "TMUX", "TMUX_PANE", "HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE", "CP_AUTH_TOKEN"] {
+                 "TMUX", "TMUX_PANE", "HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT", "CP_AUTH_TOKEN"] {
         cmd.env_remove(name);
     }
     if let Ok(dir) = std::env::current_dir() {

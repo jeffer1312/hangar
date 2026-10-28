@@ -33,6 +33,17 @@ def is_guest(conn) -> bool:
 
 async def _owner_only(ws: WebSocket) -> bool:
     """Mesma trava do `termsock._porta_de_entrada`, sem a exceção do convidado."""
+    from app import shared_auth
+    decision = await shared_auth.websocket(ws, shared_auth.VOICE_WS,
+                                          verified_guest=guest_of(ws) is not None,
+                                          login_guest=guest_users.current.get() is not None)
+    if decision is False:
+        return False
+    if decision is not None:
+        if decision.status != shared_auth.OWNER:
+            await ws.close(code=1008)
+            return False
+        return True
     host = ws.client.host if ws.client else ""
     now = time.time()
     if _blocked(host, now):

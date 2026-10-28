@@ -282,7 +282,7 @@ fn route_message(code: &str) -> &'static str {
 }
 
 pub async fn ask(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, caller) = who(&st, peer, &req);
+    let (fwd, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let Some(name) = session_name(req.uri().path()).filter(|n| caller.as_ref().is_some_and(|c| c.can(n, req.method()))) else {
         return pass(&st, req, &fwd).await;
     };
@@ -358,7 +358,7 @@ pub async fn ask(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo
 }
 
 pub async fn list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, caller) = who(&st, peer, &req);
+    let (fwd, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let Some(name) = session_name(req.uri().path()).filter(|n| caller.as_ref().is_some_and(|c| c.can(n, req.method()))) else {
         return pass(&st, req, &fwd).await;
     };

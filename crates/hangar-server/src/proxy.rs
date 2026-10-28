@@ -17,6 +17,7 @@ use crate::share::forward::HEADER as GUEST_HEADER;
 use crate::share::gate::Watcher;
 
 pub type HttpClient = Client<HttpConnector, Body>;
+pub(crate) const AUTH_EMPTY_QUERY: &str = "x-hangar-auth-empty-query";
 
 /// Abaixo dos 5 s em que o uvicorn fecha a conexão ociosa: reaproveitar uma que ele está
 /// fechando derruba o pedido no meio e vira 502 na tela.
@@ -40,6 +41,8 @@ pub struct Forward {
     pub https: bool,
     /// Convidado da 8766 decidido pelo porteiro; `routes::pass` assina o cabeçalho na hora do repasse.
     pub guest: Option<Arc<GuestGrant>>,
+    /// Só uma admissão deste pedido, assinada pelo contexto privado do pai.
+    pub auth_receipt: Option<String>,
 }
 
 const HOP: [&str; 7] = ["connection", "keep-alive", "proxy-connection", "transfer-encoding", "te", "trailer", "upgrade"];
@@ -47,7 +50,8 @@ const HOP: [&str; 7] = ["connection", "keep-alive", "proxy-connection", "transfe
 pub async fn forward(http: &HttpClient, upstream: SocketAddr, mut req: Request, fwd: &Forward) -> Response {
     let upgrade = req.headers().contains_key(header::UPGRADE);
     let path = req.uri().path_and_query().map(|p| p.as_str().to_owned()).unwrap_or_else(|| "/".into());
-    prepare(req.headers_mut(), fwd, upgrade);
+    let empty_query = req.uri().query() == Some("");
+    prepare(req.headers_mut(), fwd, upgrade, empty_query);
     if upgrade {
         let watcher = req.extensions_mut().remove::<Watcher>();
         return forward_upgrade(upstream, req, &path, watcher).await;
@@ -59,6 +63,8 @@ pub async fn forward(http: &HttpClient, upstream: SocketAddr, mut req: Request, 
     match http.request(req).await {
         Ok(resp) => {
             let (mut parts, body) = resp.into_parts();
+            parts.headers.remove("x-hangar-auth-receipt");
+            parts.headers.remove(AUTH_EMPTY_QUERY);
             for name in HOP {
                 parts.headers.remove(name);
             }
@@ -68,7 +74,15 @@ pub async fn forward(http: &HttpClient, upstream: SocketAddr, mut req: Request, 
     }
 }
 
-fn prepare(h: &mut HeaderMap, fwd: &Forward, upgrade: bool) {
+fn prepare(h: &mut HeaderMap, fwd: &Forward, upgrade: bool, empty_query: bool) {
+    h.remove("x-hangar-auth-receipt");
+    h.remove(AUTH_EMPTY_QUERY);
+    if let Some(receipt) = &fwd.auth_receipt {
+        if let Ok(value) = HeaderValue::from_str(receipt) {
+            h.insert("x-hangar-auth-receipt", value);
+            if empty_query { h.insert(AUTH_EMPTY_QUERY, HeaderValue::from_static("1")); }
+        }
+    }
     for name in HOP {
         // No aperto de mão do WebSocket, Connection e Upgrade são o próprio pedido.
         if upgrade && (name == "connection" || name == "upgrade") {
@@ -116,7 +130,9 @@ async fn forward_upgrade(upstream: SocketAddr, mut req: Request, path: &str,
         Err(e) => return bad_gateway(&e),
     };
     if resp.status() != StatusCode::SWITCHING_PROTOCOLS {
-        let (parts, body) = resp.into_parts();
+        let (mut parts, body) = resp.into_parts();
+        parts.headers.remove("x-hangar-auth-receipt");
+        parts.headers.remove(AUTH_EMPTY_QUERY);
         return Response::from_parts(parts, Body::new(body));
     }
     let upstream_side = hyper::upgrade::on(&mut resp);
@@ -125,7 +141,9 @@ async fn forward_upgrade(upstream: SocketAddr, mut req: Request, path: &str,
         let ended = async move { Watcher::ended(watcher.as_ref()).await };
         crate::share::forward::pipe_watched(TokioIo::new(c), TokioIo::new(u), ended).await;
     });
-    let (parts, _) = resp.into_parts();
+    let (mut parts, _) = resp.into_parts();
+    parts.headers.remove("x-hangar-auth-receipt");
+    parts.headers.remove(AUTH_EMPTY_QUERY);
     Response::from_parts(parts, Body::empty())
 }
 

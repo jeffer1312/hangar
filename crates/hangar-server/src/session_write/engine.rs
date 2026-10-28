@@ -81,7 +81,7 @@ pub(crate) async fn switch(st:&Arc<AppState>,runtime:&Arc<RuntimeRegistry>,name:
 
 /// Lê o corpo e acha o spec da sessão Claude; `Err` = a resposta (repasse incluído).
 async fn claude_engine(st:&Arc<AppState>,peer:SocketAddr,req:Request) -> Result<(Arc<RuntimeRegistry>,String,SessionSpec,Value,axum::http::HeaderMap),Response> {
-    let (fwd,owner)=gate(st,peer,&req);
+    let (fwd,owner)=match gate(st,peer,&req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
     let runtime=st.state.runtime.get().cloned();
     let (Some(runtime),true,Some(name))=(runtime,owner,session_name(req.uri().path())) else {return Err(crate::routes::pass(st,req,&fwd).await)};
     let (parts,body)=req.into_parts();
@@ -123,7 +123,7 @@ pub async fn model(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<
 /// `/engine/model`. As outras sessões Claude, pelo seletor do `/model` ou pelo ator sem terminal
 /// (`model_effort`).
 pub async fn effort(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<SocketAddr>,req:Request) -> Response {
-    let (fwd,owner)=gate(&st,peer,&req);
+    let (fwd,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let runtime=st.state.runtime.get().cloned();
     let (Some(runtime),true,Some(name))=(runtime,owner,session_name(req.uri().path())) else {return crate::routes::pass(&st,req,&fwd).await};
     let (parts,body)=req.into_parts();
@@ -154,7 +154,7 @@ pub async fn effort(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo
 /// `POST /service-tier`: o Fast do Claude com GPT no CLIProxyAPI local reabre a mesma identidade com o
 /// tier novo; o resto (o Codex) segue à rota do Codex com o pedido inteiro.
 pub async fn service_tier(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<SocketAddr>,req:Request) -> Response {
-    let (_,owner)=gate(&st,peer,&req);
+    let (_,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let runtime=st.state.runtime.get().cloned();
     let (Some(runtime),true,Some(name))=(runtime,owner,session_name(req.uri().path())) else {
         return super::codex::service_tier(State(st),ConnectInfo(peer),req).await;

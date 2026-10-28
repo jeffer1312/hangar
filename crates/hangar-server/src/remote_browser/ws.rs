@@ -119,16 +119,18 @@ pub async fn public(
         .map(|grant| grant.sessions.get(&name) == Some(&Kind::Share));
     if (guest.is_none() && super::login::refused(&st, req.headers(), req.uri().query(), https).await)
         || guest == Some(false)
-        || access::websocket(
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match access::authorize_websocket(
             &st.auth,
             &ip,
             req.uri().query(),
             guest == Some(true),
-            Instant::now(),
-        )
-        .is_err()
-    {
-        return StatusCode::FORBIDDEN.into_response();
+        ).await {
+        Ok(()) => {},
+        Err(access::AccessError::Unavailable(error)) => return crate::auth::unavailable(error),
+        Err(_) => return StatusCode::FORBIDDEN.into_response(),
     }
     serve(st, name, req, false).await
 }

@@ -254,7 +254,7 @@ async fn admit_codex(st: &Arc<AppState>, peer: SocketAddr, req: Request) -> Resu
 }
 
 async fn admit_codex_as(st: &Arc<AppState>, peer: SocketAddr, req: Request, route: WriteRoute) -> Result<(Ctx, Bytes), Response> {
-    let (fwd, owner) = gate(st, peer, &req);
+    let (fwd, owner) = match gate(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
     // Só o dono abre ou adota: o convidado segue ao Python, que o autentica.
     if !owner { return Err(pass(st, req, &fwd).await); }
     match ours(st, session_name(req.uri().path()).as_deref()).await {
@@ -324,7 +324,7 @@ pub async fn mode(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInf
 /// `/limits` nunca é erro nem espera, como no Python: porta fechada (troca em curso) ou leitura que falha
 /// dão a resposta neutra.
 pub async fn limits(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, who) = who(&st, peer, &req);
+    let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let name = session_name(req.uri().path()).filter(|n| who.as_ref().is_some_and(|c| c.can(n, req.method())));
     let (Some(runtime), Some(name)) = (st.state.runtime.get(), name) else { return pass(&st, req, &fwd).await };
     match ours(&st, Some(&name)).await {

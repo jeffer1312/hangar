@@ -75,6 +75,8 @@ def _fake_bins(tmp: Path, os_name: str) -> Path:
         p = d / f"{b}-{os_name}{exe}"
         p.write_bytes(f"bin {b}".encode())
         p.chmod(0o755)
+    suffix = ".dll" if os_name.startswith("windows") else ".so"
+    (d / f"hangar-auth-{os_name}{suffix}").write_bytes(b"auth-library-fixture")
     return d
 
 
@@ -128,6 +130,11 @@ def test_pacote_tem_exatamente_os_arquivos_do_manifesto(tmp_path, monkeypatch, o
     for b in ("hangar-server", "hangar-cano"):
         data, mode = members[f"bin/{b}{exe}"]
         assert data == f"bin {b}".encode() and mode & 0o111
+    auth_pair = json.loads(members["bin/hangar-server.auth.json"][0])
+    assert auth_pair["abi"] == auth_pair["store_version"] == 1
+    assert hashlib.sha256(members[f"bin/hangar-server{exe}"][0]).hexdigest() == auth_pair["server_sha256"]
+    assert members["bin/" + auth_pair["library"]][0] == b"auth-library-fixture"
+    assert hashlib.sha256(members["bin/" + auth_pair["library"]][0]).hexdigest() == auth_pair["library_sha256"]
     # Os instaladores vão no pacote: a instalação nova roda o do `current`, em modo pacote; o install.ps1
     # carrega os dois .ps1 de scripts/ na primeira linha.
     for must in ("VERSION", "install.sh", "install.ps1", "scripts/windows-tasks.ps1", "scripts/windows-wrappers.ps1",

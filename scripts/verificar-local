@@ -211,16 +211,24 @@ passo_preparo() {
     fi
     if [[ "$plano" == *" rust "* ]]; then
         # O cano é o binário que o passo rust entrega ao pytest do cano.
-        (cd crates && cargo build --locked -p hangar-server -p hangar-cano && \
+        (cd crates && cargo build --locked -p hangar-server -p hangar-cano -p hangar-auth && \
+            python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so && \
             cargo test --locked --workspace --no-run) || falhou=1
     fi
     if [[ "$plano" == *" backend "* ]]; then
         # Os contratos e as sondas de contas que o pytest executa (ci.yml): as sondas são módulos do
         # executável de testes `it` do hangar-server.
-        (cd crates && cargo build --locked -p hangar-server && \
+        (cd crates && cargo build --locked -p hangar-server -p hangar-auth && \
+            python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so && \
             cargo build --locked -p hangar-server --example orq_contract && \
             cargo build --locked -p hangar-workspace --example workspace_contract && \
             cargo test --locked -p hangar-server --no-run --test it) || falhou=1
+    fi
+    if [[ "$plano" == *" backend_rapido "* && "$plano" != *" backend "* && "$plano" != *" rust "* ]] && \
+        grep -Eq '^backend/(app/(auth|shared_auth|rust_bins|rust_server|navsock|voicesock|termsock)\.py|tests/test_shared_auth\.py)$' <<< "$ARQUIVOS"; then
+        # A prova das duas portas precisa do mesmo executável e biblioteca desta árvore fixa.
+        (cd crates && cargo build --locked -p hangar-server -p hangar-auth && \
+            python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so) || falhou=1
     fi
     for pid in "${pids[@]}"; do wait "$pid" || falhou=1; done
     return $falhou

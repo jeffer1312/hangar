@@ -20,6 +20,16 @@ UNAVAILABLE = "remote_browser_needs_rust"
 
 
 async def _autorizado(ws: WebSocket) -> bool:
+    from app import shared_auth
+    from app.guest_header import guest_of
+    decision = await shared_auth.websocket(ws, shared_auth.BROWSER_WS, verified_guest=guest_of(ws) is not None)
+    if decision is False:
+        return False
+    if decision is not None:
+        if decision.status not in (shared_auth.OWNER, shared_auth.GUEST):
+            await ws.close(code=1008)
+            return False
+        return True
     host = ws.client.host if ws.client else ""
     agora = time.time()
     if _blocked(host, agora):

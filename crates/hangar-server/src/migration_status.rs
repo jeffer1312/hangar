@@ -373,7 +373,7 @@ async fn python_facts(st: &AppState) -> Result<Value, &'static str> {
 
 /// `GET /api/migration/status` do dono. Convidado e outro método seguem ao Python, que recusa.
 pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner || req.method() != Method::GET {
         return pass(&st, req, &fwd).await;
     }

@@ -2,7 +2,6 @@
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
-use std::time::Instant;
 
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{Method, StatusCode};
@@ -32,7 +31,7 @@ pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         let (ip,https) = st.cfg.trusted.resolve(peer.ip(),req.headers());
         if super::login::refused(&st, req.headers(), req.uri().query(), https).await {
             json_response(StatusCode::FORBIDDEN,detail_body("erro_fora_do_convidado","fora do acesso do convidado",json!({})))
-        } else { match access::http(&st.auth,&ip,req.headers(),req.uri().query(),https,Instant::now()) {
+        } else { match access::authorize_http(&st.auth,&ip,req.headers(),req.uri().query(),https).await {
             Ok(()) => serve(&st,req.uri().path()).await,
             Err(AccessError::Unauthorized) => json_response(StatusCode::UNAUTHORIZED,
                 detail_body("erro_nao_autorizado","unauthorized",json!({}))),
@@ -42,6 +41,7 @@ pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
                 response.headers_mut().insert("retry-after",axum::http::HeaderValue::from_static("30"));
                 response
             },
+            Err(AccessError::Unavailable(error)) => crate::auth::unavailable(error),
         } }
     };
     let mut response = response;

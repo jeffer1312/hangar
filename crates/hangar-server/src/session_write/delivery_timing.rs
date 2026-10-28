@@ -13,7 +13,7 @@ pub async fn availability(
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     req: axum::extract::Request,
 ) -> axum::response::Response {
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return crate::routes::pass(&st, req, &fwd).await; }
     let mut response = availability_reply(&st).await;
     crate::routes::cors(req.headers(), response.headers_mut());

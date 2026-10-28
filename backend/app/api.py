@@ -482,7 +482,7 @@ async def _repasse_ao_rust(request: Request, sem_rust: dict, destino: str, **rep
     Rust não há reserva Python: a rota responde indisponível, com o código de `sem_rust`."""
     from app import account_bridge
     try:
-        require_auth(request)
+        await require_auth(request)
     except HTTPException as error:
         return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
     if account_bridge.owner_mode() == "python":
@@ -507,7 +507,7 @@ async def _providers_via_rust(request: Request, call_next):
                                or request.method == "POST" and write.group(2) is not None) else None
     if read or write:
         try:
-            require_auth(request)
+            await require_auth(request)
         except HTTPException as error:
             return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
         owned = True
@@ -516,7 +516,7 @@ async def _providers_via_rust(request: Request, call_next):
     if read:
         from app import account_bridge
         try:
-            require_auth(request)
+            await require_auth(request)
         except HTTPException as error:
             return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
         if account_bridge.owner_mode() == "python":
@@ -638,7 +638,7 @@ async def _midia_pelo_rust(request: Request, call_next):
     if not owned:
         return await call_next(request)
     try:
-        require_auth(request)
+        await require_auth(request)
     except HTTPException as error:
         return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
     if account_bridge.owner_mode() == "python":

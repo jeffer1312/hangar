@@ -87,7 +87,7 @@ fn choose(found: &[(PathBuf, f64)], in_use: &dyn Fn(&Path) -> Option<String>, si
 
 
 pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let (true, Some(name)) = (owner, session_name(req.uri().path())) else { return pass(&st, req, &fwd).await };
     let headers = req.headers().clone();
     let Ok(bytes) = to_bytes(req.into_body(), BODY_LIMIT).await else { return too_large(&headers) };

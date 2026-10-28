@@ -11,7 +11,8 @@ const IP: &str = "198.51.100.2";
 const GOOD: Option<&str> = Some("token=remote-browser-contract-owner");
 
 fn status(result: Result<(), AccessError>) -> u16 {
-    match result { Ok(()) => 200, Err(AccessError::Unauthorized) => 401, Err(AccessError::Blocked) => 429 }
+    match result { Ok(()) => 200, Err(AccessError::Unauthorized) => 401, Err(AccessError::Blocked) => 429,
+        Err(AccessError::Unavailable(error)) => panic!("autenticação local indisponível: {error}") }
 }
 
 fn bad(auth: &Auth, ip: &str, count: usize, now: Instant) {

@@ -1,15 +1,15 @@
 //! Credenciais e limite por origem compartilhados pelas rotas do dono.
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::http::{HeaderMap, Method, header};
 use subtle::ConstantTimeEq;
 
+pub use hangar_auth::{AuthAttempt, AuthDecision, AuthError, Profile, ReceiptContext};
+#[cfg(test)]
 const MAX_FAILS: usize = 8;
-const WINDOW: Duration = Duration::from_secs(30);
-const MAX_ORIGINS: usize = 512;
 const COOKIE: &str = "cp_token";
 const COOKIE_HOST: &str = "__Host-cp_token";
 
@@ -17,27 +17,111 @@ pub fn is_loopback(ip: &str) -> bool {
     matches!(ip, "127.0.0.1" | "::1" | "localhost")
 }
 
+#[derive(Clone)]
 pub struct Auth {
     token: Vec<u8>,
-    fails: Mutex<HashMap<String, Vec<Instant>>>,
+    backend: Backend,
+    clock: (Instant, f64),
+}
+#[derive(Clone)]
+enum Backend {
+    Local(Arc<Mutex<hangar_auth::Origins>>),
+    Shared(Arc<hangar_auth::SharedLimiter>),
+    Broken(AuthError),
 }
 
 impl Auth {
     pub fn new(token: &str) -> Auth {
-        Auth { token: token.as_bytes().to_vec(), fails: Mutex::new(HashMap::new()) }
+        Auth { token: token.as_bytes().to_vec(), backend: Backend::Local(Arc::default()),
+            clock: (Instant::now(), SystemTime::now().duration_since(UNIX_EPOCH).expect("relógio Unix").as_secs_f64()) }
     }
 
-    /// true = token do dono. Origem bloqueada nem tem o token avaliado: o pedido segue ao
-    /// Python, que responde o 429 pela conta dele.
+    pub fn configured(token: &str) -> Self {
+        let mut auth = Self::new(token);
+        if let Some(raw) = std::env::var_os("HANGAR_AUTH_CONTEXT") {
+            auth.backend = match raw.to_str().and_then(|s| serde_json::from_str::<hangar_auth::AuthConfig>(s).ok()) {
+                Some(config) if config.mode == "attach" => match hangar_auth::SharedLimiter::open(config) {
+                    Ok(shared) => Backend::Shared(Arc::new(shared)), Err(e) => Backend::Broken(e),
+                },
+                _ => Backend::Broken(AuthError::InvalidInput),
+            };
+        }
+        auth
+    }
+
+    pub fn shared(&self) -> bool { !matches!(self.backend, Backend::Local(_)) }
+    fn wall(&self, now: Instant) -> f64 {
+        if now >= self.clock.0 { self.clock.1 + now.duration_since(self.clock.0).as_secs_f64() }
+        else { self.clock.1 - self.clock.0.duration_since(now).as_secs_f64() }
+    }
+    fn operation_time(&self) -> Result<f64, AuthError> {
+        if self.shared() {
+            SystemTime::now().duration_since(UNIX_EPOCH).map(|t| t.as_secs_f64()).map_err(|_| AuthError::StoreUnavailable)
+        } else { Ok(self.wall(Instant::now())) }
+    }
+    fn transaction<T>(&self, op: impl FnOnce(&mut hangar_auth::Origins) -> T) -> Result<T, AuthError> {
+        match &self.backend {
+            Backend::Local(origins) => {
+                let mut origins = origins.lock().map_err(|_| AuthError::Panic)?;
+                Ok(op(&mut origins))
+            },
+            Backend::Shared(shared) => shared.transaction(op),
+            Backend::Broken(error) => Err(*error),
+        }
+    }
+
+    pub async fn evaluate(&self, attempt: AuthAttempt) -> Result<AuthDecision, AuthError> {
+        let auth = self.clone();
+        let origin = attempt.origin.clone();
+        let decision = tokio::task::spawn_blocking(move || match &auth.backend {
+            Backend::Shared(shared) => shared.evaluate(&attempt),
+            Backend::Broken(error) => Err(*error),
+            Backend::Local(_) => auth.transaction(|origins| origins.evaluate(&auth.token, &attempt, auth.wall(Instant::now()))),
+        }).await.map_err(|_| AuthError::Panic)??;
+        if decision.became_blocked != 0 { tracing::warn!(ip=%origin, "token errado 8 vezes em 30 s; origem bloqueada"); }
+        Ok(decision)
+    }
+    pub fn evaluate_at_local(&self, attempt: AuthAttempt, now: Instant) -> AuthDecision {
+        assert!(!self.shared(), "autenticação compartilhada exige a operação assíncrona");
+        self.transaction(|origins| origins.evaluate(&self.token, &attempt, self.wall(now))).expect("contador local")
+    }
+    pub async fn owner(&self, ip: &str, token: Option<&[u8]>) -> Result<bool, AuthError> {
+        self.evaluate(AuthAttempt { profile: Profile::LegacyOwnerProbe, origin: ip.into(),
+            presented_token: token.map(Vec::from), verified_guest: false, login_guest: false }).await.map(|d| d.status == 0)
+    }
+    pub async fn record_failure(&self, ip: &str) -> Result<(), AuthError> {
+        let auth = self.clone(); let ip = ip.to_owned();
+        let origin = ip.clone();
+        let decision = tokio::task::spawn_blocking(move || auth.transaction(|origins| {
+            Ok::<_, AuthError>(origins.record_failure(&ip, auth.operation_time()?))
+        })?).await.map_err(|_| AuthError::Panic)??;
+        if decision.became_blocked != 0 { tracing::warn!(ip=%origin, "token errado 8 vezes em 30 s; origem bloqueada"); }
+        Ok(())
+    }
+    pub async fn mark_blocked_async(&self, ip: &str) -> Result<(), AuthError> {
+        let auth = self.clone(); let ip = ip.to_owned();
+        tokio::task::spawn_blocking(move || auth.transaction(|origins| {
+            let now = auth.operation_time()?;
+            origins.is_blocked(&ip, now);
+            for _ in 0..hangar_auth::MAX_FAILS { origins.record_failure(&ip, now); }
+            Ok::<_, AuthError>(())
+        })?).await.map_err(|_| AuthError::Panic)?
+    }
+    pub async fn receipt(&self, context: &ReceiptContext) -> Result<Option<String>, AuthError> {
+        let auth = self.clone();
+        let context = context.clone();
+        tokio::task::spawn_blocking(move || match &auth.backend {
+            Backend::Shared(shared) => shared.receipt(&context).map(Some),
+            Backend::Local(_) => Ok(None), Backend::Broken(error) => Err(*error),
+        }).await.map_err(|_| AuthError::Panic)?
+    }
+
+    // Compatibilidade dos ensaios locais; chamadas de produção usam a operação assíncrona.
     pub fn is_owner(&self, ip: &str, token: Option<&[u8]>) -> bool {
-        if !is_loopback(ip) && self.is_blocked_at(ip, Instant::now()) {
-            return false;
-        }
-        let ok = self.token_matches(token);
-        if ok {
-            self.clear_failures(ip);
-        }
-        ok
+        assert!(!self.shared(), "autenticação compartilhada exige a operação assíncrona");
+        self.transaction(|origins| origins.evaluate(&self.token, &AuthAttempt { profile: Profile::LegacyOwnerProbe,
+            origin: ip.into(), presented_token: token.map(Vec::from), verified_guest: false, login_guest: false },
+            self.wall(Instant::now())).status == 0).expect("contador local")
     }
 
     /// Comparação sem efeito na contagem: o WebSocket conserva falhas mesmo no acerto.
@@ -47,61 +131,32 @@ impl Auth {
     }
 
     pub fn clear_failures(&self, ip: &str) {
-        self.fails.lock().unwrap().remove(ip);
+        assert!(!self.shared(), "autenticação compartilhada exige a operação assíncrona");
+        self.transaction(|o| o.clear_origin(ip)).expect("contador local");
     }
 
     pub fn is_blocked_at(&self, ip: &str, now: Instant) -> bool {
-        let mut fails = self.fails.lock().unwrap();
-        let Some(hits) = fails.get_mut(ip) else { return false };
-        hits.retain(|t| now.duration_since(*t) < WINDOW);
-        let n = hits.len();
-        if n == 0 {
-            fails.remove(ip);
-        }
-        n >= MAX_FAILS
+        assert!(!self.shared(), "autenticação compartilhada exige a operação assíncrona");
+        self.transaction(|o| o.is_blocked(ip, self.wall(now))).expect("contador local")
     }
 
-    /// O Python respondeu 401 a um pedido repassado e contou a falha; a mesma conta aqui impede
-    /// que o atalho do dono responda 200 a um palpite certo durante o bloqueio.
     pub fn record_fail(&self, ip: &str) {
         self.record_fail_at(ip, Instant::now());
     }
 
     pub fn record_fail_at(&self, ip: &str, now: Instant) {
-        self.add_fails_at(ip, 1, now);
+        assert!(!self.shared(), "autenticação compartilhada exige a operação assíncrona");
+        self.transaction(|o| { o.record_failure(ip, self.wall(now)); }).expect("contador local");
     }
 
-    /// O Python respondeu 429: a origem já está bloqueada lá, então fica bloqueada aqui também,
-    /// mesmo que as falhas tenham chegado por um caminho que o Rust não viu.
     pub fn mark_blocked(&self, ip: &str) {
-        self.add_fails_at(ip, MAX_FAILS, Instant::now());
+        for _ in 0..hangar_auth::MAX_FAILS { self.record_fail(ip); }
     }
+}
 
-    fn add_fails_at(&self, ip: &str, n: usize, now: Instant) {
-        if is_loopback(ip) {
-            return;
-        }
-        let mut fails = self.fails.lock().unwrap();
-        let hits = fails.entry(ip.to_string()).or_default();
-        hits.retain(|t| now.duration_since(*t) < WINDOW);
-        if hits.len() >= MAX_FAILS {
-            return;
-        }
-        hits.resize((hits.len() + n).min(MAX_FAILS), now);
-        if hits.len() == MAX_FAILS {
-            tracing::warn!(%ip, "token errado {MAX_FAILS} vezes em 30 s; atalho do dono desligado para esta origem");
-        }
-        if fails.len() > MAX_ORIGINS {
-            fails.retain(|_, h| h.last().is_some_and(|t| now.duration_since(*t) < WINDOW));
-            while fails.len() > MAX_ORIGINS {
-                let Some(oldest) = fails.iter().min_by_key(|(_, h)| h.last().copied()).map(|(k, _)| k.clone())
-                else {
-                    break;
-                };
-                fails.remove(&oldest);
-            }
-        }
-    }
+pub fn unavailable(error: AuthError) -> axum::response::Response {
+    crate::session_write::json_response(axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        serde_json::json!({"detail": {"error_code": error.to_string(), "message": "autenticação indisponível"}}))
 }
 
 /// Token apresentado, na ordem do require_auth: Bearer, ?token=, cookie (só GET/HEAD).

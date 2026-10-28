@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Roda o cargo do crates/ no target compartilhado da máquina (target-dir do ~/.cargo/config.toml)
-# e copia os executáveis que ele produziu para crates/target/<perfil>/ deste checkout, dentro da
-# mesma trava. Quem executa o binário fora do cargo (pytest, CP_RUST_SERVER_BIN) usa a cópia: o
+# e só publica executáveis/biblioteca após o sucesso, em crates/target/<perfil>/ deste checkout,
+# dentro da mesma trava. Quem executa fora do cargo (pytest, CP_RUST_SERVER_BIN) usa a cópia: o
 # build de outra worktree reescreve o executável do target comum, nunca o deste checkout.
 #
 # Uso:  scripts/cargo-pinned build -p hangar-server [--release]
@@ -18,24 +18,49 @@ flock 9
 
 alvo="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)"
 proprio="$(realpath -m "$raiz/crates/target")"
-[[ "$(realpath -m "$alvo")" == "$proprio" ]] && alvo=""
 
-nice -n 19 ionice -c 3 cargo "$@" -j "${CARGO_BUILD_JOBS:-2}" --message-format=json-render-diagnostics |
+args=("$@")
+if [[ "${1:-}" == build && " $* " != *" --workspace "* && " $* " == *" hangar-server "* && " $* " != *" hangar-auth "* ]]; then
+    args+=(-p hangar-auth)
+fi
+target_arg=-1
+target_inline=0
+for ((i=0; i<${#args[@]}; i++)); do
+    [[ "${args[i]}" == -- ]] && break
+    if [[ "${args[i]}" == --target-dir && $((i+1)) -lt ${#args[@]} ]]; then
+        target_arg=$((i+1)); alvo="${args[target_arg]}"
+    elif [[ "${args[i]}" == --target-dir=* ]]; then
+        target_arg=$i; target_inline=1; alvo="${args[i]#--target-dir=}"
+    fi
+done
+alvo="$(realpath -m "$alvo")"
+if [[ "$alvo" == "$proprio" ]]; then
+    # O Cargo não pode escrever no par publicado antes de terminar a rodada.
+    alvo="$proprio/.cargo-pinned-build"
+    if (( target_arg >= 0 )); then
+        if (( target_inline )); then args[target_arg]="--target-dir=$alvo"; else args[target_arg]="$alvo"; fi
+    else
+        export CARGO_TARGET_DIR="$alvo"
+    fi
+fi
+artifacts="$(mktemp)"
+trap 'rm -f "$artifacts"' EXIT
+set +e
+nice -n 19 ionice -c 3 cargo "${args[@]}" -j "${CARGO_BUILD_JOBS:-2}" --message-format=json-render-diagnostics |
     # No `cargo test` a saída dos testes vem misturada às mensagens do cargo: ela passa adiante.
     jq -rR --unbuffered '. as $l | (try fromjson catch null) as $j
         | if ($j | type) != "object" then "L\t" + $l
           elif $j.reason == "compiler-artifact" and $j.executable != null and ($j.profile.test | not)
-          then "E\t" + $j.executable else empty end' |
+          then "A\t" + ($j | tojson)
+          elif $j.reason == "compiler-artifact" and $j.target.name == "hangar_auth" and ($j.target.crate_types | index("cdylib")) != null
+          then "A\t" + ($j | tojson)
+          else empty end' |
     while IFS= read -r l; do
         if [[ "$l" == L$'\t'* ]]; then printf '%s\n' "${l#L$'\t'}"; continue; fi
-        exe="${l#E$'\t'}"
-        [[ -n "$alvo" ]] || continue
-        if [[ "$exe" != "$alvo"/* ]]; then
-            echo "cargo-pinned: $exe fora de $alvo, não fixado em crates/target" >&2
-            continue
-        fi
-        dest="$proprio/${exe#"$alvo"/}"
-        mkdir -p "$(dirname "$dest")"
-        cp -f "$exe" "$dest.tmp"
-        mv -f "$dest.tmp" "$dest"
+        printf '%s\n' "${l#A$'\t'}" >> "$artifacts"
     done
+statuses=("${PIPESTATUS[@]}")
+set -e
+(( statuses[0] == 0 )) || exit "${statuses[0]}"
+for status in "${statuses[@]:1}"; do (( status == 0 )) || exit "$status"; done
+python3 "$raiz/scripts/pin-auth-pair.py" --artifacts "$artifacts" --source-target "$alvo" --target-dir "$proprio" --workspace "$raiz/crates"

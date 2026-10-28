@@ -31,7 +31,7 @@ pub async fn public(
         crate::routes::cors(req.headers(), response.headers_mut());
         return response;
     }
-    let (forward, owner) = crate::routes::gate(&st, peer, &req);
+    let (forward, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner || req.method() != Method::GET {
         return crate::routes::pass(&st, req, &forward).await;
     }

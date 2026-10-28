@@ -297,9 +297,9 @@ pub(super) struct Machine { pub(super) st: Arc<AppState>, pub(super) groups: Arc
 impl Machine {
     pub(super) async fn take(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Result<Machine, Response> {
         let bridged = req.extensions().get::<Bridged>().is_some();
-        let (fwd, owner) = gate(&st, peer, &req);
+        let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
         if !owner && !bridged {
-            st.auth.record_fail(&fwd.client_ip);
+            if let Err(e) = st.auth.record_failure(&fwd.client_ip).await { return Err(crate::auth::unavailable(e)); }
             return Err(json_response(StatusCode::UNAUTHORIZED, detail_body("erro_nao_autorizado", "unauthorized", json!({}))));
         }
         let Some(groups) = st.groups.clone() else { return Err(reply(unavailable("groups_unavailable"))) };

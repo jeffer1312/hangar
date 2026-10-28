@@ -152,7 +152,7 @@ pub const CLOSED_TRANSCRIPT: &str = "x-hangar-closed-transcript";
 /// terminais de atalho e caches dele. Falha no encerramento responde com o código e não repassa. Outra
 /// sessão segue ao Python como chegou.
 pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, mut req: Request) -> Response {
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     // Só o próprio Rust põe a marca: a que vier de fora sai antes de qualquer decisão.
     req.headers_mut().remove(RUST_CLOSED);
     req.headers_mut().remove(CLOSED_TRANSCRIPT);

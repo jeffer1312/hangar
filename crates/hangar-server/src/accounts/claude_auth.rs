@@ -149,7 +149,7 @@ impl AccountService {
                 key.to_ascii_uppercase().as_str(),
                 "CP_AUTH_TOKEN"
                     | "HANGAR_INTERNAL_SECRET"
-                    | "HANGAR_RUNTIME_INSTANCE"
+                    | "HANGAR_RUNTIME_INSTANCE" | "HANGAR_AUTH_CONTEXT"
                     | "HANGAR_SERVER_LISTEN"
                     | "HANGAR_SERVER_UPSTREAM"
             ) && !key.to_ascii_uppercase().starts_with("ANTHROPIC_")

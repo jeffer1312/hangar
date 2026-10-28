@@ -171,7 +171,7 @@ impl Default for ProcessIo { fn default() -> Self { Self { command_timeout: Dura
 pub(crate) fn child_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut command = Command::new(program);
     // O multiplexador e o clipboard não recebem a autoridade privada do servidor.
-    for name in ["HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE", "CP_AUTH_TOKEN"] { command.env_remove(name); }
+    for name in ["HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT", "CP_AUTH_TOKEN"] { command.env_remove(name); }
     command
 }
 /// Observador tmux somente de leitura herdado pelo `send-keys`: a recusa vem antes de qualquer tecla,

@@ -82,7 +82,7 @@ pub async fn route(
     RoutePath(name): RoutePath<String>,
     req: Request,
 ) -> Response {
-    let (_, owner) = gate(&st, peer, &req);
+    let (_, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner {
         return reply(
             &req,

@@ -31,7 +31,8 @@ impl AccountEnvironment {
     pub fn capture() -> Self {
         Self::from_map(std::env::vars().collect())
     }
-    pub fn from_map(base: BTreeMap<String, String>) -> Self {
+    pub fn from_map(mut base: BTreeMap<String, String>) -> Self {
+        base.remove("HANGAR_AUTH_CONTEXT");
         let home = PathBuf::from(
             base.get(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
                 .or_else(|| base.get("HOME"))

@@ -89,6 +89,11 @@ server.serve_forever()
 @pytest.fixture(autouse=True)
 def isolated_runtime(monkeypatch, tmp_path):
     from app import runtime_coordinator, runtime_queue, runtime_process
+    from app import shared_auth
+    # Esta suíte mede o Supervisor com executável falso; a DLL real roda em test_shared_auth.
+    monkeypatch.setattr(shared_auth, "activate", lambda *args: None)
+    monkeypatch.setattr(shared_auth, "current", lambda: None)
+    monkeypatch.setattr(shared_auth, "shutdown", lambda: None)
     monkeypatch.setattr(runtime_coordinator, "_current", None)
     monkeypatch.setattr(runtime_queue, "_coordinator", None)
     monkeypatch.setattr(runtime_process, "record_path", lambda: tmp_path / "runtime-process.json")
@@ -766,7 +771,7 @@ def test_watcher_failure_puts_the_cause_in_the_diary(monkeypatch, events):
 def test_protocol_is_the_same_number_on_both_sides():
     lib = (Path(__file__).resolve().parents[2] / "crates/hangar-server/src/lib.rs").read_text()
     rust = int(re.search(r"pub const INTERNAL_PROTOCOL: u32 = (\d+);", lib).group(1))
-    assert rust == rust_server.RUST_SERVER_PROTOCOL == 91
+    assert rust == rust_server.RUST_SERVER_PROTOCOL == 94
 
 
 def _child_env(monkeypatch, tmp_path, host, port):

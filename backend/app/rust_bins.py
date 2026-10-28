@@ -8,12 +8,43 @@ Ordem: a variável de ambiente (escolha explícita, vence e não cai para as out
 from __future__ import annotations
 
 import logging
+import hashlib
+import json
 import os
 import time
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
 _REPO = Path(__file__).resolve().parents[2]
+
+
+def auth_pair(binary: Path) -> tuple[Path, str]:
+    """Confere somente o par do executável escolhido, inclusive quando ele foi explícito."""
+    binary = binary.resolve(strict=True)
+    manifest = json.loads(binary.with_suffix(".auth.json").read_bytes())
+    if not isinstance(manifest, dict) or set(manifest) != {
+            "abi", "store_version", "server_sha256", "library_sha256", "library"}:
+        raise ValueError("auth_pair_invalid")
+    if type(manifest["abi"]) is not int or manifest["abi"] != 1 or type(manifest["store_version"]) is not int or manifest["store_version"] != 1:
+        raise ValueError("auth_abi_mismatch")
+    if not isinstance(manifest["library"], str):
+        raise ValueError("auth_pair_invalid")
+    relative = Path(manifest["library"])
+    digest = manifest["library_sha256"]
+    if (relative.is_absolute() or len(relative.parts) != 3 or relative.parts[0] != "auth"
+            or not isinstance(digest, str) or len(digest) != 64
+            or any(c not in "0123456789abcdef" for c in digest) or relative.parts[1] != digest
+            or relative.name not in {"libhangar_auth.so", "libhangar_auth.dylib", "hangar_auth.dll"}):
+        raise ValueError("auth_pair_invalid")
+    library = (binary.parent / relative).resolve(strict=True)
+    if not library.is_relative_to(binary.parent) or not library.is_file():
+        raise ValueError("auth_pair_invalid")
+    def sha(path):
+        with path.open("rb") as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+    if sha(binary) != manifest["server_sha256"] or sha(library) != digest:
+        raise ValueError("auth_pair_hash_mismatch")
+    return library, digest
 
 
 def _executavel(p: Path) -> bool:

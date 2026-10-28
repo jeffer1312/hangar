@@ -14,9 +14,13 @@ const HELLO_WITHIN: Duration = Duration::from_secs(10);
 /// Só o dono pelo `?token=` (como o terminal); sem Origin: página estranha não tem o token.
 pub async fn ws(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (client_ip, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
-    let fwd = crate::proxy::Forward { client_ip, https, guest: None };
-    let owner = crate::auth::query_param(req.uri().query(), "token").filter(|t| !t.is_empty())
-        .is_some_and(|t| st.auth.is_owner(&fwd.client_ip, Some(t.as_bytes())));
+    let fwd = crate::proxy::Forward { client_ip, https, guest: None, auth_receipt: None };
+    let token = crate::auth::query_param(req.uri().query(), "token").filter(|t| !t.is_empty());
+    let owner = if token.is_some() {
+        match st.auth.owner(&fwd.client_ip, token.as_deref().map(str::as_bytes)).await {
+            Ok(owner) => owner, Err(e) => return crate::auth::unavailable(e),
+        }
+    } else { false };
     if !owner || req.method() != Method::GET { return crate::routes::pass(&st, req, &fwd).await; }
     let (mut parts, body) = req.into_parts();
     let ws = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
@@ -102,7 +106,7 @@ async fn serve_socket(st: Arc<AppState>, mut socket: WebSocket) {
 async fn close(socket: &mut WebSocket) { let _ = tokio::time::timeout(SEND_WITHIN, socket.send(Message::Close(None))).await; }
 
 pub async fn settings_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return crate::routes::pass(&st, req, &fwd).await; }
     let (home, claude_dir) = (st.voice.home().to_path_buf(), st.voice.claude_dir().to_path_buf());
     let headers = req.headers().clone();
@@ -120,7 +124,7 @@ pub async fn private_settings(State(st): State<Arc<AppState>>, ConnectInfo(peer)
 }
 
 pub async fn memory_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return crate::routes::pass(&st, req, &fwd).await; }
     let headers = req.headers().clone();
     let mut resp = memory_reply(&st, req, "/api/voice/memory").await;

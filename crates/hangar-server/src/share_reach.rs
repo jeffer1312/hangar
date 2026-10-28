@@ -191,8 +191,8 @@ fn json_response(status: StatusCode, v: Value) -> Response {
 
 /// Não-dono: 401 aqui mesmo. O Python não tem esta rota e responderia 404, que o cliente lê
 /// como "precisa do servidor Rust"; a falha conta para o bloqueio como a de qualquer rota.
-pub fn unauthorized(st: &AppState, client_ip: &str) -> Response {
-    st.auth.record_fail(client_ip);
+pub async fn unauthorized(st: &AppState, client_ip: &str) -> Response {
+    if let Err(e) = st.auth.record_failure(client_ip).await { return crate::auth::unavailable(e); }
     let (s, v) = refused(StatusCode::UNAUTHORIZED, "erro_nao_autorizado", "unauthorized");
     json_response(s, v)
 }
