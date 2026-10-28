@@ -1,10 +1,10 @@
 import { create } from 'zustand';
 import {
-  basename, createSessionForServer, fetchSessionsForServer, getCreationProgress, getHistory, quotaRefusal,
-  sanitizeSessionName, sendInputForServer, transitionFirstConversation, uniqueSessionName, uploadFileForServer, withQuotaRetry,
+  basename, createSessionForServer, fetchSessionsForServer, getCreationProgress, getHistory,
+  sanitizeSessionName, sendInputForServer, transitionFirstConversation, uniqueSessionName, uploadFileForServer,
 } from '@hangar/core';
 import type {
-  ChatEvent, CreateSessionBody, FirstConversationAttempt, FirstConversationEvent, QuotaRefusal, Server, SessionInfo,
+  ChatEvent, CreateSessionBody, FirstConversationAttempt, FirstConversationEvent, Server, SessionInfo,
 } from '@hangar/core';
 import { prefs } from './prefs';
 import { useServers } from './servers';
@@ -14,8 +14,6 @@ import * as m from '../paraglide/messages';
 
 export type NewConversationIssue =
   | { kind: 'rejected'; message: string }
-  // Conta sem cota: nada foi criado; com `refusal.retry`, a tela oferece repetir na sugerida.
-  | { kind: 'quota'; message: string; refusal: QuotaRefusal }
   | { kind: 'unknown'; message: string; events?: ChatEvent[] }
   | { kind: 'in_progress'; message: string }
   | { kind: 'not_found'; message: string }
@@ -209,16 +207,12 @@ async function runCreate(serverId: string, input: NewConversationInput, retried 
     // a sessão com esse nome é outra, e recuperá-la pelo nome mandaria a mensagem para a conversa errada.
     const nameInUse = (cause as { code?: unknown } | null)?.code === 'erro_nome_em_uso';
     if (nameInUse && !explicit) refusedNames.set(serverId, new Set([...(refusedNames.get(serverId) ?? []), finalName]));
-    // O 409 por cota é recusa antes de abrir: não há sessão a procurar.
-    const quota = quotaRefusal(cause);
-    const rejected = nameInUse || !!quota
+    const rejected = nameInUse
       || (status !== null && status >= 400 && status < 500 && status !== 408 && status !== 409);
     if (!apply(creating, { type: rejected ? 'create_rejected' : 'create_unknown' })) return;
     // Nome automático em uso (lista fora do ar, ou outra tela criou no meio): uma tentativa com o próximo.
     if (nameInUse && !explicit && !retried) return runCreate(serverId, input, true);
-    setIssue(serverId, quota
-      ? { kind: 'quota', message: quota.text, refusal: quota }
-      : rejected
+    setIssue(serverId, rejected
       ? { kind: 'rejected', message: messageOf(cause) }
       : status === 409
         ? { kind: 'conflict', message: messageOf(cause) }
@@ -249,19 +243,6 @@ function exclusive(serverId: string, work: () => Promise<void>): Promise<void> {
 // Único caminho que cria. Só sai POST quando não há tentativa ou ela ainda é rascunho.
 export function beginAttempt(serverId: string, input: NewConversationInput): Promise<void> {
   return exclusive(serverId, () => runCreate(serverId, input));
-}
-
-// Repete a tentativa recusada por cota na conta sugerida: mesmo nome, pasta, texto, anexo e escolhas.
-export function retryOnSuggestedAccount(serverId: string): Promise<void> {
-  return exclusive(serverId, async () => {
-    const { issues, attempts } = useNewConversation.getState();
-    const issue = issues[serverId];
-    const attempt = attempts[serverId];
-    if (issue?.kind !== 'quota' || !issue.refusal.retry || attempt?.phase !== 'draft') return;
-    await runCreate(serverId, {
-      body: withQuotaRetry(attempt.body, issue.refusal), text: attempt.text, attachment: attemptAttachment(attempt),
-    });
-  });
 }
 
 // A criação e o input são ações separadas; só a sessão já gravada recebe este snapshot.

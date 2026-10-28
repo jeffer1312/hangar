@@ -168,9 +168,9 @@
     ? [...draft.branches.branches, ...draft.branches.remotes].filter((b) => b !== draft.branches?.current)
     : []);
 
-  async function send(useSuggested = false) {
+  async function send() {
     try {
-      const r = await draft.send(text, useSuggested);
+      const r = await draft.send(text);
       text = '';
       selectServer(r.serverId);
       window.location.hash = `#/chat/${encodeURIComponent(r.serverId)}/${encodeURIComponent(r.name)}`;
@@ -269,8 +269,7 @@
       </div>
 
       <NewChatComposer bind:value={text} placeholder={m.native_composer({ agent: providerName(draft.provider) })}
-        busy={draft.sending} blocked={draft.loading || !!draft.proxyBlocked} note={draft.note} onsend={() => send()}
-        noteAction={draft.quota ? { label: m.open_quota_use({ conta: draft.quota.sugerida }), onclick: () => send(true) } : null}
+        busy={draft.sending} blocked={draft.loading || !!draft.proxyBlocked} note={draft.note} onsend={send}
         hasAttachments={draft.attachments.length > 0}>
         {#snippet top()}
           {#if draft.attachments.length > 0}

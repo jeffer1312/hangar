@@ -9391,8 +9391,5 @@
   "tags_apply_retry": "Try again",
   "rename_suggest_title": "Rename to {name}?",
   "rename_suggest_apply": "Rename",
-  "rename_suggest_dismiss": "Not now",
-  "open_quota_title": "Account {conta} is out of quota ({uso}% used).",
-  "open_quota_use": "Open on {conta}",
-  "open_quota_none": "All accounts are out of quota right now."
+  "rename_suggest_dismiss": "Not now"
 }

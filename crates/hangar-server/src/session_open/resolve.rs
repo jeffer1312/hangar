@@ -287,11 +287,11 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         }
     }
 
-    // Conta a 95% ou mais: a que ninguém escolheu (herdada ou padrão) troca pela de mais folga; a
-    // mandada pela tela é recusada com a sugerida, para a tela oferecer a troca.
+    // Conta a 95% ou mais sai da escolha, mesmo a mandada pela tela: a sessão nasce na de mais folga,
+    // sem perguntar, e a tela mostra o aviso.
     let explicit = if provider == AgentProvider::Codex { request.codex_account.is_some() } else { explicit_account };
     let quota_rule = match provider {
-        // O convidado não recebe oferta de outra conta do dono.
+        // A conta que o convidado escolheu não troca por outra do dono.
         AgentProvider::Claude => !truthy(&request.engine) && !(guest && explicit),
         AgentProvider::Codex => !guest,
         _ => false,
@@ -299,11 +299,11 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
     if quota_rule {
         let name = request.name.as_deref().unwrap_or_default();
         let current = if provider == AgentProvider::Codex { codex_account.as_deref().or(Some("default")) } else { config_dir.as_deref() };
-        match quota_check(provider, current, explicit, facts) {
+        match quota_check(provider, current, facts) {
             QuotaCheck::Room => {}
             QuotaCheck::Unknown(account) => facts.quota_unknown(name, &account),
-            QuotaCheck::Exhausted { current, best } if explicit => return Err(no_quota(&current, best.as_ref())),
-            QuotaCheck::Exhausted { best: None, .. } => {}
+            QuotaCheck::Exhausted { current, best: None } => tracing::warn!(code = "open_quota_no_room", session = name, account = %current.id,
+                "conta com {:.0}% de uso e nenhuma outra com folga; a sessão segue nela", current.usage.unwrap_or(100.0)),
             QuotaCheck::Exhausted { current, best: Some(best) } => {
                 let warning = format!("conta {} com {:.0}% de uso; a sessão nasceu em {}", current.label, current.usage.unwrap_or(100.0), best.label);
                 tracing::warn!("create_session {name}: {warning}");
@@ -440,11 +440,10 @@ struct QuotaAccount {
     id: String,
     label: String,
     usage: Option<f64>,
-    /// Leitura atual (`lida`): só ela serve de sugestão; a guardada de antes do token vencer, não.
+    /// Leitura atual (`lida`): só ela serve de destino; a guardada de antes do token vencer, não.
     read: bool,
     active: bool,
-    /// O campo do pedido e o valor dele que abrem nesta conta.
-    field: &'static str,
+    /// O valor do pedido (`config_dir` ou `codex_account`) que abre nesta conta.
     choice: String,
 }
 
@@ -473,7 +472,7 @@ fn quota_accounts(provider: AgentProvider, current: Option<&str>, rows: &[Value]
                 && row["id"].as_str().and_then(|i| i.strip_prefix("codex:")).is_some_and(|path| same_dir(path, &home)));
             Some(QuotaAccount { id: row.and_then(|r| r["id"].as_str()).map_or_else(|| format!("codex:{home}"), str::to_owned),
                 label: label(row, id), usage: quota_usage(row, None, now), read: read(row), active: false,
-                field: "codex_account", choice: id.to_owned() })
+                choice: id.to_owned() })
         };
         let others = facts.codex_logins().unwrap_or_default().iter().filter(|login| login.id != current)
             .filter_map(|login| account(&login.id)).collect();
@@ -483,7 +482,7 @@ fn quota_accounts(provider: AgentProvider, current: Option<&str>, rows: &[Value]
     let account = |row: &Value| -> Option<QuotaAccount> {
         let path = row["id"].as_str()?.strip_prefix("claude:")?;
         Some(QuotaAccount { id: row["id"].as_str()?.to_owned(), label: label(Some(row), path), usage: quota_usage(Some(row), spent_until(path), now),
-            read: read(Some(row)), active: row["ativa"] == true, field: "config_dir", choice: path.to_owned() })
+            read: read(Some(row)), active: row["ativa"] == true, choice: path.to_owned() })
     };
     let claude: Vec<QuotaAccount> = rows.iter().filter(|row| row["provedor"] == "claude").filter_map(account).collect();
     let (mine, others): (Vec<_>, Vec<_>) = claude.into_iter().partition(|a| match current {
@@ -496,15 +495,14 @@ fn quota_accounts(provider: AgentProvider, current: Option<&str>, rows: &[Value]
         let named = if dir.is_empty() { "padrão" } else { dir };
         QuotaAccount { id: format!("claude:{named}"), label: named.to_owned(),
             usage: quota_usage(None, current.and_then(spent_until), now), read: false, active: current.is_none(),
-            field: "config_dir", choice: dir.to_owned() }
+            choice: dir.to_owned() }
     });
     Some((current, others))
 }
 
-/// `cotas.conta_com_cota`: a conta a 95% ou mais e a de mais folga que a substitui (a ativa no empate).
-/// A sugerida para a conta escolhida pela tela também fica abaixo dos 95%: senão a nova tentativa
-/// seria recusada de novo.
-fn quota_verdict(provider: AgentProvider, current: Option<&str>, explicit: bool, rows: &[Value],
+/// `cotas.conta_com_cota`: a conta a 95% ou mais e a de mais folga que a substitui (a ativa no empate),
+/// desde que tenha mais folga que ela.
+fn quota_verdict(provider: AgentProvider, current: Option<&str>, rows: &[Value],
                  spent: &std::collections::BTreeMap<String, f64>, facts: &dyn OpenFacts) -> QuotaCheck {
     let Some((current, others)) = quota_accounts(provider, current, rows, spent, facts) else { return QuotaCheck::Room };
     let Some(usage) = current.usage else { return QuotaCheck::Unknown(current.id) };
@@ -513,35 +511,19 @@ fn quota_verdict(provider: AgentProvider, current: Option<&str>, explicit: bool,
     }
     let best = others.into_iter().filter(|a| a.read && a.id != current.id)
         .filter_map(|a| Some((a.usage?, a)))
-        .filter(|(other, _)| *other < usage && (!explicit || *other < QUOTA_LIMIT))
+        .filter(|(other, _)| *other < usage)
         .reduce(|best, next| if (-next.0, next.1.active) > (-best.0, best.1.active) { next } else { best })
         .map(|(_, a)| a);
     QuotaCheck::Exhausted { current, best }
 }
 
 /// A regra pelo cache; sem cota conhecida da conta, uma leitura curta da rede antes de desistir.
-fn quota_check(provider: AgentProvider, current: Option<&str>, explicit: bool, facts: &dyn OpenFacts) -> QuotaCheck {
+fn quota_check(provider: AgentProvider, current: Option<&str>, facts: &dyn OpenFacts) -> QuotaCheck {
     let spent = if provider == AgentProvider::Claude { facts.spent_accounts() } else { Default::default() };
-    match quota_verdict(provider, current, explicit, &facts.quotas(false), &spent, facts) {
-        QuotaCheck::Unknown(_) => quota_verdict(provider, current, explicit, &facts.quotas(true), &spent, facts),
+    match quota_verdict(provider, current, &facts.quotas(false), &spent, facts) {
+        QuotaCheck::Unknown(_) => quota_verdict(provider, current, &facts.quotas(true), &spent, facts),
         known => known,
     }
-}
-
-/// 409 da conta mandada pela tela sem cota. `retry` é só o campo do pedido que a tela troca para abrir
-/// na sugerida; sem sugerida ele não vem.
-fn no_quota(current: &QuotaAccount, best: Option<&QuotaAccount>) -> OpenError {
-    let usage = format!("{:.0}", current.usage.unwrap_or(100.0));
-    let msg = match best {
-        Some(best) => format!("a conta {} está com {usage}% de uso; abra a sessão na conta {}", current.label, best.label),
-        None => format!("a conta {} está com {usage}% de uso e nenhuma outra conta tem cota", current.label),
-    };
-    let mut params = json!({"conta": current.label, "conta_id": current.id, "uso": usage,
-        "sugerida": best.map_or("", |b| b.label.as_str()), "sugerida_id": best.map_or("", |b| b.id.as_str())});
-    if let Some(best) = best {
-        params["retry"] = json!({best.field: best.choice});
-    }
-    OpenError::new(409, "erro_conta_sem_cota", msg).with_params(params)
 }
 
 /// `Path(a).resolve() == Path(b).resolve()`, sem exigir que existam.

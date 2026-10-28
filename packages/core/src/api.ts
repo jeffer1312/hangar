@@ -1603,35 +1603,6 @@ export function accountHolders(error: unknown): AccountHolders | null {
   return { sessoes: params.sessoes as string[], processos: params.processos as AccountHolders['processos'] };
 }
 
-/** Campos que repetem a abertura na conta sugerida pela recusa por cota. */
-export type QuotaRetry = Pick<CreateSessionBody, 'config_dir' | 'codex_account'>;
-
-/** Recusa 409 `erro_conta_sem_cota` da abertura: a conta pedida está a 95% ou mais.
- *  `text` é a frase da recusa sem o status na frente; sem `retry` ela já diz que não há outra conta. */
-export interface QuotaRefusal { conta: string; uso: number; sugerida: string; retry: QuotaRetry | null; text: string }
-
-/** Os dados da recusa por cota; `null` para qualquer outro erro. Sem `retry` não há conta para oferecer. */
-export function quotaRefusal(error: unknown): QuotaRefusal | null {
-  const e = error as { status?: number; code?: string; envelope?: { params?: Record<string, unknown> } } | null;
-  if (e?.status !== 409 || e.code !== 'erro_conta_sem_cota') return null;
-  const p = e.envelope?.params ?? {};
-  const r = (p.retry ?? {}) as Record<string, unknown>;
-  const retry: QuotaRetry | null = typeof r.config_dir === 'string' && r.config_dir ? { config_dir: r.config_dir }
-    : typeof r.codex_account === 'string' && r.codex_account ? { codex_account: r.codex_account } : null;
-  return {
-    conta: String(p.conta ?? ''),
-    uso: Math.round(Number(p.uso ?? 0)),
-    sugerida: retry ? String(p.sugerida || p.sugerida_id || '') : '',
-    retry,
-    text: mensagemDeErro('erro_conta_sem_cota', { ...p, retry }) ?? '',
-  };
-}
-
-/** O mesmo corpo da abertura recusada, só com a conta trocada pela sugerida. */
-export function withQuotaRetry<T extends object>(body: T, refusal: QuotaRefusal): T {
-  return { ...body, ...refusal.retry };
-}
-
 // Apaga a conta no servidor; com `keepTranscripts` as conversas vão antes para a conta padrão.
 // Recusa 409 se houver sessão viva usando-a. `release`: a pessoa confirmou levar as sessões para outra
 // conta e encerrar o que prende esta.

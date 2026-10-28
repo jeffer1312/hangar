@@ -389,9 +389,9 @@ fn expected(name: &str, fixture: &Value, local: bool) -> Expected {
         // Fast sem modelo: o Python recebeu "Rust fora" da ponte que valida (502); o `LocalFacts`
         // valida aqui mesmo e recusa porque o Fast exige modelo explícito.
         "create_codex_priority_catalog_unavailable" if local => refused(422, "erro_codex_escolha_invalida"),
-        // Conserto da parte 3: a conta mandada pela tela a 97% é recusada com a sugerida (o Python abria
-        // nela). O corpo da recusa tem teste próprio.
-        "create_quota_explicit_account_kept" => refused(409, "erro_conta_sem_cota"),
+        // Conserto da parte 3: a conta mandada pela tela a 97% troca pela de mais folga (o Python abria
+        // nela). Tem teste próprio.
+        "create_quota_explicit_account_kept" => Expected::Skip,
         _ if status == 200 => Expected::Created,
         _ => Expected::Refused {
             status, code: detail["code"].as_str().map(str::to_owned),
@@ -466,8 +466,8 @@ fn every_creation_fixture_resolves_like_python() {
         .filter(|(name, fixture)| !matches!(expected(name, fixture, false), Expected::Skip))
         .map(|(name, fixture)| check(name, fixture, resolve_fixture(fixture), false)).fold((0, 0, 0), sum);
     // Todo 200 tem o que o Python lançou (argv do pane ou o sidecar); recusas antes do lançamento.
-    // Um 200 do Python virou a recusa por cota da conta escolhida.
-    assert_eq!(total, (42, 42, 30));
+    // Um 200 do Python (a conta escolhida a 97%) agora nasce em outra conta e tem teste próprio.
+    assert_eq!(total, (42, 42, 29));
 }
 
 /// As mesmas 81 pelo `LocalFacts` de produção, lendo um cenário montado em disco.
@@ -490,7 +490,7 @@ fn every_creation_fixture_resolves_like_python_with_the_real_facts() {
         total = sum(total, check(&name, &fixture, unroot(resolve::resolve_open(&request, &OWNER, &facts), &root), true));
     }
     // As mesmas contas da `FixtureFacts`: o Fast sem modelo recusa com outro status, mas recusa.
-    assert_eq!(total, (42, 42, 30));
+    assert_eq!(total, (42, 42, 29));
 }
 
 /// O POST que o Rust atende deixa a linha do middleware de acesso do Python.
@@ -1244,6 +1244,8 @@ fn the_claude_pane_is_the_one_python_launched() {
             .find(|p| p["prog"] == "tmux" && p["argv"][0] == "new-session") else { continue };
         let python: Vec<String> = tmux["argv"].as_array().unwrap().iter().map(|a| a.as_str().unwrap().to_owned()).collect();
         if !python.iter().any(|a| a == "CP_PROVIDER=claude") { continue; }
+        // A conta escolhida a 97% agora nasce em outra pasta de conta: o pane não é mais o do Python.
+        if name == "create_quota_explicit_account_kept" { continue; }
         let mut spec = resolve_fixture(&fixture).unwrap_or_else(|e| panic!("{name}: {e}")).spec;
         spec.cwd = python[python.iter().position(|a| a == "-c").unwrap() + 1].clone();
         let state = &fixture["scenario"]["state"]["files"];
@@ -1274,7 +1276,8 @@ fn the_claude_pane_is_the_one_python_launched() {
         assert_eq!(our_words, words, "{name}: comando");
         compared += 1;
     }
-    assert_eq!(compared, 26);
+    // 26 panes do Python, menos `create_quota_explicit_account_kept`, que agora nasce em outra conta.
+    assert_eq!(compared, 25);
 }
 
 /// Pi, omp e Kimi que o Python lançou: o pane do `agents::pane` sobre o spec dá o mesmo `-e` e o
@@ -3136,36 +3139,39 @@ fn an_exhausted_default_codex_account_is_switched_to_the_one_with_room() {
     assert_eq!(resolved.spec.account, Account::Codex { account_id: "trabalho".into() });
     assert_eq!((resolved.spec.account_source, resolved.warnings), (AccountSource::Quota, vec!["conta Codex com 99% de uso; a sessão nasceu em trabalho".to_owned()]));
 
-    // A mesma conta pedida pela tela é recusada, com a conta Codex de mais folga para repetir.
+    // A mesma conta pedida pela tela também sai da escolha: nasce na de mais folga, com o mesmo aviso.
     fixture["scenario"]["steps"][0]["json"]["codex_account"] = json!("default");
-    let error = open_with(&fixture, &FixtureFacts { connected, ..FixtureFacts::of(&fixture) }).unwrap_err();
-    assert_eq!((error.status, error.code), (409, Some("erro_conta_sem_cota")));
-    assert_eq!(error.params, json!({"conta": "Codex", "conta_id": "codex:<ROOT>/home/.codex", "uso": "99", "sugerida": "trabalho",
-        "sugerida_id": "codex:<ROOT>/home/.codex-trabalho", "retry": {"codex_account": "trabalho"}}));
+    let resolved = open_with(&fixture, &FixtureFacts { connected, ..FixtureFacts::of(&fixture) }).unwrap();
+    assert_eq!(resolved.spec.account, Account::Codex { account_id: "trabalho".into() });
+    assert_eq!((resolved.spec.account_source, resolved.warnings), (AccountSource::Quota, vec!["conta Codex com 99% de uso; a sessão nasceu em trabalho".to_owned()]));
 }
 
-/// A conta mandada pela tela a 95% ou mais é recusada com 409 e a sugerida; com folga, abre nela.
+/// A conta mandada pela tela a 95% ou mais nasce na de mais folga, sem perguntar, com o aviso; com
+/// folga, abre nela; sem outra abaixo dos 95%, segue nela.
 #[test]
-fn an_explicit_exhausted_account_is_refused_with_the_suggested_one() {
+fn an_explicit_exhausted_account_is_born_on_the_one_with_room() {
     let fixture = fixture_named("create_quota_explicit_account_kept");
-    let error = resolve_fixture(&fixture).unwrap_err();
-    assert_eq!(error.status, 409);
-    assert_eq!(error.body(), json!({"detail": {"code": "erro_conta_sem_cota",
-        "msg": "a conta default está com 97% de uso; abra a sessão na conta b",
-        "params": {"conta": "default", "conta_id": "claude:<ROOT>/home/.claude", "uso": "97", "sugerida": "b",
-            "sugerida_id": "claude:<ROOT>/home/.claude-b", "retry": {"config_dir": "<ROOT>/home/.claude-b"}}}}));
+    let resolved = resolve_fixture(&fixture).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() }, AccountSource::Quota));
+    assert_eq!(resolved.warnings, ["conta default com 97% de uso; a sessão nasceu em b"]);
 
-    // Repetir com o `retry` abre na sugerida, sem aviso.
-    let mut retried = fixture.clone();
-    retried["scenario"]["steps"][0]["json"]["config_dir"] = json!("<ROOT>/home/.claude-b");
-    let resolved = resolve_fixture(&retried).unwrap();
+    let mut roomy = fixture.clone();
+    roomy["scenario"]["steps"][0]["json"]["config_dir"] = json!("<ROOT>/home/.claude-b");
+    let resolved = resolve_fixture(&roomy).unwrap();
     assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() }, AccountSource::Explicit));
     assert!(resolved.warnings.is_empty());
 
-    // Todas esgotadas: a recusa vem sem sugerida e sem `retry`.
+    // Acima dos 95% também troca, desde que a outra tenha mais folga (a regra de antes, agora também para a escolhida).
+    let mut tight = fixture.clone();
+    tight["scenario"]["fakes"]["quotas"][1]["janelas"] = json!([{"rotulo": "7d", "pct": 96.0}]);
+    let resolved = resolve_fixture(&tight).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() }, AccountSource::Quota));
+    assert_eq!(resolved.warnings, ["conta default com 97% de uso; a sessão nasceu em b"]);
+
+    // Nenhuma com mais folga: fica na pedida, sem aviso na tela.
     let mut full = fixture.clone();
-    full["scenario"]["fakes"]["quotas"][1]["janelas"] = json!([{"rotulo": "7d", "pct": 96.0}]);
-    let error = resolve_fixture(&full).unwrap_err();
-    assert_eq!(error.params, json!({"conta": "default", "conta_id": "claude:<ROOT>/home/.claude", "uso": "97", "sugerida": "", "sugerida_id": ""}));
-    assert_eq!(error.msg, "a conta default está com 97% de uso e nenhuma outra conta tem cota");
+    full["scenario"]["fakes"]["quotas"][1]["janelas"] = json!([{"rotulo": "7d", "pct": 99.0}]);
+    let resolved = resolve_fixture(&full).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude".into() }, AccountSource::Explicit));
+    assert!(resolved.warnings.is_empty());
 }

@@ -266,8 +266,6 @@ pub(super) enum CreateReply {
     /// Passo da criação em voo; `None` é consulta que falhou, e o passo anterior fica.
     Step(u64, Option<String>),
     Created(u64, Result<Opened, String>),
-    /// A conta pedida está sem cota: nada foi criado. Leva o nome usado, para repetir com ele na sugerida.
-    QuotaRefused(u64, String, api::QuotaRefusal),
     /// Seleção, o texto do campo, a mensagem que saiu (com os caminhos dos anexos) e a entrega dela.
     CreatedWithInput(u64, u64, String, String, Result<Delivery, Failure>, Result<Opened, String>),
     /// O catálogo de modelos e o último modelo e esforço lembrados para a chave dele.
@@ -513,10 +511,6 @@ pub(in crate::app) struct NewSession {
     started: Option<Instant>,
     step: String,
     pub(super) error: Option<String>,
-    /// Recusa por cota com conta sugerida e o nome usado: o botão repete a criação nela, com o resto igual.
-    pub(super) quota: Option<(String, api::QuotaRefusal)>,
-    /// O próximo `create` é a repetição na sugerida (o botão da recusa por cota).
-    quota_accepted: bool,
     /// O relógio do "passo · N s": anda sozinho a cada segundo, mesmo sem resposta do backend.
     clock: Option<Task<()>>,
     models: Remote<Catalog>,
@@ -660,7 +654,7 @@ impl NewSession {
             config: None, config_pick: None, customizations: Default::default(), customizations_search,
             customizations_focus: cx.focus_handle().tab_stop(true), codex: Remote::default(), codex_account: String::new(), codex_pick: None, headless: true, headless_owner: None, headless_touched: false, headless_saving: false,
             difference: false, manual_open: false, manual, choosing: false, choose_error: None, create_seq: 0, creating: false, started: None,
-            step: String::new(), error: None, quota: None, quota_accepted: false, clock: None, models: Remote::default(), model: String::new(), model_choice_touched: false, account_touched: false, account_suggested: false, effort: String::new(), service_tier: None,
+            step: String::new(), error: None, clock: None, models: Remote::default(), model: String::new(), model_choice_touched: false, account_touched: false, account_suggested: false, effort: String::new(), service_tier: None,
             permission: String::new(), saved_default: None, defaults_ready: false, default_saving: false, default_save_seq: 0, permission_touched: false, subagent: String::new(), engine: String::new(), engine_account: String::new(), engine_account_pick: None, model_pick: None, effort_pick: None,
             permission_pick: None, subagent_pick: None, engine_pick: None, engines: Remote::default(), jev: Remote::default(), jev_on: false,
             more: false, omp, quotas: Remote::default(), reopen_config: None, reopen_default: false, asking: false, confirming: false, holders: None, keep_transcripts: true, account_busy: false, account_seq: 0, account_name,
@@ -1214,9 +1208,6 @@ impl NewSession {
         let reserve = self.prewarm_want(cx).and_then(|want| self.prewarm.adoptable(&want));
         let named = reserve.as_ref().filter(|_| self.compact || name == self.suggested_name).map(|(_, reserved)| reserved.clone());
         if let Some(reserved) = &named { name = reserved.clone(); }
-        // Repetição na conta sugerida: o mesmo nome da recusada, e a reserva (de outra conta) fica de fora.
-        let retry = if std::mem::take(&mut self.quota_accepted) { self.quota.take() } else { self.quota = None; None };
-        if let Some((kept, _)) = &retry { name = kept.clone(); }
         let provider = self.provider;
         let typed = self.new_branch_name.read(cx).value().trim().to_string();
         let typed_empty = typed.is_empty();
@@ -1248,11 +1239,7 @@ impl NewSession {
             body["remember_provider"] = json!(true);
         }
         // Nome digitado diferente do da reserva: o servidor a descartaria, então ela fica para a próxima.
-        if let Some((id, _)) = reserve.as_ref().filter(|_| named.is_some() && retry.is_none()) { body["prewarm"] = json!(id); }
-        if let Some(fields) = retry.as_ref().and_then(|(_, refusal)| refusal.retry.clone()) && let Some(obj) = body.as_object_mut() {
-            obj.extend(fields);
-        }
-        let keep_name = retry.is_some();
+        if let Some((id, _)) = reserve.as_ref().filter(|_| named.is_some()) { body["prewarm"] = json!(id); }
         // A renovação para antes do POST: atrasada, ela subiria outra reserva depois da adoção.
         self.prewarm.stop();
         // A memória vai antes do POST: a escolha não se perde se a criação falhar.
@@ -1266,7 +1253,7 @@ impl NewSession {
             if !this.update(cx, |this, cx| { cx.notify(); this.creating }).unwrap_or(false) { break; }
         }));
         self.request(cx, move |api, send| Box::pin(async move {
-            if first.is_some() && named.is_none() && !keep_name {
+            if first.is_some() && named.is_none() {
                 let sessions = match api.sessions().await {
                     Ok(sessions) => sessions,
                     Err(error) => { send(CreateReply::Created(seq, Err(Hangar::fetch_failure(&error)))).await; return; }
@@ -1299,13 +1286,8 @@ impl NewSession {
                     handed(&api, result, &name, &cwd).await
                 }
                 None => {
-                    let result = api.open_session(body, 120).await;
+                    let result = api.server_send(reqwest::Method::POST, &["sessions"], Some(body), 120).await;
                     poll.abort();
-                    let result = match result {
-                        Ok(api::Opening::Quota(refusal)) => { send(CreateReply::QuotaRefused(seq, name.clone(), refusal)).await; return; }
-                        Ok(api::Opening::Done(value)) => Ok(value),
-                        Err(error) => Err(error),
-                    };
                     opened(&api, result, &name, &cwd, requested_branch.as_deref()).await
                 }
             };
@@ -1481,12 +1463,6 @@ impl NewSession {
             CreateReply::Step(seq, step) => {
                 if seq != self.create_seq || !self.creating { return None; }
                 if let Some(step) = step { self.step = step; }
-            }
-            CreateReply::QuotaRefused(seq, name, refusal) => {
-                if seq != self.create_seq || !self.creating { return None; }
-                (self.creating, self.resuming, self.started, self.clock) = (false, false, None, None);
-                self.error = Some(refusal.text());
-                self.quota = refusal.retry.is_some().then_some((name, refusal));
             }
             CreateReply::Created(seq, result) | CreateReply::CreatedWithInput(seq, _, _, _, _, result) => {
                 if seq != self.create_seq || !self.creating { return None; }
@@ -1762,13 +1738,6 @@ impl NewSession {
 
     /// A ação do botão do formulário, também a do Enter: retoma a conversa escolhida ou cria. Com o nome sugerido ainda
     /// chegando, a criação espera por ele em vez de o Enter se perder.
-    /// Repete a criação recusada por cota na conta sugerida; a marca vale só para este envio.
-    fn accept_quota(&mut self, cx: &mut Context<Self>) {
-        self.quota_accepted = true;
-        self.submit(cx);
-        self.quota_accepted = false;
-    }
-
     fn submit(&mut self, cx: &mut Context<Self>) {
         if self.target().is_some() { return self.resume(cx); }
         if self.can_create(cx) { self.create(None, cx); }
@@ -2099,9 +2068,6 @@ impl NewSession {
         };
         let footer = div().flex_shrink_0().pt(px(12.)).border_t_1().border_color(theme::border()).flex().flex_col().gap(px(8.))
             .when_some(self.error.clone(), |el, error| el.child(alert("create-error", error)))
-            .when_some(self.quota.as_ref().filter(|_| !busy).map(|(_, refusal)| refusal.suggested.clone()), |el, account| el.child(
-                Button::new("create-quota-retry").outline().large().w_full().label(tr_shared("open_quota_use", &[("conta", &account)]))
-                    .on_click(cx.listener(|this, _, _, cx| this.accept_quota(cx)))))
             .child(submit)
             .when(busy && !self.resuming, |el| el.child(div().id("create-step").role(Role::Status).child(muted(tr("create_step_time")
                 .replace("{passo}", &step).replace("{segundos}", &seconds.to_string())))));
@@ -2776,7 +2742,6 @@ impl Hangar {
         let (top, bottom, note) = view.update(cx, |view, cx| (view.render_top_pills(cx), view.render_bottom_pills(cx), view.note()));
         // Anexo recusado (grande demais, ilegível) avisa aqui, onde a tela sem sessão mostra os avisos dela.
         let note = self.action_feedback.get(&new_chat_key()).cloned().or(note);
-        let quota = { let v = view.read(cx); v.quota.as_ref().filter(|_| !v.creating).map(|(_, refusal)| refusal.suggested.clone()) };
         let composer = self.render_composer(false, false, false, 0, false, false, window, cx);
         // A tela chega como um objeto só, descendo 10 px até o lugar (o `settle-down` do kit, no tempo do `fade-in`).
         let settle = motion::enter("new-chat-in", motion::FADE_IN, window, cx);
@@ -2788,19 +2753,8 @@ impl Hangar {
                 .child(composer)
                 .child(landing_column(div().flex().flex_col().gap_1().child(popup::anchor(bottom, super::landing::BOTTOM))
                     .children(note.map(|(text, warning)| div().id("new-chat-note").role(if warning { Role::Alert } else { Role::Status })
-                        .px(px(14.)).text_sm().whitespace_normal().text_color(if warning { theme::warning() } else { theme::muted() }).child(text)))
-                    .children(quota.map(|account| div().px(px(14.)).child(Button::new("new-chat-quota-retry").outline().small()
-                        .label(tr_shared("open_quota_use", &[("conta", &account)]))
-                        .on_click(cx.listener(|this, _, window, cx| this.send_on_suggested_account(window, cx)))))))))
+                        .px(px(14.)).text_sm().whitespace_normal().text_color(if warning { theme::warning() } else { theme::muted() }).child(text))))))
             .into_any_element()
-    }
-
-    /// Reenvia a mensagem da tela sem sessão na conta que a recusa por cota sugeriu, com o mesmo nome e escolhas.
-    fn send_on_suggested_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(view) = self.new_chat.clone() else { return };
-        view.update(cx, |view, _| view.quota_accepted = true);
-        self.submit(false, false, window, cx);
-        view.update(cx, |view, _| view.quota_accepted = false);
     }
 
     /// A view da tela sem sessão, refeita quando a conexão ou a lista de máquinas mudam. A conversa fechada aberta usa a
@@ -2871,7 +2825,7 @@ impl Hangar {
             CreateReply::CreatedWithInput(_, selection, text, message, result, _) => Some((*selection, text.clone(), message.clone(), result.clone())),
             _ => None,
         };
-        let finished = matches!(&reply, CreateReply::Created(..) | CreateReply::CreatedWithInput(..) | CreateReply::QuotaRefused(..));
+        let finished = matches!(&reply, CreateReply::Created(..) | CreateReply::CreatedWithInput(..));
         let Some(Opened { session, notes, warning }) = entity.update(cx, |d, cx| d.receive(reply, window, cx)) else {
             // A tela sem sessão já mostrava a mensagem como enviada: volta com o erro dela e o texto no campo.
             if compact && finished && !entity.read(cx).creating { self.fail_opening(window, cx); cx.notify(); }

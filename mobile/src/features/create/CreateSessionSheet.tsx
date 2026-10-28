@@ -6,10 +6,10 @@ import { useRouter } from 'expo-router';
 import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount,
   getEnginesForServer, getSessionDefaultsForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
   modelOptionsForServer, resumeArchivedConversation, getProvidersForServer, createSessionForServer, sanitizeSessionName, getWorktreesForServer,
-  PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, quotaRefusal, withQuotaRetry } from '@hangar/core';
+  PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer } from '@hangar/core';
 import { basename, ctxWindow, providerName, contaComFolga, cotaDaConta, cotaParada, janelaEsgotada, motivoCotaAntiga, resumoCota, CLAUDE_PERMISSION_MODES, EFFORT_LEVELS,
   SESSION_PROVIDERS, hasExecutionMode, effortLevels, contextRefsPlainText } from '@hangar/core';
-import type { ArchiveEntry, CodexAccount, ConfigDirInfo, Provider, ModelOption, CotaContaResumo, QuotaRefusal, Server, WorktreeChoice, WorktreeRepo } from '@hangar/core';
+import type { ArchiveEntry, CodexAccount, ConfigDirInfo, Provider, ModelOption, CotaContaResumo, Server, WorktreeChoice, WorktreeRepo } from '@hangar/core';
 import { SessionSettingsControl } from '../../chat/SessionSettings';
 import { semEsforco } from '../pills/pills';
 import { SettingsList } from '../../ui/SettingsList';
@@ -115,8 +115,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [repos, setRepos] = useState<WorktreeRepo[]>([]);
   const [hasSameFolder, setHasSameFolder] = useState(false);
   const [error, setError] = useState('');
-  // Recusa por cota com conta sugerida: o botão repete a criação nela.
-  const [quota, setQuota] = useState<QuotaRefusal | null>(null);
   const [configsError, setConfigsError] = useState('');
   const [enginesError, setEnginesError] = useState('');
   const catalogError = [configsError, enginesError].filter(Boolean).join('\n');
@@ -173,9 +171,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const cotaSelecionada = selectedConfig ? cotaDaConta(cotas, selectedConfig) : undefined;
   // Só a escolha à mão no menu de conta desliga a troca automática por cota esgotada.
   const accountTouched = useRef(false);
-  // D-003: só vai no pedido a conta que a pessoa tocou nesta tela, como no nativo e no PWA. A lembrada
-  // só aparece selecionada: mandada, o servidor a trataria como escolha e recusaria a esgotada. A que a
-  // tela trocou por cota esgotada vai como a que a tela mostra: a regra é a mesma do servidor.
+  // D-003: só vai no pedido a conta que a pessoa escolheu (agora ou lembrada de antes). A ativa sem
+  // escolha não vai, e o servidor troca a que estiver a 95% ou mais. A lembrada que a tela trocou por
+  // cota esgotada vai como a que a tela mostra: a regra é a mesma do servidor.
   const [accountChosen, setAccountChosen] = useState(false);
   // Conta que a troca automática deixou para trás; a pílula avisa até a próxima escolha.
   const [switchedFrom, setSwitchedFrom] = useState('');
@@ -288,6 +286,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         const kept = cs.find((c) => c.path === remembered.configDir)?.path;
         const sel = kept ?? cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null;
         // Retomar a carga não desfaz a conta que a pessoa já escolheu.
+        if (!accountTouched.current) setAccountChosen(!!kept);
         setSelectedConfig((current) => cs.some((c) => c.path === current) ? current : sel);
       })
       .catch((cause: unknown) => {
@@ -491,7 +490,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setPicked(p);
     setWorktree(null);
     setError('');
-    setQuota(null);
     setProjectWarning('');
     if (root) {
       try { rememberProject(active.id, { root, cwd: p }); }
@@ -624,7 +622,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setRetomando(false);
     setRetomavel('');
     setError('');
-    setQuota(null);
     setCodexProgress('');
     setCodexAccount(value);
     remember({ codexAccount: value });
@@ -772,11 +769,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       ) : null}
       {projectWarning ? <Text style={styles.error} accessibilityRole="alert">{projectWarning}</Text> : null}
       {error ? <Text style={styles.error} accessibilityRole="alert">{error}</Text> : null}
-      {quota && !creating ? (
-        <Pressable accessibilityRole="button" onPress={() => void createSession(true)} style={styles.quotaRetry}>
-          <Text style={styles.navAction}>{m.open_quota_use({ conta: quota.sugerida })}</Text>
-        </Pressable>
-      ) : null}
       {catalogError ? <Text style={styles.error} accessibilityRole="alert">{catalogError}</Text> : null}
       {defaultsError ? <View>
         <Text style={styles.error} accessibilityRole="alert">{m.native_create_default_failed({ erro: defaultsError })}</Text>
@@ -911,14 +903,11 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // para a mesma pasta e nome digitado: repetir depois de uma falha de rede não abre uma segunda sessão.
   const createInFlight = useRef(false);
   const attemptName = useRef<{ key: string; name: string; known: boolean } | null>(null);
-  // `useSuggested`: repete a criação recusada por cota na conta sugerida, com o mesmo nome.
-  const createSession = async (useSuggested = false) => {
+  const createSession = async () => {
     if (!body || !canCreate || createInFlight.current) return;
     createInFlight.current = true;
     setCreating(true);
     setError('');
-    const refused = useSuggested ? quota : null;
-    setQuota(null);
     const key = `${body.cwd}\n${name.trim()}`;
     const typed = name.trim();
     const previous = attemptName.current;
@@ -934,11 +923,10 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       for (let first = true; ; first = false) {
         attemptName.current = { key, ...chosen };
         try {
-          const request = { ...body, name: chosen.name,
+          const session = await createSessionForServer(active, { ...body, name: chosen.name,
             // Só com o nome da reserva: o digitado, a repetição ou o próximo automático vão sem ela.
             ...(ticket && ticket.name === chosen.name ? { prewarm: ticket.id } : {}),
-            ...(body.new_branch && !body.branch?.trim() ? { branch: sanitizeSessionName(chosen.name) } : {}) };
-          const session = await createSessionForServer(active, refused ? withQuotaRetry(request, refused) : request);
+            ...(body.new_branch && !body.branch?.trim() ? { branch: sanitizeSessionName(chosen.name) } : {}) });
           open(session.name);
           return;
         } catch (cause: unknown) {
@@ -956,18 +944,15 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       // definitiva (4xx) não criou nada; 409 só conta como "nasceu" na repetição da mesma tentativa, e
       // no nome automático só se ele estava livre na lista: senão a sessão com esse nome pode ser outra.
       const status = (cause as { status?: unknown } | null)?.status;
-      // Recusa por cota não abriu nada; o nome fica para repetir na conta sugerida.
-      const q = quotaRefusal(cause);
-      const lost = !q && (typeof status !== 'number' || status >= 500 || status === 408 || (status === 409 && retry && chosen.known));
+      const lost = typeof status !== 'number' || status >= 500 || status === 408 || (status === 409 && retry && chosen.known);
       // Recusa respondida encerra a tentativa: o próximo toque escolhe o nome de novo, sem contar como repetição.
-      if (!lost && !q) attemptName.current = null;
+      if (!lost) attemptName.current = null;
       const exists = !lost ? false : await fetchSessionsForServer(active)
         .then((list) => list.some((session) => session.name === finalName), () => null);
       if (exists) open(finalName);
       else if (mounted.current) {
         reserve.current?.resume();
-        setQuota(q?.retry ? q : null);
-        setError(q ? q.text : exists === null ? m.nova_conversa_criacao_incerta() : cause instanceof Error ? cause.message : m.criar_sessao_erro());
+        setError(exists === null ? m.nova_conversa_criacao_incerta() : cause instanceof Error ? cause.message : m.criar_sessao_erro());
       }
     } finally {
       createInFlight.current = false;
@@ -1178,7 +1163,6 @@ const styles = StyleSheet.create((theme) => ({
   selectTxt: { color: theme.tokens.text.primary, fontSize: theme.base.text.sm, flex: 1 },
   selectChevron: { marginLeft: theme.base.space[2] },
   error: { color: theme.tokens.status.error, fontSize: theme.base.text.sm },
-  quotaRetry: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start' },
   primaryDis: { opacity: 0.5 },
   ghostButton: { height: 44, borderWidth: 1, borderColor: theme.tokens.border.default, borderRadius: theme.base.radius.md, justifyContent: 'center', alignItems: 'center' },
   ghostTxt: { color: theme.tokens.text.secondary, fontSize: theme.base.text.sm },

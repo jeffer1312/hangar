@@ -13,8 +13,6 @@
     /** Só o botão enviar travado (falta pasta, conta sem limite…). */
     blocked?: boolean;
     note?: { text: string; warning: boolean } | null;
-    /** Botão ao lado do aviso (ex.: abrir na conta sugerida quando a escolhida está sem cota). */
-    noteAction?: { label: string; onclick: () => void } | null;
     onsend: () => void;
     pills?: Snippet;
     below?: Snippet;
@@ -24,8 +22,8 @@
     /** Anexo sozinho já é mensagem: o envio não exige texto. */
     hasAttachments?: boolean;
   }
-  let { value = $bindable(''), placeholder, busy = false, blocked = false, note = null, noteAction = null, onsend, pills, below,
-    leading, top, hasAttachments = false }: Props = $props();
+  let { value = $bindable(''), placeholder, busy = false, blocked = false, note = null, onsend, pills, below, leading, top,
+    hasAttachments = false }: Props = $props();
 
   let field: HTMLTextAreaElement | undefined = $state();
   const canSend = $derived(!busy && !blocked && (value.trim().length > 0 || hasAttachments));
@@ -68,9 +66,6 @@
   {@render below?.()}
   {#if note}
     <p class="note" class:warning={note.warning} role={note.warning ? 'alert' : 'status'}>{note.text}</p>
-    {#if noteAction && !busy}
-      <button type="button" class="note-action" onclick={noteAction.onclick}>{noteAction.label}</button>
-    {/if}
   {/if}
 </div>
 
@@ -97,9 +92,4 @@
   .send:disabled { background: var(--bg-hover); color: var(--text-muted); cursor: default; }
   .note { margin: 4px 0 0; padding: 0 14px; font-size: var(--text-sm); color: var(--text-muted); }
   .note.warning { color: var(--warning-text); }
-  .note-action {
-    align-self: flex-start; margin: 4px 14px 0; min-height: 44px; padding: 0 14px; border: 1px solid var(--border-default);
-    border-radius: var(--radius-full); background: transparent; color: var(--accent); font: inherit;
-    font-size: var(--text-sm); font-weight: 600; cursor: pointer;
-  }
 </style>

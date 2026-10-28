@@ -7,8 +7,8 @@ import {
   uniqueSessionName, basename, effortLevels, defaultCodexAccount, SESSION_PROVIDERS,
   getEnginesForServer, getConfigForServer, contextModel, setClaudeDefaultsForServer,
   getWorktreesForServer, getCreationProgress, uploadFileForServer,
-  PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, quotaRefusal, withQuotaRetry,
-  type QuotaRefusal, type WorktreeStatus, type CreationProgress, type CreateSessionBody,
+  PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer,
+  type WorktreeStatus, type CreationProgress, type CreateSessionBody,
   type CodexAccount, type ConfigDirInfo, type FolderBranches, type FsRoot, type ModelOption, type Provider,
   type WorktreeChoice, type Motor, type CliProxyAccount,
 } from '@hangar/core';
@@ -100,9 +100,6 @@ export class NewChatDraft {
 
   sending = $state(false);
   sendError = $state('');
-  // Recusa por cota com conta sugerida: a tela oferece repetir nela, com o mesmo nome.
-  quota = $state<QuotaRefusal | null>(null);
-  #quotaName = '';
 
   // Um contador por carregador: resposta de servidor/conta/pasta já trocados é descartada.
   #provSeq = 0;
@@ -558,12 +555,9 @@ export class NewChatDraft {
     return () => { alive = false; this.progress = ''; };
   }
 
-  /** `useSuggested`: repete a abertura recusada por cota na conta sugerida, com o mesmo nome. */
-  async send(text: string, useSuggested = false): Promise<{ serverId: string; name: string }> {
+  async send(text: string): Promise<{ serverId: string; name: string }> {
     if (this.sending) throw new Error(m.native_new_chat_sending());
     this.sendError = '';
-    const retry = useSuggested && this.quota?.retry ? { refusal: this.quota, name: this.#quotaName } : null;
-    this.quota = null;
     const server = this.serverObj, cwd = this.cwd;
     try {
       if (!server || !cwd) throw new Error(m.newchat_sem_pasta());
@@ -576,19 +570,18 @@ export class NewChatDraft {
       if (!name) {
         // Antes do POST: renovação atrasada subiria outra reserva depois da adoção.
         const ticket = this.#reserve.take();
-        const taken = ticket || retry ? new Set<string>() : new Set((await fetchSessionsForServer(server)).map((s) => s.name));
+        const taken = ticket ? new Set<string>() : new Set((await fetchSessionsForServer(server)).map((s) => s.name));
         // Memória antes de criar, como a folha: a escolha não se perde se a criação falhar.
         const key = this.memoryKey();
         writeStorage(key, this.bodyModel ?? '');
         writeStorage(`${key}:effort`, this.effort);
         // A reserva já segura o nome dela no servidor.
-        const sessionName = retry?.name || ticket?.name || uniqueSessionName(basename(this.existing ?? cwd), taken);
-        this.#quotaName = sessionName;
+        const sessionName = ticket?.name ?? uniqueSessionName(basename(this.existing ?? cwd), taken);
         if (this.newBranch && !this.branchName.trim()) this.branchName = sessionName;
         const stopProgress = this.#followCreation(sessionName, server);
-        const body: CreateSessionBody = { ...this.#body(cwd), name: sessionName, ...(ticket ? { prewarm: ticket.id } : {}) };
-        const info = await createSessionForServer(server, retry ? withQuotaRetry(body, retry.refusal) : body)
-          .finally(stopProgress);
+        const info = await createSessionForServer(server, {
+          ...this.#body(cwd), name: sessionName, ...(ticket ? { prewarm: ticket.id } : {}),
+        }).finally(stopProgress);
         // O nome que vale é o devolvido pelo backend: ele pode desempatar de novo.
         name = info.name;
         // Releitura das escolhas: o nome da branch nova pode ter sido preenchido acima.
@@ -610,9 +603,7 @@ export class NewChatDraft {
       this.#created = null;
       return { serverId: server.id, name };
     } catch (e) {
-      const q = quotaRefusal(e);
-      this.quota = q?.retry ? q : null;
-      this.sendError = q ? q.text : errText(e, m.criar_sessao_erro());
+      this.sendError = errText(e, m.criar_sessao_erro());
       // Sem sessão criada para reaproveitar, a próxima tentativa cria de novo: vale reservar.
       if (this.#created?.choices !== this.#choices) this.#reserve.resume();
       throw e;

@@ -3046,9 +3046,13 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
   - sem cota conhecida, a abertura faz uma leitura de 5 s e considera o `limit-spent.json`. Se ainda
     não souber, segue e registra `rust.open_quota_unknown` no diário;
   - a regra vale também para conta Codex;
-  - conta escolhida na tela com 95% ou mais recebe 409 `erro_conta_sem_cota`, com `retry` (os campos
-    da criação a trocar). Os três clientes oferecem "Abrir em Y" com um clique;
-  - o Expo só manda a conta lembrada quando ela foi tocada.
+  - conta com 95% ou mais sai da escolha mesmo quando a tela a mandou (`config_dir` ou
+    `codex_account`): a sessão nasce direto na de mais folga, abaixo dos 95%, sem pergunta e sem
+    trocar depois. A tela mostra o aviso de sempre ("conta X com N% de uso; a sessão nasceu em Y"),
+    e `account_source` vem `quota`. Decisão do usuário em 28/10: a regra é a mesma para todo
+    cliente (D-003 da abertura única), sem confirmação;
+  - sem outra conta abaixo dos 95% e com menos uso, a sessão segue na pedida e o log registra
+    `open_quota_no_room`. A conta escolhida pelo convidado não troca.
 
   Nos testes, a leitura pela rede é desligada (`disable_open_network_read`, `HANGAR_QUOTA_NETWORK=0`).
 

@@ -9391,8 +9391,5 @@
   "tags_apply_retry": "Tentar de novo",
   "rename_suggest_title": "Renomear para {name}?",
   "rename_suggest_apply": "Renomear",
-  "rename_suggest_dismiss": "Agora não",
-  "open_quota_title": "A conta {conta} está sem cota ({uso}% usado).",
-  "open_quota_use": "Abrir em {conta}",
-  "open_quota_none": "Todas as contas estão sem cota agora."
+  "rename_suggest_dismiss": "Agora não"
 }

@@ -61,26 +61,6 @@ describe('NewChatDraft.send', () => {
     expect(r).toEqual({ serverId: 'pc', name: 'proj-3' });
   });
 
-  it('conta sem cota: oferece a sugerida e repete a criação nela com o mesmo nome e o resto igual', async () => {
-    const params = { conta: 'c', conta_id: '/c', uso: '98', sugerida: 'd', sugerida_id: '/d', retry: { config_dir: '/d' } };
-    const refusal = Object.assign(new Error('409: x'), { status: 409, code: 'erro_conta_sem_cota', envelope: { code: 'erro_conta_sem_cota', params } });
-    core.fetchSessionsForServer.mockResolvedValue([]);
-    core.createSessionForServer.mockRejectedValueOnce(refusal).mockResolvedValueOnce({ name: 'proj' });
-    core.sendInputForServer.mockResolvedValue(undefined);
-    const draft = await ready();
-
-    await expect(draft.send('oi')).rejects.toBe(refusal);
-    expect(draft.quota?.sugerida).toBe('d');
-    expect(draft.note?.text).not.toContain('409');
-    await draft.send('oi', true);
-
-    const [first, second] = core.createSessionForServer.mock.calls.map((c) => c[1]);
-    expect(second).toEqual({ ...first, config_dir: '/d' });
-    expect(second.name).toBe('proj');
-    expect(draft.quota).toBeNull();
-    expect(core.sendInputForServer).toHaveBeenCalledWith(srv, 'proj', 'oi');
-  });
-
   it('envio que falha depois de criar: tentar de novo reenvia na mesma sessão', async () => {
     core.fetchSessionsForServer.mockResolvedValue([]);
     core.createSessionForServer.mockResolvedValue({ name: 'proj' });
