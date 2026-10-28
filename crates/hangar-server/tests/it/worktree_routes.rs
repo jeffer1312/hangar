@@ -95,7 +95,7 @@ async fn initialized_submodule_and_ignored_directories_require_visible_confirmat
             assert_eq!(std::fs::read_to_string(path.join("docs/local.txt")).unwrap(), "conteúdo local");
             assert!(path.join("Hooks/.git").exists());
         } else {
-            assert_eq!(body["removed"], path.to_string_lossy().as_ref());
+            assert_eq!(std::path::Path::new(body["removed"].as_str().unwrap()), path);
             assert_eq!(body["branch_deleted"], false);
         }
     }
