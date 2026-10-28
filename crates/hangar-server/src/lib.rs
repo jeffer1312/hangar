@@ -2,6 +2,7 @@
 pub mod accounts;
 pub mod artifacts;
 pub mod auth;
+pub mod remote_browser;
 pub mod config;
 pub mod commands;
 pub mod orq_conductor;

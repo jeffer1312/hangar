@@ -1,5 +1,4 @@
-//! Quem é o dono, pela mesma regra do auth.py. Quem não traz o token do dono é repassado ao
-//! Python, que decide (convidado, 401, 429).
+//! Credenciais e limite por origem compartilhados pelas rotas do dono.
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Mutex;
@@ -31,20 +30,28 @@ impl Auth {
     /// true = token do dono. Origem bloqueada nem tem o token avaliado: o pedido segue ao
     /// Python, que responde o 429 pela conta dele.
     pub fn is_owner(&self, ip: &str, token: Option<&[u8]>) -> bool {
-        if !is_loopback(ip) && self.blocked(ip) {
+        if !is_loopback(ip) && self.is_blocked_at(ip, Instant::now()) {
             return false;
         }
-        // Fatias de tamanho diferente saem na hora, como o compare_digest.
-        let ok = token.is_some_and(|t| bool::from(t.ct_eq(self.token.as_slice())));
+        let ok = self.token_matches(token);
         if ok {
-            self.fails.lock().unwrap().remove(ip);
+            self.clear_failures(ip);
         }
         ok
     }
 
-    fn blocked(&self, ip: &str) -> bool {
+    /// Comparação sem efeito na contagem: o WebSocket conserva falhas mesmo no acerto.
+    pub fn token_matches(&self, token: Option<&[u8]>) -> bool {
+        // Fatias de tamanho diferente saem na hora, como o compare_digest.
+        token.is_some_and(|t| bool::from(t.ct_eq(self.token.as_slice())))
+    }
+
+    pub fn clear_failures(&self, ip: &str) {
+        self.fails.lock().unwrap().remove(ip);
+    }
+
+    pub fn is_blocked_at(&self, ip: &str, now: Instant) -> bool {
         let mut fails = self.fails.lock().unwrap();
-        let now = Instant::now();
         let Some(hits) = fails.get_mut(ip) else { return false };
         hits.retain(|t| now.duration_since(*t) < WINDOW);
         let n = hits.len();
@@ -57,21 +64,24 @@ impl Auth {
     /// O Python respondeu 401 a um pedido repassado e contou a falha; a mesma conta aqui impede
     /// que o atalho do dono responda 200 a um palpite certo durante o bloqueio.
     pub fn record_fail(&self, ip: &str) {
-        self.add_fails(ip, 1);
+        self.record_fail_at(ip, Instant::now());
+    }
+
+    pub fn record_fail_at(&self, ip: &str, now: Instant) {
+        self.add_fails_at(ip, 1, now);
     }
 
     /// O Python respondeu 429: a origem já está bloqueada lá, então fica bloqueada aqui também,
     /// mesmo que as falhas tenham chegado por um caminho que o Rust não viu.
     pub fn mark_blocked(&self, ip: &str) {
-        self.add_fails(ip, MAX_FAILS);
+        self.add_fails_at(ip, MAX_FAILS, Instant::now());
     }
 
-    fn add_fails(&self, ip: &str, n: usize) {
+    fn add_fails_at(&self, ip: &str, n: usize, now: Instant) {
         if is_loopback(ip) {
             return;
         }
         let mut fails = self.fails.lock().unwrap();
-        let now = Instant::now();
         let hits = fails.entry(ip.to_string()).or_default();
         hits.retain(|t| now.duration_since(*t) < WINDOW);
         if hits.len() >= MAX_FAILS {

@@ -1,0 +1,179 @@
+#![allow(dead_code)]
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use axum::Router;
+use axum::body::to_bytes;
+use axum::extract::{Request, State};
+use axum::http::{HeaderMap, StatusCode};
+use base64::Engine;
+use hangar_server::auth::TrustedHosts;
+use hangar_server::config::Config;
+use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
+use hangar_server::list::facts::FactsClient;
+use hangar_server::list::mux::Mux;
+use hangar_server::locate::ListLocate;
+use hangar_server::routes::{AppState, guest_router, router};
+use hangar_server::share::gate::GuestConn;
+use hangar_server::share::store::Kind;
+use serde_json::{Value, json};
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
+
+pub const OWNER: &str = "remote-browser-contract-owner";
+pub const SECRET: &str = "remote-browser-test-internal";
+
+pub fn contract(name: &str) -> Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../backend/tests/fixtures/contract/remote-browser").join(format!("{name}.json"));
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+/// O JPEG veio do Chromium medido, nunca de um gerador substituto do protocolo.
+pub fn frozen_jpeg() -> Vec<u8> {
+    base64::engine::general_purpose::STANDARD.decode(contract("chromium")["frame"]["data"].as_str().unwrap()).unwrap()
+}
+
+pub struct Server {
+    pub address: SocketAddr,
+    stop: Option<oneshot::Sender<()>>,
+    task: Option<JoinHandle<()>>,
+}
+
+impl Server {
+    pub async fn owner(app: Router) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (stop, stopped) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+                .with_graceful_shutdown(async { let _ = stopped.await; }).await.unwrap();
+        });
+        Self { address, stop: Some(stop), task: Some(task) }
+    }
+
+    pub async fn guest(app: Router) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (stop, stopped) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service_with_connect_info::<GuestConn>())
+                .with_graceful_shutdown(async { let _ = stopped.await; }).await.unwrap();
+        });
+        Self { address, stop: Some(stop), task: Some(task) }
+    }
+
+    pub async fn close(mut self) {
+        let _ = self.stop.take().unwrap().send(());
+        let mut task = self.task.take().unwrap();
+        match tokio::time::timeout(Duration::from_secs(3), &mut task).await {
+            Ok(result) => result.unwrap(),
+            Err(_) => {
+                task.abort();
+                let _ = task.await;
+                panic!("servidor de ensaio não encerrou em {}", self.address);
+            }
+        }
+        crate::assert_closed(self.address, "servidor do navegador remoto").await;
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() { task.abort(); }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Attempt { pub path: String, pub headers: HeaderMap, pub body: Vec<u8> }
+
+/// A borda externa anota e recusa; nenhum `/info` de mentira pode satisfazer a descoberta.
+pub struct RefusingServer { pub server: Server, pub attempts: Arc<Mutex<Vec<Attempt>>> }
+
+impl RefusingServer {
+    pub async fn new() -> Self {
+        async fn refuse(State(attempts): State<Arc<Mutex<Vec<Attempt>>>>, req: Request) -> (StatusCode, &'static str) {
+            let (parts, body) = req.into_parts();
+            let body = to_bytes(body, 1024 * 1024).await.unwrap();
+            attempts.lock().unwrap().push(Attempt { path: parts.uri.to_string(), headers: parts.headers, body: body.to_vec() });
+            (StatusCode::SERVICE_UNAVAILABLE, "remote_browser_test_upstream_refused")
+        }
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let server = Server::owner(Router::new().fallback(refuse).with_state(attempts.clone())).await;
+        Self { server, attempts }
+    }
+
+    pub fn paths(&self) -> Vec<String> { self.attempts.lock().unwrap().iter().map(|a| a.path.clone()).collect() }
+
+    pub fn assert_no_browser_or_discovery_calls(&self) {
+        for path in self.paths() {
+            let path = path.split('?').next().unwrap();
+            assert!(!path.contains("/nav-remoto") && !path.ends_with("/navegador")
+                && !path.ends_with("/info") && path != "/internal/list/facts", "consulta indevida ao Python: {path}");
+        }
+    }
+}
+
+#[cfg(unix)]
+pub struct Scene {
+    pub root: tempfile::TempDir,
+    pub state: Arc<AppState>,
+    pub owner: Server,
+    pub guest: Server,
+    pub upstream: RefusingServer,
+}
+
+#[cfg(unix)]
+impl Scene {
+    pub async fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let script = crate::list_support::sessions(root.path(), 1);
+        let home = root.path().join("home");
+        let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
+            "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
+            "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
+        let upstream = RefusingServer::new().await;
+        let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: upstream.server.address,
+            internal_secret: SECRET.into(), auth_token: OWNER.into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") };
+        let mut state = AppState::new(cfg.clone());
+        let list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(2)),
+            capture_program: script.clone().into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
+            FactsClient::new(cfg.upstream, SECRET.into())));
+        state.hangar_dir = home.join(".hangar");
+        std::fs::create_dir_all(state.hangar_dir.join("nav")).unwrap();
+        Self::write_headless(&home, "headless", "headless-key", root.path());
+        state.share = hangar_server::share::from_env(Some(home.join("shares.json")), list.env().dirs.as_ref(), script.into_os_string());
+        list.set_shares(state.share.as_ref().unwrap().clone());
+        state.list = list.clone();
+        state.side.locate = Arc::new(ListLocate { list: list.clone() });
+        state.side.queue_dir = Some(home.join(".claude/.hangar-queue"));
+        state.state = Arc::new(hangar_server::state::live::StateEnv::new(state.terminal.clone(), list, state.diag.clone()));
+        state.side.monitors = Some(hangar_server::state::live::spawner(state.state.clone()));
+        let state = Arc::new(state);
+        let owner = Server::owner(router(state.clone())).await;
+        let guest = Server::guest(guest_router(state.clone())).await;
+        Self { root, state, owner, guest, upstream }
+    }
+
+    fn write_headless(home: &Path, name: &str, key: &str, cwd: &Path) {
+        let dir = home.join(".hangar/claude-headless");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{name}.json")), json!({"name":name, "key":key, "session_id":"headless-transcript", "cwd":cwd}).to_string()).unwrap();
+    }
+
+    pub fn nav_dir(&self) -> PathBuf { self.state.hangar_dir.join("nav") }
+
+    pub async fn guest_token(&self, name: &str, kind: Kind) -> String {
+        let share = self.state.share.as_ref().unwrap();
+        let life = share.lives.life(name, true).await.expect("sessão de ensaio com identidade real");
+        share.store.create_redeemed(name, Some(life), kind).unwrap().1
+    }
+
+    pub async fn close(self) {
+        self.owner.close().await;
+        self.guest.close().await;
+        self.upstream.server.close().await;
+    }
+}
