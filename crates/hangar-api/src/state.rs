@@ -26,6 +26,7 @@ pub struct CodexCommand {
 #[serde(default)]
 pub struct CodexSubagent {
     pub agent_path: Option<String>,
+    pub activity_revision: u64,
     pub state: Option<String>,
     pub ended_at: Option<f64>,
     pub can_message: bool,
@@ -73,6 +74,14 @@ pub struct StateEvent {
 #[cfg(test)]
 mod tests {
     use super::StateEvent;
+
+    #[test]
+    fn codex_subagent_activity_revision_is_optional_and_survives_round_trip() {
+        let old: super::CodexSubagent = serde_json::from_value(serde_json::json!({"state":"running"})).unwrap();
+        assert_eq!(old.activity_revision, 0);
+        let state = super::CodexSubagent { activity_revision: 7, ..old };
+        assert_eq!(serde_json::to_value(state).unwrap()["activity_revision"], 7);
+    }
 
     #[test]
     fn codex_service_tier_survives_state_round_trip() {

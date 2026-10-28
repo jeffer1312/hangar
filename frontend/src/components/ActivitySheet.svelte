@@ -137,10 +137,10 @@
   }
 
   const runningAgents = $derived(activity.agents.filter((a) => {
-    if (codex && !nativeReady && codexSubagentState(nativeStates, a.agentId, a.agentPath)?.state !== 'running') return false;
     if (a.kind !== 'agent') return false;
-    if (codex || session?.provider === 'codex') return a.running;
     const sub = matchSub(a);
+    if (codex || session?.provider === 'codex') return a.running && (codexSubagentState(nativeStates, a.agentId, a.agentPath)?.state === 'running'
+      || (nativeReady && sub?.state === 'running'));
     if (sub?.state) return sub.state === 'running';
     if (sub?.finished !== undefined) return !sub.finished;
     return a.running;

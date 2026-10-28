@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { codexSubagentState, formatElapsed, getSubagents, getWorkflow, getWorkflowAgent, getWorkflows, projectSubagentActivity, projectCodexSubagent, isCodexAgentSpawn } from '@hangar/core';
+import { codexSubagentActivityKey, codexSubagentState, formatElapsed, getSubagents, getWorkflow, getWorkflowAgent, getWorkflows, projectSubagentActivity, projectCodexSubagent, isCodexAgentSpawn } from '@hangar/core';
 import type { AgentRun, CodexCommand, ShellVivo, SubagentRun, WorkflowDetail, WorkflowAgentDetail, WorkflowSummary } from '@hangar/core';
 import { chatStore } from '../../stores/chat';
 import { useServers } from '../../stores/servers';
@@ -67,7 +67,7 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   const subs = useMemo(() => currentList ? list.subs.map(run => projectCodexSubagent(run, nativeStates)) : [], [currentList, list.subs, nativeStates]);
   const nativeSubagents = nativeStates !== undefined || events.some(event => event.kind === 'tool_use' && isCodexAgentSpawn(event.tool_name ?? ''))
     || subs.some(sub => !!sub.agentPath);
-  const nativeIds = Object.entries(nativeStates ?? {}).map(([id, state]) => `${id}:${state.agent_path ?? ''}`).sort().join('|');
+  const nativeIds = codexSubagentActivityKey(nativeStates);
   const activity = projectSubagentActivity(transcriptActivity, subs, agentIds, nativeStates);
   const listLoading = !currentList || ((list.workflowLoading || list.subLoading) && workflows.length === 0 && subs.length === 0);
   const workflowListError = currentList ? list.workflowError : '';
@@ -195,9 +195,9 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
     at: Date.parse(run.endedAt ?? '') || Date.parse(run.updatedAt) || run.mtime * 1000,
   }));
   const runningAgents = activity.agents.filter((a) => {
-    if (nativeSubagents && list.subLoading && codexSubagentState(nativeStates, a.agentId ?? agentIds.get(a.id), a.agentPath)?.state !== 'running') return false;
     if (a.kind !== 'agent' || !a.running) return false;
     const sub = matchSub(a);
+    if (nativeSubagents && codexSubagentState(nativeStates, a.agentId ?? agentIds.get(a.id), a.agentPath)?.state !== 'running' && sub?.state !== 'running') return false;
     return !sub || subRows.find((row) => row.run.agentId === sub.agentId)?.status === 'running';
   });
   const shown = new Set(runningAgents.map((a) => matchSub(a)?.agentId));

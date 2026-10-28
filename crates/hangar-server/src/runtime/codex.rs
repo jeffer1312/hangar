@@ -191,6 +191,8 @@ pub struct Engine {
     notices_seen:BTreeSet<String>,
     /// A rodada de reaprovação deste turno já terminou (aprovou, falhou ou não tinha o que aprovar).
     hook_trust_settled:bool,
+    /// Saída nova de comando ainda não publicada: sai no Tick deste instante.
+    output_due:Option<f64>,
     thinking:LiveBuffer,
     /// A vida anterior desta sessão estava no meio de um turno.
     was_working:bool,
@@ -307,6 +309,8 @@ const UNPROVEN_THREAD:&str = "o Codex respondeu sem comprovar a conversa pedida"
 const HOOK_APPROVAL_REQUIRED:&str = "hook approval required";
 /// O mesmo rabo de saída que o `bash-output` do Claude mostra.
 const OUTPUT_TAIL:usize = 16_000;
+/// O mesmo passo em que o feed junta os eventos.
+const OUTPUT_EVERY:f64 = 0.15;
 
 struct RunningCommand { turn:String, process:String, command:String, started_at:f64, tail:String }
 
@@ -502,7 +506,7 @@ impl Engine {
             // já foi recusado no `new_checked`; em nenhum dos dois vira Full Access.
             permission_mode:headless.then(||super::codex_launch::stored_mode(&metadata).ok()).flatten().map(Into::into),token_usage:Value::Null,rate_limits:Value::Null,usage_limited:false,
             preview:LiveBuffer::default(),response_started:false,first_response_start:None,compacting:false,
-            running_commands:BTreeMap::new(),hook_streaks:BTreeMap::new(),notices_seen:BTreeSet::new(),hook_trust_settled:false,thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
+            running_commands:BTreeMap::new(),hook_streaks:BTreeMap::new(),notices_seen:BTreeSet::new(),hook_trust_settled:false,output_due:None,thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
             rpc:BTreeMap::new(),server_requests:Vec::new(),
             request_epochs:BTreeMap::new(),answering:BTreeSet::new(),lost_requests:BTreeSet::new(),wires:BTreeMap::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reported_formats:BTreeSet::new(),async_questions,subagents:BTreeMap::new(),subagent_revision:0,subagent_epoch:Arc::new(subagents::FamilyEpoch::default()),reservations:Vec::new(),skill_preparations:BTreeMap::new(),skips:BTreeMap::new(),last_event:clock.monotonic_s,mode_write:None,metadata }
     }
@@ -812,12 +816,16 @@ impl Engine {
         }
         if rpc.method != "hooks/list" { return; }
         // Aberta na home, o Codex lista o `hooks.json` da conta como hook de projeto: é o mesmo arquivo que o Hangar escreve.
-        let account_hooks = self.metadata["codex_home"].as_str().map(|home|format!("{}/hooks.json:",home.trim_end_matches('/')));
+        // Barra normalizada: no Windows a chave vem com `\`.
+        let account_hooks = self.metadata["codex_home"].as_str().map(|home|format!("{}/hooks.json:",home.replace('\\',"/").trim_end_matches('/')));
+        // Só o que já foi aprovado antes (`modified` = conteúdo mudou depois da aprovação): hook nunca aprovado
+        // (`untrusted`) continua pedindo a decisão de quem usa.
         let edits:Vec<Value> = line["result"]["data"].as_array().into_iter().flatten()
             .flat_map(|entry|entry["hooks"].as_array().into_iter().flatten())
-            .filter(|hook|hook["enabled"] == true && matches!(hook["trustStatus"].as_str(),Some("untrusted" | "modified" | "trusted")))
+            .filter(|hook|hook["enabled"] == true && matches!(hook["trustStatus"].as_str(),Some("modified" | "trusted")))
             .filter_map(|hook|Some((hook["key"].as_str()?,hook["currentHash"].as_str()?,hook["source"].as_str().unwrap_or(""))))
-            .filter(|(key,_,source)|matches!(*source,"user" | "plugin") || account_hooks.as_deref().is_some_and(|prefix|key.starts_with(prefix)))
+            .filter(|(key,_,source)|matches!(*source,"user" | "plugin")
+                || account_hooks.as_deref().is_some_and(|prefix|key.replace('\\',"/").starts_with(prefix)))
             .map(|(key,hash,_)|{
                 let path = ["hooks","state",key,"trusted_hash"].map(|part|Value::from(part).to_string()).join(".");
                 json!({"keyPath":path,"value":hash,"mergeStrategy":"replace"})
@@ -1254,7 +1262,8 @@ impl Engine {
     }
 
     /// Rabo da saída de cada comando rodando, num objeto `{item: texto}`; vazio quando nenhum escreveu.
-    fn publish_output(&self,effects:&mut Vec<Effect>) {
+    fn publish_output(&mut self,effects:&mut Vec<Effect>) {
+        self.output_due = None;
         let tails:serde_json::Map<String,Value> = self.running_commands.iter().filter(|(_,command)|!command.tail.is_empty())
             .map(|(id,command)|(id.clone(),json!(command.tail))).collect();
         let text = if tails.is_empty() { String::new() } else { Value::Object(tails).to_string() };
@@ -1847,6 +1856,7 @@ impl Engine {
                 }
             }
             EngineInput::Tick => {
+                if self.output_due.is_some_and(|due|clock.monotonic_s >= due) { self.publish_output(&mut effects); }
                 if let Some(text) = self.preview.tick(clock.monotonic_s) { self.publish(text,&mut effects); }
                 if let Some(text) = self.thinking.tick(clock.monotonic_s) { self.publish_on("thinking",text,&mut effects); }
                 let mut subscribe_lost = false;
@@ -2066,6 +2076,8 @@ impl Engine {
                     self.finish_service_tier(Disposition::Unknown,json!({"error":"A conversa mudou antes de confirmar Fast"}),effects);
                     self.clear_preview(effects); self.thread_id = response.thread.id.clone();
                     self.subagents.clear();
+                    // O `item/completed` do comando da conversa anterior não chega mais a esta (filtro de thread).
+                    self.running_commands.clear(); self.hook_streaks.clear(); self.notices_seen.clear(); self.publish_output(effects);
                     self.bind_interactions()?;
                 }
                 // A vista leva o rollout: o Python recusa como velho o patch que difere dela.
@@ -2279,7 +2291,12 @@ impl Engine {
     fn notification(&mut self,line:Value,effects:&mut Vec<Effect>) -> Result<(),RuntimeError> {
         let method = line["method"].as_str().unwrap_or("");
         let params = &line["params"];
+        let child_event = params["threadId"].as_str().is_some_and(|id| self.subagents.contains_key(id))
+            || (method == "thread/started" && params["thread"]["parentThreadId"].as_str()
+                .is_some_and(|parent| parent == self.thread_id || self.subagents.contains_key(parent)));
+        let subagent_revision = self.subagent_revision;
         self.observe_subagent(method,params);
+        if child_event && self.subagent_revision != subagent_revision { effects.push(Effect::StateChanged); }
         // Pedido de outra thread (subagente) entra na fila como os da principal; só o "resolvido" dele
         // também passa, para o pedido sair da fila. O resto vindo de outra thread é descartado.
         let foreign = params["threadId"].as_str().filter(|thread|*thread != self.thread_id);
@@ -2506,7 +2523,9 @@ impl Engine {
                     .unwrap_or(if n.will_retry { "codex_sem_conexao" } else { "headless_turno_erro" });
                 self.put_problem(code,error_detail(&n.error));
             }
-            N::HookCompleted(n) if !self.hook_trust_settled && n.run.entries.iter().any(|entry|entry.text.as_deref().is_some_and(|text|text.contains(HOOK_APPROVAL_REQUIRED))) => {
+            // Só a recusa do próprio Codex (`failed` com a entrada de erro dele), não um texto que o hook escreveu.
+            N::HookCompleted(n) if !self.hook_trust_settled && n.run.status == "failed" && n.run.entries.iter()
+                .any(|entry|entry.kind == "error" && entry.text.as_deref().is_some_and(|text|text.contains(HOOK_APPROVAL_REQUIRED))) => {
                 self.trust_synced_hooks(effects);
                 return Ok(());
             }
@@ -2532,7 +2551,8 @@ impl Engine {
                     let cut = (command.tail.len() - OUTPUT_TAIL..).find(|&at|command.tail.is_char_boundary(at)).unwrap_or(0);
                     command.tail.drain(..cut);
                 }
-                self.publish_output(effects);
+                // O delta chega sem limite de ritmo: o rabo sai no Tick, no máximo a cada `OUTPUT_EVERY`.
+                if self.output_due.is_none() { self.output_due = Some(self.clock.monotonic_s + OUTPUT_EVERY); }
                 return Ok(());
             }
             N::Warning(n) | N::GuardianWarning(n) if n.thread_id.as_deref().is_none_or(|thread|thread == self.thread_id) => {
@@ -2558,7 +2578,7 @@ impl Engine {
     pub fn next_deadline(&self) -> Option<f64> {
         self.preview.deadline().into_iter().chain(self.thinking.deadline()).chain(self.rpc.values().filter(|rpc|!rpc.timed_out).map(|rpc|rpc.deadline))
             .chain(self.service_tier_pending.as_ref().map(|pending|pending.deadline)).chain(self.subscribe_due).chain(self.unsubscribed_turn_due())
-            .chain(self.turn_probe_due()).min_by(f64::total_cmp)
+            .chain(self.turn_probe_due()).chain(self.output_due).min_by(f64::total_cmp)
     }
 
     /// Conferência do turno calado: só com a assinatura (ou o cano) entregando eventos e nenhuma em voo.

@@ -1325,6 +1325,7 @@
   "codex_command_stopping": "Encerrando…",
   "codex_command_stop_label": "Encerrar comando: {command}",
   "codex_command_output": "Ver saída",
+  "codex_command_process_id": "PID {id}",
   "codex_command_no_output": "Aguardando saída…",
   "codex_command_stop_failed": "Não foi possível encerrar o comando.",
   "notice_skill_loaded": "Skill {name} carregada",

@@ -198,6 +198,29 @@ it('fixa só o agente Codex confirmado pelo state antes da descoberta e mesmo ap
   } finally { vi.mocked(api.getSubagents).mockResolvedValue([]); }
 });
 
+it('eventos de atividade da mesma filha motivam leitura sem sobrepor pedidos', async () => {
+  const child: api.SubagentRun = { agentId: 'child', agentPath: '/root/review', agentType: null, prompt: null,
+    startedAt: '', updatedAt: '', mtime: 1, toolCalls: 1, tools: [], recent: [], lastText: '', state: 'running' };
+  vi.mocked(api.getSubagents).mockResolvedValue([child]);
+  try {
+    await montar(false);
+    const state = (activity_revision: number) => ({ session: 'codex-flow', state: 'working', codex_subagents: { child: {
+      agent_path: '/root/review', activity_revision, state: 'running', ended_at: null, can_message: true, message_blocked: null,
+    } } });
+    await emit('state', state(1));
+    const reads = vi.mocked(api.getSubagents).mock.calls.length;
+    const pending = Promise.withResolvers<api.SubagentRun[]>();
+    vi.mocked(api.getSubagents).mockReturnValueOnce(pending.promise).mockResolvedValue([{ ...child, toolCalls: 3 }]);
+    await emit('state', state(2));
+    expect(api.getSubagents).toHaveBeenCalledTimes(reads + 1);
+    await emit('state', state(3));
+    expect(api.getSubagents).toHaveBeenCalledTimes(reads + 1);
+    pending.resolve([{ ...child, toolCalls: 2 }]);
+    await flush(); await flush();
+    expect(api.getSubagents).toHaveBeenCalledTimes(reads + 2);
+  } finally { vi.mocked(api.getSubagents).mockResolvedValue([]); }
+});
+
 it.each(['claude', 'codex'] as const)('preserva a descoberta de subagentes ao chegar histórico antigo de %s e a renova no reset', async provider => {
   harness.provider = provider;
   let finishHistory!: (value: Awaited<ReturnType<typeof api.getHistoryDesde>>) => void;

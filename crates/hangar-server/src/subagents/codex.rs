@@ -1,11 +1,11 @@
 //! Conversas filhas do Codex, ligadas pelo cabeçalho original do rollout da mesma conta.
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::SystemTime;
 
-use chrono::{DateTime, FixedOffset, NaiveDate};
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate};
 use serde_json::{Map, Value, json};
 
 use super::{Acc, DETAIL_TAIL, LIST_TAIL, mtime, unreadable};
@@ -34,22 +34,38 @@ fn stamp(path: &Path) -> Option<Stamp> {
 
 static HEADERS: LazyLock<Mutex<Capped<PathBuf, (Stamp, Option<Identity>)>>> =
     LazyLock::new(|| Mutex::new(Capped::new(SESSION_CAP * 4)));
-static DIRECTORIES: LazyLock<Mutex<Capped<PathBuf, (Stamp, Vec<PathBuf>)>>> =
+static DIRECTORIES: LazyLock<Mutex<Capped<PathBuf, Arc<Directory>>>> =
     LazyLock::new(|| Mutex::new(Capped::new(SESSION_CAP)));
+
+#[derive(Clone)]
+struct Directory {
+    stamp: Stamp,
+    subdirs: Vec<PathBuf>,
+    families: HashMap<String, Vec<(PathBuf, Identity)>>,
+    pending: Vec<PathBuf>,
+}
+
+impl Directory {
+    fn record(&mut self, path: PathBuf, identity: Identity) {
+        if path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.ends_with(&format!("-{}.jsonl", identity.id)))
+            && let Some(parent) = identity.parent.clone() {
+            self.families.entry(parent).or_default().push((path, identity));
+        }
+    }
+}
 
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
 
-fn header(path: &Path) -> Option<Identity> {
-    let seen = stamp(path)?;
+fn header(path: &Path) -> std::io::Result<Option<Identity>> {
+    let seen = stamp(path).ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
     if let Some((old, identity)) = HEADERS.lock().unwrap_or_else(PoisonError::into_inner).get(path)
-        && *old == seen { return identity.clone(); }
+        && *old == seen { return Ok(identity.clone()); }
     // O cabeçalho é pequeno; um arquivo que não termina a primeira linha não prende a consulta.
     let mut first = Vec::new();
-    let file = std::fs::File::open(path).map_err(|error| tracing::warn!(file = %path.display(), %error, "cabeçalho do subagente Codex não pôde ser aberto")).ok()?;
-    BufReader::new(file.take(1024 * 1024)).read_until(b'\n', &mut first)
-        .map_err(|error| tracing::warn!(file = %path.display(), %error, "cabeçalho do subagente Codex não pôde ser lido")).ok()?;
+    let file = std::fs::File::open(path)?;
+    BufReader::new(file.take(1024 * 1024)).read_until(b'\n', &mut first)?;
     let record = decode_line(&first).unwrap_or(Value::Null);
     let value = &record["payload"];
     let identity = (|| {
@@ -69,10 +85,10 @@ fn header(path: &Path) -> Option<Identity> {
         })
     })();
     HEADERS.lock().unwrap_or_else(PoisonError::into_inner).insert(path.to_path_buf(), (seen, identity.clone()));
-    identity
+    Ok(identity)
 }
 
-pub(super) fn parent_thread_id(path: &Path) -> Option<String> { Some(header(path)?.id) }
+pub(super) fn parent_thread_id(path: &Path) -> Option<String> { header(path).ok().flatten().map(|identity| identity.id) }
 
 fn sessions_root(path: &Path) -> Option<PathBuf> {
     let real = path.canonicalize().ok()?;
@@ -83,48 +99,58 @@ fn sessions_root(path: &Path) -> Option<PathBuf> {
 
 fn date_dirs(root: &Path, since: NaiveDate) -> std::io::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
-    for year in subdirs(root)? {
+    for year in &directory(root)?.subdirs {
         let Some(y) = year.file_name().and_then(|s| s.to_str()).and_then(|s| s.parse::<i32>().ok()) else { continue };
-        for month in subdirs(&year)? {
+        if y < since.year() { continue; }
+        for month in &directory(year)?.subdirs {
             let Some(m) = month.file_name().and_then(|s| s.to_str()).and_then(|s| s.parse::<u32>().ok()) else { continue };
-            for day in subdirs(&month)? {
+            if y == since.year() && m < since.month() { continue; }
+            for day in &directory(month)?.subdirs {
                 let Some(d) = day.file_name().and_then(|s| s.to_str()).and_then(|s| s.parse::<u32>().ok()) else { continue };
-                if NaiveDate::from_ymd_opt(y, m, d).is_some_and(|date| date >= since) { out.push(day); }
+                if NaiveDate::from_ymd_opt(y, m, d).is_some_and(|date| date >= since) { out.push(day.clone()); }
             }
         }
     }
     Ok(out)
 }
 
-fn subdirs(root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    std::fs::read_dir(root)?.filter_map(|entry| match entry {
-        Ok(entry) => match entry.file_type() {
-            Ok(kind) if kind.is_dir() => Some(Ok(entry.path())),
-            Ok(_) => None,
-            Err(error) => Some(Err(error)),
-        },
-        Err(error) => Some(Err(error)),
-    }).collect()
-}
-
-fn rollouts(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+fn directory(dir: &Path) -> std::io::Result<Arc<Directory>> {
     let Some(seen) = stamp(dir) else { return Err(std::io::Error::from(std::io::ErrorKind::NotFound)) };
-    if let Some((old, files)) = DIRECTORIES.lock().unwrap_or_else(PoisonError::into_inner).get(dir)
-        && *old == seen { return Ok(files.clone()); }
-    let mut files = Vec::new();
+    let cached = DIRECTORIES.lock().unwrap_or_else(PoisonError::into_inner).get(dir).cloned();
+    if let Some(cached) = cached.filter(|old| old.stamp == seen) {
+        // O arquivo pode aparecer antes de a primeira linha ser escrita, sem mudar a pasta depois.
+        let mut ready = Vec::new();
+        for path in &cached.pending {
+            if let Some(identity) = header(path)? { ready.push((path.clone(), identity)); }
+        }
+        if ready.is_empty() { return Ok(cached); }
+        let mut next = (*cached).clone();
+        next.pending.retain(|path| !ready.iter().any(|(ready, _)| ready == path));
+        for (path, identity) in ready { next.record(path, identity); }
+        let next = Arc::new(next);
+        DIRECTORIES.lock().unwrap_or_else(PoisonError::into_inner).insert(dir.to_path_buf(), next.clone());
+        return Ok(next);
+    }
+    let mut next = Directory { stamp: seen, subdirs: Vec::new(), families: HashMap::new(), pending: Vec::new() };
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        if entry.file_type()?.is_file() && entry.file_name().to_str().is_some_and(|n| n.starts_with("rollout-") && n.ends_with(".jsonl")) {
-            files.push(entry.path());
+        let kind = entry.file_type()?;
+        if kind.is_dir() { next.subdirs.push(entry.path()); }
+        else if kind.is_file() && entry.file_name().to_str().is_some_and(|n| n.starts_with("rollout-") && n.ends_with(".jsonl")) {
+            match header(&entry.path())? {
+                Some(identity) => next.record(entry.path(), identity),
+                None => next.pending.push(entry.path()),
+            }
         }
     }
-    DIRECTORIES.lock().unwrap_or_else(PoisonError::into_inner).insert(dir.to_path_buf(), (seen, files.clone()));
-    Ok(files)
+    let next = Arc::new(next);
+    DIRECTORIES.lock().unwrap_or_else(PoisonError::into_inner).insert(dir.to_path_buf(), next.clone());
+    Ok(next)
 }
 
 fn children(parent: &Path) -> Result<Vec<(PathBuf, Identity)>, &'static str> {
     let root = sessions_root(parent).ok_or("codex_subagents_source_unavailable")?;
-    let own = header(parent).ok_or("codex_subagents_source_unavailable")?;
+    let own = header(parent).map_err(|_| "codex_subagents_source_unavailable")?.ok_or("codex_subagents_source_unavailable")?;
     let real = parent.canonicalize().map_err(|_| "codex_subagents_source_unavailable")?;
     let relative = real.strip_prefix(&root).map_err(|_| "codex_subagents_source_unavailable")?;
     let parts = relative.components().take(3).map(|part| part.as_os_str().to_str()).collect::<Option<Vec<_>>>()
@@ -132,16 +158,16 @@ fn children(parent: &Path) -> Result<Vec<(PathBuf, Identity)>, &'static str> {
     let since = NaiveDate::parse_from_str(&parts.join("-"), "%Y-%m-%d").map_err(|_| "codex_subagents_source_unavailable")?;
     let mut out = Vec::new();
     // Um filho não pode nascer antes do pai; arquivos antigos da conta nem têm o cabeçalho aberto.
-    let mut paths = Vec::new();
     for dir in date_dirs(&root, since).map_err(|_| "codex_subagents_source_unavailable")? {
-        paths.extend(rollouts(&dir).map_err(|_| "codex_subagents_source_unavailable")?);
-    }
-    for path in paths {
-        let Some(real) = path.canonicalize().ok().filter(|real| real.starts_with(&root)) else { continue };
-        let Some(identity) = header(&real) else { continue };
-        if identity.parent.as_deref() == Some(&own.id) && identity.born >= own.born
-            && real.file_name().and_then(|n| n.to_str()).is_some_and(|name| name.ends_with(&format!("-{}.jsonl", identity.id))) {
-            out.push((real, identity));
+        let snapshot = directory(&dir).map_err(|_| "codex_subagents_source_unavailable")?;
+        for (path, _) in snapshot.families.get(&own.id).into_iter().flatten() {
+            let real = path.canonicalize().map_err(|_| "codex_subagents_source_unavailable")?;
+            if !real.starts_with(&root) { continue; }
+            let identity = header(&real).map_err(|_| "codex_subagents_source_unavailable")?.ok_or("codex_subagents_source_unavailable")?;
+            if identity.parent.as_deref() == Some(&own.id) && identity.born >= own.born
+                && real.file_name().and_then(|n| n.to_str()).is_some_and(|name| name.ends_with(&format!("-{}.jsonl", identity.id))) {
+                out.push((real, identity));
+            }
         }
     }
     Ok(out)
@@ -303,6 +329,82 @@ mod tests {
         assert!(get(&parent, "outside", 200).is_none());
         assert!(get(&parent, "../mine", 200).is_none());
         assert!(get(&parent, "C:mine", 200).is_none());
+    }
+
+    #[test]
+    fn discovery_reuses_unchanged_directories_and_detects_children_on_new_days_and_removal() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = write(root.path(), "parent", None, &[]);
+        let child = write(root.path(), "mine", Some("parent"), &[event("2026-10-28T09:00:01Z", "task_started")]);
+        assert_eq!(list_checked(&parent).unwrap().len(), 1);
+        let cached = directory(child.parent().unwrap()).unwrap();
+        let mut file = std::fs::OpenOptions::new().append(true).open(&child).unwrap();
+        writeln!(file, "{}", event("2026-10-28T09:00:02Z", "task_complete")).unwrap();
+        drop(file);
+        assert_eq!(get_checked(&parent, "mine", 200).unwrap().unwrap()["state"], "finished");
+        assert!(Arc::ptr_eq(&cached, &directory(child.parent().unwrap()).unwrap()));
+
+        write(root.path(), "same-day", Some("parent"), &[]);
+        assert_eq!(list_checked(&parent).unwrap().len(), 2);
+        let later = write(root.path(), "next-day", Some("parent"), &[]);
+        let next_day = root.path().join("sessions/2026/10/29");
+        std::fs::create_dir_all(&next_day).unwrap();
+        std::fs::rename(&later, next_day.join(later.file_name().unwrap())).unwrap();
+        assert!(get_checked(&parent, "next-day", 0).unwrap().is_some());
+        std::fs::remove_file(&child).unwrap();
+        assert!(get_checked(&parent, "mine", 200).unwrap().is_none());
+        assert_eq!(list_checked(&parent).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_late_header_is_discovered_without_another_directory_change() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = write(root.path(), "parent", None, &[]);
+        let child = write(root.path(), "late", Some("parent"), &[]);
+        let contents = std::fs::read(&child).unwrap();
+        std::fs::write(&child, "").unwrap();
+        assert!(list_checked(&parent).unwrap().is_empty());
+        let before = stamp(child.parent().unwrap()).unwrap();
+        std::fs::write(&child, contents).unwrap();
+        assert_eq!(stamp(child.parent().unwrap()).unwrap(), before);
+        assert!(get_checked(&parent, "late", 0).unwrap().is_some());
+    }
+
+    #[test]
+    fn replacing_the_parent_or_child_does_not_reuse_the_old_family() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = write(root.path(), "parent", None, &[]);
+        let child = write(root.path(), "mine", Some("parent"), &[]);
+        write(root.path(), "new-family", Some("new-parent"), &[]);
+        assert!(get_checked(&parent, "mine", 0).unwrap().is_some());
+        let mut meta: Value = serde_json::from_str(std::fs::read_to_string(&parent).unwrap().trim()).unwrap();
+        meta["payload"]["id"] = json!("new-parent");
+        std::fs::write(&parent, format!("{meta}\n")).unwrap();
+        assert!(get_checked(&parent, "mine", 0).unwrap().is_none());
+        assert!(get_checked(&parent, "new-family", 0).unwrap().is_some());
+        meta["payload"]["timestamp"] = json!("2026-10-28T10:00:00Z");
+        std::fs::write(&parent, format!("{meta}\n")).unwrap();
+        assert!(get_checked(&parent, "new-family", 0).unwrap().is_none());
+        let replacement = write(root.path(), "replacement", Some("new-parent"), &[]);
+        let mut child_meta: Value = serde_json::from_str(std::fs::read_to_string(&replacement).unwrap().trim()).unwrap();
+        child_meta["payload"]["id"] = json!("mine");
+        std::fs::write(&replacement, format!("{child_meta}\n")).unwrap();
+        meta["payload"]["id"] = json!("parent");
+        meta["payload"]["timestamp"] = json!("2026-10-28T08:00:00Z");
+        std::fs::write(&parent, format!("{meta}\n")).unwrap();
+        std::fs::rename(replacement, &child).unwrap();
+        assert!(get_checked(&parent, "mine", 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_failed_directory_read_never_returns_the_cached_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("day");
+        std::fs::create_dir(&path).unwrap();
+        directory(&path).unwrap();
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::write(&path, "not a directory").unwrap();
+        assert!(directory(&path).is_err());
     }
 
     #[test]

@@ -10,7 +10,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   conta e na conversa do pai; histórico copiado antes do nascimento do filho não é atividade dele.
   Retorno de criação não encerra agente, e evento do filho não troca o estado nem a prévia do pai.
   O ator publica o estado em `state.codex_subagents`; a descoberta dos metadados é inicial ou
-  motivada por UUID/caminho novo, sem consulta periódica saudável do Codex. Histórico sem estado
+  motivada por UUID/caminho novo ou evento de atividade da filha, sem consulta periódica saudável do Codex. Histórico sem estado
   confirmado não cria agente ativo; indisponibilidade não é conclusão. A leitura do detalhe aberto
   continua enquanto ele executa e recebe uma última atualização ao terminar.
   Mensagem direta depende da capacidade efetiva do app-server; recusa nunca vira entrega nem

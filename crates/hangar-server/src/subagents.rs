@@ -169,6 +169,7 @@ async fn serve(st: &AppState, (name, agent): (String, Option<String>), query: Op
     let mut blocked = message_blocked(&provider);
     let mut lives = HashMap::new();
     let mut codex_status = Value::Null;
+    let mut codex_detail = None;
     let mut problem = None;
     if blocked.is_none() {
         match plugin_binding(st, &name, &jsonl).await {
@@ -202,6 +203,17 @@ async fn serve(st: &AppState, (name, agent): (String, Option<String>), query: Op
         let Some(parent) = codex::parent_thread_id(&jsonl) else {
             return route_failed(st, headers, "rust.subagents_failed", &name, "codex_subagents_source_unavailable", "a conversa Codex não pôde ser lida");
         };
+        if let Some(id) = &agent {
+            let (path, id) = (jsonl.clone(), id.clone());
+            codex_detail = match tokio::task::spawn_blocking(move || codex::get_checked(&path, &id, events)).await {
+                Ok(Ok(found)) => found,
+                Ok(Err(code)) => return route_failed(st, headers, "rust.subagents_failed", &name, code, "a família do subagente Codex não pôde ser lida"),
+                Err(error) => {
+                    tracing::warn!(session = %name, panic = error.is_panic(), "leitura do subagente Codex caiu");
+                    return route_failed(st, headers, "rust.subagents_failed", &name, "subagents_panic", "a leitura dos subagentes caiu no servidor");
+                }
+            };
+        }
         if let Some(runtime) = st.state.runtime.get() {
             match runtime.codex_subagents(&name, &parent).await {
                 Some(Ok(map)) => { lives.extend(headless_lives(&map)); codex_status = map; }
@@ -214,16 +226,7 @@ async fn serve(st: &AppState, (name, agent): (String, Option<String>), query: Op
             }
             if let Some(id) = &agent {
                 // Só consulta o filho depois de conferir a família no histórico desta conta.
-                let own = { let (path, id) = (jsonl.clone(), id.clone());
-                    match tokio::task::spawn_blocking(move || codex::get_checked(&path, &id, 0)).await {
-                        Ok(Ok(own)) => own.is_some(),
-                        Ok(Err(code)) => return route_failed(st, headers, "rust.subagents_failed", &name, code, "a família do subagente Codex não pôde ser lida"),
-                        Err(error) => {
-                            tracing::warn!(session = %name, panic = error.is_panic(), "leitura do subagente Codex caiu");
-                            return route_failed(st, headers, "rust.subagents_failed", &name, "subagents_panic", "a leitura dos subagentes caiu no servidor");
-                        }
-                    } };
-                if own {
+                if codex_detail.is_some() {
                     match runtime.codex_subagent_status(&name, &parent, id).await {
                         Some(Ok(status)) => {
                             let map = Value::Object(Map::from_iter([(id.clone(), status)]));
@@ -259,7 +262,7 @@ async fn serve(st: &AppState, (name, agent): (String, Option<String>), query: Op
                 Ok(json!(rows.into_iter().map(&mut fill).collect::<Vec<_>>()))
             }
             Some(id) => {
-                let found = if provider == "codex" { codex::get_checked(&jsonl, &id, events).map_err(Some)? } else { get_subagent(&provider, &jsonl, &id, events) };
+                let found = if provider == "codex" { codex_detail } else { get_subagent(&provider, &jsonl, &id, events) };
                 found.map(|a| Value::Object(fill(a))).ok_or(None)
             }
         }

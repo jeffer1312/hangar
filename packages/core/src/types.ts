@@ -240,6 +240,7 @@ export interface CodexCommand {
 
 export interface CodexSubagent {
   agent_path: string | null;
+  activity_revision?: number;
   state: 'running' | 'finished' | 'failed' | null;
   ended_at: number | null;
   can_message: boolean;

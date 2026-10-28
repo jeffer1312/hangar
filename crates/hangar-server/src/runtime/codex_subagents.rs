@@ -46,6 +46,8 @@ pub(super) struct Agent {
     direct_input:Option<bool>,
     hydrated:bool,
     revision:u64,
+    #[serde(default)]
+    parent_event:Option<(String,String)>,
 }
 
 #[cfg(test)]
@@ -108,6 +110,22 @@ mod tests {
         assert_eq!(view["child"].agent_path.as_deref(), Some("/root/review"));
         engine.alive = false;
         assert_eq!(engine.published_subagents()["child"].state, None);
+    }
+
+    #[test]
+    fn child_tool_events_advance_the_published_activity_revision() {
+        let mut engine = engine();
+        child(&mut engine, false);
+        let before = engine.published_subagents()["child"].activity_revision;
+        let effects = notify(&mut engine, "item/started", json!({"threadId":"child","item":{"type":"commandExecution","id":"exec","processId":"42","command":"pwd"}}));
+        assert!(effects.iter().any(|effect|matches!(effect, Effect::StateChanged)));
+        let started = engine.published_subagents()["child"].activity_revision;
+        assert!(started > before);
+        let effects = notify(&mut engine, "item/completed", json!({"threadId":"child","item":{"type":"commandExecution","id":"exec","processId":"42","command":"pwd"}}));
+        assert!(effects.iter().any(|effect|matches!(effect, Effect::StateChanged)));
+        assert!(engine.published_subagents()["child"].activity_revision > started);
+        assert_eq!(engine.published_subagents()["child"].state.as_deref(), Some("running"));
+        assert_eq!(engine.control_view()["turn_id"], Value::Null);
     }
 
     #[test]
@@ -198,8 +216,63 @@ mod tests {
     }
 
     fn snapshot(status:&str) -> Value {
-        json!({"turns":[{"items":[{"type":"collabAgentToolCall","tool":"spawnAgent","status":"completed",
+        json!({"turns":[{"items":[{"id":"spawn-item","type":"collabAgentToolCall","tool":"spawnAgent","status":"completed",
             "senderThreadId":"root","receiverThreadIds":["child"],"agentsStates":{"child":{"status":status}}}]}]})
+    }
+
+    #[test]
+    fn rehydrating_a_spawn_keeps_the_child_completion_and_direct_input_capability() {
+        let mut engine=engine();
+        child(&mut engine,true);
+        notify(&mut engine,"turn/completed",json!({"threadId":"child","turn":{"id":"child-turn","status":"completed"}}));
+        let ended=engine.subagents["child"].end_time;
+        assert!(ended.is_some());
+        let requested_revision=engine.subagent_revision;
+        for _ in 0..2 {
+            engine.hydrate_agents(&snapshot("running"),requested_revision);
+            let agent=&engine.subagents["child"];
+            assert_eq!(agent.state.as_deref(),Some("completed"));
+            assert_eq!(agent.end_time,ended);
+            assert_eq!(agent.direct_input,Some(true));
+            assert_eq!(engine.subagent_views()["child"]["can_message"],true);
+        }
+        engine.transport_lost("queda de ensaio",&std::collections::BTreeSet::new());
+        engine.hydrate_agents(&snapshot("running"),engine.subagent_revision);
+        assert_eq!(engine.subagents["child"].state.as_deref(),Some("completed"));
+        assert_eq!(engine.subagents["child"].end_time,ended);
+        assert_eq!(engine.subagents["child"].direct_input,Some(true));
+    }
+
+    #[test]
+    fn a_new_parent_followup_in_resumed_history_can_restart_a_completed_child() {
+        let mut engine=engine();
+        engine.hydrate_agents(&snapshot("running"),0);
+        child(&mut engine,true);
+        notify(&mut engine,"turn/completed",json!({"threadId":"child","turn":{"id":"child-turn","status":"completed"}}));
+        let mut history=snapshot("running");
+        history["turns"][0]["items"].as_array_mut().unwrap().push(json!({"id":"followup-item","type":"collabAgentToolCall",
+            "tool":"followupTask","status":"completed","senderThreadId":"root","receiverThreadIds":["child"],
+            "agentsStates":{"child":{"status":"running"}}}));
+        engine.hydrate_agents(&history,engine.subagent_revision);
+        assert_eq!(engine.subagents["child"].state.as_deref(),Some("running"));
+        assert_eq!(engine.subagents["child"].end_time,None);
+        assert_eq!(engine.subagents["child"].direct_input,Some(true));
+    }
+
+    #[test]
+    fn root_history_keeps_known_descendants_and_rejects_another_root() {
+        let mut engine=engine();
+        engine.hydrate_agents(&snapshot("running"),0);
+        child(&mut engine,true);
+        notify(&mut engine,"thread/started",json!({"thread":{"id":"grandchild","parentThreadId":"child",
+            "canAcceptDirectInput":true,"status":{"type":"active"}}}));
+        notify(&mut engine,"turn/completed",json!({"threadId":"grandchild","turn":{"id":"nested-turn","status":"completed"}}));
+        engine.hydrate_agents(&snapshot("running"),engine.subagent_revision);
+        assert_eq!(engine.subagents["grandchild"].state.as_deref(),Some("completed"));
+        assert_eq!(engine.subagents["grandchild"].direct_input,Some(true));
+        let mut other=snapshot("failed");other["id"]=json!("other-root");
+        engine.hydrate_agents(&other,engine.subagent_revision);
+        assert_eq!(engine.subagents["child"].state.as_deref(),Some("running"));
     }
 
     #[test]
@@ -221,6 +294,16 @@ mod tests {
         notify(&mut engine,"turn/completed",json!({"threadId":"child","turn":{"id":"child-turn","status":"completed"}}));
         engine.hydrate_agents(&snapshot("running"),requested_revision);
         assert_eq!(engine.subagents["child"].state.as_deref(),Some("completed"));
+    }
+
+    #[test]
+    fn a_path_received_after_the_read_started_wins_over_its_snapshot() {
+        let mut engine=engine();child(&mut engine,true);
+        let requested_revision=engine.subagent_revision;
+        let item=|path:&str|json!({"type":"subAgentActivity","id":"activity","kind":"started","agentThreadId":"child","agentPath":path});
+        notify(&mut engine,"item/completed",json!({"threadId":"root","item":item("/root/new")}));
+        engine.hydrate_agents(&json!({"turns":[{"items":[item("/root/old")]}]}),requested_revision);
+        assert_eq!(engine.subagents["child"].path.as_deref(),Some("/root/new"));
     }
 
     #[test]
@@ -311,7 +394,7 @@ impl Engine {
                 _ => None,
             }).map(str::to_owned);
             let can_message = available && agent.direct_input == Some(true);
-            (id.clone(), hangar_api::state::CodexSubagent { agent_path: agent.path.clone(), state,
+            (id.clone(), hangar_api::state::CodexSubagent { agent_path: agent.path.clone(), activity_revision: agent.revision, state,
                 ended_at: agent.end_time.map(|ms| ms as f64 / 1000.), can_message,
                 message_blocked: (!can_message).then(|| UNAVAILABLE.to_owned()) })
         }).collect()
@@ -321,7 +404,7 @@ impl Engine {
         if !self.family(thread) { return; }
         let now = self.agent_now();
         match item {
-            wire::ThreadItem::CollabAgentToolCall { tool,status,sender_thread_id,receiver_thread_ids,agents_states,.. }
+            wire::ThreadItem::CollabAgentToolCall { id:item_id,tool,status,sender_thread_id,receiver_thread_ids,agents_states }
                 if sender_thread_id == thread => {
                 for id in receiver_thread_ids {
                     if tool == "spawnAgent" { self.register_agent(id,thread,None); }
@@ -332,16 +415,18 @@ impl Engine {
                                 "closeAgent" | "interruptAgent" => agent.status("stopped",now,revision),
                                 _ => {},
                             }
+                            agent.parent_event=Some((item_id.clone(),tool.clone()));
                         }
                     }
                 }
                 for (id,state) in agents_states {
                     if let Some(agent) = self.subagents.get_mut(id) {
                         agent.status(&state.status,now,revision);
+                        agent.parent_event=Some((item_id.clone(),tool.clone()));
                     }
                 }
             }
-            wire::ThreadItem::SubAgentActivity { kind,agent_thread_id,agent_path,.. } => {
+            wire::ThreadItem::SubAgentActivity { id,kind,agent_thread_id,agent_path } => {
                 if self.register_agent(agent_thread_id,thread,Some(agent_path)) {
                     let agent = self.subagents.get_mut(agent_thread_id).unwrap();
                     match kind.as_str() {
@@ -350,6 +435,7 @@ impl Engine {
                         "completed" => agent.status("completed",now,revision),
                         _ => {},
                     }
+                    agent.parent_event=Some((id.clone(),kind.clone()));
                 }
             }
             _ => {},
@@ -357,7 +443,8 @@ impl Engine {
     }
 
     pub(super) fn hydrate_agents(&mut self,thread:&Value,requested_revision:u64) {
-        let observed=std::mem::take(&mut self.subagents);
+        if thread["id"].as_str().is_some_and(|id|id!=self.thread_id) {return;}
+        let observed=self.subagents.clone();
         let root = self.thread_id.clone();
         for turn in thread["turns"].as_array().into_iter().flatten() {
             for item in turn["items"].as_array().into_iter().flatten() {
@@ -366,9 +453,25 @@ impl Engine {
                 }
             }
         }
-        // Só sinais posteriores ao pedido vencem a leitura; o estado anterior à desconexão não a sobrepõe.
-        for agent in self.subagents.values_mut() { agent.end_time=None; }
-        self.subagents.extend(observed.into_iter().filter(|(_,agent)|agent.revision>requested_revision));
+        for (id,agent) in &mut self.subagents {
+            let Some(previous)=observed.get(id) else {agent.end_time=None;continue;};
+            let reopened=agent.parent_event.as_ref().is_some_and(|(item,kind)|!item.is_empty()
+                && previous.parent_event.as_ref().is_some_and(|(old,_)|old!=item)
+                && matches!(kind.as_str(),"sendInput"|"sendMessage"|"followupTask"|"resumeAgent"|"interacted"));
+            // Repetir o lançamento no histórico não reabre uma filha que já encerrou seu próprio turno.
+            if previous.revision>requested_revision || (previous.state.as_deref().is_some_and(|state|state!="running")
+                && agent.state.as_deref()==Some("running") && !reopened) {
+                let path=agent.path.clone();
+                let parent_event=agent.parent_event.clone();
+                *agent=previous.clone();
+                agent.path=if previous.revision>requested_revision {previous.path.clone().or(path)} else {path.or_else(||previous.path.clone())};
+                agent.parent_event=previous.parent_event.clone().or(parent_event);
+            } else if agent.state==previous.state {
+                agent.end_time=previous.end_time;
+            } else {
+                agent.end_time=None;agent.turn_id=None;agent.hydrated=false;
+            }
+        }
     }
 
     /// O estado das filhas nunca altera turno, prévia ou pergunta da conversa principal.
@@ -394,6 +497,7 @@ impl Engine {
             }
         }
         let Some(agent) = self.subagents.get_mut(thread) else { return };
+        if matches!(method, "item/started" | "item/completed") { agent.revision = revision; }
         match method {
             "turn/started" => {
                 agent.turn_id = params["turn"]["id"].as_str().filter(|id|!id.is_empty()).map(Into::into);

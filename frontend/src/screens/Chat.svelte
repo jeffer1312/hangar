@@ -18,7 +18,7 @@
   import { citeDialog } from '../lib/citeDialog.svelte';
   import { contextRefsKey } from '../lib/contextRefsDraft.svelte';
   import { attachmentCaption, composeWithContextRefs, splitContextRefs, parseCodexOutput, type ContextRef } from '@hangar/core';
-  import { codexSubagentState, projectCodexSubagent } from '@hangar/core';
+  import { codexSubagentActivityKey, codexSubagentState, projectCodexSubagent } from '@hangar/core';
   import { itemModsCelular, modsCelular, modsNaTela } from '../lib/modsCelular.svelte';
   import { activePaneId, applyPluginUiDelta, closePluginPane, fieldSender, followLocalTab, inputPluginField, isMissingRoute, parsePluginToast, pluginFailureText, parsePluginUi, pressPluginButton, safeHref, showPluginPane, tabFollowsServer, type PluginControl, type PluginInputKind, type PluginSource, type PluginNode as PluginTree, type PluginPane as PluginPaneData, type PluginToast } from '@hangar/core';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
@@ -118,7 +118,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   import { parentSessionServerId, provideSessionServer } from '../lib/sessionServer';
   import { getIdentificador } from '../lib/peers';
   import { destinoDoRemetente } from '../lib/remetente';
-  import { createActivityFolder, projectSubagentActivity } from '@hangar/core';
+  import { createActivityFolder, matchAgentSubagent, projectSubagentActivity } from '@hangar/core';
   import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail, UploadFile, SessionOpeningExtras, SubagentRun } from '@hangar/core';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { workspaceSessionKey } from '../lib/workspaceCommands';
@@ -1937,10 +1937,11 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   let subagentReadError = $state('');
   let subagentRetry = $state(0);
   const liveSubagentRuns = $derived(subagentRuns.map(run => projectCodexSubagent(run, stateEvent?.codex_subagents)));
-  const codexAgentIds = $derived(Object.entries(stateEvent?.codex_subagents ?? {}).map(([id, state]) => `${id}:${state.agent_path ?? ''}`).sort().join('|'));
+  const codexAgentIds = $derived(codexSubagentActivityKey(stateEvent?.codex_subagents));
   const activity = $derived(isCodex ? projectSubagentActivity(transcriptActivity, liveSubagentRuns, undefined, stateEvent?.codex_subagents) : transcriptActivity);
-  const runningAgents = $derived(activity.agents.filter(agent => agent.running && (!isCodex || subagentsLoaded
-    || codexSubagentState(stateEvent?.codex_subagents, agent.agentId, agent.agentPath)?.state === 'running')));
+  const runningAgents = $derived(activity.agents.filter(agent => agent.running && (!isCodex
+    || codexSubagentState(stateEvent?.codex_subagents, agent.agentId, agent.agentPath)?.state === 'running'
+    || (subagentsLoaded && matchAgentSubagent(subagentRuns, agent)?.state === 'running'))));
   let activityConversation = $state(0);
   // O shell de fundo conta junto: pro app "o que está rodando aqui" é uma coisa só. O terminal já
   // mostrava ("5 shells still running") e o app não mostrava nada.
@@ -1959,7 +1960,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
 
   // Quando perguntar: enquanto TRABALHA (é quando nasce subagente) e uma vez ao parar, pra pegar o
   // último que terminou junto com o turno. Sessão parada não fica batendo no backend.
-  let subagentesEmVoo: { key: string; promise: ReturnType<typeof getSubagents> } | null = null;
+  let subagentesEmVoo: { key: string; activity: string; promise: ReturnType<typeof getSubagents> } | null = null;
   let subagentReadSource = '';
   $effect(() => {
     const acompanhar = !isCodex && currentState === 'working';
@@ -1974,14 +1975,18 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     async function contar() {
       try {
-        const key = JSON.stringify([source, nativeIds, attempt]);
+        const key = JSON.stringify([source, attempt]);
         if (!subagentesEmVoo || subagentesEmVoo.key !== key) {
-          const request = { key, promise: getSubagents(sessionName, sessionServer()) };
+          const request = { key, activity: nativeIds, promise: getSubagents(sessionName, sessionServer()) };
           request.promise = request.promise.finally(() => { if (subagentesEmVoo === request) subagentesEmVoo = null; });
           subagentesEmVoo = request;
         }
-        const lista = await subagentesEmVoo.promise;
-        if (vivo && conversation === activityConversation) { subagentesNoDisco = lista.length; subagentRuns = lista; subagentsLoaded = true; subagentReadError = ''; }
+        const request = subagentesEmVoo;
+        const lista = await request.promise;
+        if (vivo && conversation === activityConversation) {
+          subagentesNoDisco = lista.length; subagentRuns = lista; subagentsLoaded = true; subagentReadError = '';
+          if (request.activity !== nativeIds) subagentRetry += 1;
+        }
       } catch {
         if (!vivo) return;
         subagentReadError = m.atividade_erro_subagentes();

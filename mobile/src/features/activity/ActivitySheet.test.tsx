@@ -724,6 +724,34 @@ describe('ActivitySheet real', () => {
     expect(api.getSubagents.mock.calls.length).toBe(beforeTick);
   });
 
+  it.each(['vazio', 'falha'] as const)('estado null e descoberta %s não ativam um lançamento histórico', async source => {
+    stores.chat.events = [
+      { id: 'spawn', kind: 'tool_use', tool_use_id: 'launch', tool_name: 'spawn_agent', tool_input: { task_name: 'revisar-painel' } },
+      { id: 'created', kind: 'tool_result', tool_use_id: 'launch', result: '{"agent_id":"child","task_name":"/root/review"}' },
+    ];
+    stores.chat.stateEvent = { codex_subagents: { child: { agent_path: '/root/review', state: null, ended_at: null, can_message: false, message_blocked: null } } };
+    if (source === 'vazio') api.getSubagents.mockResolvedValue([]);
+    else api.getSubagents.mockRejectedValue(new Error('offline'));
+    const { el } = await mount();
+    expect(el.textContent).not.toContain(m.atividade_grupo_rodando({ n: 1 }));
+  });
+
+  it('um evento da filha renova contagem e última ferramenta na lista sem trocar identidade', async () => {
+    const child: SubagentRun = { ...sub, agentId: 'child', agentPath: '/root/review', state: 'running', toolCalls: 1,
+      recent: [{ name: 'Bash', target: 'pwd' }] };
+    const state = { agent_path: '/root/review', state: 'running' as const, ended_at: null, can_message: true, message_blocked: null };
+    stores.chat.stateEvent = { codex_subagents: { child: { ...state, activity_revision: 1 } } };
+    api.getSubagents.mockResolvedValue([child]);
+    const { el, render } = await mount();
+    const calls = api.getSubagents.mock.calls.length;
+    api.getSubagents.mockResolvedValue([{ ...child, toolCalls: 2, recent: [{ name: 'Read', target: 'source.rs' }] }]);
+    stores.chat.stateEvent = { codex_subagents: { child: { ...state, activity_revision: 2 } } };
+    await render();
+    expect(api.getSubagents.mock.calls.length).toBeGreaterThan(calls);
+    expect(el.textContent).toContain('Read');
+    expect(el.textContent).toContain(m.atividade_chamadas({ n: 2 }));
+  });
+
   it('Android mantém cabeçalho no conteúdo com títulos, badges e voltar em todos os níveis', async () => {
     platform.OS = 'android';
     const { el } = await mount();

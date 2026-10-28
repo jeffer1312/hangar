@@ -61,6 +61,19 @@ function montar(atividade: unknown = SEM_ATIVIDADE) {
 beforeEach(() => { vi.clearAllMocks(); api.getWorkflows.mockResolvedValue([]); });
 afterEach(() => { document.body.innerHTML = ''; });
 
+it.each([false, true])('estado null só mantém execução com confirmação no disco (confirmado: %s)', async known => {
+  const run: SubagentRun = { ...sub('child'), agentPath: '/root/review', state: 'running' };
+  const activity: Activity = { ...SEM_ATIVIDADE, agents: [{ id: 'spawn', kind: 'agent', description: 'review', agentId: 'child', running: true }], runningAgents: 1 };
+  const target = document.createElement('div');
+  const comp = mount(ActivitySheet, { target, props: { open: true, codex: true, sessionName: 'sess', activity, onClose: vi.fn(),
+    nativeSubs: known ? [run] : [], nativeStates: { child: { agent_path: '/root/review', state: null, ended_at: null, can_message: false, message_blocked: null } },
+  } });
+  try {
+    await tick(); await tick();
+    expect(target.textContent?.includes(m.atividade_rodando_agora())).toBe(known);
+  } finally { await unmount(comp); }
+});
+
 it.each(['failed', null] as const)('o detalhe Codex mostra %s sem afirmar conclusão', async state => {
   const run = { ...sub('child'), agentPath: '/root/review', state: 'finished' as const, finished: true };
   const states: CodexSubagents = { child: { agent_path: '/root/review', state, ended_at: null, can_message: false, message_blocked: null } };

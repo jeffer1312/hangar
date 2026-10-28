@@ -148,11 +148,37 @@ it('Codex aguarda a descoberta, acompanha o state e não consulta a lista a cada
   expect(api.getSubagents).toHaveBeenCalledTimes(1);
   await render({ 'sub-1': { ...state, state: 'finished', ended_at: 1000 } });
   expect(el.textContent).toBe('true:finished');
-  expect(api.getSubagents).toHaveBeenCalledTimes(1);
+  expect(api.getSubagents).toHaveBeenCalledTimes(2);
   api.getSubagents.mockResolvedValue([{ ...sub, state: 'running' }]);
   await render({ 'sub-1': { ...state, state: 'finished', ended_at: 1000 }, other: state });
-  expect(api.getSubagents).toHaveBeenCalledTimes(2);
+  expect(api.getSubagents).toHaveBeenCalledTimes(3);
   expect(el.textContent).toBe('true:finished');
+});
+
+it('eventos da mesma filha atualizam chamadas e última ferramenta sem polling nem sobreposição', async () => {
+  function Monitor({ states }: { states: CodexSubagents }) {
+    const { subs } = useAgentSubagents('a', 'sess', true, 'conversation', true, states);
+    return createElement('output', null, `${subs[0]?.toolCalls}:${subs[0]?.recent[0]?.target}`);
+  }
+  api.getSubagents.mockResolvedValue([{ ...sub, state: 'running', toolCalls: 1, recent: [{ name: 'Bash', target: 'pwd' }] }]);
+  const el = document.createElement('div');
+  const root = createRoot(el); roots.push(root);
+  const render = (activity_revision: number) => act(async () => root.render(createElement(Monitor, { states: { 'sub-1': {
+    agent_path: '/root/review', activity_revision, state: 'running', ended_at: null, can_message: false, message_blocked: null,
+  } } })));
+  await render(1);
+  expect(el.textContent).toBe('1:pwd');
+  const pending = Promise.withResolvers<SubagentRun[]>();
+  api.getSubagents.mockReturnValueOnce(pending.promise).mockResolvedValue([{ ...sub, state: 'running', toolCalls: 3, recent: [{ name: 'Bash', target: 'cargo check' }] }]);
+  await render(2);
+  expect(api.getSubagents).toHaveBeenCalledTimes(2);
+  await render(3);
+  expect(api.getSubagents).toHaveBeenCalledTimes(2);
+  await act(async () => pending.resolve([{ ...sub, state: 'running', toolCalls: 2 }]));
+  expect(api.getSubagents).toHaveBeenCalledTimes(3);
+  expect(el.textContent).toBe('3:cargo check');
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(api.getSubagents).toHaveBeenCalledTimes(3);
 });
 
 it('Codex tenta novamente após falha inicial e para as consultas ao recuperar', async () => {

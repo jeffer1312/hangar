@@ -1,7 +1,7 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import { getSubagents, projectCodexSubagent, registrarDiag, type CodexSubagents, type SubagentRun } from '@hangar/core';
+import { codexSubagentActivityKey, getSubagents, projectCodexSubagent, registrarDiag, type CodexSubagents, type SubagentRun } from '@hangar/core';
 import { useServers } from '../../stores/servers';
 import { ActivityTimeout, useActivityRequest } from './useActivityRequest';
 import * as m from '../../paraglide/messages';
@@ -12,7 +12,8 @@ export type AgentSubagents = ReturnType<typeof useAgentSubagents>;
 export function useAgentSubagents(serverId: string | undefined, name: string | undefined, enabled: boolean, conversation?: string, codex = false, states?: CodexSubagents) {
   const server = useServers(state => state.servers.find(item => item.id === serverId));
   const source = JSON.stringify([serverId, name, conversation, codex]);
-  const nativeIds = Object.entries(states ?? {}).map(([id, state]) => `${id}:${state.agent_path ?? ''}`).sort().join('|');
+  const nativeIds = codexSubagentActivityKey(states);
+  const refreshActivity = useRef<() => void>(() => {});
   const epoch = useRef({ source, enabled, value: 0 });
   if (epoch.current.source !== source || epoch.current.enabled !== enabled) {
     epoch.current = { source, enabled, value: epoch.current.value + 1 };
@@ -32,13 +33,15 @@ export function useAgentSubagents(serverId: string | undefined, name: string | u
     if (!enabled || !server || !name) return;
     let stopped = false;
     let busy = false;
+    let rerun = false;
     let retryAfter = 0;
     let timeouts = 0;
     let failureRetry: ReturnType<typeof setTimeout> | undefined;
     // A mesma falha vai ao diário uma vez.
     let logged = '';
-    const refresh = async () => {
-      if (stopped || busy || Date.now() < retryAfter || AppState.currentState !== 'active') return;
+    const refresh = async (changed = false) => {
+      if (stopped || Date.now() < retryAfter || AppState.currentState !== 'active') return;
+      if (busy) { rerun ||= changed; return; }
       clearTimeout(failureRetry);
       busy = true;
       try {
@@ -47,8 +50,7 @@ export function useAgentSubagents(serverId: string | undefined, name: string | u
         timeouts = 0;
         retryAfter = 0;
         if (!stopped) setSnapshot(current => {
-          const models = (rows: SubagentRun[]) => rows.map(sub => [sub.agentId, sub.agentPath, sub.prompt, sub.model, sub.state, sub.finished, sub.endedAt]);
-          if (current.key === key && current.loaded && !current.error && JSON.stringify(models(current.subs)) === JSON.stringify(models(subs))) return current;
+          if (current.key === key && current.loaded && !current.error && JSON.stringify(current.subs) === JSON.stringify(subs)) return current;
           return { key, subs, error: '', loaded: true };
         });
       } catch (error) {
@@ -65,13 +67,22 @@ export function useAgentSubagents(serverId: string | undefined, name: string | u
         if (codex) failureRetry = setTimeout(() => void refresh(), Math.max(5_000, retryAfter - Date.now()));
       } finally {
         busy = false;
+        if (rerun && !stopped) { rerun = false; void refresh(); }
       }
     };
+    refreshActivity.current = () => { void refresh(true); };
     void refresh();
     const timer = codex ? undefined : setInterval(() => { void refresh(); }, 5_000);
     const appState = AppState.addEventListener('change', state => { if (state === 'active') { retryAfter = 0; void refresh(); } });
-    return () => { stopped = true; clearInterval(timer); clearTimeout(failureRetry); appState.remove(); };
-  }, [enabled, server, name, key, read, attempt, codex, nativeIds]));
+    return () => { stopped = true; refreshActivity.current = () => {}; clearInterval(timer); clearTimeout(failureRetry); appState.remove(); };
+  }, [enabled, server, name, key, read, attempt, codex]));
+
+  const previousActivity = useRef(nativeIds);
+  useEffect(() => {
+    const changed = previousActivity.current !== nativeIds;
+    previousActivity.current = nativeIds;
+    if (codex && changed) refreshActivity.current();
+  }, [codex, nativeIds]);
 
   const current = enabled && snapshot.key === key;
   const raw = current ? snapshot.subs : EMPTY;

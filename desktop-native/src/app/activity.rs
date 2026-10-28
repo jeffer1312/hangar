@@ -28,10 +28,12 @@ fn project_native_subs(subs: &mut [SubRun], states: Option<&NativeAgents>) {
             sub.message_blocked = Some("erro_subagente_estado_indisponivel".into());
             continue;
         };
-        sub.state = state.state.clone();
-        sub.ended = state.ended_at;
-        sub.finished = state.state.as_deref().is_some_and(|state| state != "running");
-        sub.failed = state.state.as_deref() == Some("failed");
+        if let Some(status) = &state.state {
+            sub.state = Some(status.clone());
+            sub.ended = state.ended_at;
+            sub.finished = status != "running";
+            sub.failed = status == "failed";
+        }
         sub.can_message = state.can_message;
         sub.message_blocked = state.message_blocked.clone();
         sub.problem = state.state.is_none().then(|| "erro_subagente_estado_indisponivel".into());
@@ -40,7 +42,7 @@ fn project_native_subs(subs: &mut [SubRun], states: Option<&NativeAgents>) {
 
 fn native_running(agent: &AgentRun, subs: &[SubRun], states: Option<&NativeAgents>, loaded: bool) -> bool {
     if let Some(state) = states.and_then(|states| native_agent(states, agent.agent_id.as_deref().unwrap_or(""), agent.agent_path.as_deref())) {
-        return state.state.as_deref() == Some("running");
+        if let Some(status) = &state.state { return status == "running"; }
     }
     loaded && match_agent(subs, agent).is_some_and(|sub| sub.state.as_deref() == Some("running"))
 }
@@ -48,13 +50,14 @@ fn native_running(agent: &AgentRun, subs: &[SubRun], states: Option<&NativeAgent
 fn project_native_detail(value: &mut Value, states: Option<&NativeAgents>, id: &str) {
     if !value.is_object() { return; }
     let Some(state) = states.and_then(|states| native_agent(states, id, value["agentPath"].as_str())) else { return; };
-    value["state"] = json!(state.state);
     value["canMessage"] = json!(state.can_message);
     value["messageBlocked"] = json!(state.message_blocked);
+    value["problema"] = json!(state.state.is_none().then_some("erro_subagente_estado_indisponivel"));
+    if state.state.is_none() { return; }
+    value["state"] = json!(state.state);
     value["finished"] = json!(state.state.as_deref().map(|state| state != "running"));
     value["failed"] = json!(state.state.as_deref() == Some("failed"));
     value["endedAt"] = json!(state.ended_at.and_then(|seconds| chrono::DateTime::from_timestamp_millis((seconds * 1000.) as i64)).map(|at| at.to_rfc3339()));
-    value["problema"] = json!(state.state.is_none().then_some("erro_subagente_estado_indisponivel"));
 }
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::tab::{Tab, TabBar};
@@ -867,8 +870,8 @@ impl ActivityPanel {
                     if let Some((old, _)) = &mut self.command_view { *old = source; }
                 }
                 if let Some((_, view)) = &self.command_view {
-                    row = row.child(div().max_h(px(240.)).overflow_y_scroll().id("command-output")
-                        .child(TextView::new(view).selectable(true).scrollable(false).style(theme::conversation_markdown(cx))));
+                    row = row.child(div().id("command-output").max_h(px(240.)).overflow_y_scroll()
+                        .child(gpui_kit::base::TextView::new(view).selectable(true).scrollable(false).style(theme::conversation_markdown(cx))));
                 }
             }
             group = group.child(row);
@@ -1166,7 +1169,7 @@ impl Hangar {
         if self.provider().0 != "codex" { return; }
         let states = self.chat.state.codex_subagents.as_ref();
         let ids: HashSet<_> = states.into_iter().flat_map(|states| states.iter())
-            .map(|(id, state)| format!("{id}:{}", state.agent_path.as_deref().unwrap_or(""))).collect();
+            .map(|(id, state)| format!("{id}:{}:{}:{}", state.agent_path.as_deref().unwrap_or(""), state.state.as_deref().unwrap_or(""), state.activity_revision)).collect();
         let added = ids.difference(&self.act.native_ids).next().is_some();
         self.act.native_ids = ids;
         project_native_subs(&mut self.act.subs, states);
@@ -1668,8 +1671,12 @@ mod tests {
         assert_eq!(detail["canMessage"], false);
         states.get_mut("child").unwrap().state = None;
         super::project_native_detail(&mut detail, Some(&states), "child");
-        assert_eq!(detail["finished"], serde_json::Value::Null);
+        assert_eq!(detail["finished"], true);
         assert_eq!(detail["problema"], "erro_subagente_estado_indisponivel");
+        let mut unknown_detail = serde_json::json!({"agentId":"child","state":null});
+        super::project_native_detail(&mut unknown_detail, Some(&states), "child");
+        assert_eq!(unknown_detail["state"], serde_json::Value::Null);
+        assert_eq!(unknown_detail["finished"], serde_json::Value::Null);
         let mut unknown = sub("child", "review");
         unknown.state = None;
         unknown.problem = Some("erro_subagente_estado_indisponivel".into());

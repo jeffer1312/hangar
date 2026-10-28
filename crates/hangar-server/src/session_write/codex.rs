@@ -67,6 +67,17 @@ pub fn model_answer(sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
     if accepted(sent).is_some() { (StatusCode::OK, json!({"ok": true})) } else { refused() }
 }
 
+/// `/codex/terminate`: a recusa do motor ou do Codex ("esse comando já terminou", erro do app-server) chega à tela.
+pub fn terminate_answer(sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
+    match sent {
+        Ok(reply) if reply.disposition == Disposition::Accepted => (StatusCode::OK, json!({"ok": true})),
+        Ok(reply) => reply.payload["error"]["message"].as_str().or(reply.payload["error"].as_str())
+            .map_or_else(refused, codex_control),
+        Err(error) if error.code == "codex_command" => codex_control(&error.message),
+        Err(_) => refused(),
+    }
+}
+
 pub fn service_tier_answer(tier: &str, sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
     match accepted(sent) {
         Some(done) if done["service_tier"] == tier => (StatusCode::OK, json!({"ok": true, "service_tier": tier})),
@@ -366,7 +377,7 @@ pub async fn terminate(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
     let Some(body) = object(&bytes, ctx.headers()).and_then(|f| strings(&f, "process_id", None)) else { return invalid_body(ctx.headers()) };
     let sent = run(&ctx, OperationKind::TerminateTerminal, json!({"process_id": body["process_id"]})).await;
     log_outcome(&ctx.name, "terminate", &sent, "encerrar comando do Codex não confirmado; a rota responde 409 erro_codex_controle");
-    answer(&ctx, model_answer(&sent))
+    answer(&ctx, terminate_answer(&sent))
 }
 
 pub async fn commands(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {

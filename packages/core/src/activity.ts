@@ -73,7 +73,7 @@ export function projectSubagentActivity(activity: Activity, subs: SubagentRun[],
   const agents = activity.agents.map(agent => {
     const sub = matchAgentSubagent(subs, agent, ids);
     const native = codexSubagentState(states, agent.agentId ?? ids?.get(agent.id), agent.agentPath);
-    const running = native ? native.state === 'running'
+    const running = native?.state ? native.state === 'running'
       : sub?.state ? sub.state === 'running' : sub?.finished === undefined ? agent.running : !sub.finished;
     if (running === agent.running) return agent;
     changed = true;

@@ -57,7 +57,7 @@ export function CodexCommands({ commands, name, serverId, server, readOnly = fal
           <Icon name={opened === command.id ? 'ChevronDown' : 'ChevronRight'} size={18} color={theme.tokens.text.muted} />
           <View style={styles.body}>
             <Text style={styles.text} numberOfLines={2}>{command.command}</Text>
-            <Text style={styles.meta}>pid {command.process_id} · {command.background ? m.codex_terminals_count({ n: 1 }) : m.native_tool_running()}</Text>
+            <Text style={styles.meta}>{m.codex_command_process_id({ id: command.process_id })} · {command.background ? m.codex_terminals_count({ n: 1 }) : m.native_tool_running()}</Text>
           </View>
         </Pressable>
         {!readOnly ? <Pressable onPress={() => void stop(command)} disabled={!server || pending.includes(command.id)} style={styles.stop}

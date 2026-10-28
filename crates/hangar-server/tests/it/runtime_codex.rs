@@ -2633,6 +2633,7 @@ fn plugin_hook_refused_after_update_is_trusted_again_through_the_session_connect
 
     let hooks = json!([
         {"key":"p@m:hooks/hooks.json:post_tool_use:0:0","currentHash":"sha256:decl/sha256:content","source":"plugin","trustStatus":"modified","enabled":true},
+        {"key":"novo@m:hooks/hooks.json:stop:0:0","currentHash":"sha256:never","source":"plugin","trustStatus":"untrusted","enabled":true},
         {"key":"/home/u/.codex/hooks.json:stop:0:0","currentHash":"sha256:account","source":"project","trustStatus":"trusted","enabled":true},
         {"key":"/home/u/repo/.codex/hooks.json:stop:0:0","currentHash":"sha256:repo","source":"project","trustStatus":"untrusted","enabled":true},
         {"key":"p@m:hooks/hooks.json:stop:0:0","currentHash":"sha256:off","source":"plugin","trustStatus":"modified","enabled":false}]);
@@ -2682,13 +2683,16 @@ fn command_that_outlives_its_turn_stays_listed_with_its_output_until_it_exits() 
     assert_eq!(commands[0]["background"],false);
     let effects = line(&mut engine,json!({"method":"item/commandExecution/outputDelta","params":{"threadId":"thread-1","turnId":"turn-1",
         "itemId":"exec-1","delta":"ready on :5173\n"}}),10.6);
+    assert!(published(&effects,"output").is_empty(),"o delta só marca; o rabo sai no Tick");
+    let effects = engine.apply(EngineInput::Tick,clock(10.75)).unwrap();
     assert_eq!(published(&effects,"output"),[json!({"exec-1":"ready on :5173\n"}).to_string()]);
     line(&mut engine,json!({"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}),11.0);
     line(&mut engine,json!({"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-2"}}}),12.0);
     assert_eq!(engine.view()["codex_commands"][0]["background"],true,"o turno seguinte não apaga o comando que segue vivo");
     // O rabo fica nos últimos 16 000 bytes.
-    let effects = line(&mut engine,json!({"method":"item/commandExecution/outputDelta","params":{"threadId":"thread-1","turnId":"turn-1",
+    line(&mut engine,json!({"method":"item/commandExecution/outputDelta","params":{"threadId":"thread-1","turnId":"turn-1",
         "itemId":"exec-1","delta":"x".repeat(20_000)}}),12.1);
+    let effects = engine.apply(EngineInput::Tick,clock(12.3)).unwrap();
     let tail:Value = serde_json::from_str(&published(&effects,"output")[0]).unwrap();
     assert_eq!(tail["exec-1"].as_str().unwrap().len(),16_000);
     let effects = line(&mut engine,json!({"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1",
