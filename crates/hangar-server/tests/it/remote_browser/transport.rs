@@ -89,7 +89,7 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
     tungstenite::{Message as ClientMessage, client::IntoClientRequest},
 };
-type Client = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+pub(super) type Client = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 pub(super) const KEY: &str = "contract::nav-contract";
 const DESKTOP_TOKEN: &str = "remote-browser-contract-desktop";
 const BARRIER: &str = "__remote_browser_contract_barrier__";
@@ -186,10 +186,36 @@ impl Desktop {
         .await
         .expect("desktop não recebeu o efeito esperado");
     }
-    fn detach(&self, index: usize, reason: &str) {
+    pub(super) fn detach(&self, index: usize, reason: &str) {
         self.state.lock().unwrap().peers[index]
             .send(json!({"method":"Inspector.detached","params":{"reason":reason}}))
             .unwrap();
+    }
+    pub(super) fn identify(&self, pid: u32, token: &str, layout: &str) {
+        let mut state = self.state.lock().unwrap();
+        state.pid = pid;
+        state.token = token.into();
+        state.layout = layout.into();
+    }
+    pub(super) fn requests(&self) -> Vec<Value> {
+        self.state.lock().unwrap().requests.clone()
+    }
+    pub(super) fn current_layout(&self) -> String {
+        self.state.lock().unwrap().layout.clone()
+    }
+    pub(super) async fn wait_closed(&self, count: usize) {
+        self.wait(|state| state.closed >= count).await;
+    }
+    pub(super) async fn wait_requests(&self, count: usize) {
+        self.wait(|state| state.requests.len() >= count).await;
+    }
+    pub(super) async fn assert_no_new_requests(&self, previous: &[Value]) {
+        let received = tokio::time::timeout(
+            Duration::from_secs(1),
+            self.wait(|state| state.requests.len() > previous.len()),
+        ).await;
+        assert!(received.is_err(), "encerramento consultou ou restaurou um desktop sem posse");
+        assert_eq!(self.requests(), previous);
     }
     fn result(&self, events: Vec<Value>, logs: Vec<Value>) -> Value {
         let d = self.state.lock().unwrap();
@@ -207,7 +233,7 @@ async fn desktop_cdp(
             .unwrap()
             .to_str()
             .unwrap(),
-        format!("Bearer {DESKTOP_TOKEN}")
+        format!("Bearer {}", ctx.state.lock().unwrap().token)
     );
     let key = hangar_server::auth::query_param(request.uri().query(), "chave").unwrap();
     let (mut parts, _) = request.into_parts();
@@ -309,7 +335,7 @@ pub(super) async fn until(client: &mut Client, events: &mut Vec<Value>, predicat
         }
     }
 }
-async fn barrier(client: &mut Client, events: &mut Vec<Value>) {
+pub(super) async fn barrier(client: &mut Client, events: &mut Vec<Value>) {
     client
         .send(ClientMessage::Text(
             json!({"t":"txt","s":BARRIER}).to_string().into(),
@@ -321,7 +347,7 @@ async fn barrier(client: &mut Client, events: &mut Vec<Value>) {
     })
     .await;
 }
-async fn connect(
+pub(super) async fn connect(
     scene: &Scene,
     query: &str,
 ) -> Result<(Client, axum::http::Response<Option<Vec<u8>>>), tokio_tungstenite::tungstenite::Error>
