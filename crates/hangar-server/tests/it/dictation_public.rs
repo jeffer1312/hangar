@@ -590,7 +590,7 @@ async fn dictation_public_global_does_not_inherit_a_session_from_query() {
 }
 
 #[tokio::test]
-async fn dictation_public_chunked_limits_preserve_original_errors() {
+async fn dictation_public_chunked_audio_limit_uses_approved_413() {
     let server = PublicServer::start().await;
     let fixture: Value = serde_json::from_str(include_str!(
         "../../../../backend/tests/fixtures/contract/dictation_public/edges.json"
@@ -611,17 +611,37 @@ async fn dictation_public_chunked_limits_preserve_original_errors() {
             .post(format!("{}{}", server.base, case["path"].as_str().unwrap()))
             .bearer_auth("owner")
             .header("content-type", "application/json")
+            .header("origin", "https://hangar.test")
             .body(reqwest::Body::wrap_stream(stream))
             .timeout(std::time::Duration::from_secs(60))
             .send()
             .await
             .unwrap();
+        // A diferença aprovada corrige somente áudio; a captura Python continua imutável.
+        let audio = case["path"] != "/api/ditado/relimpar";
+        let expected_status = if audio {
+            json!(413)
+        } else {
+            case["status"].clone()
+        };
+        let expected_body = if audio {
+            json!("request body too large")
+        } else {
+            case["response"].clone()
+        };
+        if audio {
+            assert_eq!(response.headers()["access-control-allow-origin"], "*");
+            assert_eq!(
+                response.headers()["content-type"],
+                "text/plain; charset=utf-8"
+            );
+        }
         let status = response.status().as_u16();
         let text = response.text().await.unwrap();
         let body = serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text));
-        if json!(status) != case["status"] || body != case["response"] {
+        if json!(status) != expected_status || body != expected_body {
             differences.push(
-                json!({"id":case["id"],"actual":body,"status":status,"expected":case["response"]}),
+                json!({"id":case["id"],"actual":body,"status":status,"expected":expected_body}),
             );
         }
         assert!(server.heard.lock().unwrap().is_empty());

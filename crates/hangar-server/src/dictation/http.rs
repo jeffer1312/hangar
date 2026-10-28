@@ -170,9 +170,10 @@ pub async fn serve(
             .filter(|v| !v.is_empty())
             .unwrap_or("audio.wav")
             .to_owned();
+        let headers = req.headers().clone();
         let data = match to_bytes(req.into_body(), AUDIO_LIMIT).await {
             Ok(v) => v,
-            Err(_) => return audio_body_error(),
+            Err(error) => return audio_body_error(error, &headers),
         };
         let result = within_public_deadline(180, async {
             let _slot = st
@@ -212,9 +213,10 @@ pub async fn serve(
         .filter(|v| !v.is_empty())
         .map(str::to_owned)
         .or_else(|| query.get("name").cloned());
+    let headers = req.headers().clone();
     let data = match to_bytes(req.into_body(), AUDIO_LIMIT).await {
         Ok(v) => v,
-        Err(_) => return audio_body_error(),
+        Err(error) => return audio_body_error(error, &headers),
     };
     let transcription = match within_public_deadline(
         180,
@@ -352,8 +354,12 @@ fn declared_too_large(req: &Request) -> bool {
         })
 }
 
-// Preserva a resposta pública do middleware original até a mudança de contrato ser aprovada.
-fn audio_body_error() -> Response {
+fn audio_body_error(error: axum::Error, headers: &axum::http::HeaderMap) -> Response {
+    if std::error::Error::source(&error)
+        .is_some_and(|source| source.is::<http_body_util::LengthLimitError>())
+    {
+        return crate::session_write::too_large(headers);
+    }
     (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
 }
 
