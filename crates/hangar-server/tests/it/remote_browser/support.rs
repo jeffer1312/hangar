@@ -25,6 +25,47 @@ use tokio::task::JoinHandle;
 pub const OWNER: &str = "remote-browser-contract-owner";
 pub const SECRET: &str = "remote-browser-test-internal";
 
+#[cfg(unix)]
+pub async fn isolated(test: &str, inspect: impl FnOnce(&Path)) -> bool {
+    if std::env::var("HANGAR_REMOTE_BROWSER_TEST").as_deref() == Ok(test) { return false; }
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    std::fs::create_dir_all(root.path().join("tmp")).unwrap();
+    let bin = git_probe(root.path());
+    let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+    command.args(["--exact", test, "--nocapture"]).env_clear().current_dir(root.path()).kill_on_drop(true)
+        .env("HANGAR_REMOTE_BROWSER_TEST", test).env("HANGAR_REMOTE_BROWSER_ROOT", root.path())
+        .env("HOME", &home).env("USERPROFILE", &home)
+        .env("XDG_CONFIG_HOME", home.join(".config")).env("XDG_DATA_HOME", home.join(".local/share"))
+        .env("XDG_CACHE_HOME", home.join(".cache")).env("TMPDIR", root.path().join("tmp"))
+        .env("CLAUDE_CONFIG_DIR", home.join(".claude")).env("CODEX_HOME", home.join(".codex"))
+        .env("CP_CLAUDE_CONFIG_DIRS", home.join(".claude")).env("HANGAR_LIST_DIRS", dirs_json(&home))
+        .env("HANGAR_SHARES_FILE", home.join("shares.json"))
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()));
+    let output = tokio::time::timeout(Duration::from_secs(20), command.output()).await
+        .expect("processo de ensaio não encerrou").unwrap();
+    crate::assert_ran_one(&output.stdout);
+    assert!(output.status.success(), "ensaio isolado falhou: {} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    // O filho já saiu: nenhuma tarefa dele pode escrever depois desta conferência.
+    inspect(root.path());
+    true
+}
+
+fn dirs_json(home: &Path) -> String {
+    json!({"home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),
+        "pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),
+        "omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string()
+}
+
+#[cfg(unix)]
+pub fn git_probe(root: &Path) -> PathBuf {
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    crate::write_executable(&bin.join("git"), format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexit 1\n", root.join("git.calls").display()));
+    bin
+}
+
 pub fn contract(name: &str) -> Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../backend/tests/fixtures/contract/remote-browser").join(format!("{name}.json"));
@@ -119,6 +160,7 @@ impl RefusingServer {
 #[cfg(unix)]
 pub struct Scene {
     pub root: tempfile::TempDir,
+    pub home: PathBuf,
     pub state: Arc<AppState>,
     pub owner: Server,
     pub guest: Server,
@@ -128,12 +170,16 @@ pub struct Scene {
 #[cfg(unix)]
 impl Scene {
     pub async fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let isolated = PathBuf::from(std::env::var_os("HANGAR_REMOTE_BROWSER_ROOT").expect("Scene exige processo isolado"));
+        let home = isolated.join("home");
+        assert_eq!(std::env::var_os("HOME"), Some(home.clone().into_os_string()), "HOME fora do ensaio");
+        let root = tempfile::tempdir_in(&isolated).unwrap();
         let script = crate::list_support::sessions(root.path(), 1);
-        let home = root.path().join("home");
-        let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
-            "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
-            "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
+        // O multiplexador de ensaio e o construtor leem as mesmas fontes temporárias.
+        let source = root.path().join("home/.claude");
+        std::fs::rename(source.join("projects"), home.join(".claude/projects")).unwrap();
+        std::fs::rename(source.join(".hangar-state"), home.join(".claude/.hangar-state")).unwrap();
+        let dirs = parse_dirs(&dirs_json(&home));
         let upstream = RefusingServer::new().await;
         let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: upstream.server.address,
             internal_secret: SECRET.into(), auth_token: OWNER.into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") };
@@ -154,7 +200,7 @@ impl Scene {
         let state = Arc::new(state);
         let owner = Server::owner(router(state.clone())).await;
         let guest = Server::guest(guest_router(state.clone())).await;
-        Self { root, state, owner, guest, upstream }
+        Self { root, home, state, owner, guest, upstream }
     }
 
     fn write_headless(home: &Path, name: &str, key: &str, cwd: &Path) {

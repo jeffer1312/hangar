@@ -151,26 +151,56 @@ fn empty_server_token_never_authorizes_a_websocket() {
 #[cfg(unix)]
 #[tokio::test]
 async fn real_discovery_owner_guest_and_external_resources_close() {
-    use super::support::{Scene, RefusingServer};
+    use super::support::{self, Scene, RefusingServer};
     use hangar_server::share::store::Kind;
 
+    let test = crate::exact_name(module_path!(), "real_discovery_owner_guest_and_external_resources_close");
+    if std::env::var_os("REMOTE_BROWSER_AMBIENT_PROBE").is_some() {
+        if support::isolated(&test, |root| assert!(!root.join("git.calls").exists(), "atividade Git depois da descoberta")).await { return; }
+    } else if std::env::var_os("HANGAR_REMOTE_BROWSER_TEST").is_none() {
+        let ambient = tempfile::tempdir().unwrap();
+        let home = ambient.path().join("home");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let shares = ambient.path().join("shares.json");
+        std::fs::write(&shares, "ambient-invalid-shares").unwrap();
+        let bin = support::git_probe(ambient.path());
+        let dirs = serde_json::json!({"home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),
+            "pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")});
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", &test, "--nocapture"]).env_clear().current_dir(ambient.path())
+            .kill_on_drop(true)
+            .env("HOME", &home).env("USERPROFILE", &home).env("XDG_CACHE_HOME", home.join("cache"))
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("HANGAR_LIST_DIRS", dirs.to_string()).env("HANGAR_SHARES_FILE", &shares)
+            .env("CP_CLAUDE_CONFIG_DIRS", home.join(".claude")).env("REMOTE_BROWSER_AMBIENT_PROBE", "1");
+        let output = tokio::time::timeout(Duration::from_secs(30), command.output()).await
+            .expect("sonda do ambiente não encerrou").unwrap();
+        crate::assert_ran_one(&output.stdout);
+        let untouched = std::fs::read_to_string(&shares).ok().as_deref() == Some("ambient-invalid-shares");
+        let no_git = !ambient.path().join("git.calls").exists();
+        assert_eq!((untouched, no_git), (true, true), "estado alheio preservado / Git ausente; filho: {} {}",
+            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert!(output.status.success(), "filho falhou: {} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        return;
+    }
     let scene = Scene::new().await;
-    let info = scene.state.side.locate.info("headless").await.unwrap().unwrap();
+    std::fs::create_dir_all(scene.root.path().join(".git")).unwrap();
+    std::fs::create_dir_all(scene.root.path().join("w0/.git")).unwrap();
+    assert_eq!(scene.state.origins_home, scene.home);
+    let (row, _) = scene.state.list.discovered_session("headless").await.unwrap().unwrap();
+    let info = hangar_server::locate::info_of(&row, &scene.home.join(".claude"));
     assert_eq!(info.session_key, "headless-transcript");
     assert_eq!(info.provider, "claude-headless");
-    assert!(scene.state.side.locate.info("s0").await.unwrap().is_some());
-    assert!(scene.state.side.locate.info("absent").await.unwrap().is_none());
+    assert!(scene.state.list.discovered_session("s0").await.unwrap().is_some());
+    assert!(scene.state.list.discovered_session("absent").await.unwrap().is_none());
     let client = reqwest::Client::new();
-    let owner = client.get(format!("http://{}/api/sessions", scene.owner.address)).bearer_auth(OWNER).send().await.unwrap();
+    let owner = client.get(format!("http://{}/api/session-defaults?provider=claude", scene.owner.address)).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(owner.status(), 200);
-    let rows: serde_json::Value = owner.json().await.unwrap();
-    assert!(rows.as_array().unwrap().iter().any(|r| r["name"] == "headless"));
+    assert_eq!(owner.json::<serde_json::Value>().await.unwrap()["configured"], false);
     let token = scene.guest_token("headless", Kind::Share).await;
-    let guest = client.get(format!("http://{}/api/sessions", scene.guest.address)).bearer_auth(token).send().await.unwrap();
-    assert_eq!(guest.status(), 200);
-    let rows: serde_json::Value = guest.json().await.unwrap();
-    assert_eq!(rows.as_array().unwrap().len(), 1);
-    assert_eq!(rows[0]["name"], "headless");
+    let guest = client.get(format!("http://{}/api/session-defaults?provider=claude", scene.guest.address)).bearer_auth(token).send().await.unwrap();
+    assert_eq!(guest.status(), 403);
     scene.upstream.assert_no_browser_or_discovery_calls();
 
     let desktop = RefusingServer::new().await;
