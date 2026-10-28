@@ -14,7 +14,7 @@ const screenOptions = vi.hoisted(() => [] as object[]);
 const stores = vi.hoisted(() => ({ servers: [
   { id: 'a', label: 'A', baseUrl: 'https://a.test', token: 'token-a' },
   { id: 'b', label: 'B', baseUrl: 'https://b.test', token: 'token-b' },
-] as Server[], activeId: 'b', chat: { events: [] as ChatEvent[], eventsRevision: 0, stateEvent: null as Pick<StateEvent, 'shells'> | null } }));
+] as Server[], activeId: 'b', chat: { events: [] as ChatEvent[], eventsRevision: 0, stateEvent: null as Pick<StateEvent, 'shells' | 'codex_subagents'> | null } }));
 vi.mock('@hangar/core', async (original) => ({ ...await original<typeof import('@hangar/core')>(), ...api }));
 vi.mock('expo-router', () => ({
   useLocalSearchParams: () => route.params,
@@ -688,7 +688,7 @@ describe('ActivitySheet real', () => {
     expect(api.getSubagents).toHaveBeenCalledTimes(2);
   });
 
-  it('retomada nativa do Codex atualiza a lista e o detalhe já concluído', async () => {
+  it.each([false, true])('retomada nativa do Codex atualiza lista e detalhe sem polling saudável (snapshot: %s)', async snapshot => {
     vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
     vi.setSystemTime(new Date(2026, 9, 17, 12, 0, 0));
     stores.chat.events = [
@@ -698,6 +698,8 @@ describe('ActivitySheet real', () => {
     ];
     const finished: SubagentRun = { ...sub, agentId: 'native-thread', agentPath: '/root/revisar-painel', prompt: null, state: 'finished',
       endedAt: new Date().toISOString(), events: [] };
+    const native = { agent_path: '/root/revisar-painel', ended_at: null, can_message: true, message_blocked: null };
+    if (snapshot) stores.chat.stateEvent = { codex_subagents: { 'native-thread': { ...native, state: 'finished' } } };
     api.getSubagents.mockResolvedValue([finished]);
     api.getSubagent.mockResolvedValue(finished);
     const { el, render } = await mount();
@@ -710,13 +712,16 @@ describe('ActivitySheet real', () => {
       { id: 'followup', kind: 'tool_use', tool_use_id: 'followup', tool_name: 'followup_task', tool_input: { target: '/root/revisar-painel', message: 'continue' } },
       { id: 'accepted', kind: 'tool_result', tool_use_id: 'followup', result: '{}' },
     ];
+    if (snapshot) stores.chat.stateEvent = { codex_subagents: { 'native-thread': { ...native, state: 'running' } } };
     await render();
     expect(api.getSubagents.mock.calls.length).toBeGreaterThan(listed);
     expect(api.getSubagent.mock.calls.length).toBeGreaterThan(detailed);
     expect(el.textContent).toContain('Retomada confirmada');
+    await click(el, m.comum_voltar());
+    expectHeader(el, m.ctx_atividade());
     const beforeTick = api.getSubagents.mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-    expect(api.getSubagents.mock.calls.length).toBeGreaterThan(beforeTick);
+    expect(api.getSubagents.mock.calls.length).toBe(beforeTick);
   });
 
   it('Android mantém cabeçalho no conteúdo com títulos, badges e voltar em todos os níveis', async () => {

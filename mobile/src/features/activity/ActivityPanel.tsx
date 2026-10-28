@@ -167,8 +167,8 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   useEffect(() => {
     const previous = previousAgents.current;
     previousAgents.current = { key: listKey, signature: agentSignature };
-    if (!nativeSubagents && previous.key === listKey && previous.signature !== agentSignature) void refreshSubs();
-  }, [agentSignature, listKey, refreshSubs, nativeSubagents]);
+    if (previous.key === listKey && previous.signature !== agentSignature) void refreshSubs();
+  }, [agentSignature, listKey, refreshSubs]);
 
   const previousNativeIds = useRef(nativeIds);
   useEffect(() => {

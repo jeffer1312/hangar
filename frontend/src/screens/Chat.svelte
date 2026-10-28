@@ -18,7 +18,7 @@
   import { citeDialog } from '../lib/citeDialog.svelte';
   import { contextRefsKey } from '../lib/contextRefsDraft.svelte';
   import { attachmentCaption, composeWithContextRefs, splitContextRefs, parseCodexOutput, type ContextRef } from '@hangar/core';
-  import { projectCodexSubagent } from '@hangar/core';
+  import { codexSubagentState, projectCodexSubagent } from '@hangar/core';
   import { itemModsCelular, modsCelular, modsNaTela } from '../lib/modsCelular.svelte';
   import { activePaneId, applyPluginUiDelta, closePluginPane, fieldSender, followLocalTab, inputPluginField, isMissingRoute, parsePluginToast, pluginFailureText, parsePluginUi, pressPluginButton, safeHref, showPluginPane, tabFollowsServer, type PluginControl, type PluginInputKind, type PluginSource, type PluginNode as PluginTree, type PluginPane as PluginPaneData, type PluginToast } from '@hangar/core';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
@@ -1939,10 +1939,12 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   const liveSubagentRuns = $derived(subagentRuns.map(run => projectCodexSubagent(run, stateEvent?.codex_subagents)));
   const codexAgentIds = $derived(Object.entries(stateEvent?.codex_subagents ?? {}).map(([id, state]) => `${id}:${state.agent_path ?? ''}`).sort().join('|'));
   const activity = $derived(isCodex ? projectSubagentActivity(transcriptActivity, liveSubagentRuns, undefined, stateEvent?.codex_subagents) : transcriptActivity);
+  const runningAgents = $derived(activity.agents.filter(agent => agent.running && (!isCodex || subagentsLoaded
+    || codexSubagentState(stateEvent?.codex_subagents, agent.agentId, agent.agentPath)?.state === 'running')));
   let activityConversation = $state(0);
   // O shell de fundo conta junto: pro app "o que está rodando aqui" é uma coisa só. O terminal já
   // mostrava ("5 shells still running") e o app não mostrava nada.
-  const activityBadge = $derived(activity.inProgress + (isCodex && !subagentsLoaded ? 0 : activity.runningAgents) + activity.runningShells);
+  const activityBadge = $derived(activity.inProgress + runningAgents.length + activity.runningShells);
 
   // Subagentes que existem NO DISCO (`<session-dir>/subagents/agent-*.jsonl`), contados pelo
   // backend. Sem isto o painel só abria quando o transcript trazia a ferramenta `Agent` — e o uso
@@ -2006,7 +2008,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   let workflowRunning = $state(false);
   let workflowsEmVoo: ReturnType<typeof getWorkflows> | null = null;
   const wfCount = $derived(activity.agents.filter((a) => a.kind === 'workflow').length);
-  const activityRunning = $derived(workflowRunning || activity.runningAgents > 0);
+  const activityRunning = $derived(workflowRunning || runningAgents.length > 0);
   $effect(() => {
     if (!wfCount) { workflowRunning = false; return; }
     const sustain = activityOpen || workflowRunning;
@@ -3686,7 +3688,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
       pending={pendingShown}
       {sessionName}
       {pluginServers}
-      agentesRodando={isCodex && !subagentsLoaded ? [] : activity.agents.filter((a) => a.running)}
+      agentesRodando={runningAgents}
       onFimDoLocal={pedirMaisAntigos}
       {ancora}
       {dockH}

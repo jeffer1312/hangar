@@ -2723,3 +2723,19 @@ fn codex_warnings_and_failed_mcp_server_show_once_in_the_conversation() {
     let elsewhere = json!({"method":"warning","params":{"message":"de outra conversa","threadId":"thread-9"}});
     assert!(notes(&line(&mut engine,elsewhere,10.4)).is_empty());
 }
+
+#[test]
+fn hook_reapproval_without_answer_shows_the_failure_when_it_expires() {
+    let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":true,"initialized":true,"ready":true,
+        "cwd":"/home/u","codex_home":"/home/u/.codex"}),1,clock(10.0));
+    let refused = json!({"method":"hook/completed","params":{"threadId":"thread-1","run":{"eventName":"postToolUse","status":"failed",
+        "sourcePath":"/home/u/.codex/plugins/cache/m/p/local/hooks/hooks.json",
+        "entries":[{"kind":"error","text":"plugin contents changed; hook approval required"}]}}});
+    assert_eq!(frames(&line(&mut engine,refused.clone(),11.0))[0]["method"],"hooks/list");
+    let expired = engine.apply(EngineInput::Tick,clock(42.0)).unwrap();
+    assert_eq!(hook_notices(&expired),["o Codex não respondeu à reaprovação dos hooks alterados"]);
+    // Depois disso a recusa aparece como as outras falhas, sem nova rodada no mesmo turno.
+    let again = line(&mut engine,refused,43.0);
+    assert!(frames(&again).is_empty());
+    assert_eq!(hook_notices(&again).len(),1);
+}

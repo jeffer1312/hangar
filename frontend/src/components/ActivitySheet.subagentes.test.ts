@@ -12,7 +12,7 @@ import { mount, unmount, tick } from 'svelte';
 import ActivitySheet from './ActivitySheet.svelte';
 import * as m from '../paraglide/messages';
 import * as apiLib from '@hangar/core';
-import type { CodexSubagents, SubagentRun } from '@hangar/core';
+import type { Activity, CodexSubagents, SubagentRun } from '@hangar/core';
 
 vi.mock('@hangar/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@hangar/core')>()),
@@ -46,7 +46,7 @@ function sub(agentId: string, over: Partial<SubagentRun> = {}): SubagentRun {
 }
 
 // Atividade derivada do transcript: VAZIA — é o cenário exato do defeito.
-const SEM_ATIVIDADE = { tasks: [], agents: [], shells: [], inProgress: 0, runningAgents: 0, runningShells: 0 };
+const SEM_ATIVIDADE: Activity = { tasks: [], agents: [], shells: [], total: 0, done: 0, inProgress: 0, runningAgents: 0, runningShells: 0 };
 
 function montar(atividade: unknown = SEM_ATIVIDADE) {
   const el = document.createElement('div');

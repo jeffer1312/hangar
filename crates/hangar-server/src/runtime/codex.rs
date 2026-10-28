@@ -794,14 +794,7 @@ impl Engine {
     /// Plugin ou `hooks.json` sincronizado pelo Hangar mudou com a sessão aberta e o Codex passou a
     /// recusar o hook. Só a conexão desta sessão recarrega a confiança que o app-server dela tem em memória.
     fn trust_synced_hooks(&mut self,effects:&mut Vec<Effect>) {
-        let trust = |rpc:&&Rpc|rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust");
-        if self.rpc.values().filter(trust).any(|rpc|!rpc.timed_out) { return; }
-        // A rodada anterior estourou o prazo: a recusa passa a aparecer, em vez de ficar em silêncio a cada hook.
-        if self.rpc.values().filter(trust).any(|rpc|rpc.timed_out) {
-            self.hook_trust_settled = true;
-            self.hook_notice("hook_failed","o Codex não respondeu à reaprovação dos hooks alterados",effects);
-            return;
-        }
+        if self.rpc.values().any(|rpc|!rpc.timed_out && rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust")) { return; }
         let cwds:Vec<Value> = self.metadata["cwd"].as_str().map(Value::from).into_iter().collect();
         self.counter += 1;
         self.rpc(format!("hook_trust:{}:{}",self.generation,self.counter),"hooks/list",json!({"cwds":cwds}),
@@ -1858,9 +1851,11 @@ impl Engine {
                 if let Some(text) = self.thinking.tick(clock.monotonic_s) { self.publish_on("thinking",text,&mut effects); }
                 let mut subscribe_lost = false;
                 let mut uncertain = Vec::new();
+                let mut trust_expired = false;
                 for rpc in self.rpc.values_mut() {
                     if !rpc.timed_out && clock.monotonic_s >= rpc.deadline {
                         rpc.timed_out = true;
+                        trust_expired |= rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust");
                         subscribe_lost |= subscribe_rpc(rpc) && rpc.params["threadId"] == self.thread_id.as_str();
                         uncertain.extend(reserved_entry(rpc));
                         effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Unknown,payload:json!({"error":"RPC sem resposta"}) });
@@ -1872,6 +1867,11 @@ impl Engine {
                     }
                 }
                 for entry in uncertain { self.set_reservation(&entry,ReservationState::Uncertain); }
+                // Reaprovação sem resposta: o hook que motivou continua recusado, e a conversa precisa saber.
+                if trust_expired && !self.hook_trust_settled {
+                    self.hook_trust_settled = true;
+                    self.hook_notice("hook_failed","o Codex não respondeu à reaprovação dos hooks alterados",&mut effects);
+                }
                 // Assinatura sem resposta é falha de protocolo, não "ainda sem rollout": aparece em vez de ficar ociosa.
                 if subscribe_lost && !self.subscribed {
                     self.subscription_failed("thread/resume sem resposta",&mut effects);

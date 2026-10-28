@@ -14,6 +14,7 @@ use crate::transcript::{LineParser, Provider, decode_line};
 use hangar_api::chat::{ChatEvent, ChatKind};
 
 type Stamp = (Option<SystemTime>, u64, Option<SystemTime>);
+const CACHED_EVENTS: usize = 200;
 
 #[derive(Clone)]
 struct Identity {
@@ -187,7 +188,7 @@ static AGENTS: LazyLock<Mutex<Capped<PathBuf, Parsed>>> = LazyLock::new(|| Mutex
 fn read(path: &Path, identity: &Identity, tail: usize, events: usize) -> Option<Map<String, Value>> {
     let seen = stamp(path)?;
     let cached = AGENTS.lock().unwrap_or_else(PoisonError::into_inner).get(path).cloned();
-    let capacity = events.max(200);
+    let capacity = events.max(CACHED_EVENTS);
     let mut parsed = cached.filter(|p| p.capacity >= capacity && p.offset <= seen.1 && p.stamp.2 == seen.2
         && (p.stamp == seen || seen.1 > p.stamp.1)).unwrap_or_else(|| Parsed {
             stamp: (None, 0, seen.2), offset: 0, acc: Acc { started: identity.born.to_rfc3339(), agent_type: identity.role.clone(), ..Acc::default() },
@@ -246,7 +247,10 @@ fn read(path: &Path, identity: &Identity, tail: usize, events: usize) -> Option<
             }
         }
         parsed.stamp = seen;
-        AGENTS.lock().unwrap_or_else(PoisonError::into_inner).insert(path.to_path_buf(), parsed.clone());
+        // Páginas maiores servem à leitura do histórico, sem ficar retidas no cache da lista.
+        if capacity == CACHED_EVENTS {
+            AGENTS.lock().unwrap_or_else(PoisonError::into_inner).insert(path.to_path_buf(), parsed.clone());
+        }
     }
     let mut out = parsed.acc.clone().into_map(&identity.id, mtime(path), tail);
     out.insert("agentPath".into(), json!(identity.path));
@@ -325,6 +329,24 @@ mod tests {
         assert_eq!(resumed["state"], "running");
         assert!(resumed["endedAt"].is_null());
         assert_eq!(resumed["toolCalls"], 1);
+    }
+
+    #[test]
+    fn older_history_is_returned_without_expanding_the_persistent_cache() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = write(root.path(), "parent", None, &[]);
+        let records = (0..600).map(|index| json!({"timestamp":"2026-10-28T09:00:01Z","type":"response_item",
+            "payload":{"type":"function_call","name":"exec_command","call_id":format!("call-{index}"),"arguments":"{\"cmd\":\"pwd\"}"}})).collect::<Vec<_>>();
+        let child = write(root.path(), "mine", Some("parent"), &records);
+        assert_eq!(get_checked(&parent, "mine", 200).unwrap().unwrap()["events"].as_array().unwrap().len(), 200);
+        let page = get_checked(&parent, "mine", 400).unwrap().unwrap();
+        assert_eq!(page["events"].as_array().unwrap().len(), 400);
+        assert_eq!(page["events"][0]["tool_use_id"], "call-200");
+        assert_eq!(get_checked(&parent, "mine", i64::MAX).unwrap().unwrap()["events"].as_array().unwrap().len(), 600);
+        let cache = AGENTS.lock().unwrap_or_else(PoisonError::into_inner);
+        let parsed = cache.peek(&child.canonicalize().unwrap()).unwrap();
+        assert_eq!(parsed.capacity, CACHED_EVENTS);
+        assert_eq!(parsed.events.len(), CACHED_EVENTS);
     }
 
     #[test]

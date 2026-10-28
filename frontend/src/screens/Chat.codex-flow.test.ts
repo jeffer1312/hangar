@@ -175,6 +175,29 @@ it('não sobrepõe consultas de subagentes mesmo se o estado mudar durante a res
   await flush();
 });
 
+it('fixa só o agente Codex confirmado pelo state antes da descoberta e mesmo após falha na leitura', async () => {
+  let failSubs!: (cause: Error) => void;
+  const pending = new Promise<Awaited<ReturnType<typeof api.getSubagents>>>((_, reject) => { failSubs = reject; });
+  vi.mocked(api.getSubagents).mockReturnValue(pending);
+  try {
+    await montar(false);
+    await emit('message', { id: 'spawn', kind: 'tool_use', tool_use_id: 'launch', tool_name: 'spawn_agent', tool_input: { task_name: 'revisar-painel' } });
+    await emit('message', { id: 'created', kind: 'tool_result', tool_use_id: 'launch', result: '{"agent_id":"child","task_name":"/root/revisar-painel"}' });
+    expect(document.querySelector('.agentes-rodando')).toBeNull();
+    const native = { agent_path: '/root/revisar-painel', ended_at: null, can_message: true, message_blocked: null };
+    await emit('state', { session: 'codex-flow', state: 'working', codex_subagents: { child: { ...native, state: 'running' } } });
+    expect(document.querySelector('.agentes-rodando')).not.toBeNull();
+    for (const state of ['finished', null]) {
+      await emit('state', { session: 'codex-flow', state: 'working', codex_subagents: { child: { ...native, state } } });
+      expect(document.querySelector('.agentes-rodando')).toBeNull();
+    }
+    await emit('state', { session: 'codex-flow', state: 'working', codex_subagents: { child: { ...native, state: 'running' } } });
+    failSubs(new Error('leitura indisponível'));
+    await flush();
+    expect(document.querySelector('.agentes-rodando')).not.toBeNull();
+  } finally { vi.mocked(api.getSubagents).mockResolvedValue([]); }
+});
+
 it.each(['claude', 'codex'] as const)('preserva a descoberta de subagentes ao chegar histórico antigo de %s e a renova no reset', async provider => {
   harness.provider = provider;
   let finishHistory!: (value: Awaited<ReturnType<typeof api.getHistoryDesde>>) => void;

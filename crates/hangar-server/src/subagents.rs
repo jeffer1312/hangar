@@ -208,6 +208,7 @@ async fn serve(st: &AppState, (name, agent): (String, Option<String>), query: Op
                 Some(Err(error)) => {
                     warn_once(&name, "runtime_subagents_unavailable");
                     tracing::debug!(session = %name, ?error, "subagentes Codex do runtime");
+                    problem = Some("runtime_subagents_unavailable".into());
                 }
                 None => {}
             }

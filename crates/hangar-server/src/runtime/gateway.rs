@@ -1858,11 +1858,11 @@ impl RuntimeRegistry {
     }
 
     pub async fn codex_subagent_message(&self,name:&str,parent_thread_id:&str,agent_id:&str,text:&str) -> Option<Result<Value,RuntimeError>> {
-        let handle=self.codex_agent_handle(name).await?;
         let _pass=match self.ingress.enter(name,Duration::ZERO).await {
             Ok(pass)=>pass,
             Err(_)=>return Some(Err(RuntimeError::new("session_transfer_busy","a sessão está trocando de agente"))),
         };
+        let handle=self.codex_agent_handle(name).await?;
         Some(Self::codex_agent_command(&handle,OperationKind::SubagentMessage,parent_thread_id,agent_id,Some(text)).await)
     }
 
@@ -2885,6 +2885,17 @@ async fn events(State(state):State<Gateway>) -> Response {
 pub(crate) mod tests {
     use super::*;
     use crate::runtime::queue::acquire_lease;
+
+    #[tokio::test]
+    async fn a_subagent_message_checks_ingress_before_choosing_an_actor() {
+        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "fixture".into(), "instance".into());
+        registry.ingress.hold("session", Duration::from_secs(1)).await.unwrap();
+        let _entries = registry.entries.lock().await;
+        let error = tokio::time::timeout(Duration::from_secs(1), registry.codex_subagent_message("session", "parent", "child", "continue"))
+            .await.expect("a porta fechada recusa antes de esperar a escolha do ator").unwrap().unwrap_err();
+        assert_eq!(error.code, "session_transfer_busy");
+        registry.ingress.release("session");
+    }
 
     #[test]
     fn a_session_recreated_with_the_same_name_is_not_the_dead_life() {

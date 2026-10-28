@@ -17,7 +17,17 @@ fn native_agent<'a>(states: &'a NativeAgents, id: &str, path: Option<&str>) -> O
 fn project_native_subs(subs: &mut [SubRun], states: Option<&NativeAgents>) {
     let Some(states) = states else { return; };
     for sub in subs {
-        let Some(state) = native_agent(states, &sub.agent_id, sub.agent_path.as_deref()) else { continue; };
+        let Some(state) = native_agent(states, &sub.agent_id, sub.agent_path.as_deref()) else {
+            if sub.state.as_deref() == Some("running") {
+                sub.state = None;
+                sub.finished = false;
+                sub.ended = None;
+                sub.problem = Some("erro_subagente_estado_indisponivel".into());
+            }
+            sub.can_message = false;
+            sub.message_blocked = Some("erro_subagente_estado_indisponivel".into());
+            continue;
+        };
         sub.state = state.state.clone();
         sub.ended = state.ended_at;
         sub.finished = state.state.as_deref().is_some_and(|state| state != "running");
@@ -191,10 +201,13 @@ fn norm(text: &str) -> String { text.split_whitespace().collect::<Vec<_>>().join
 
 /// O subagente do disco de um Agent: prompt normalizado inteiro, senão os 400 primeiros caracteres (o mais recente
 /// vence, e a lista já vem do mais recém-escrito).
-fn agent_model(subs: &[SubRun], agent_id: Option<&str>, prompt: Option<&str>, asked: Option<String>) -> Option<String> {
+fn agent_model(subs: &[SubRun], agent_id: Option<&str>, agent_path: Option<&str>, prompt: Option<&str>, asked: Option<String>) -> Option<String> {
     let sub = match agent_id {
         Some(id) => subs.iter().find(|s| s.agent_id == id),
-        None => match_sub(subs, prompt),
+        None => match agent_path {
+            Some(path) => subs.iter().find(|sub| sub.agent_path.as_deref() == Some(path)),
+            None => match_sub(subs, prompt),
+        },
     };
     // Na lista sem modelo (só erro de API, ilegível): o apelido seria afirmar o que não rodou.
     match sub { Some(s) => s.model.clone(), None => asked }
@@ -536,6 +549,8 @@ impl ActivityPanel {
         if self.subs != subs {
             self.seq += 1;
             self.receive(self.seq, Ok(subs), cx);
+        } else if self.prepare() {
+            cx.notify();
         }
     }
 
@@ -1058,6 +1073,7 @@ impl ActivityPanel {
             }
             // Já chamou ferramentas (ou o registro não foi lido): é falha de leitura, não agente parado.
             else if run.unreadable || run.calls > 0 { empty(web("atividade_erro_transcript")) }
+            else if run.problem.as_deref() == Some("erro_subagente_estado_indisponivel") { div().into_any_element() }
             else { empty(web("atividade_pensando")) };
         let title = if opened.title.trim().is_empty() { web("atividade_subagente") } else { opened.title.clone() };
         let back = web("comum_voltar");
@@ -1270,7 +1286,6 @@ impl Hangar {
     pub(super) fn restart_subagent_count(&mut self, cx: &mut Context<Self>) {
         if !self.history_installed { return; }
         if self.provider().0 == "codex" {
-            self.act.count_timer = None;
             if !self.act.count_loaded { self.count_subagents(); }
             return;
         }
@@ -1308,7 +1323,7 @@ impl Hangar {
                 self.act.count_busy = false;
                 let Ok(mut subs) = result else {
                     if self.act.pending_tab.take().is_some() { self.act.tab_error = Some(web("atividade_erro_vivo")); cx.notify(); }
-                    if self.provider().0 == "codex" && !self.act.count_loaded {
+                    if self.provider().0 == "codex" {
                         self.act.count_timer = Some(cx.spawn(async move |this, cx| {
                             cx.background_executor().timer(COUNT_EVERY).await;
                             let _ = this.update(cx, |this, _| this.count_subagents());
@@ -1369,8 +1384,7 @@ impl Hangar {
     /// O modelo do card do Agent: o que respondeu, quando o subagente já está na lista; antes, o apelido pedido.
     pub(super) fn agent_card_model(&self, call: usize, asked: Option<String>) -> Option<String> {
         let Some(agent) = self.conversation.activity.agents.iter().find(|a| a.call == call) else { return asked };
-        if agent.agent_path.is_some() { return match_agent(&self.act.subs, agent).and_then(|sub| sub.model.clone()); }
-        agent_model(&self.act.subs, agent.agent_id.as_deref(), agent.prompt.as_deref(), asked)
+        agent_model(&self.act.subs, agent.agent_id.as_deref(), agent.agent_path.as_deref(), agent.prompt.as_deref(), asked)
     }
 
     pub(super) fn effective_agent(&self, call: usize) -> Option<AgentRun> {
@@ -1500,7 +1514,7 @@ impl Hangar {
             let id = tab.id;
             let view = tab.view.read(cx);
             let opened = view.opened.as_ref();
-            let unavailable = view.notice.is_some() || opened.is_some_and(|o| o.run.unreadable);
+            let unavailable = view.notice.is_some() || opened.is_some_and(|o| o.run.unreadable || o.run.problem.is_some());
             let silent = opened.is_some_and(|o| sub_silent(&view.activity.agents, &view.subs, &o.run));
             let running = !unavailable && !silent && opened.is_some_and(|o| !o.done);
             let failed = opened.is_some_and(|o| o.run.failed);
@@ -1666,6 +1680,96 @@ mod tests {
         super::project_native_detail(&mut serde_json::json!("invalid"), Some(&states), "child");
     }
 
+    #[test]
+    fn removing_a_live_child_clears_its_active_state_without_erasing_history() {
+        let states = super::NativeAgents::from([("child".into(), super::CodexSubagent {
+            agent_path: Some("/root/review".into()), state: Some("running".into()), can_message: true, ..Default::default()
+        })]);
+        let mut subs = vec![sub("child", "review"), SubRun { state: Some("finished".into()), finished: true, ..sub("old", "older work") }];
+        super::project_native_subs(&mut subs, Some(&states));
+        assert_eq!(subs[0].state.as_deref(), Some("running"));
+        assert!(subs[0].can_message);
+        super::project_native_subs(&mut subs, Some(&super::NativeAgents::new()));
+        assert_eq!(subs.len(), 2);
+        assert_eq!(subs[0].state, None);
+        assert!(!subs[0].can_message);
+        assert_eq!(super::sub_status(&[], &subs, &subs[0], 1000.), super::SubStatus::Unknown);
+        assert_eq!(subs[1].state.as_deref(), Some("finished"));
+        super::project_native_subs(&mut subs, Some(&states));
+        assert_eq!(subs[0].state.as_deref(), Some("running"));
+        assert!(subs[0].problem.is_none());
+    }
+
+    #[gpui::test]
+    fn native_state_changes_rebuild_lines_even_without_subagent_metadata(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, cx| {
+            panel.activity.agents = vec![parent("spawn", "review", Some("child"), true)];
+            let mut states = super::NativeAgents::from([("child".into(), super::CodexSubagent {
+                state: Some("running".into()), ..Default::default()
+            })]);
+            panel.set_native_states(Some(&states), cx);
+            assert_eq!(panel.lines.agents.len(), 1);
+            states.get_mut("child").unwrap().state = Some("finished".into());
+            panel.set_native_states(Some(&states), cx);
+            assert!(panel.lines.agents.is_empty());
+            assert!(panel.subs.is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn command_stop_sends_the_selected_session_route_and_process_id(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        let runtime = super::Arc::new(super::Runtime::new().unwrap());
+        let listener = runtime.block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = runtime.spawn(async move {
+            let (stream, _) = tokio::time::timeout(super::Duration::from_secs(3), listener.accept()).await.unwrap().unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut line = String::new();
+            stream.read_line(&mut line).await.unwrap();
+            assert_eq!(line.trim(), "POST /api/sessions/fixture-session/codex/terminate HTTP/1.1");
+            let (mut length, mut authorized) = (0, false);
+            loop {
+                line.clear();
+                stream.read_line(&mut line).await.unwrap();
+                if line == "\r\n" { break; }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") { length = value.trim().parse::<usize>().unwrap(); }
+                    if name.eq_ignore_ascii_case("authorization") { authorized = value.trim() == "Bearer fixture-owner"; }
+                }
+            }
+            assert!(authorized);
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).await.unwrap();
+            assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap(), serde_json::json!({"process_id":"4242"}));
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}").await.unwrap();
+        });
+        let (tx, rx) = async_channel::unbounded();
+        let key = super::SessionKey { server: "server-b".into(), name: "fixture-session".into(), jsonl: "thread-1".into() };
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, cx| {
+            panel.key = Some(key.clone());
+            panel.link = Some(super::Link { api: super::Api::new(&format!("http://{address}"), "fixture-owner").unwrap(), runtime: runtime.clone(), tx, connection: 7 });
+            panel.commands = vec![super::CodexCommand { id: "exec-a".into(), process_id: "4242".into(), ..Default::default() }];
+            panel.stop_command("exec-a", cx);
+            assert!(panel.command_pending.contains("exec-a"));
+        });
+        let reply = runtime.block_on(async { tokio::time::timeout(super::Duration::from_secs(3), rx.recv()).await.unwrap().unwrap() });
+        assert_eq!(reply.connection, 7);
+        match reply.payload {
+            super::Payload::Activity(super::ActivityReply::CommandStopped(reply_key, id, result)) => {
+                assert_eq!(reply_key, key);
+                assert_eq!(id, "exec-a");
+                assert_eq!(result.unwrap(), serde_json::json!({"ok":true}));
+            }
+            _ => panic!("unexpected command reply"),
+        }
+        runtime.block_on(server).unwrap();
+    }
+
     #[gpui::test]
     fn command_stop_clears_each_request_and_rejects_another_conversation(cx: &mut gpui::TestAppContext) {
         use gpui::AppContext;
@@ -1823,13 +1927,16 @@ mod tests {
     #[test]
     fn the_model_shown_is_the_one_that_answered_and_the_alias_only_until_it_is_known() {
         use super::{agent_model, parse_sub};
-        let answered = parse_sub(&serde_json::json!({"agentId": "a", "prompt": "faz X", "model": "gpt-6.1-sol"})).unwrap();
+        let answered = parse_sub(&serde_json::json!({"agentId": "a", "agentPath":"/root/review", "prompt": "faz X", "model": "gpt-6.1-sol"})).unwrap();
         let subs = vec![answered, sub("b", "faz Y")];
-        assert_eq!(agent_model(&subs, None, Some("faz X"), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
-        assert_eq!(agent_model(&subs, Some("a"), Some("outro prompt"), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
-        assert_eq!(agent_model(&subs, None, Some("faz Y"), Some("opus".into())), None);
-        assert_eq!(agent_model(&subs, None, Some("ainda não listado"), Some("opus".into())).as_deref(), Some("opus"));
-        assert_eq!(agent_model(&[], None, Some("faz X"), None), None);
+        assert_eq!(agent_model(&subs, None, None, Some("faz X"), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(agent_model(&subs, Some("a"), None, Some("outro prompt"), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(agent_model(&subs, None, None, Some("faz Y"), Some("opus".into())), None);
+        assert_eq!(agent_model(&subs, None, None, Some("ainda não listado"), Some("opus".into())).as_deref(), Some("opus"));
+        assert_eq!(agent_model(&[], None, None, Some("faz X"), None), None);
+        assert_eq!(agent_model(&[], None, Some("/root/review"), None, Some("asked".into())).as_deref(), Some("asked"));
+        assert_eq!(agent_model(&subs, None, Some("/root/review"), None, Some("asked".into())).as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(agent_model(&subs, Some("other-uuid"), Some("/root/review"), None, Some("asked".into())).as_deref(), Some("asked"));
     }
 
     #[test]
