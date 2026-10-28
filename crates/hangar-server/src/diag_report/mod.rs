@@ -20,6 +20,9 @@ pub struct ClientInput {
     pub text: Option<String>,
     pub client: String,
     pub failures: Vec<ClientFailure>,
+    /// Código do primeiro relatório do mesmo envio ("todas as minhas máquinas"); vai ao worker no cabeçalho.
+    #[serde(default)]
+    pub group: Option<String>,
 }
 
 #[derive(serde::Deserialize)]

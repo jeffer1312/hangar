@@ -15,8 +15,9 @@
   // por IP, e o global vale para os dois; o envio do diário inteiro usa o LIMITER.
   "ratelimits": [
     { "name": "LIMITER", "namespace_id": "1001", "simple": { "limit": 3, "period": 60 } },
-    { "name": "GLOBAL_LIMITER", "namespace_id": "1002", "simple": { "limit": 2, "period": 60 } },
-    { "name": "DIAG_LIMITER", "namespace_id": "1003", "simple": { "limit": 1, "period": 60 } }
+    { "name": "GLOBAL_LIMITER", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } },
+    { "name": "DIAG_LIMITER", "namespace_id": "1003", "simple": { "limit": 1, "period": 60 } },
+    { "name": "DIARY_LIMITER", "namespace_id": "1004", "simple": { "limit": 10, "period": 60 } }
   ],
   // Destinatário no segredo REPORT_TO: o repositório é público.
   "send_email": [{ "name": "MAILER" }],

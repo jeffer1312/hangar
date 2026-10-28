@@ -23,6 +23,8 @@ export const DIARY_MAX_BYTES = 10 * 1024 * 1024;
 /** Prazo da senha de envio do diário: o servidor manda logo depois do relatório. */
 export const UPLOAD_TTL_SECONDS = 10 * 60;
 const DIAG_CODE = /^[a-z2-7]{8}$/;
+/** Máquinas de um mesmo envio ("todas as minhas máquinas"): o primeiro relatório e os que levam o código dele. */
+export const GROUP_MAX = 8;
 const UPLOAD = /^[a-z2-7]{32}$/;
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
@@ -39,7 +41,7 @@ export interface Report {
 /** O que o handler usa do mundo: os testes trocam limite e e-mail sem tocar na conta. */
 export interface Deps {
 	reports: KVNamespace;
-	allow(ip: string, limit: Kind): Promise<boolean>;
+	allow(ip: string, limit: Kind | "diario"): Promise<boolean>;
 	/** Teto de todos juntos: muitos IPs (ou um que troca) não esgotam as escritas do KV nem a caixa de e-mail. */
 	allowAll(): Promise<boolean>;
 	/** Soma as escritas no KV ao contador do dia e devolve o total; aproximado (por local da Cloudflare). */
@@ -144,8 +146,24 @@ function stampedApp(request: Request): string | undefined {
 	return STAMP.exec(request.headers.get("x-hangar-stamp") ?? "")?.[1];
 }
 
-function record(report: Report, request: Request): string {
-	return JSON.stringify({ ...report, received: new Date().toISOString(), country: request.cf?.country ?? null });
+function record(report: Report, request: Request, group?: string): string {
+	return JSON.stringify({ ...report, ...(group ? { group } : {}), received: new Date().toISOString(), country: request.cf?.country ?? null });
+}
+
+interface Group { code: string; members: string[] }
+
+/** O grupo de um envio, só pelo código do primeiro relatório (o que grava `group` igual ao próprio código): um membro
+ *  aceito como grupo abriria outro de 8 e encadearia envios sem limite por IP. A lista nasce no segundo relatório. */
+async function readGroup(deps: Deps, code: string): Promise<Group | null> {
+	if (!DIAG_CODE.test(code)) return null;
+	const list = await deps.reports.get(`diag/${code}/group`);
+	if (list !== null) {
+		const members: unknown = JSON.parse(list);
+		return Array.isArray(members) ? { code, members: members.filter((m): m is string => typeof m === "string") } : null;
+	}
+	const lead = await deps.reports.get(`diag/${code}`);
+	if (lead === null) return null;
+	return (JSON.parse(lead) as { group?: unknown }).group === code ? { code, members: [code] } : null;
 }
 
 async function handleReport(request: Request, deps: Deps): Promise<Response> {
@@ -161,7 +179,13 @@ async function handleReport(request: Request, deps: Deps): Promise<Response> {
 	// O limite do IP depende do `kind`, que está no corpo: a leitura vem antes (com teto de MAX_BYTES), o limite antes
 	// de qualquer escrita, e JSON quebrado também paga o limite.
 	const limit: Kind = (parsed as { kind?: unknown } | null | undefined)?.kind === "diagnostico" ? "diagnostico" : "instalacao";
-	if (!(await deps.allow(request.headers.get("cf-connecting-ip") ?? "sem-ip", limit))) return json(429, { erro: "limite" });
+	const ip = request.headers.get("cf-connecting-ip") ?? "sem-ip";
+	// As outras máquinas da pessoa saem do mesmo IP logo depois da primeira: com o código dela, o teto é o do grupo.
+	const groupCode = request.headers.get("x-hangar-group");
+	const group = groupCode !== null && limit === "diagnostico" ? await readGroup(deps, groupCode) : null;
+	if (!group && !(await deps.allow(ip, limit))) return json(429, { erro: "limite" });
+	if (groupCode !== null && !group) return json(400, { erro: "grupo" });
+	if (group && group.members.length >= GROUP_MAX) return json(429, { erro: "grupo-cheio" });
 	if (broken) return json(400, { erro: "json" });
 	const report = parseReport(parsed);
 	if (!report) return json(400, { erro: "campos" });
@@ -169,7 +193,7 @@ async function handleReport(request: Request, deps: Deps): Promise<Response> {
 	if (stamped !== (report.kind === "diagnostico" ? "server" : "native")) return json(403, { erro: "carimbo" });
 	// O teto de todos só conta relatório válido: lixo com o carimbo público não tira a vez de quem precisa.
 	if (!(await deps.allowAll())) return json(429, { erro: "limite" });
-	if (report.kind === "diagnostico") return storeDiagnostic(report, request, deps);
+	if (report.kind === "diagnostico") return storeDiagnostic(report, request, deps, group);
 	const id = `${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}`;
 	// Acima do teto diário só o e-mail sai.
 	const overDaily = await overDailyCeiling(deps, 1);
@@ -190,11 +214,11 @@ async function handleReport(request: Request, deps: Deps): Promise<Response> {
 }
 
 /** Diagnóstico só responde com código que abre: sem gravar no KV é 503 e nenhum e-mail sai. */
-async function storeDiagnostic(report: Report, request: Request, deps: Deps): Promise<Response> {
+async function storeDiagnostic(report: Report, request: Request, deps: Deps, group: Group | null): Promise<Response> {
 	// shortcut: código de 40 bits sem conferir colisão; com milhões de relatórios em 90 dias, conferir antes de gravar.
 	const code = randomCode(8);
 	const id = `diag/${code}`;
-	if (await overDailyCeiling(deps, 2)) {
+	if (await overDailyCeiling(deps, group ? 3 : 2)) {
 		console.error(JSON.stringify({ message: "diagnostico sem kv", id, reason: "teto-diario" }));
 		return json(503, { erro: "armazenamento" });
 	}
@@ -202,7 +226,10 @@ async function storeDiagnostic(report: Report, request: Request, deps: Deps): Pr
 	try {
 		// Senha primeiro: se o relatório falhar, sobra só ela, que vence em 10 min, e não um relatório órfão de 90 dias.
 		await deps.reports.put(`${id}/upload`, upload, { expirationTtl: UPLOAD_TTL_SECONDS });
-		await deps.reports.put(id, record(report, request), { expirationTtl: TTL_SECONDS });
+		await deps.reports.put(id, record(report, request, group?.code ?? code), { expirationTtl: TTL_SECONDS });
+		// shortcut: ler e regravar a lista perde um membro se duas máquinas chegarem juntas; o app manda uma por vez e
+		// cada relatório guarda o `group`.
+		if (group) await deps.reports.put(`diag/${group.code}/group`, JSON.stringify([...group.members, code]), { expirationTtl: TTL_SECONDS });
 	} catch (e: unknown) {
 		logErr("kv falhou", id, e);
 		return json(503, { erro: "armazenamento" });
@@ -231,8 +258,9 @@ async function handleDiary(request: Request, deps: Deps): Promise<Response> {
 	if (!Number.isInteger(length) || length <= 0 || !request.body) return json(411, { erro: "tamanho" });
 	if (length > DIARY_MAX_BYTES) return json(413, { erro: "grande" });
 	// Cada tentativa custa uma leitura do KV, que é da conta inteira.
-	// O diário vem logo após o relatório, que já gastou a vez no limitador do diagnóstico: aqui vale o da instalação.
-	if (!(await deps.allow(request.headers.get("cf-connecting-ip") ?? "sem-ip", "instalacao"))) return json(429, { erro: "limite" });
+	// O diário vem logo após o relatório, que já gastou a vez no limitador do diagnóstico; as máquinas de um mesmo envio
+	// mandam cada uma o seu, do mesmo IP: limitador próprio, mais largo, já que a senha de uso único barra o resto.
+	if (!(await deps.allow(request.headers.get("cf-connecting-ip") ?? "sem-ip", "diario"))) return json(429, { erro: "limite" });
 	const id = `diag/${code}`;
 	try {
 		const expected = await deps.reports.get(`${id}/upload`);
@@ -256,13 +284,13 @@ async function handleDiary(request: Request, deps: Deps): Promise<Response> {
 
 /** `REPORT_TO` é segredo (`wrangler secret put`), fora do `wrangler.jsonc` e por isso fora do `Env` gerado. */
 // shortcut: DIAG_LIMITER declarado aqui até `npm run types` regenerar o worker-configuration.d.ts.
-type Bindings = Env & { REPORT_TO?: string; DIAG_LIMITER: RateLimit };
+type Bindings = Env & { REPORT_TO?: string; DIAG_LIMITER: RateLimit; DIARY_LIMITER: RateLimit };
 
 export default {
 	async fetch(request, env: Bindings, ctx): Promise<Response> {
 		return handle(request, {
 			reports: env.REPORTS,
-			allow: async (ip, limit) => (await (limit === "diagnostico" ? env.DIAG_LIMITER : env.LIMITER).limit({ key: ip })).success,
+			allow: async (ip, limit) => (await ({ diagnostico: env.DIAG_LIMITER, diario: env.DIARY_LIMITER, instalacao: env.LIMITER })[limit].limit({ key: ip })).success,
 			allowAll: async () => (await env.GLOBAL_LIMITER.limit({ key: "global" })).success,
 			countToday: async (writes) => {
 				// ponytail: contador no Cache API, por local e sem atomicidade; Durable Object se precisar exato.

@@ -145,7 +145,7 @@ impl LocalTerminalFacts {
     fn plugin_proves(&self, target: &TerminalTarget) -> bool {
         // Plugin sem vínculo ou ilegível não prova nada: segue a leitura do processo.
         self.plugin.as_ref().is_some_and(|store| self.plugin_facts(target).is_ok_and(|facts| plugin_current(&facts, target.metadata.cut(target.created)))
-            && store.conversation_proved(&Self::binding(target)).unwrap_or(false))
+            && store.conversation_proved(&Self::binding(target), Instant::now()).unwrap_or(false))
     }
     /// Sem o registro nativo, o `/pull` aberto do plugin é a prova da conversa: quem o entrega ao plugin
     /// (`Fill`) fica sem ela até ele voltar.
@@ -478,6 +478,23 @@ mod tests {
         plugin.record_state(&binding,"idle".into(),None,Instant::now()).unwrap();
         assert_eq!(local.check(&target,&target.binding).await.unwrap_err().0,"terminal_conversation_unavailable");
         drop(poll);
+    }
+    /// Sem o registro nativo, em qualquer SO: o plugin vivo prova a conversa também entre um `/pull` e o seguinte,
+    /// senão a entrada pisca em erro a cada troca de `/pull` (no Windows nada mais prova).
+    #[tokio::test]
+    async fn plugin_between_pulls_still_proves_the_conversation_without_the_native_record() {
+        use crate::plugin::Pull;
+        let dir=tempfile::tempdir().unwrap();let target=target(dir.path());let binding=LocalTerminalFacts::binding(&target);
+        std::fs::create_dir_all(target.transcript.parent().unwrap()).unwrap();std::fs::write(&target.transcript,"").unwrap();
+        let plugin=Arc::new(Store::new(Arc::new(crate::interactions::InteractionStore::default())));plugin.interactions().bind(&binding).unwrap();plugin.bind(&binding).unwrap();
+        let local=LocalTerminalFacts::new(frame(),Some(plugin.clone()),None);
+        let now=SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();let mut stamp=(now*1000.0) as u64;let mut instance=String::new();while stamp>0 {instance.insert(0,char::from_digit((stamp%36) as u32,36).unwrap());stamp/=36;}
+        let poll=plugin.begin_pull(&binding,Pull {instance,modos:vec!["fill".into()],estado:Some("idle".into()),session_id:Some("sid".into())},Instant::now()).unwrap();
+        assert!(local.check(&target,&target.binding).await.is_ok(),"/pull aberto");
+        drop(poll);
+        assert!(local.check(&target,&target.binding).await.is_ok(),"entre um /pull e o seguinte");
+        plugin.record_state(&binding,"fim".into(),Some("clear".into()),Instant::now()).unwrap();
+        assert!(local.check(&target,&target.binding).await.is_err(),"session.end depois do último /pull");
     }
     /// Pane que troca de tela a cada Enter enviado, como o formulário do TUI.
     struct FormIo { screens: Vec<String>, at: Mutex<usize>, keys: Mutex<Vec<String>> }

@@ -157,6 +157,33 @@ test("ponte recusada e `whoami` falhando com o backend ainda subindo: o plugin n
   expect(pulls).toContain("nova");
 });
 
+for (const { code, back } of [
+  // A sessão reabrindo no Hangar (vínculo trocando): a ponte volta em segundos, não fica 30 s sem provar a conversa.
+  { code: "erro_interacao_desatualizada", back: true },
+  { code: "plugin_identity_missing", back: true },
+  // Outra instância é dona da sessão: segue a espera longa.
+  { code: "plugin_instance_conflict", back: false },
+]) test(`ponte do lançamento recusada com ${code}: ${back ? "tenta de novo em segundos" : "espera a outra instância"}`, {}, async ($, on) => {
+  const relogio = mock.clock(on, { now: 1_000_000 });
+  const env: Record<string, string> = { HANGAR_PLUGIN_URL: "http://127.0.0.1:1/api/plugin", HANGAR_PLUGIN_TOKEN: "k.t", CP_SESSION_NAME: "s" };
+  let pulls = 0;
+  on("env.get", ($, e) => ({ value: env[e.name] }));
+  on("session.start", ($, e) => ({ cwd: e.cwd }));
+  on("session.cwd", () => ({ value: "/tmp" }));
+  on("session.model", () => ({ value: "modelo" }));
+  on("session.id", () => ({ value: "sid" }) as never);
+  on("command.register", () => ({ value: undefined }) as never);
+  on("http.fetch", ($, e) => {
+    const resp = (status: number, text: string) => ({ value: { status, ok: status === 200, headers: {}, text } }) as never;
+    if (!e.url.endsWith("/pull")) return resp(200, '{"ok":true}');
+    pulls++;
+    return pulls === 1 ? resp(409, JSON.stringify({ detail: { code } })) : resp(200, '{"text":null}');
+  });
+  await $.session.start({ cwd: "/tmp", surface: "terminal", isInteractive: true });
+  await relogio.advance(5_000);
+  expect(pulls > 1).toBe(back);
+});
+
 /** Composer de mentira: `typed` é a tecla da pessoa que chega logo depois do espaço; `failBack` recusa a volta. */
 function composer(draft: string, opts: { typed?: string; failBack?: boolean } = {}) {
   const box = { text: draft };

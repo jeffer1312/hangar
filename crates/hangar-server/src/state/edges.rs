@@ -26,6 +26,7 @@ pub fn runtime_problem(view: &RuntimeView) -> Option<(String, String)> {
         "composer_unreadable" => "terminal_input_composer_unreadable",
         "capture_failed" | "capture_utf8" => "terminal_input_capture_failed",
         "delivery_unproved" => "terminal_input_delivery_unproved",
+        "delivery_composer_busy" => "terminal_input_delivery_composer_busy",
         "no_safe_delivery" => "terminal_input_no_safe_delivery",
         _ => "terminal_input_stalled",
     };
@@ -35,7 +36,7 @@ pub fn runtime_problem(view: &RuntimeView) -> Option<(String, String)> {
 /// O erro do runtime é consequência do motivo de entrada parada que já sai com frase própria.
 pub(crate) fn explained(stalled: Option<&str>, error: &str) -> bool {
     match stalled {
-        Some("delivery_unproved") => error == "terminal_delivery_unknown",
+        Some("delivery_unproved" | "delivery_composer_busy") => error == "terminal_delivery_unknown",
         Some("no_safe_delivery") => matches!(error, "terminal_facts" | "terminal_delivery_unknown"),
         _ => false,
     }
@@ -93,6 +94,9 @@ mod tests {
         assert_eq!(runtime_problem(&v(Some("terminal_facts"), None, Some("no_safe_delivery"))),
             Some(("terminal_input_no_safe_delivery".into(), "no_safe_delivery".into())));
         assert_eq!(runtime_problem(&v(Some("queue_io"), None, Some("no_safe_delivery"))).unwrap().0, "runtime_falhou", "outro erro continua vencendo");
+        // Trava da entrega incerta com texto no campo: a frase diz que é a pessoa quem destrava.
+        assert_eq!(runtime_problem(&v(Some("terminal_delivery_unknown"), None, Some("delivery_composer_busy"))),
+            Some(("terminal_input_delivery_composer_busy".into(), "delivery_composer_busy".into())));
     }
 
     #[test]

@@ -28,7 +28,11 @@ fn valid(input: &ClientInput) -> bool {
         && input.client.chars().count() <= CLIENT_MAX
         && input.failures.len() <= FAILURES_MAX
         && input.failures.iter().all(|f| f.route.chars().count() <= ROUTE_MAX && f.code.as_deref().is_none_or(code_ok))
+        && input.group.as_deref().is_none_or(group_ok)
 }
+
+/// O código de um relatório do worker (`[a-z2-7]{8}`).
+fn group_ok(group: &str) -> bool { group.len() == 8 && group.bytes().all(|b| matches!(b, b'a'..=b'z' | b'2'..=b'7')) }
 
 fn stamp() -> String {
     let version = crate::update::running_package().map_or(env!("CARGO_PKG_VERSION"), |p| p.version.as_str());
@@ -48,14 +52,22 @@ impl Failed {
 }
 
 /// O relatório (C2); devolve o código e a senha do diário.
-async fn send_report(base: &str, stamp: &str, body: Vec<u8>) -> Result<(String, Option<String>), Failed> {
-    let resp = CLIENT.post(format!("{base}/api/relatorio")).header("content-type", "application/json")
-        .header("x-hangar-stamp", stamp).body(body).send().await.map_err(|_| Failed::unreachable())?;
-    match resp.status().as_u16() {
-        201 => {}
-        429 => return Err(Failed { status: StatusCode::TOO_MANY_REQUESTS, code: "diag_report_rate_limited",
-            msg: "muitos relatórios em pouco tempo; tente de novo em um minuto", params: Value::Null }),
-        other => return Err(Failed::refused(other)),
+async fn send_report(base: &str, stamp: &str, group: Option<&str>, body: Vec<u8>) -> Result<(String, Option<String>), Failed> {
+    let mut req = CLIENT.post(format!("{base}/api/relatorio")).header("content-type", "application/json").header("x-hangar-stamp", stamp);
+    if let Some(group) = group { req = req.header("x-hangar-group", group); }
+    let resp = req.body(body).send().await.map_err(|_| Failed::unreachable())?;
+    let status = resp.status().as_u16();
+    if status != 201 {
+        let erro = resp.json::<Value>().await.ok().and_then(|v| v["erro"].as_str().map(str::to_owned));
+        return Err(match (status, erro.as_deref()) {
+            (429, Some("grupo-cheio")) => Failed { status: StatusCode::CONFLICT, code: "diag_report_group_full",
+                msg: "o envio já tem o máximo de máquinas", params: Value::Null },
+            (400, Some("grupo")) => Failed { status: StatusCode::CONFLICT, code: "diag_report_group_unknown",
+                msg: "o servidor de relatórios não achou o primeiro relatório deste envio", params: Value::Null },
+            (429, _) => Failed { status: StatusCode::TOO_MANY_REQUESTS, code: "diag_report_rate_limited",
+                msg: "muitos relatórios em pouco tempo; tente de novo em um minuto", params: Value::Null },
+            (other, _) => Failed::refused(other),
+        });
     }
     let reply: Value = resp.json().await.map_err(|_| Failed::refused(201))?;
     let code = reply["code"].as_str().filter(|c| (1..=16).contains(&c.len()) && c.bytes().all(|b| b.is_ascii_alphanumeric()))
@@ -97,9 +109,10 @@ pub async fn report_route(
         let Some(input) = input else {
             break 'r detail(StatusCode::UNPROCESSABLE_ENTITY, "diag_report_bad_request", "corpo do relatório inválido", Value::Null);
         };
+        let group = input.group.clone();
         let bundle = build(&st, input).await;
         let stamp = stamp();
-        match send_report(&st.diag_report_base, &stamp, bundle.body).await {
+        match send_report(&st.diag_report_base, &stamp, group.as_deref(), bundle.body).await {
             Ok((code, upload)) => {
                 let diary = match upload {
                     Some(upload) if !bundle.diary_gz.is_empty() => send_diary(&st.diag_report_base, &stamp, &code, &upload, bundle.diary_gz).await,

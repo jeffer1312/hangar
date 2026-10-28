@@ -6,8 +6,8 @@
   // O que o arquivo contém e o que NÃO contém está em backend/app/diag.py e em lib/diag.ts. O texto
   // aqui repete a parte que importa pra quem vai enviar: fica na máquina, e não guarda conversa.
   import { getDiagResumo, baixarDiag, type ResumoDiag, type LinhaDiag } from '@hangar/core';
-  import { fmtBytes, sendDiagReport, DIAG_REPORT_TEXT_MAX, type DiagReportResult } from '@hangar/core';
-  import { findServer, getActiveId, onServersChanged } from '../../lib/auth';
+  import { fmtBytes, sendDiagReportAll, DIAG_REPORT_TEXT_MAX, type DiagReportAllResult, type DiagReportResult } from '@hangar/core';
+  import { findServer, getActiveId, listOwnServers, onServersChanged } from '../../lib/auth';
   import { papelDo } from '../../lib/papel.svelte';
   import { copyText } from '../../lib/clipboard';
   import * as m from '../../paraglide/messages';
@@ -15,27 +15,39 @@
   // O relatório vai ao mesmo servidor que a prévia e o download acima leem: o ativo.
   const ativo = () => findServer(getActiveId() ?? '') ?? null;
   let servidor = $state(ativo());
-  $effect(() => onServersChanged(() => { servidor = ativo(); }));
+  let proprios = $state(listOwnServers());
+  $effect(() => onServersChanged(() => { servidor = ativo(); proprios = listOwnServers(); }));
   // Convidado não manda relatório da máquina de outra pessoa (o servidor recusa com 403).
   const podeReportar = $derived(!!servidor && !servidor.invite && papelDo(servidor) !== 'guest');
+  // O erro costuma estar noutra máquina da pessoa (a VM, não o PC de onde ela envia): o padrão é mandar de todas.
+  const maquinas = $derived(proprios.filter((s) => papelDo(s) !== 'guest'));
 
   let texto = $state('');
   let enviando = $state(false);
-  let resultado = $state<DiagReportResult | null>(null);
+  let escopo = $state<'todas' | 'esta' | 'escolher'>('todas');
+  let escolhidas = $state<Record<string, boolean>>({});
+  let resultado = $state<DiagReportAllResult | null>(null);
   let copiado = $state(false);
 
+  const alvos = $derived(maquinas.length < 2 || escopo === 'esta' ? (servidor ? [servidor] : [])
+    : escopo === 'todas' ? maquinas : maquinas.filter((s) => escolhidas[s.id] ?? s.id === servidor?.id));
+
   async function reportar() {
-    if (!servidor || enviando) return;
+    if (!alvos.length || enviando) return;
     enviando = true; resultado = null; copiado = false;
-    resultado = await sendDiagReport(servidor, { text: texto, client: `pwa ${__HANGAR_VERSION__}` });
+    resultado = await sendDiagReportAll(alvos, { text: texto, client: `pwa ${__HANGAR_VERSION__}` });
     enviando = false;
   }
 
-  const falha = $derived(!resultado || resultado.ok ? null
-    : resultado.kind === 'unsupported' ? m.config_diag_report_unsupported()
-    : resultado.kind === 'rate_limited' ? m.config_diag_report_rate_limited()
-    : resultado.kind === 'unreachable' ? m.config_diag_report_unreachable()
-    : m.config_diag_report_failed({ code: resultado.code }));
+  function motivo(r: DiagReportResult): string {
+    return r.ok ? '' : r.kind === 'unsupported' ? m.config_diag_report_unsupported()
+      : r.kind === 'rate_limited' ? m.config_diag_report_rate_limited()
+      : r.kind === 'unreachable' ? m.config_diag_report_unreachable()
+      : m.config_diag_report_failed({ code: r.code });
+  }
+  const falhas = $derived(resultado?.results.filter((r) => !r.result.ok) ?? []);
+  const diarioFalhou = $derived(resultado?.results.some((r) => r.result.ok && r.result.diary === 'failed') ?? false);
+  const soSemSuporte = $derived(!!resultado && resultado.code === null && falhas.every((r) => !r.result.ok && r.result.kind === 'unsupported'));
 
   async function copiar(code: string) {
     if (!(await copyText(code))) return;
@@ -133,29 +145,53 @@
   {#if servidor && podeReportar}
     <section class="reportar" aria-labelledby="diag-report-tit">
       <strong id="diag-report-tit" class="preview-tit">{m.config_diag_report_title()}</strong>
-      <p class="rep-servidor">{m.config_diag_report_server({ server: servidor.label })}</p>
-      {#if resultado?.ok}
+      <p class="rep-servidor">{maquinas.length > 1 ? m.config_diag_report_server_many() : m.config_diag_report_server({ server: servidor.label })}</p>
+      {#if resultado?.code}
+        {@const code = resultado.code}
         <p class="rep-msg" role="status">{m.config_diag_report_sent()}</p>
         <div class="rep-codigo">
-          <code>{resultado.code}</code>
-          <button class="recarregar" onclick={() => resultado?.ok && copiar(resultado.code)}>
+          <code>{code}</code>
+          <button class="recarregar" onclick={() => copiar(code)}>
             {copiado ? m.config_diag_report_copied() : m.config_diag_report_copy()}
           </button>
         </div>
-        {#if resultado.diary === 'failed'}<p class="rep-msg aviso">{m.config_diag_report_diary_failed()}</p>{/if}
+        {#if diarioFalhou}<p class="rep-msg aviso">{m.config_diag_report_diary_failed()}</p>{/if}
       {:else}
+        {#if maquinas.length > 1}
+          <fieldset class="rep-escopo" disabled={enviando}>
+            <legend class="rep-label">{m.config_diag_report_scope_label()}</legend>
+            <label><input type="radio" bind:group={escopo} value="todas" /> {m.config_diag_report_scope_all({ count: maquinas.length })}</label>
+            <label><input type="radio" bind:group={escopo} value="esta" /> {m.config_diag_report_scope_this({ server: servidor.label })}</label>
+            <label><input type="radio" bind:group={escopo} value="escolher" /> {m.config_diag_report_scope_pick()}</label>
+            {#if escopo === 'escolher'}
+              <div class="rep-maquinas">
+                {#each maquinas as s (s.id)}
+                  <label><input type="checkbox" checked={escolhidas[s.id] ?? s.id === servidor.id}
+                                onchange={(e) => { escolhidas[s.id] = e.currentTarget.checked; }} /> {s.label}</label>
+                {/each}
+              </div>
+            {/if}
+          </fieldset>
+        {/if}
         <label class="rep-label" for="diag-report-texto">{m.config_diag_report_text_label()}</label>
         <textarea id="diag-report-texto" bind:value={texto} maxlength={DIAG_REPORT_TEXT_MAX} rows="3"
                   disabled={enviando} placeholder={m.config_diag_report_text_placeholder()}></textarea>
         <p class="rep-aviso">{m.config_diag_report_notice()}</p>
-        {#if falha}
-          <p class="erro" role="alert">{falha}</p>
-        {/if}
-        <button class="btn primario" onclick={reportar} disabled={enviando || resultado?.ok === false && resultado.kind === 'unsupported'}>
+        <button class="btn primario" onclick={reportar} disabled={enviando || !alvos.length || soSemSuporte}>
           {enviando ? m.config_diag_report_sending()
-            : resultado && !resultado.ok && resultado.kind !== 'unsupported' ? m.config_diag_report_retry()
+            : resultado && !soSemSuporte ? m.config_diag_report_retry()
             : m.config_diag_report_send()}
         </button>
+      {/if}
+      {#if falhas.length}
+        <div class="erro" role="alert">
+          {#if alvos.length > 1}<p>{m.config_diag_report_machines_failed()}</p>{/if}
+          <ul class="rep-falhas">
+            {#each falhas as f (f.server.id)}
+              <li>{alvos.length > 1 ? m.config_diag_report_machine_failed({ server: f.server.label, reason: motivo(f.result) }) : motivo(f.result)}</li>
+            {/each}
+          </ul>
+        </div>
       {/if}
     </section>
   {/if}
@@ -216,6 +252,11 @@
   .rep-aviso { font-size: var(--text-xs); color: var(--text-muted); }
   .rep-msg.aviso { color: var(--warning); }
   .rep-label { font-size: var(--text-sm); color: var(--text-secondary); }
+  .rep-escopo { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; padding: 0; border: 0; font-size: var(--text-sm); }
+  .rep-escopo label { display: flex; align-items: center; gap: var(--space-2); min-height: 32px; }
+  .rep-maquinas { display: flex; flex-direction: column; padding-left: var(--space-5); }
+  .rep-falhas { margin: var(--space-1) 0 0; padding-left: var(--space-4); }
+  .erro p { margin: 0; }
   textarea {
     width: 100%;
     box-sizing: border-box;

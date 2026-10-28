@@ -308,6 +308,10 @@ pub(crate) struct RuntimeFact {
     pub alive: Option<bool>,
     pub generation: Option<u64>,
     pub waiting: Option<usize>,
+    /// Claude com terminal: o plugin pedindo (`/pull`), que prova a conversa quando falta o registro nativo.
+    pub plugin: Option<crate::plugin::PullStatus>,
+    /// Claude com terminal: o `sessions/<pid>.json` do agente existe.
+    pub native_record: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -344,6 +348,11 @@ impl SessionFact {
             if let Some(e) = &r.error { out += &format!(" erro={e}"); }
             if let Some(s) = &r.input_stalled { out += &format!(" entrada_parada={s}"); }
             out += &format!(" fila={}", r.waiting.map_or("?".to_owned(), |n| n.to_string()));
+            if let Some(native) = r.native_record { out += &format!(" registro_nativo={}", if native { "sim" } else { "não" }); }
+            if let Some(p) = &r.plugin {
+                out += &format!(" plugin: pull_aberto={} ultimo_pull={} conversa_nova={} fim={}", p.open,
+                    p.last_seen_s.map_or("nunca".to_owned(), |s| format!("{s}s")), p.reported, p.ended);
+            }
         }
         out
     }
@@ -360,7 +369,7 @@ pub(crate) fn session_fact(row: &hangar_api::session::SessionRow, s: &Scrubber) 
 pub(crate) fn runtime_fact(snapshot: &Value, waiting: Option<usize>, s: &Scrubber) -> RuntimeFact {
     let text = |v: &Value| v.as_str().filter(|t| !t.is_empty()).map(|t| clean(s, t, VALUE_MAX));
     RuntimeFact { error: text(&snapshot["error"]), input_stalled: text(&snapshot["view"]["input_stalled"]),
-        alive: snapshot["view"]["alive"].as_bool(), generation: snapshot["generation"].as_u64(), waiting }
+        alive: snapshot["view"]["alive"].as_bool(), generation: snapshot["generation"].as_u64(), waiting, plugin: None, native_record: None }
 }
 
 /// Mensagens esperando no estado da fila; `None` se o arquivo não se leu.
@@ -397,9 +406,18 @@ pub(crate) async fn sessions(st: &crate::routes::AppState, s: &Scrubber) -> Sess
             files.into_iter().map(|(key, (name, path, created))| (key, name, count_waiting(&path, created))).collect::<Vec<_>>()
         })).await;
         let counted = match counted { Ok(Ok(counted)) => counted, _ => Vec::new() };
-        counted.into_iter().map(|(key, name, waiting)| {
-            (clean(s, &name, VALUE_MAX), runtime_fact(snapshots.get(&key).unwrap_or(&Value::Null), waiting, s))
-        }).collect::<Vec<_>>()
+        let mut out = Vec::new();
+        for (key, name, waiting) in counted {
+            let mut fact = runtime_fact(snapshots.get(&key).unwrap_or(&Value::Null), waiting, s);
+            if let Ok(Some(target)) = registry.terminal_target(&name).await {
+                let record = target.metadata.config_dir.join("sessions").join(format!("{}.json", target.metadata.agent_pid));
+                fact.native_record = tokio::fs::try_exists(record).await.ok();
+                fact.plugin = registry.plugin().ok().and_then(|plugin| plugin
+                    .pull_status(&crate::terminal_facts::LocalTerminalFacts::binding(&target), std::time::Instant::now()).ok());
+            }
+            out.push((clean(s, &name, VALUE_MAX), fact));
+        }
+        out
     };
     let ((list_error, mut facts), runtime) = tokio::join!(list, runtime);
     for (name, fact) in runtime {

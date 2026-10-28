@@ -12,6 +12,8 @@ use super::{PluginMode, PluginReply, PluginRequest, ServiceError};
 const POLL: Duration = Duration::from_secs(25);
 const NO_POLL: Duration = Duration::from_secs(5);
 const ALIVE: Duration = Duration::from_secs(35);
+/// Quanto o último `/pull` ainda prova a conversa, a mesma janela do estado recente.
+const PULL_PROOF: Duration = Duration::from_secs(90);
 const HOOK_ALIVE: Duration = Duration::from_secs(2);
 const CONFIRM: Duration = Duration::from_secs(5);
 const PUBLISH: Duration = Duration::from_secs(30);
@@ -101,6 +103,8 @@ struct Question {
     waiter: Option<Waiter>,
     answer: Option<Answer>,
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct PullStatus { pub open: bool, pub last_seen_s: Option<u64>, pub reported: bool, pub ended: bool }
 struct Session {
     binding: InteractionBinding,
     owner: Option<Owner>,
@@ -499,10 +503,20 @@ impl Store {
     }
     /// O plugin prova que a conversa do vínculo é a atual: um `/pull` aberto agora, que só entra com o
     /// `session_id` dela, e nenhum `session.end` (`fim`, o `/clear` incluso) depois de ele começar.
-    pub fn conversation_proved(&self, binding: &InteractionBinding) -> Result<bool, ServiceError> {
+    /// Para o relatório de diagnóstico: o plugin pedindo ou não, e o que ele informou por último.
+    pub fn pull_status(&self, binding: &InteractionBinding, now: Instant) -> Result<PullStatus, ServiceError> {
         let mut memory = self.memory.lock().map_err(|_| unavailable())?;
         let s = session(&mut memory, binding)?;
-        Ok(s.waiter.is_some() && s.owner.as_ref().is_some_and(|owner| s.ended.is_none_or(|ended| ended < owner.seen)))
+        let seen = s.owner.as_ref().map(|owner| owner.seen);
+        Ok(PullStatus { open: s.waiter.is_some(), last_seen_s: seen.map(|seen| now.saturating_duration_since(seen).as_secs()),
+            reported: s.reported.is_some(), ended: s.ended.is_some_and(|ended| seen.is_none_or(|seen| ended >= seen)) })
+    }
+    /// O `/pull` aberto, ou visto há pouco: entre um `/pull` e o seguinte a prova não pisca.
+    pub fn conversation_proved(&self, binding: &InteractionBinding, now: Instant) -> Result<bool, ServiceError> {
+        let mut memory = self.memory.lock().map_err(|_| unavailable())?;
+        let s = session(&mut memory, binding)?;
+        Ok(s.owner.as_ref().is_some_and(|owner| (s.waiter.is_some() || now.saturating_duration_since(owner.seen) <= PULL_PROOF)
+            && s.ended.is_none_or(|ended| ended < owner.seen)))
     }
     /// A conversa nova que o plugin informou depois de a do vínculo acabar, se houver.
     pub fn reported_conversation(&self, binding: &InteractionBinding) -> Result<Option<String>, ServiceError> {
@@ -715,6 +729,38 @@ mod tests {
     fn pull(instance: &str) -> Pull { Pull { instance: instance.into(), modos: vec!["fill".into(),"user".into(),"focus".into(),"receipt_v2".into()], estado: Some("idle".into()), session_id: Some("sid".into()) } }
     fn receipt() -> Receipt { Receipt { publication_id: "publication-1".into(), generation: 2, session_id: "sid".into() } }
     fn request(mode: PluginMode) -> PluginRequest { PluginRequest { id: "publication-1".into(), text: "teste".into(), mode } }
+
+    #[test]
+    fn pull_status_tells_whether_the_plugin_is_pulling_and_what_it_reported() {
+        let (store, binding) = setup();
+        let at = |s: &Store| s.pull_status(&binding, Instant::now()).unwrap();
+        assert_eq!(at(&store), PullStatus { open: false, last_seen_s: None, reported: false, ended: false }, "nunca fez /pull");
+        let poll = store.begin_pull(&binding, pull("i"), Instant::now()).unwrap();
+        assert_eq!(at(&store), PullStatus { open: true, last_seen_s: Some(0), reported: false, ended: false });
+        drop(poll);
+        let later = store.pull_status(&binding, Instant::now() + Duration::from_secs(120)).unwrap();
+        assert_eq!((later.open, later.last_seen_s), (false, Some(120)), "parou de pedir há 2 min");
+        let mut other = pull("i"); other.session_id = Some("sid-nova".into());
+        assert!(store.begin_pull(&binding, other, Instant::now()).is_err());
+        assert!(at(&store).reported, "conversa nova informada");
+        store.record_state(&binding, "fim".into(), None, Instant::now() + Duration::from_millis(1)).unwrap();
+        assert!(store.pull_status(&binding, Instant::now() + Duration::from_millis(2)).unwrap().ended);
+    }
+
+    #[test]
+    fn conversation_stays_proved_between_pulls_until_the_window_or_the_end() {
+        let (store, binding) = setup();
+        assert!(!store.conversation_proved(&binding, Instant::now()).unwrap(), "sem /pull nenhum, nada prova");
+        let poll = store.begin_pull(&binding, pull("i"), Instant::now()).unwrap();
+        assert!(store.conversation_proved(&binding, Instant::now()).unwrap());
+        drop(poll);
+        let between = Instant::now();
+        assert!(store.conversation_proved(&binding, between).unwrap(), "o intervalo entre dois /pull não tira a prova");
+        assert!(store.conversation_proved(&binding, between + Duration::from_secs(89)).unwrap());
+        assert!(!store.conversation_proved(&binding, between + Duration::from_secs(91)).unwrap(), "sem /pull há 90 s, o plugin não prova mais");
+        store.record_state(&binding, "fim".into(), None, Instant::now() + Duration::from_millis(1)).unwrap();
+        assert!(!store.conversation_proved(&binding, Instant::now() + Duration::from_millis(2)).unwrap(), "session.end depois do /pull");
+    }
 
     #[test]
     fn conversation_held_plugin_memory_cannot_activate_the_public_identity() {

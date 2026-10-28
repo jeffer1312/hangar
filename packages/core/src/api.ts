@@ -470,8 +470,8 @@ export function recentFailuresFor(server: Server): RecentFailure[] {
 }
 
 /** Relatório de diagnóstico ao servidor da tela. Não lança: toda saída vira um `DiagReportResult`. */
-export async function sendDiagReport(server: Server, { text, client }: { text?: string; client: string }): Promise<DiagReportResult> {
-  const body = { ...(text?.trim() ? { text } : {}), client, failures: recentFailuresFor(server) };
+export async function sendDiagReport(server: Server, { text, client, group }: { text?: string; client: string; group?: string }): Promise<DiagReportResult> {
+  const body = { ...(text?.trim() ? { text } : {}), client, failures: recentFailuresFor(server), ...(group ? { group } : {}) };
   try {
     // Pior caso do servidor: montagem (até 50 s), worker (20 s) e diário inteiro (60 s).
     const res = await apiFetchForServer<{ code?: unknown; diary?: unknown }>(server, '/api/diag/report',
@@ -484,6 +484,25 @@ export async function sendDiagReport(server: Server, { text, client }: { text?: 
     if (status === 404) return diagReportFailure('unsupported', status);
     return diagReportFailure(typeof code === 'string' ? code : 'unexpected', status);
   }
+}
+
+export interface DiagReportAllResult {
+  /** O código do envio: o da primeira máquina que deu certo; `null` se nenhuma deu. */
+  code: string | null;
+  results: { server: Server; result: DiagReportResult }[];
+}
+
+/** Um relatório por máquina, uma por vez: as seguintes levam o código da primeira que deu certo, e o
+ *  servidor de relatórios as junta nele. Uma por vez porque ele grava a lista do envio relendo-a. */
+export async function sendDiagReportAll(servers: Server[], input: { text?: string; client: string }): Promise<DiagReportAllResult> {
+  let code: string | null = null;
+  const results: DiagReportAllResult['results'] = [];
+  for (const server of servers) {
+    const result = await sendDiagReport(server, { ...input, ...(code ? { group: code } : {}) });
+    if (result.ok && code === null) code = result.code;
+    results.push({ server, result });
+  }
+  return { code, results };
 }
 
 export function getSessions(server?: Server | null, init?: RequestInit): Promise<SessionInfo[]> {

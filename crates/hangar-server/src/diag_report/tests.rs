@@ -269,7 +269,7 @@ fn facts(problems: Vec<DiaryEntry>, sessions: Vec<collect::SessionFact>, account
 
 fn input() -> ClientInput {
     ClientInput { text: Some("travou a fila".into()), client: "native 0.1.0.8380 linux-x86_64".into(),
-        failures: vec![ClientFailure { ts: 1_793_130_757.2, route: "POST /api/sessions/*/queue/*/steer".into(), status: 503, code: Some("runtime_unhealthy".into()) }] }
+        failures: vec![ClientFailure { ts: 1_793_130_757.2, route: "POST /api/sessions/*/queue/*/steer".into(), status: 503, code: Some("runtime_unhealthy".into()) }], group: None }
 }
 
 fn report(body: &[u8]) -> (Value, String) {
@@ -335,6 +335,10 @@ fn private_fields_never_reach_the_report() {
     let mut session = collect::session_fact(&row, &s);
     session.runtime = Some(collect::runtime_fact(&json!({"generation": 3, "error": "queue_io",
         "view": {"input_stalled": "composer_busy", "alive": true, "conversation": "CONVERSA_SECRETA"}}), Some(2), &s));
+    if let Some(runtime) = session.runtime.as_mut() {
+        runtime.native_record = Some(false);
+        runtime.plugin = Some(crate::plugin::PullStatus { open: false, last_seen_s: Some(14_400), reported: false, ended: false });
+    }
     let account = collect::account_fact(&json!({
         "id": "claude:/home/fulano/.claude-x", "label": "fulano@exemplo.com", "provedor": "claude", "ativa": true,
         "estado": "lida", "janelas": [{"rotulo": "5h", "pct": 95.0, "reset_ts": 1_793_200_000.0, "por_modelo": false}],
@@ -352,6 +356,8 @@ fn private_fields_never_reach_the_report() {
     let (_, text) = report(raw.as_bytes());
     assert!(text.contains("pm-1 · claude · com terminal · awaiting_input · problema=runtime_unhealthy"));
     assert!(text.contains("erro=queue_io entrada_parada=composer_busy fila=2"));
+    // Sem o registro nativo, o plugin parado há 4 h é o que explica a entrada em erro.
+    assert!(text.contains("registro_nativo=não plugin: pull_aberto=false ultimo_pull=14400s conversa_nova=false fim=false"), "{text}");
     assert!(text.contains("f***@exemplo.com · claude · ativa · lida · 5h 95%"));
     assert!(text.contains("gasta até"));
 }

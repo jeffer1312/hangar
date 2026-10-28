@@ -6478,7 +6478,8 @@ fn prepare_detail(full: String) -> Prepared {
 
 /// A bolha entregue sem prova que segura a fila: o servidor aceita descartá-la (desiste e tira).
 fn holds_queue(event: &ChatEvent, problem: Option<&str>) -> bool {
-    problem == Some("terminal_input_delivery_unproved") && event.queued() && event.queued_delivered == Some(true) && event.desistiu != Some(true)
+    matches!(problem, Some("terminal_input_delivery_unproved" | "terminal_input_delivery_composer_busy"))
+        && event.queued() && event.queued_delivered == Some(true) && event.desistiu != Some(true)
 }
 
 /// Mensagem sem entrega com o processo vivo e surdo: só a pessoa reabre, pelo painel "Na fila", onde ela espera.
@@ -6488,7 +6489,7 @@ const STALLED: &str = "headless_delivery_stalled";
 fn stuck_note(event: &ChatEvent, problem: Option<&str>) -> Option<&'static str> {
     if !event.queued() || event.queued_delivered == Some(true) || event.desistiu == Some(true) { return None; }
     match problem {
-        Some("terminal_input_delivery_unproved") => Some("queue_held"),
+        Some("terminal_input_delivery_unproved" | "terminal_input_delivery_composer_busy") => Some("queue_held"),
         Some("terminal_input_no_safe_delivery") => Some("no_safe_delivery"),
         _ => None,
     }

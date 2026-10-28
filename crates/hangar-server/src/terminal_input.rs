@@ -625,9 +625,7 @@ impl TerminalDriver {
             let facts = self.verify().await?;
             let (screen, typed) = self.composer_capture().await?;
             let composer = Self::composer(&screen, &typed)?;
-            let owned = guard.allow_owned && guard.input.is_some_and(|(text,before)| composer.owned(text,before)
-                || !composer.content.is_empty() && (compact(text).starts_with(&compact(&composer.content))
-                    || self.binding.windows && text.starts_with('-') && format!("x{}",compact(text)).starts_with(&compact(&composer.content))));
+            let owned = guard.allow_owned && guard.input.is_some_and(|(text,before)| self.ours(&composer,text,before));
             if !facts.ready || facts.open_question || crate::terminal_state::analyze(&screen).state == "awaiting_input"
                 || crate::terminal_state::footer_visible(&screen) || !composer.is_empty() && !owned {
                 return Err(failure(InteractionError::Changed));
@@ -748,11 +746,13 @@ impl TerminalDriver {
     }
     /// Só leitura: composer legível e vazio, então uma entrega adiada pode tentar já. Quem chama
     /// acabou de conferir a conversa pelos fatos; aqui basta o mesmo pane.
-    pub async fn composer_free(&self) -> bool {
+    pub async fn composer_free(&self) -> bool { self.composer_empty().await == Some(true) }
+    /// O campo vazio ou não, conferindo só o pane; `None` quando não se lê.
+    pub async fn composer_empty(&self) -> Option<bool> {
         let _serial = self.serial.lock().await;
-        if self.verify_pane().await.is_err() { return false; }
-        let Ok((screen, typed)) = self.composer_capture_unverified().await else { return false };
-        Self::composer(&screen, &typed).is_ok_and(|draft| draft.is_empty())
+        self.verify_pane().await.ok()?;
+        let (screen, typed) = self.composer_capture_unverified().await.ok()?;
+        Self::composer(&screen, &typed).ok().map(|draft| draft.is_empty())
     }
     async fn settle(&self) { tokio::time::sleep(self.limits.settle).await; }
     async fn key_inner(&self, key: &str) -> Result<(), IoFailure> { self.key_guarded(key, None).await }
@@ -984,16 +984,23 @@ impl TerminalDriver {
             Err(error) if error.code == "facts_unavailable" => match self.snapshot_agent().await { Ok(now) => (now, true), Err(_) => return false },
             Err(_) => return false,
         };
-        if !now.owned(text, before) { return false; }
-        for _ in 0..self.limits.cleanup_attempts {
+        if !self.ours(&now, text, before) { return false; }
+        // O Ctrl+U apaga só a linha do cursor (numa linha vazia, só a quebra): o texto de várias linhas sai aos
+        // pedaços, e cada pedaço que sobra tem de ser o começo do nosso. Qualquer outra coisa é da pessoa.
+        for _ in 0..self.limits.cleanup_attempts.max(text.lines().count() * 2 + 2) {
             if if agent { self.key_agent("C-u").await } else { self.key_inner("C-u").await }.is_err() { return false; }
             self.settle().await;
             let Ok(after) = (if agent { self.snapshot_agent().await } else { self.snapshot().await }) else { return false; };
             if after.is_empty() { return true; }
-            if !after.owned(text, before) || after.content.chars().count() >= now.content.chars().count() { return false; }
+            if !self.ours(&after, text, before) || after.content.chars().count() >= now.content.chars().count() { return false; }
             now = after;
         }
         false
+    }
+    /// O campo tem o nosso texto inteiro ou o começo dele (a parte que a limpeza ainda não tirou).
+    fn ours(&self, now: &ComposerSnapshot, text: &str, before: &ComposerSnapshot) -> bool {
+        now.owned(text, before) || !now.content.is_empty() && (compact(text).starts_with(&compact(&now.content))
+            || self.binding.windows && text.starts_with('-') && format!("x{}", compact(text)).starts_with(&compact(&now.content)))
     }
     fn failed(error: IoFailure, stage: DeliveryStage) -> DeliveryResult {
         if let Some(interaction) = InteractionError::from_code(error.code) { return Self::interaction_failure(interaction, error.may_have_written); }
@@ -1015,6 +1022,8 @@ impl TerminalDriver {
         let mark = if expected.is_none() && !text.trim_start().starts_with('/') { self.services.transcript_mark().await.ok().flatten() } else { None };
         let since = crate::state::monitor::wall_now();
         if let Err(error) = self.key_guarded("Enter", expected.map(|expected| GuardedText { expected,closed:true,pane:None,input:Some((text,before)),allow_owned:true })).await {
+            // A conferência antes da tecla falhou: o Enter não saiu, e o texto nosso sai do campo como no ramo acima.
+            if expected.is_none() && !error.may_have_written { return self.partial(text, before, DeliveryStage::Submit).await; }
             return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Submit, if expected.is_some() { "erro_sem_confirmacao_resposta" } else { error.code });
         }
         let mut slash_selected = false;

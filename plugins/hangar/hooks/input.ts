@@ -247,13 +247,16 @@ async function pull($: EngineInterface, ponte: Bridge, discovered = false) {
       }
     } else {
       // 403 é token de outra vida da sessão: insistir de 50 ms bateria no
-      // backend para sempre. 409 é outra instância dona da sessão: espera mais.
-      espera = r.status === 409 ? BACKOFF_DONO_MS : BACKOFF_MS;
+      // backend para sempre. Só outra instância dona da sessão espera mais: o resto do 409 é a sessão
+      // reabrindo ou trocando de conversa no Hangar, e a ponte é a prova da conversa sem o registro nativo.
+      espera = r.status === 409 && r.text.includes("plugin_instance_conflict") ? BACKOFF_DONO_MS : BACKOFF_MS;
       // Chave do `whoami` recusada: o backend trocou (reinício, Python → Rust) e ela morreu com ele. Insistir nela
       // deixava a sessão sem ponte até ser reaberta; a mesma espera vale para a pergunta nova.
       if (discovered && (r.status === 403 || (r.status === 409 && r.text.includes("plugin_identity_missing")))) {
-        // Descoberta que falha volta a esta ponte, que segue tentando como antes.
-        $.clock.after(espera, () => void discover($, 0, () => $.clock.after(espera, () => void pull($, ponte, discovered))));
+        // Descoberta que falha volta a esta ponte, que segue tentando como antes. O `whoami` varre todas as
+        // sessões: depois de um 409 ele mantém a espera longa.
+        const espera409 = r.status === 409 ? BACKOFF_DONO_MS : espera;
+        $.clock.after(espera409, () => void discover($, 0, () => $.clock.after(espera409, () => void pull($, ponte, discovered))));
         return;
       }
     }

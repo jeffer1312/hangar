@@ -15,7 +15,7 @@ function post(body: string, headers: Record<string, string> = {}) {
 function deps(allow = true, mailFails = false, allowAll = true, today = 1) {
 	const mails: { subject: string; text: string }[] = [];
 	const pending: Promise<unknown>[] = [];
-	const calls = { all: 0, limits: [] as Kind[], writes: [] as number[] };
+	const calls = { all: 0, limits: [] as (Kind | "diario")[], writes: [] as number[] };
 	const d: Deps = {
 		reports: env.REPORTS,
 		allow: async (_ip, limit) => { calls.limits.push(limit); return allow; },
@@ -321,7 +321,8 @@ describe("PUT /api/relatorio/diario", () => {
 		expect(new Uint8Array((await env.REPORTS.get(key, "arrayBuffer"))!)).toEqual(GZIP);
 		expect((await stored()).find((k) => k.name === key)!.expiration).toBeGreaterThanOrEqual(before + TTL_SECONDS - 5);
 		expect(await env.REPORTS.get(`diag/${created.code}/upload`)).toBeNull();
-		expect(calls.limits).toEqual(["diagnostico", "instalacao"]);
+		// Limite próprio do diário: as várias máquinas de um envio mandam cada uma o seu, do mesmo IP.
+		expect(calls.limits).toEqual(["diagnostico", "diario"]);
 	});
 
 	it("refuses a wrong password without storing", async () => {
@@ -408,5 +409,76 @@ describe("PUT /api/relatorio/diario", () => {
 		const res = await handle(putDiary(GZIP, created), d);
 		expect(res.status).toBe(503);
 		expect(await res.json()).toEqual({ erro: "armazenamento" });
+	});
+});
+
+describe("POST /api/relatorio with x-hangar-group (one report per machine)", () => {
+	async function first(d: Deps) { return (await handle(postDiag(JSON.stringify(diagnostic())), d)).json<DiagCreated>(); }
+	const member = (group: string) => postDiag(JSON.stringify(diagnostic()), { "x-hangar-group": group });
+
+	it("skips the per-IP limit, records the group in each report and keeps the list", async () => {
+		const lead = await first(deps().d);
+		const { d, calls } = deps(false);
+		const res = await handle(member(lead.code), d);
+		expect(res.status).toBe(201);
+		const body = await res.json<DiagCreated>();
+		expect(calls.limits).toEqual([]);
+		expect(calls.all).toBe(1);
+		expect(calls.writes).toEqual([3]);
+		expect(JSON.parse((await env.REPORTS.get(body.id))!).group).toBe(lead.code);
+		expect(JSON.parse((await env.REPORTS.get(lead.id))!).group).toBe(lead.code);
+		expect(JSON.parse((await env.REPORTS.get(`${lead.id}/group`))!)).toEqual([lead.code, body.code]);
+		const keys = await stored();
+		expect(keys.find((k) => k.name === `${lead.id}/group`)!.expiration).toBeGreaterThan(Math.floor(Date.now() / 1000) + TTL_SECONDS - 60);
+	});
+
+	it("caps a group at 8 machines", async () => {
+		const lead = await first(deps().d);
+		for (let i = 0; i < 7; i++) expect((await handle(member(lead.code), deps().d)).status).toBe(201);
+		const res = await handle(member(lead.code), deps().d);
+		expect(res.status).toBe(429);
+		expect(await res.json()).toEqual({ erro: "grupo-cheio" });
+		expect(JSON.parse((await env.REPORTS.get(`${lead.id}/group`))!)).toHaveLength(8);
+	});
+
+	it("refuses an unknown or malformed group after charging the per-IP limit", async () => {
+		for (const group of ["abcdefgh", "NAO-VALE", ""]) {
+			const { d, calls } = deps();
+			const res = await handle(member(group), d);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({ erro: "grupo" });
+			expect(calls.limits).toEqual(["diagnostico"]);
+			expect(calls.all).toBe(0);
+		}
+		expect(await stored()).toHaveLength(0);
+	});
+
+	it("refuses a member's code as a group: groups don't chain past the per-IP limit", async () => {
+		const lead = await first(deps().d);
+		const joined = await (await handle(member(lead.code), deps().d)).json<DiagCreated>();
+		const { d, calls } = deps();
+		const res = await handle(member(joined.code), d);
+		expect(res.status).toBe(400);
+		expect(await res.json()).toEqual({ erro: "grupo" });
+		expect(calls.limits).toEqual(["diagnostico"]);
+	});
+
+	it("still pays the per-IP limit for an unknown group", async () => {
+		const { d } = deps(false);
+		expect((await handle(member("abcdefgh"), d)).status).toBe(429);
+	});
+
+	it("still goes through the global limit", async () => {
+		const lead = await first(deps().d);
+		const res = await handle(member(lead.code), deps(true, false, false).d);
+		expect(res.status).toBe(429);
+		expect(await env.REPORTS.get(`${lead.id}/group`)).toBeNull();
+	});
+
+	it("only groups diagnostics", async () => {
+		const lead = await first(deps().d);
+		const res = await handle(post(JSON.stringify(report()), { "x-hangar-group": lead.code }), deps().d);
+		expect(res.status).toBe(400);
+		expect(await res.json()).toEqual({ erro: "grupo" });
 	});
 });

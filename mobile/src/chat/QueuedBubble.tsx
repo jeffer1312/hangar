@@ -49,7 +49,8 @@ export const QueuedBubble = memo(function QueuedBubble({ event, working, problem
 }) {
   const queued = event.id.startsWith('queued-');
   const failed = event.desistiu === true;
-  const holdsQueue = queued && !event.queued_consumed && problem === 'terminal_input_delivery_unproved' && event.queued_delivered === true && !failed;
+  const writeHeld = problem === 'terminal_input_delivery_unproved' || problem === 'terminal_input_delivery_composer_busy';
+  const holdsQueue = queued && !event.queued_consumed && writeHeld && event.queued_delivered === true && !failed;
   const notes: string[] = [];
   if (!event.queued_consumed) {
     if (failed || event.id.startsWith('held:') || event.hook_error != null) {
@@ -57,7 +58,7 @@ export const QueuedBubble = memo(function QueuedBubble({ event, working, problem
     }
     if (failed) notes.push(m.msg_nao_chegou_reenvie());
     else if (holdsQueue) notes.push(m.native_delivery_unproved());
-    else if (queued && event.queued_delivered !== true && problem === 'terminal_input_delivery_unproved') notes.push(m.native_queue_held());
+    else if (queued && event.queued_delivered !== true && writeHeld) notes.push(m.native_queue_held());
     else if (queued && event.queued_delivered !== true && problem === 'terminal_input_no_safe_delivery') notes.push(m.native_no_safe_delivery());
     else if (queued) notes.push(event.queued_delivered === true ? m.native_delivering() : m.native_queued());
   }

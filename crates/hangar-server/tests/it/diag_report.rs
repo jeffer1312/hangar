@@ -12,6 +12,7 @@ const BODY_MAX: usize = 250 * 1024;
 /// O que o worker falso recebeu e com que status responde ao relatório.
 struct Worker {
     status: Mutex<u16>,
+    erro: Mutex<&'static str>,
     reports: Mutex<Vec<(HeaderMap, Bytes)>>,
     diaries: Mutex<Vec<(HeaderMap, Bytes)>>,
 }
@@ -19,7 +20,7 @@ struct Worker {
 async fn report(State(w): State<Arc<Worker>>, headers: HeaderMap, body: Bytes) -> (StatusCode, String) {
     w.reports.lock().unwrap().push((headers, body));
     let status = *w.status.lock().unwrap();
-    let reply = if status == 201 { json!({"id": "diag/abcd2345", "code": "abcd2345", "upload": "u".repeat(32)}) } else { json!({"erro": "x"}) };
+    let reply = if status == 201 { json!({"id": "diag/abcd2345", "code": "abcd2345", "upload": "u".repeat(32)}) } else { json!({"erro": *w.erro.lock().unwrap()}) };
     (StatusCode::from_u16(status).unwrap(), reply.to_string())
 }
 
@@ -44,7 +45,7 @@ impl Fixture {
     /// `base` troca o endereço do worker (porta fechada = worker fora do ar).
     async fn with_base(status: u16, base: Option<String>) -> Self {
         let home = tempfile::tempdir().unwrap();
-        let worker = Arc::new(Worker { status: Mutex::new(status), reports: Mutex::default(), diaries: Mutex::default() });
+        let worker = Arc::new(Worker { status: Mutex::new(status), erro: Mutex::new("x"), reports: Mutex::default(), diaries: Mutex::default() });
         let (worker_addr, worker_task) = serve(Router::new().route("/api/relatorio", post(report))
             .route("/api/relatorio/diario", put(diary)).with_state(worker.clone())).await;
         let (upstream, python) = serve(Router::new().fallback(|| async { "python" })).await;
@@ -150,6 +151,33 @@ async fn worker_429_becomes_rate_limited_and_other_status_refused() {
     let (status, body) = f.post(true, &[], input()).await;
     assert_eq!((status, code_of(&body), &body["detail"]["params"]["status"]), (502, &json!("diag_report_refused"), &json!(503)));
     assert!(f.worker.diaries.lock().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn group_goes_to_the_worker_and_its_refusals_have_their_own_codes() {
+    let f = Fixture::start(201).await;
+    let mut grouped = input();
+    grouped["group"] = json!("abcd2345");
+    assert_eq!(f.post(true, &[], grouped.clone()).await.0, 201);
+    assert_eq!(f.post(true, &[], input()).await.0, 201);
+    {
+        let reports = f.worker.reports.lock().unwrap();
+        assert_eq!(reports[0].0["x-hangar-group"], "abcd2345");
+        assert!(!reports[1].0.contains_key("x-hangar-group"), "sem grupo, sem cabeçalho");
+    }
+    for bad in ["ABCD2345", "abcd234", "abcd2345/x"] {
+        let mut body = input();
+        body["group"] = json!(bad);
+        assert_eq!(code_of(&f.post(true, &[], body).await.1), &json!("diag_report_bad_request"), "{bad}");
+    }
+    assert_eq!(f.worker.reports.lock().unwrap().len(), 2);
+
+    for (status, erro, code) in [(429, "grupo-cheio", "diag_report_group_full"), (400, "grupo", "diag_report_group_unknown")] {
+        *f.worker.status.lock().unwrap() = status;
+        *f.worker.erro.lock().unwrap() = erro;
+        let (got, body) = f.post(true, &[], grouped.clone()).await;
+        assert_eq!((got, code_of(&body)), (409, &json!(code)), "{erro}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
