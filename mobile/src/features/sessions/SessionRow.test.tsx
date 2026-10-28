@@ -296,7 +296,7 @@ describe('SessionRow', () => {
   it.each([
     { engine: undefined, label: 'Claude' },
     { engine: 'gpt-6-1-sol', label: 'gpt-6-1-sol' },
-  ])('separador do servidor fica fora do texto truncável (provedor=$label)', async ({ engine, label }) => {
+  ])('servidor vai na placa que fecha a linha e encolhe sem separador (provedor=$label)', async ({ engine, label }) => {
     Platform.OS = 'ios';
     const serverLabel = 'servidor-com-nome-longo-para-disputar-a-largura';
     const { container, root } = await render(
@@ -308,12 +308,13 @@ describe('SessionRow', () => {
       expect(server?.textContent).toBe(serverLabel);
       expect(server?.getAttribute('data-number-of-lines')).toBe('1');
       expect(server?.style.flexShrink).toBe('1');
-      const separator = server?.nextElementSibling as HTMLElement | null;
-      expect(separator?.textContent).toBe(' · ');
-      expect(separator?.style.flexShrink).toBe('0');
-      expect(separator?.nextElementSibling?.textContent).toContain(engine || 'repo');
+      const plate = server?.parentElement?.parentElement as HTMLElement | null;
+      const row = plate?.parentElement as HTMLElement | null;
+      expect(row?.lastElementChild).toBe(plate);
+      expect([...(row?.querySelectorAll('span') ?? [])].some(el => el.textContent === ' · ')).toBe(false);
+      expect(row?.textContent?.slice(0, row.textContent.indexOf(serverLabel))).toContain(engine || 'repo');
       if (engine) {
-        const mark = server?.parentElement?.querySelector('[data-symbol="gearshape"]');
+        const mark = row?.querySelector('[data-symbol="gearshape"]');
         expect(mark).not.toBeNull();
         expect(mark?.parentElement?.textContent).toBe('gpt-6-1-sol');
       }
@@ -558,8 +559,10 @@ describe('SessionRow', () => {
       cwd: '/r/hangar-x', worktree: true, worktree_path: '/r/hangar-x', branch: 'feat/mobile-avatar-estado' }, { mostrarServidor: true });
     try {
       const server = [...container.querySelectorAll('span')].find(el => el.textContent === 'notebook-jefferson');
-      expect(server?.nextElementSibling?.textContent).toBe(' · ');
-      expect(server?.nextElementSibling?.nextElementSibling?.getAttribute('data-symbol')).toBe('arrow.triangle.branch');
+      const plate = server?.parentElement?.parentElement as HTMLElement | null;
+      const branch = plate?.parentElement?.querySelector('[data-symbol="arrow.triangle.branch"]');
+      expect(branch).not.toBeNull();
+      expect(plate?.contains(branch ?? null)).toBe(false);
     } finally { act(() => root.unmount()); }
   });
 

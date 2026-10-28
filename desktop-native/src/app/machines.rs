@@ -1825,7 +1825,7 @@ impl Hangar {
                             Ok(api) => this.open_tag_editor(api, super::tags::Subject::Machine, tag_title.clone(), window, cx),
                             Err(error) => window.push_notification(Notification::warning(Self::fetch_failure(&error)), cx),
                         }
-                    })))))
+                    }))))
             .children(rename_editor)
             .child(device)
             .child(messages)

@@ -111,7 +111,7 @@ export interface SessionInfo {
   // parseStatusLine (modelo/contexto no composer; ⚡5h/📅7d na RateStrip). Chat usa a versão ao vivo.
   status_line?: string | null;
   // Contexto lido do transcript pela lista do Rust (só Claude); vence a statusline no anel.
-  context?: { used: number; window: number } | null;
+  context?: { used: number; 'window': number } | null;
   // Id do modelo em uso na sessão Claude (`claude-opus-5-5[1m]`), resolvido pelo backend: dá nome à
   // pílula quando a statusline não é a do Hangar ou ainda não chegou.
   model?: string | null;

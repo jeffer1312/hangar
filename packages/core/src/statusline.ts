@@ -60,7 +60,8 @@ function clampPct(n: number): number {
 /** Contexto da sessão em % (0–100): o `context` da lista vence, como no nativo; senão a statusline; sem leitura, `null`. */
 export function sessionContextPct(s: Pick<SessionInfo, 'status_line' | 'context'>): number | null {
   const ctx = s.context;
-  if (ctx && ctx.window > 0) return clampPct((ctx.used / ctx.window) * 100);
+  // `window` entre aspas: a trava de fronteira lê a palavra solta como o global do DOM.
+  if (ctx && ctx['window'] > 0) return clampPct((ctx.used / ctx['window']) * 100);
   const fromLine = parseStatusLine(s.status_line)?.ctxPct;
   return typeof fromLine === 'number' && isFinite(fromLine) ? fromLine : null;
 }
