@@ -218,7 +218,7 @@ it('eventos de atividade da mesma filha motivam leitura sem sobrepor pedidos', a
       promise: new Promise<api.SubagentRun[]>((resolve) => { resolvePending = resolve; }),
       resolve: (runs: api.SubagentRun[]) => resolvePending(runs),
     };
-    vi.mocked(api.getSubagents).mockReturnValueOnce(pending.promise).mockResolvedValue([{ ...child, toolCalls: 3 }]);
+    vi.mocked(api.getSubagents).mockReturnValueOnce(pending.promise).mockResolvedValue([{ ...child, toolCalls: 5 }]);
     await emit('state', state(2));
     expect(api.getSubagents).toHaveBeenCalledTimes(reads + 1);
     await emit('state', state(3));
@@ -226,7 +226,7 @@ it('eventos de atividade da mesma filha motivam leitura sem sobrepor pedidos', a
     pending.resolve([{ ...child, toolCalls: 2 }]);
     await flush(); await flush();
     expect(api.getSubagents).toHaveBeenCalledTimes(reads + 2);
-    expect(shownCalls()).toContain(m.atividade_chamadas({ n: 3 }));
+    expect(shownCalls()).toContain(m.atividade_chamadas({ n: 5 }));
   } finally { vi.mocked(api.getSubagents).mockResolvedValue([]); }
 });
 
