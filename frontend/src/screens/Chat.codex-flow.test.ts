@@ -16,7 +16,6 @@ vi.mock('../components/CreateSessionSheet.svelte', vazio);
 vi.mock('../components/UsageSheet.svelte', vazio);
 vi.mock('../components/Git.svelte', vazio);
 vi.mock('../components/PreviewSheet.svelte', vazio);
-vi.mock('../components/ActivitySheet.svelte', vazio);
 vi.mock('../components/TerminalMirror.svelte', vazio);
 vi.mock('../components/RunSheet.svelte', vazio);
 vi.mock('../components/MoreSheet.svelte', vazio);
@@ -206,10 +205,19 @@ it('eventos de atividade da mesma filha motivam leitura sem sobrepor pedidos', a
     await montar(false);
     const state = (activity_revision: number) => ({ session: 'codex-flow', state: 'working', codex_subagents: { child: {
       agent_path: '/root/review', activity_revision, state: 'running', ended_at: null, can_message: true, message_blocked: null,
-    } } });
+    } }, codex_commands: [{ id: 'exec', process_id: '42', command: 'pwd', started_at: 1, background: true }] });
     await emit('state', state(1));
+    document.querySelector<HTMLButtonElement>('button.shell-chip')!.click();
+    await flush();
+    const shownCalls = () => document.querySelector('[role="dialog"] .agent-now')?.textContent;
+    expect(shownCalls()).toContain(m.atividade_chamadas({ n: 1 }));
     const reads = vi.mocked(api.getSubagents).mock.calls.length;
-    const pending = Promise.withResolvers<api.SubagentRun[]>();
+    // Sem Promise.withResolvers: o lib do tsconfig do PWA não o tem.
+    let resolvePending!: (runs: api.SubagentRun[]) => void;
+    const pending = {
+      promise: new Promise<api.SubagentRun[]>((resolve) => { resolvePending = resolve; }),
+      resolve: (runs: api.SubagentRun[]) => resolvePending(runs),
+    };
     vi.mocked(api.getSubagents).mockReturnValueOnce(pending.promise).mockResolvedValue([{ ...child, toolCalls: 3 }]);
     await emit('state', state(2));
     expect(api.getSubagents).toHaveBeenCalledTimes(reads + 1);
@@ -218,6 +226,7 @@ it('eventos de atividade da mesma filha motivam leitura sem sobrepor pedidos', a
     pending.resolve([{ ...child, toolCalls: 2 }]);
     await flush(); await flush();
     expect(api.getSubagents).toHaveBeenCalledTimes(reads + 2);
+    expect(shownCalls()).toContain(m.atividade_chamadas({ n: 3 }));
   } finally { vi.mocked(api.getSubagents).mockResolvedValue([]); }
 });
 

@@ -14,7 +14,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use serde_json::{Map, Value, json};
 
-use super::input::{MSG_CODEX_CONTROL, answer, codex_control, json_content_type};
+use super::input::{MSG_CODEX_CONTROL, MSG_CONTROL_UNCONFIRMED, answer, codex_control, control_failed, json_content_type};
 use super::{Ctx, Owner, Provider, WriteRoute, admit, decide, detail_body, enter_then_find, invalid_body, json_response, session_name};
 use crate::mods::state::random_hex;
 use crate::permission_control::PermissionAction;
@@ -71,6 +71,8 @@ pub fn model_answer(sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
 pub fn terminate_answer(sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
     match sent {
         Ok(reply) if reply.disposition == Disposition::Accepted => (StatusCode::OK, json!({"ok": true})),
+        // Prazo estourado: o encerramento pode ter acontecido; dizer "recusado" seria falso.
+        Ok(reply) if reply.disposition == Disposition::Unknown => control_failed(MSG_CONTROL_UNCONFIRMED),
         Ok(reply) => reply.payload["error"]["message"].as_str().or(reply.payload["error"].as_str())
             .map_or_else(refused, codex_control),
         Err(error) if error.code == "codex_command" => codex_control(&error.message),
