@@ -308,9 +308,12 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     }
     // Kimi entra depois da cota lida, como sempre entrou.
     let kimi = config.kimi_text.as_deref();
-    for Listed { id, natural, .. } in listed.iter().filter(|l| matches!(l.origin, Origin::Kimi) && quota.contains_key(&l.id)) {
+    for Listed { id, .. } in listed.iter().filter(|l| matches!(l.origin, Origin::Kimi) && quota.contains_key(&l.id)) {
         let suffix = id.split_once(':').map_or("", |(_, tail)| tail);
-        let mut item = line(id, "chave", "api_key", natural, aliases, &quota);
+        // O nome é o da linha da cota, como no Python: a fonte só sabe o rótulo cru.
+        let row = &quota[id.as_str()];
+        let natural = if other::falsy(&row["label"]) { json!(suffix) } else { row["label"].clone() };
+        let mut item = line(id, "chave", "api_key", &natural, aliases, &quota);
         item["usos"] = json!(["kimi_cli"]);
         item["gerenciada"] = json!(managed_block(kimi, suffix));
         out.push(item);
