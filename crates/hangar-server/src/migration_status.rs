@@ -449,7 +449,7 @@ mod tests {
         assert_eq!(AREAS[area_of("/api/sessions-x")], "other", "prefixo só casa por segmento inteiro");
         assert_eq!(AREAS[area_of("/assets/index.js")], "static");
         // A tela web repassa o que não tem na pasta: só o contador por resposta sabe quem atendeu.
-        assert!(!get("/docs") && !get("/"));
+        assert!(!get("/docs") && get("/"));
         assert_eq!(AREAS[area_of("/api/sessions/a")], "session");
     }
 
