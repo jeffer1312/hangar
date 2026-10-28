@@ -84,6 +84,11 @@ try:
             response=client.post(path,content=b'audio',headers={'Authorization':'Bearer fixture-owner'})
         assert network.call_args.kwargs['timeout']==180
         cases.append({'id':'public_timeout' if '/dictation/' in path else 'provider_timeout','path':path,'headers':{},'status':response.status_code,'response':response.json(),'timeout_seconds':180})
+    for path,seconds in [('/api/dictation/models?session=destination&fresh=true',60),('/api/transcription/providers/status',15)]:
+        with patch.object(transcription_bridge._opener,'open',side_effect=TimeoutError) as network:
+            response=client.get(path,headers={'Authorization':'Bearer fixture-owner'})
+        assert network.call_args.kwargs['timeout']==seconds
+        cases.append({'id':'catalog_timeout' if seconds==60 else 'status_timeout','path':path,'headers':{},'status':response.status_code,'response':response.json(),'timeout_seconds':seconds})
     assert not list(Path(scratch.name).rglob('*.wav'))
 
 finally:

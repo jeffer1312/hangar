@@ -275,6 +275,33 @@
         }
       },
       "timeout_seconds": 180
+    },
+    {
+      "id": "catalog_timeout",
+      "path": "/api/dictation/models?session=destination&fresh=true",
+      "headers": {},
+      "status": 503,
+      "response": {
+        "detail": {
+          "code": "dictation_rust_unavailable",
+          "msg": "Não foi possível confirmar a organização no Rust; a transcrição foi preservada."
+        }
+      },
+      "timeout_seconds": 60
+    },
+    {
+      "id": "status_timeout",
+      "path": "/api/transcription/providers/status",
+      "headers": {},
+      "status": 503,
+      "response": {
+        "detail": {
+          "code": "transcription_rust_unavailable",
+          "params": {},
+          "msg": "Não foi possível confirmar a transcrição no Rust. O áudio foi preservado para tentar novamente."
+        }
+      },
+      "timeout_seconds": 15
     }
   ]
 }

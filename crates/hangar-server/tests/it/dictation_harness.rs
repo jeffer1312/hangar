@@ -26,7 +26,7 @@ async fn attempt_with_context(
     locked: bool,
 ) -> Value {
     attempt_with_budget(
-        provider, oauth, model, generation, include, snapshot, locked, None, None,
+        provider, oauth, model, generation, include, snapshot, locked, None, None, false,
     )
     .await
     .0
@@ -42,6 +42,7 @@ async fn attempt_with_budget(
     locked: bool,
     budget: Option<Duration>,
     account_snapshot: Option<&str>,
+    catalog_deadline: bool,
 ) -> (Value, Value) {
     let root = tempfile::tempdir().unwrap();
     let bin = root.path().join("bin");
@@ -66,7 +67,7 @@ async fn attempt_with_budget(
     if provider == "claude" {
         std::fs::write(
             account.join("settings.json"),
-            if oauth {"{}".to_owned()} else {json!({"env":{"ANTHROPIC_API_KEY":"fixture-api-key"},"fixture_catalog_stall":budget.is_some()}).to_string()},
+            if oauth {"{}".to_owned()} else {json!({"env":{"ANTHROPIC_API_KEY":"fixture-api-key"},"fixture_catalog_stall":budget.is_some() || catalog_deadline}).to_string()},
         )
         .unwrap();
         if oauth {
@@ -177,6 +178,79 @@ async fn attempt_with_budget(
         FactsClient::new(upstream, "harness-secret".into()),
     ));
     let state = Arc::new(state);
+    if catalog_deadline {
+        let app = hangar_server::routes::router(state.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let requests = (0..4)
+            .map(|_| {
+                tokio::spawn(async move {
+                    reqwest::Client::new()
+                        .get(format!(
+                            "http://{address}/api/dictation/models?session=destination&fresh=true"
+                        ))
+                        .bearer_auth("owner")
+                        .send()
+                        .await
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !account.join("fixture-catalog-stalled").exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            state.dictation_slots.available_permits(),
+            3,
+            "só a consulta sob o mutex deve ocupar vaga"
+        );
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(61)).await;
+        let responses = tokio::time::timeout(
+            Duration::from_secs(2),
+            futures_util::future::join_all(requests),
+        )
+        .await;
+        tokio::time::resume();
+        server.abort();
+        python.abort();
+        let responses = responses.expect("fresh concorrentes ultrapassaram o teto público de60s");
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../backend/tests/fixtures/contract/dictation_public/edges.json"
+        ))
+        .unwrap();
+        let expected = fixture["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "catalog_timeout")
+            .unwrap();
+        let mut timed_out = 0;
+        for response in responses {
+            let response = response.unwrap();
+            if response.status() == 503 {
+                assert_eq!(
+                    response.json::<Value>().await.unwrap(),
+                    expected["response"]
+                );
+                timed_out += 1;
+            }
+        }
+        assert!(timed_out > 0, "ninguém testou a espera pelo mutex");
+        assert_eq!(state.dictation_slots.available_permits(), 4);
+        return (Value::Null, Value::Null);
+    }
     if let Some(budget) = budget {
         use hangar_server::dictation::{
             harness,
@@ -264,6 +338,7 @@ async fn dictation_harness_oauth_claude_uses_safe_mode_and_destination_subscript
         false,
         None,
         None,
+        false,
     )
     .await;
     assert_eq!(result["text"], "Hoje vamos conferir o ditado completo.");
@@ -308,6 +383,7 @@ async fn dictation_recent_messages_are_opt_in_bounded_and_frozen_for_revision() 
         false,
         None,
         None,
+        false,
     )
     .await;
     let prompt = record["system_prompt"].as_str().unwrap_or_default();
@@ -383,6 +459,7 @@ async fn dictation_deadline_includes_waiting_for_the_catalog_and_preserves_raw()
         false,
         Some(Duration::from_millis(500)),
         None,
+        false,
     )
     .await
     .0;
@@ -405,9 +482,27 @@ async fn dictation_public_harness_refuses_changed_account_snapshot() {
         false,
         None,
         Some("other-account"),
+        false,
     )
     .await;
     assert_eq!(result["organization_code"], "dictation_target_changed");
     assert_eq!(result["raw"], "  Hoje vamos conferir o ditado completo.\n");
     assert!(record.is_null(), "a conta divergente executou o CLI");
+}
+
+#[tokio::test]
+async fn dictation_public_catalog_fresh_queue_keeps_sixty_second_deadline() {
+    attempt_with_budget(
+        "claude",
+        false,
+        None,
+        "k:original",
+        false,
+        None,
+        false,
+        None,
+        None,
+        true,
+    )
+    .await;
 }

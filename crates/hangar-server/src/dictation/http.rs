@@ -101,33 +101,45 @@ pub async fn serve(
         if guest {
             return forbidden("O catálogo de organização é exclusivo do dono.");
         }
-        let request = super::model::OrganizationRequest {
-            session: Some(session.clone()),
-            ..Default::default()
-        };
-        let context = match super::context::resolve(st, &request).await {
-            Ok(c) => c,
-            Err(code) => {
-                return reply(
-                    409,
+        return tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            let request = super::model::OrganizationRequest {
+                session: Some(session.clone()),
+                ..Default::default()
+            };
+            let context = match super::context::resolve(st, &request).await {
+                Ok(c) => c,
+                Err(code) => {
+                    return reply(
+                        409,
+                        json!({"detail":{"code":code,"msg":super::harness::detail(code)}}),
+                    );
+                }
+            };
+            match st
+                .dictation_models
+                .get_context(&st.accounts, &st.dictation_slots, &context, fresh)
+                .await
+            {
+                Ok((models, _)) => reply(
+                    200,
+                    json!({"provider":context.provider,"models":models,"generation":context.generation}),
+                ),
+                Err(code) => reply(
+                    502,
                     json!({"detail":{"code":code,"msg":super::harness::detail(code)}}),
-                );
+                ),
             }
-        };
-        return match st
-            .dictation_models
-            .get_context(&st.accounts, &st.dictation_slots, &context, fresh)
-            .await
-        {
-            Ok((models, _)) => reply(
-                200,
-                json!({"provider":context.provider,"models":models,"generation":context.generation}),
-            ),
-            Err(code) => reply(
-                502,
-                json!({"detail":{"code":code,"msg":super::harness::detail(code)}}),
-            ),
-        };
+        })
+        .await
+        .unwrap_or_else(|_| {
+            reply(
+                503,
+                json!({"detail": {
+                    "code": "dictation_rust_unavailable",
+                    "msg": "Não foi possível confirmar a organização no Rust; a transcrição foi preservada."
+                }}),
+            )
+        });
     }
     if path == "/api/transcription/providers/status" {
         if guest {
@@ -136,11 +148,14 @@ pub async fn serve(
         let Ok(_slot) = st.transcription_slots.clone().try_acquire_owned() else {
             return busy();
         };
-        return match crate::transcription::routes::configuration(st).await {
-            Ok(config) => {
-                st.transcription.configure(config).await;
-                reply(200, json!({"providers":st.transcription.status().await}))
-            }
+        return match within_public_deadline(15, async {
+            let config = crate::transcription::routes::configuration(st).await?;
+            st.transcription.configure(config).await;
+            Ok(st.transcription.status().await)
+        })
+        .await
+        {
+            Ok(providers) => reply(200, json!({"providers":providers})),
             Err(e) => failure(e),
         };
     }
@@ -159,7 +174,7 @@ pub async fn serve(
             Ok(v) => v,
             Err(_) => return audio_body_error(),
         };
-        let result = within_public_deadline(async {
+        let result = within_public_deadline(180, async {
             let _slot = st
                 .transcription_slots
                 .clone()
@@ -201,12 +216,10 @@ pub async fn serve(
         Ok(v) => v,
         Err(_) => return audio_body_error(),
     };
-    let transcription = match within_public_deadline(crate::transcription::routes::transcribe_here(
-        st,
-        data,
-        filename,
-        Profile::Dictation,
-    ))
+    let transcription = match within_public_deadline(
+        180,
+        crate::transcription::routes::transcribe_here(st, data, filename, Profile::Dictation),
+    )
     .await
     {
         Ok(v) => v,
@@ -345,15 +358,11 @@ fn audio_body_error() -> Response {
 }
 
 /// O prazo público inclui configuração e todas as tentativas; cancelar solta o future e sua vaga.
-async fn within_public_deadline<F>(
-    operation: F,
-) -> Result<crate::transcription::model::Transcription, TranscriptionError>
+async fn within_public_deadline<T, F>(seconds: u64, operation: F) -> Result<T, TranscriptionError>
 where
-    F: std::future::Future<
-            Output = Result<crate::transcription::model::Transcription, TranscriptionError>,
-        >,
+    F: std::future::Future<Output = Result<T, TranscriptionError>>,
 {
-    tokio::time::timeout(std::time::Duration::from_secs(180),operation).await.unwrap_or_else(|_|Err(TranscriptionError{
+    tokio::time::timeout(std::time::Duration::from_secs(seconds),operation).await.unwrap_or_else(|_|Err(TranscriptionError{
         status:503,code:"transcription_rust_unavailable".into(),detail:"Não foi possível confirmar a transcrição no Rust. O áudio foi preservado para tentar novamente.".into(),
     }))
 }
