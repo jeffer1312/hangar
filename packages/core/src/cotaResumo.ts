@@ -57,30 +57,33 @@ export function janelaEsgotada(c: CotaContaResumo | undefined): string | null {
   return c.janelas.find((j) => !j.por_modelo && typeof j.pct === 'number' && j.pct >= 100)?.rotulo ?? null;
 }
 
-/** Janela geral cheia e ainda não renovada (o `exhausted` do app de PC): reset já passado é leitura velha. */
-function bloqueada(c: CotaContaResumo | undefined, now: number): boolean {
-  if (!c || c.estado !== 'lida') return false;
-  return c.janelas.some((j) => !j.por_modelo && typeof j.pct === 'number' && j.pct >= 100 && (j.reset_ts == null || j.reset_ts > now));
+/** Uso a partir do qual a conta cede a vez: o `QUOTA_LIMIT` do servidor (session_open/resolve.rs). */
+export const COTA_LIMITE = 95;
+
+type CotaUso = { id: string; estado: string; janelas: { pct: number }[] };
+
+/** Maior janela lida, de qualquer tipo (como o servidor conta); null sem leitura. */
+function usoDaConta(c: CotaUso | undefined): number | null {
+  const pcts = c?.estado === 'lida' ? c.janelas.map((j) => j.pct).filter((p) => typeof p === 'number' && isFinite(p)) : [];
+  return pcts.length ? Math.max(...pcts) : null;
 }
 
-/** Para onde sair quando a conta Claude `atual` tem a janela geral esgotada: a de mais folga (100 menos a
- *  pior janela, a regra do `sugerir_claude` do backend) entre as lidas e não esgotadas; empate fica com a
- *  ativa. null quando a atual não está esgotada, não tem cota lida ou nenhuma outra serve. `now` em segundos. */
+/** A regra do servidor ao abrir (`quota_verdict`), para a tela mostrar a conta em que a sessão vai nascer:
+ *  a Claude `atual` a COTA_LIMITE% ou mais sai para a lida de menor uso, se ela tiver mais folga que a
+ *  atual; empate fica com a ativa. null = fica onde está (abaixo do limite, sem leitura ou nenhuma melhor). */
 export function contaComFolga(
   atual: string | null | undefined,
   contas: { path: string; active?: boolean }[],
-  cotas: CotaContaResumo[],
-  now: number,
+  cotas: CotaUso[],
 ): string | null {
-  if (!atual || !bloqueada(cotaDaConta(cotas, atual), now)) return null;
-  let best: { folga: number; ativa: boolean; path: string } | null = null;
+  const agora = atual ? usoDaConta(cotaDaConta(cotas, atual)) : null;
+  if (agora === null || agora < COTA_LIMITE) return null;
+  let best: { uso: number; ativa: boolean; path: string } | null = null;
   for (const conta of contas) {
-    const c = cotaDaConta(cotas, conta.path);
-    const pcts = c?.estado === 'lida' ? c.janelas.map((j) => j.pct).filter((p) => typeof p === 'number' && isFinite(p)) : [];
-    if (!pcts.length || bloqueada(c, now)) continue;
-    const folga = 100 - Math.max(...pcts);
+    const uso = conta.path === atual ? null : usoDaConta(cotaDaConta(cotas, conta.path));
+    if (uso === null || uso >= agora) continue;
     const ativa = !!conta.active;
-    if (!best || folga > best.folga || (folga === best.folga && ativa && !best.ativa)) best = { folga, ativa, path: conta.path };
+    if (!best || uso < best.uso || (uso === best.uso && ativa && !best.ativa)) best = { uso, ativa, path: conta.path };
   }
   return best?.path ?? null;
 }

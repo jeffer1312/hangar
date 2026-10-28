@@ -14,7 +14,7 @@
            type ModelOption, type Motor, type CliProxyAccount, type SessionOpeningExtras, type ArchiveEntry,
            sanitizeSessionName, uniqueSessionName, contextRefsPlainText } from '@hangar/core';
   import { carregarModelos as carregarModelosDaConta, matchRemembered, temEscolhaDeModelo, valorModelo } from '../lib/modelosPorConta';
-  import { basename, claudeAccountFolder, providerName, relativeTime, cotaDaConta, resumoCota, janelaEsgotada, effortLevels, SESSION_PROVIDERS,
+  import { basename, claudeAccountFolder, providerName, relativeTime, cotaDaConta, contaComFolga, resumoCota, janelaEsgotada, effortLevels, SESSION_PROVIDERS,
     contextModel, setClaudeDefaultsForServer } from '@hangar/core';
   import SessionOpeningFields from './SessionOpeningFields.svelte';
   import BranchChoice from './BranchChoice.svelte';
@@ -22,7 +22,7 @@
   import { quotaFeed } from '../lib/quotaFeed.svelte';
   import { segredos } from '../lib/segredos.svelte';
   import { papelDo } from '../lib/papel.svelte';
-  import { faixaDeCota, faltaPara, motivoParado, exhaustedWindow, bestAccountWithQuota } from '../lib/cota';
+  import { faixaDeCota, faltaPara, motivoParado, exhaustedWindow } from '../lib/cota';
   import FolderGitPill from './FolderGitPill.svelte';
   import CustomizationsSheet from './CustomizationsSheet.svelte';
   import { emptyDelta, isEmptyDelta, deltaCount } from '../lib/customizations';
@@ -558,10 +558,10 @@
   const contasVisiveis = $derived(isDesktop || cotaLinha.length === 0 ? configs
     : configs.filter((c) => c.active || c.path === selectedConfig || cotaLinha.some((q) => q.id === `claude:${c.path}`)));
   const contaEsgotada = (path: string) => exhaustedWindow(cotaLinha.find((c) => c.id === `claude:${path}`));
-  // Conta escolhida esgotada e sem escolha manual: troca sozinha para a de mais folga (como a Nova conversa).
+  // Conta a 95% ou mais e sem escolha manual: troca sozinha para a de mais folga, a regra do servidor (como a Nova conversa).
   $effect(() => {
-    if (isDesktop || !open || provider !== 'claude' || contaEscolhidaAMao || !selectedConfig || !contaEsgotada(selectedConfig)) return;
-    const alvo = bestAccountWithQuota(cotaLinha, contasVisiveis.map((c) => c.path));
+    if (isDesktop || !open || provider !== 'claude' || contaEscolhidaAMao || !selectedConfig) return;
+    const alvo = contaComFolga(selectedConfig, contasVisiveis, cotaLinha);
     if (alvo && alvo !== selectedConfig) { selectedConfig = alvo; carregarModelos(); }
   });
   const cotaContaChatGpt = $derived.by(() => {

@@ -211,6 +211,10 @@ pub struct SessionOpenRequest {
     /// abertura (a reserva sai). A abertura do dono liga; a resolução da própria reserva não.
     #[serde(skip)]
     pub take_reserved_name: bool,
+    /// Fora do fio: a conversa retomada mora na pasta desta conta e não muda com ela (Codex), então
+    /// a regra dos 95% não a troca.
+    #[serde(skip)]
+    pub account_bound: bool,
 }
 
 fn is_false(value: &bool) -> bool { !value }

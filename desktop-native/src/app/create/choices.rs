@@ -234,15 +234,20 @@ pub(super) fn exhausted(quota: &QuotaLine, now: f64) -> Option<Option<f64>> {
     Some(full.iter().filter_map(|w| w.reset_ts).reduce(f64::max))
 }
 
-/// A conta para onde sair quando a escolhida (`selected`) tem a janela geral esgotada: a de mais folga (100 menos a maior
-/// janela, a regra do `sugerir_claude` do backend) entre as de cota lida e não esgotada, empate com a ativa. `None` quando a
-/// escolhida não está esgotada, não tem cota conhecida ou nenhuma outra serve.
-fn quota_switch(selected: Option<&str>, accounts: &[(&str, bool, Option<&QuotaLine>)], now: f64) -> Option<String> {
-    exhausted(accounts.iter().find(|a| Some(a.0) == selected)?.2?, now)?;
-    accounts.iter().filter_map(|&(path, active, quota)| {
-        let quota = quota.filter(|q| exhausted(q, now).is_none() && q.state == "lida")?;
-        Some((100. - quota.windows().map(|(_, p)| p).reduce(f64::max)?, active, path))
-    }).max_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))).map(|(_, _, path)| path.to_owned())
+/// Uso a partir do qual a conta cede a vez: o `QUOTA_LIMIT` do servidor (session_open/resolve.rs), o `COTA_LIMITE` do core.
+const QUOTA_LIMIT: f64 = 95.;
+
+/// A regra do servidor ao abrir (`quota_verdict`), para a tela mostrar a conta em que a sessão vai nascer: a escolhida
+/// (`selected`) a 95% ou mais sai para a lida de menor uso (a maior janela, de qualquer tipo), se ela tiver mais folga que
+/// a escolhida; empate fica com a ativa. `None` = fica (abaixo do limite, sem cota conhecida ou nenhuma melhor).
+fn quota_switch(selected: Option<&str>, accounts: &[(&str, bool, Option<&QuotaLine>)]) -> Option<String> {
+    let usage = |quota: Option<&QuotaLine>| quota.filter(|q| q.state == "lida")?.windows().map(|(_, p)| p).reduce(f64::max);
+    let current = usage(accounts.iter().find(|a| Some(a.0) == selected)?.2)?;
+    if current < QUOTA_LIMIT { return None; }
+    accounts.iter().filter(|a| Some(a.0) != selected)
+        .filter_map(|&(path, active, quota)| Some((usage(quota)?, active, path)))
+        .filter(|a| a.0 < current)
+        .min_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1))).map(|(_, _, path)| path.to_owned())
 }
 
 /// "2h10", "35m", "3d4h": quanto falta para a janela voltar (`faltaPara` do web).
@@ -851,14 +856,14 @@ impl NewSession {
         }, window, cx));
     }
 
-    /// A conta Claude escolhida com a cota esgotada troca sozinha pela de mais folga, salvo escolha à mão no menu.
+    /// A conta Claude escolhida a 95% ou mais troca sozinha pela de mais folga (`quota_switch`), salvo escolha à mão no menu.
     /// A conversa fechada não passa por aqui: lá o envio fica bloqueado. `true` quando trocou.
     pub(super) fn leave_exhausted_account(&mut self) -> bool {
         // Com o menu de conta aberto, a lista não muda debaixo do clique: fechar ou a próxima cota reavalia.
         if self.account_touched || self.menu.get() == Some(Menu::Account) || self.reopen_config.is_some() || self.creating || self.account_busy
             || self.provider != "claude" || !self.engine.is_empty() || self.target().is_some() { return false; }
         let accounts: Vec<_> = self.accounts().map(|c| (c.path.as_str(), c.active, self.quota_of(&format!("claude:{}", c.path)))).collect();
-        let Some(path) = quota_switch(self.config.as_deref(), &accounts, chrono::Local::now().timestamp() as f64) else { return false };
+        let Some(path) = quota_switch(self.config.as_deref(), &accounts) else { return false };
         // A conta mostrada é a que vai no pedido; sem isso o servidor refaz a troca e avisa como se ninguém tivesse escolhido.
         (self.config, self.account_suggested) = (Some(path), true);
         true
@@ -1528,27 +1533,35 @@ mod tests {
     }
 
     #[test]
-    fn exhausted_account_switches_to_the_roomiest() {
+    fn account_at_95_switches_to_the_roomiest() {
         let quota = |windows: serde_json::Value| -> QuotaLine {
             serde_json::from_value(serde_json::json!({"id": "claude:/x", "estado": "lida", "janelas": windows})).unwrap()
         };
-        let now = 1000.;
+        let used = |pct: f64| quota(serde_json::json!([{"rotulo": "7d", "pct": pct}]));
         let full = quota(serde_json::json!([{"rotulo": "5h", "pct": 100.0, "reset_ts": 2000.0}]));
         let busy = quota(serde_json::json!([{"rotulo": "5h", "pct": 70.0}, {"rotulo": "7d", "pct": 10.0}]));
         let free = quota(serde_json::json!([{"rotulo": "5h", "pct": 20.0}, {"rotulo": "7d opus", "pct": 40.0}]));
         let model_full = quota(serde_json::json!([{"rotulo": "7d opus", "pct": 100.0}, {"rotulo": "5h", "pct": 10.0}]));
         // Esgotada: vai para a de mais folga, contando todas as janelas; a sem leitura não entra.
-        assert_eq!(quota_switch(Some("/a"), &[("/a", true, Some(&full)), ("/b", false, Some(&busy)), ("/c", false, Some(&free)), ("/d", false, None)], now),
+        assert_eq!(quota_switch(Some("/a"), &[("/a", true, Some(&full)), ("/b", false, Some(&busy)), ("/c", false, Some(&free)), ("/d", false, None)]),
             Some("/c".into()));
-        // Janela por modelo cheia não é esgotada: fica onde está.
-        assert_eq!(quota_switch(Some("/a"), &[("/a", true, Some(&model_full)), ("/c", false, Some(&free))], now), None);
-        // Nenhuma serve: fica.
-        assert_eq!(quota_switch(Some("/a"), &[("/a", true, Some(&full)), ("/b", false, Some(&full)), ("/d", false, None)], now), None);
+        // A 97% com outra a 40%: troca.
+        assert_eq!(quota_switch(Some("/a"), &[("/a", true, Some(&used(97.))), ("/b", false, Some(&used(40.)))]), Some("/b".into()));
+        // Janela por modelo conta, como no servidor.
+        assert_eq!(quota_switch(Some("/a"), &[("/a", true, Some(&model_full)), ("/c", false, Some(&free))]), Some("/c".into()));
+        // Todas a 95% ou mais: a de mais folga.
+        assert_eq!(quota_switch(Some("/a"), &[("/a", true, Some(&used(99.))), ("/b", false, Some(&used(98.))), ("/c", false, Some(&used(96.)))]),
+            Some("/c".into()));
+        // Abaixo de 95%: fica.
+        assert_eq!(quota_switch(Some("/a"), &[("/a", true, Some(&used(94.))), ("/c", false, Some(&used(10.)))]), None);
+        // Nenhuma com mais folga que a escolhida: fica.
+        assert_eq!(quota_switch(Some("/a"), &[("/a", true, Some(&used(96.))), ("/b", false, Some(&used(100.))), ("/c", false, Some(&full))]), None);
+        assert_eq!(quota_switch(Some("/a"), &[("/a", true, Some(&full)), ("/b", false, Some(&full)), ("/d", false, None)]), None);
         // Sem conta escolhida conhecida: fica.
-        assert_eq!(quota_switch(None, &[("/a", true, Some(&full)), ("/c", false, Some(&free))], now), None);
+        assert_eq!(quota_switch(None, &[("/a", true, Some(&full)), ("/c", false, Some(&free))]), None);
         // Empate fica com a ativa, em qualquer ordem.
-        assert_eq!(quota_switch(Some("/a"), &[("/a", false, Some(&full)), ("/c", true, Some(&free)), ("/e", false, Some(&free))], now), Some("/c".into()));
-        assert_eq!(quota_switch(Some("/a"), &[("/a", false, Some(&full)), ("/e", false, Some(&free)), ("/c", true, Some(&free))], now), Some("/c".into()));
+        assert_eq!(quota_switch(Some("/a"), &[("/a", false, Some(&full)), ("/c", true, Some(&free)), ("/e", false, Some(&free))]), Some("/c".into()));
+        assert_eq!(quota_switch(Some("/a"), &[("/a", false, Some(&full)), ("/e", false, Some(&free)), ("/c", true, Some(&free))]), Some("/c".into()));
     }
 
     #[test]

@@ -3104,6 +3104,62 @@ fn an_unknown_quota_gets_a_short_read_before_the_open_decides() {
     assert_eq!(*facts.unknown_quota.lock().unwrap(), ["claude:padrão"]);
 }
 
+/// Conta que ninguém escolheu (padrão ou herdada) com cota ilegível nasce na de cota lida e mais
+/// folga, com aviso; a escolhida fica; nenhuma lida, fica na padrão.
+#[test]
+fn an_unknown_quota_on_an_unchosen_account_is_born_on_a_known_one() {
+    let unread = claude_row(".claude", "default", true, "expirada", 0.0);
+    let rows = json!([unread, claude_row(".claude-b", "b", false, "lida", 60.0)]);
+    for name in ["create_quota_switch", "create_quota_inherited_switch"] {
+        let mut fixture = fixture_named(name);
+        fixture["scenario"]["fakes"]["quotas"] = rows.clone();
+        let facts = FixtureFacts::of(&fixture);
+        let resolved = open_with(&fixture, &facts).unwrap();
+        assert_eq!(*facts.network_reads.lock().unwrap(), 1, "{name}: lê a rede antes de trocar");
+        assert_eq!((resolved.spec.account, resolved.spec.account_source),
+            (Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() }, AccountSource::Quota), "{name}");
+        assert_eq!(resolved.warnings, ["cota da conta default não pôde ser lida; a sessão nasceu em b"], "{name}");
+        assert!(facts.unknown_quota.lock().unwrap().is_empty(), "{name}");
+    }
+
+    let mut fixture = fixture_named("create_quota_explicit_account_kept");
+    fixture["scenario"]["fakes"]["quotas"] = rows.clone();
+    let facts = FixtureFacts::of(&fixture);
+    let resolved = open_with(&fixture, &facts).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source),
+        (Account::Claude { config_dir: "<ROOT>/home/.claude".into() }, AccountSource::Explicit));
+    assert!(resolved.warnings.is_empty());
+    assert_eq!(*facts.unknown_quota.lock().unwrap(), ["claude:<ROOT>/home/.claude"]);
+
+    let mut fixture = fixture_named("create_quota_switch");
+    fixture["scenario"]["fakes"]["quotas"] = json!([unread, claude_row(".claude-b", "b", false, "expirada", 0.0)]);
+    let facts = FixtureFacts::of(&fixture);
+    let resolved = open_with(&fixture, &facts).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Default, AccountSource::Default));
+    assert!(resolved.warnings.is_empty());
+    assert_eq!(*facts.unknown_quota.lock().unwrap(), ["claude:<ROOT>/home/.claude"]);
+}
+
+/// Todas a 95% ou mais: nasce na de mais folga mesmo acima dos 95%; nenhuma com mais folga, fica.
+#[test]
+fn all_exhausted_accounts_pick_the_one_with_most_room() {
+    let mut fixture = fixture_named("create_quota_switch");
+    fixture["scenario"]["state"]["dirs"].as_array_mut().unwrap().push(json!("<ROOT>/home/.claude-c/projects"));
+    fixture["scenario"]["state"]["files"]["<ROOT>/home/.claude-c/.credentials.json"] = json!({});
+    fixture["scenario"]["fakes"]["quotas"] = json!([claude_row(".claude", "default", true, "lida", 99.0),
+        claude_row(".claude-b", "b", false, "lida", 98.0), claude_row(".claude-c", "c", false, "lida", 96.0)]);
+    let resolved = resolve_fixture(&fixture).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source),
+        (Account::Claude { config_dir: "<ROOT>/home/.claude-c".into() }, AccountSource::Quota));
+    assert_eq!(resolved.warnings, ["conta default com 99% de uso; a sessão nasceu em c"]);
+
+    fixture["scenario"]["fakes"]["quotas"][2]["janelas"] = json!([{"rotulo": "7d", "pct": 99.5}]);
+    fixture["scenario"]["fakes"]["quotas"][1]["janelas"] = json!([{"rotulo": "7d", "pct": 99.0}]);
+    let resolved = resolve_fixture(&fixture).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Default, AccountSource::Default));
+    assert!(resolved.warnings.is_empty());
+}
+
 /// Conta que bateu o limite (`limit-spent.json` com reset no futuro) conta como 100%, mesmo com o
 /// cache ainda mostrando folga; reset passado não pesa. O token vencido guarda o uso da última leitura.
 #[test]
@@ -3141,9 +3197,16 @@ fn an_exhausted_default_codex_account_is_switched_to_the_one_with_room() {
 
     // A mesma conta pedida pela tela também sai da escolha: nasce na de mais folga, com o mesmo aviso.
     fixture["scenario"]["steps"][0]["json"]["codex_account"] = json!("default");
-    let resolved = open_with(&fixture, &FixtureFacts { connected, ..FixtureFacts::of(&fixture) }).unwrap();
+    let resolved = open_with(&fixture, &FixtureFacts { connected: connected.clone(), ..FixtureFacts::of(&fixture) }).unwrap();
     assert_eq!(resolved.spec.account, Account::Codex { account_id: "trabalho".into() });
     assert_eq!((resolved.spec.account_source, resolved.warnings), (AccountSource::Quota, vec!["conta Codex com 99% de uso; a sessão nasceu em trabalho".to_owned()]));
+
+    // Retomada do Arquivo: a conversa Codex mora na pasta da conta e não muda com ela, então fica.
+    let mut request = SessionOpenRequest::parse(&request_body(&fixture)).unwrap();
+    request.account_bound = true;
+    let resolved = resolve::resolve_open(&request, &OWNER, &FixtureFacts { connected, ..FixtureFacts::of(&fixture) }).unwrap();
+    assert_eq!(resolved.spec.account, Account::Codex { account_id: "default".into() });
+    assert!(resolved.warnings.is_empty());
 }
 
 /// A conta mandada pela tela a 95% ou mais nasce na de mais folga, sem perguntar, com o aviso; com

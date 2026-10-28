@@ -313,7 +313,8 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
     }
     let config_dir = body.config_dir.clone().or_else(|| found.owner.clone());
     let request = SessionOpenRequest { name: Some(name), cwd: found.cwd.clone(), config_dir, provider: Some(provider.name().into()),
-        codex_account: found.codex_account.clone(), engine: body.engine, engine_account: body.engine_account, model: body.model,
+        codex_account: found.codex_account.clone(), account_bound: provider == AgentProvider::Codex,
+        engine: body.engine, engine_account: body.engine_account, model: body.model,
         headless: body.headless, ..Default::default() };
     Ok(Plan { request, found, provider, project: project.to_owned() })
 }

@@ -293,24 +293,32 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
     let quota_rule = match provider {
         // A conta que o convidado escolheu não troca por outra do dono.
         AgentProvider::Claude => !truthy(&request.engine) && !(guest && explicit),
-        AgentProvider::Codex => !guest,
+        AgentProvider::Codex => !guest && !request.account_bound,
         _ => false,
     };
     if quota_rule {
         let name = request.name.as_deref().unwrap_or_default();
         let current = if provider == AgentProvider::Codex { codex_account.as_deref().or(Some("default")) } else { config_dir.as_deref() };
-        match quota_check(provider, current, facts) {
-            QuotaCheck::Room => {}
-            QuotaCheck::Unknown(account) => facts.quota_unknown(name, &account),
-            QuotaCheck::Exhausted { current, best: None } => tracing::warn!(code = "open_quota_no_room", session = name, account = %current.id,
-                "conta com {:.0}% de uso e nenhuma outra com folga; a sessão segue nela", current.usage.unwrap_or(100.0)),
-            QuotaCheck::Exhausted { current, best: Some(best) } => {
-                let warning = format!("conta {} com {:.0}% de uso; a sessão nasceu em {}", current.label, current.usage.unwrap_or(100.0), best.label);
-                tracing::warn!("create_session {name}: {warning}");
-                if provider == AgentProvider::Codex { codex_account = Some(best.choice) } else { config_dir = Some(best.choice) }
-                warnings.push(warning);
-                source = AccountSource::Quota;
+        let switch = match quota_check(provider, current, facts) {
+            QuotaCheck::Room => None,
+            // Ninguém escolheu a conta: nascer numa de cota lida evita gastar às cegas uma que pode estar no fim.
+            QuotaCheck::Unknown { current, best: Some(best) } if !explicit =>
+                Some((format!("cota da conta {} não pôde ser lida; a sessão nasceu em {}", current.label, best.label), best)),
+            // A escolhida fica. Nenhuma conta com cota lida: decisão em aberto com o usuário, fica na pedida.
+            QuotaCheck::Unknown { current, .. } => { facts.quota_unknown(name, &current.id); None }
+            QuotaCheck::Exhausted { current, best: None } => {
+                tracing::warn!(code = "open_quota_no_room", session = name, account = %current.id,
+                    "conta com {:.0}% de uso e nenhuma outra com folga; a sessão segue nela", current.usage.unwrap_or(100.0));
+                None
             }
+            QuotaCheck::Exhausted { current, best: Some(best) } =>
+                Some((format!("conta {} com {:.0}% de uso; a sessão nasceu em {}", current.label, current.usage.unwrap_or(100.0), best.label), best)),
+        };
+        if let Some((warning, best)) = switch {
+            tracing::warn!("create_session {name}: {warning}");
+            if provider == AgentProvider::Codex { codex_account = Some(best.choice) } else { config_dir = Some(best.choice) }
+            warnings.push(warning);
+            source = AccountSource::Quota;
         }
     }
 
@@ -448,7 +456,7 @@ struct QuotaAccount {
 }
 
 #[derive(Debug)]
-enum QuotaCheck { Room, Unknown(String), Exhausted { current: QuotaAccount, best: Option<QuotaAccount> } }
+enum QuotaCheck { Room, Unknown { current: QuotaAccount, best: Option<QuotaAccount> }, Exhausted { current: QuotaAccount, best: Option<QuotaAccount> } }
 
 /// Uso conhecido: a janela mais cheia da leitura (a guardada de antes do token vencer também vale) e
 /// 100% enquanto o limite que a troca automática gravou não volta.
@@ -500,28 +508,27 @@ fn quota_accounts(provider: AgentProvider, current: Option<&str>, rows: &[Value]
     Some((current, others))
 }
 
-/// `cotas.conta_com_cota`: a conta a 95% ou mais e a de mais folga que a substitui (a ativa no empate),
-/// desde que tenha mais folga que ela.
+/// `cotas.conta_com_cota`: a conta a 95% ou mais (ou de cota desconhecida) e a de mais folga que a
+/// substitui (a ativa no empate), desde que tenha mais folga que ela, mesmo acima dos 95%.
 fn quota_verdict(provider: AgentProvider, current: Option<&str>, rows: &[Value],
                  spent: &std::collections::BTreeMap<String, f64>, facts: &dyn OpenFacts) -> QuotaCheck {
     let Some((current, others)) = quota_accounts(provider, current, rows, spent, facts) else { return QuotaCheck::Room };
-    let Some(usage) = current.usage else { return QuotaCheck::Unknown(current.id) };
-    if usage < QUOTA_LIMIT {
+    if current.usage.is_some_and(|usage| usage < QUOTA_LIMIT) {
         return QuotaCheck::Room;
     }
     let best = others.into_iter().filter(|a| a.read && a.id != current.id)
         .filter_map(|a| Some((a.usage?, a)))
-        .filter(|(other, _)| *other < usage)
+        .filter(|(other, _)| current.usage.is_none_or(|usage| *other < usage))
         .reduce(|best, next| if (-next.0, next.1.active) > (-best.0, best.1.active) { next } else { best })
         .map(|(_, a)| a);
-    QuotaCheck::Exhausted { current, best }
+    if current.usage.is_none() { QuotaCheck::Unknown { current, best } } else { QuotaCheck::Exhausted { current, best } }
 }
 
 /// A regra pelo cache; sem cota conhecida da conta, uma leitura curta da rede antes de desistir.
 fn quota_check(provider: AgentProvider, current: Option<&str>, facts: &dyn OpenFacts) -> QuotaCheck {
     let spent = if provider == AgentProvider::Claude { facts.spent_accounts() } else { Default::default() };
     match quota_verdict(provider, current, &facts.quotas(false), &spent, facts) {
-        QuotaCheck::Unknown(_) => quota_verdict(provider, current, &facts.quotas(true), &spent, facts),
+        QuotaCheck::Unknown { .. } => quota_verdict(provider, current, &facts.quotas(true), &spent, facts),
         known => known,
     }
 }
