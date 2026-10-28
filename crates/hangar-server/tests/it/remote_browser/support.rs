@@ -8,6 +8,7 @@ use axum::Router;
 use axum::body::to_bytes;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use hangar_server::auth::TrustedHosts;
 use hangar_server::config::Config;
@@ -135,11 +136,16 @@ pub struct RefusingServer { pub server: Server, pub attempts: Arc<Mutex<Vec<Atte
 
 impl RefusingServer {
     pub async fn new() -> Self {
-        async fn refuse(State(attempts): State<Arc<Mutex<Vec<Attempt>>>>, req: Request) -> (StatusCode, &'static str) {
+        async fn refuse(State(attempts): State<Arc<Mutex<Vec<Attempt>>>>, req: Request) -> Response {
             let (parts, body) = req.into_parts();
             let body = to_bytes(body, 1024 * 1024).await.unwrap();
+            let head = parts.method == axum::http::Method::HEAD;
             attempts.lock().unwrap().push(Attempt { path: parts.uri.to_string(), headers: parts.headers, body: body.to_vec() });
-            (StatusCode::SERVICE_UNAVAILABLE, "remote_browser_test_upstream_refused")
+            if head {
+                return (StatusCode::METHOD_NOT_ALLOWED, [("allow","GET"),("content-type","application/json")],
+                    r#"{"detail":"Method Not Allowed"}"#).into_response();
+            }
+            (StatusCode::SERVICE_UNAVAILABLE, "remote_browser_test_upstream_refused").into_response()
         }
         let attempts = Arc::new(Mutex::new(Vec::new()));
         let server = Server::owner(Router::new().fallback(refuse).with_state(attempts.clone())).await;
@@ -174,7 +180,23 @@ impl Scene {
         let home = isolated.join("home");
         assert_eq!(std::env::var_os("HOME"), Some(home.clone().into_os_string()), "HOME fora do ensaio");
         let root = tempfile::tempdir_in(&isolated).unwrap();
-        let script = crate::list_support::sessions(root.path(), 1);
+        let discovery = crate::list_support::sessions(root.path(), 1);
+        let script = root.path().join("remote-browser-mux");
+        // A lista e o porteiro consultam formatos diferentes do mesmo terminal de ensaio.
+        crate::write_executable(&script, format!(r#"#!/bin/sh
+if [ "$1" = display-message ] && [ "$5" = '#{{session_created}}' ]; then
+    printf 'display-message\n' >> '{log}'
+    [ "$2" = -p ] && [ "$3" = -t ] && [ "$4" = '=s0:' ] || exit 1
+    printf '1\n'
+    exit 0
+fi
+if [ "$1" = has-session ]; then
+    printf 'has-session\n' >> '{log}'
+    [ "$2" = -t ] && [ "$3" = '=s0' ]
+    exit $?
+fi
+exec '{discovery}' "$@"
+"#, log = root.path().join("calls.log").display(), discovery = discovery.display()));
         // O multiplexador de ensaio e o construtor leem as mesmas fontes temporárias.
         let source = root.path().join("home/.claude");
         std::fs::rename(source.join("projects"), home.join(".claude/projects")).unwrap();

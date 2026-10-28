@@ -522,6 +522,7 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/limits", get(crate::session_write::codex::limits).fallback(fallback.clone()))
         .route("/api/sessions/{name}/question/skip", axum::routing::post(crate::session_write::codex::skip_question).fallback(fallback.clone()))
         .route("/api/orq/{exec_id}/conductor", get(crate::orq_conductor::public).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/navegador", get(crate::remote_browser::url::route).head(fallback.clone()).fallback(fallback.clone()))
         .route("/api/sessions/{name}/commands", get(crate::commands::route).fallback(fallback.clone()))
         .route("/api/sessions/{name}/codex-permissions", get(crate::session_write::codex::permissions).fallback(fallback.clone()))
         // Mesmo caminho: o axum junta o POST à rota de cima (um repasse só, o dela).

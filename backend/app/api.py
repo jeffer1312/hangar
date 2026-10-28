@@ -8229,21 +8229,10 @@ def preview_stop():
 
 
 @app.get("/api/sessions/{name}/navegador", dependencies=[Depends(require_auth)])
-def navegador_da_sessao(name: str):
-    """URL que o navegador embutido (app desktop) da sessão está mostrando, pelo sidecar que o shell
-    grava em ~/.hangar/nav/ — o mesmo que `scripts/hangar-preview` lê. Sem navegador: url null."""
-    pasta = Path.home() / ".hangar" / "nav"
-    if pasta.is_dir():
-        for arq in pasta.glob("*.json"):
-            try:
-                sc = json.loads(arq.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as e:
-                _log.warning("sidecar de navegador ilegivel %s: %s", arq, e)
-                continue
-            chave = sc.get("chave", "") if isinstance(sc, dict) else ""
-            if chave == name or chave.endswith(f"::{name}"):
-                return {"url": sc.get("url")}
-    return {"url": None}
+async def navegador_da_sessao(name: str, request: Request):
+    request = Request({**request.scope, "path": f"/api/sessions/{urllib.parse.quote(name, safe='')}/navegador"}, request.receive)
+    return await _repasse_ao_rust(request, erro("browser_need_rust_server", "o navegador precisa do servidor Rust, que não está rodando"),
+                                  "/__hangar_server/forwarded")
 
 
 @app.get("/api/sessions/{name}/commands", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])

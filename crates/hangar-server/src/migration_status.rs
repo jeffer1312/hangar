@@ -106,6 +106,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if crate::orchestration::matches(method, path) || crate::provider_models::matches(method, path)
         || crate::omp_sync::matches(method, path) { return true; }
     if crate::prewarm::http::matches(method, path) { return true; }
+    if crate::remote_browser::url::matches(method, path) { return true; }
     if crate::nav_requests::matches(method, path) { return true; }
     if crate::loops::http::matches(method, path) { return true; }
     if crate::push::http::matches(method, path) { return true; }
@@ -217,6 +218,7 @@ fn share_route(method: &Method, path: &str) -> bool {
 /// Um ou mais pedidos reais por área, só para a tabela; a decisão é de `rust_route`.
 const PROBES: &[(&str, &str)] = &[
     ("GET", "/api/sessions/x/history"), ("GET", "/api/sessions/x/events"),
+    ("GET", "/api/sessions/x/navegador"),
     ("GET", "/api/sessions"), ("GET", "/api/sessions/events"), ("POST", "/api/sessions"),
     ("POST", "/api/sessions/x/input"), ("POST", "/api/sessions/x/interrupt"), ("POST", "/api/sessions/x/answer"),
     ("POST", "/api/sessions/x/steer"), ("POST", "/api/sessions/x/select"), ("POST", "/api/sessions/x/select/submit"),
