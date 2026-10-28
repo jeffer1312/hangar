@@ -74,3 +74,5 @@ export * from './contextRefs';
 export * from './mermaid';
 export * from './liveVoice';
 export * from './updateAll';
+export * from './tags';
+export * from './applyToOwnServers';

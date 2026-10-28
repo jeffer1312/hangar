@@ -63,6 +63,8 @@ vi.mock('../../paraglide/messages', () => ({
   pair_full_pending: () => 'pair_full_pending',
   pair_release: (p: { dono: string }) => `liberar ${p.dono}`,
   pair_level_view: () => 'pair_level_view',
+  tags_context_ring: (p: { pct: number }) => `contexto ${p.pct}`,
+  ctx_uso_contexto: () => 'uso de contexto',
 }));
 
 import { useUnistyles } from 'react-native-unistyles';
@@ -361,11 +363,44 @@ describe('SessionRow', () => {
       expect(chip!.style.maxWidth).toBe('96px');
       expect(chip!.style.flexShrink, 'os metadados cedem antes da conta').toBe('0');
       expect(chip!.nextElementSibling, 'a conta fecha a linha').toBeNull();
-      expect(chip!.parentElement!.textContent).toContain('repo · main');
-      expect(chip!.parentElement!.textContent).not.toContain('api');
+      // A conta mora na placa, último pedaço da linha de metadados.
+      const line = chip!.parentElement!.parentElement!;
+      expect(line.lastElementChild).toBe(chip!.parentElement);
+      expect(line.textContent).toContain('repo · main');
+      expect(line.textContent).not.toContain('api');
       expect(container.querySelector('button[aria-label^="api,"]')?.getAttribute('aria-label')).toContain(`conta ${name}`);
     } finally {
       act(() => root.unmount());
+    }
+  });
+
+  it('etiqueta da conta e da máquina vindas do servidor vencem o cálculo local', async () => {
+    Platform.OS = 'android';
+    const { container, root } = await render({
+      ...base, name: 'api', provider: 'claude', conta: 'claude:/home/user/.claude-claude-200-3', cwd: '/repo', branch: 'main',
+      accountTag: { name: 'ana', icon: 'key-round', color: 'blue' },
+      machineTag: { name: 'Casa', icon: 'house', color: null },
+    }, { mostrarServidor: true });
+    try {
+      const chip = container.querySelector<HTMLElement>('[aria-label="conta ana"]');
+      expect(chip!.textContent).toBe('ana');
+      expect(chip!.querySelector('svg')?.getAttribute('stroke')).toBe('#3b82f6');
+      const plate = chip!.parentElement!;
+      expect(plate.textContent).toBe(`${base.serverLabel}ana`);
+      expect(container.querySelector('button[aria-label^="api,"]')?.getAttribute('aria-label')).toContain('conta ana');
+    } finally {
+      act(() => root.unmount());
+    }
+  });
+
+  it('anel de contexto entra no rótulo da linha só com leitura', async () => {
+    const lida = await render({ ...base, name: 'api', provider: 'claude', context: { used: 150_000, window: 200_000 } });
+    const sem = await render({ ...base, name: 'web', provider: 'claude' });
+    try {
+      expect(lida.container.querySelector('button[aria-label^="api,"]')?.getAttribute('aria-label')).toContain('contexto 75');
+      expect(sem.container.querySelector('button[aria-label^="web,"]')?.getAttribute('aria-label')).not.toContain('contexto');
+    } finally {
+      act(() => { lida.root.unmount(); sem.root.unmount(); });
     }
   });
 

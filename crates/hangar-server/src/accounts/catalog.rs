@@ -89,10 +89,10 @@ fn displayed(path: &Path) -> String {
         .or_else(|| value.strip_prefix(r"\\?\").map(str::to_owned))
         .unwrap_or_else(|| value.into_owned())
 }
+/// O caminho que forma o id da conta (`claude:`/`codex:<pasta>`): a mesma resolução da `conta` da
+/// linha da lista, inclusive para pasta que ainda não existe sob um link.
 pub fn resolved(path: &Path) -> PathBuf {
-    path.canonicalize()
-        .map(|p| PathBuf::from(displayed(&p)))
-        .unwrap_or_else(|_| path.to_owned())
+    crate::list::links::resolve_lenient(path)
 }
 
 #[derive(Clone)]

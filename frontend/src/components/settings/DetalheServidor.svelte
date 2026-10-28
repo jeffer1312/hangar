@@ -6,6 +6,7 @@
   import * as m from '../../paraglide/messages';
   import ModalDialog from '../ModalDialog.svelte';
   import EscopoChip from './EscopoChip.svelte';
+  import TagEditor from './TagEditor.svelte';
   import { estadoDaLinha, recadosCard, sessionsState, type EstadoPeer, type LinhaMaquina } from '../../lib/maquinas';
   import type { EnderecoAlcance } from '../../lib/alcance';
   import type { Server } from '../../lib/auth';
@@ -168,6 +169,12 @@
       {/each}
       {#if linha.navegadores.length > 1}<p class="sd-dup">{m.servidores_guardado_explica({ n: linha.navegadores.length })}</p>{/if}
     </div>
+
+    <!-- Gravada no servidor dela e vista igual em todos os clientes; convite não tem a rota. -->
+    {#if linha.navegador && !linha.navegador.invite}
+      <p class="sd-grupo">{m.tags_machine_title()} <EscopoChip escopo="servidor" /></p>
+      <div class="sd-cartao"><TagEditor server={linha.navegador} /></div>
+    {/if}
 
     <p class="sd-grupo">{m.maquinas_falar()} <EscopoChip escopo="servidor" /></p>
     <div class="sd-cartao">

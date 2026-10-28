@@ -22,6 +22,7 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
   import { diaDoReset, faltaPara, janelaLonga, nivelDePct, VELHA_APOS_S, motivoParado,
     motivoSessaoViva } from '../../lib/cota';
   import NovaCredencialSheet from './NovaCredencialSheet.svelte';
+  import TagEditor from './TagEditor.svelte';
   import CodexContaLogin from './CodexContaLogin.svelte';
   import { credentialAuth, credentialGroup, codexCliAusente, motivoLoginIndisponivel, motivoCotaAntiga } from '@hangar/core';
   import { listServers, getActiveId } from '../../lib/auth';
@@ -50,6 +51,9 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
   }
   let { apiTarget, desktop = false }: Props = $props();
   const codexServer = $derived(apiTarget ?? listServers().find((s) => s.id === getActiveId()) ?? null);
+  // Etiqueta da conta vai para a máquina desta lista; a vista desktop web não ganha recurso novo.
+  const tagsServer = $derived(!desktop && codexServer && !codexServer.invite ? codexServer : null);
+  let tagDe = $state<string | null>(null);   // id da credencial com o editor de etiqueta aberto
   let codexLogin = $state<string | null>(null);
   let codexHerdar = $state<string | null>(null);
 
@@ -375,6 +379,7 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
     renomeando = null; apelidoTexto = ''; salvandoApelido = false;
     cookieDe = null; cookieWs = ''; cookieValor = ''; salvandoCookie = false;
     motorAberto = null;
+    tagDe = null;
     novo = null;
     apagando = false;
     // Refresh em voo pertence ao alvo que saiu: o finally de atualizar() só limpa o flag se a
@@ -1316,8 +1321,18 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
               <button type="button" class="ct-acao" aria-label={m.contas_remover_aria({ nome: conta.nome })}
                 onclick={() => { confirmando = conta.id; saindoDe = null; }}>{m.lista_remover()}</button>
             {/if}
+            {#if tagsServer}
+              <button type="button" class="ct-acao" aria-expanded={tagDe === conta.id}
+                onclick={() => (tagDe = tagDe === conta.id ? null : conta.id)}
+                >{tagDe === conta.id ? m.sessao_fechar() : m.tags_account_title()}</button>
+            {/if}
           </span>
           </div>
+          {#if tagsServer && tagDe === conta.id}
+            <div class="ct-form">
+              <TagEditor server={tagsServer} account={{ id: conta.id, provider: conta.tipo }} />
+            </div>
+          {/if}
           {#if conta.tipo === 'codex' && codexLogin === conta.codex_account && codexServer}
             <div class="ct-form">
               <CodexContaLogin server={codexServer} accountId={conta.codex_account ?? undefined}

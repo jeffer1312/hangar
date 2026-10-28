@@ -16,11 +16,14 @@ const C = 2 * Math.PI * R;
 
 // showValue=false: anel pequeno da linha de status, com a % escrita ao lado — o número de 9 unidades
 // dentro de um anel de 12 pt não se lê.
-export function ContextRing({ pct, size = 24, showValue = true }: { pct?: number | null; size?: number; showValue?: boolean }) {
+// stroke (pt): só o arco, por cima da borda de quem chama (o avatar), sem trilho.
+export function ContextRing({ pct, size = 24, showValue = true, stroke }: { pct?: number | null; size?: number; showValue?: boolean; stroke?: number }) {
   const { theme } = useUnistyles();
   if (typeof pct !== 'number' || !isFinite(pct)) return null;
   const value = Math.min(100, Math.max(0, pct));
-  const offset = C * (1 - value / 100);
+  const r = stroke ? 12 - (stroke * 24) / size : R;
+  const c = stroke ? 2 * Math.PI * r : C;
+  const offset = c * (1 - value / 100);
   const cor =
     value >= 90
       ? theme.tokens.status.error
@@ -35,16 +38,16 @@ export function ContextRing({ pct, size = 24, showValue = true }: { pct?: number
       accessibilityValue={{ min: 0, max: 100, now: Math.round(value) }}
     >
       <Svg width={size} height={size} viewBox="0 0 24 24">
-        <Circle cx="12" cy="12" r={R} stroke={theme.tokens.border.default} strokeWidth={3} fill="none" />
+        {stroke ? null : <Circle cx="12" cy="12" r={R} stroke={theme.tokens.border.default} strokeWidth={3} fill="none" />}
         <G transform="rotate(-90 12 12)">
           <Circle
             cx="12"
             cy="12"
-            r={R}
+            r={r}
             stroke={cor}
-            strokeWidth={3}
+            strokeWidth={stroke ? (stroke * 24) / size : 3}
             strokeLinecap="round"
-            strokeDasharray={C}
+            strokeDasharray={c}
             strokeDashoffset={offset}
             fill="none"
           />

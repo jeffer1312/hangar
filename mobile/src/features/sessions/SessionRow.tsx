@@ -3,11 +3,13 @@ import { ActionSheetIOS, Platform, Pressable, Text, View } from 'react-native';
 import { MenuView, type NativeActionEvent } from '@react-native-menu/menu';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import * as Haptics from 'expo-haptics';
-import { cwdParts, isOrq, loopBadge, pairExternals, providerName, relativeTime, rotuloEstado, untrackedReason, worktreeLabel, type AggSession, type PairExternal } from '@hangar/core';
+import { cwdParts, isOrq, loopBadge, pairExternals, providerName, relativeTime, rotuloEstado, sessionContextPct, tagHex, untrackedReason, worktreeLabel, type AggSession, type PairExternal } from '@hangar/core';
 import { Chip, type Tone } from '../../ui/Chip';
 import { SessionAvatar } from './SessionAvatar';
 import { HeadlessSignal } from './HeadlessSignal';
 import { Icon } from '../../ui/Icon';
+import { ProviderGlyph } from '../../ui/ProviderGlyph';
+import { ACCOUNT_ICON_NAME, MACHINE_ICON_NAME } from '../tags/tagVisuals';
 import { superficie } from '../../theme/superficie';
 import { SPACE } from '../../theme/scale';
 import { useWorktreeStatus } from '../worktrees/worktreeStatus';
@@ -25,7 +27,8 @@ const TOM_DO_LOOP: Record<'ok' | 'warn' | 'attention' | 'muted', Tone> = {
 
 const ACCOUNT_COLORS = ['#80bbc3', '#d3a781', '#97c69d', '#cd99b9', '#9ba9d9', '#ccbf87'];
 
-// O cabeçalho inclui motor e reservas; na lista só a conta de assinatura vira chip.
+// Servidor sem o evento `tags` (versão antiga): o nome sai da `conta`, e a cor por hash vale também
+// para a etiqueta sem cor. O cabeçalho inclui motor e reservas; aqui só a conta de assinatura.
 function accountChip(account: string | null | undefined) {
   const harness = ['claude', 'codex'].find(h => account?.startsWith(`${h}:`));
   if (!account || !harness) return null;
@@ -34,7 +37,7 @@ function accountChip(account: string | null | undefined) {
   const label = name.replace(new RegExp(`^${harness}-(?=.)`), '') || m.conta_padrao();
   let hash = 0;
   for (const char of base) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  return { label, name: name || m.conta_padrao(), color: ACCOUNT_COLORS[hash % ACCOUNT_COLORS.length] };
+  return { label, name: name || m.conta_padrao(), color: ACCOUNT_COLORS[hash % ACCOUNT_COLORS.length], harness };
 }
 
 // Ações de par externo da linha: a lista decide o que cada uma faz (confirmação, servidor, folha).
@@ -137,7 +140,14 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
   const sub = s.question ?? (s.state === 'working' ? s.label : reply) ?? null;
   const engineLabel = !orq && s.provider === 'claude' ? s.engine : null;
   const providerLabel = orq ? null : [providerName(s.provider), engineLabel].filter(Boolean).join(', ');
-  const account = accountChip(s.conta);
+  const legacy = accountChip(s.conta);
+  const tag = s.accountTag;
+  const account = tag
+    ? { label: tag.name, name: tag.name, color: tagHex(tag.color) ?? legacy?.color ?? theme.tokens.text.secondary, icon: tag.icon }
+    : legacy && { ...legacy, icon: null };
+  const accountProvider = legacy?.harness ?? s.provider ?? '';
+  const ctxPct = useMemo(() => sessionContextPct(s), [s]);
+  const plate = mostrarServidor || !!account;
   const juntada = useWorktreeStatus(s.serverId, wtPath)?.merged === true;
   // Na worktree a branch sai do texto e ganha o ícone de ramo; a pasta some quando repete o nome
   // da sessão ou da worktree.
@@ -198,7 +208,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
       // estado e a pergunta sumiriam do leitor de tela.
       // Máquina e projeto entram mesmo quando a tela os esconde (lista agrupada, pasta = nome):
       // é o que distingue duas conversas de mesmo nome no leitor de tela.
-      accessibilityLabel={`${s.name}${s.headless === true ? `, ${m.criar_modo_exec_headless()}` : ''}${fora ? `, ${m.pair_from_owner({ dono: fora.owner })}${s.guest_kind === 'share' ? '' : `, ${m.pair_level_view()}`}` : ''}, ${rotuloEstado(s.state)}${s.limited ? `, ${s.limit_reset ? m.sessao_limite_volta({ n: s.limit_reset }) : m.sessao_limite()}` : ''}${pendingQuestions > 0 ? `, ${m.ask_perguntas()}: ${pendingQuestions}` : ''}${sub ? `, ${sub}` : ''}${badgeText ? `, ${badgeText}` : ''}${providerLabel ? `, ${providerLabel}` : ''}${account ? `, ${m.sessao_conta({ n: account.name })}` : ''}, ${s.serverLabel}${s.cwd ? `, ${cwd.base}` : ''}${s.branch ? `, ${s.branch}` : ''}${gitAhead || gitBehind ? `, ${m.git_sync_titulo({ ahead: gitAhead, behind: gitBehind })}` : ''}${selected ? `, ${m.switcher_atual()}` : ''}`}
+      accessibilityLabel={`${s.name}${s.headless === true ? `, ${m.criar_modo_exec_headless()}` : ''}${fora ? `, ${m.pair_from_owner({ dono: fora.owner })}${s.guest_kind === 'share' ? '' : `, ${m.pair_level_view()}`}` : ''}, ${rotuloEstado(s.state)}${s.limited ? `, ${s.limit_reset ? m.sessao_limite_volta({ n: s.limit_reset }) : m.sessao_limite()}` : ''}${pendingQuestions > 0 ? `, ${m.ask_perguntas()}: ${pendingQuestions}` : ''}${sub ? `, ${sub}` : ''}${badgeText ? `, ${badgeText}` : ''}${providerLabel ? `, ${providerLabel}` : ''}${account ? `, ${m.sessao_conta({ n: account.name })}` : ''}${ctxPct !== null ? `, ${m.tags_context_ring({ pct: Math.round(ctxPct) })}` : ''}, ${s.serverLabel}${s.cwd ? `, ${cwd.base}` : ''}${s.branch ? `, ${s.branch}` : ''}${gitAhead || gitBehind ? `, ${m.git_sync_titulo({ ahead: gitAhead, behind: gitBehind })}` : ''}${selected ? `, ${m.switcher_atual()}` : ''}`}
       accessibilityActions={acoesA11y}
       onAccessibilityAction={({ nativeEvent }) => {
         acao(nativeEvent.actionName);
@@ -206,7 +216,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
     >
       {fora ? <View style={[styles.faixa, { backgroundColor: theme.tokens.accent.base }]} /> : null}
       <View style={styles.lead}>
-        <SessionAvatar session={s} />
+        <SessionAvatar session={s} ctxPct={ctxPct} />
       </View>
       <View style={styles.col}>
         <View style={styles.linha}>
@@ -228,15 +238,8 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
             {sub}
           </Text>
         ) : null}
-        {meta.length || engineLabel || mostrarServidor || branchWt || account || temGit || badgeText ? (
+        {meta.length || engineLabel || plate || branchWt || temGit || badgeText ? (
           <View style={styles.metaRow}>
-            {mostrarServidor ? <>
-              <View style={styles.serverIcon} accessibilityElementsHidden importantForAccessibility="no">
-                <Icon name="Monitor" size={SPACE[3]} color={muted} />
-              </View>
-              <Text style={[styles.meta, styles.metaRest, { color: s.serverColor }]} numberOfLines={1}>{s.serverLabel}</Text>
-              {meta.length || engineLabel || branchWt ? <Text style={[styles.meta, styles.metaSeparator, { color: s.serverColor }]}>{' · '}</Text> : null}
-            </> : null}
             {engineLabel ? (
               <View style={styles.engine}>
                 <Icon name="Settings" size={12} color={theme.tokens.accent.base} />
@@ -249,7 +252,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
                 onPress={groupTitle ? () => onPair?.(s, { kind: 'group' }) : undefined}
                 disabled={!groupTitle}
                 hitSlop={{ top: 8, bottom: 13, left: 6, right: 6 }}
-                style={[styles.badge, (meta.length > 0 || !!engineLabel || mostrarServidor) && styles.badgeAfter, { borderColor: theme.tokens.border.subtle }]}
+                style={[styles.badge, (meta.length > 0 || !!engineLabel) && styles.badgeAfter, { borderColor: theme.tokens.border.subtle }]}
                 accessibilityElementsHidden
                 importantForAccessibility="no-hide-descendants"
               >
@@ -276,10 +279,26 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
                 {gitRemoved > 0 ? <Text style={[styles.meta, { color: theme.tokens.status.error }]}>{`−${gitRemoved}`}</Text> : null}
               </View>
             ) : null}
-            {account ? (
-              <View style={styles.account} accessibilityLabel={m.sessao_conta({ n: account.name })}>
-                <View style={[styles.accountDot, { backgroundColor: account.color }]} />
-                <Text style={[styles.accountText, { color: theme.tokens.text.secondary }]} numberOfLines={1}>{account.label}</Text>
+            {/* Placa: [máquina, só fora da lista agrupada] [conta]; fecha a linha, e os metadados cedem antes dela. */}
+            {plate ? (
+              <View style={styles.plate}>
+                {mostrarServidor ? (
+                  <View style={styles.plateSeg}>
+                    {/* Ícone apagado como o do ramo; a cor da etiqueta fica no nome. */}
+                    <View style={styles.serverIcon} accessibilityElementsHidden importantForAccessibility="no">
+                      <Icon name={s.machineTag ? MACHINE_ICON_NAME[s.machineTag.icon] : 'Monitor'} size={SPACE[3]} color={muted} />
+                    </View>
+                    <Text style={[styles.meta, styles.metaRest, { color: s.serverColor }]} numberOfLines={1}>{s.serverLabel}</Text>
+                  </View>
+                ) : null}
+                {account ? (
+                  <View style={[styles.plateSeg, styles.account]} accessibilityLabel={m.sessao_conta({ n: account.name })}>
+                    {account.icon === 'provider' ? <ProviderGlyph provider={accountProvider} size={SPACE[3]} inline color={account.color} />
+                      : account.icon ? <Icon name={ACCOUNT_ICON_NAME[account.icon]} size={SPACE[3]} color={account.color} />
+                      : <View style={[styles.accountDot, { backgroundColor: account.color }]} />}
+                    <Text style={[styles.accountText, { color: theme.tokens.text.secondary }]} numberOfLines={1}>{account.label}</Text>
+                  </View>
+                ) : null}
               </View>
             ) : null}
           </View>
@@ -326,13 +345,16 @@ const styles = StyleSheet.create((theme) => ({
   col: { flex: 1, gap: theme.base.space[0.5], minWidth: 0 },
   linha: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5], minWidth: 0 },
   nome: { fontSize: theme.base.text.base, lineHeight: 22, fontWeight: theme.base.weight.semibold, flexShrink: 1 },
-  account: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], minWidth: 0, maxWidth: 96, flexShrink: 0, paddingLeft: theme.base.space[2] },
+  // A placa ocupa no máximo 60% da linha; dentro dela a conta guarda o nome curto e a máquina encolhe.
+  plate: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], minWidth: 0, maxWidth: '60%', flexShrink: 0, paddingLeft: theme.base.space[2] },
+  plateSeg: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], minWidth: 0, flexShrink: 1 },
+  account: { maxWidth: 96, flexShrink: 0 },
   accountDot: { width: 5, height: 5, borderRadius: theme.base.radius.full, flexShrink: 0 },
   accountText: { fontSize: theme.base.text.xxs, fontWeight: theme.base.weight.medium, minWidth: 0, flexShrink: 1 },
   tempo: { marginLeft: 'auto', paddingLeft: theme.base.space[1], flexShrink: 0, fontSize: theme.base.text.xs, fontVariant: ['tabular-nums'] },
   sub: { fontSize: theme.base.text.sm, lineHeight: 20 },
   metaRow: { flexDirection: 'row', alignItems: 'center', minWidth: 0 },
-  serverIcon: { flexShrink: 0, marginRight: theme.base.space[1] },
+  serverIcon: { flexShrink: 0 },
   engine: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], minWidth: 0, flexShrink: 0 },
   engineText: { fontWeight: theme.base.weight.semibold, flexShrink: 0 },
   metaRest: { flexShrink: 1 },

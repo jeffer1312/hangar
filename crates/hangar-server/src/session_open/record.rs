@@ -109,6 +109,7 @@ pub fn claude_live(home: &Path, meta: &Value, name: &str) -> io::Result<SessionS
     spec.creator = recorded.creator;
     spec.account_source = recorded.account_source;
     spec.created_at = recorded.created_at;
+    (spec.name_auto, spec.rename_suggestion, spec.rename_dismissed) = (recorded.name_auto, recorded.rename_suggestion, recorded.rename_dismissed);
     Ok(spec)
 }
 
@@ -133,6 +134,7 @@ pub fn claude_from_meta(meta: &Value, name: &str, created_at: f64) -> io::Result
         subagent_model: text(meta, "subagent_model"), customizations: None, jev: meta["jev"] == true,
         read_only: meta["read_only"] == true, worktree: None, creator: None, created_at,
         conversation: text(meta, "session_id"),
+        name_auto: None, rename_suggestion: None, rename_dismissed: false,
     })
 }
 
@@ -168,6 +170,7 @@ pub fn from_sidecars(home: &Path, name: &str) -> io::Result<Option<SessionSpec>>
         permission_mode: text(&meta, "permission_mode").as_deref().and_then(PermissionMode::codex),
         subagent_model: None, customizations: None, jev: meta["jev"] == true, read_only: meta["read_only"] == true,
         worktree: None, creator: None, created_at: created(&codex_path), conversation: text(&meta, "thread_id"),
+        name_auto: None, rename_suggestion: None, rename_dismissed: false,
     }))
 }
 

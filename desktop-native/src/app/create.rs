@@ -292,6 +292,8 @@ pub(super) enum CreateReply {
     GitElsewhere(String),
     /// As worktrees do servidor, para a pílula de branch mostrar as do repositório da pasta.
     Worktrees(u64, Result<Value, Failure>),
+    /// "Em todas as minhas máquinas": o resultado de uma máquina (chave) na rodada `u64`.
+    Spread(choices::SpreadOf, u64, String, choices::Applied),
 }
 
 /// A regra do backend (`names.sanitize_session_name`): acento vira a letra sem ele, o que não for letra, número, `_` ou `-` vira `-`,
@@ -567,6 +569,8 @@ pub(in crate::app) struct NewSession {
     context_on: Option<bool>,
     context_want: Option<bool>,
     context_error: Option<String>,
+    /// "Em todas as minhas máquinas" do padrão do harness e do 1M do Codex, por `SpreadOf as usize`.
+    spreads: [choices::Spread; 2],
     archive: Remote<Vec<ArchiveEntry>>,
     want_resume: bool,
     conversation: String,
@@ -655,6 +659,7 @@ impl NewSession {
             permission_pick: None, subagent_pick: None, engine_pick: None, engines: Remote::default(), jev: Remote::default(), jev_on: false,
             more: false, omp, quotas: Remote::default(), reopen_config: None, reopen_default: false, asking: false, confirming: false, holders: None, keep_transcripts: true, account_busy: false, account_seq: 0, account_name,
             notice: None, created_path: None, context_seq: 0, context_busy: false, context_on: None, context_want: None, context_error: None,
+            spreads: Default::default(),
             archive: Remote::default(), want_resume: false, conversation: String::new(), before: None, preview: Remote::default(),
             preview_scroll: ScrollHandle::new(), resuming: false, baton, baton_by_model: false, baton_open: false,
             baton_preview: Remote::default(), suggested_name: String::new(), prewarm, _subscriptions: subscriptions,
@@ -1446,7 +1451,7 @@ impl NewSession {
                 if !self.is_transfer() { self.load_archive(window, cx); }
             }
             reply @ (CreateReply::Models(..) | CreateReply::Engines(..) | CreateReply::Config(..) | CreateReply::Quotas(..)
-                | CreateReply::Context(..) | CreateReply::Account(..)) => self.receive_extra(reply, window, cx),
+                | CreateReply::Context(..) | CreateReply::Account(..) | CreateReply::Spread(..)) => self.receive_extra(reply, window, cx),
             reply @ (CreateReply::Archive(..) | CreateReply::Preview(..)) => self.receive_archive(reply, cx),
             reply @ (CreateReply::Git(..) | CreateReply::GitDone(..) | CreateReply::GitElsewhere(..)) => self.receive_git(reply, window, cx),
             CreateReply::Baton(seq, result) => {

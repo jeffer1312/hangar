@@ -725,6 +725,22 @@ test('evento keyring marca o chaveiro trancado do servidor e sobrevive à lista 
   rel();
 });
 
+test('evento tags dá nome e conta à linha e sobrevive à lista seguinte e a frame torto', async () => {
+  const rel = useSessions.getState().retain();
+  await settle();
+  created[0].trigger('sessions', JSON.stringify([{ name: 'viva', state: 'working', conta: 'claude:/c' }]));
+  created[0].trigger('tags', JSON.stringify({ machine_id: 'casa', machine: { name: 'Casa', icon: 'house', color: 'blue' },
+    accounts: { 'claude:/c': { name: 'ana', icon: 'key-round', color: null } } }));
+  const row = () => useSessions.getState().rows[0];
+  expect(row().serverLabel).toBe('Casa');
+  expect(row().accountTag?.name).toBe('ana');
+  created[0].trigger('sessions', JSON.stringify([{ name: 'viva', state: 'idle', conta: 'claude:/c' }]));
+  expect(row().serverLabel).toBe('Casa');
+  created[0].trigger('tags', '{torto');
+  expect(row().accountTag?.name).toBe('ana');
+  rel();
+});
+
 test('list_error sem lista na tela mantém o aviso de bloqueio do servidor', async () => {
   const rel = useSessions.getState().retain();
   await settle();

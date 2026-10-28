@@ -277,6 +277,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     state.voice.set_self(listener.local_addr()?, &state.cfg.auth_token);
     let public_v6 = state.public_v6.take();
     let state = Arc::new(state);
+    // Ligado com o estado final: o evento lê as mesmas contas que a rota `/api/tags`.
+    state.list.tags.bind(state.accounts.clone(), state.server_id.clone());
     if crate::config::Config::runtime_instance().map_err(std::io::Error::other)?.is_some() {
         let omp_sync = crate::omp_sync::Service::start(state.clone());
         let _ = state.omp_sync.set(omp_sync.clone());
@@ -642,6 +644,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/update/notes", get(crate::update_notes::route))
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_any))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
+        // Sugestão de nome da sessão genérica: só o dono, nunca repassada (o Python não tem a rota).
+        .route("/api/sessions/{name}/rename-suggestion", axum::routing::post(crate::dictation::rename_suggestion::route).delete(crate::dictation::rename_suggestion::route))
+        .route("/api/tags", axum::routing::get(crate::tags::handle).put(crate::tags::handle))
         .route("/api/push/expo/subscribe", axum::routing::post(crate::push_expo::subscribe))
         .route("/api/push/vapid", get(crate::push::http::route).fallback(pass_any))
         .route("/api/push/settings", get(crate::push::http::route).fallback(pass_any))

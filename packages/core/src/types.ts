@@ -61,6 +61,8 @@ export interface SessionInfo {
   worktree_gone?: boolean;
   /** Raiz do repositório onde o agente trabalha quando saiu do da pasta de abertura; o git da sessão é lido ali. */
   git_cwd?: string | null;
+  /** Nome sugerido para a sessão de nome genérico; some quando a pessoa renomeia ou diz "agora não". */
+  rename_suggestion?: string | null;
   /** Servidores MCP criados por plugin (`$.tool.register`); a pele 'terminal' deixa as chamadas deles fora da dobra. */
   plugin_tool_servers?: string[] | null;
   // Linhas adicionadas/removidas no working tree vs HEAD (git diff --numstat, staged+unstaged;
@@ -108,6 +110,8 @@ export interface SessionInfo {
   // Statusline crua da sessão (cache ~20s no backend) — o card do board/canvas parseia com
   // parseStatusLine (modelo/contexto no composer; ⚡5h/📅7d na RateStrip). Chat usa a versão ao vivo.
   status_line?: string | null;
+  // Contexto lido do transcript pela lista do Rust (só Claude); vence a statusline no anel.
+  context?: { used: number; window: number } | null;
   // Id do modelo em uso na sessão Claude (`claude-opus-5-5[1m]`), resolvido pelo backend: dá nome à
   // pílula quando a statusline não é a do Hangar ou ainda não chegou.
   model?: string | null;
@@ -172,6 +176,10 @@ export interface AggSession extends SessionInfo {
   serverColor: string;
   // A linha veio de um servidor de convite: é a sessão de outra pessoa, compartilhada com você.
   serverInvite?: boolean;
+  // Do evento `tags` da lista; `null` = servidor sem etiqueta ou versão antiga.
+  machineTag?: import('./tags').Tag | null;
+  // Conta da linha (`conta`) como o servidor a mostra; `null` = conta desconhecida ou sem evento.
+  accountTag?: import('./tags').AccountBadge | null;
   // Sessão de fora posta no grupo local por `placeExternalRows`; `serverId` continua o da entrada
   // do convite (é por ela que a sessão é chamada).
   outside?: OutsideMark;

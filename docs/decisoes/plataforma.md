@@ -3412,3 +3412,56 @@ código que não abre.
 **Passo futuro (não feito): envio automático de erros.** Falha relevante iria sozinha ao dono,
 sem clique. Exige consentimento explícito na instalação, controle de volume no worker e os mesmos
 limites de privacidade acima. Fica para quando o botão manual não bastar.
+
+## Etiquetas de máquina e conta moram no servidor da máquina (28/10/2026)
+
+**Regra.** A etiqueta da máquina (nome curto, ícone, cor) e a de cada conta (ícone, cor) ficam em
+`~/.hangar/tags.json` da própria máquina, por `GET/PUT /api/tags` (só o dono, Rust,
+`crates/hangar-server/src/tags.rs`). Os clientes recebem tudo resolvido pelo evento `tags` da
+lista do dono, publicado só quando muda: `machine_id`, a etiqueta da máquina e, por `conta` da
+linha, `{name, icon, color}` com o nome já cortado no `@`. Cor e ícone viajam como chave
+(`slate…violet`; `laptop…cloud`; `credit-card…id-card`); `color: null` é a cor por hash que já
+existia. O apelido da conta continua em `.hangar-apelidos.json`.
+
+**Por quê.** Pedido de 28/10: ver de relance em que máquina e com que conta cada sessão roda, igual
+nos três clientes. O nome da máquina vinha da lista de servidores de cada cliente, que diverge entre
+eles; guardado no servidor, uma troca aparece em todos sem recarregar.
+
+**Id único da conta.** A `conta` da linha e o `id` de `/api/credenciais` saem da mesma função
+(`accounts::catalog::resolved` = `list::links::resolve_lenient`). Antes divergiam com a pasta da
+conta sob link e na rota de motor com conta Codex (`canonicalize` cru, prefixo `\\?\` no Windows).
+
+**Custo.** Um vigia (`notify`, sem recursão) acorda o evento quando muda `tags.json`, apelidos,
+`engines.json`, config do Kimi ou uma pasta `.claude*`/`.codex*` da HOME com os marcadores de conta,
+e um PUT o refaz na hora; só com lista do dono aberta. Sem vigia (erro do `notify`), vale a
+assinatura por metadados a cada tique, avisada uma vez no log (`rust.tags_watch_unavailable`). A
+lista de contas do evento e a do `/api/credenciais` saem de `accounts::credentials::listed_ids`.
+
+**Limites.** A rota não passa pela porta do Connect (8768, Python, inativa). Servidor antigo responde
+404 e fica sem etiqueta, sem aviso na tela. "Em todas as minhas máquinas" (padrão de criação no
+nativo; 1M do Codex nos três) repete a gravação em cada máquina própria e diz por máquina o que não
+foi aplicado: motor, conta de proxy ou Codex ausente ali conta como "não existe nesta máquina".
+
+## Sugestão de nome para sessão com nome genérico (28/10/2026)
+
+**Regra.** Só o nome que o Hangar deu a partir da pasta ganha sugestão: `sanitize(basename(cwd))`,
+ou isso com `-N`, ou `sessao[-N]`. O servidor grava `name_auto` no `SessionSpec` na criação
+(pelo padrão, porque os três clientes mandam o nome da pasta já calculado) e renomear apaga a
+marca. Nome de PM, de branch, dado por outra sessão ou já trocado fica como está. Sessão antiga
+sem a marca cai no padrão.
+
+**Fluxo.** O cliente do dono, ao abrir a conversa de uma sessão genérica que já tem um pedido,
+chama `POST /api/sessions/{name}/rename-suggestion` uma vez; o servidor gera o nome com o executor
+da organização do ditado (`dictation::harness::run_prompt`, mesmo semáforo, trava de conta e prazo,
+com prompt próprio) a partir do primeiro pedido e da branch, guarda no spec, e a linha da lista traz
+`rename_suggestion` aos três clientes. A faixa "Renomear para X?" aplica a rota de renomear que já
+existe; "Agora não" (`DELETE`) fica guardado. Nunca renomeia sozinho: o nome é o endereço da sessão
+em recados, grupos e pares.
+
+**Por quê.** Pedido de 28/10: sessões abertas sem nome ficavam como `hangar-2` e ninguém sabia o
+que eram. Renomear sozinho foi descartado pelo usuário em favor da sugestão com um clique.
+
+**Limites.** Sem modelo de organização configurado para o provedor da sessão, não há sugestão
+(não é falha, não aparece aviso). Erro do executor vira 204 e registro no diário
+(`rust.rename_suggestion`). O executor só roda a pedido do dono, por isso o gatilho é do cliente e
+não um trabalho de fundo.

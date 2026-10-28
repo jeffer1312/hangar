@@ -301,6 +301,8 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         None => folder_name(&request.cwd, request.take_reserved_name, facts)?,
     };
     let name = validate_name(&raw, provider, headless, request, facts)?;
+    // As telas mandam o nome da pasta que elas mesmas calculam: vale o formato, não quem mandou.
+    let name_auto = folder_pattern(&name, &request.cwd);
 
     let permission_mode = match provider {
         AgentProvider::Claude => Some(match permission.as_deref() {
@@ -347,6 +349,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         jev: request.jev.unwrap_or_else(|| facts.defaults().jev), read_only: request.read_only,
         worktree: request.branch.clone().map(|branch| WorktreeSpec { branch, new_branch: request.new_branch, base: request.base.clone(), path: None }),
         creator: request.creator.clone(), created_at: facts.now(), conversation: None,
+        name_auto: Some(name_auto), rename_suggestion: None, rename_dismissed: false,
     };
     // Nascer já no plano sem terminal deixaria a sessão sem modo de base. O ilegível vale bypass, como o
     // `modo_da_conta` do Python: o modo pedido já está escolhido, só a volta do plano depende dele.
@@ -590,13 +593,30 @@ fn validate_name(raw: &str, provider: AgentProvider, headless: bool, request: &S
     Ok(name)
 }
 
+/// A base do nome que ninguém escolheu: a pasta saneada, ou `sessao`.
+pub(crate) fn folder_base(cwd: &str) -> String {
+    let folder = cwd.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or_default();
+    Some(crate::list::discover_other::sanitize_session_name(folder)).filter(|n| !n.is_empty()).unwrap_or_else(|| "sessao".into())
+}
+
+/// A base (ASCII, já saneada) cede espaço ao sufixo para o nome caber no teto.
+pub(crate) fn fit_name(base: &str, suffix: &str) -> String {
+    format!("{}{suffix}", base[..base.len().min(NAME_MAX - suffix.len())].trim_end_matches('-'))
+}
+
+/// O nome tem a forma do que a pasta dá: a base dela ou `sessao`, com ou sem `-N`.
+pub(crate) fn folder_pattern(name: &str, cwd: &str) -> bool {
+    let from = |base: &str| name == fit_name(base, "") || name.rsplit_once('-').is_some_and(|(_, n)|
+        (1..8).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()) && name == fit_name(base, &format!("-{n}")));
+    from(folder_base(cwd).as_str()) || from("sessao")
+}
+
 /// O nome que ninguém escolheu, pela regra do `uniqueSessionName` das telas. Com `take_reserved`, o
 /// nome que só uma reserva pré-aquecida segura conta como livre: a pessoa não a vê, e a abertura a descarta.
 fn folder_name(cwd: &str, take_reserved: bool, facts: &dyn OpenFacts) -> Result<String, OpenError> {
-    let folder = cwd.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or_default();
-    let base = Some(crate::list::discover_other::sanitize_session_name(folder)).filter(|n| !n.is_empty()).unwrap_or_else(|| "sessao".into());
-    // A base cede espaço ao sufixo para o nome caber no teto; quem está abrindo agora também ocupa.
-    let fit = |suffix: &str| format!("{}{suffix}", base[..base.len().min(NAME_MAX - suffix.len())].trim_end_matches('-'));
+    let base = folder_base(cwd);
+    // Quem está abrindo agora também ocupa.
+    let fit = |suffix: &str| fit_name(&base, suffix);
     let held = |name: &str| if take_reserved { super::open::NameClaim::opening_without_reserves(name) } else { super::open::NameClaim::opening(name) };
     let mut name = fit("");
     for n in 2.. {

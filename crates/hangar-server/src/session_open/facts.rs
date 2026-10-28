@@ -201,7 +201,7 @@ pub fn fixed_account(accounts: &AccountService, engine: &str, account: &str) -> 
         if matches.len() > 1 { return Err(cliproxy(format!("CLIProxyAPI: mais de uma credencial ativa para a conta {}", codex.id))); }
         let Some(&found) = matches.first() else { continue };
         if entries.iter().any(|e| e.3 == found) { return Err(cliproxy("CLIProxyAPI: a mesma credencial corresponde a mais de uma conta Hangar")); }
-        let home = codex.home.canonicalize().unwrap_or(codex.home.clone()).to_string_lossy().into_owned();
+        let home = crate::accounts::catalog::resolved(&codex.home).to_string_lossy().into_owned();
         entries.push((codex.id, home, text(&creds[found].1["prefix"]), found));
     }
     for (_, _, prefix, at) in &entries {

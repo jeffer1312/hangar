@@ -49,6 +49,8 @@ async fn owner_catalog_is_not_a_python_proxy() {
         trusted: TrustedHosts::parse("127.0.0.1"),
     });
     state.accounts = isolated_service(root.path());
+    // A limpeza de worktrees lê a config da HOME real e, ligada lá, pede o contexto ao Python na subida.
+    state.origins_home = root.path().to_path_buf();
     let server = tokio::spawn(hangar_server::routes::serve_with_state(listener, state));
     let response = reqwest::Client::new()
         .get(format!("http://{addr}/api/claude-configs"))

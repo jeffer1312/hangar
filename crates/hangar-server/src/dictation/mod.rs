@@ -7,5 +7,6 @@ pub mod model;
 pub mod process;
 pub mod prompts;
 pub mod references;
+pub mod rename_suggestion;
 pub mod routes;
 pub mod service;

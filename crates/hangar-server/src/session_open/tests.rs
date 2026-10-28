@@ -126,6 +126,7 @@ fn reopen_keeps_what_the_change_does_not_name() {
         model: Some("opus".into()), effort: Some("high".into()), service_tier: None,
         permission_mode: Some(PermissionMode::Manual), subagent_model: None, customizations: None, jev: true,
         read_only: false, worktree: None, creator: None, created_at: 1.0, conversation: None,
+        name_auto: None, rename_suggestion: None, rename_dismissed: false,
     };
     let change = SessionChange { reason: ChangeReason::Bypass, surface: None, account: None,
         permission_mode: Some(PermissionMode::BypassPermissions), model: None, effort: None, service_tier: None };
@@ -1596,6 +1597,11 @@ fn a_fixed_chatgpt_account_resolves_and_routes_the_engine() {
     assert_eq!(command[..12], ["hangar-engine", "--exec", "gpt", "--account", "work", "--account-home", &home_text,
         "--account-base-url", &format!("http://127.0.0.1:{port}"), "--model", "gpt-5.5", "--context"]);
     assert_eq!(route.credential_id, format!("codex:{home_text}"));
+    // A `conta` da linha do motor é este id: o evento `tags` tem de nomear a mesma conta.
+    let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
+        [("HOME".to_owned(), home.to_string_lossy().into_owned())].into()));
+    let tags = crate::tags::event(&accounts, "").unwrap();
+    assert!(tags["accounts"].get(&route.credential_id).is_some(), "{} fora de {}", route.credential_id, tags["accounts"]);
 }
 
 /// A abertura inteira pelo lado Rust do harness: nasceu, a ordem do diário é a do Python e o spec
@@ -3009,4 +3015,33 @@ fn a_snapshot_entry_comes_back_with_its_whole_spec_keeping_its_group_and_queue()
     }
     assert_eq!(raw["cleaned"], json!([]), "a mesma sessão voltando não limpa grupo, fila nem `then` do nome");
     assert!(root.join("home/.claude/.hangar-pair/proj.json").is_file() && root.join("home/.claude/.hangar-queue/proj.jsonl").is_file());
+}
+
+/// Só o nome com a forma do da pasta é marcado como genérico, venha do servidor ou da tela (que manda
+/// o nome da pasta que ela calculou); chave de PM e nome dado por alguém não são.
+#[test]
+fn only_the_folder_name_is_marked_generic() {
+    assert!(resolve::folder_pattern("hangar-2", "/w/hangar") && resolve::folder_pattern("sessao-3", "/w/x"));
+    assert!(!resolve::folder_pattern("ABC-123-Coordenadora", "/w/hangar") && !resolve::folder_pattern("hangar-x", "/w/hangar"));
+    let (mut server, mut sent, mut named) = (0, 0, 0);
+    for (name, fixture) in create_fixtures() {
+        let Ok(resolved) = resolve_fixture(&fixture) else { continue };
+        let request = SessionOpenRequest::parse(&request_body(&fixture)).unwrap();
+        assert_eq!(resolved.spec.name_auto, Some(resolve::folder_pattern(&resolved.spec.name, &request.cwd)), "{name}");
+        let facts = FixtureFacts::of(&fixture);
+        let open = |asked: Option<String>| resolve::resolve_open(&SessionOpenRequest { name: asked, ..request.clone() }, &OWNER, &facts);
+        if let Ok(folder) = open(None) {
+            assert_eq!(folder.spec.name_auto, Some(true), "{name}: sem nome");
+            server += 1;
+        }
+        if let Ok(folder) = open(Some(resolve::fit_name(&resolve::folder_base(&request.cwd), "-2"))) {
+            assert_eq!(folder.spec.name_auto, Some(true), "{name}: a tela mandou o nome da pasta");
+            sent += 1;
+        }
+        if let Ok(pm) = open(Some("ABC-123-Coordenadora".into())) {
+            assert_eq!(pm.spec.name_auto, Some(false), "{name}: nome dado");
+            named += 1;
+        }
+    }
+    assert!(server > 0 && sent > 0 && named > 0, "os três casos foram exercidos ({server}, {sent}, {named})");
 }

@@ -97,7 +97,7 @@ pub fn area_of(path: &str) -> usize {
 /// O Rust atende este pedido do dono sem repassar? Mesma decisão do `routes::router`: as rotas
 /// GET registradas lá, mais os `matches` de Git/arquivos e de worktrees que o `pass_any` consulta.
 pub fn rust_route(method: &Method, path: &str) -> bool {
-    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/session-defaults" | "/api/web-ui") { return true; }
+    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/session-defaults" | "/api/tags" | "/api/web-ui") { return true; }
     if (matches!(*method, Method::GET | Method::PUT) && path == "/api/update-channel") { return true; }
     if (*method == Method::GET && path == "/api/atualizacao")
         || (*method == Method::POST && matches!(path, "/api/atualizacao/iniciar" | "/api/atualizacao/reiniciar" | "/api/atualizacao/dev-mode")) { return true; }
@@ -167,6 +167,10 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     // conta ChatGPT fixa): o Rust atende as sessões dele.
     if *method == Method::POST && matches!(tail, Some("model" | "service-tier" | "codex/mode" | "codex/plan/implement" | "question/skip" | "codex-permissions"
         | "permission-mode" | "modo-execucao" | "recarregar" | "conta" | "engine/model" | "model-effort" | "bastao" | "resume" | "rename")) {
+        return true;
+    }
+    // Sugestão de nome da sessão genérica (`dictation::rename_suggestion`): só o dono, nunca repassada.
+    if matches!(*method, Method::POST | Method::DELETE) && tail == Some("rename-suggestion") {
         return true;
     }
     // A pergunta lateral do Claude, com e sem terminal, e o histórico dela.

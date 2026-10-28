@@ -1,7 +1,8 @@
 //! `GET /api/credenciais`: contas Claude, chaves do `engines.json`, contas Codex e as linhas que só
 //! a cota conhece, numa lista só. Tudo em processo: nenhuma pergunta ao Python.
 use super::{
-    AccountKey, Provider,
+    AccountKey, AccountService, Provider,
+    catalog::Account,
     http::{Json, bridge},
     quotas::other,
 };
@@ -63,6 +64,59 @@ fn line(id: &str, kind: &str, auth: &str, natural: &Value, aliases: &Map<String,
         "login": null, "base_url": null, "chave_mascarada": null, "usos": [],
         "cota": quota.get(id).map_or(Value::Null, summary), "aceita_cookie": false,
         "cookie_definido": false, "gerenciada": true})
+}
+
+/// Nome natural do motor: o `label` texto, senão o nome; `label` de outro tipo tira o motor da lista.
+fn engine_natural(name: &str, data: &Map<String, Value>) -> Option<Value> {
+    match data.get("label") {
+        Some(label @ Value::String(_)) if !other::falsy(label) => Some(label.clone()),
+        Some(label) if !other::falsy(label) => None,
+        _ => Some(json!(name)),
+    }
+}
+
+/// O que a linha de `/api/credenciais` lê além do id e do nome.
+pub(crate) enum Origin { Claude(Value, Account), Engine(Map<String, Value>), Codex(Account), Kimi }
+
+pub(crate) struct Listed { pub id: String, pub natural: Value, pub origin: Origin }
+
+/// As contas de `/api/credenciais`, na ordem dela, sem login nem cota. As etiquetas usam esta mesma
+/// lista: o id é o elo entre as duas. Catálogo ilegível tira só a parte dele e volta com o código.
+pub(crate) fn listed_ids(service: &AccountService, config: &other::Config) -> (Vec<Listed>, Vec<(Provider, &'static str)>) {
+    let mut out = vec![];
+    let mut problems = vec![];
+    match service.claude_listed() {
+        Ok(claude) => out.extend(claude.into_iter().map(|(row, account)| Listed {
+            id: format!("claude:{}", row["path"].as_str().unwrap_or_default()),
+            natural: row["label"].clone(),
+            origin: Origin::Claude(row, account),
+        })),
+        Err(err) => problems.push((Provider::Claude, err.code)),
+    }
+    // Motor torto sai da lista; o código dele já foi ao diário pela cota (`config.problems`).
+    for (name, data) in config.engines.iter().filter(|(name, _)| other::engine_name_ok(name)) {
+        let Some(data) = data.as_object() else { continue };
+        let Some(natural) = engine_natural(name, data) else { continue };
+        if data.get("base_url").is_some_and(|base| !base.is_null() && !base.is_string()) {
+            continue;
+        }
+        out.push(Listed { id: format!("chave:{name}"), natural, origin: Origin::Engine(data.clone()) });
+    }
+    match service.visible_codex_accounts() {
+        Ok(codex) => out.extend(codex.into_iter().map(|account| Listed {
+            id: format!("codex:{}", super::catalog::resolved(&account.home).to_string_lossy()),
+            natural: json!(account.id),
+            origin: Origin::Codex(account),
+        })),
+        Err(err) => problems.push((Provider::Codex, err.code)),
+    }
+    // Mesma fonte e mesmo nome das linhas Kimi da cota.
+    for source in config.sources.iter().filter(|s| s.id.starts_with("kimi:")) {
+        let suffix = source.id.split_once(':').map_or("", |(_, tail)| tail);
+        let natural = if other::falsy(&source.label) { json!(suffix) } else { source.label.clone() };
+        out.push(Listed { id: source.id.clone(), natural, origin: Origin::Kimi });
+    }
+    (out, problems)
 }
 
 /// O `config.toml` do Kimi tem o bloco que o app gravou para esse provedor?
@@ -139,10 +193,6 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     // a lista das outras credenciais nunca cai junto.
     let report = |code: &str, reason: &'static str| state.diag.report("rust.credentials_partial", "credenciais", code, reason);
     let service = state.accounts.clone();
-    let codex = service.visible_codex_accounts().unwrap_or_else(|err| {
-        report(err.code, "contas Codex ilegíveis; a lista segue sem elas");
-        vec![]
-    });
     let bridge = bridge(&state).map_err(|err| report(err.code, "ponte de contas ausente; sem preparo Codex nesta lista")).ok();
     // Arquivos das fontes lidos uma vez, fora do runtime; a cota usa a mesma leitura e leva os
     // problemas deles ao diário.
@@ -155,7 +205,19 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
             Arc::new(other::Config::default())
         }
     };
-    let snapshots = futures_util::future::join_all(codex.iter().map(|account| codex_snapshot(&state, account, force, bridge.as_ref())));
+    let (listed, problems) = listed_ids(&service, &config);
+    for (provider, code) in problems {
+        report(code, match provider {
+            Provider::Claude => "contas Claude ilegíveis; a lista segue sem elas",
+            _ => "contas Codex ilegíveis; a lista segue sem elas",
+        });
+    }
+    let claude: Vec<(Value, Account)> = listed.iter().filter_map(|l| match &l.origin {
+        Origin::Claude(row, account) => Some((row.clone(), account.clone())),
+        _ => None,
+    }).collect();
+    let codex = listed.iter().filter_map(|l| match &l.origin { Origin::Codex(account) => Some(account), _ => None });
+    let snapshots = futures_util::future::join_all(codex.map(|account| codex_snapshot(&state, account, force, bridge.as_ref())));
     let quotas = async {
         let (result, late) = service.quotas_within(bridge.clone(), force, super::quotas::CLIENT_DEADLINE, Some(config.clone())).await;
         if late {
@@ -163,7 +225,7 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
         }
         result.map_err(|err| report(err.code, "cotas indisponíveis; as linhas saem sem cota")).ok()
     };
-    let claude = service.claude_states();
+    let claude = service.claude_states_of(claude);
     let (snapshots, quotas, claude) = tokio::join!(snapshots, quotas, claude);
     let aliases = &config.aliases;
     let quotas = quotas.unwrap_or_else(|| json!([]));
@@ -174,88 +236,83 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
             quota.insert(id.to_owned(), row.clone());
         }
     }
-    let claude = claude.unwrap_or_else(|err| {
-        report(err.code, "contas Claude ilegíveis; a lista segue sem elas");
-        json!([])
-    });
-    let mut out = vec![];
-    for row in claude.as_array().into_iter().flatten() {
-        let path = row["path"].as_str().unwrap_or_default();
-        let id = format!("claude:{path}");
-        let mut item = line(&id, "claude", "oauth", &row["label"], aliases, &quota);
-        item["ativa"] = json!(row["active"] == true);
-        item["path"] = json!(path);
-        let login = &row["login"];
-        item["login"] = json!({"estado": login["estado"], "loggedIn": login["loggedIn"], "email": login["email"],
-            "plano": login["plano"], "motivo": login["motivo"], "refreshExpiresAt": float(&login["refreshExpiresAt"])});
-        out.push(item);
-    }
-    // Motor torto sai da lista; o código dele já foi ao diário pela cota (`config.problems`).
+    let (mut claude, mut snapshots) = (claude.into_iter(), snapshots.into_iter());
     let cookies = &config.opencode;
-    for (name, data) in config.engines.iter().filter(|(name, _)| other::engine_name_ok(name)) {
-        let Some(data) = data.as_object() else { continue };
-        let id = format!("chave:{name}");
-        let natural = match data.get("label") {
-            Some(label @ Value::String(_)) if !other::falsy(label) => label.clone(),
-            Some(label) if !other::falsy(label) => continue,
-            _ => json!(name),
-        };
-        let base = match data.get("base_url") {
-            None | Some(Value::Null) => Value::Null,
-            Some(base @ Value::String(_)) => base.clone(),
-            Some(_) => continue,
-        };
-        let accepts = base.as_str().is_some_and(|b| b.contains("opencode.ai"));
-        let mut item = line(&id, "chave", "api_key", &natural, aliases, &quota);
-        item["base_url"] = base;
-        item["chave_mascarada"] = data.get("api_key").and_then(Value::as_str).filter(|k| !k.is_empty()).map_or(Value::Null, |k| json!(mask(k)));
-        item["usos"] = json!(["claude_code"]);
-        item["aceita_cookie"] = json!(accepts);
-        item["cookie_definido"] = json!(accepts && cookies.contains_key(&id));
-        out.push(item);
-    }
-    for (account, (auth, sync)) in codex.iter().zip(snapshots) {
-        let id = format!("codex:{}", super::catalog::resolved(&account.home).to_string_lossy());
-        let mut method = auth["method"].as_str().unwrap_or("unknown");
-        if !matches!(method, "oauth" | "api_key" | "none" | "unknown") {
-            report("codex_auth_method_unknown", "método de autenticação Codex desconhecido; sai unknown");
-            method = "unknown";
+    let mut out = vec![];
+    for Listed { id, natural, origin } in &listed {
+        match origin {
+            Origin::Claude(..) => {
+                let Some(row) = claude.next() else { continue };
+                let path = row["path"].as_str().unwrap_or_default();
+                let mut item = line(id, "claude", "oauth", natural, aliases, &quota);
+                item["ativa"] = json!(row["active"] == true);
+                item["path"] = json!(path);
+                let login = &row["login"];
+                item["login"] = json!({"estado": login["estado"], "loggedIn": login["loggedIn"], "email": login["email"],
+                    "plano": login["plano"], "motivo": login["motivo"], "refreshExpiresAt": float(&login["refreshExpiresAt"])});
+                out.push(item);
+            }
+            Origin::Engine(data) => {
+                let base = data.get("base_url").filter(|base| base.is_string()).cloned().unwrap_or(Value::Null);
+                let accepts = base.as_str().is_some_and(|b| b.contains("opencode.ai"));
+                let mut item = line(id, "chave", "api_key", natural, aliases, &quota);
+                item["base_url"] = base;
+                item["chave_mascarada"] = data.get("api_key").and_then(Value::as_str).filter(|k| !k.is_empty()).map_or(Value::Null, |k| json!(mask(k)));
+                item["usos"] = json!(["claude_code"]);
+                item["aceita_cookie"] = json!(accepts);
+                item["cookie_definido"] = json!(accepts && cookies.contains_key(id));
+                out.push(item);
+            }
+            Origin::Codex(account) => {
+                let Some((auth, sync)) = snapshots.next() else { continue };
+                let mut method = auth["method"].as_str().unwrap_or("unknown");
+                if !matches!(method, "oauth" | "api_key" | "none" | "unknown") {
+                    report("codex_auth_method_unknown", "método de autenticação Codex desconhecido; sai unknown");
+                    method = "unknown";
+                }
+                let sync_running = sync["status"] == "running";
+                let mut sync = if account.is_default { Value::Null } else { sync["status"].clone() };
+                if !(sync.is_null() || matches!(sync.as_str(), Some("idle" | "running" | "ready" | "partial" | "error"))) {
+                    report("codex_sync_unknown", "estado de preparo Codex desconhecido; sai null");
+                    sync = Value::Null;
+                }
+                let mut item = line(id, "codex", method, natural, aliases, &quota);
+                item["codex_account"] = json!(account.id);
+                item["codex_sync"] = sync;
+                item["ativa"] = json!(account.is_default);
+                item["path"] = json!(account.home.to_string_lossy());
+                item["usos"] = json!(["codex_cli"]);
+                item["login"] = codex_login(&auth, sync_running);
+                // Com o preparo em curso não há leitura (o snapshot nem pergunta): nada a esconder ali.
+                match item["login"]["motivo"].as_str() {
+                    Some("formato-desconhecido") => report("codex_auth_status_unknown", "status de autenticação Codex desconhecido; sai indisponível"),
+                    Some("leitura-falhou") => report("codex_auth_read_failed", "leitura de autenticação Codex falhou; sai indisponível"),
+                    Some("prazo") => report("codex_auth_deadline", "leitura de autenticação Codex passou do prazo; segue em segundo plano"),
+                    _ => {}
+                }
+                out.push(item);
+            }
+            Origin::Kimi => {}
         }
-        let sync_running = sync["status"] == "running";
-        let mut sync = if account.is_default { Value::Null } else { sync["status"].clone() };
-        if !(sync.is_null() || matches!(sync.as_str(), Some("idle" | "running" | "ready" | "partial" | "error"))) {
-            report("codex_sync_unknown", "estado de preparo Codex desconhecido; sai null");
-            sync = Value::Null;
-        }
-        let mut item = line(&id, "codex", method, &json!(account.id), aliases, &quota);
-        item["codex_account"] = json!(account.id);
-        item["codex_sync"] = sync;
-        item["ativa"] = json!(account.is_default);
-        item["path"] = json!(account.home.to_string_lossy());
-        item["usos"] = json!(["codex_cli"]);
-        item["login"] = codex_login(&auth, sync_running);
-        // Com o preparo em curso não há leitura (o snapshot nem pergunta): nada a esconder ali.
-        match item["login"]["motivo"].as_str() {
-            Some("formato-desconhecido") => report("codex_auth_status_unknown", "status de autenticação Codex desconhecido; sai indisponível"),
-            Some("leitura-falhou") => report("codex_auth_read_failed", "leitura de autenticação Codex falhou; sai indisponível"),
-            Some("prazo") => report("codex_auth_deadline", "leitura de autenticação Codex passou do prazo; segue em segundo plano"),
-            _ => {}
-        }
-        out.push(item);
     }
     // Cota sem cadastro continua visível, mas não comprova autenticação do Codex.
-    let kimi = config.kimi_text.as_deref();
-    for (id, row) in &quota {
-        let codex = id.starts_with("codex:");
-        if !(codex || id.starts_with("kimi:")) || out.iter().any(|item| item["id"] == id.as_str()) {
+    for (id, row) in quota.iter().filter(|(id, _)| id.starts_with("codex:")) {
+        if out.iter().any(|item| item["id"] == id.as_str()) {
             continue;
         }
         let suffix = id.split_once(':').map_or("", |(_, tail)| tail);
         let natural = if other::falsy(&row["label"]) { json!(suffix) } else { row["label"].clone() };
-        let (kind, auth, usage) = if codex { ("codex", "unknown", "codex_cli") } else { ("chave", "api_key", "kimi_cli") };
-        let mut item = line(id, kind, auth, &natural, aliases, &quota);
-        item["usos"] = json!([usage]);
-        item["gerenciada"] = json!(codex || managed_block(kimi, suffix));
+        let mut item = line(id, "codex", "unknown", &natural, aliases, &quota);
+        item["usos"] = json!(["codex_cli"]);
+        out.push(item);
+    }
+    // Kimi entra depois da cota lida, como sempre entrou.
+    let kimi = config.kimi_text.as_deref();
+    for Listed { id, natural, .. } in listed.iter().filter(|l| matches!(l.origin, Origin::Kimi) && quota.contains_key(&l.id)) {
+        let suffix = id.split_once(':').map_or("", |(_, tail)| tail);
+        let mut item = line(id, "chave", "api_key", natural, aliases, &quota);
+        item["usos"] = json!(["kimi_cli"]);
+        item["gerenciada"] = json!(managed_block(kimi, suffix));
         out.push(item);
     }
     Json(json!(out)).into_response()
@@ -270,6 +327,41 @@ mod tests {
         assert_eq!(mask("1234567890"), "••••••••••");
         assert_eq!(mask("12345678901"), "1234567••••8901");
         assert_eq!(mask("çççççççççççç"), "ççççççç••••çççç");
+    }
+
+    /// O id é o elo da etiqueta com a linha de Contas: todo id do evento `tags` sai em `/api/credenciais`.
+    #[tokio::test]
+    async fn every_tagged_account_is_a_credentials_row() {
+        use crate::{accounts::{environment::AccountEnvironment, storage}, auth::TrustedHosts, config::Config, routes::AppState};
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().canonicalize().unwrap();
+        let write = |path: std::path::PathBuf, text: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(home.join(".claude/settings.json"), "{}");
+        write(home.join(".claude-x").join(storage::CLAUDE_MARKER), "");
+        write(home.join(".codex-y").join(storage::CODEX_MARKER), &json!({"version": 1, "id": "y"}).to_string());
+        // `torto` tem `base_url` que não é texto: fora das duas listas.
+        write(home.join(".claude/engines.json"), &json!({"motor": {"label": "Motor"}, "torto": {"base_url": 7}}).to_string());
+        let mut state = AppState::new(Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
+            internal_secret: "s".into(), auth_token: "owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
+        state.accounts = AccountService::new(AccountEnvironment::from_map([
+            ("HOME".into(), home.to_string_lossy().into_owned()),
+            ("USERPROFILE".into(), home.to_string_lossy().into_owned())].into()));
+        let tags = crate::tags::event(&state.accounts, "").unwrap();
+        let response = public(Arc::new(state), Request::new(axum::body::Body::empty())).await;
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let rows: Value = serde_json::from_slice(&body).unwrap();
+        let ids: Vec<&str> = rows.as_array().unwrap().iter().filter_map(|row| row["id"].as_str()).collect();
+        let tagged: Vec<&String> = tags["accounts"].as_object().unwrap().keys().collect();
+        for (prefix, tail) in [("claude:", ".claude"), ("claude:", ".claude-x"), ("chave:", "motor"), ("codex:", ".codex-y")] {
+            assert!(tagged.iter().any(|id| id.starts_with(prefix) && id.ends_with(tail)), "{prefix}…{tail} fora das etiquetas {tagged:?}");
+        }
+        assert!(!tagged.iter().any(|id| *id == "chave:torto"), "motor torto nas etiquetas");
+        for id in tagged {
+            assert!(ids.contains(&id.as_str()), "{id} nas etiquetas e fora de /api/credenciais {ids:?}");
+        }
     }
 
     #[test]

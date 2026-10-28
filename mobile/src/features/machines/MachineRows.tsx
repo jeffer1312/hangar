@@ -5,7 +5,7 @@ import { Icon } from '../../ui/Icon';
 import { SectionCard } from '../config/SectionCard';
 import { useSettingsColors } from '../config/colors';
 
-export type MachineView = 'edit' | 'connection' | 'discover' | 'remote' | 'advanced' | 'identity' | 'terminal' | 'diagnostics' | 'peers' | 'maintenance';
+export type MachineView = 'edit' | 'connection' | 'discover' | 'remote' | 'advanced' | 'identity' | 'terminal' | 'diagnostics' | 'peers' | 'maintenance' | 'tag';
 
 export const MachineGroup = ({ children }: { children: ReactNode }) => <SectionCard>{children}</SectionCard>;
 

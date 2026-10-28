@@ -342,6 +342,15 @@ pub struct SessionSpec {
     /// omp, a do Kimi retomado): o restore depois do reboot volta nela.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation: Option<String>,
+    /// O nome veio da pasta (`folder_name`), não de alguém. Ausente = registro anterior à marca: vale o
+    /// padrão do nome (`rename_suggestion::is_generic`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_auto: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename_suggestion: Option<String>,
+    /// "Agora não" do dono: a sugestão não volta nesta sessão.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rename_dismissed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

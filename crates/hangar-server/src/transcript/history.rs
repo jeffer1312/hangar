@@ -142,6 +142,31 @@ pub(crate) fn merged_history_capped(req: &HistoryRequest, max_window: u64) -> io
     Ok(evs)
 }
 
+/// O primeiro evento que `want` aceita, lido do começo do transcript e parando nele: quem só quer o
+/// início da conversa não relê o arquivo inteiro. Transcript ausente = `None`.
+pub(crate) fn first_event(provider: Provider, jsonl: &Path, want: impl Fn(&ChatEvent) -> bool) -> io::Result<Option<ChatEvent>> {
+    let file = match File::open(jsonl) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    for raw in BufReader::new(file).split(b'\n') {
+        let raw = raw?;
+        let line = String::from_utf8_lossy(&raw);
+        let Some(value) = pyjson::loads_lossless(line.trim_end_matches('\r')) else { continue };
+        let Value::Object(obj) = &value else { continue };
+        let events = match provider {
+            Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(obj, peer::name_of_pid),
+            Provider::Codex => codex::parse_rollout_obj(&value),
+            Provider::Orq => return Ok(None),
+        };
+        if let Some(event) = events.into_iter().find(|e| want(e)) {
+            return Ok(Some(event));
+        }
+    }
+    Ok(None)
+}
+
 /// `_tail_offset` (pqueue.py:961): primeira linha completa dentro dos últimos `window` bytes.
 fn tail_offset(path: &Path, window: u64) -> u64 {
     let read = || -> io::Result<u64> {
