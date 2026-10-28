@@ -26,7 +26,7 @@ async fn attempt_with_context(
     locked: bool,
 ) -> Value {
     attempt_with_budget(
-        provider, oauth, model, generation, include, snapshot, locked, None,
+        provider, oauth, model, generation, include, snapshot, locked, None, None,
     )
     .await
     .0
@@ -41,6 +41,7 @@ async fn attempt_with_budget(
     snapshot: Option<Value>,
     locked: bool,
     budget: Option<Duration>,
+    account_snapshot: Option<&str>,
 ) -> (Value, Value) {
     let root = tempfile::tempdir().unwrap();
     let bin = root.path().join("bin");
@@ -88,9 +89,11 @@ async fn attempt_with_budget(
         json!({"name":"destination","cwd":project,"codex_home":account,"key":"original","headless":true,"model":"conversation-model"})
     };
     std::fs::write(folder.join("destination.json"), metadata.to_string()).unwrap();
-    let transcripts = account.join("projects").join(
-        hangar_workspace::worktrees::sanitize_cwd(&project.to_string_lossy()),
-    );
+    let transcripts = account
+        .join("projects")
+        .join(hangar_workspace::worktrees::sanitize_cwd(
+            &project.to_string_lossy(),
+        ));
     std::fs::create_dir_all(&transcripts).unwrap();
     let transcript = transcripts.join("00000000-0000-0000-0000-000000000001.jsonl");
     let lines = [
@@ -213,7 +216,7 @@ async fn attempt_with_budget(
         python.abort();
         return (serde_json::to_value(result).unwrap(), Value::Null);
     }
-    let app = hangar_server::routes::terminal_router(state);
+    let app = hangar_server::routes::router(state);
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
@@ -222,9 +225,9 @@ async fn attempt_with_budget(
         .await
         .unwrap();
     });
-    let response=reqwest::Client::new().post(format!("http://{address}/__hangar_server/dictation/organize"))
-        .header("x-hangar-internal","harness-secret").header("content-type","application/json")
-        .body(json!({"session":"destination","generation":generation,"raw":"  Hoje vamos conferir o ditado completo.\n","style":"limpar","model":if model==Some(""){json!("")}else{Value::Null},"include_recent_messages":include,"recent_messages":snapshot,"harness_allowed":true}).to_string()).send().await.unwrap();
+    let response=reqwest::Client::new().post(format!("http://{address}/api/ditado/relimpar"))
+        .bearer_auth("owner").header("content-type","application/json")
+        .body(json!({"session":"destination","generation":generation,"organization_account":account_snapshot,"texto":"  Hoje vamos conferir o ditado completo.\n","estilo":"limpar","organization_model":if model==Some(""){json!("")}else{Value::Null},"include_recent_messages":include,"recent_messages":snapshot}).to_string()).send().await.unwrap();
     let status = response.status();
     let data = response.bytes().await.unwrap();
     server.abort();
@@ -234,10 +237,7 @@ async fn attempt_with_budget(
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or(Value::Null);
-    (
-        serde_json::from_slice::<Value>(&data).unwrap()["result"].clone(),
-        record,
-    )
+    (serde_json::from_slice::<Value>(&data).unwrap(), record)
 }
 
 #[tokio::test]
@@ -254,8 +254,18 @@ async fn dictation_harness_uses_destination_account_and_its_separate_model() {
 }
 #[tokio::test]
 async fn dictation_harness_oauth_claude_uses_safe_mode_and_destination_subscription() {
-    let (result, record) =
-        attempt_with_budget("claude", true, None, "k:original", false, None, false, None).await;
+    let (result, record) = attempt_with_budget(
+        "claude",
+        true,
+        None,
+        "k:original",
+        false,
+        None,
+        false,
+        None,
+        None,
+    )
+    .await;
     assert_eq!(result["text"], "Hoje vamos conferir o ditado completo.");
     assert!(result["organization_code"].is_null(), "{result}");
     assert_eq!(
@@ -288,8 +298,18 @@ async fn dictation_recent_messages_are_opt_in_bounded_and_frozen_for_revision() 
         off["recent_messages"].is_null(),
         "sem opção não há histórico"
     );
-    let (on, record) =
-        attempt_with_budget("claude", false, None, "k:original", true, None, false, None).await;
+    let (on, record) = attempt_with_budget(
+        "claude",
+        false,
+        None,
+        "k:original",
+        true,
+        None,
+        false,
+        None,
+        None,
+    )
+    .await;
     let prompt = record["system_prompt"].as_str().unwrap_or_default();
     assert!(
         prompt.contains("O projeto usa PostgreSQL") && prompt.contains("O serviço se chama Hangar"),
@@ -362,6 +382,7 @@ async fn dictation_deadline_includes_waiting_for_the_catalog_and_preserves_raw()
         None,
         false,
         Some(Duration::from_millis(500)),
+        None,
     )
     .await
     .0;
@@ -370,4 +391,23 @@ async fn dictation_deadline_includes_waiting_for_the_catalog_and_preserves_raw()
         "dictation_organization_timeout"
     );
     assert_eq!(result["text"], "  Hoje vamos conferir o ditado completo.\n");
+}
+
+#[tokio::test]
+async fn dictation_public_harness_refuses_changed_account_snapshot() {
+    let (result, record) = attempt_with_budget(
+        "claude",
+        false,
+        None,
+        "k:original",
+        false,
+        None,
+        false,
+        None,
+        Some("other-account"),
+    )
+    .await;
+    assert_eq!(result["organization_code"], "dictation_target_changed");
+    assert_eq!(result["raw"], "  Hoje vamos conferir o ditado completo.\n");
+    assert!(record.is_null(), "a conta divergente executou o CLI");
 }

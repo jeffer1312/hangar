@@ -41,10 +41,15 @@ transcription_bridge.configure(f'127.0.0.1:{server.server_port}','fixture-privat
 cases=[]
 try:
     client=TestClient(api.app)
-    for path,body in [('/api/dictation/transcribe?limpar=0',None),('/api/dictation/transcribe?limpar=bad',None),('/api/ditado/relimpar',{'texto':'Fala original.','estilo':'limpar','organization_mode':'none'}),('/api/ditado/relimpar',{'texto':'','estilo':'limpar'}),('/api/ditado/relimpar',{'texto':'Fala original.','estilo':'errado'}),('/api/ditado/relimpar',{'texto':'fala','estilo':'prosa','extra':1}),('/api/ditado/relimpar',{}),('/api/dictation/models',None),('/api/dictation/models?session=x&fresh=bad',None),('/api/transcription/providers/status',None),('/api/ditado/relimpar',{'texto':12,'estilo':False}),('/api/ditado/relimpar',{'texto':'fala','estilo':'prosa','recent_messages':[3]}),('/api/ditado/relimpar',{'texto':'fala','estilo':'prosa','include_recent_messages':'sim'}),('/api/ditado/relimpar',{'texto':'fala','estilo':'prosa','include_recent_messages':'1'})]:
+    for path,body in [('/api/ditado/relimpar',{'texto':'fala','estilo':'prosa','include_recent_messages':1.5}),('/api/dictation/transcribe?limpar=bad&include_recent_messages=bad',None),('/api/dictation/models?fresh=bad',None),('/api/dictation/transcribe?limpar=0',None),('/api/dictation/transcribe?limpar=bad',None),('/api/ditado/relimpar',{'texto':'Fala original.','estilo':'limpar','organization_mode':'none'}),('/api/ditado/relimpar',{'texto':'','estilo':'limpar'}),('/api/ditado/relimpar',{'texto':'Fala original.','estilo':'errado'}),('/api/ditado/relimpar',{'texto':'fala','estilo':'prosa','extra':1}),('/api/ditado/relimpar',{}),('/api/dictation/models',None),('/api/dictation/models?session=x&fresh=bad',None),('/api/transcription/providers/status',None),('/api/ditado/relimpar',{'texto':12,'estilo':False}),('/api/ditado/relimpar',{'texto':'fala','estilo':'prosa','recent_messages':[3]}),('/api/ditado/relimpar',{'texto':'fala','estilo':'prosa','include_recent_messages':'sim'}),('/api/ditado/relimpar',{'texto':'fala','estilo':'prosa','include_recent_messages':'1'})]:
         method='GET' if '/models' in path or path.endswith('/status') else 'POST'
         r=client.request(method,path,headers={'Authorization':'Bearer fixture-owner'},**({'json':body} if body is not None else {'content':b'audio'}))
         cases.append({'method':method,'path':path,'body':body,'status':r.status_code,'response':r.json()})
+    for content_type in ['text/plain','application/json; charset=utf-8','application/vnd.hangar+json']:
+        raw_body='{"texto":"fala","estilo":"prosa","organization_mode":"none"}'
+        response=client.post('/api/ditado/relimpar',content=raw_body,headers={'Authorization':'Bearer fixture-owner','Content-Type':content_type})
+        cases.append({'method':'POST','path':'/api/ditado/relimpar','body':None,'raw_body':raw_body,'headers':{'content-type':content_type},'status':response.status_code,'response':response.json()})
+
 finally:
     server.shutdown();server.server_close();thread.join()
 output={'source_commit':source_commit,'command':'cd backend && uv run python tests/fixtures/contract/dictation_public/capture.py','cases':cases}

@@ -93,6 +93,14 @@ async fn dictation_public_characterized_contract() {
         } else if case["method"] == "POST" {
             request = request.body("audio");
         }
+        if let Some(raw) = case["raw_body"].as_str() {
+            request = request.body(raw.to_owned());
+        }
+        if let Some(headers) = case["headers"].as_object() {
+            for (name, value) in headers {
+                request = request.header(name, value.as_str().unwrap());
+            }
+        }
         let response = request.send().await.unwrap();
         let status = response.status().as_u16();
         let body = response.json::<Value>().await.unwrap_or(Value::Null);
@@ -113,6 +121,8 @@ async fn dictation_public_characterized_contract() {
 struct PublicServer {
     _directory: tempfile::TempDir,
     state: Arc<AppState>,
+    config: Arc<Mutex<Value>>,
+    heard: Arc<Mutex<Vec<(String, String)>>>,
     base: String,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -128,10 +138,23 @@ impl PublicServer {
         let directory = tempfile::tempdir().unwrap();
         let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
+        let config = Arc::new(Mutex::new(
+            json!({"providers":[],"organization":{"llm_api_key":"fixture","llm_base_url":"http://127.0.0.1:1","dictation_organization_mode":"none"}}),
+        ));
+        let heard: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+        let configuration = config.clone();
+        let seen = heard.clone();
         let task = tokio::spawn(async move {
-            axum::serve(upstream,Router::new().route("/internal/transcription/config",get(||async {
-            ([("content-type","application/json")],json!({"providers":[],"organization":{"llm_api_key":"fixture","llm_base_url":"http://127.0.0.1:1","dictation_organization_mode":"none"}}).to_string())
-        }))).await.unwrap();
+            axum::serve(upstream,Router::new().route("/internal/transcription/config",get(move || {
+                let value=configuration.lock().unwrap().clone();async move { ([("content-type","application/json")],value.to_string()) }
+            })).fallback(move |uri:axum::http::Uri,body:axum::body::Bytes| {
+                seen.lock().unwrap().push((uri.path().to_owned(),String::from_utf8_lossy(&body).into_owned()));
+                async move {
+                    if uri.path().starts_with("/stall/"){std::future::pending::<()>().await;}
+                    let status=if uri.path().starts_with("/first/"){axum::http::StatusCode::INTERNAL_SERVER_ERROR}else{axum::http::StatusCode::OK};
+                    (status,[("content-type","application/json")],json!({"text":"Hoje vamos conferir o ditado completo.","choices":[{"message":{"content":"Hoje vamos conferir o ditado completo."}}]}).to_string())
+                }
+            })).await.unwrap();
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -165,6 +188,8 @@ impl PublicServer {
         Self {
             _directory: directory,
             state,
+            config,
+            heard,
             base: format!("http://{addr}"),
             tasks: vec![task, server],
         }
@@ -350,4 +375,258 @@ async fn dictation_public_forwarded_authentication_and_guest_harness_limit() {
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["text"], raw);
     assert_eq!(body["organization_code"], "dictation_harness_unauthorized");
+}
+
+#[tokio::test]
+async fn dictation_public_audio_edges_match_python() {
+    let server = PublicServer::start().await;
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../backend/tests/fixtures/contract/dictation_public/edges.json"
+    ))
+    .unwrap();
+    let endpoint = format!("http://{}", server.state.cfg.upstream);
+    let before = directory_snapshot(server._directory.path());
+    let mut differences = Vec::new();
+    for case in fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| !c["id"].as_str().unwrap().ends_with("limit"))
+    {
+        server.heard.lock().unwrap().clear();
+        let mut providers = vec![
+            json!({"id":"fixture","name":"fixture","kind":"openai","base_url":endpoint,"model":"fixture"}),
+        ];
+        if case["id"] == "warnings" {
+            providers.insert(0,json!({"id":"first","name":"primeiro","kind":"openai","base_url":format!("{endpoint}/first"),"model":"fixture"}));
+        }
+        if case["id"] == "stt_error" {
+            providers.clear();
+        }
+        *server.config.lock().unwrap() =
+            json!({"providers":providers,"organization":{"dictation_organization_mode":"none"}});
+        let mut request = reqwest::Client::new()
+            .post(format!("{}{}", server.base, case["path"].as_str().unwrap()))
+            .bearer_auth("owner")
+            .body("audio");
+        for (name, value) in case["headers"].as_object().unwrap() {
+            request = request.header(name, value.as_str().unwrap());
+        }
+        let response = request.send().await.unwrap();
+        let status = response.status().as_u16();
+        let body: Value = response.json().await.unwrap();
+        if json!(status) != case["status"] || body != case["response"] {
+            differences.push(
+                json!({"id":case["id"],"status":status,"actual":body,"expected":case["response"]}),
+            );
+        }
+        if let Some(filename) = case["calls"][0]["query"]["filename"].as_str() {
+            let heard = server.heard.lock().unwrap();
+            assert!(
+                heard.iter().any(|(_, body)| body.contains(&format!(
+                    "filename=\"audio.{}\"",
+                    filename.rsplit('.').next().unwrap()
+                ))),
+                "{}: {heard:?}",
+                case["id"]
+            );
+        }
+        assert!(body.get("path").is_none());
+        assert_eq!(
+            directory_snapshot(server._directory.path()),
+            before,
+            "o ditado global gravou um arquivo"
+        );
+    }
+    assert!(differences.is_empty(), "{differences:#?}");
+}
+
+#[tokio::test]
+async fn dictation_public_declared_audio_limit_matches_python() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let server = PublicServer::start().await;
+    let mut stream = tokio::net::TcpStream::connect(server.base.trim_start_matches("http://"))
+        .await
+        .unwrap();
+    stream.write_all(format!("POST /api/dictation/transcribe HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer owner\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",100*1024*1024+1).as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        stream.read_to_end(&mut response),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let response = String::from_utf8(response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 413"), "{response}");
+    assert!(
+        response.contains("content-type: text/plain; charset=utf-8"),
+        "{response}"
+    );
+    assert!(server.heard.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn dictation_public_provider_test_selects_only_requested_provider() {
+    let server = PublicServer::start().await;
+    let endpoint = format!("http://{}", server.state.cfg.upstream);
+    *server.config.lock().unwrap() = json!({"providers":[{"id":"first","name":"primeiro","kind":"openai","base_url":format!("{endpoint}/first")},{"id":"second","name":"segundo","kind":"openai","base_url":endpoint}],"legacy":{"id":"legacy","kind":"openai","base_url":endpoint}});
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!(
+            "{}/api/transcription/providers/first/test",
+            server.base
+        ))
+        .bearer_auth("owner")
+        .body("audio")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 502);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["detail"]["code"],
+        "transcription_provider_failed"
+    );
+    let heard = server.heard.lock().unwrap().clone();
+    assert_eq!(heard.len(), 1);
+    assert_eq!(heard[0].0, "/first/audio/transcriptions");
+    assert!(heard[0].1.contains("filename=\"audio.wav\""));
+    server.heard.lock().unwrap().clear();
+    let response = client
+        .post(format!(
+            "{}/api/transcription/providers/second/test",
+            server.base
+        ))
+        .header("x-filename", "chosen.webm")
+        .bearer_auth("owner")
+        .body("audio")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["provider"],
+        "segundo"
+    );
+    let heard = server.heard.lock().unwrap();
+    assert_eq!(heard.len(), 1);
+    assert_eq!(heard[0].0, "/audio/transcriptions");
+    assert!(heard[0].1.contains("filename=\"audio.webm\""));
+}
+
+#[tokio::test]
+async fn dictation_public_without_cleanup_keeps_dictation_deadline() {
+    let server = PublicServer::start().await;
+    *server.config.lock().unwrap() = json!({"dictation_max_minutes":2,"providers":[{"id":"stall","name":"stall","kind":"openai","base_url":format!("http://{}/stall",server.state.cfg.upstream)}]});
+    let url = format!("{}/api/dictation/transcribe?limpar=0", server.base);
+    let response = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(url)
+            .bearer_auth("owner")
+            .body("audio")
+            .send()
+            .await
+            .unwrap()
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while server.heard.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(61)).await;
+    let response = tokio::time::timeout(std::time::Duration::from_secs(2), response)
+        .await
+        .expect("a rota global usou o prazo de arquivo (120 s), não o ditado (60 s)")
+        .unwrap();
+    assert_eq!(response.status(), 504);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["detail"]["code"],
+        "transcription_network_failed"
+    );
+    tokio::time::resume();
+}
+
+fn directory_snapshot(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    fn visit(path: &std::path::Path, output: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            output.push(entry.path());
+            if entry.file_type().unwrap().is_dir() {
+                visit(&entry.path(), output);
+            }
+        }
+    }
+    let mut paths = Vec::new();
+    visit(root, &mut paths);
+    paths.sort();
+    paths
+}
+
+#[tokio::test]
+async fn dictation_public_global_does_not_inherit_a_session_from_query() {
+    let server = PublicServer::start().await;
+    let endpoint = format!("http://{}", server.state.cfg.upstream);
+    *server.config.lock().unwrap() = json!({"providers":[{"id":"p","kind":"openai","name":"fixture","base_url":endpoint}],"organization":{"dictation_organization_mode":"external_api","llm_base_url":endpoint,"llm_api_key":"fixture","llm_model":"organization-model"}});
+    let response=reqwest::Client::new().post(format!("{}/api/dictation/transcribe?organization_mode=external_api&include_recent_messages=true&session=inexistente&generation=outra&organization_account=outra",server.base)).bearer_auth("owner").body("audio").send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["raw"], "Hoje vamos conferir o ditado completo.");
+    assert!(
+        body["organization_code"].is_null(),
+        "a sessão indevida acionou a leitura de referências: {body}"
+    );
+    let heard = server.heard.lock().unwrap();
+    assert_eq!(
+        heard
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>(),
+        ["/audio/transcriptions", "/chat/completions"]
+    );
+    let prompt: Value = serde_json::from_str(&heard[1].1).unwrap();
+    assert_eq!(prompt["model"], "organization-model");
+    assert!(!heard[1].1.contains("inexistente"));
+}
+
+#[tokio::test]
+async fn dictation_public_chunked_limits_preserve_original_errors() {
+    let server = PublicServer::start().await;
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../backend/tests/fixtures/contract/dictation_public/edges.json"
+    ))
+    .unwrap();
+    let mut differences = Vec::new();
+    for case in fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|case| case["transport"] == "chunked")
+    {
+        let chunk = bytes::Bytes::from(vec![b'x'; 1024 * 1024]);
+        let stream = futures_util::stream::iter(
+            (0..101).map(move |_| Ok::<_, std::io::Error>(chunk.clone())),
+        );
+        let response = reqwest::Client::new()
+            .post(format!("{}{}", server.base, case["path"].as_str().unwrap()))
+            .bearer_auth("owner")
+            .header("content-type", "application/json")
+            .body(reqwest::Body::wrap_stream(stream))
+            .timeout(std::time::Duration::from_secs(60))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap();
+        let body = serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text));
+        if json!(status) != case["status"] || body != case["response"] {
+            differences.push(
+                json!({"id":case["id"],"actual":body,"status":status,"expected":case["response"]}),
+            );
+        }
+        assert!(server.heard.lock().unwrap().is_empty());
+    }
+    assert!(differences.is_empty(), "{differences:#?}");
 }

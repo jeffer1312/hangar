@@ -9,7 +9,7 @@ use axum::{
     body::to_bytes,
     extract::Request,
     http::{Method, StatusCode},
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use serde_json::{Value, json};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
@@ -56,6 +56,9 @@ fn forbidden(message: &str) -> Response {
 }
 
 pub async fn public(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
+    if declared_too_large(&req) {
+        return crate::session_write::too_large(req.headers());
+    }
     let (forward, caller) = who(&st, peer, &req);
     let Some(caller) = caller else {
         return pass(&st, req, &forward).await;
@@ -74,6 +77,9 @@ pub async fn serve(
     guest: bool,
     grant: Option<Arc<GuestGrant>>,
 ) -> Response {
+    if declared_too_large(&req) {
+        return crate::session_write::too_large(req.headers());
+    }
     let path = req.uri().path().to_owned();
     let query: HashMap<String, String> =
         form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes())
@@ -83,16 +89,15 @@ pub async fn serve(
         return reorganize(st, req, guest, grant).await;
     }
     if path == "/api/dictation/models" {
-        let Some(session) = query.get("session") else {
-            return reply(
-                422,
-                json!({"detail":[{"type":"missing","loc":["query","session"],"msg":"Field required","input":null}]}),
-            );
-        };
-        let fresh = match crate::query::bool_param(&query, "fresh") {
-            Ok(v) => v,
-            Err(e) => return *e,
-        };
+        let mut errors = Vec::new();
+        if !query.contains_key("session") {
+            errors.push(json!({"type":"missing","loc":["query","session"],"msg":"Field required","input":null}));
+        }
+        let fresh = boolean(&query, "fresh", false, &mut errors);
+        if !errors.is_empty() {
+            return reply(422, json!({"detail":errors}));
+        }
+        let session = &query["session"];
         if guest {
             return forbidden("O catálogo de organização é exclusivo do dono.");
         }
@@ -152,7 +157,7 @@ pub async fn serve(
             .to_owned();
         let data = match to_bytes(req.into_body(), AUDIO_LIMIT).await {
             Ok(v) => v,
-            Err(_) => return reply(413, json!({"detail":"O áudio excede o limite de 100 MiB."})),
+            Err(_) => return audio_body_error(),
         };
         let Ok(_slot) = st.transcription_slots.clone().try_acquire_owned() else {
             return busy();
@@ -171,32 +176,13 @@ pub async fn serve(
             Err(error) => failure(error),
         };
     }
-    let clean = match crate::query::bool_param_or(&query, "limpar", true) {
-        Ok(v) => v,
-        Err(e) => return *e,
-    };
-    let include = match query
+    let mut errors = Vec::new();
+    let clean = boolean(&query, "limpar", true, &mut errors);
+    let include = query
         .contains_key("include_recent_messages")
-        .then(|| crate::query::bool_param(&query, "include_recent_messages"))
-        .transpose()
-    {
-        Ok(v) => v,
-        Err(e) => return *e,
-    };
-    let declared = req
-        .headers()
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok());
-    if declared.is_some_and(|n| n > AUDIO_LIMIT as u64) {
-        return reply(
-            413,
-            detail_body(
-                "erro_arquivo_grande",
-                "arquivo maior que 100 MiB",
-                json!({}),
-            ),
-        );
+        .then(|| boolean(&query, "include_recent_messages", false, &mut errors));
+    if !errors.is_empty() {
+        return reply(422, json!({"detail":errors}));
     }
     let filename = req
         .headers()
@@ -207,16 +193,7 @@ pub async fn serve(
         .or_else(|| query.get("name").cloned());
     let data = match to_bytes(req.into_body(), AUDIO_LIMIT).await {
         Ok(v) => v,
-        Err(_) => {
-            return reply(
-                413,
-                detail_body(
-                    "transcription_audio_too_large",
-                    "O áudio excede o limite de 100 MiB.",
-                    json!({}),
-                ),
-            );
-        }
+        Err(_) => return audio_body_error(),
     };
     let transcription =
         match crate::transcription::routes::transcribe_here(st, data, filename, Profile::Dictation)
@@ -255,13 +232,28 @@ async fn reorganize(
     guest: bool,
     grant: Option<Arc<GuestGrant>>,
 ) -> Response {
-    let bytes = match to_bytes(req.into_body(), usize::MAX).await {
+    let content_type = req
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let json_body = content_type.is_empty()
+        || content_type.split(';').next().is_some_and(|mime| {
+            mime == "application/json"
+                || mime.starts_with("application/") && mime.ends_with("+json")
+        });
+    let bytes = match to_bytes(req.into_body(), AUDIO_LIMIT).await {
         Ok(v) => v,
         Err(_) => return reply(400, json!({"detail":"There was an error parsing the body"})),
     };
-    let value = match crate::orchestration::body::parse(&bytes) {
-        Ok(v) => v,
-        Err((status, body)) => return json_response(status, body),
+    let value = if json_body || bytes.is_empty() {
+        match crate::orchestration::body::parse(&bytes) {
+            Ok(v) => v,
+            Err((status, body)) => return json_response(status, body),
+        }
+    } else {
+        Value::String(String::from_utf8_lossy(&bytes).into_owned())
     };
     let value = match super::http_body::validate(value) {
         Ok(v) => v,
@@ -308,4 +300,36 @@ async fn organize(st: &AppState, payload: Value) -> Value {
             "Pedido de organização inválido.",
         ),
     }
+}
+
+fn boolean(
+    query: &HashMap<String, String>,
+    name: &str,
+    default: bool,
+    errors: &mut Vec<Value>,
+) -> bool {
+    match query.get(name) {
+        None=>default,
+        Some(value)=>crate::query::fastapi_bool(value).unwrap_or_else(||{
+            errors.push(json!({"type":"bool_parsing","loc":["query",name],"msg":"Input should be a valid boolean, unable to interpret input","input":value}));default
+        }),
+    }
+}
+
+fn declared_too_large(req: &Request) -> bool {
+    req.headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            if v.is_empty() || !v.bytes().all(|c| c.is_ascii_digit()) {
+                return false;
+            }
+            let digits = v.trim_start_matches('0');
+            digits.len() > 9 || digits.parse::<u64>().is_ok_and(|n| n > AUDIO_LIMIT as u64)
+        })
+}
+
+// Preserva a resposta pública do middleware original até a mudança de contrato ser aprovada.
+fn audio_body_error() -> Response {
+    (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
 }

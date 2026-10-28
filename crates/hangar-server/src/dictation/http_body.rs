@@ -64,11 +64,17 @@ pub fn validate(mut value: Value) -> Result<Value, Value> {
                 object.insert((*field).into(), json!(boolean));
                 None
             } else {
-                Some(if input.is_string() || input.is_number() {
-                    "bool_parsing"
-                } else {
-                    "bool_type"
-                })
+                Some(
+                    if input.is_string()
+                        || input.as_i64().is_some()
+                        || input.as_u64().is_some()
+                        || input.as_f64().is_some_and(|v| v.fract() == 0.)
+                    {
+                        "bool_parsing"
+                    } else {
+                        "bool_type"
+                    },
+                )
             }
         } else if *field == "recent_messages" {
             if let Some(rows) = input.as_array() {
