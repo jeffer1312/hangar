@@ -289,8 +289,8 @@ async fn fake_python(State(f): State<Arc<Fake>>, mut req: Request) -> Response {
                 }));
             Response::new(Body::from_stream(s))
         }
-        // O navegador remoto do convidado também é WebSocket no Python.
-        p if p == "/ws" || p.ends_with("/nav-remoto") => {
+        // O eco deixa a prova do proxy independente das rotas atendidas no Rust.
+        p if p == "/ws" || p.ends_with("/proxy-ws-test") => {
             let upgrade = hyper::upgrade::on(&mut req);
             tokio::spawn(async move {
                 let Ok(up) = upgrade.await else { return };

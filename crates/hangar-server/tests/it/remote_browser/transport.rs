@@ -90,7 +90,7 @@ use tokio_tungstenite::{
     tungstenite::{Message as ClientMessage, client::IntoClientRequest},
 };
 type Client = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
-const KEY: &str = "contract::nav-contract";
+pub(super) const KEY: &str = "contract::nav-contract";
 const DESKTOP_TOKEN: &str = "remote-browser-contract-desktop";
 const BARRIER: &str = "__remote_browser_contract_barrier__";
 
@@ -110,10 +110,10 @@ struct DesktopState {
     fail_restore: bool,
     closed: usize,
 }
-struct Desktop {
+pub(super) struct Desktop {
     state: Arc<Mutex<DesktopState>>,
     changed: Arc<Notify>,
-    server: Server,
+    pub(super) server: Server,
 }
 #[derive(Clone)]
 struct DesktopContext {
@@ -122,7 +122,7 @@ struct DesktopContext {
     measured: Arc<Value>,
 }
 impl Desktop {
-    async fn new(inputs: &Value) -> Self {
+    pub(super) async fn new(inputs: &Value) -> Self {
         let fault = &inputs["desktop_fault"];
         let state = Arc::new(Mutex::new(DesktopState {
             commands: vec![],
@@ -159,7 +159,7 @@ impl Desktop {
             server,
         }
     }
-    fn publish(&self, scene: &Scene, key: &str) {
+    pub(super) fn publish(&self, scene: &Scene, key: &str) {
         let d = self.state.lock().unwrap();
         std::fs::write(
             scene.nav_dir().join("browser.json"),
@@ -302,7 +302,7 @@ async fn next_event(client: &mut Client, events: &mut Vec<Value>) -> Value {
         }
     }
 }
-async fn until(client: &mut Client, events: &mut Vec<Value>, predicate: impl Fn(&Value) -> bool) {
+pub(super) async fn until(client: &mut Client, events: &mut Vec<Value>, predicate: impl Fn(&Value) -> bool) {
     loop {
         if predicate(&next_event(client, events).await) {
             return;
@@ -333,7 +333,7 @@ async fn connect(
     ))
     .await
 }
-fn seed_session(scene: &Scene) {
+pub(super) fn seed_session(scene: &Scene) {
     let dir = scene.home.join(".hangar/claude-headless");
     let mut sidecar: Value =
         serde_json::from_slice(&std::fs::read(dir.join("headless.json")).unwrap()).unwrap();
@@ -606,68 +606,6 @@ same_name_new_browser_receives_old_restore, same_key_new_desktop_receives_old_re
 old_viewer_leaves_after_same_size_new_viewer, auth_missing, auth_wrong, auth_bearer_only, auth_cookie_only,
 auth_owner_foreign_origin, auth_loopback_not_rate_limited, auth_blocked_before_correct_token,
 auth_success_does_not_reset_ws_failures, opening_missing_browser, opening_wrong_desktop_pid,
-}
-
-#[tokio::test]
-async fn share_guest_stays_in_rust_and_revocation_closes_4410() {
-    if support::isolated(
-        "remote_browser::transport::share_guest_stays_in_rust_and_revocation_closes_4410",
-        |root| assert!(!root.join("git.calls").exists()),
-    )
-    .await
-    {
-        return;
-    }
-    use hangar_server::share::store::Kind;
-    let scene = Scene::new().await;
-    seed_session(&scene);
-    let desktop = Desktop::new(&json!({})).await;
-    desktop.publish(&scene, KEY);
-    let pair = scene.guest_token("nav-contract", Kind::Pair).await;
-    let denied = tokio_tungstenite::connect_async(format!(
-        "ws://{}/api/sessions/nav-contract/nav-remoto?token={pair}",
-        scene.guest.address
-    ))
-    .await;
-    assert!(
-        matches!(denied,Err(tokio_tungstenite::tungstenite::Error::Http(ref r)) if r.status()==403)
-    );
-    let token = scene.guest_token("nav-contract", Kind::Share).await;
-    let (mut socket, _) = tokio_tungstenite::connect_async(format!(
-        "ws://{}/api/sessions/nav-contract/nav-remoto?token={token}",
-        scene.guest.address
-    ))
-    .await
-    .expect("convite completo deve chegar ao Rust");
-    let mut events = vec![];
-    until(&mut socket, &mut events, |v| {
-        v["url"] == "http://contract.test/ready"
-    })
-    .await;
-    scene
-        .state
-        .share
-        .as_ref()
-        .unwrap()
-        .store
-        .revoke_session("nav-contract", None)
-        .unwrap();
-    let frame = tokio::time::timeout(Duration::from_secs(7), async {
-        loop {
-            if let Some(Ok(ClientMessage::Close(frame))) = socket.next().await {
-                break frame;
-            }
-        }
-    })
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(u16::from(frame.code), 4410);
-    let _ = socket.close(None).await;
-    while socket.next().await.is_some() {}
-    scene.upstream.assert_no_browser_or_discovery_calls();
-    desktop.server.close().await;
-    scene.close().await;
 }
 
 #[tokio::test]

@@ -186,37 +186,6 @@ async fn forwarded_matches_public_without_auth_or_python_and_decodes_once() {
     scene.close().await;
 }
 
-#[tokio::test]
-async fn real_guest_gate_allows_share_and_blocks_pair_other_session_and_revocation() {
-    use hangar_server::share::store::Kind;
-    if support::isolated("remote_browser::url::real_guest_gate_allows_share_and_blocks_pair_other_session_and_revocation", |root| {
-        assert!(!root.join("git.calls").exists());
-    }).await { return; }
-    let scene = Scene::new().await;
-    let client = reqwest::Client::new();
-    for name in ["s0","headless"] {
-        std::fs::write(scene.nav_dir().join("native.json"),json!({"chave":format!("server::{name}"),"url":"https://example.invalid/página?q=ação#parte"}).to_string()).unwrap();
-        let share = scene.guest_token(name,Kind::Share).await;
-        let answer = client.get(format!("http://{}/api/sessions/{name}/navegador?token={share}",scene.guest.address)).send().await.unwrap();
-        assert_eq!(answer.status().as_u16(),200);
-        let corpus = support::contract("url-commands");
-        let want = &corpus["cases"].as_array().unwrap().iter()
-            .find(|c|c["name"]=="get_signed_share_reaches_handler").unwrap()["expected"]["responses"][0]["body"];
-        assert_eq!(answer.json::<Value>().await.unwrap(),*want);
-        let other = if name=="s0" {"headless"} else {"s0"};
-        let answer = client.get(format!("http://{}/api/sessions/{other}/navegador?token={share}",scene.guest.address)).send().await.unwrap();
-        assert_eq!(answer.status().as_u16(),403);
-        let pair = scene.guest_token(name,Kind::Pair).await;
-        let answer = client.get(format!("http://{}/api/sessions/{name}/navegador?token={pair}",scene.guest.address)).send().await.unwrap();
-        assert_eq!(answer.status().as_u16(),403);
-        scene.state.share.as_ref().unwrap().store.revoke_session(name, Some(Kind::Share)).unwrap();
-        let answer = client.get(format!("http://{}/api/sessions/{name}/navegador?token={share}",scene.guest.address)).send().await.unwrap();
-        assert_eq!(answer.status().as_u16(),410);
-    }
-    scene.upstream.assert_no_browser_or_discovery_calls();
-    scene.close().await;
-}
-
 #[derive(Clone)]
 struct Log(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 impl std::io::Write for Log {

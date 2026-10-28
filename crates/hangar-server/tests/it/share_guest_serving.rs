@@ -366,7 +366,7 @@ async fn guest_forward_never_touches_the_owner_backoff() {
     assert!(srv.st.auth.is_owner(&lan.to_string(), Some(OWNER.as_bytes())), "o dono nesse IP segue livre");
 }
 
-/// WebSocket repassado ao Python (o navegador remoto): revogar fecha com 4410, que o Python não sabe.
+/// O proxy genérico precisa encerrar o WebSocket quando o convite é revogado.
 #[tokio::test(flavor = "multi_thread")]
 async fn forwarded_guest_websocket_closes_4410_when_revoked() {
     use tokio::io::AsyncReadExt;
@@ -374,7 +374,7 @@ async fn forwarded_guest_websocket_closes_4410_when_revoked() {
     let srv = plain_srv(dir.path(), |_| {}).await;
     let t = srv.g.token("cc", Kind::Share);
     let mut s = tokio::net::TcpStream::connect(srv.guest).await.unwrap();
-    s.write_all(format!("GET /api/sessions/cc/nav-remoto?token={t} HTTP/1.1\r\nHost: h\r\n\
+    s.write_all(format!("GET /api/sessions/cc/proxy-ws-test?token={t} HTTP/1.1\r\nHost: h\r\n\
         Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n").as_bytes()).await.unwrap();
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
@@ -388,7 +388,7 @@ async fn forwarded_guest_websocket_closes_4410_when_revoked() {
     tokio::time::timeout(Duration::from_secs(5), s.read_exact(&mut got)).await.unwrap().unwrap();
     assert_eq!(&got, b"ola");
     let (_, h) = srv.python.last_hit();
-    verified(&h, "GET", "/api/sessions/cc/nav-remoto");
+    verified(&h, "GET", "/api/sessions/cc/proxy-ws-test");
     srv.g.revoke_all();
     let mut rest = Vec::new();
     tokio::time::timeout(Duration::from_secs(12), s.read_to_end(&mut rest)).await.expect("o vigia fecha em até 5 s").unwrap();
