@@ -6,8 +6,42 @@
   // O que o arquivo contém e o que NÃO contém está em backend/app/diag.py e em lib/diag.ts. O texto
   // aqui repete a parte que importa pra quem vai enviar: fica na máquina, e não guarda conversa.
   import { getDiagResumo, baixarDiag, type ResumoDiag, type LinhaDiag } from '@hangar/core';
-  import { fmtBytes } from '@hangar/core';
+  import { fmtBytes, sendDiagReport, DIAG_REPORT_TEXT_MAX, type DiagReportResult } from '@hangar/core';
+  import { findServer, getActiveId, onServersChanged } from '../../lib/auth';
+  import { papelDo } from '../../lib/papel.svelte';
+  import { copyText } from '../../lib/clipboard';
   import * as m from '../../paraglide/messages';
+
+  // O relatório vai ao mesmo servidor que a prévia e o download acima leem: o ativo.
+  const ativo = () => findServer(getActiveId() ?? '') ?? null;
+  let servidor = $state(ativo());
+  $effect(() => onServersChanged(() => { servidor = ativo(); }));
+  // Convidado não manda relatório da máquina de outra pessoa (o servidor recusa com 403).
+  const podeReportar = $derived(!!servidor && !servidor.invite && papelDo(servidor) !== 'guest');
+
+  let texto = $state('');
+  let enviando = $state(false);
+  let resultado = $state<DiagReportResult | null>(null);
+  let copiado = $state(false);
+
+  async function reportar() {
+    if (!servidor || enviando) return;
+    enviando = true; resultado = null; copiado = false;
+    resultado = await sendDiagReport(servidor, { text: texto, client: `pwa ${__HANGAR_VERSION__}` });
+    enviando = false;
+  }
+
+  const falha = $derived(!resultado || resultado.ok ? null
+    : resultado.kind === 'unsupported' ? m.config_diag_report_unsupported()
+    : resultado.kind === 'rate_limited' ? m.config_diag_report_rate_limited()
+    : resultado.kind === 'unreachable' ? m.config_diag_report_unreachable()
+    : m.config_diag_report_failed({ code: resultado.code }));
+
+  async function copiar(code: string) {
+    if (!(await copyText(code))) return;
+    copiado = true;
+    setTimeout(() => { copiado = false; }, 2000);
+  }
 
   let resumo = $state<ResumoDiag | null>(null);
   let erro = $state('');
@@ -96,6 +130,36 @@
   {/if}
   {#if erro}<p class="erro" role="alert">{erro}</p>{/if}
 
+  {#if servidor && podeReportar}
+    <section class="reportar" aria-labelledby="diag-report-tit">
+      <strong id="diag-report-tit" class="preview-tit">{m.config_diag_report_title()}</strong>
+      <p class="rep-servidor">{m.config_diag_report_server({ server: servidor.label })}</p>
+      {#if resultado?.ok}
+        <p class="rep-msg" role="status">{m.config_diag_report_sent()}</p>
+        <div class="rep-codigo">
+          <code>{resultado.code}</code>
+          <button class="recarregar" onclick={() => resultado?.ok && copiar(resultado.code)}>
+            {copiado ? m.config_diag_report_copied() : m.config_diag_report_copy()}
+          </button>
+        </div>
+        {#if resultado.diary === 'failed'}<p class="rep-msg aviso">{m.config_diag_report_diary_failed()}</p>{/if}
+      {:else}
+        <label class="rep-label" for="diag-report-texto">{m.config_diag_report_text_label()}</label>
+        <textarea id="diag-report-texto" bind:value={texto} maxlength={DIAG_REPORT_TEXT_MAX} rows="3"
+                  disabled={enviando} placeholder={m.config_diag_report_text_placeholder()}></textarea>
+        <p class="rep-aviso">{m.config_diag_report_notice()}</p>
+        {#if falha}
+          <p class="erro" role="alert">{falha}</p>
+        {/if}
+        <button class="btn primario" onclick={reportar} disabled={enviando || resultado?.ok === false && resultado.kind === 'unsupported'}>
+          {enviando ? m.config_diag_report_sending()
+            : resultado && !resultado.ok && resultado.kind !== 'unsupported' ? m.config_diag_report_retry()
+            : m.config_diag_report_send()}
+        </button>
+      {/if}
+    </section>
+  {/if}
+
   <!-- Prévia das últimas linhas. Existe pra a pessoa CONFERIR que está gravando: sem ela o botão
        de baixar é fé, e quem recebe é que descobre que veio vazio. -->
   <div class="preview-head">
@@ -146,6 +210,40 @@
   .primario:disabled { opacity: 0.5; cursor: default; }
   .num { display: block; margin-top: var(--space-2); text-align: center; font-size: var(--text-xs); color: var(--text-muted); }
   .erro { margin: var(--space-2) 0 0; color: var(--error); font-size: var(--text-sm); }
+
+  .reportar { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-5); }
+  .rep-servidor, .rep-aviso, .rep-msg { margin: 0; font-size: var(--text-sm); color: var(--text-secondary); }
+  .rep-aviso { font-size: var(--text-xs); color: var(--text-muted); }
+  .rep-msg.aviso { color: var(--warning); }
+  .rep-label { font-size: var(--text-sm); color: var(--text-secondary); }
+  textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: var(--space-2) var(--space-3);
+    background: var(--surface-inset);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--text-base);
+    resize: vertical;
+  }
+  .rep-codigo {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+    padding: var(--space-3);
+    background: var(--surface-inset);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+  }
+  .rep-codigo code {
+    font-family: var(--font-mono);
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--text-primary);
+    user-select: all;
+  }
+  .rep-codigo .recarregar { height: 44px; }
 
   .preview-head {
     display: flex;

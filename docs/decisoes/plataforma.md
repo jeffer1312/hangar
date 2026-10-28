@@ -2257,6 +2257,38 @@ mostrar a worktree e a branch dela.
 
 ## Worktrees mescladas usam a origem e a base publicada
 
+### Recuperação manual de worktrees residuais
+
+(27/10/2026.) Pasta existente sem `.git`, ainda registrada na administração do repositório,
+é um estado residual explícito. O PR #220 recuperou pasta ausente; o PR #262 manteve os resíduos
+existentes protegidos como leitura incerta, sem um caminho manual de exclusão. Na reprodução,
+o detalhe respondia 404 e a exclusão falhava antes de permitir o descarte informado. Em pasta
+aninhada em outro checkout, ainda havia o risco de ler HEAD e arquivos do repositório pai.
+
+O estado residual lê HEAD, branch e vínculo na administração do repositório principal. A tela
+informa que todos os arquivos remanescentes serão perdidos, mostra a quantidade de entradas e
+até 50 exemplos, incluindo fontes e ignorados, e conserva a branch. A confirmação é manual:
+resíduo nunca comprova limpeza ou merge. Caminho não registrado, checkout principal, sessão
+ou terminal em uso, lock do Git e vínculo administrativo alterado continuam recusados.
+
+A remoção protege o registro contra prune com o lock da worktree, e uma trava do sistema
+separa execução viva de retomada. O inventário e o vínculo são reconferidos depois da guarda
+de sessões. A pasta sai primeiro; falha conserva o registro para outra tentativa, inclusive
+quando a pasta já acabou de sair. Repetir um sucesso conhecido não tenta apagar outro caminho.
+
+O `git worktree remove` não usa mais o prazo de 20 s das consultas: a operação destrutiva é
+acompanhada até concluir, com proteção da árvore de processos. O worker HTTP não é cancelado
+pela desconexão do cliente; uma interrupção do servidor admite recuperação residual. O teste
+de prazo mantém um comando bloqueado por sinal além dos 20 s e então o libera. Isso corrige
+o mecanismo capaz de produzir remoção parcial, sem afirmar que ele originou os resíduos
+históricos, para os quais não há log dessa causa.
+
+As provas usam Git e disco reais descartáveis, chamadas HTTP ao servidor de teste e os
+componentes dos três clientes. Cobrem confirmação, preservação da branch, retomada, reentrada,
+locks, sessões e revalidação. Nenhuma prova apaga uma pasta residual do ambiente em uso.
+
+### Base publicada e elegibilidade
+
 **Regra:** `branch.<branch>.hangar-base` tem prioridade. Sem ela, a base vem da referência
 nomeada de criação no reflog; `HEAD`, hashes e o upstream da própria branch não informam o
 destino. Sem origem recuperável, permanece o fallback para a branch do checkout principal.
@@ -3346,3 +3378,37 @@ cada escopo. Num boot, 15 linhas tinham `TYPESAFE_API_KEY`, `JEV_AUX_API_KEY` e
 **Limite.** Janela nova aberta dentro da sessão tmux não herda essas chaves (antes herdava pelo
 ambiente da sessão). O journal antigo e as chaves já gravadas lá não mudam com isto: trocar as
 chaves e limpar o journal são passos à parte.
+
+## Reportar problema: o pacote de diagnóstico vai ao dono (27/10/2026)
+
+**Decisão.** Configurações > Diário de uso tem **Reportar problema** nos três clientes. O cliente
+manda ao seu servidor `POST /api/diag/report` (só o dono) com o texto opcional da pessoa e as
+falhas recentes dele contra aquele servidor. O `hangar-server` (`diag_report/`) monta o pacote e o
+envia ao worker `hangar-relatorio` (`kind: "diagnostico"`, KV `diag/<código>` por 90 dias e
+e-mail ao dono); o diário inteiro dos 7 dias vai compactado num `PUT` separado, gravado pelo
+worker sem decodificar (o plano Free tem 10 ms de CPU por pedido). A pessoa recebe um código de 8
+caracteres para passar ao dono.
+
+**Por quê.** Em 27/10 três casos no mesmo dia só se explicaram pedindo log por SSH ou por comando:
+a fila travada depois da troca de conta numa máquina de casa (`input_unproved`), o
+`runtime_unhealthy` no Windows de outra pessoa depois de uma atualização automática, e o Orientar
+recusado. O diário exportado não tinha a causa e o 503 do envio não estava em lugar nenhum; nem
+todo mundo que usa sabe rodar comando. "Só erros não ajudam: tem que ser ele completo" — por isso o
+diário vai inteiro, com os eventos `ok` em volta da falha.
+
+**Privacidade (invariante).** Os logs privados podem ter token, caminho, conversa e `peer_info`:
+do `hangar-server.log` saem só hora, nível, a mensagem fixa e os campos `code`, `session`,
+`reason`, `stage`, `kind`, `window`, `outcome`, `status`, `attempt`, `wait_s` (o `detail` fica de
+fora); do log do Python, só a contagem por logger. Sessões sem `last_reply`, pergunta, opções,
+linha de status nem texto de fila; contas sem `id`, caminho, assinatura de credencial nem token.
+O `scrub` roda em cada parte do texto, antes de qualquer corte, e em cada linha do diário anexo: home e `C:\Users\<nome>`,
+`sk-…`, `Bearer …`, `token=` em URL, hex/base64 longos, e-mail, `*.ts.net` e IPv4.
+
+**Limites.** O worker usa KV: a senha de uso único do envio do diário não é atômica (dois envios
+quase simultâneos com a mesma senha podem gravar os dois). O teto diário do KV conta escritas
+(o diagnóstico custa 2, o diário mais 2) e, passado o teto, o diagnóstico recebe 503 em vez de um
+código que não abre.
+
+**Passo futuro (não feito): envio automático de erros.** Falha relevante iria sozinha ao dono,
+sem clique. Exige consentimento explícito na instalação, controle de volume no worker e os mesmos
+limites de privacidade acima. Fica para quando o botão manual não bastar.

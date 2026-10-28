@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const api = vi.hoisted(() => ({ getWorktreeForServer: vi.fn(), deleteWorktreeForServer: vi.fn() }));
@@ -31,6 +31,8 @@ vi.mock('../../paraglide/messages', () => Object.fromEntries([
   'worktree_apagar_branch_juntada', 'worktree_apagar_branch_tambem', 'worktree_apagar_perder', 'worktree_apagar',
   'worktree_apagar_branch_perde', 'worktree_copiar_caminho', 'toast_copiado',
   'worktree_tamanho_falhou', 'worktree_tamanho_parcial', 'worktree_leitura_incompleta',
+  'worktree_estado_residual', 'worktree_residual_warning', 'worktree_residual_entries',
+  'worktree_residual_inventory_incomplete',
 ].map((k) => [k, (p?: Record<string, unknown>) => (p ? `${k}:${Object.values(p).join(',')}` : k)])));
 vi.mock('@hangar/core', async (original) => ({ ...await original<typeof import('@hangar/core')>(), ...api }));
 import { WorktreeSheet } from './WorktreeSheet';
@@ -38,9 +40,13 @@ import { WorktreeSheet } from './WorktreeSheet';
 const st = { path: '/r/hangar-x', repo: '/r/hangar', exists: true, branch: 'x', base: 'main', main_branch: 'dev', merged: false, ahead: 3,
   dirty: 2, ignored: ['.env.local'], sessions: [] as string[], closed: 0 };
 
+const roots: ReturnType<typeof createRoot>[] = [];
+afterEach(async () => { await act(async () => { for (const root of roots.splice(0)) root.unmount(); }); vi.clearAllMocks(); });
 async function montar() {
   const el = document.createElement('div');
-  await act(async () => { createRoot(el).render(createElement(WorktreeSheet,
+  const root = createRoot(el);
+  roots.push(root);
+  await act(async () => { root.render(createElement(WorktreeSheet,
     { server: { id: 's' } as never, path: '/r/hangar-x', onClose: () => {} })); });
   return el;
 }
@@ -48,6 +54,29 @@ const clicar = async (el: HTMLElement, label: string) =>
   act(async () => { (el.querySelector(`[aria-label="${label}"]`) as HTMLElement).click(); });
 
 describe('WorktreeSheet', () => {
+  it('avisa que o inventário residual não foi lido no detalhe e na confirmação', async () => {
+    api.getWorktreeForServer.mockResolvedValue({ ...st, residual: true, degraded: true, dirty: 0, ignored: [], ahead: 0,
+      residual_files: [], residual_entries: null });
+    const el = await montar();
+    expect(el.textContent).toContain('worktree_residual_inventory_incomplete');
+    await clicar(el, 'worktree_apagar_reticencias');
+    expect(el.textContent).toContain('worktree_residual_inventory_incomplete');
+    expect(el.textContent).toContain('worktree_residual_warning');
+    expect(el.textContent).not.toContain('worktree_residual_entries:0');
+  });
+  it('resíduo mostra fontes e ignorados e confirma preservando a branch', async () => {
+    api.getWorktreeForServer.mockResolvedValue({ ...st, residual: true, dirty: 0, ignored: [], ahead: 0,
+      residual_files: ['source.rs', 'node_modules/cache'], residual_entries: 2 });
+    api.deleteWorktreeForServer.mockResolvedValue({ removed: st.path, branch_deleted: false, moved: 0 });
+    const el = await montar();
+    await clicar(el, 'worktree_apagar_reticencias');
+    expect(el.textContent).toContain('source.rs');
+    expect(el.textContent).toContain('node_modules/cache');
+    expect(el.querySelector('input[type=checkbox]')).toBeNull();
+    await clicar(el, 'worktree_apagar');
+    expect(api.deleteWorktreeForServer).toHaveBeenCalledWith(expect.anything(),
+      expect.objectContaining({ confirm: true, keep_branch: true, delete_branch: false }));
+  });
   it('apagar com arquivos a perder confirma e mantém a branch', async () => {
     api.getWorktreeForServer.mockResolvedValue(st);
     api.deleteWorktreeForServer.mockResolvedValue({ removed: st.path, branch_deleted: false, moved: 0 });

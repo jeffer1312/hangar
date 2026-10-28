@@ -1,15 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Platform, ScrollView, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Directory } from 'expo-file-system';
-import { getDiagFileForServer, getDiagSummaryForServer, type LinhaDiag, type ResumoDiag } from '@hangar/core';
+import * as Clipboard from 'expo-clipboard';
+import { runtimeVersion } from 'expo-updates';
+import {
+  DIAG_REPORT_TEXT_MAX, getDiagFileForServer, getDiagSummaryForServer, sendDiagReport,
+  type DiagReportFailureKind, type LinhaDiag, type ResumoDiag, type Server,
+} from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { PageHeader, Pill } from '../../src/features/config/PageHeader';
 import { SectionCard } from '../../src/features/config/SectionCard';
 import { SettingsRow } from '../../src/features/config/SettingsRow';
 import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { useSettingsColors } from '../../src/features/config/colors';
+import { useInputStyle } from '../../src/features/config/ServerConfigParts';
 import { useServers } from '../../src/stores/servers';
+import { haptic } from '../../src/ui/haptics';
+import { toast } from '../../src/ui/Toast';
 import * as m from '../../src/paraglide/messages';
 
 /** `missing`: servidor anterior à rota do diário; não é falha, só não há o que mostrar. */
@@ -33,6 +42,113 @@ function context(line: LinhaDiag): string {
   const code = line.codigo && line.nivel && line.nivel !== 'ok' ? `#${line.codigo}` : '';
   return [line.detalhe, platform, line.sessao, line.tela, code, line.ms != null ? `${line.ms}ms` : '']
     .filter(Boolean).join(' · ');
+}
+
+type Failure = { code: string; kind: DiagReportFailureKind };
+type Report = { state: 'sending' } | { state: 'sent'; code: string; diary: 'sent' | 'failed' } | ({ state: 'failed' } & Failure);
+
+const CLIENT = `expo ${runtimeVersion ?? 'dev'} ${Platform.OS}`;
+
+function failureText({ code, kind }: Failure): string {
+  if (kind === 'unsupported') return m.native_settings_diary_report_unsupported();
+  if (kind === 'rate_limited') return m.native_settings_diary_report_rate_limited();
+  if (kind === 'unreachable') return m.native_settings_diary_report_unreachable();
+  return m.native_settings_diary_report_failed({ code });
+}
+
+/** Relatório de diagnóstico ao servidor da tela. Convidado não vê a seção: o servidor recusaria. */
+function ReportSection({ server }: { server: Server }) {
+  const c = useSettingsColors();
+  const { theme } = useUnistyles();
+  const input = useInputStyle();
+  const [text, setText] = useState('');
+  const [report, setReport] = useState<Report | null>(null);
+  const [copied, setCopied] = useState(false);
+  const generation = useRef(0);
+
+  useEffect(() => {
+    setReport(null);
+    setCopied(false);
+    return () => { generation.current++; };
+  }, [server.id, server.baseUrl, server.token]);
+
+  const send = async () => {
+    if (report?.state === 'sending') return;
+    const now = ++generation.current;
+    setReport({ state: 'sending' });
+    setCopied(false);
+    const result = await sendDiagReport(server, { text, client: CLIENT });
+    if (now !== generation.current) return;
+    if (result.ok) {
+      haptic.success();
+      setReport({ state: 'sent', code: result.code, diary: result.diary });
+      setText('');
+    } else {
+      toast.erro(failureText(result));
+      setReport({ state: 'failed', code: result.code, kind: result.kind });
+    }
+  };
+
+  const copy = async (code: string) => {
+    try {
+      await Clipboard.setStringAsync(code);
+      haptic.success();
+      setCopied(true);
+    } catch (e) {
+      toast.erro(e instanceof Error ? e.message : m.erro_desconhecido());
+    }
+  };
+
+  const sending = report?.state === 'sending';
+  return (
+    <SectionCard icon="LifeBuoy" title={m.native_settings_diary_report_title()}>
+      <SettingsRow icon="Server" title={server.label} description={m.native_settings_diary_report_server({ server: server.label })} />
+      <SettingsRow icon="MessageSquare" title={m.native_settings_diary_report_text_label()}>
+        <TextInput
+          {...input}
+          style={[input.style, styles.textArea]}
+          value={text}
+          onChangeText={setText}
+          placeholder={m.native_settings_diary_report_text_placeholder()}
+          accessibilityLabel={m.native_settings_diary_report_text_label()}
+          maxLength={DIAG_REPORT_TEXT_MAX}
+          multiline
+          textAlignVertical="top"
+          editable={!sending}
+        />
+      </SettingsRow>
+      <SettingsRow icon="ShieldCheck" title={m.native_settings_diary_report_send()} description={m.native_settings_diary_report_notice()}>
+        {report?.state === 'sent' ? (
+          <View style={styles.sent}>
+            <Text accessibilityLiveRegion="polite" style={[styles.noteText, { color: c.text }]}>{m.native_settings_diary_report_sent()}</Text>
+            <Text selectable style={[styles.code, { color: c.text, fontFamily: theme.base.fontMono }]}>{report.code}</Text>
+            {report.diary === 'failed' ? (
+              <Text style={[styles.noteText, { color: theme.tokens.status.warning }]}>{m.native_settings_diary_report_diary_failed()}</Text>
+            ) : null}
+          </View>
+        ) : report?.state === 'failed' ? (
+          <Text accessibilityRole="alert" style={[styles.noteText, { color: theme.tokens.status.error }]}>{failureText(report)}</Text>
+        ) : null}
+        <View style={styles.row}>
+          {report?.state === 'sent' ? (
+            <Pill
+              icon={copied ? 'Check' : 'Copy'}
+              label={copied ? m.native_settings_diary_report_copied() : m.native_settings_diary_report_copy()}
+              onPress={() => { void copy(report.code); }}
+            />
+          ) : null}
+          <Pill
+            icon={report?.state === 'failed' ? 'RefreshCw' : 'Send'}
+            label={sending ? m.native_settings_diary_report_sending()
+              : report?.state === 'failed' ? m.native_settings_diary_report_retry()
+              : m.native_settings_diary_report_send()}
+            disabled={sending || (report?.state === 'failed' && report.kind === 'unsupported')}
+            onPress={() => { void send(); }}
+          />
+        </View>
+      </SettingsRow>
+    </SectionCard>
+  );
 }
 
 const stamp = () => new Date().toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
@@ -123,6 +239,7 @@ export default function UsageLogPage() {
   );
 
   return (
+    <KeyboardAvoidingView behavior="padding" automaticOffset style={styles.flex}>
     <Pagina>
       {header}
       <SectionCard icon="ShieldCheck" title={m.native_settings_diary_rules()}>
@@ -139,6 +256,7 @@ export default function UsageLogPage() {
           ) : null}
         </SettingsRow>
       </SectionCard>
+      {server.invite ? null : <ReportSection server={server} />}
       <SectionCard
         icon="List"
         title={m.native_settings_diary_recent()}
@@ -162,10 +280,16 @@ export default function UsageLogPage() {
         {diary && error ? note(error, theme.tokens.status.error, true) : null}
       </SectionCard>
     </Pagina>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
+  flex: { flex: 1 },
+  textArea: { minHeight: 88, paddingTop: theme.base.space[2], paddingBottom: theme.base.space[2] },
+  sent: { gap: theme.base.space[1.5] },
+  noteText: { fontSize: theme.base.text.xs },
+  code: { fontSize: theme.base.text.xl, fontWeight: theme.base.weight.semibold, letterSpacing: 2 },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.base.space[2] },
   note: { paddingHorizontal: theme.base.space[4], paddingVertical: theme.base.space[3], fontSize: theme.base.text.xs },
   lines: { maxHeight: 420 },

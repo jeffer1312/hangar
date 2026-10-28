@@ -31,6 +31,14 @@ const texto = () => document.body.textContent ?? '';
 const botao = (rotulo: string) => [...document.querySelectorAll('button')].find((b) => b.textContent?.includes(rotulo))!;
 
 describe('tela de worktrees', () => {
+  it('pasta residual nunca aparece como limpa na lista', async () => {
+    const residual = { ...pronta('residual', 12), residual: true, merged: false, degraded: true };
+    vi.spyOn(api, 'getWorktreesForServer').mockResolvedValue([{ repo: '/r/hangar', worktrees: [residual] }]);
+    vi.spyOn(api, 'fetchWorktreesForServer').mockResolvedValue();
+    comp = mount(Worktrees, { target: document.body.appendChild(document.createElement('div')), props: {} });
+    await vi.waitFor(() => expect(texto()).toContain(m.worktree_estado_residual()));
+    expect(document.querySelector('.metricas')?.textContent).not.toContain(m.worktree_limpa());
+  });
   it('carregando diz o que está lendo, e não é uma tela vazia', async () => {
     vi.spyOn(api, 'getWorktreesForServer').mockReturnValue(new Promise(() => {}));
     comp = mount(Worktrees, { target: document.body.appendChild(document.createElement('div')), props: {} });

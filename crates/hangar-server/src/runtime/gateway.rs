@@ -2520,6 +2520,19 @@ impl RuntimeRegistry {
     }
     /// Retrato de todas as sessões, por chave, para a lista. Diferente de `snapshots`, a sessão cujo
     /// ator não respondeu fica com `{"error": código}`: fora do retrato ela pareceria parada.
+    /// Chave → (nome, estado da fila, início da vida) das entradas abertas: o relatório de diagnóstico
+    /// conta o que espera sem pedir ao ator. Sem início conhecido, 0 (conta também a vida anterior).
+    pub async fn queue_files(&self) -> BTreeMap<String,(String,std::path::PathBuf,f64)> {
+        self.entries.lock().await.iter().map(|(key,entry)| {
+            let (path,created) = match (&entry.handle,&entry.runtime_target) {
+                (EntryHandle::Terminal {target,..},_) => (target.state_path.clone(),target.created),
+                (EntryHandle::CodexTerminal {target,..},_) => { let t = target.runtime_target(); (t.state_path,t.created) },
+                (_,Some(target)) => (target.state_path.clone(),target.created),
+                _ => (entry.lease_path.with_extension("json"),0.0),
+            };
+            (key.clone(),(entry.name.clone(),path,created))
+        }).collect()
+    }
     pub async fn list_snapshots(&self) -> BTreeMap<String,Value> {
         let entries:Vec<_> = self.entries.lock().await.iter().map(|(key,entry)|(key.clone(),entry.handle.clone())).collect();
         let asks = entries.into_iter().map(|(key,handle)| async move {

@@ -926,10 +926,22 @@ impl TerminalDriver {
     async fn prove_input(&self, text: &str, before: &ComposerSnapshot) -> bool {
         // A primeira leitura vem logo depois do `literal_settle` que a escrita já esperou; a espera fica
         // entre as tentativas. A prova é a mesma: só o texto presente passa.
+        let mut last_unread = None;
         for attempt in 0..self.limits.proof_attempts.max(1) {
             if attempt > 0 { self.settle().await; }
-            let Ok(now) = self.snapshot().await else { return false; };
-            if now.proves(text, before) == Proof::Present { return true; }
+            match self.snapshot().await {
+                Ok(now) if now.proves(text, before) == Proof::Present => return true,
+                Ok(_) => last_unread = None,
+                // Tela ainda redesenhando (o TUI recém-retomado): a leitura volta dentro da mesma janela.
+                Err(error) if matches!(error.code, "composer_unreadable" | "overlay" | "footer_focus") => last_unread = Some(error.code),
+                Err(error) => {
+                    tracing::warn!(code = "input_proof_read_failed", reason = error.code, "prova da entrada encerrada por leitura que falhou");
+                    return false;
+                }
+            }
+        }
+        if let Some(reason) = last_unread {
+            tracing::warn!(code = "input_proof_read_failed", reason, "prova da entrada sem leitura do composer até o fim do prazo");
         }
         false
     }

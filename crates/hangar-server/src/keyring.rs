@@ -161,6 +161,7 @@ pub fn spawn(keyring: std::sync::Arc<Keyring>) -> tokio::task::JoinHandle<()> {
         let mut warned = false;
         loop {
             let result = watch(&keyring).await;
+            tracing::info!(code = "keyring_watch_ended", ok = result.is_ok(), "escuta do chaveiro terminou");
             if let Some(error) = result.as_ref().err().filter(|_| !warned) {
                 tracing::warn!(code = "keyring_watch_failed", %error, "escuta do chaveiro parou; religa em 30 s");
             }
@@ -182,6 +183,7 @@ async fn watch(keyring: &Keyring) -> zbus::Result<()> {
     let mut changes = zbus::MessageStream::for_match_rule(rule, &conn, None).await?;
     let props = zbus::proxy::Builder::<zbus::Proxy>::new(&conn).destination(SECRETS)?.path("/org/freedesktop/secrets/collection/login")?
         .interface("org.freedesktop.DBus.Properties")?.cache_properties(zbus::proxy::CacheProperties::No).build().await?;
+    tracing::info!(code = "keyring_watch_ready", name = ?conn.unique_name(), "escuta do chaveiro ligada");
     // Releituras com atraso, contadas: leitura que falhou, ou daemon recém-subido que ainda não exportou a coleção.
     let (mut again, mut failures): (u32, u32) = (0, 0);
     loop {

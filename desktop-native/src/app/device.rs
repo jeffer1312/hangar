@@ -105,10 +105,48 @@ pub(super) struct ServerVersion { version: String, local: bool, ts: Option<Strin
 #[derive(Clone, PartialEq)]
 enum Run { Starting, Uncertain, Running { step: u64, total: u64, text: String }, Restarting, Done { ok: bool, text: String } }
 
+/// Teto do texto da pessoa no relatório; acima disso o servidor recusa o relatório inteiro.
+const REPORT_TEXT_MAX: usize = 2000;
+
+/// Relatório de diagnóstico (`POST /api/diag/report`): o envio em curso ou o desfecho do último.
+#[derive(Clone, Debug, PartialEq)]
+enum Report { Sending, Sent { code: String, diary_sent: bool, copied: bool }, Failed { code: String, retry: bool } }
+
+fn report_outcome(result: Result<Value, Failure>) -> Report {
+    let failed = |code: &str| Report::Failed { code: code.to_owned(), retry: true };
+    match result {
+        Ok(value) => match value.get("code").and_then(Value::as_str).filter(|code| !code.is_empty()) {
+            Some(code) => Report::Sent { code: code.to_owned(), diary_sent: value.get("diary").and_then(Value::as_str) == Some("sent"), copied: false },
+            None => failed("unexpected"),
+        },
+        // Servidor anterior à rota: repetir não muda nada, o caminho é baixar o diário.
+        Err(error) if error.status == Some(404) => Report::Failed { code: "HTTP 404".into(), retry: false },
+        Err(error) if error.status == Some(429) => failed("diag_report_rate_limited"),
+        Err(error) => match (error.code, error.status) {
+            (Some(code), _) => failed(&code),
+            (None, Some(status)) => failed(&format!("HTTP {status}")),
+            (None, None) => failed("network"),
+        },
+    }
+}
+
+/// Texto da falha, no idioma de agora; sem repetição é o servidor anterior à rota.
+fn report_failure_text(code: &str, retry: bool) -> String {
+    match code {
+        _ if !retry => tr("settings_diary_report_unsupported"),
+        "diag_report_rate_limited" => tr("settings_diary_report_rate_limited"),
+        "diag_report_unreachable" => tr("settings_diary_report_unreachable"),
+        code => tr("settings_diary_report_failed").replace("{code}", code),
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Device {
     rate: Remote<Option<f64>>,
     diary: Remote<Diary>,
+    report: Option<Report>,
+    report_input: Option<Entity<TextareaState>>,
+    _report_subscription: Option<Subscription>,
     /// Caminho gravado (ou o erro). `saving`: o arquivo já tem destino e está vindo do servidor.
     download: Remote<String>,
     saving: bool,
@@ -151,9 +189,14 @@ impl Device {
                 }
             }
         });
+        let report = cx.new(|cx| TextareaState::new(window, cx).rows(3).placeholder(tr("settings_diary_report_text_placeholder")));
+        // O contador do teto e o botão dependem do texto: a página redesenha a cada mudança.
+        let report_sub = cx.subscribe(&report, |_: &mut Hangar, _, event: &InputEvent, cx| if matches!(event, InputEvent::Change) { cx.notify(); });
         let mut device = Self::default();
         device.channel_input = Some(input);
         device._channel_subscription = Some(sub);
+        device.report_input = Some(report);
+        device._report_subscription = Some(report_sub);
         device
     }
     fn rate_value(&self) -> Option<f64> { self.rate.ok().copied().flatten() }
@@ -169,6 +212,7 @@ pub(super) enum DeviceReply {
     Started(u64, Launch),
     Tick(u64, Result<Value, Failure>),
     Migration(u64, Result<Value, Failure>),
+    Report(Result<Value, Failure>),
 }
 
 /// Valor em dólar na moeda escolhida. Real sem cotação fica em dólar.
@@ -257,7 +301,11 @@ impl Hangar {
         if page != Page::Devices { self.devices_page_left(); }
         match page {
             Page::General if !self.device.rate.loading && self.device.rate_value().is_none() => self.load_rate(cx),
-            Page::Diary => self.load_diary(cx),
+            Page::Diary => {
+                // Voltar à página começa um relatório novo; o envio em curso continua na tela.
+                if !matches!(self.device.report, Some(Report::Sending)) { self.device.report = None; }
+                self.load_diary(cx)
+            }
             Page::About => {
                 if !self.device.about.loading { self.load_about(false, cx); }
                 if !self.device.channel.request.loading && !self.device.channel.is_dirty() { self.load_channel(cx); }
@@ -297,6 +345,23 @@ impl Hangar {
         if !self.device.download.loading { self.device.download.value = None; }
         let done = self.device_send_later();
         self.runtime.spawn(async move { done(DeviceReply::Diary(seq, api.server_read(&["diag"], &[], 20).await)).await });
+        cx.notify();
+    }
+
+    /// Relatório ao servidor da tela, com as falhas recentes só dele. O servidor espera o receptor (20 s) e o diário (60 s).
+    fn send_report(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        if matches!(self.device.report, Some(Report::Sending)) { return; }
+        let text = self.device.report_input.as_ref().map(|input| input.read(cx).value().trim().to_owned()).unwrap_or_default();
+        if text.chars().count() > REPORT_TEXT_MAX { return; }
+        let client = format!("native {} {}-{}", crate::update::CURRENT, std::env::consts::OS, std::env::consts::ARCH);
+        let mut body = json!({"client": client, "failures": api.recent_failures()});
+        if !text.is_empty() { body["text"] = Value::String(text); }
+        self.device.report = Some(Report::Sending);
+        let done = self.device_send_later();
+        self.runtime.spawn(async move {
+            done(DeviceReply::Report(api.server_send(reqwest::Method::POST, &["diag", "report"], Some(body), 150).await)).await
+        });
         cx.notify();
     }
 
@@ -499,6 +564,9 @@ impl Hangar {
                     }
                 }
             }
+            DeviceReply::Report(result) => {
+                self.device.report = Some(report_outcome(result));
+            }
             DeviceReply::Migration(seq, result) => {
                 self.device.migration.finish(seq, result.map(|v| super::migration::parse(&v)).map_err(|e| Self::failure(&e)));
             }
@@ -620,6 +688,9 @@ impl Hangar {
         }
         if let Some(input) = self.device.channel_input.clone() {
             input.update(cx, |input, cx| input.set_placeholder(tr("settings_channel_branch_placeholder"), window, cx));
+        }
+        if let Some(input) = self.device.report_input.clone() {
+            input.update(cx, |input, cx| input.set_placeholder(tr("settings_diary_report_text_placeholder"), window, cx));
         }
         if let Some(icon) = &self.window_tray.icon { icon.refresh(); }
         self.relabel_settings(window, cx);
@@ -761,13 +832,55 @@ impl Hangar {
             _ => note(tr("settings_diary_loading"), theme::muted()).into_any_element(),
         };
         let server = self.server_label(cx);
+        // Convidado não manda relatório: a rota é só do dono.
+        let report = (self.api.is_some() && !self.active_invite()).then(|| self.render_report(&server, cx));
         div().flex().flex_col()
             .child(self.page_top("settings_page_diary", tr("settings_diary_lead").replace("{server}", &server)))
             .child(self.heading("settings_diary_rules")).child(rules)
             .child(self.heading("settings_diary_file")).child(file_box)
+            .when_some(report, |el, report| el.child(self.heading("settings_diary_report_title")).child(report))
             .child(div().flex().items_end().child(div().flex_1().child(self.heading("settings_diary_recent"))).child(div().mb(px(6.)).child(reload)))
             .child(settings_box().child(list))
             .into_any_element()
+    }
+
+    fn render_report(&self, server: &str, cx: &mut Context<Self>) -> Div {
+        let input = self.device.report_input.clone();
+        let length = input.as_ref().map(|input| input.read(cx).value().chars().count()).unwrap_or(0);
+        let over = length > REPORT_TEXT_MAX;
+        let sending = matches!(self.device.report, Some(Report::Sending));
+        let note = |text: String, color: Hsla| div().text_size(px(13.)).text_color(color).whitespace_normal().child(text);
+        let send = |id: &'static str, label: &'static str| Button::new(id).primary().small().label(tr(label)).loading(sending)
+            .disabled(sending || over).on_click(cx.listener(|this, _, _, cx| this.send_report(cx)));
+        let outcome = match &self.device.report {
+            None => div().child(send("diary-report-send", "settings_diary_report_send")),
+            Some(Report::Sending) => div().child(send("diary-report-send", "settings_diary_report_sending")),
+            Some(Report::Sent { code, diary_sent, copied }) => {
+                let copy = code.clone();
+                div().flex().flex_col().gap(px(8.))
+                    .child(note(tr("settings_diary_report_sent"), theme::text()))
+                    .child(div().flex().items_center().gap(px(12.))
+                        .child(div().font_family(theme::MONO).text_size(px(24.)).font_weight(FontWeight::SEMIBOLD).child(code.clone()))
+                        .child(Button::new("diary-report-copy").outline().small().icon(if *copied { IconName::Check } else { IconName::Copy })
+                            .label(tr(if *copied { "settings_diary_report_copied" } else { "settings_diary_report_copy" }))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                                if let Some(Report::Sent { copied, .. }) = &mut this.device.report { *copied = true; }
+                                cx.notify();
+                            }))))
+                    .when(!diary_sent, |el| el.child(note(tr("settings_diary_report_diary_failed"), theme::warning())))
+            }
+            Some(Report::Failed { code, retry }) => div().flex().flex_col().gap(px(8.))
+                .child(note(report_failure_text(code, *retry), theme::danger()))
+                .when(*retry, |el| el.child(div().child(send("diary-report-retry", "settings_diary_report_retry")))),
+        };
+        settings_box().child(div().px_4().py(px(14.)).flex().flex_col().gap(px(10.))
+            .child(note(tr("settings_diary_report_server").replace("{server}", server), theme::muted()))
+            .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(tr("settings_diary_report_text_label")))
+            .children(input.map(|input| Textarea::new(&input).aria_label(tr("settings_diary_report_text_label")).disabled(sending)))
+            .when(over, |el| el.child(note(format!("{length}/{REPORT_TEXT_MAX}"), theme::danger())))
+            .child(note(tr("settings_diary_report_notice"), theme::muted()))
+            .child(outcome))
     }
 
     pub(super) fn render_about(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -1084,5 +1197,25 @@ mod tests {
         assert_eq!(pending(&stale), 1);
         let warning = serde_json::json!({"versoes": {"repo": "a", "backend": "a"}, "atras": 0, "atualizacao_disponivel": false, "pending_warning": true});
         assert_eq!(pending(&warning), 1, "aviso a aceitar mostra o Atualizar");
+    }
+
+    #[test]
+    fn report_outcome_reads_the_c1_answers() {
+        use super::{Failure, Report, report_failure_text, report_outcome, tr};
+        let refused = |status: Option<u16>, code: Option<&str>| match report_outcome(Err(Failure { status, code: code.map(str::to_owned),
+            ..Failure::local("x") })) {
+            Report::Failed { code, retry } => report_failure_text(&code, retry),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(report_outcome(Ok(serde_json::json!({"code": "AB12CD34", "diary": "failed"}))),
+            Report::Sent { code: "AB12CD34".into(), diary_sent: false, copied: false });
+        assert_eq!(report_outcome(Err(Failure { status: Some(404), ..Failure::local("x") })),
+            Report::Failed { code: "HTTP 404".into(), retry: false });
+        assert_eq!(refused(Some(404), None), tr("settings_diary_report_unsupported"));
+        assert_eq!(refused(Some(429), None), tr("settings_diary_report_rate_limited"));
+        assert_eq!(refused(Some(429), Some("diag_report_rate_limited")), tr("settings_diary_report_rate_limited"));
+        assert_eq!(refused(Some(502), Some("diag_report_unreachable")), tr("settings_diary_report_unreachable"));
+        assert_eq!(refused(Some(502), Some("diag_report_refused")), tr("settings_diary_report_failed").replace("{code}", "diag_report_refused"));
+        assert_eq!(refused(None, None), tr("settings_diary_report_failed").replace("{code}", "network"));
     }
 }

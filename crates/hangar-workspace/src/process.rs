@@ -30,7 +30,15 @@ pub fn run(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output> {
     run_program(Command::new("git").arg("-C").arg(cwd).args(args), timeout)
 }
 
+pub fn run_program_to_completion(command: &mut Command) -> Result<Output> {
+    run_with_deadline(command, None)
+}
+
 pub fn run_program(command: &mut Command, timeout: Duration) -> Result<Output> {
+    run_with_deadline(command, Some(timeout))
+}
+
+fn run_with_deadline(command: &mut Command, timeout: Option<Duration>) -> Result<Output> {
     let guard = crate::process_lifetime::Guard::new()
         .map_err(|_| unavailable("não foi possível proteger a árvore do comando"))?;
     guard.configure(command);
@@ -69,10 +77,14 @@ pub fn run_program(command: &mut Command, timeout: Duration) -> Result<Output> {
     let mut stdout = None;
     let mut stderr = None;
     let status = loop {
-        let remaining = timeout.saturating_sub(start.elapsed());
+        let remaining = timeout.map(|timeout| timeout.saturating_sub(start.elapsed()));
         // Dorme no canal até as duas saídas fecharem: girar a cada 1 ms custava CPU por git em voo.
         if stdout.is_none() || stderr.is_none() {
-            let (which, result) = match rx.recv_timeout(remaining) {
+            let received = match remaining {
+                Some(remaining) => rx.recv_timeout(remaining),
+                None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+            };
+            let (which, result) = match received {
                 Ok(received) => received,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     guard.kill();
@@ -108,13 +120,16 @@ pub fn run_program(command: &mut Command, timeout: Duration) -> Result<Output> {
             }
             continue;
         }
+        if remaining.is_none() {
+            break child.wait().map_err(|_| error(500, "git falhou ao aguardar o processo"))?;
+        }
         if let Some(status) = child
             .try_wait()
             .map_err(|_| error(500, "git falhou ao aguardar o processo"))?
         {
             break status;
         }
-        if remaining.is_zero() {
+        if remaining.is_some_and(|d| d.is_zero()) {
             guard.kill();
             kill_tree(&mut child);
             return Err(error(504, "git timeout"));
@@ -186,6 +201,30 @@ fn kill_tree(child: &mut std::process::Child) {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    #[test]
+    fn destructive_operation_waits_for_completion_beyond_the_read_deadline() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("release");
+        assert!(Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        let mut signal = std::fs::OpenOptions::new().read(true).write(true).open(&fifo).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let result = run_program_to_completion(Command::new("/bin/sh").env_clear()
+                .args(["-c", "IFS= read -r value < \"$1\"; printf completed", "removal"])
+                .arg(fifo));
+            tx.send(result).unwrap();
+        });
+        let early = rx.recv_timeout(Duration::from_secs(21));
+        signal.write_all(b"finish\n").unwrap();
+        let was_running = early.is_err();
+        let result = early.unwrap_or_else(|_| rx.recv_timeout(Duration::from_secs(30)).unwrap());
+        thread.join().unwrap();
+        assert!(was_running, "a operação foi interrompida pelo prazo de leitura");
+        let result = result.unwrap();
+        assert_eq!(result.code, 0);
+        assert_eq!(result.stdout, "completed");
+    }
     #[test]
     fn inherited_pipe_does_not_outlive_the_deadline() {
         let start = Instant::now();

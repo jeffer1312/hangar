@@ -159,13 +159,13 @@ pub async fn public(st: Arc<AppState>, req: Request) -> Response {
     let repo = params.get("repo").cloned();
     let done = tokio::task::spawn_blocking(move || -> hangar_workspace::Result<Value> {
         if detail {
-            let path = worktrees::allowed_worktree(&path.unwrap_or_default(), &ctx.roots)?;
-            Ok(worktrees::status_of(
-                &path,
+            worktrees::status_allowed(
+                &path.unwrap_or_default(),
+                &ctx.roots,
                 &ctx.sessions,
                 true,
                 &ctx.project_bases,
-            ))
+            )
         } else {
             let repo = repo
                 .map(|r| worktrees::allowed_repo(&r, &ctx.roots))

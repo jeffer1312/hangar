@@ -1,6 +1,8 @@
 pub mod dto;
 pub mod device_install;
 mod local;
+mod recent;
+pub use recent::RecentFailure;
 pub mod route;
 pub mod sse;
 mod session_defaults;
@@ -116,6 +118,12 @@ impl Api {
     pub fn server_address(&self) -> String {
         format!("{}{}", self.base.origin().ascii_serialization(), self.base.path().trim_end_matches('/'))
     }
+
+    /// Falhas recentes deste servidor (até 50, mais recentes primeiro), pelo endereço salvo e pela rota de agora.
+    // shortcut: a rede local de uma rota já esquecida não entra; guardar por identidade se isso fizer falta.
+    pub fn recent_failures(&self) -> Vec<RecentFailure> {
+        recent::recent(&[recent::origin(&self.base), recent::origin(&self.route())])
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -135,6 +143,11 @@ impl Failure {
     }
     fn transport(post: bool) -> Self {
         Self { uncertain: post, ..Self::local(if post { "delivery_uncertain" } else { "network_error" }) }
+    }
+    /// Sem resposta: entra nas falhas recentes do servidor com status 0.
+    fn lost(method: &str, error: &reqwest::Error, post: bool) -> Self {
+        if let Some(url) = error.url() { recent::record(method, url, 0, Some("transport")); }
+        Self::transport(post)
     }
 }
 
@@ -320,11 +333,18 @@ impl Api {
     }
 
     async fn checked(response: Response, post: bool) -> Result<Response, Failure> {
+        Self::checked_as(response, post, if post { "POST" } else { "GET" }).await
+    }
+
+    /// `method` só rotula a falha guardada para o relatório de diagnóstico.
+    async fn checked_as(response: Response, post: bool, method: &str) -> Result<Response, Failure> {
         if response.status().is_success() || response.status() == StatusCode::NOT_MODIFIED { return Ok(response); }
         let status = response.status().as_u16();
+        let url = response.url().clone();
         let retry_after = response.headers().get(header::RETRY_AFTER).and_then(|s| s.to_str().ok()).and_then(|s| s.parse().ok());
         let body = response.json::<Value>().await.ok();
         let code = envelope_code(body.as_ref());
+        recent::record(method, &url, status, code.as_deref());
         let detail = failure_detail(body, status);
         Err(Failure { status: Some(status), detail: detail.chars().take(500).collect(), retry_after, uncertain: post && status >= 500, code })
     }
@@ -582,10 +602,11 @@ impl Api {
         let mut url = self.endpoint(Some(name), None);
         url.path_segments_mut().expect("validated HTTP base").extend(path);
         if let Some((key, value)) = query { url.query_pairs_mut().append_pair(key, value); }
+        let label = method.clone();
         let mut req = self.client.request(method, url);
         if let Some(body) = body { req = req.json(&body); }
-        let r = req.timeout(Duration::from_secs(seconds)).send().await.map_err(|_| Failure::transport(true))?;
-        let r = Self::checked(r, true).await?;
+        let r = req.timeout(Duration::from_secs(seconds)).send().await.map_err(|e| Failure::lost(label.as_str(), &e, true))?;
+        let r = Self::checked_as(r, true, label.as_str()).await?;
         r.json().await.map_err(|_| Failure::transport(true))
     }
 
@@ -706,7 +727,7 @@ impl Api {
     /// Leitura do servidor (cotação, diário, estado da atualização): queda é rede, nunca incerteza.
     pub async fn server_read(&self, path: &[&str], query: &[(&str, &str)], seconds: u64) -> Result<Value, Failure> {
         let r = self.client.get(self.server_url(path, query)).timeout(Duration::from_secs(seconds)).send().await
-            .map_err(|_| Failure::transport(false))?;
+            .map_err(|e| Failure::lost("GET", &e, false))?;
         Self::checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
@@ -741,10 +762,11 @@ impl Api {
 
     pub async fn server_send_query(&self, method: reqwest::Method, path: &[&str], query: &[(&str, &str)], body: Option<Value>,
         seconds: u64) -> Result<Value, Failure> {
+        let label = method.clone();
         let mut req = self.client.request(method, self.server_url(path, query));
         if let Some(body) = body { req = req.json(&body); }
-        let r = req.timeout(Duration::from_secs(seconds)).send().await.map_err(|_| Failure::transport(true))?;
-        let r = Self::checked(r, true).await?;
+        let r = req.timeout(Duration::from_secs(seconds)).send().await.map_err(|e| Failure::lost(label.as_str(), &e, true))?;
+        let r = Self::checked_as(r, true, label.as_str()).await?;
         // 204 não tem corpo para ler.
         if r.status() == StatusCode::NO_CONTENT { return Ok(Value::Null); }
         r.json().await.map_err(|_| Failure::transport(true))
@@ -760,14 +782,14 @@ impl Api {
             let code = envelope_code(body.as_ref());
             return Err(Failure { status: Some(409), detail: failure_detail(body, 409).chars().take(500).collect(), retry_after: None, uncertain: false, code });
         }
-        Self::checked(r, true).await?.json().await.map(Removed::Done).map_err(|_| Failure::transport(true))
+        Self::checked_as(r, true, "DELETE").await?.json().await.map(Removed::Done).map_err(|_| Failure::transport(true))
     }
 
     /// Rota do hub de sincronização: a sessão ali é o cookie `cp_sync`, não o token. Devolve também o `cp_sync=…` que a
     /// resposta trouxer, pra quem chama guardar em memória e mandar de volta.
     pub async fn hub(&self, method: reqwest::Method, path: &[&str], query: &[(&str, &str)], body: Option<Value>, cookie: Option<&str>,
         seconds: u64) -> Result<(Value, Option<String>), Failure> {
-        let post = method != reqwest::Method::GET;
+        let (post, label) = (method != reqwest::Method::GET, method.clone());
         let mut req = self.client.request(method, self.server_url(path, query));
         if let Some(cookie) = cookie {
             let mut value = header::HeaderValue::from_str(cookie).map_err(|_| Failure::local("invalid_token"))?;
@@ -776,7 +798,7 @@ impl Api {
         }
         if let Some(body) = body { req = req.json(&body); }
         let r = req.timeout(Duration::from_secs(seconds)).send().await.map_err(|_| Failure::transport(post))?;
-        let r = Self::checked(r, post).await?;
+        let r = Self::checked_as(r, post, label.as_str()).await?;
         let session = r.headers().get_all(header::SET_COOKIE).iter().filter_map(|v| v.to_str().ok())
             .filter_map(|v| v.split(';').next()).find(|v| v.starts_with("cp_sync=")).map(str::to_owned);
         Ok((r.json().await.map_err(|_| Failure::local("invalid_response"))?, session))
@@ -802,7 +824,7 @@ impl Api {
     pub async fn server_delete(&self, path: &[&str], query: &[(&str, &str)], seconds: u64) -> Result<Value, Failure> {
         let r = self.client.delete(self.server_url(path, query)).timeout(Duration::from_secs(seconds)).send().await
             .map_err(|_| Failure::transport(true))?;
-        Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
+        Self::checked_as(r, true, "DELETE").await?.json().await.map_err(|_| Failure::transport(true))
     }
 
     /// Manifesto da configuração compartilhada, com as etapas da leitura em `on` (`None` = Hangar sem etapas).

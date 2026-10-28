@@ -47,5 +47,37 @@ export function novoReq(): string {
   try { return _sink?.novoReq() ?? ''; } catch { return ''; }
 }
 
+/** Uma falha recente contra um servidor, no formato que o relatório de diagnóstico leva. */
+export interface RecentFailure {
+  /** Segundos desde a época. */
+  ts: number;
+  /** `METHOD /rota` com os segmentos variáveis trocados por `*`. */
+  route: string;
+  /** 0 = sem resposta (rede, prazo). */
+  status: number;
+  code: string | null;
+}
+
+const FAILURES_PER_SERVER = 50;
+const FAILURE_CODE = /^[a-z0-9_.:-]{1,64}$/;
+// Só em memória: o relatório leva o que esta aba viu, sem gravar nada no aparelho.
+const _failures = new Map<string, RecentFailure[]>();
+
+export function recordFailure(serverKey: string, failure: RecentFailure): void {
+  const code = failure.code && FAILURE_CODE.test(failure.code) ? failure.code : null;
+  const list = _failures.get(serverKey) ?? [];
+  list.unshift({ ...failure, code });
+  if (list.length > FAILURES_PER_SERVER) list.length = FAILURES_PER_SERVER;
+  _failures.set(serverKey, list);
+}
+
+/** Mais recentes primeiro, até 50. Várias chaves: o mesmo servidor alcançado por mais de um endereço. */
+export function recentFailures(...serverKeys: string[]): RecentFailure[] {
+  const keys = [...new Set(serverKeys.filter(Boolean))];
+  return keys.flatMap((k) => _failures.get(k) ?? [])
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, FAILURES_PER_SERVER);
+}
+
 // só para testes — permite isolar o "sem configurar"
-export function _resetDiagForTests(): void { _sink = null; }
+export function _resetDiagForTests(): void { _sink = null; _failures.clear(); }

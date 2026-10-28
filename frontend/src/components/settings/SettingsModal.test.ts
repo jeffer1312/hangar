@@ -50,6 +50,7 @@ vi.mock('../../lib/auth', async () => {
   serverColor: () => '#fff',
   serverIdentidade: vi.fn(() => 'global'),
   listServers,
+  findServer: vi.fn(() => undefined),
   // Sem desligadas nestes testes: a lista inteira é a mesma das ligadas.
   listAllServers: (...a: unknown[]) => listServers(...a),
   listOwnServers: (...a: unknown[]) => listServers(...a),
