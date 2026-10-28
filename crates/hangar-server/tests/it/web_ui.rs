@@ -24,6 +24,8 @@ impl Fixture {
 
     async fn start_router(upstream: std::net::SocketAddr, private: bool) -> Self {
         let home = tempfile::tempdir().unwrap();
+        // Sem a raiz temporária, a descoberta cairia no checkout real e no dist dele.
+        std::fs::create_dir_all(home.path().join(".hangar/current")).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let mut state = AppState::new(Config {
