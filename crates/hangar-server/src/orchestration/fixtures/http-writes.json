@@ -1,0 +1,333 @@
+{
+  "source_commit": "a0860f26b6e3f611806e780acf87588f6065b328",
+  "command": "HANGAR_ORQ_REFERENCE_ROOT=<source_commit> python crates/hangar-server/src/orchestration/fixtures/generate_writes.py",
+  "comparison": "mtime corresponde ao fstat do arquivo; demais campos e bytes são exatos",
+  "cases": [
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "initial": "",
+      "file": "regras-draft-cc33a7ddb6c2f0e4d24e94d1.md",
+      "body": {
+        "papel": "executor",
+        "provider": "claude",
+        "conta": "padrao",
+        "modelo": "opus",
+        "esforco": "high",
+        "mtime": "FILE_MTIME"
+      },
+      "status": 200,
+      "output": {
+        "papeis": [
+          {
+            "papel": "executor",
+            "sessao": "",
+            "provider": "claude",
+            "conta": "padrao",
+            "modelo": "opus",
+            "esforco": "high",
+            "vez": "",
+            "headless": null,
+            "permissao": "",
+            "motor": "",
+            "jev": false,
+            "subagente": "",
+            "perfil": "",
+            "abertura_extra": "",
+            "janela": ""
+          }
+        ],
+        "papel": {
+          "papel": "executor",
+          "sessao": "",
+          "provider": "claude",
+          "conta": "padrao",
+          "modelo": "opus",
+          "esforco": "high",
+          "vez": "",
+          "headless": null,
+          "permissao": "",
+          "motor": "",
+          "jev": false,
+          "subagente": "",
+          "perfil": "",
+          "abertura_extra": "",
+          "janela": ""
+        },
+        "arbitro": null,
+        "aviso": "proxima_sessao",
+        "erro": null
+      },
+      "version": true,
+      "final": "<!-- hangar-orq-prefix: planner -->\n\n## Quem é quem\n\n| papel | sessão | provider | conta | modelo | esforço |\n|---|---|---|---|---|---|\n| executor | - | claude | padrao | opus | high |\n"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "initial": "# Contrato\n\n## Gates\n\n- Preserve esta instrução.\n",
+      "file": "regras-draft-cc33a7ddb6c2f0e4d24e94d1.md",
+      "body": {
+        "papel": "executor",
+        "provider": "claude",
+        "conta": "padrao",
+        "modelo": "opus",
+        "esforco": "high",
+        "sessao": "trabalho-t*",
+        "headless": false,
+        "mtime": "FILE_MTIME"
+      },
+      "status": 200,
+      "output": {
+        "papeis": [
+          {
+            "papel": "executor",
+            "sessao": "trabalho-t*",
+            "provider": "claude",
+            "conta": "padrao",
+            "modelo": "opus",
+            "esforco": "high",
+            "vez": "",
+            "headless": false,
+            "permissao": "",
+            "motor": "",
+            "jev": false,
+            "subagente": "",
+            "perfil": "",
+            "abertura_extra": "",
+            "janela": ""
+          }
+        ],
+        "papel": {
+          "papel": "executor",
+          "sessao": "trabalho-t*",
+          "provider": "claude",
+          "conta": "padrao",
+          "modelo": "opus",
+          "esforco": "high",
+          "vez": "",
+          "headless": false,
+          "permissao": "",
+          "motor": "",
+          "jev": false,
+          "subagente": "",
+          "perfil": "",
+          "abertura_extra": "",
+          "janela": ""
+        },
+        "arbitro": null,
+        "aviso": "proxima_sessao",
+        "erro": null
+      },
+      "version": true,
+      "final": "<!-- hangar-orq-prefix: planner -->\n\n# Contrato\n\n## Gates\n\n- Preserve esta instrução.\n\n## Quem é quem\n\n| papel | sessão | provider | conta | modelo | esforço | abertura |\n|---|---|---|---|---|---|---|\n| executor | trabalho-t* | claude | padrao | opus | high | --terminal |\n"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papeis",
+      "initial": "# Contrato\n\n## Gates\n\n- Preserve esta instrução.\n",
+      "file": "regras-draft-cc33a7ddb6c2f0e4d24e94d1.md",
+      "body": {
+        "papeis": [
+          {
+            "papel": "executor",
+            "provider": "claude",
+            "conta": "padrao",
+            "modelo": "opus",
+            "esforco": "high",
+            "vez": "1",
+            "janela": "60"
+          },
+          {
+            "papel": "executor",
+            "provider": "claude",
+            "conta": "padrao",
+            "modelo": "opus",
+            "esforco": "high",
+            "vez": "2",
+            "headless": true
+          }
+        ],
+        "mtime": "FILE_MTIME"
+      },
+      "status": 200,
+      "output": {
+        "papeis": [
+          {
+            "papel": "executor",
+            "sessao": "",
+            "provider": "claude",
+            "conta": "padrao",
+            "modelo": "opus",
+            "esforco": "high",
+            "vez": "1",
+            "headless": null,
+            "permissao": "",
+            "motor": "",
+            "jev": false,
+            "subagente": "",
+            "perfil": "",
+            "abertura_extra": "",
+            "janela": "60"
+          },
+          {
+            "papel": "executor",
+            "sessao": "",
+            "provider": "claude",
+            "conta": "padrao",
+            "modelo": "opus",
+            "esforco": "high",
+            "vez": "2",
+            "headless": true,
+            "permissao": "",
+            "motor": "",
+            "jev": false,
+            "subagente": "",
+            "perfil": "",
+            "abertura_extra": "",
+            "janela": ""
+          }
+        ],
+        "papel": {
+          "papel": "executor",
+          "sessao": "",
+          "provider": "claude",
+          "conta": "padrao",
+          "modelo": "opus",
+          "esforco": "high",
+          "vez": "1",
+          "headless": null,
+          "permissao": "",
+          "motor": "",
+          "jev": false,
+          "subagente": "",
+          "perfil": "",
+          "abertura_extra": "",
+          "janela": "60"
+        },
+        "arbitro": null,
+        "aviso": "proxima_sessao",
+        "erro": null
+      },
+      "version": true,
+      "final": "<!-- hangar-orq-prefix: planner -->\n\n# Contrato\n\n## Gates\n\n- Preserve esta instrução.\n\n## Quem é quem\n\n| papel | vez | sessão | provider | conta | modelo | esforço | janela | abertura |\n|---|---|---|---|---|---|---|---|---|\n| executor | 1 | - | claude | padrao | opus | high | 60% | - |\n| executor | 2 | - | claude | padrao | opus | high | - | --headless |\n"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papeis",
+      "initial": "# Contrato\n\n## Gates\n\n- Preserve esta instrução.\n",
+      "file": "regras-draft-cc33a7ddb6c2f0e4d24e94d1.md",
+      "body": {
+        "papeis": [],
+        "mtime": "FILE_MTIME"
+      },
+      "status": 400,
+      "output": {
+        "detail": {
+          "code": "erro_orq_celula_invalida",
+          "params": {},
+          "msg": "nenhum papel"
+        }
+      },
+      "version": false,
+      "final": "# Contrato\n\n## Gates\n\n- Preserve esta instrução.\n"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "initial": "# Contrato\n\n## Gates\n\n- Preserve esta instrução.\n",
+      "file": "regras-draft-cc33a7ddb6c2f0e4d24e94d1.md",
+      "body": {
+        "papel": "x|y",
+        "provider": "claude",
+        "conta": "padrao",
+        "modelo": "opus",
+        "esforco": "high",
+        "mtime": "FILE_MTIME"
+      },
+      "status": 400,
+      "output": {
+        "detail": {
+          "code": "erro_orq_celula_invalida",
+          "params": {},
+          "msg": "celula com '|', quebra de linha ou caractere de controle"
+        }
+      },
+      "version": false,
+      "final": "# Contrato\n\n## Gates\n\n- Preserve esta instrução.\n"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papeis",
+      "initial": "# Contrato\n\n## Gates\n\n- Preserve esta instrução.\n",
+      "file": "regras-draft-cc33a7ddb6c2f0e4d24e94d1.md",
+      "body": {
+        "papeis": [
+          {
+            "papel": "executor",
+            "provider": "claude",
+            "conta": "padrao",
+            "modelo": "opus",
+            "esforco": "high",
+            "janela": "9"
+          }
+        ],
+        "mtime": "FILE_MTIME"
+      },
+      "status": 400,
+      "output": {
+        "detail": {
+          "code": "erro_orq_celula_invalida",
+          "params": {},
+          "msg": "janela: porcentagem inteira entre 10 e 95"
+        }
+      },
+      "version": false,
+      "final": "# Contrato\n\n## Gates\n\n- Preserve esta instrução.\n"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "initial": "# Contrato\n\n## Gates\n\n- Preserve esta instrução.\n",
+      "file": "regras-draft-cc33a7ddb6c2f0e4d24e94d1.md",
+      "body": {
+        "papel": "executor",
+        "provider": "pi",
+        "conta": "padrao",
+        "modelo": "opus",
+        "esforco": "",
+        "headless": true,
+        "mtime": "FILE_MTIME"
+      },
+      "status": 400,
+      "output": {
+        "detail": {
+          "code": "erro_orq_headless_provider",
+          "params": {},
+          "msg": "sem terminal só vale para claude ou codex: executor"
+        }
+      },
+      "version": false,
+      "final": "# Contrato\n\n## Gates\n\n- Preserve esta instrução.\n"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/sessions/planner/orq/papel",
+      "initial": "# Contrato\n\n## Gates\n\n- Preserve esta instrução.\n",
+      "file": "regras-draft-cc33a7ddb6c2f0e4d24e94d1.md",
+      "body": {
+        "papel": "ausente",
+        "mtime": "FILE_MTIME"
+      },
+      "status": 404,
+      "output": {
+        "detail": {
+          "code": "erro_orq_papel_inexistente",
+          "params": {},
+          "msg": "não há linha para 'ausente' nesta configuração"
+        }
+      },
+      "version": false,
+      "final": "# Contrato\n\n## Gates\n\n- Preserve esta instrução.\n"
+    }
+  ]
+}

@@ -23,8 +23,6 @@ fn json(value: Value) -> Response {
     ([("content-type", "application/json")], value.to_string()).into_response()
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum Operation {
     Acquire(CaptureRequest),
     Capture(CaptureRequest),
@@ -32,6 +30,21 @@ enum Operation {
 }
 
 impl Operation {
+    fn parse(bytes: &[u8]) -> Option<Self> {
+        let mut fields: crate::json_envelope::Fields = serde_json::from_slice(bytes).ok()?;
+        let operation: String = fields.take("op").ok()?;
+        match operation.as_str() {
+            "acquire" => fields.decode().ok().map(Self::Acquire),
+            "capture" => fields.decode().ok().map(Self::Capture),
+            "release" => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Release { consumer: String }
+                fields.decode::<Release>().ok().map(|body| Self::Release { consumer: body.consumer })
+            }
+            _ => None,
+        }
+    }
     fn safe_session(&self) -> Option<&str> {
         let name = match self { Self::Acquire(r) | Self::Capture(r) => &r.name, Self::Release { .. } => return None };
         (!name.is_empty() && name.len() <= 64
@@ -61,7 +74,7 @@ pub async fn terminal(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connec
         Ok(Ok(bytes)) => bytes,
         _ => return invalid(),
     };
-    let Ok(op) = serde_json::from_slice::<Operation>(&bytes) else { return invalid(); };
+    let Some(op) = Operation::parse(&bytes) else { return invalid(); };
     let session = op.safe_session().map(String::from);
     let result = match op {
         Operation::Acquire(request) => st.terminal.acquire(request).await.map(|_| serde_json::json!({})),

@@ -21,6 +21,7 @@ pub(crate) mod diag_report;
 pub mod display_env;
 pub mod groups;
 pub mod interactions;
+pub(crate) mod json_envelope;
 pub mod list;
 pub mod locate;
 pub mod loops;
@@ -57,6 +58,12 @@ pub mod tail;
 pub mod term;
 pub mod terminal_state;
 pub mod terminal_control;
+pub mod terminal_lock;
+pub mod provider_accounts;
+pub mod provider_info;
+pub mod provider_models;
+pub mod omp_sync;
+pub mod orchestration;
 pub mod terminal_input;
 pub mod permission_control;
 pub mod model_picker;
@@ -83,7 +90,7 @@ mod warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 90;
+pub const INTERNAL_PROTOCOL: u32 = 91;
 
 /// Todo cliente HTTP do servidor nasce aqui. Uma dependência liga `gzip`, `http2` e (no Windows)
 /// `native-tls` no reqwest, e o Cargo estende isso a todo cliente: sem estes desligamentos ele
@@ -140,6 +147,7 @@ pub async fn serve_until_with_guest(
     let _ = update::running_package();
     let cfg = state.cfg.clone();
     let transcription = state.transcription.clone();
+    let omp_sync = state.omp_sync.clone();
     let codex_logins=state.accounts.codex_logins.clone();
     let codex_readers=state.accounts.codex_readers.clone();
     let device_logins=state.accounts.device_logins.clone();
@@ -220,6 +228,7 @@ pub async fn serve_until_with_guest(
         () = stop => Ok(()),
     }
     }.await;
+    if let Some(service) = omp_sync.get() { service.close().await; }
     transcription.shutdown().await;
     if let Some((stop,task))=refresh_loop {
         let _=stop.send(true);

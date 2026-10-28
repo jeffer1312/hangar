@@ -4,14 +4,35 @@ import json
 import os
 import subprocess
 import sys
+import shlex
+import tempfile
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import orq, orq_conductor
 from app.config import settings
+from orq_contract_client import call
+from orq_http_native import NativeClient
+
+
+class NativeConductor:
+    @staticmethod
+    def watchdog(directory, units, now):
+        return call("conductor.watchdog", directory=directory, units=units, now=now.timestamp())
+
+    @staticmethod
+    def units():
+        return call("conductor.units")
+
+    @property
+    def JEV_VETO_P(self):
+        return call("conductor.veto")
+
+
+orq_conductor = NativeConductor()
 
 ORQ_PY = Path(__file__).resolve().parents[2] / "skills" / "orquestrar" / "scripts" / "orq.py"
 AGORA = datetime.now().astimezone()
@@ -97,41 +118,44 @@ ExecStart={ path=/x/vigia.sh ; argv[]=/x/vigia.sh exec rev arb 5 ; ignore_errors
 """
 
 
-def _systemd(monkeypatch, stdout="", rc=0, exc=None):
-    monkeypatch.setattr(orq_conductor.sys, "platform", "linux")
-    monkeypatch.setattr(orq_conductor.shutil, "which", lambda n: "/usr/bin/systemctl")
-    chamadas = []
-
-    def run(cmd, **kw):
-        chamadas.append((cmd, kw))
-        if exc:
-            raise exc
-        return subprocess.CompletedProcess(cmd, rc, stdout, "")
-
-    monkeypatch.setattr(orq_conductor.subprocess, "run", run)
-    return chamadas
+def _systemd(monkeypatch, tmp_path, stdout="", rc=0, exc=None):
+    programs = Path(tempfile.mkdtemp(prefix="systemd-", dir=tmp_path))
+    log = programs / "arguments"
+    script = programs / "systemctl"
+    body = ("exec /bin/sleep 4\n" if exc else
+            f"printf '%s' {shlex.quote(stdout)}\nexit {rc}\n")
+    script.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > {shlex.quote(str(log))}\n" + body, encoding="utf-8")
+    script.chmod(0o700)
+    monkeypatch.setenv("PATH", str(programs))
+    return log
 
 
-def test_units_acha_a_unidade_pelo_dir_do_menos_e(monkeypatch):
-    chamadas = _systemd(monkeypatch, SHOW)
+@pytest.mark.skipif(sys.platform != "linux", reason="systemd é consultado somente no Linux")
+def test_units_acha_a_unidade_pelo_dir_do_menos_e(monkeypatch, tmp_path):
+    log = _systemd(monkeypatch, tmp_path, SHOW)
     u = orq_conductor.units()
     assert list(u) == ["/home/u/.hangar/orq/2026-09-23-np"]
     assert u["/home/u/.hangar/orq/2026-09-23-np"]["Id"] == "vigia-g1.service"
-    cmd, kw = chamadas[0]
+    cmd = ["systemctl", *log.read_text().splitlines()]
     assert cmd[:4] == ["systemctl", "--user", "show", "vigia-*"] and "--timestamp=unix" in cmd
-    assert kw["timeout"] == orq_conductor.SYSTEMCTL_TIMEOUT_S
 
 
-def test_units_sem_systemd_travado_ou_com_erro_e_none(monkeypatch):
-    _systemd(monkeypatch, exc=subprocess.TimeoutExpired("systemctl", 3))
+@pytest.mark.skipif(sys.platform != "linux", reason="systemd é consultado somente no Linux")
+def test_units_sem_systemd_travado_ou_com_erro_e_none(monkeypatch, tmp_path):
+    _systemd(monkeypatch, tmp_path, exc=subprocess.TimeoutExpired("systemctl", 3))
+    before = time.monotonic()
     assert orq_conductor.units() is None
-    _systemd(monkeypatch, rc=1)
+    assert 2.5 <= time.monotonic() - before < 4.0
+    _systemd(monkeypatch, tmp_path, rc=1)
     assert orq_conductor.units() is None
-    _systemd(monkeypatch, SHOW)
-    monkeypatch.setattr(orq_conductor.shutil, "which", lambda n: None)
+    missing = tmp_path / "missing"
+    missing.mkdir()
+    monkeypatch.setenv("PATH", str(missing))
     assert orq_conductor.units() is None
-    monkeypatch.setattr(orq_conductor.shutil, "which", lambda n: "/usr/bin/systemctl")
-    monkeypatch.setattr(orq_conductor.sys, "platform", "win32")
+
+
+@pytest.mark.skipif(sys.platform == "linux", reason="prova da ausência de systemd fora do Linux")
+def test_units_outside_linux_is_unavailable():
     assert orq_conductor.units() is None
 
 
@@ -151,8 +175,6 @@ def test_limiar_do_veto_e_o_mesmo_do_orq():
 @pytest.fixture
 def cli(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "auth_token", "secret")
-    monkeypatch.setattr(orq, "raiz_padrao", lambda: tmp_path)
-    monkeypatch.setattr(orq_conductor, "units", lambda: {})
     from app.api import app
     return TestClient(app)
 
@@ -169,24 +191,19 @@ def test_rota_do_condutor_exige_autenticacao(cli):
     assert cli.get("/api/orq/x/conductor").status_code == 401
 
 
-def test_fato_interno_valida_caminho_sem_exigir_eventos(monkeypatch, tmp_path):
-    from fastapi import FastAPI
-    from app import internal_api
-    app = FastAPI()
-    app.include_router(internal_api.router)
-    app.dependency_overrides[internal_api.require_internal] = lambda: None
-    monkeypatch.setattr(orq, "raiz_padrao", lambda: tmp_path)
-    monkeypatch.setattr(orq_conductor, "units", lambda: {})
-    directory = tmp_path / "execução"
-    directory.mkdir()
-    client = TestClient(app)
-    answer = client.get("/internal/orq/execução/conductor-facts")
+def test_condutor_valida_caminho_sem_exigir_eventos(monkeypatch, tmp_path):
+    client = NativeClient(tmp_path, monkeypatch)
+    _systemd(monkeypatch, tmp_path)
+    directory = client.home / ".hangar/orq/execução"
+    directory.mkdir(parents=True)
+    answer = client.get("/api/orq/execução/conductor")
     assert answer.status_code == 200
-    assert answer.json()["path"] == str(directory)
-    assert answer.json()["watchdog"]["source"] == "none"
+    assert call("conductor.exec-dir", home=client.home, id="execução") == str(directory)
+    expected_source = "none" if sys.platform == "linux" else "unavailable"
+    assert answer.json()["watchdog"]["source"] == expected_source
     assert list(directory.iterdir()) == []
     for invalid in ("a:b", "a%5Cb", "a%00b", "ausente"):
-        answer = client.get(f"/internal/orq/{invalid}/conductor-facts")
+        answer = client.get(f"/api/orq/{invalid}/conductor")
         assert answer.status_code == 404
         assert answer.json()["detail"]["code"] == "erro_nao_encontrado"
 
@@ -207,6 +224,7 @@ def test_rota_do_condutor_connect_repassa_pedido(cli, monkeypatch):
 
     async def forward(request, target, **kwargs):
         calls.append((request.method, request.url.path, request.url.query, target))
+        assert kwargs == {"limit": None}
         return JSONResponse({"fixture": True})
 
     monkeypatch.setattr(account_bridge, "forward_public", forward)

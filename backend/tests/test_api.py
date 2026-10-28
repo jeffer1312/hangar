@@ -235,7 +235,7 @@ def test_input_pi_cria_a_entrada_antes_do_envio_com_id_estavel(api_client, tmp_p
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
     with patch("app.api.terminal.send_prompt", return_value="sent") as sp:
         r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 200
@@ -252,7 +252,7 @@ def test_input_pi_deferred_mantem_a_entrada_pendente_com_o_mesmo_id(api_client, 
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
     with patch("app.api.terminal.send_prompt", return_value="deferred") as sp:
         r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 200
@@ -268,7 +268,7 @@ def test_input_pi_partial_nao_deixa_entrada_orfa_pendente(api_client, tmp_path, 
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
     with patch("app.api.terminal.send_prompt", return_value="partial"):
         r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 400
@@ -316,7 +316,7 @@ def test_input_pi_slash_command_nao_cria_entrada_antecipada(api_client, tmp_path
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
     with patch("app.api.terminal.send_prompt", return_value="sent") as sp:
         r = api_client.post("/api/sessions/pisess/input", json={"text": "/clear"}, headers=_h())
     assert r.status_code == 200
@@ -335,7 +335,7 @@ def test_input_pi_sem_linha_nao_cria_entrada_antes_do_envio(api_client, tmp_path
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: False)   # sem linha -> fallback de tecla
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": None})   # sem linha -> fallback de tecla
 
     visto = {}
 
@@ -1075,8 +1075,6 @@ def test_clear_then_link_route(api_client, _tmp_chain_dir):
     r = api_client.delete("/api/sessions/a/then", headers=_h())
     assert r.status_code == 200
     assert ThenLink("a").get() is None
-
-
 
 
 @pytest.mark.parametrize("headless, named", [(None, True), (True, True), (None, False)])
@@ -2093,226 +2091,6 @@ def test_broadcast_uses_send_thread(api_client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Modelo + nivel de raciocinio do Pi — GET/POST /pi/model(s)
-# ---------------------------------------------------------------------------
-
-_PI_CAT = {
-    "current": {"provider": "kimi-coding", "id": "k3", "name": "Kimi K3"},
-    "thinking": "low",
-    "levels": ["low", "high", "max"],
-    "models": [{"provider": "kimi-coding", "id": "k3", "name": "Kimi K3", "reasoning": True}],
-}
-
-
-def _pi_info():
-    return SessionInfo(name="pp", cwd="/p", jsonl="/p/ts_uuid.jsonl", provider="pi")
-
-
-def test_pi_models_returns_catalog(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
-         patch("app.api.pi_models.read_catalog", return_value=_PI_CAT), \
-         patch("app.api._session_config_dir", return_value=None):
-        r = api_client.get("/api/sessions/pp/pi/models", headers=_h())
-    assert r.status_code == 200
-    assert r.json()["levels"] == ["low", "high", "max"]
-    assert r.json()["current"]["id"] == "k3"
-
-
-def test_pi_models_claude_session_rejected_with_400(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
-            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))):
-        r = api_client.get("/api/sessions/cc/pi/models", headers=_h())
-    assert r.status_code == 400
-
-
-def test_pi_models_missing_sidecar_is_409_not_empty_list(api_client):
-    # Extensao ausente/velha: falha ALTA com instrucao — nunca um catalogo vazio que parece "sem modelos".
-    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
-         patch("app.api.pi_models.read_catalog", return_value=None), \
-         patch("app.api._session_config_dir", return_value=None):
-        r = api_client.get("/api/sessions/pp/pi/models", headers=_h())
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "erro_catalogo_pi_indisponivel"
-
-
-def test_omp_models_missing_sidecar_is_409_com_codigo_proprio(api_client):
-    # Codigo SEPARADO do erro_catalogo_pi_indisponivel: o front traduz por `code`, entao reusar o
-    # do Pi mostraria "reinicie a sessao" numa sessao omp, onde o /reload nao recarrega a extensao.
-    info_omp = SessionInfo(name="oo", cwd="/p", jsonl="/p/ts_uuid.jsonl", provider="omp")
-    with patch("app.api._cached_info", AsyncMock(return_value=info_omp)), \
-         patch("app.api.pi_models.read_catalog", return_value=None), \
-         patch("app.api._session_config_dir", return_value=None):
-        r = api_client.get("/api/sessions/oo/pi/models", headers=_h())
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "erro_catalogo_omp_indisponivel"
-
-
-def test_pi_model_set_sends_both_commands_and_reports_readback(api_client):
-    # `xhigh` FORA dos levels do modelo novo: e o caso real do clamp (o Pi aterrissa em high).
-    after = {**_PI_CAT, "current": {"provider": "clinepass", "id": "cline-pass/glm-5.2"},
-             "thinking": "high", "levels": ["off", "low", "medium", "high"], "ts": 2.0}
-    cat = {**_PI_CAT, "ts": 1.0, "models": _PI_CAT["models"] + [
-        {"provider": "clinepass", "id": "cline-pass/glm-5.2", "name": "GLM", "reasoning": True}]}
-    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
-         patch("app.api.pi_models.read_catalog", side_effect=[cat, after]), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.terminal.send_pi_commands") as send:
-        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
-                            json={"provider": "clinepass", "model": "cline-pass/glm-5.2",
-                                  "effort": "xhigh"})
-    assert r.status_code == 200
-    send.assert_called_once_with(
-        "pp", ["/cp-model clinepass cline-pass/glm-5.2", "/cp-think xhigh"])
-    # O Pi clampa: pedimos xhigh, o readback e quem manda no que a UI mostra.
-    assert r.json()["thinking"] == "high"
-
-
-def test_pi_model_set_recusado_pelo_pi_vira_409(api_client):
-    # `/cp-model` sem chave pro provedor: setModel devolve false, o Pi notifica DENTRO do TUI e
-    # republica o catalogo com o modelo VELHO. Antes disto o app fechava a folha dizendo ok=True.
-    cat = {**_PI_CAT, "ts": 1.0, "models": _PI_CAT["models"] + [
-        {"provider": "clinepass", "id": "cline-pass/glm-5.2", "name": "GLM", "reasoning": True}]}
-    after = {**cat, "ts": 2.0}                     # ts novo (processou), modelo o mesmo (recusou)
-    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
-         patch("app.api.pi_models.read_catalog", return_value=cat), \
-         patch("app.api.pi_models.read_back", return_value=after), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.terminal.send_pi_commands"):
-        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
-                            json={"provider": "clinepass", "model": "cline-pass/glm-5.2"})
-    assert r.status_code == 409
-    d = r.json()["detail"]
-    assert d["code"] == "erro_pi_recusou_troca"
-    assert d["params"]["provider"] == "kimi-coding" and d["params"]["id"] == "k3"  # diz onde a sessao FICOU
-
-
-def test_pi_model_set_sem_republicacao_diz_que_nao_confirmou(api_client):
-    # Sidecar parado no MESMO ts: o comando pode nem ter chegado — nao da pra chamar de recusa.
-    cat = {**_PI_CAT, "ts": 1.0, "models": _PI_CAT["models"] + [
-        {"provider": "clinepass", "id": "cline-pass/glm-5.2", "name": "GLM", "reasoning": True}]}
-    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
-         patch("app.api.pi_models.read_catalog", return_value=cat), \
-         patch("app.api.pi_models.read_back", return_value=cat), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.terminal.send_pi_commands"):
-        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
-                            json={"provider": "clinepass", "model": "cline-pass/glm-5.2"})
-    assert r.status_code == 409
-    d = r.json()["detail"]
-    assert d["code"] == "erro_sem_confirmacao_troca"
-
-
-def test_pi_model_set_rejects_model_outside_catalog(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
-         patch("app.api.pi_models.read_catalog", return_value=_PI_CAT), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.terminal.send_pi_commands") as send:
-        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
-                            json={"provider": "kimi-coding", "model": "k9"})
-    assert r.status_code == 422
-    send.assert_not_called()
-
-
-def test_pi_model_set_requires_something_to_change(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
-         patch("app.api.pi_models.read_catalog", return_value=_PI_CAT), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.terminal.send_pi_commands") as send:
-        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(), json={})
-    assert r.status_code == 422
-    send.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Modelo de uma sessão Kimi — GET/POST /kimi/model(s)
-# ---------------------------------------------------------------------------
-
-_KIMI_CAT = {
-    "default": "apikey/k3",
-    "models": [
-        {"alias": "apikey/k3", "provider": "apikey", "id": "k3", "name": "K3",
-         "context_length": 1048576, "efforts": ["low", "high", "max"], "default_effort": "high"},
-        {"alias": "apikey/k3-256k", "provider": "apikey", "id": "k3-256k", "name": "K3-256k",
-         "context_length": 262144, "efforts": ["low", "high", "max"], "default_effort": "high"},
-    ],
-}
-
-
-def _kimi_info():
-    return SessionInfo(name="kk", cwd="/p", jsonl="/p/wire_abc.jsonl", provider="kimi")
-
-
-def test_kimi_models_returns_catalog(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
-         patch("app.api.kimi_models.read_catalog", return_value=_KIMI_CAT):
-        r = api_client.get("/api/sessions/kk/kimi/models", headers=_h())
-    assert r.status_code == 200
-    assert r.json()["default"] == "apikey/k3"
-    assert [m["alias"] for m in r.json()["models"]] == ["apikey/k3", "apikey/k3-256k"]
-
-
-def test_kimi_models_claude_session_rejected_with_400(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
-            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))):
-        r = api_client.get("/api/sessions/cc/kimi/models", headers=_h())
-    assert r.status_code == 400
-
-
-def test_kimi_models_missing_config_is_409_not_empty_list(api_client):
-    # Mesma política do sidecar do Pi: falha ALTA, nunca catálogo vazio que parece "sem modelos".
-    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
-         patch("app.api.kimi_models.read_catalog", return_value=None):
-        r = api_client.get("/api/sessions/kk/kimi/models", headers=_h())
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "erro_catalogo_kimi_indisponivel"
-
-
-def test_kimi_model_set_aplica_e_devolve_o_readback(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
-         patch("app.api.kimi_models.read_catalog", return_value=_KIMI_CAT), \
-         patch("app.api._recusa_se_painel_aberto"), \
-         patch("app.api.hook_state") as hs, \
-         patch("app.api.terminal.set_kimi_model",
-               return_value={"ok": True, "result": "Switched to K3-256k …"}) as drive:
-        hs.get_state.return_value = None
-        r = api_client.post("/api/sessions/kk/kimi/model", headers=_h(),
-                            json={"model": "apikey/k3-256k"})
-    assert r.status_code == 200
-    # Alias E display name: o drive digita um e confere o outro na linha "Switched to …".
-    drive.assert_called_once_with("kk", "apikey/k3-256k", "K3-256k", None)
-    assert r.json()["current"]["name"] == "K3-256k"
-
-
-def test_kimi_model_set_rejeita_alias_fora_do_catalogo(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
-         patch("app.api.kimi_models.read_catalog", return_value=_KIMI_CAT), \
-         patch("app.api._recusa_se_painel_aberto"), \
-         patch("app.api.hook_state") as hs, \
-         patch("app.api.terminal.set_kimi_model") as drive:
-        hs.get_state.return_value = None
-        r = api_client.post("/api/sessions/kk/kimi/model", headers=_h(),
-                            json={"model": "apikey/k4"})
-    assert r.status_code == 422
-    drive.assert_not_called()
-
-
-def test_kimi_model_set_com_sessao_trabalhando_vira_409(api_client):
-    # Sem esta guarda o `/model` digitado cai no composer e o Enter o enfileira como MENSAGEM —
-    # a troca vira um "/model" mandado pro modelo ler.
-    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
-         patch("app.api.kimi_models.read_catalog", return_value=_KIMI_CAT), \
-         patch("app.api._recusa_se_painel_aberto"), \
-         patch("app.api.hook_state") as hs, \
-         patch("app.api.corrige_ocioso_kimi", side_effect=lambda m, j: m), \
-         patch("app.api.terminal.set_kimi_model") as drive:
-        hs.get_state.return_value = ("working", 1.0)
-        r = api_client.post("/api/sessions/kk/kimi/model", headers=_h(),
-                            json={"model": "apikey/k3-256k"})
-    assert r.status_code == 409
-    drive.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
 # Catalogo de modelos da sessao Claude — GET /model/options, POST /engine/model
 # ---------------------------------------------------------------------------
 
@@ -2426,18 +2204,6 @@ def test_model_options_sessao_ocupada_propaga_409(api_client_limpo):
         r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
     assert r.status_code == 409
     assert "trabalhando" in r.json()["detail"]
-
-
-@pytest.mark.parametrize("provider,codigo", [("omp", "erro_omp_ausente"), ("pi", "erro_pi_ausente")])
-def test_model_options_binario_ausente_tem_codigo_por_provider(api_client_limpo, monkeypatch,
-                                                               provider, codigo):
-    # O front traduz por `code`: um codigo so pros dois mandava a sessao omp instalar o Pi.
-    from app import pi_catalog
-    pi_catalog._cache.clear()
-    monkeypatch.setattr(pi_catalog.shutil, "which", lambda _b: None)
-    r = api_client_limpo.get(f"/api/model-options?provider={provider}", headers=_h())
-    assert r.status_code == 502
-    assert r.json()["detail"]["code"] == codigo
 
 
 def test_engine_model_set_restaura_o_default_global(api_client_limpo):

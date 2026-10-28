@@ -6,15 +6,13 @@ from app.adapters.claude_headless.adapter import CHAVE as CLAUDE_HEADLESS, Claud
 from app.adapters.codex.adapter import CodexAdapter
 from app.adapters.kimi.adapter import KimiAdapter
 from app.adapters.omp.adapter import OmpAdapter
-from app.adapters.orq.adapter import OrqAdapter
 from app.adapters.pi.adapter import PiAdapter
 
 # "claude-headless" é chave INTERNA: a sessão continua `provider="claude"` (é Claude para o
 # front, comandos, estatísticas e cotas); só o transporte muda. Quem precisa do adapter certo
 # passa pelo `chave_de(...)`, que olha o sidecar sem terminal.
 PROVIDERS = {"claude": ClaudeAdapter(), CLAUDE_HEADLESS: ClaudeHeadlessAdapter(),
-             "codex": CodexAdapter(), "pi": PiAdapter(), "kimi": KimiAdapter(), "omp": OmpAdapter(),
-             "orq": OrqAdapter()}
+             "codex": CodexAdapter(), "pi": PiAdapter(), "kimi": KimiAdapter(), "omp": OmpAdapter()}
 
 
 def get_adapter(provider: str):

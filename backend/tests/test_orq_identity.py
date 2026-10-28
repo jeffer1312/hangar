@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 
-from app import orq_identity
+from orq_contract_client import identity as orq_identity
 
 
 @pytest.fixture

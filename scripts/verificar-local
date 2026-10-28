@@ -218,6 +218,7 @@ passo_preparo() {
         # Os contratos e as sondas de contas que o pytest executa (ci.yml): as sondas são módulos do
         # executável de testes `it` do hangar-server.
         (cd crates && cargo build --locked -p hangar-server && \
+            cargo build --locked -p hangar-server --example orq_contract && \
             cargo build --locked -p hangar-workspace --example workspace_contract && \
             cargo test --locked -p hangar-server --no-run --test it) || falhou=1
     fi

@@ -145,7 +145,6 @@ def test_delete_answers_the_rust_code_when_the_close_fails(monkeypatch):
         raise KillFailed(name, {"code": "codex_bridge_failed", "params": {}, "msg": "fora"})
     monkeypatch.setattr(api_mod.registry, "kill", refuse)
     monkeypatch.setattr(api_mod, "_invalidate_lists", lambda: None)
-    monkeypatch.setattr(api_mod, "_recusa_orq", lambda name: None)
     with pytest.raises(HTTPException) as failed:
         asyncio.run(api_mod.kill_session("cx"))
     assert failed.value.status_code == 500 and failed.value.detail["code"] == "codex_bridge_failed"
@@ -154,7 +153,6 @@ def test_delete_answers_the_rust_code_when_the_close_fails(monkeypatch):
 def test_delete_entering_the_connect_port_is_closed_by_the_rust(monkeypatch):
     killed, recorded, cleaned, bridged = [], [], [], []
     monkeypatch.setattr(api_mod.registry, "kill", lambda name, closed_by_rust=False: killed.append(closed_by_rust) or [])
-    monkeypatch.setattr(api_mod, "_recusa_orq", lambda name: None)
     monkeypatch.setattr(api_mod, "_jsonl_of_session", lambda name: None)
     monkeypatch.setattr(api_mod, "_invalidate_lists", lambda: cleaned.append("invalidate"))
     monkeypatch.setattr(api_mod.share_bridge, "revoke_session", lambda name: cleaned.append("revoke"))
@@ -191,7 +189,6 @@ def test_connect_delete_without_the_list_closes_here(monkeypatch, failure):
     """Lista indisponível não descobre o provedor: o DELETE pelo Connect fecha pelo nome, sem 503."""
     killed, bridged = [], []
     monkeypatch.setattr(api_mod.registry, "kill", lambda name, closed_by_rust=False: killed.append(closed_by_rust) or [])
-    monkeypatch.setattr(api_mod, "_recusa_orq", lambda name: None)
     monkeypatch.setattr(api_mod, "_jsonl_of_session", lambda name: None)
     monkeypatch.setattr(api_mod, "_invalidate_lists", lambda: None)
     monkeypatch.setattr(api_mod, "_sidecar_state", lambda name: "absent")
@@ -206,20 +203,18 @@ def test_connect_delete_without_the_list_closes_here(monkeypatch, failure):
 
 
 def test_connect_close_of_a_grouped_claude_leaves_the_group_from_here(monkeypatch):
-    """O Rust fecha o Claude do Connect sem sair do grupo: a saída vai pela ponte daqui, com a fase lida antes."""
+    """O Rust fecha o Claude do Connect; a saída do grupo vai pela ponte e lê a fase no Rust."""
     left = []
     monkeypatch.setattr(api_mod.registry, "kill", lambda name, closed_by_rust=False: [])
-    monkeypatch.setattr(api_mod, "_recusa_orq", lambda name: None)
     monkeypatch.setattr(api_mod.closed_names, "record", lambda jsonl, name: None)
     monkeypatch.setattr(api_mod, "_sidecar_state", lambda name: "present")
-    monkeypatch.setattr(api_mod, "_route_facts", lambda name, body, route=None: {"phases": {"ct": "exec"}})
     monkeypatch.setattr(api_mod.groups_bridge, "rust_owns_groups", lambda: True)
     monkeypatch.setattr(api_mod.groups_bridge, "call", lambda op, **kw: left.append((op, kw)) or {"warnings": []})
     monkeypatch.setattr(runtime_coordinator, "rust_claude", lambda *args, **kw: (200, b'{"closed": true, "transcript": ""}'))
     _provider(monkeypatch, ct="claude")
     request = _request(api_mod.CONNECT_PORT, "/api/sessions/ct", body=b"", method="DELETE")
     assert asyncio.run(api_mod.kill_session("ct", request=request)) == {"ok": True, "warning": None}
-    assert left == [("group.leave", {"name": "ct", "phases": {"ct": "exec"}})]
+    assert left == [("group.leave", {"name": "ct", "phases": {}})]
 
 
 def test_claude_reopen_entering_the_connect_port_goes_to_the_rust(monkeypatch):
@@ -330,7 +325,6 @@ def test_delete_marked_by_the_rust_only_cleans_python_stores(monkeypatch):
     calls = []
     monkeypatch.setattr(api_mod.registry, "kill", lambda name, closed_by_rust=False: calls.append(closed_by_rust) or [])
     monkeypatch.setattr(api_mod, "_invalidate_lists", lambda: calls.append("invalidate"))
-    monkeypatch.setattr(api_mod, "_recusa_orq", lambda name: None)
     monkeypatch.setattr(api_mod.share_bridge, "revoke_session", lambda name: calls.append("revoke"))
 
     def request(mark):
@@ -350,7 +344,6 @@ def test_delete_closed_by_the_rust_records_the_closed_name_from_its_transcript(m
     killed, recorded = [], []
     monkeypatch.setattr(api_mod.registry, "kill", lambda name, closed_by_rust=False: killed.append(name) or [])
     monkeypatch.setattr(api_mod.registry, "list", lambda: pytest.fail("fechada pelo Rust: não procura na lista"))
-    monkeypatch.setattr(api_mod, "_recusa_orq", lambda name: None)
     monkeypatch.setattr(api_mod.share_bridge, "revoke_session", lambda name: None)
     monkeypatch.setattr(api_mod.closed_names, "record", lambda jsonl, name: recorded.append((jsonl, name)))
 

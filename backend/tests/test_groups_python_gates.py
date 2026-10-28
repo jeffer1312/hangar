@@ -116,7 +116,6 @@ def test_close_done_by_the_rust_never_touches_the_group(monkeypatch):
     def forbidden(op, **args):
         pytest.fail(f"a ponte não pode ser chamada num fechamento do Rust: {op}")
     monkeypatch.setattr(groups_bridge, "call", forbidden)
-    monkeypatch.setattr(api, "_recusa_orq", lambda n: None)
     monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: [])
     monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
     monkeypatch.setattr(api.share_bridge, "revoke_session", lambda n: None)
@@ -136,7 +135,6 @@ def test_python_mode_list_reads_the_group_and_a_broken_outside_registry_is_empty
     monkeypatch.setattr(S, "_dir", lambda: tmp_path / "hl")
     monkeypatch.setattr(R.tmux, "list_panes_all", lambda: {})
     monkeypatch.setattr(R.codex_sessions, "list_all", lambda include_incomplete=False: [])
-    monkeypatch.setattr(R, "_orq_infos", lambda: [])
     monkeypatch.setattr(R, "_decorate_transfers", lambda out: None)
     S.save("s", str(tmp_path), "22222222-2222-2222-2222-222222222222")
     (pair._pair_dir() / "s.json").write_text(json.dumps(

@@ -1,0 +1,2533 @@
+{
+  "pytest_functions": [
+    "test_pi_models.py::test_sidecar_path_keyed_by_jsonl_stem",
+    "test_pi_models.py::test_read_catalog_real_sidecar",
+    "test_pi_models.py::test_read_catalog_rejects_garbage",
+    "test_pi_models.py::test_read_catalog_missing_file_is_none",
+    "test_pi_models.py::test_provider_atual_le_o_current",
+    "test_pi_models.py::test_provider_atual_sem_modelo_e_none",
+    "test_pi_models.py::test_confirms_modelo_exige_igualdade",
+    "test_pi_models.py::test_confirms_nivel_aceita_o_clamp_mas_nao_o_ignorado",
+    "test_pi_models.py::test_read_back_sonda_ate_confirmar",
+    "test_pi_models.py::test_read_back_devolve_a_ultima_leitura_no_prazo",
+    "test_pi_models.py::test_model_command_uses_space_not_slash",
+    "test_pi_models.py::test_model_command_rejects_untypeable",
+    "test_pi_models.py::test_think_command_normalizes_and_rejects",
+    "test_pi_models.py::test_check_known",
+    "test_pi_models.py::test_send_pi_commands_key_sequence",
+    "test_pi_models.py::test_send_pi_commands_pergunta_pela_linha_e_nao_pela_tela",
+    "test_pi_models.py::test_send_pi_commands_refuses_when_overlay_open",
+    "test_pi_catalog.py::test_cabecalho_e_descartado",
+    "test_pi_catalog.py::test_le_provedor_e_id",
+    "test_pi_catalog.py::test_id_com_barra_dentro_sobrevive",
+    "test_pi_catalog.py::test_etiquetas_de_contexto_e_imagem",
+    "test_pi_catalog.py::test_linha_malformada_e_pulada_sem_derrubar_a_lista",
+    "test_pi_catalog.py::test_tabela_com_coluna_a_mais_nao_vira_lista_vazia",
+    "test_pi_catalog.py::test_falha_nao_fica_no_cache",
+    "test_pi_catalog.py::test_id_com_byte_ilegivel_e_falha_do_provedor",
+    "test_pi_catalog.py::test_argv_leva_o_caminho_RESOLVIDO_e_nao_o_nome_cru",
+    "test_pi_catalog.py::test_pi_fora_do_path_e_erro_PROPRIO",
+    "test_pi_catalog.py::test_rotulo_ilegivel_em_coluna_de_leitura_nao_derruba_a_lista",
+    "test_pi_catalog.py::test_parse_omp_devolve_o_mesmo_shape_do_pi",
+    "test_pi_catalog.py::test_contexto_torto_no_json_do_omp_nao_derruba_a_lista",
+    "test_pi_catalog.py::test_listar_omp_chama_omp_models_json_e_cacheia_por_provider",
+    "test_kimi_models.py::test_read_catalog_mapeia_os_campos",
+    "test_kimi_models.py::test_read_catalog_ausente_ou_vazio_e_none",
+    "test_kimi_models.py::test_clean_alias_recusa_o_que_viraria_tecla_errada",
+    "test_kimi_models.py::test_check_known_devolve_a_entrada_ou_recusa",
+    "test_kimi_models.py::test_parse_switched_pega_a_ultima_e_marca_session_only",
+    "test_kimi_models.py::test_confirms_exige_linha_nova_com_o_nome_pedido",
+    "test_kimi_models.py::test_check_effort_valida_contra_o_suporte_do_modelo",
+    "test_kimi_models.py::test_parse_thinking_set_e_confirms_effort",
+    "test_kimi_models.py::test_parse_thinking_row_le_niveis_e_colchete",
+    "test_pi_inbox.py::test_entrega_confirmada_vira_sent",
+    "test_pi_inbox.py::test_sem_linha_nao_inventa_entrega",
+    "test_pi_inbox.py::test_recusa_da_extensao_vira_deferred",
+    "test_pi_inbox.py::test_sem_confirmacao_no_prazo_vira_deferred",
+    "test_pi_inbox.py::test_segunda_linha_no_mesmo_pane_derruba_a_primeira",
+    "test_pi_inbox.py::test_envio_que_explode_nao_derruba_o_chamador",
+    "test_pi_inbox.py::test_duas_mensagens_no_mesmo_pane_nao_se_cruzam",
+    "test_pi_inbox.py::test_entregar_usa_o_msg_id_recebido_em_vez_de_gerar_um_novo",
+    "test_pi_inbox.py::test_entregar_sem_msg_id_ainda_gera_um_uuid_por_tentativa",
+    "test_pi_inbox.py::test_entregar_sync_repassa_o_msg_id_estavel",
+    "test_pi_inbox.py::test_entregar_sync_atravessa_do_mundo_de_thread",
+    "test_pi_inbox.py::test_entregar_sync_sem_loop_nao_explode",
+    "test_pi_inbox.py::test_linha_de_prefere_o_nome_da_sessao",
+    "test_pi_inbox.py::test_linha_de_cai_no_pane_quando_nao_ha_nome",
+    "test_pi_inbox.py::test_pergunta_devolve_o_valor_lido",
+    "test_pi_inbox.py::test_string_vazia_e_RESPOSTA_e_nao_ausencia",
+    "test_pi_inbox.py::test_extensao_que_nao_sabe_responder_vira_None",
+    "test_pi_inbox.py::test_pergunta_sem_resposta_no_prazo_vira_None",
+    "test_pi_inbox.py::test_pergunta_sem_linha_nao_explode",
+    "test_pi_inbox.py::test_resposta_de_pergunta_nao_resolve_uma_ENTREGA",
+    "test_pi_inbox.py::test_linha_que_cai_no_meio_da_pergunta_vira_None",
+    "test_pi_inbox.py::test_perguntar_sync_sem_loop_nao_explode",
+    "test_pi_inbox.py::test_entregar_sync_cancela_a_corrotina_no_timeout",
+    "test_pi_inbox.py::test_entregar_sync_sem_futuro_nao_explode",
+    "test_pi_inbox.py::test_endpoint_vai_pra_todos_os_config_dirs",
+    "test_pi_inbox.py::test_endpoint_tmp_nunca_nasce_com_permissao_frouxa",
+    "test_pi_inbox.py::test_endpoint_usa_o_bind_real_do_backend",
+    "test_pi_inbox.py::test_endpoint_bind_0000_ainda_aponta_pro_loopback",
+    "test_pi_inbox.py::test_endpoint_ilegivel_nao_derruba_a_subida",
+    "test_pi_inbox.py::test_endpoint_falha_generica_antes_do_loop_nao_derruba_a_subida",
+    "test_pi_inbox_route.py::test_conexao_sem_token_e_recusada",
+    "test_pi_inbox_route.py::test_registra_e_desregistra_pelo_pane",
+    "test_pi_inbox_route.py::test_primeira_mensagem_sem_pane_fecha",
+    "test_pi_inbox_route.py::test_confirmacao_de_id_desconhecido_nao_derruba",
+    "test_pi_inbox_route.py::test_mensagem_gigante_fecha_a_linha",
+    "test_pi_inbox_route.py::test_primeira_mensagem_gigante_fecha_antes_de_registrar",
+    "test_pi_inbox_route.py::test_conexao_do_bind_configurado_e_aceita",
+    "test_pi_inbox_route.py::test_conexao_de_outro_ip_da_lan_continua_recusada",
+    "test_pi_inbox_route.py::test_recusa_por_token_agora_loga",
+    "test_pi_inbox_route.py::test_recusa_por_token_loga_so_uma_vez_ate_acertar",
+    "test_pi_inbox_route.py::test_recusa_por_origem_agora_loga",
+    "test_pi_inbox_route.py::test_recusa_para_e_conexao_boa_reabre_o_aviso",
+    "test_pi_inbox_route.py::test_heartbeat_sem_resposta_derruba_linha_zumbi",
+    "test_api.py::test_pi_models_returns_catalog",
+    "test_api.py::test_pi_models_claude_session_rejected_with_400",
+    "test_api.py::test_pi_models_missing_sidecar_is_409_not_empty_list",
+    "test_api.py::test_omp_models_missing_sidecar_is_409_com_codigo_proprio",
+    "test_api.py::test_pi_model_set_sends_both_commands_and_reports_readback",
+    "test_api.py::test_pi_model_set_recusado_pelo_pi_vira_409",
+    "test_api.py::test_pi_model_set_sem_republicacao_diz_que_nao_confirmou",
+    "test_api.py::test_pi_model_set_rejects_model_outside_catalog",
+    "test_api.py::test_pi_model_set_requires_something_to_change",
+    "test_api.py::test_kimi_models_returns_catalog",
+    "test_api.py::test_kimi_models_claude_session_rejected_with_400",
+    "test_api.py::test_kimi_models_missing_config_is_409_not_empty_list",
+    "test_api.py::test_kimi_model_set_aplica_e_devolve_o_readback",
+    "test_api.py::test_kimi_model_set_rejeita_alias_fora_do_catalogo",
+    "test_api.py::test_kimi_model_set_com_sessao_trabalhando_vira_409",
+    "test_api.py::test_model_options_binario_ausente_tem_codigo_por_provider",
+    "test_model_options_api.py::test_pi_vem_do_catalogo",
+    "test_model_options_api.py::test_pi_que_falha_vira_502",
+    "test_model_options_api.py::test_kimi_serve_o_catalogo_do_config",
+    "test_model_options_api.py::test_kimi_sem_config_vira_409"
+  ],
+  "passed_assertion_cases": 109,
+  "source_commit": "d2a42410f9fe6df4ea491b296c7fea7b98d8b844",
+  "generator": "Execução dos103 testes da matriz com captura das chamadas à referência Python, sem alterar asserções.",
+  "cases": [
+    {
+      "pytest": "tests/test_pi_models.py::test_read_catalog_real_sidecar",
+      "op": "pi_read_catalog",
+      "input": [
+        "{\"current\": {\"provider\": \"kimi-coding\", \"id\": \"k3\", \"name\": \"Kimi K3\"}, \"thinking\": \"low\", \"levels\": [\"low\", \"high\", \"max\"], \"models\": [{\"provider\": \"kimi-coding\", \"id\": \"k3\", \"name\": \"Kimi K3\", \"reasoning\": true}, {\"provider\": \"kimi-coding\", \"id\": \"k3-256k\", \"name\": \"Kimi K3-256K\", \"reasoning\": true}, {\"provider\": \"kimi-coding\", \"id\": \"kimi-for-coding\", \"name\": \"Kimi K2.7 Code\", \"reasoning\": true}, {\"provider\": \"kimi-coding\", \"id\": \"kimi-for-coding-highspeed\", \"name\": \"Kimi For Coding HighSpeed\", \"reasoning\": true}, {\"provider\": \"clinepass\", \"id\": \"cline-pass/glm-5.2\", \"name\": \"GLM-5.2 (ClinePass)\", \"reasoning\": true}], \"ts\": 1785203739.733}"
+      ],
+      "expected": {
+        "ok": {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "k3-256k",
+              "name": "Kimi K3-256K",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding",
+              "name": "Kimi K2.7 Code",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding-highspeed",
+              "name": "Kimi For Coding HighSpeed",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM-5.2 (ClinePass)",
+              "reasoning": true
+            }
+          ],
+          "ts": 1785203739.733
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_read_catalog_rejects_garbage[nao e json]",
+      "op": "pi_read_catalog",
+      "input": [
+        "nao e json"
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_read_catalog_rejects_garbage[{\"models\": \"nao e lista\"}]",
+      "op": "pi_read_catalog",
+      "input": [
+        "{\"models\": \"nao e lista\"}"
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_read_catalog_rejects_garbage[[]]",
+      "op": "pi_read_catalog",
+      "input": [
+        "[]"
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_read_catalog_missing_file_is_none",
+      "op": "pi_read_catalog",
+      "input": [
+        null
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_provider_atual_le_o_current",
+      "op": "pi_read_catalog",
+      "input": [
+        "{\"current\": {\"provider\": \"kimi-coding\", \"id\": \"k3\", \"name\": \"Kimi K3\"}, \"thinking\": \"low\", \"levels\": [\"low\", \"high\", \"max\"], \"models\": [{\"provider\": \"kimi-coding\", \"id\": \"k3\", \"name\": \"Kimi K3\", \"reasoning\": true}, {\"provider\": \"kimi-coding\", \"id\": \"k3-256k\", \"name\": \"Kimi K3-256K\", \"reasoning\": true}, {\"provider\": \"kimi-coding\", \"id\": \"kimi-for-coding\", \"name\": \"Kimi K2.7 Code\", \"reasoning\": true}, {\"provider\": \"kimi-coding\", \"id\": \"kimi-for-coding-highspeed\", \"name\": \"Kimi For Coding HighSpeed\", \"reasoning\": true}, {\"provider\": \"clinepass\", \"id\": \"cline-pass/glm-5.2\", \"name\": \"GLM-5.2 (ClinePass)\", \"reasoning\": true}], \"ts\": 1785203739.733}"
+      ],
+      "expected": {
+        "ok": {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "k3-256k",
+              "name": "Kimi K3-256K",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding",
+              "name": "Kimi K2.7 Code",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding-highspeed",
+              "name": "Kimi For Coding HighSpeed",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM-5.2 (ClinePass)",
+              "reasoning": true
+            }
+          ],
+          "ts": 1785203739.733
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_provider_atual_sem_modelo_e_none",
+      "op": "pi_read_catalog",
+      "input": [
+        "{\"current\": null, \"thinking\": \"low\", \"levels\": [\"low\", \"high\", \"max\"], \"models\": [{\"provider\": \"kimi-coding\", \"id\": \"k3\", \"name\": \"Kimi K3\", \"reasoning\": true}, {\"provider\": \"kimi-coding\", \"id\": \"k3-256k\", \"name\": \"Kimi K3-256K\", \"reasoning\": true}, {\"provider\": \"kimi-coding\", \"id\": \"kimi-for-coding\", \"name\": \"Kimi K2.7 Code\", \"reasoning\": true}, {\"provider\": \"kimi-coding\", \"id\": \"kimi-for-coding-highspeed\", \"name\": \"Kimi For Coding HighSpeed\", \"reasoning\": true}, {\"provider\": \"clinepass\", \"id\": \"cline-pass/glm-5.2\", \"name\": \"GLM-5.2 (ClinePass)\", \"reasoning\": true}], \"ts\": 1785203739.733}"
+      ],
+      "expected": {
+        "ok": {
+          "current": null,
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "k3-256k",
+              "name": "Kimi K3-256K",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding",
+              "name": "Kimi K2.7 Code",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding-highspeed",
+              "name": "Kimi For Coding HighSpeed",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM-5.2 (ClinePass)",
+              "reasoning": true
+            }
+          ],
+          "ts": 1785203739.733
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_confirms_modelo_exige_igualdade",
+      "op": "pi_confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "name": "GLM"
+          },
+          "thinking": "high",
+          "levels": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "models": [],
+          "ts": 2.0
+        },
+        "clinepass",
+        "cline-pass/glm-5.2",
+        null
+      ],
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_confirms_modelo_exige_igualdade",
+      "op": "pi_confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "name": "GLM"
+          },
+          "thinking": "high",
+          "levels": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "models": [],
+          "ts": 2.0
+        },
+        "kimi-coding",
+        "k3",
+        null
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_confirms_modelo_exige_igualdade",
+      "op": "pi_confirms",
+      "input": [
+        {
+          "current": null,
+          "thinking": "high",
+          "levels": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "models": [],
+          "ts": 2.0
+        },
+        "clinepass",
+        "cline-pass/glm-5.2",
+        null
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_confirms_nivel_aceita_o_clamp_mas_nao_o_ignorado",
+      "op": "pi_confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "name": "GLM"
+          },
+          "thinking": "high",
+          "levels": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "models": [],
+          "ts": 2.0
+        },
+        null,
+        null,
+        "xhigh"
+      ],
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_confirms_nivel_aceita_o_clamp_mas_nao_o_ignorado",
+      "op": "pi_confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "name": "GLM"
+          },
+          "thinking": "high",
+          "levels": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "models": [],
+          "ts": 2.0
+        },
+        null,
+        null,
+        "medium"
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_confirms_nivel_aceita_o_clamp_mas_nao_o_ignorado",
+      "op": "pi_confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "name": "GLM"
+          },
+          "thinking": "high",
+          "levels": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "models": [],
+          "ts": 2.0
+        },
+        null,
+        null,
+        "high"
+      ],
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_read_back_sonda_ate_confirmar",
+      "op": "pi_confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3"
+          },
+          "models": [],
+          "ts": 1.0
+        },
+        "clinepass",
+        "cline-pass/glm-5.2",
+        null
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_read_back_sonda_ate_confirmar",
+      "op": "pi_confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3"
+          },
+          "models": [],
+          "ts": 1.0
+        },
+        "clinepass",
+        "cline-pass/glm-5.2",
+        null
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_read_back_sonda_ate_confirmar",
+      "op": "pi_confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "name": "GLM"
+          },
+          "thinking": "high",
+          "levels": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "models": [],
+          "ts": 2.0
+        },
+        "clinepass",
+        "cline-pass/glm-5.2",
+        null
+      ],
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_read_back_devolve_a_ultima_leitura_no_prazo",
+      "op": "pi_confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3"
+          },
+          "models": [],
+          "ts": 1.0
+        },
+        "clinepass",
+        "cline-pass/glm-5.2",
+        null
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_model_command_uses_space_not_slash",
+      "op": "pi_model_command",
+      "input": [
+        "clinepass",
+        "cline-pass/glm-5.2"
+      ],
+      "expected": {
+        "ok": "/cp-model clinepass cline-pass/glm-5.2"
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_model_command_rejects_untypeable[clinepass-com espaco]",
+      "op": "pi_model_command",
+      "input": [
+        "clinepass",
+        "com espaco"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "model invalido: 'com espaco'"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_model_command_rejects_untypeable[com espaco-k3]",
+      "op": "pi_model_command",
+      "input": [
+        "com espaco",
+        "k3"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "provider invalido: 'com espaco'"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_model_command_rejects_untypeable[clinepass-k3\\nEnter]",
+      "op": "pi_model_command",
+      "input": [
+        "clinepass",
+        "k3\nEnter"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "model invalido: 'k3\\nEnter'"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_model_command_rejects_untypeable[-k3]",
+      "op": "pi_model_command",
+      "input": [
+        "",
+        "k3"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "provider invalido: ''"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_think_command_normalizes_and_rejects",
+      "op": "pi_think_command",
+      "input": [
+        " XHigh "
+      ],
+      "expected": {
+        "ok": "/cp-think xhigh"
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_think_command_normalizes_and_rejects",
+      "op": "pi_think_command",
+      "input": [
+        "ultracode"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "nivel desconhecido: 'ultracode'"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_check_known",
+      "op": "pi_check_known",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "k3-256k",
+              "name": "Kimi K3-256K",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding",
+              "name": "Kimi K2.7 Code",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding-highspeed",
+              "name": "Kimi For Coding HighSpeed",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM-5.2 (ClinePass)",
+              "reasoning": true
+            }
+          ],
+          "ts": 1785203739.733
+        },
+        "kimi-coding",
+        "k3"
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_check_known",
+      "op": "pi_check_known",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "k3-256k",
+              "name": "Kimi K3-256K",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding",
+              "name": "Kimi K2.7 Code",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding-highspeed",
+              "name": "Kimi For Coding HighSpeed",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM-5.2 (ClinePass)",
+              "reasoning": true
+            }
+          ],
+          "ts": 1785203739.733
+        },
+        "kimi-coding",
+        "k9"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "modelo fora do catalogo: kimi-coding/k9"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_pi_models.py::test_check_known",
+      "op": "pi_check_known",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "k3-256k",
+              "name": "Kimi K3-256K",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding",
+              "name": "Kimi K2.7 Code",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding-highspeed",
+              "name": "Kimi For Coding HighSpeed",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM-5.2 (ClinePass)",
+              "reasoning": true
+            }
+          ],
+          "ts": 1785203739.733
+        },
+        "outro-provedor",
+        "k3"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "modelo fora do catalogo: outro-provedor/k3"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_cabecalho_e_descartado",
+      "op": "parse",
+      "input": [
+        "provider          model                                    context  max-out  thinking  images\ncline             deepseek/deepseek-v4-flash               1.0M     131.1K   yes       no\nkimi-coding       k3                                       1.0M     131.1K   yes       yes\nclinepass         cline-pass/glm-5.2                       200K     131.1K   yes       no\n"
+      ],
+      "expected": {
+        "ok": [
+          {
+            "provider": "cline",
+            "id": "deepseek/deepseek-v4-flash",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          },
+          {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": true
+          },
+          {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "context": "200K",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          }
+        ]
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_le_provedor_e_id",
+      "op": "parse",
+      "input": [
+        "provider          model                                    context  max-out  thinking  images\ncline             deepseek/deepseek-v4-flash               1.0M     131.1K   yes       no\nkimi-coding       k3                                       1.0M     131.1K   yes       yes\nclinepass         cline-pass/glm-5.2                       200K     131.1K   yes       no\n"
+      ],
+      "expected": {
+        "ok": [
+          {
+            "provider": "cline",
+            "id": "deepseek/deepseek-v4-flash",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          },
+          {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": true
+          },
+          {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "context": "200K",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          }
+        ]
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_id_com_barra_dentro_sobrevive",
+      "op": "parse",
+      "input": [
+        "provider          model                                    context  max-out  thinking  images\ncline             deepseek/deepseek-v4-flash               1.0M     131.1K   yes       no\nkimi-coding       k3                                       1.0M     131.1K   yes       yes\nclinepass         cline-pass/glm-5.2                       200K     131.1K   yes       no\n"
+      ],
+      "expected": {
+        "ok": [
+          {
+            "provider": "cline",
+            "id": "deepseek/deepseek-v4-flash",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          },
+          {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": true
+          },
+          {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "context": "200K",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          }
+        ]
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_etiquetas_de_contexto_e_imagem",
+      "op": "parse",
+      "input": [
+        "provider          model                                    context  max-out  thinking  images\ncline             deepseek/deepseek-v4-flash               1.0M     131.1K   yes       no\nkimi-coding       k3                                       1.0M     131.1K   yes       yes\nclinepass         cline-pass/glm-5.2                       200K     131.1K   yes       no\n"
+      ],
+      "expected": {
+        "ok": [
+          {
+            "provider": "cline",
+            "id": "deepseek/deepseek-v4-flash",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          },
+          {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": true
+          },
+          {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "context": "200K",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          }
+        ]
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_linha_malformada_e_pulada_sem_derrubar_a_lista",
+      "op": "parse",
+      "input": [
+        "provider          model                                    context  max-out  thinking  images\ncline             deepseek/deepseek-v4-flash               1.0M     131.1K   yes       no\nkimi-coding       k3                                       1.0M     131.1K   yes       yes\nclinepass         cline-pass/glm-5.2                       200K     131.1K   yes       no\nlixo\n"
+      ],
+      "expected": {
+        "ok": [
+          {
+            "provider": "cline",
+            "id": "deepseek/deepseek-v4-flash",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          },
+          {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": true
+          },
+          {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "context": "200K",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          }
+        ]
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_tabela_com_coluna_a_mais_nao_vira_lista_vazia",
+      "op": "parse",
+      "input": [
+        "provider model context max-out thinking images cost\ncline deepseek/v4 1.0M 131.1K yes no 0.10\n"
+      ],
+      "expected": {
+        "ok": []
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_falha_nao_fica_no_cache",
+      "op": "parse",
+      "input": [
+        ""
+      ],
+      "expected": {
+        "ok": []
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_falha_nao_fica_no_cache",
+      "op": "parse",
+      "input": [
+        "provider          model                                    context  max-out  thinking  images\ncline             deepseek/deepseek-v4-flash               1.0M     131.1K   yes       no\nkimi-coding       k3                                       1.0M     131.1K   yes       yes\nclinepass         cline-pass/glm-5.2                       200K     131.1K   yes       no\n"
+      ],
+      "expected": {
+        "ok": [
+          {
+            "provider": "cline",
+            "id": "deepseek/deepseek-v4-flash",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          },
+          {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": true
+          },
+          {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "context": "200K",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          }
+        ]
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_id_com_byte_ilegivel_e_falha_do_provedor",
+      "op": "parse",
+      "input": [
+        "provider          model                                    context  max-out  thinking  images\ncline             deepseek/deepseek-v4-flash               1.0M     131.1K   yes       no\nkimi-coding       k�3                                       1.0M     131.1K   yes       yes\nclinepass         cline-pass/glm-5.2                       200K     131.1K   yes       no\n"
+      ],
+      "expected": {
+        "ok": [
+          {
+            "provider": "cline",
+            "id": "deepseek/deepseek-v4-flash",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          },
+          {
+            "provider": "kimi-coding",
+            "id": "k�3",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": true
+          },
+          {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "context": "200K",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          }
+        ]
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_argv_leva_o_caminho_RESOLVIDO_e_nao_o_nome_cru",
+      "op": "parse",
+      "input": [
+        "provider          model                                    context  max-out  thinking  images\ncline             deepseek/deepseek-v4-flash               1.0M     131.1K   yes       no\nkimi-coding       k3                                       1.0M     131.1K   yes       yes\nclinepass         cline-pass/glm-5.2                       200K     131.1K   yes       no\n"
+      ],
+      "expected": {
+        "ok": [
+          {
+            "provider": "cline",
+            "id": "deepseek/deepseek-v4-flash",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          },
+          {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": true
+          },
+          {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "context": "200K",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          }
+        ]
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_rotulo_ilegivel_em_coluna_de_leitura_nao_derruba_a_lista",
+      "op": "parse",
+      "input": [
+        "provider          model                                    context  max-out  thinking  images\ncline             deepseek/deepseek-v4-flash               1.0M     131.1K   yes       no\nkimi-coding       k3                                       1.0M     131.1K   yes       yes\nclinepass         cline-pass/glm-5.2                       20�K     131.1K   yes       no\n"
+      ],
+      "expected": {
+        "ok": [
+          {
+            "provider": "cline",
+            "id": "deepseek/deepseek-v4-flash",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          },
+          {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "context": "1.0M",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": true
+          },
+          {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "context": "20�K",
+            "max_out": "131.1K",
+            "thinking": true,
+            "images": false
+          }
+        ]
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_parse_omp_devolve_o_mesmo_shape_do_pi",
+      "op": "parse_omp",
+      "input": [
+        "{\"models\":[{\"provider\":\"opencode-go\",\"id\":\"deepseek-v4-flash\",\"selector\":\"opencode-go/deepseek-v4-flash\",\n\"name\":\"DeepSeek V4 Flash\",\"contextWindow\":1000000,\"maxTokens\":384000,\"reasoning\":true,\n\"thinking\":[\"low\",\"high\",\"max\"],\"input\":[\"text\"],\"cost\":{\"input\":0.22}},\n{\"provider\":\"opencode-go\",\"id\":\"deepseek-v4-flash-vision-exp\",\"name\":\"x\",\"contextWindow\":1000000,\n\"maxTokens\":384000,\"reasoning\":true,\"thinking\":[],\"input\":[\"text\",\"image\"]}]}"
+      ],
+      "expected": {
+        "ok": [
+          {
+            "provider": "opencode-go",
+            "id": "deepseek-v4-flash",
+            "context": "1M",
+            "max_out": "384K",
+            "thinking": true,
+            "images": false
+          },
+          {
+            "provider": "opencode-go",
+            "id": "deepseek-v4-flash-vision-exp",
+            "context": "1M",
+            "max_out": "384K",
+            "thinking": false,
+            "images": true
+          }
+        ]
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_contexto_torto_no_json_do_omp_nao_derruba_a_lista",
+      "op": "parse_omp",
+      "input": [
+        "{\"models\":[{\"provider\":\"opencode-go\",\"id\":\"deepseek-v4-flash\",\"selector\":\"opencode-go/deepseek-v4-flash\",\n\"name\":\"DeepSeek V4 Flash\",\"contextWindow\":\"1M\",\"maxTokens\":384000,\"reasoning\":true,\n\"thinking\":[\"low\",\"high\",\"max\"],\"input\":[\"text\"],\"cost\":{\"input\":0.22}},\n{\"provider\":\"opencode-go\",\"id\":\"deepseek-v4-flash-vision-exp\",\"name\":\"x\",\"contextWindow\":1000000,\n\"maxTokens\":384000,\"reasoning\":true,\"thinking\":[],\"input\":[\"text\",\"image\"]}]}"
+      ],
+      "expected": {
+        "ok": [
+          {
+            "provider": "opencode-go",
+            "id": "deepseek-v4-flash",
+            "context": "0",
+            "max_out": "384K",
+            "thinking": true,
+            "images": false
+          },
+          {
+            "provider": "opencode-go",
+            "id": "deepseek-v4-flash-vision-exp",
+            "context": "1M",
+            "max_out": "384K",
+            "thinking": false,
+            "images": true
+          }
+        ]
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_listar_omp_chama_omp_models_json_e_cacheia_por_provider",
+      "op": "parse_omp",
+      "input": [
+        "{\"models\":[{\"provider\":\"opencode-go\",\"id\":\"deepseek-v4-flash\",\"selector\":\"opencode-go/deepseek-v4-flash\",\n\"name\":\"DeepSeek V4 Flash\",\"contextWindow\":1000000,\"maxTokens\":384000,\"reasoning\":true,\n\"thinking\":[\"low\",\"high\",\"max\"],\"input\":[\"text\"],\"cost\":{\"input\":0.22}},\n{\"provider\":\"opencode-go\",\"id\":\"deepseek-v4-flash-vision-exp\",\"name\":\"x\",\"contextWindow\":1000000,\n\"maxTokens\":384000,\"reasoning\":true,\"thinking\":[],\"input\":[\"text\",\"image\"]}]}"
+      ],
+      "expected": {
+        "ok": [
+          {
+            "provider": "opencode-go",
+            "id": "deepseek-v4-flash",
+            "context": "1M",
+            "max_out": "384K",
+            "thinking": true,
+            "images": false
+          },
+          {
+            "provider": "opencode-go",
+            "id": "deepseek-v4-flash-vision-exp",
+            "context": "1M",
+            "max_out": "384K",
+            "thinking": false,
+            "images": true
+          }
+        ]
+      }
+    },
+    {
+      "pytest": "tests/test_pi_catalog.py::test_listar_omp_chama_omp_models_json_e_cacheia_por_provider",
+      "op": "parse",
+      "input": [
+        "provider id ctx max thinking images\npi-prov m1 128k 8k yes no\n"
+      ],
+      "expected": {
+        "ok": [
+          {
+            "provider": "pi-prov",
+            "id": "m1",
+            "context": "128k",
+            "max_out": "8k",
+            "thinking": true,
+            "images": false
+          }
+        ]
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_read_catalog_mapeia_os_campos",
+      "op": "kimi_read_catalog",
+      "input": [
+        "\ndefault_model = \"apikey/k3\"\n\n[thinking]\nenabled = true\neffort = \"high\"\n\n[models.\"apikey/k3\"]\nmodel = \"k3\"\ndisplay_name = \"K3\"\nmax_context_size = 1048576\nsupport_efforts = [ \"low\", \"high\", \"max\" ]\ndefault_effort = \"high\"\n\n[models.\"apikey/k3-256k\"]\nmodel = \"k3-256k\"\ndisplay_name = \"K3-256k\"\nmax_context_size = 262144\nsupport_efforts = [ \"low\", \"high\", \"max\" ]\ndefault_effort = \"high\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nmodel = \"kimi-for-coding\"\ndisplay_name = \"K2.7 Coding\"\nmax_context_size = 262144\n"
+      ],
+      "expected": {
+        "ok": {
+          "default": "apikey/k3",
+          "models": [
+            {
+              "alias": "apikey/k3",
+              "provider": "apikey",
+              "id": "k3",
+              "name": "K3",
+              "context_length": 1048576,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "apikey/k3-256k",
+              "provider": "apikey",
+              "id": "k3-256k",
+              "name": "K3-256k",
+              "context_length": 262144,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "kimi-code/kimi-for-coding",
+              "provider": "kimi-code",
+              "id": "kimi-for-coding",
+              "name": "K2.7 Coding",
+              "context_length": 262144,
+              "efforts": [],
+              "default_effort": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_read_catalog_ausente_ou_vazio_e_none",
+      "op": "kimi_read_catalog",
+      "input": [
+        null
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_read_catalog_ausente_ou_vazio_e_none",
+      "op": "kimi_read_catalog",
+      "input": [
+        "default_model = \"apikey/k3\"\n"
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_read_catalog_ausente_ou_vazio_e_none",
+      "op": "kimi_read_catalog",
+      "input": [
+        "não é toml válido [[["
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_clean_alias_recusa_o_que_viraria_tecla_errada",
+      "op": "kimi_clean_alias",
+      "input": [
+        ""
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "alias invalido: ''"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_clean_alias_recusa_o_que_viraria_tecla_errada",
+      "op": "kimi_clean_alias",
+      "input": [
+        "  "
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "alias invalido: '  '"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_clean_alias_recusa_o_que_viraria_tecla_errada",
+      "op": "kimi_clean_alias",
+      "input": [
+        "apikey/ k3"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "alias invalido: 'apikey/ k3'"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_clean_alias_recusa_o_que_viraria_tecla_errada",
+      "op": "kimi_clean_alias",
+      "input": [
+        "k3\n4"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "alias invalido: 'k3\\n4'"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_clean_alias_recusa_o_que_viraria_tecla_errada",
+      "op": "kimi_clean_alias",
+      "input": [
+        "k\ts"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "alias invalido: 'k\\ts'"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_clean_alias_recusa_o_que_viraria_tecla_errada",
+      "op": "kimi_clean_alias",
+      "input": [
+        "\u001bk3"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "alias invalido: '\\x1bk3'"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_check_known_devolve_a_entrada_ou_recusa",
+      "op": "kimi_read_catalog",
+      "input": [
+        "\ndefault_model = \"apikey/k3\"\n\n[thinking]\nenabled = true\neffort = \"high\"\n\n[models.\"apikey/k3\"]\nmodel = \"k3\"\ndisplay_name = \"K3\"\nmax_context_size = 1048576\nsupport_efforts = [ \"low\", \"high\", \"max\" ]\ndefault_effort = \"high\"\n\n[models.\"apikey/k3-256k\"]\nmodel = \"k3-256k\"\ndisplay_name = \"K3-256k\"\nmax_context_size = 262144\nsupport_efforts = [ \"low\", \"high\", \"max\" ]\ndefault_effort = \"high\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nmodel = \"kimi-for-coding\"\ndisplay_name = \"K2.7 Coding\"\nmax_context_size = 262144\n"
+      ],
+      "expected": {
+        "ok": {
+          "default": "apikey/k3",
+          "models": [
+            {
+              "alias": "apikey/k3",
+              "provider": "apikey",
+              "id": "k3",
+              "name": "K3",
+              "context_length": 1048576,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "apikey/k3-256k",
+              "provider": "apikey",
+              "id": "k3-256k",
+              "name": "K3-256k",
+              "context_length": 262144,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "kimi-code/kimi-for-coding",
+              "provider": "kimi-code",
+              "id": "kimi-for-coding",
+              "name": "K2.7 Coding",
+              "context_length": 262144,
+              "efforts": [],
+              "default_effort": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_check_known_devolve_a_entrada_ou_recusa",
+      "op": "kimi_clean_alias",
+      "input": [
+        "apikey/k3-256k"
+      ],
+      "expected": {
+        "ok": "apikey/k3-256k"
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_check_known_devolve_a_entrada_ou_recusa",
+      "op": "kimi_check_known",
+      "input": [
+        {
+          "default": "apikey/k3",
+          "models": [
+            {
+              "alias": "apikey/k3",
+              "provider": "apikey",
+              "id": "k3",
+              "name": "K3",
+              "context_length": 1048576,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "apikey/k3-256k",
+              "provider": "apikey",
+              "id": "k3-256k",
+              "name": "K3-256k",
+              "context_length": 262144,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "kimi-code/kimi-for-coding",
+              "provider": "kimi-code",
+              "id": "kimi-for-coding",
+              "name": "K2.7 Coding",
+              "context_length": 262144,
+              "efforts": [],
+              "default_effort": null
+            }
+          ]
+        },
+        "apikey/k3-256k"
+      ],
+      "expected": {
+        "ok": {
+          "alias": "apikey/k3-256k",
+          "provider": "apikey",
+          "id": "k3-256k",
+          "name": "K3-256k",
+          "context_length": 262144,
+          "efforts": [
+            "low",
+            "high",
+            "max"
+          ],
+          "default_effort": "high"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_check_known_devolve_a_entrada_ou_recusa",
+      "op": "kimi_clean_alias",
+      "input": [
+        "apikey/k4"
+      ],
+      "expected": {
+        "ok": "apikey/k4"
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_check_known_devolve_a_entrada_ou_recusa",
+      "op": "kimi_check_known",
+      "input": [
+        {
+          "default": "apikey/k3",
+          "models": [
+            {
+              "alias": "apikey/k3",
+              "provider": "apikey",
+              "id": "k3",
+              "name": "K3",
+              "context_length": 1048576,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "apikey/k3-256k",
+              "provider": "apikey",
+              "id": "k3-256k",
+              "name": "K3-256k",
+              "context_length": 262144,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "kimi-code/kimi-for-coding",
+              "provider": "kimi-code",
+              "id": "kimi-for-coding",
+              "name": "K2.7 Coding",
+              "context_length": 262144,
+              "efforts": [],
+              "default_effort": null
+            }
+          ]
+        },
+        "apikey/k4"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "modelo fora do catalogo: apikey/k4"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_parse_switched_pega_a_ultima_e_marca_session_only",
+      "op": "kimi_parse_switched",
+      "input": [
+        "   Switched to K2.7 Coding with thinking on.\n\n   Switched to K3 with thinking high for this session only.\n 🤖 K3 (high✦) │ 📁 tmp\n"
+      ],
+      "expected": {
+        "ok": {
+          "name": "K3",
+          "level": "high",
+          "session_only": true,
+          "raw": "Switched to K3 with thinking high for this session only."
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_parse_switched_pega_a_ultima_e_marca_session_only",
+      "op": "kimi_parse_switched",
+      "input": [
+        "nenhuma troca por aqui\n🤖 K3"
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_confirms_exige_linha_nova_com_o_nome_pedido",
+      "op": "kimi_confirms",
+      "input": [
+        {
+          "name": "K2.7 Coding",
+          "session_only": false,
+          "raw": "Switched to K2.7 Coding …"
+        },
+        {
+          "name": "K2.7 Coding",
+          "session_only": false,
+          "raw": "Switched to K2.7 Coding …"
+        },
+        "K3"
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_confirms_exige_linha_nova_com_o_nome_pedido",
+      "op": "kimi_confirms",
+      "input": [
+        {
+          "name": "K2.7 Coding Highspeed",
+          "session_only": true,
+          "raw": "…"
+        },
+        {
+          "name": "K2.7 Coding",
+          "session_only": false,
+          "raw": "Switched to K2.7 Coding …"
+        },
+        "K3"
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_confirms_exige_linha_nova_com_o_nome_pedido",
+      "op": "kimi_confirms",
+      "input": [
+        {
+          "name": "K3",
+          "session_only": true,
+          "raw": "…"
+        },
+        {
+          "name": "K2.7 Coding",
+          "session_only": false,
+          "raw": "Switched to K2.7 Coding …"
+        },
+        "K3"
+      ],
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_confirms_exige_linha_nova_com_o_nome_pedido",
+      "op": "kimi_confirms",
+      "input": [
+        null,
+        {
+          "name": "K2.7 Coding",
+          "session_only": false,
+          "raw": "Switched to K2.7 Coding …"
+        },
+        "K3"
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_check_effort_valida_contra_o_suporte_do_modelo",
+      "op": "kimi_read_catalog",
+      "input": [
+        "\ndefault_model = \"apikey/k3\"\n\n[thinking]\nenabled = true\neffort = \"high\"\n\n[models.\"apikey/k3\"]\nmodel = \"k3\"\ndisplay_name = \"K3\"\nmax_context_size = 1048576\nsupport_efforts = [ \"low\", \"high\", \"max\" ]\ndefault_effort = \"high\"\n\n[models.\"apikey/k3-256k\"]\nmodel = \"k3-256k\"\ndisplay_name = \"K3-256k\"\nmax_context_size = 262144\nsupport_efforts = [ \"low\", \"high\", \"max\" ]\ndefault_effort = \"high\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nmodel = \"kimi-for-coding\"\ndisplay_name = \"K2.7 Coding\"\nmax_context_size = 262144\n"
+      ],
+      "expected": {
+        "ok": {
+          "default": "apikey/k3",
+          "models": [
+            {
+              "alias": "apikey/k3",
+              "provider": "apikey",
+              "id": "k3",
+              "name": "K3",
+              "context_length": 1048576,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "apikey/k3-256k",
+              "provider": "apikey",
+              "id": "k3-256k",
+              "name": "K3-256k",
+              "context_length": 262144,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "kimi-code/kimi-for-coding",
+              "provider": "kimi-code",
+              "id": "kimi-for-coding",
+              "name": "K2.7 Coding",
+              "context_length": 262144,
+              "efforts": [],
+              "default_effort": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_check_effort_valida_contra_o_suporte_do_modelo",
+      "op": "kimi_clean_alias",
+      "input": [
+        "apikey/k3"
+      ],
+      "expected": {
+        "ok": "apikey/k3"
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_check_effort_valida_contra_o_suporte_do_modelo",
+      "op": "kimi_check_known",
+      "input": [
+        {
+          "default": "apikey/k3",
+          "models": [
+            {
+              "alias": "apikey/k3",
+              "provider": "apikey",
+              "id": "k3",
+              "name": "K3",
+              "context_length": 1048576,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "apikey/k3-256k",
+              "provider": "apikey",
+              "id": "k3-256k",
+              "name": "K3-256k",
+              "context_length": 262144,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "kimi-code/kimi-for-coding",
+              "provider": "kimi-code",
+              "id": "kimi-for-coding",
+              "name": "K2.7 Coding",
+              "context_length": 262144,
+              "efforts": [],
+              "default_effort": null
+            }
+          ]
+        },
+        "apikey/k3"
+      ],
+      "expected": {
+        "ok": {
+          "alias": "apikey/k3",
+          "provider": "apikey",
+          "id": "k3",
+          "name": "K3",
+          "context_length": 1048576,
+          "efforts": [
+            "low",
+            "high",
+            "max"
+          ],
+          "default_effort": "high"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_check_effort_valida_contra_o_suporte_do_modelo",
+      "op": "kimi_check_effort",
+      "input": [
+        {
+          "alias": "apikey/k3",
+          "provider": "apikey",
+          "id": "k3",
+          "name": "K3",
+          "context_length": 1048576,
+          "efforts": [
+            "low",
+            "high",
+            "max"
+          ],
+          "default_effort": "high"
+        },
+        "LOW"
+      ],
+      "expected": {
+        "ok": "low"
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_check_effort_valida_contra_o_suporte_do_modelo",
+      "op": "kimi_check_effort",
+      "input": [
+        {
+          "alias": "apikey/k3",
+          "provider": "apikey",
+          "id": "k3",
+          "name": "K3",
+          "context_length": 1048576,
+          "efforts": [
+            "low",
+            "high",
+            "max"
+          ],
+          "default_effort": "high"
+        },
+        "xhigh"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "nível fora do suporte de apikey/k3: 'xhigh' (use um de low, high, max)"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_check_effort_valida_contra_o_suporte_do_modelo",
+      "op": "kimi_clean_alias",
+      "input": [
+        "kimi-code/kimi-for-coding"
+      ],
+      "expected": {
+        "ok": "kimi-code/kimi-for-coding"
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_check_effort_valida_contra_o_suporte_do_modelo",
+      "op": "kimi_check_known",
+      "input": [
+        {
+          "default": "apikey/k3",
+          "models": [
+            {
+              "alias": "apikey/k3",
+              "provider": "apikey",
+              "id": "k3",
+              "name": "K3",
+              "context_length": 1048576,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "apikey/k3-256k",
+              "provider": "apikey",
+              "id": "k3-256k",
+              "name": "K3-256k",
+              "context_length": 262144,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "kimi-code/kimi-for-coding",
+              "provider": "kimi-code",
+              "id": "kimi-for-coding",
+              "name": "K2.7 Coding",
+              "context_length": 262144,
+              "efforts": [],
+              "default_effort": null
+            }
+          ]
+        },
+        "kimi-code/kimi-for-coding"
+      ],
+      "expected": {
+        "ok": {
+          "alias": "kimi-code/kimi-for-coding",
+          "provider": "kimi-code",
+          "id": "kimi-for-coding",
+          "name": "K2.7 Coding",
+          "context_length": 262144,
+          "efforts": [],
+          "default_effort": null
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_check_effort_valida_contra_o_suporte_do_modelo",
+      "op": "kimi_check_effort",
+      "input": [
+        {
+          "alias": "kimi-code/kimi-for-coding",
+          "provider": "kimi-code",
+          "id": "kimi-for-coding",
+          "name": "K2.7 Coding",
+          "context_length": 262144,
+          "efforts": [],
+          "default_effort": null
+        },
+        "low"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "nível fora do suporte de kimi-code/kimi-for-coding: 'low' (use um de nenhum — modelo sem níveis)"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_parse_thinking_set_e_confirms_effort",
+      "op": "kimi_parse_thinking_set",
+      "input": [
+        "   Thinking set to low for this session only.\n 🤖 K3 (low✦)\n"
+      ],
+      "expected": {
+        "ok": {
+          "level": "low",
+          "raw": "Thinking set to low for this session only."
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_parse_thinking_set_e_confirms_effort",
+      "op": "kimi_parse_thinking_set",
+      "input": [
+        "nada por aqui"
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_parse_thinking_set_e_confirms_effort",
+      "op": "kimi_confirms_effort",
+      "input": [
+        {
+          "level": "high",
+          "raw": "Thinking set to high for this session only."
+        },
+        {
+          "level": "high",
+          "raw": "Thinking set to high for this session only."
+        },
+        "low"
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_parse_thinking_set_e_confirms_effort",
+      "op": "kimi_confirms_effort",
+      "input": [
+        {
+          "level": "low",
+          "raw": "Thinking set to low for this session only."
+        },
+        {
+          "level": "high",
+          "raw": "Thinking set to high for this session only."
+        },
+        "low"
+      ],
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_parse_thinking_set_e_confirms_effort",
+      "op": "kimi_confirms_effort",
+      "input": [
+        {
+          "level": "low",
+          "raw": "Thinking set to low for this session only."
+        },
+        {
+          "level": "high",
+          "raw": "Thinking set to high for this session only."
+        },
+        "max"
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_parse_thinking_row_le_niveis_e_colchete",
+      "op": "kimi_parse_thinking_row",
+      "input": [
+        "  Select a model  (type to search)\n   ❯ K3                     apikey ← current\n  Thinking  (←→ to switch)\n     Low    [ High ]    Max\n 🤖 K3 (high✦)\n"
+      ],
+      "expected": {
+        "ok": {
+          "levels": [
+            "Low",
+            "High",
+            "Max"
+          ],
+          "current": "High"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_kimi_models.py::test_parse_thinking_row_le_niveis_e_colchete",
+      "op": "kimi_parse_thinking_row",
+      "input": [
+        "sem picker aqui"
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_pi_model_set_sends_both_commands_and_reports_readback",
+      "op": "pi_check_known",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM",
+              "reasoning": true
+            }
+          ],
+          "ts": 1.0
+        },
+        "clinepass",
+        "cline-pass/glm-5.2"
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_pi_model_set_sends_both_commands_and_reports_readback",
+      "op": "pi_model_command",
+      "input": [
+        "clinepass",
+        "cline-pass/glm-5.2"
+      ],
+      "expected": {
+        "ok": "/cp-model clinepass cline-pass/glm-5.2"
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_pi_model_set_sends_both_commands_and_reports_readback",
+      "op": "pi_think_command",
+      "input": [
+        "xhigh"
+      ],
+      "expected": {
+        "ok": "/cp-think xhigh"
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_pi_model_set_sends_both_commands_and_reports_readback",
+      "op": "pi_confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2"
+          },
+          "thinking": "high",
+          "levels": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            }
+          ],
+          "ts": 2.0
+        },
+        "clinepass",
+        "cline-pass/glm-5.2",
+        "xhigh"
+      ],
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_pi_model_set_sends_both_commands_and_reports_readback",
+      "op": "pi_confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2"
+          },
+          "thinking": "high",
+          "levels": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            }
+          ],
+          "ts": 2.0
+        },
+        "clinepass",
+        "cline-pass/glm-5.2",
+        "xhigh"
+      ],
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_pi_model_set_recusado_pelo_pi_vira_409",
+      "op": "pi_check_known",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM",
+              "reasoning": true
+            }
+          ],
+          "ts": 1.0
+        },
+        "clinepass",
+        "cline-pass/glm-5.2"
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_pi_model_set_recusado_pelo_pi_vira_409",
+      "op": "pi_model_command",
+      "input": [
+        "clinepass",
+        "cline-pass/glm-5.2"
+      ],
+      "expected": {
+        "ok": "/cp-model clinepass cline-pass/glm-5.2"
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_pi_model_set_recusado_pelo_pi_vira_409",
+      "op": "pi_confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM",
+              "reasoning": true
+            }
+          ],
+          "ts": 2.0
+        },
+        "clinepass",
+        "cline-pass/glm-5.2",
+        null
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_pi_model_set_sem_republicacao_diz_que_nao_confirmou",
+      "op": "pi_check_known",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM",
+              "reasoning": true
+            }
+          ],
+          "ts": 1.0
+        },
+        "clinepass",
+        "cline-pass/glm-5.2"
+      ],
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_pi_model_set_sem_republicacao_diz_que_nao_confirmou",
+      "op": "pi_model_command",
+      "input": [
+        "clinepass",
+        "cline-pass/glm-5.2"
+      ],
+      "expected": {
+        "ok": "/cp-model clinepass cline-pass/glm-5.2"
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_pi_model_set_sem_republicacao_diz_que_nao_confirmou",
+      "op": "pi_confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM",
+              "reasoning": true
+            }
+          ],
+          "ts": 1.0
+        },
+        "clinepass",
+        "cline-pass/glm-5.2",
+        null
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_pi_model_set_rejects_model_outside_catalog",
+      "op": "pi_check_known",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            }
+          ]
+        },
+        "kimi-coding",
+        "k9"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "modelo fora do catalogo: kimi-coding/k9"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_kimi_model_set_aplica_e_devolve_o_readback",
+      "op": "kimi_clean_alias",
+      "input": [
+        "apikey/k3-256k"
+      ],
+      "expected": {
+        "ok": "apikey/k3-256k"
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_kimi_model_set_aplica_e_devolve_o_readback",
+      "op": "kimi_check_known",
+      "input": [
+        {
+          "default": "apikey/k3",
+          "models": [
+            {
+              "alias": "apikey/k3",
+              "provider": "apikey",
+              "id": "k3",
+              "name": "K3",
+              "context_length": 1048576,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "apikey/k3-256k",
+              "provider": "apikey",
+              "id": "k3-256k",
+              "name": "K3-256k",
+              "context_length": 262144,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            }
+          ]
+        },
+        "apikey/k3-256k"
+      ],
+      "expected": {
+        "ok": {
+          "alias": "apikey/k3-256k",
+          "provider": "apikey",
+          "id": "k3-256k",
+          "name": "K3-256k",
+          "context_length": 262144,
+          "efforts": [
+            "low",
+            "high",
+            "max"
+          ],
+          "default_effort": "high"
+        }
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_kimi_model_set_rejeita_alias_fora_do_catalogo",
+      "op": "kimi_clean_alias",
+      "input": [
+        "apikey/k4"
+      ],
+      "expected": {
+        "ok": "apikey/k4"
+      }
+    },
+    {
+      "pytest": "tests/test_api.py::test_kimi_model_set_rejeita_alias_fora_do_catalogo",
+      "op": "kimi_check_known",
+      "input": [
+        {
+          "default": "apikey/k3",
+          "models": [
+            {
+              "alias": "apikey/k3",
+              "provider": "apikey",
+              "id": "k3",
+              "name": "K3",
+              "context_length": 1048576,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "apikey/k3-256k",
+              "provider": "apikey",
+              "id": "k3-256k",
+              "name": "K3-256k",
+              "context_length": 262144,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            }
+          ]
+        },
+        "apikey/k4"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "modelo fora do catalogo: apikey/k4"
+        }
+      }
+    }
+  ]
+}

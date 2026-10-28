@@ -1,0 +1,131 @@
+{
+  "source_commit": "a0860f26b6e3f611806e780acf87588f6065b328",
+  "command": "python crates/hangar-server/src/orchestration/fixtures/generate.py",
+  "cases": [
+    {
+      "text": "",
+      "headers": [
+        "papel",
+        "sessão",
+        "provider",
+        "conta",
+        "modelo",
+        "esforço"
+      ],
+      "key": [
+        "executor"
+      ],
+      "values": {
+        "papel": "executor",
+        "sessão": "trabalho-t*",
+        "provider": "codex",
+        "conta": "padrão",
+        "modelo": "gpt",
+        "esforço": "high"
+      },
+      "table": [],
+      "replaced": "## Quem é quem\n\n| papel | sessão | provider | conta | modelo | esforço |\n|---|---|---|---|---|---|\n| executor | trabalho-t* | codex | padrão | gpt | high |\n",
+      "removed": "",
+      "column": "",
+      "section": "## Gates\n\n- Novo\n"
+    },
+    {
+      "text": "# Prosa\n",
+      "headers": [
+        "papel",
+        "sessão",
+        "provider",
+        "conta",
+        "modelo",
+        "esforço"
+      ],
+      "key": [
+        "executor"
+      ],
+      "values": {
+        "papel": "executor",
+        "sessão": "trabalho-t*",
+        "provider": "codex",
+        "conta": "padrão",
+        "modelo": "gpt",
+        "esforço": "high"
+      },
+      "table": [],
+      "replaced": "# Prosa\n\n## Quem é quem\n\n| papel | sessão | provider | conta | modelo | esforço |\n|---|---|---|---|---|---|\n| executor | trabalho-t* | codex | padrão | gpt | high |\n",
+      "removed": "# Prosa\n",
+      "column": "# Prosa\n",
+      "section": "# Prosa\n\n## Gates\n\n- Novo\n"
+    },
+    {
+      "text": "# Título\n\n## Quem é quem\n\n| Papel | Sessão | Provider | Conta | Modelo | Esforço |\n|---|---|---|---|---|---|\n| **Árbitro** | `a` | claude | p | opus | - |\n| executor | b | claude | p | sonnet | low |\n\n## Gates\n\n- Intacto\n",
+      "headers": [
+        "papel",
+        "sessão",
+        "provider",
+        "conta",
+        "modelo",
+        "esforço"
+      ],
+      "key": [
+        "executor"
+      ],
+      "values": {
+        "papel": "executor",
+        "sessão": "trabalho-t*",
+        "provider": "codex",
+        "conta": "padrão",
+        "modelo": "gpt",
+        "esforço": "high"
+      },
+      "table": [
+        {
+          "papel": "Árbitro",
+          "sessão": "a",
+          "provider": "claude",
+          "conta": "p",
+          "modelo": "opus",
+          "esforço": ""
+        },
+        {
+          "papel": "executor",
+          "sessão": "b",
+          "provider": "claude",
+          "conta": "p",
+          "modelo": "sonnet",
+          "esforço": "low"
+        }
+      ],
+      "replaced": "# Título\n\n## Quem é quem\n\n| Papel | Sessão | Provider | Conta | Modelo | Esforço |\n|---|---|---|---|---|---|\n| **Árbitro** | `a` | claude | p | opus | - |\n| executor | trabalho-t* | codex | padrão | gpt | high |\n\n## Gates\n\n- Intacto\n",
+      "removed": "# Título\n\n## Quem é quem\n\n| Papel | Sessão | Provider | Conta | Modelo | Esforço |\n|---|---|---|---|---|---|\n| **Árbitro** | `a` | claude | p | opus | - |\n\n## Gates\n\n- Intacto\n",
+      "column": "# Título\n\n## Quem é quem\n\n| papel | vez | sessão | provider | conta | modelo | esforço |\n|---|---|---|---|---|---|---|\n| Árbitro | - | a | claude | p | opus | - |\n| executor | - | b | claude | p | sonnet | low |\n\n## Gates\n\n- Intacto\n",
+      "section": "# Título\n\n## Quem é quem\n\n| Papel | Sessão | Provider | Conta | Modelo | Esforço |\n|---|---|---|---|---|---|\n| **Árbitro** | `a` | claude | p | opus | - |\n| executor | b | claude | p | sonnet | low |\n\n## Gates\n\n- Novo\n"
+    },
+    {
+      "text": "```\n| papel | sessão | provider | conta | modelo | esforço |\n|---|---|---|---|---|---|\n| exemplo | x | x | x | x | x |\n```\n",
+      "headers": [
+        "papel",
+        "sessão",
+        "provider",
+        "conta",
+        "modelo",
+        "esforço"
+      ],
+      "key": [
+        "executor"
+      ],
+      "values": {
+        "papel": "executor",
+        "sessão": "trabalho-t*",
+        "provider": "codex",
+        "conta": "padrão",
+        "modelo": "gpt",
+        "esforço": "high"
+      },
+      "table": [],
+      "replaced": "```\n| papel | sessão | provider | conta | modelo | esforço |\n|---|---|---|---|---|---|\n| exemplo | x | x | x | x | x |\n```\n\n## Quem é quem\n\n| papel | sessão | provider | conta | modelo | esforço |\n|---|---|---|---|---|---|\n| executor | trabalho-t* | codex | padrão | gpt | high |\n",
+      "removed": "```\n| papel | sessão | provider | conta | modelo | esforço |\n|---|---|---|---|---|---|\n| exemplo | x | x | x | x | x |\n```\n",
+      "column": "```\n| papel | sessão | provider | conta | modelo | esforço |\n|---|---|---|---|---|---|\n| exemplo | x | x | x | x | x |\n```\n",
+      "section": "```\n| papel | sessão | provider | conta | modelo | esforço |\n|---|---|---|---|---|---|\n| exemplo | x | x | x | x | x |\n```\n\n## Gates\n\n- Novo\n"
+    }
+  ]
+}

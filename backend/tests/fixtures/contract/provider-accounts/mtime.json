@@ -1,0 +1,14 @@
+{
+  "source_commit": "d2a42410f9fe6df4ea491b296c7fea7b98d8b844",
+  "generated_by": "Execução dos leitores originais com os.utime(ns=(1800000000000000000, ...)), seguida de alteração de conteúdo e +1 ns",
+  "stamp_ns": 1800000000000000000,
+  "delta_ns": 1,
+  "first": {
+    "kimi": "apikey",
+    "pi": "kimi:apikey"
+  },
+  "after": {
+    "kimi": "apikey",
+    "pi": "kimi:apikey"
+  }
+}

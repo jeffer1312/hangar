@@ -1,0 +1,433 @@
+{
+  "source_commit": "a0860f26b6e3f611806e780acf87588f6065b328",
+  "command": "python crates/hangar-server/src/orchestration/fixtures/generate.py",
+  "cases": [
+    {
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g1",
+          "branch": "main",
+          "plano": "p.md",
+          "ts": "2026-09-29T10:00:00+00:00"
+        }
+      ],
+      "summary": {
+        "id": "run",
+        "plano": "p.md",
+        "branch": "main",
+        "gid": "g1",
+        "inicio": "2026-09-29T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false
+      }
+    },
+    {
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g1",
+          "branch": "main",
+          "plano": "p.md",
+          "ts": "2026-09-29T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 1,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Primeira",
+          "ts": "2026-09-29T10:01:00+00:00"
+        }
+      ],
+      "summary": {
+        "id": "run",
+        "plano": "p.md",
+        "branch": "main",
+        "gid": "g1",
+        "inicio": "2026-09-29T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 1,
+            "titulo": "Primeira",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 0,
+            "resultado": null,
+            "inicio": "2026-09-29T10:01:00+00:00",
+            "fim": null,
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 1,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Primeira",
+                "ts": "2026-09-29T10:01:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false
+      }
+    },
+    {
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g1",
+          "branch": "main",
+          "plano": "p.md",
+          "ts": "2026-09-29T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 1,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Primeira",
+          "ts": "2026-09-29T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": 1,
+          "rodada": 1,
+          "ts": "2026-09-29T10:02:00+00:00"
+        }
+      ],
+      "summary": {
+        "id": "run",
+        "plano": "p.md",
+        "branch": "main",
+        "gid": "g1",
+        "inicio": "2026-09-29T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 1,
+            "titulo": "Primeira",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 1,
+            "resultado": null,
+            "inicio": "2026-09-29T10:01:00+00:00",
+            "fim": null,
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 1,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Primeira",
+                "ts": "2026-09-29T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 1,
+                "rodada": 1,
+                "ts": "2026-09-29T10:02:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false
+      }
+    },
+    {
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g1",
+          "branch": "main",
+          "plano": "p.md",
+          "ts": "2026-09-29T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 1,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Primeira",
+          "ts": "2026-09-29T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": 1,
+          "rodada": 1,
+          "ts": "2026-09-29T10:02:00+00:00"
+        },
+        {
+          "tipo": "veredito",
+          "task": 1,
+          "rodada": 1,
+          "resultado": "aprova",
+          "fase": "codigo",
+          "ts": "2026-09-29T10:03:00+00:00"
+        }
+      ],
+      "summary": {
+        "id": "run",
+        "plano": "p.md",
+        "branch": "main",
+        "gid": "g1",
+        "inicio": "2026-09-29T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 1,
+            "titulo": "Primeira",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 1,
+            "resultado": null,
+            "inicio": "2026-09-29T10:01:00+00:00",
+            "fim": null,
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 1,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Primeira",
+                "ts": "2026-09-29T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 1,
+                "rodada": 1,
+                "ts": "2026-09-29T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 1,
+                "rodada": 1,
+                "resultado": "aprova",
+                "fase": "codigo",
+                "ts": "2026-09-29T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false
+      }
+    },
+    {
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g1",
+          "branch": "main",
+          "plano": "p.md",
+          "ts": "2026-09-29T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 1,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Primeira",
+          "ts": "2026-09-29T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": 1,
+          "rodada": 1,
+          "ts": "2026-09-29T10:02:00+00:00"
+        },
+        {
+          "tipo": "veredito",
+          "task": 1,
+          "rodada": 1,
+          "resultado": "aprova",
+          "fase": "codigo",
+          "ts": "2026-09-29T10:03:00+00:00"
+        },
+        {
+          "tipo": "execucao_fim",
+          "resultado": "ok",
+          "ts": "2026-09-29T10:04:00+00:00"
+        }
+      ],
+      "summary": {
+        "id": "run",
+        "plano": "p.md",
+        "branch": "main",
+        "gid": "g1",
+        "inicio": "2026-09-29T10:00:00+00:00",
+        "fim": "2026-09-29T10:04:00+00:00",
+        "resultado": "ok",
+        "tasks": [
+          {
+            "task": 1,
+            "titulo": "Primeira",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 1,
+            "resultado": null,
+            "inicio": "2026-09-29T10:01:00+00:00",
+            "fim": null,
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 1,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Primeira",
+                "ts": "2026-09-29T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 1,
+                "rodada": 1,
+                "ts": "2026-09-29T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 1,
+                "rodada": 1,
+                "resultado": "aprova",
+                "fase": "codigo",
+                "ts": "2026-09-29T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false
+      }
+    },
+    {
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g1",
+          "branch": "main",
+          "plano": "p.md",
+          "ts": "2026-09-29T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 1,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Primeira",
+          "ts": "2026-09-29T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": 1,
+          "rodada": 1,
+          "ts": "2026-09-29T10:02:00+00:00"
+        },
+        {
+          "tipo": "veredito",
+          "task": 1,
+          "rodada": 1,
+          "resultado": "aprova",
+          "fase": "codigo",
+          "ts": "2026-09-29T10:03:00+00:00"
+        },
+        {
+          "tipo": "execucao_fim",
+          "resultado": "ok",
+          "ts": "2026-09-29T10:04:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 2,
+          "executor": "ex2",
+          "par": "subagente",
+          "ts": "2026-09-29T10:05:00+00:00"
+        }
+      ],
+      "summary": {
+        "id": "run",
+        "plano": "p.md",
+        "branch": "main",
+        "gid": "g1",
+        "inicio": "2026-09-29T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 1,
+            "titulo": "Primeira",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 1,
+            "resultado": null,
+            "inicio": "2026-09-29T10:01:00+00:00",
+            "fim": null,
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 1,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Primeira",
+                "ts": "2026-09-29T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 1,
+                "rodada": 1,
+                "ts": "2026-09-29T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 1,
+                "rodada": 1,
+                "resultado": "aprova",
+                "fase": "codigo",
+                "ts": "2026-09-29T10:03:00+00:00"
+              }
+            ]
+          },
+          {
+            "task": 2,
+            "titulo": "",
+            "executor": "ex2",
+            "par": "subagente",
+            "rodadas": 0,
+            "resultado": null,
+            "inicio": "2026-09-29T10:05:00+00:00",
+            "fim": null,
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 2,
+                "executor": "ex2",
+                "par": "subagente",
+                "ts": "2026-09-29T10:05:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false
+      }
+    }
+  ]
+}

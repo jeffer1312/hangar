@@ -809,7 +809,6 @@ def test_claude_terminal_all_producers_route_to_owner(monkeypatch,tmp_path,sourc
     monkeypatch.setattr(api,'_provider_of',lambda name:'claude')
     monkeypatch.setattr(api,'_headless',lambda name:False)
     monkeypatch.setattr(api,'_session_exists',lambda name:True)
-    monkeypatch.setattr(api,'_recusa_orq',lambda name:None)
     monkeypatch.setattr(api,'_cached_info_sync',lambda name:SimpleNamespace(jsonl=slot.binding.jsonl,provider='claude'))
     async def flow():
         await _to_rust(owner,'session')
@@ -859,7 +858,6 @@ def test_public_guest_routes_follow_owner(monkeypatch,tmp_path,kind,status):
     monkeypatch.setattr(api,'_provider_of',lambda name:'claude')
     monkeypatch.setattr(api,'_headless',lambda name:False)
     monkeypatch.setattr(api,'_session_exists',lambda name:True)
-    monkeypatch.setattr(api,'_recusa_orq',lambda name:None)
     headers={'Authorization':'Bearer guest'}
     if kind=='guest_user':
         guest=guest_users.Guest('test','guest','hash',str(tmp_path))

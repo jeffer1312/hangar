@@ -2,7 +2,11 @@
 import json
 import subprocess
 
+import pytest
+
 from test_orq_plano import PROJETO, congelar, escrever, iniciar, repo, run  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures("hangar_server_bin")
 
 
 def test_plan_check_exige_revisao_valida(tmp_path):

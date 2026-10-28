@@ -182,16 +182,23 @@ def _sem_endereco_do_plugin_real():
 
 @pytest.fixture(scope="session", autouse=True)
 def _sem_orquestracoes_reais(tmp_path_factory):
-    # A lista de sessões lê ~/.hangar/orq: uma orquestração `auto` viva na máquina viraria linha
-    # extra em todo teste que conta sessões.
-    from app.adapters.orq import runs
-    original = runs.root
-    pasta = tmp_path_factory.mktemp("orq")
-    runs.root = lambda: pasta
+    # O Rust resolve o cofre pela casa do processo; um patch no módulo Python não o isolaria.
+    pasta = tmp_path_factory.mktemp("rust-home")
+    nomes = ("HOME", "USERPROFILE", "CARGO_HOME", "RUSTUP_HOME")
+    anteriores = {nome: os.environ.get(nome) for nome in nomes}
+    # A casa de dados muda; a instalação do compilador e seu cache continuam os do preparo.
+    os.environ.setdefault("CARGO_HOME", str(Path.home() / ".cargo"))
+    os.environ.setdefault("RUSTUP_HOME", str(Path.home() / ".rustup"))
+    for nome in ("HOME", "USERPROFILE"):
+        os.environ[nome] = str(pasta)
     try:
         yield
     finally:
-        runs.root = original
+        for nome, valor in anteriores.items():
+            if valor is None:
+                os.environ.pop(nome, None)
+            else:
+                os.environ[nome] = valor
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -286,16 +293,12 @@ def _reset_auth_backoff():
 
 
 @pytest.fixture(autouse=True)
-def _reset_pi_inbox_ws_warn():
-    # Aviso-uma-vez-ate-mudar da recusa de conexao WS (app.api._ws_origem_avisada/_ws_token_avisado)
-    # e dict de MODULO: sem reset, o teste que prova "recusa loga" falharia se um teste anterior na
-    # mesma sessao ja tivesse "gasto" o aviso daquele host (mesmo padrao do _reset_auth_backoff acima).
-    from app import api
-    api._ws_origem_avisada.clear()
-    api._ws_token_avisado.clear()
-    yield
-    api._ws_origem_avisada.clear()
-    api._ws_token_avisado.clear()
+def _isolate_provider_inbox_transport():
+    from unittest.mock import patch
+    from app import providers_bridge
+    with patch.object(providers_bridge, "inbox_call", lambda operation, **arguments:
+                      {"line": None, "value": None, "disposition": "sem-linha", "present": False}):
+        yield
 
 
 @pytest.fixture(autouse=True)

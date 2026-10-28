@@ -1,4 +1,5 @@
 import logging
+import hashlib
 import os
 import re
 import threading
@@ -9,10 +10,9 @@ from pathlib import Path
 from app import agentpane
 from app import diag as usage_diag
 from app import codex_permissions as cxperm
-from app import kimi_models
 from app.askquestion import pergunta_aberta
 from app import model_picker as mp
-from app import pi_inbox
+from app import providers_bridge
 from app import plugin_bridge
 from app import tmux
 from app.models import scrub_surrogates
@@ -622,9 +622,9 @@ def _composer_ocupado_pi(name: str, pane_id: str | None = None) -> bool:
     mao)."""
     # `linha_de` e nao o pane cru: no psmux o pane e `%1` em toda sessao Pi, e perguntar pela chave
     # errada leria o composer da conversa do vizinho (mesma raiz do 11909b31).
-    chave = pi_inbox.linha_de(name, pane_id)
+    chave = providers_bridge.inbox_call("line", name=name, pane=pane_id)["line"]
     if chave:
-        resposta = pi_inbox.INBOX.perguntar_sync(chave, "editor")
+        resposta = providers_bridge.inbox_call("question", key=chave, what="editor")["value"]
         if resposta is not None:
             # `.strip()`: um espaco solto no campo nao e rascunho que valha adiar envio — e o que
             # sobra de um paste cancelado. Vazio e resposta ("nao ha rascunho"), None e ausencia.
@@ -681,14 +681,70 @@ def deliverable(name: str) -> bool:
 # Lock POR SESSAO serializando o send_prompt: dois /input quase simultaneos (ou /input + drain)
 # rodavam em threads digitando no MESMO tty — o texto de B aterrissava na janela de settle de A e o
 # Enter de A submetia os dois CONCATENADOS. setdefault e atomico no CPython (pior caso: Lock orfao).
-_send_locks: dict[str, threading.Lock] = {}
+class _SharedSendLock:
+    """Adapta a trava existente do sistema ao mesmo contrato de threading.Lock."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.local = threading.Lock()
+        self.file = None
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        from app.account_lifecycle import GuardMode, _try_lock
+
+        deadline = time.monotonic() + timeout if timeout >= 0 else None
+        if not self.local.acquire(blocking, timeout):
+            return False
+        file = None
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            file = self.path.open("a+b")
+            while not _try_lock(file, GuardMode.EXCLUSIVE):
+                if not blocking or deadline is not None and time.monotonic() >= deadline:
+                    file.close()
+                    self.local.release()
+                    return False
+                remaining = deadline - time.monotonic() if deadline is not None else 0.025
+                threading.Event().wait(min(0.025, max(0, remaining)))
+            self.file = file
+            return True
+        except BaseException:
+            if file is not None:
+                file.close()
+            self.local.release()
+            raise
+
+    def release(self):
+        if self.file is None:
+            raise RuntimeError("release unlocked lock")
+        file, self.file = self.file, None
+        try:
+            file.close()
+        finally:
+            self.local.release()
+
+    def locked(self) -> bool:
+        return self.local.locked()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *args):
+        self.release()
+
+
+_send_locks: dict[tuple[Path, str], _SharedSendLock] = {}
 
 # Providers cuja entrega NAO passa pelo teclado do pane — ver o guard no topo do `drain`.
 _SEM_TECLA = frozenset({"codex"})
 
 
-def _send_lock(name: str) -> threading.Lock:
-    return _send_locks.setdefault(name, threading.Lock())
+def _send_lock(name: str) -> _SharedSendLock:
+    home = Path.home()
+    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()
+    path = home / ".hangar" / "terminal-locks" / f"{digest}.lock"
+    return _send_locks.setdefault((home, name), _SharedSendLock(path))
 
 
 def _drain_pelo_plugin(name: str, q: PromptQueue, start_ts: float, jsonl: str | None = None) -> int:
@@ -1726,9 +1782,9 @@ class TerminalInput:
             # `linha_de` (nome primeiro, pane depois) e nao o pane cru: no psmux TODA sessao Pi se
             # declara `%1`, entao procurar por pane entregava a mensagem na conversa da OUTRA
             # sessao — medido 22/08/2026, com `delivered: true` na resposta. Ver pi_inbox.
-            chave = provider in ("pi", "omp") and pi_inbox.linha_de(name, pane_id)
+            chave = provider in ("pi", "omp") and providers_bridge.inbox_call("line", name=name, pane=pane_id)["line"]
             if chave:
-                r = pi_inbox.INBOX.entregar_sync(chave, text, msg_id)
+                r = providers_bridge.inbox_call("deliver", key=chave, text=text, msg_id=msg_id)["disposition"]
                 if r != "sem-linha":
                     return r
             # Gate de entregabilidade (chokepoint UNICO p/ texto livre — /input e drain passam por
@@ -2345,127 +2401,6 @@ class TerminalInput:
         ):
             raise mp.PickerError(409, f"expected session-only switch, got: {result}")
         return {"ok": True, "scope": scope, "result": result}
-
-    def send_pi_commands(self, name: str, commands: list[str]) -> None:
-        """Digita comandos da extensao do Pi (`/cp-model …`, `/cp-think …`) no pane, em ordem.
-
-        Nao ha picker a dirigir aqui: o Pi aplica a troca pela API de extensao (ver `pi_models`),
-        entao isto e so o mesmo maquinario de ENVIO do send_prompt — mesmo lock por sessao (dois
-        toques simultaneos nao intercalam teclas no tty), mesmo gate de overlay e mesma espera de
-        TUI pronta com o marcador do Pi.
-
-        UM Enter por comando (medido: os nossos comandos nao registram completions de argumento,
-        entao o menu de autocomplete fecha no espaco e nao engole o Enter — ao contrario do
-        `/model` NATIVO do Pi, que tem completions e reescreve o argumento).
-        """
-        with _send_lock(name):
-            if not deliverable(name):
-                raise DriveError("pane com overlay aberto ou sessao morta — nada foi digitado")
-            _wait_input_ready(name, provider="pi")
-            # Mesma guarda anti-colagem do send_prompt: comando digitado em cima de residuo deixa
-            # de ser comando e vira mensagem pro modelo (pior que a colagem de prompt). Achado da
-            # review de 31/07 — o gate precisa valer em TODO caminho que digita no composer do Pi.
-            #
-            # Este e o caminho que MAIS precisa da pergunta pela linha: aqui o guard e um 409 na
-            # cara do usuario (nao um adiamento silencioso), e a troca de modelo pelo app ficava
-            # recusada enquanto qualquer aviso de extensao estivesse desenhado na faixa do composer
-            # — medido 22/08/2026 com o aviso da nossa propria extensao de estado.
-            if _composer_ocupado_pi(name, agentpane.pane_info(name)[1]):
-                raise DriveError("composer do pi ja tem texto — comando nao digitado (residuo/rascunho)")
-            for cmd in commands:
-                send_keys(name, cmd, literal=True)
-                time.sleep(_SLASH_SETTLE)
-                send_keys(name, "Enter")
-                time.sleep(_OPEN_SETTLE)
-
-    def set_kimi_model(self, name: str, alias: str | None = None, display: str | None = None,
-                       effort: str | None = None) -> dict:
-        """Troca modelo e/ou nível de pensamento de uma sessao Kimi dirigindo o picker do `/model`.
-
-        Sequencia medida ao vivo (Kimi Code 0.37.2, ver kimi_models.py): abre com `/model`+Enter.
-        Modelo: digita o ALIAS completo na busca (ela casa alias, nao so nome — a lista do picker e
-        invisivel pro capture-pane, entao navegar por setas seria as cegas). Esforço: a linha
-        "Thinking (←→ to switch)" mostra os níveis do modelo com o ATUAL colchetado — lê o pane,
-        anda Left/Right a diferença de posições. SEMPRE aplica com Alt+S, que troca SO na sessao;
-        NUNCA Enter: ele gravaria o alias como default_model GLOBAL no config.toml (medido: o
-        arquivo e reescrito na hora). Confirma pela linha NOVA no scrollback — "Switched to …" pra
-        modelo, "Thinking set to …" pra esforço — com baseline lida ANTES de digitar (a linha da
-        troca anterior continua na tela, mesmo cuidado do set_engine_model com k3-256k -> k3).
-        """
-        with _send_lock(name):
-            if not deliverable(name):
-                raise DriveError("pane com overlay aberto ou sessao morta — nada foi digitado")
-            _wait_input_ready(name, provider="kimi")
-            pane0 = tmux.capture_pane(name) or ""
-            antes_model = kimi_models.parse_switched(pane0)
-            antes_effort = kimi_models.parse_thinking_set(pane0)
-            send_keys(name, "/model", literal=True)
-            time.sleep(_SLASH_SETTLE)
-            send_keys(name, "Enter")
-            # SONDAGEM, não foto única: numa sessão recém-aberta o picker leva ~2s pra pintar a
-            # primeira vez (medido no e2e), e checar uma vez só aos 0.7s abortava com o picker
-            # abrindo logo depois — o Esc de saída caía ANTES dele e ficava tudo aberto. Sem 2o
-            # Enter de insistência (o que o Claude faz em _open_model_picker): aqui ele cairia
-            # num picker JÁ aberto meio pintado e confirmaria a linha sob o cursor COMO DEFAULT
-            # GLOBAL — o lado errado da falha. Não abriu no prazo: erro e o usuário tenta de novo.
-            fim = time.monotonic() + self._RESULT_PRAZO
-            aberto = False
-            while time.monotonic() < fim:
-                time.sleep(_SETTLE)
-                if "Select a model" in (tmux.capture_pane(name) or ""):
-                    aberto = True
-                    break
-            if not aberto:
-                self._abort(name)
-                raise mp.PickerError(409, "o picker do /model do Kimi nao abriu")
-            if alias:
-                send_keys(name, alias, literal=True)
-                # A busca filtra no redraw; teclar o Alt+S em cima da digitacao aplicaria o item que
-                # estava sob o cursor ANTES do filtro — o K3 errado com folga.
-                time.sleep(_OPEN_SETTLE)
-            if effort:
-                row = kimi_models.parse_thinking_row(tmux.capture_pane(name) or "")
-                if row is None:
-                    self._abort(name)
-                    raise mp.PickerError(409, "este modelo nao tem niveis de pensamento no picker")
-                niveis = [n.lower() for n in row["levels"]]
-                if effort not in niveis:
-                    self._abort(name)
-                    raise mp.PickerError(409, f"nivel {effort} nao aparece no picker deste modelo")
-                passos = niveis.index(effort) - niveis.index(row["current"].lower())
-                for _ in range(abs(passos)):
-                    send_keys(name, "Right" if passos > 0 else "Left")
-                    time.sleep(_NAV_GAP)
-                time.sleep(_SETTLE)
-            send_keys(name, "M-s")
-            fim = time.monotonic() + self._RESULT_PRAZO
-            while True:
-                time.sleep(_SETTLE)
-                pane = tmux.capture_pane(name) or ""
-                troca = kimi_models.parse_switched(pane)
-                pensou = kimi_models.parse_thinking_set(pane)
-                # Modelo: "Switched to X with thinking Y". Esforço sozinho: "Thinking set to Y".
-                # Pedidos juntos: a linha "Switched" carrega o nível e serve de prova pros dois.
-                ok_model = not alias or (
-                    troca is not None and troca != antes_model and troca.get("name") == display)
-                ok_effort = not effort or (
-                    (pensou is not None and pensou != antes_effort and pensou.get("level") == effort)
-                    or (troca is not None and troca != antes_model
-                        and troca.get("level") == effort))
-                if ok_model and ok_effort:
-                    linha = (troca or pensou or {}).get("raw") if (troca or pensou) else None
-                    return {"ok": True, "result": linha}
-                novo = (troca if troca != antes_model else None) or \
-                       (pensou if pensou != antes_effort else None)
-                if novo is not None:
-                    # Saiu uma linha NOVA mas não é o pedido: a busca/navegação casou algo
-                    # inesperado. Falha alta, nunca sucesso sobre o que ficou.
-                    self._abort(name)
-                    raise mp.PickerError(
-                        409, f"o Kimi aplicou outra coisa ({novo.get('raw')})")
-                if time.monotonic() >= fim:
-                    self._abort(name)
-                    raise mp.PickerError(409, "sem confirmacao da troca no terminal")
 
     # ── modo de permissao do Codex (`/permissions`) ─────────────────────────────────────────
     # Mesmo desenho do picker do `/model`: abre, le/navega, e nunca fecha por numero (a tecla de

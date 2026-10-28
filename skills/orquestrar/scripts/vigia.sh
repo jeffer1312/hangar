@@ -404,11 +404,9 @@ if s.get("pair_gid"):
         print(f"other-group {s['pair_gid']}")
         sys.exit()
 if identities.get(name):
-    path = Path(sys.argv[4]).resolve().parents[3] / "backend" / "app" / "orq_identity.py"
-    spec = importlib.util.spec_from_file_location("orq_session_identity", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    if mod.identity(name) != identities[name]:
+    sys.path.insert(0, str(Path(sys.argv[4]).resolve().parents[3] / "backend"))
+    from app.providers_bridge import local
+    if local("orq-info", "identity", name=name) != identities[name]:
         print("other-identity")
         sys.exit()
 jsonl = s.get("jsonl")

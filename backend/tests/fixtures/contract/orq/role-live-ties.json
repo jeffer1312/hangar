@@ -1,0 +1,45 @@
+{
+  "source_commit": "a0860f26b6e3f611806e780acf87588f6065b328",
+  "command": "HANGAR_ORQ_REFERENCE_ROOT=<checkout-origem> python backend/tests/fixtures/contract/orq/generate_role_live.py",
+  "cases": [
+    {
+      "rows": [
+        {
+          "name": "worker-a",
+          "last_activity": 1.0
+        },
+        {
+          "name": "worker-b",
+          "last_activity": 1.0
+        }
+      ],
+      "expected": "worker-a"
+    },
+    {
+      "rows": [
+        {
+          "name": "worker-a",
+          "last_activity": null
+        },
+        {
+          "name": "worker-b",
+          "last_activity": null
+        }
+      ],
+      "expected": "worker-a"
+    },
+    {
+      "rows": [
+        {
+          "name": "worker-a",
+          "last_activity": -0.0
+        },
+        {
+          "name": "worker-b",
+          "last_activity": 0.0
+        }
+      ],
+      "expected": "worker-a"
+    }
+  ]
+}

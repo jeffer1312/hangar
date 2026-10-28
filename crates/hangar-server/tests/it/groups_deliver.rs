@@ -1,5 +1,5 @@
 //! Aviso de grupo pelo mesmo caminho do `/input` (`deliver_text`), texto do protocolo e fatos da
-//! orquestração pedidos ao Python falso.
+//! orquestração lidos no cofre isolado.
 use crate::fake;
 
 use std::path::Path;
@@ -256,46 +256,82 @@ fn protocol_text_is_rendered_in_process_and_group_needs_another_member() {
     assert_eq!((&err["code"], &err["params"]["erro"]), (&json!("erro_envio_falhou"), &json!("groups_pair_text_no_others")));
 }
 
+fn isolated_accounts(st: &mut AppState, home: &Path) {
+    st.accounts = hangar_server::accounts::AccountService::new(
+        hangar_server::accounts::environment::AccountEnvironment::from_map(
+            [("HOME".into(),home.to_string_lossy().into_owned()),
+             ("USERPROFILE".into(),home.to_string_lossy().into_owned())].into()));
+}
+fn native_run(home: &Path, ended: bool) {
+    let root = hangar_server::orchestration::runs::root(home).join("one");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("orq.json"),"{\"auto\":true}").unwrap();
+    let mut events = "{\"tipo\":\"execucao_inicio\",\"gid\":\"g1\"}\n".to_owned();
+    if ended {events += "{\"tipo\":\"execucao_fim\"}\n";}
+    std::fs::write(root.join("eventos.jsonl"),events).unwrap();
+    std::fs::write(root.join("vigia.json"),json!({"ts":chrono::Utc::now().to_rfc3339(),"pid":std::process::id()}).to_string()).unwrap();
+}
+
 #[tokio::test]
 async fn orq_phase_maps_every_answer_and_failure_is_unknown() {
-    let (python, st) = state(None, Duration::from_secs(5)).await;
-    let orq = PythonOrq::from_state(&st);
-    for (phase, want) in [(json!("live"), OrqPhase::Live), (json!("ended"), OrqPhase::Ended), (Value::Null, OrqPhase::NotStarted),
-                          (json!("unknown"), OrqPhase::Unknown), (json!("other"), OrqPhase::Unknown)] {
-        python.set_internal("orq/group-phase", StatusCode::OK, json!({"phase": phase}));
-        assert_eq!(orq.phase("g1").await, want, "{phase}");
-    }
-    assert_eq!(python.internal_bodies("orq/group-phase")[0], json!({"gid": "g1"}));
-    python.set_internal("orq/group-phase", StatusCode::OK, json!({}));
-    assert_eq!(orq.phase("g1").await, OrqPhase::Unknown, "sem a chave não é 'sem execução'");
-    python.set_internal("orq/group-phase", StatusCode::INTERNAL_SERVER_ERROR, json!({}));
-    assert_eq!(orq.phase("g1").await, OrqPhase::Unknown);
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let (python, mut st) = state(None, Duration::from_secs(5)).await;
+    isolated_accounts(&mut st,&home);
+    let orq = PythonOrq::from_state(&st).with_paths(home.clone(),dir.path().join("pair"));
+    assert_eq!(orq.phase("g1").await,OrqPhase::NotStarted);
+    native_run(&home,false);
+    assert_eq!(orq.phase("g1").await,OrqPhase::Live);
+    native_run(&home,true);
+    assert_eq!(orq.phase("g1").await,OrqPhase::Ended);
+    let cfg = home.join(".hangar/orq/one/orq.json");
+    std::fs::write(&cfg,"{").unwrap();
+    assert_eq!(orq.phase("g1").await,OrqPhase::NotStarted,"JSON inválido não é uma execução");
+    native_run(&home,true);
+    let events = home.join(".hangar/orq/one/eventos.jsonl");
+    std::fs::remove_file(&events).unwrap();
+    std::fs::create_dir(&events).unwrap();
+    assert_eq!(orq.phase("g1").await,OrqPhase::Unknown,"leitura falhou: não decide no escuro");
+    std::fs::remove_dir_all(home.join(".hangar/orq")).unwrap();
+    std::fs::write(home.join(".hangar/orq"),"ilegível").unwrap();
+    assert_eq!(orq.phase("g1").await,OrqPhase::Unknown);
+    assert!(python.internal_bodies("orq/group-phase").is_empty());
 }
 
 #[tokio::test]
 async fn orq_promote_ok_and_conflict_text() {
-    let (python, st) = state(None, Duration::from_secs(5)).await;
-    let orq = PythonOrq::from_state(&st);
-    python.set_internal("orq/promote", StatusCode::OK, json!({}));
-    assert_eq!(orq.promote("a", "g1").await, Ok(()));
-    assert_eq!(python.internal_bodies("orq/promote"), vec![json!({"name": "a", "gid": "g1"})]);
-    python.set_internal("orq/promote", StatusCode::CONFLICT,
-        json!({"detail": {"code": "erro_orq_arquivo_mudou", "params": {}, "msg": "o time já pertence a outro grupo"}}));
-    assert_eq!(orq.promote("a", "g1").await, Err(PromoteError::Conflict("o time já pertence a outro grupo".to_owned())));
-    // Só o 409 é conflito; o resto é o Python indisponível, com o código.
-    for (status, code) in [(StatusCode::INTERNAL_SERVER_ERROR, "groups_orq_promote_status_500"), (StatusCode::NOT_FOUND, "groups_orq_promote_status_404")] {
-        python.set_internal("orq/promote", status, json!({}));
-        assert_eq!(orq.promote("a", "g1").await, Err(PromoteError::Unavailable(code.to_owned())));
-    }
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let pair = dir.path().join("pair");
+    let (python, mut st) = state(None, Duration::from_secs(5)).await;
+    isolated_accounts(&mut st,&home);
+    let root = home.join(".hangar/claude-headless");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&pair).unwrap();
+    std::fs::write(root.join("a.json"),"{\"key\":\"life-a\"}").unwrap();
+    let orq = PythonOrq::from_state(&st).with_paths(home.clone(),pair.clone());
+    assert_eq!(orq.promote("a","g1").await,Ok(()));
+    let gid = hangar_server::orchestration::context::draft(&home,"a","unused").unwrap();
+    let source = pair.join(format!("regras-{gid}.md"));
+    std::fs::write(&source,"<!-- hangar-orq-group: other -->\n").unwrap();
+    assert_eq!(orq.promote("a","g1").await,Err(PromoteError::Conflict("o time já pertence a outro grupo".into())));
+    std::fs::remove_file(&source).unwrap();
+    std::fs::create_dir(&source).unwrap();
+    assert!(matches!(orq.promote("a","g1").await,Err(PromoteError::Conflict(_))),"falha local de disco é conflito com restauração");
+    assert!(python.internal_bodies("orq/promote").is_empty());
 }
 
 #[tokio::test]
-async fn orchestrator_names_come_from_python() {
-    let (python, st) = state(None, Duration::from_secs(5)).await;
-    python.set_internal("orq/is-orchestrator", StatusCode::OK, json!({"names": ["g1-orq"]}));
+async fn orchestrator_names_come_from_the_native_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let (python, mut st) = state(None, Duration::from_secs(5)).await;
+    isolated_accounts(&mut st,&home);
     let names = vec!["a".to_owned(), "g1-orq".to_owned()];
-    assert_eq!(is_orchestrator(&st, &names).await, Ok(vec!["g1-orq".to_owned()]));
-    assert_eq!(python.internal_bodies("orq/is-orchestrator"), vec![json!({"names": ["a", "g1-orq"]})]);
-    python.set_internal("orq/is-orchestrator", StatusCode::INTERNAL_SERVER_ERROR, json!({}));
-    assert!(is_orchestrator(&st, &names).await.is_err());
+    native_run(&home,false);
+    assert_eq!(is_orchestrator(&st,&names).await,Ok(vec!["g1-orq".into()]));
+    assert!(python.internal_bodies("orq/is-orchestrator").is_empty());
+    std::fs::remove_dir_all(home.join(".hangar/orq")).unwrap();
+    std::fs::write(home.join(".hangar/orq"),"ilegível").unwrap();
+    assert!(is_orchestrator(&st,&names).await.is_err());
 }

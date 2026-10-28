@@ -1,47 +1,13 @@
 """Rotas de orquestração: política (GET/PUT) e papéis do grupo (GET/POST) e o kick-off do árbitro."""
-from types import SimpleNamespace
-
+import os
 import pytest
-from fastapi.testclient import TestClient
-
-from app import orq_context, orq_papeis, orq_politica, pair
-from app.config import settings
+from orq_contract_client import roles as orq_papeis
+from orq_http_native import NativeClient, NativePlan as orq_start
 
 
 @pytest.fixture
 def cli(monkeypatch, tmp_path):
-    settings.auth_token = "secret"
-    import app.api as api_mod
-    from app.api import app
-    monkeypatch.setattr(orq_politica, "caminho", lambda: tmp_path / "orquestracao-contas.md")
-    monkeypatch.setattr(orq_papeis, "regras_path", lambda gid: tmp_path / f"regras-{gid}.md")
-    inv = [
-        orq_politica.ContaInventario("200-01", "claude", "Rafael", "claude:/x/200-01",
-                                     ({"id": "opus[1m]"}, {"id": "sonnet"}), False),
-        orq_politica.ContaInventario("apikey", "kimi", "Kimi", "kimi:apikey", ({"id": "apikey/k3"},)),
-    ]
-    monkeypatch.setattr(api_mod, "_inventario", lambda: inv)
-    # E TAMBÉM no módulo: quem escreve a seção "O que NÃO pode" é `orq_politica._secao_nao_pode`,
-    # que chama o `inventario()` dele — não o da API. Sem este segundo patch o arquivo gravado
-    # lista as contas REAIS da máquina de quem roda o teste, e o caso passa ou falha conforme quem
-    # tem qual conta instalada (verde aqui, vermelho no CI).
-    monkeypatch.setattr(orq_politica, "inventario", lambda *a, **k: inv)
-    links = lambda name: SimpleNamespace(
-        get=lambda: {"peers": ["arb"], "gid": "g1"} if name in ("exec", "arb") else None)
-    monkeypatch.setattr(api_mod, "PairLink", links)
-    monkeypatch.setattr(pair, "PairLink", links)
-    monkeypatch.setattr(orq_context, "active_gid", lambda name: None)
-    monkeypatch.setattr(orq_context, "identity", lambda name: "test-session:" + name)
-    # `cwd` no stub porque o /orq/comecar procura o plano da PASTA da sessão.
-    sessoes = [SimpleNamespace(name="arb", provider="claude", last_activity=1.0, cwd=str(tmp_path)),
-               SimpleNamespace(name="exec", provider="claude", last_activity=2.0, cwd=str(tmp_path))]
-    monkeypatch.setattr(api_mod.registry, "list", lambda: sessoes)
-    enviados = []
-    monkeypatch.setattr(api_mod, "_send_one", lambda n, t: (enviados.append((n, t)) or {"ok": True, "delivered": True}))
-    monkeypatch.setattr(orq_politica, "_niveis", lambda p, m: None)
-    c = TestClient(app)
-    c.enviados = enviados
-    return c
+    return NativeClient(tmp_path, monkeypatch)
 
 
 H = {"Authorization": "Bearer secret"}
@@ -55,7 +21,7 @@ def test_politica_put_e_get(cli, tmp_path):
     assert r.status_code == 200, r.text
     pol = cli.get("/api/orquestracao/politica", headers=H).json()["politica"]
     assert pol[0]["conta"] == "200-01" and pol[0]["modelos"] == ["opus[1m]"] and pol[0]["trocar"] is False
-    assert "`apikey` (kimi) — não liberada" in (tmp_path / "orquestracao-contas.md").read_text()
+    assert "`apikey` (kimi) — não liberada" in cli.policy.read_text(encoding="utf-8")
     # mtime velho -> 409; modelo fora do catálogo -> 400; conta desconhecida -> 400
     assert cli.put("/api/orquestracao/politica/200-01", headers=H,
                    json={"provider": "claude", "mtime": 0.0}).status_code == 409
@@ -112,10 +78,7 @@ def test_papel_post_grava_sem_avisar_arbitro(cli, tmp_path):
 
 
 def test_actual_group_remains_readable_without_identity(cli, monkeypatch):
-    def unavailable(name):
-        raise orq_context.IdentityUnavailable("cannot read current process")
-
-    monkeypatch.setattr(orq_context, "identity", unavailable)
+    (cli.sidecars / "exec.json").unlink()
     r = cli.get("/api/sessions/exec/orq", headers=H)
     assert r.status_code == 200 and r.json()["grouped"] is True
     assert r.json()["gid"] == "g1" and r.json()["session_identity"] is None
@@ -125,7 +88,6 @@ def test_find_plan_ignora_exemplo_e_plano_terminado(tmp_path):
     """Exemplo do formato dentro de bloco de código não é plano, e plano com todo Step marcado —
     carimbado ou não — é trabalho feito: nenhum dos dois pode virar o plano do play."""
     import subprocess
-    from app import orq_start
     orq = orq_start._orq()
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     (tmp_path / "doc.md").write_text("````md\n```\n### Task 1: x\n```\n### Task 2: y\n````\n", encoding="utf-8")
@@ -136,15 +98,18 @@ def test_find_plan_ignora_exemplo_e_plano_terminado(tmp_path):
     assert orq.find_plan(tmp_path)["path"] == str(tmp_path / "aberto.md")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a sonda de erro usa um executável shell POSIX")
 def test_prontidao_nao_confunde_git_quebrado_com_sem_plano(tmp_path, monkeypatch):
     """Git que falha (timeout, dono duvidoso) não é "não há plano": o recado de planejadora avisa
     que não deu para ler, senão ela escreve um plano novo por cima de um que existe."""
     import subprocess
-    from app import orq_start
     orq = orq_start._orq()
-    real = subprocess.run
-    monkeypatch.setattr(orq.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
-        a[0], 128, "", "fatal: detected dubious ownership") if a[0][:1] == ["git"] else real(*a, **k))
+    programs = tmp_path / "programs"
+    programs.mkdir()
+    git = programs / "git"
+    git.write_text("#!/bin/sh\necho 'fatal: detected dubious ownership' >&2\nexit 128\n", encoding="utf-8")
+    git.chmod(0o700)
+    monkeypatch.setenv("PATH", str(programs))
     r = orq_start.readiness(str(tmp_path), False, True)
     assert r["phase"] == "planner" and any("dubious ownership" in p for p in r["problems"])
     assert "Não consegui ler tudo" in orq_start.kickoff(r, "/c/regras.md")
@@ -156,7 +121,6 @@ def test_comecar_parte_do_passo_que_falta(cli, tmp_path):
     """O botão "Começar" nunca recusa por falta de plano: sem plano a PRÓPRIA sessão vira
     planejadora; com o plano carimbado e grupo, árbitra. A régua é o `find_plan` do orq.py."""
     import subprocess
-    from app import orq_start
     mt0 = cli.get("/api/orquestracao/politica", headers=H).json()["mtime"]
     cli.put("/api/orquestracao/politica/200-01", headers=H, json={"provider": "claude", "mtime": mt0})
     cli.post("/api/sessions/exec/orq/papel", headers=H, json={
@@ -207,8 +171,8 @@ def test_remover_uma_conta_do_rodizio_nao_leva_as_outras(cli, tmp_path):
 
 
 def test_papel_guarda_abertura_e_recusa_o_que_a_criacao_recusaria(cli, tmp_path, monkeypatch):
-    import app.api as api_mod
-    monkeypatch.setattr(api_mod.engines, "listar", lambda: ["m1"])
+    import json
+    (cli.base / "engines.json").write_text(json.dumps({"m1": {"api_key": "synthetic", "base_url": "https://example.invalid"}}), encoding="utf-8")
     mt0 = cli.get("/api/orquestracao/politica", headers=H).json()["mtime"]
     mt1 = cli.put("/api/orquestracao/politica/200-01", headers=H, json={"provider": "claude", "mtime": mt0}).json()["mtime"]
     cli.put("/api/orquestracao/politica/apikey", headers=H, json={"provider": "kimi", "mtime": mt1})
@@ -258,15 +222,15 @@ def test_sem_terminal_com_read_only_na_abertura_e_recusado(cli, tmp_path):
         "modelo": "opus[1m]", "esforco": "high", "mtime": 0.0})
     # O árbitro escreve `--read-only` na célula de abertura; o painel não edita esse trecho.
     from dataclasses import replace
-    regras = tmp_path / "regras-g1.md"
-    texto = regras.read_text()
+    regras = cli.rules
+    texto = regras.read_text(encoding="utf-8")
     rev = next(x for x in orq_papeis.ler(texto) if x.papel == "revisor")
-    regras.write_text(orq_papeis.escrever_papel(texto, replace(rev, abertura_extra="--read-only")))
-    antes = regras.read_text()
+    regras.write_text(orq_papeis.escrever_papel(texto, replace(rev, abertura_extra="--read-only")), encoding="utf-8")
+    antes = regras.read_text(encoding="utf-8")
     got = cli.get("/api/sessions/exec/orq", headers=H).json()
     r = cli.post("/api/sessions/exec/orq/papeis", headers=H, json={
         "mtime": got["mtime"], "papeis": [
             {"papel": "revisor", "sessao": "rev", "provider": "claude", "conta": "200-01",
              "modelo": "opus[1m]", "esforco": "high", "headless": True}]})
     assert r.status_code == 400 and r.json()["detail"]["code"] == "erro_orq_headless_read_only"
-    assert regras.read_text() == antes
+    assert regras.read_text(encoding="utf-8") == antes

@@ -245,45 +245,16 @@ def transcription_config():
             "state_path": str(Path.home() / ".hangar" / "transcription-wait.json")}
 
 
-class _OrqGid(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    gid: str
 
 
-class _OrqPromote(_OrqGid):
-    name: str
 
 
-class _OrqNames(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    names: list[str]
 
 
-@router.post("/orq/group-phase")
-async def orq_group_phase(body: _OrqGid) -> dict:
-    from app.adapters.orq import runs
-    return {"phase": await internal_thread(runs.group_phase, body.gid)}
 
 
-@router.post("/orq/promote")
-async def orq_promote(body: _OrqPromote) -> dict:
-    """O Rust promove o time quando um grupo `orq` nasce, com os mesmos erros da rota `/pair`."""
-    from app import orq_context, orq_md
-    try:
-        await internal_thread(orq_context.promote, body.name, body.gid)
-    except orq_context.IdentityUnavailable:
-        # Sem identidade não houve configuração pela API para promover.
-        logging.getLogger(__name__).warning("pair: sem identidade para promover o grupo %s", body.gid)
-    except (orq_context.PromotionConflict, orq_md.Conflito) as e:
-        raise HTTPException(409, detail=erro("erro_orq_arquivo_mudou", str(e)))
-    return {}
 
 
-@router.post("/orq/is-orchestrator")
-async def orq_is_orchestrator(body: _OrqNames) -> dict:
-    """Os nomes que são a linha do orquestrador: a recusa `_recusa_orq` das rotas de par."""
-    from app.adapters.orq import runs
-    return {"names": await internal_thread(lambda: [n for n in body.names if runs.find(n)])}
 
 
 @router.get("/costs/scopes")
@@ -292,15 +263,3 @@ async def costs_scopes() -> dict:
     return await internal_thread(costs_sources.scopes_for_rust)
 
 
-@router.get("/orq/{exec_id}/conductor-facts")
-async def orq_conductor_facts(exec_id: str) -> dict:
-    """Uma leitura factual: caminho validado e watchdog compartilhado com a lista."""
-    from app import orq, orq_conductor
-
-    def read():
-        directory = orq.exec_dir(orq.raiz_padrao(), exec_id)
-        if directory is None or not directory.is_dir():
-            raise HTTPException(404, detail=erro("erro_nao_encontrado", "execução não encontrada"))
-        return {"path": str(directory), "watchdog": orq_conductor.watchdog(directory, orq_conductor.units())}
-
-    return await internal_thread(read)

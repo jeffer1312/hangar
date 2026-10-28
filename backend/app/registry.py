@@ -28,7 +28,6 @@ from app import guest_users
 from app.pair import PairLink
 from app.adapters.claude_headless import sessions as headless_sessions
 from app.adapters.codex import sessions as codex_sessions
-from app.adapters.orq import runs as orq_runs
 from app import codex_contas
 from app.askquestion import clear_pending_askq, pergunta_aberta
 from app.state import (classify, _live_spinner, rate_limit_reset, corrige_ocioso_kimi,
@@ -201,16 +200,6 @@ def _decorate_plan(info) -> None:
     info.plan_tasks = [(t.done, t.total) for t in p.tasks[:_MAX_PLAN_TASK_SEGMENTS]]
 
 
-def _orq_infos() -> list[SessionInfo]:
-    """Orquestrações `auto` vivas: sem pane nem processo. A linha do tempo da execução é o
-    transcript, e o grupo do árbitro põe a linha no bloco dele."""
-    try:
-        runs = orq_runs.active()
-    except Exception:
-        _log.warning("orq: leitura das orquestrações falhou (lista segue)", exc_info=True)
-        return []
-    return [SessionInfo(name=run["name"], cwd=run["repo"], jsonl=run["timeline"], provider="orq",
-                        tracked=True, pair_gid=run["gid"], orq_arbiter=run["arbiter"]) for run in runs]
 
 
 def _decorate_transfers(infos: list[SessionInfo]) -> None:
@@ -1347,9 +1336,7 @@ class SessionRegistry:
         # No Python quem garante isso é o `_guardar_snap(forcar=True)`, que relê os processos.
         if rust_owns_list():
             from app import list_bridge
-            # A descoberta do Rust não traz as `orq` (na lista elas vêm dos fatos); sem elas, quem
-            # procura a sessão pelo nome (painel, histórico) não a acha.
-            return list_bridge.discover(newer_than) + _orq_infos()
+            return list_bridge.discover(newer_than)
         PYTHON_DISCOVERY["list"] += 1
         # Resolucao de jsonl/tracked de todas as sessoes. Otimizado: UM mapa /proc + UMA chamada tmux
         # (pane_pid em lote) reusados por sessao -> O(P + S·descendentes) em vez de O(S·P). NAO calcula
@@ -1412,10 +1399,7 @@ class SessionRegistry:
                 # devolve tracked=True sozinha (list() e polled).
                 tracked = jsonl is not None
             elif prov == "kimi":
-                # Mesmo contrato do Pi acima: so o bilhete do hook (kimi_session_file) liga o pane
-                # ao wire — sem ele NAO ha fallback (o Kimi nao aceita id escolhido pelo caller).
-                # Temporario: a sessao Kimi so nasce no 1o prompt ("No session yet" da TUI), entao
-                # toda sessao recem-criada fica untracked ate o 1o turno.
+                # Só o bilhete do hook liga o pane ao wire; o Kimi não aceita um ID escolhido.
                 jsonl = kimi_session_file(p.get("pane_id", ""), p["pid"], p["cwd"])
                 tracked = jsonl is not None
             elif prov == "codex":
@@ -1458,29 +1442,13 @@ class SessionRegistry:
             if info.engine:
                 info.conta = (procinfo._env_var_of(pid_env, "CP_ENGINE_CREDENTIAL_ID")
                               if info.engine_account else f"chave:{info.engine}")
-            elif prov == "kimi":
-                # Sessão Kimi sem motor gasta o provider do default_model do config dela
-                # ("apikey/k3" -> conta "kimi:apikey"). Cache por mtime dentro de cotas — isto
-                # roda por sessão a cada varredura.
-                from app import cotas
-                padrao = cotas.provider_padrao_kimi()
-                info.conta = f"kimi:{padrao}" if padrao else None
-            elif prov in ("pi", "omp"):
-                # Sessão Pi/omp gasta a credencial do modelo escolhido NELA (o `current.provider` do
-                # sidecar do catálogo), que pode ser a mesma chave Kimi/motor que já é uma conta
-                # desta lista. Provider sem chave conhecida (OAuth do Codex, provedor só do Pi)
-                # segue None, e a pílula cai no pior-geral como antes.
-                from app import cotas, pi_models
-                cfg_pi = _config_dir_of(pid_env) if pid_env else None
-                atual = pi_models.provider_atual(jsonl, cfg_pi) if jsonl else None
-                info.conta = cotas.conta_de_provider_pi(atual)
             elif prov == "codex":
                 # A origem é a raiz do Codex, mesmo sem `auth.json`: a identidade da sessão não pode
                 # desaparecer só porque a conta está desconectada.
                 codex_home = str(codex_contas.default_home().resolve(strict=False))
                 info.codex_home = codex_home
                 info.conta = f"codex:{codex_home}"
-            else:
+            elif prov == "claude":
                 cdir = (_config_dir_of(pid_env) if pid_env else None) or (Path.home() / ".claude")
                 info.conta = f"claude:{Path(cdir).resolve()}"
             out.append(info)
@@ -1533,7 +1501,6 @@ class SessionRegistry:
                 pair_gid=(PairLink(meta["name"]).get() or {}).get("gid"),
                 pair_task=(PairLink(meta["name"]).get() or {}).get("task"),
             ))
-        out.extend(_orq_infos())
         _decorate_transfers(out)
         return out
 
@@ -1610,13 +1577,6 @@ class SessionRegistry:
         terminal_phases = {p.value for p in (TransferPhase.COMPLETE, TransferPhase.REJECTED, TransferPhase.ROLLED_BACK)}
         transfers = [i for i in infos if i.transfer_phase and i.transfer_phase not in terminal_phases]
         infos = [i for i in infos if not i.transfer_phase or i.transfer_phase in terminal_phases]
-        orqs = [i for i in infos if getattr(i, "provider", "claude") == "orq"]
-        if orqs:
-            def _orq_state():
-                for i in orqs:
-                    i.state, i.last_activity = orq_runs.activity(i.jsonl)
-            await asyncio.to_thread(_orq_state)
-            infos = [i for i in infos if getattr(i, "provider", "claude") != "orq"]
         # `shared` é do Rust (a lista dele a marca pela loja de convites); aqui só o dono.
         async def decorate_access(rows):
             if guest_users.has_claims():
@@ -1626,8 +1586,8 @@ class SessionRegistry:
                 await asyncio.to_thread(owners)
 
         if not infos:
-            await decorate_access(orqs + transfers)
-            return orqs + transfers
+            await decorate_access(transfers)
+            return transfers
         # Estado pela marca dos hooks quando existe (custo ~0); senao cai no pane (fallback).
         # NOTA: o sweep de STATUSLINE (mais abaixo) captura pane mesmo de sessao com marcador —
         # a statusline nao tem outra fonte. O "custo ~0" continua valendo pra CLASSIFICACAO; o
@@ -2039,8 +1999,8 @@ class SessionRegistry:
         await asyncio.to_thread(_decorate_planos)
         for info in infos:
             _decorate_loop(info)
-        await decorate_access(infos + orqs + transfers)
-        return infos + orqs + transfers
+        await decorate_access(infos + transfers)
+        return infos + transfers
 
     # ── Troca terminal ⇄ sem terminal (mesma conversa) ──────────────────────────────────────
     # É troca, não cópia: o antigo morre antes do novo nascer, e fila, `then` e pareamento ficam
@@ -2091,9 +2051,10 @@ class SessionRegistry:
                 pre += ["--service-tier", service_tier]
             cmd = tmux.join_cmd(pre + ["--"]) + " " + cmd
         if meta.get("read_only"):
-            from app.orq_readonly import prepare
+            from app import providers_bridge
             # Refeita para a conta em que reabre; sem bwrap, recusa em vez de abrir sem a proteção.
-            prefix = prepare(meta["cwd"], runtime_dirs=(meta.get("config_dir") or "",))
+            prefix = providers_bridge.local("provider-info", op="read-only", home=str(Path.home()),
+                                            env=dict(os.environ), cwd=meta["cwd"], config_dir=meta.get("config_dir"))
             cmd = tmux.join_cmd([*prefix, "/bin/sh", "-c", cmd])
         return cmd
 

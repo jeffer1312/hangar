@@ -197,7 +197,7 @@ pub fn backfill(path: &Path, key: &str, provider: Provider, resume: Option<&str>
     if start >= cut {
         return Vec::new();
     }
-    let mut parser = LineParser::new(provider);
+    let mut parser = LineParser::new(provider).with_path(path);
     match read_frames(path, start, Some(cut), &mut parser, key) {
         Ok((frames, _)) => frames,
         Err(e) => {
@@ -218,7 +218,7 @@ pub fn last_committed(path: &Path, provider: Provider) -> std::io::Result<Option
     };
     let mut reader = BufReader::new(file);
     reader.seek(SeekFrom::Start(start))?;
-    let mut parser = LineParser::new(provider);
+    let mut parser = LineParser::new(provider).with_path(path);
     let (mut at, mut last, mut line) = (start, None, Vec::new());
     loop {
         line.clear();
@@ -330,7 +330,7 @@ impl TailState {
     /// Sem o relógio das linhas da cauda, a regravação do `claude --resume` sairia ao vivo; o
     /// leitor do Python começa 200 linhas antes e não a mostra.
     fn seed_rewrite(&mut self, end: u64) {
-        if self.provider == Provider::Codex {
+        if !matches!(self.provider, Provider::Claude | Provider::ClaudeHeadless) {
             return;
         }
         let Ok(start) = tail_offset(&self.path, BACKFILL_LINES) else { return };
@@ -366,7 +366,7 @@ impl TailState {
         let Ok(meta) = std::fs::metadata(&self.path) else { return };
         if meta.len() < pos {
             tracing::info!(key = %self.key, "transcript encolheu; recomeça do início");
-            self.parser = LineParser::new(self.provider);
+            self.parser = LineParser::new(self.provider).with_path(&self.path);
             self.pos = Some(0);
             let _ = tx.send(Out::Tail(self.generation, reset_frame()));
         }
@@ -418,7 +418,7 @@ impl FileTail {
             provider,
             generation,
             pos: None,
-            parser: LineParser::new(provider),
+            parser: LineParser::new(provider).with_path(&path),
         }));
         let task = tokio::spawn(run(path, state.clone(), tx, watchers, on_dead)).abort_handle();
         Arc::new(FileTail { state, task })

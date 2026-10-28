@@ -1,0 +1,325 @@
+[
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1_0",
+    "result": 10.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1__0",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": " 1_0 ",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1e1",
+    "result": 10.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "+1",
+    "result": 1.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1_0e1",
+    "result": 100.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "0x10",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": " 10 ",
+    "result": 10.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "10 ",
+    "result": 10.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "\t10",
+    "result": 10.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": " 1e1 ",
+    "result": 10.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": " 1_0",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1_0 ",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1_0.2_5",
+    "result": 10.25
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1._0",
+    "result": 1.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1_.0",
+    "result": 1.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "_10",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "10_",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": " 10 ",
+    "result": 10.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1e+1",
+    "result": 10.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1e_1",
+    "result": 10.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1e1_0",
+    "result": 10000000000.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "+Inf",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "Infinity",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "nan",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1e-400",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1e300",
+    "result": 1e+300
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "",
+    "result": 300.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": " ",
+    "result": 300.0
+  },
+  {
+    "key": "omp_plugin_sync_enabled",
+    "input": "invalid",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_enabled",
+    "input": "0",
+    "result": false
+  },
+  {
+    "key": "omp_plugin_sync_enabled",
+    "input": "1",
+    "result": true
+  },
+  {
+    "key": "omp_plugin_sync_enabled",
+    "input": "yes",
+    "result": true
+  },
+  {
+    "key": "omp_plugin_sync_enabled",
+    "input": "t",
+    "result": true
+  },
+  {
+    "key": "omp_plugin_sync_enabled",
+    "input": " TRUE ",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_enabled",
+    "input": "",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_enabled",
+    "input": "false",
+    "result": false
+  },
+  {
+    "key": "omp_plugin_sync_enabled",
+    "input": "off",
+    "result": false
+  },
+  {
+    "key": "omp_plugin_sync_enabled",
+    "input": "n",
+    "result": false
+  },
+  {
+    "key": "omp_plugin_sync_enabled",
+    "input": "f",
+    "result": false
+  },
+  {
+    "key": "omp_plugin_sync_enabled",
+    "input": "on",
+    "result": true
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "+_10",
+    "result": 10.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1_e1",
+    "result": 10.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1e+_1",
+    "result": 10.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1e_+1",
+    "result": 10.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1_",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "_1",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1__2",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1.0_e1",
+    "result": 10.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1_0 ",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "\u001c",
+    "result": 300.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "\u001c1\u001c",
+    "result": {
+      "error": "ValidationError"
+    }
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "\u001d",
+    "result": 300.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "\u001e",
+    "result": 300.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "\u001f",
+    "result": 300.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "",
+    "result": 300.0
+  },
+  {
+    "key": "omp_plugin_sync_interval",
+    "input": "1",
+    "result": 1.0
+  }
+]

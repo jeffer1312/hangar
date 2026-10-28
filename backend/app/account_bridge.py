@@ -489,7 +489,7 @@ async def forward_public(request, target: str = "/__hangar_server/accounts/publi
 
 
 _HOP_BY_HOP = {"connection", "transfer-encoding", "keep-alive"}
-_STREAM_HEADERS = ("content-type", "x-filename", "range", "if-range", "if-none-match", "if-modified-since")
+_STREAM_HEADERS = ("content-type", "x-filename", "range", "if-range", "if-none-match", "if-modified-since", "last-event-id")
 
 
 async def forward_stream(request, *, guest: bool):
@@ -498,7 +498,7 @@ async def forward_stream(request, *, guest: bool):
     Tudo no loop, sem thread do executor padrão: uploads simultâneos não podem esgotá-lo."""
     import asyncio
     import h11
-    from starlette.responses import JSONResponse, StreamingResponse
+    from starlette.responses import JSONResponse, Response, StreamingResponse
     config = _preparation_transport
     if config is None:
         return JSONResponse({"detail": {"code": "account_bridge_unavailable"}}, status_code=503)
@@ -536,6 +536,9 @@ async def forward_stream(request, *, guest: bool):
             response = await receive()
         if not isinstance(response, h11.Response):
             raise h11.RemoteProtocolError("conexão fechada sem resposta")
+        if response.status_code == 421:
+            writer.close()
+            return Response(status_code=421)
     except (OSError, TimeoutError, h11.ProtocolError) as error:
         if writer is not None:
             writer.close()

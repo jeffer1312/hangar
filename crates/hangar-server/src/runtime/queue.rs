@@ -1310,6 +1310,11 @@ pub(crate) fn replace(from: &Path, to: &Path) -> io::Result<()> {
     std::fs::rename(from,to)
 }
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_write_inner(path,bytes, |_| Ok(()))
+}
+#[cfg(test)]
+pub(crate) fn atomic_write_inspected(path:&Path,bytes:&[u8],before:impl FnOnce(&File)->io::Result<()>)->io::Result<()> {atomic_write_inner(path,bytes,before)}
+fn atomic_write_inner(path:&Path,bytes:&[u8],before:impl FnOnce(&File)->io::Result<()>)->io::Result<()> {
     let parent = path.parent().ok_or_else(||invalid("arquivo sem diretório"))?;
     let tick = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .map_err(|_|invalid("relógio do arquivo temporário inválido"))?.as_nanos();
@@ -1321,6 +1326,7 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
         let mut file = options.open(&temp)?;
         created = true;
+        before(&file)?;
         file.write_all(bytes)?; file.sync_all()?; drop(file);
         replace(&temp,path)?;
         #[cfg(unix)] { File::open(parent)?.sync_all()?; }

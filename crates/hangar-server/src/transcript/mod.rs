@@ -28,6 +28,7 @@ pub enum Provider {
     Claude,
     ClaudeHeadless,
     Codex,
+    Orq,
 }
 
 impl Provider {
@@ -36,6 +37,7 @@ impl Provider {
             "claude" => Some(Self::Claude),
             "claude-headless" => Some(Self::ClaudeHeadless),
             "codex" => Some(Self::Codex),
+            "orq" => Some(Self::Orq),
             _ => None,
         }
     }
@@ -45,6 +47,7 @@ impl Provider {
             Self::Claude => "claude",
             Self::ClaudeHeadless => "claude-headless",
             Self::Codex => "codex",
+            Self::Orq => "orq",
         }
     }
 }
@@ -64,11 +67,17 @@ pub struct LineParser {
     provider: Provider,
     rewrite: claude::RewriteFilter,
     peer_resolver: claude::PeerResolver,
+    run_dir: Option<std::path::PathBuf>,
 }
 
 impl LineParser {
     pub fn new(provider: Provider) -> Self {
-        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid }
+        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None }
+    }
+
+    pub fn with_path(mut self, path: &std::path::Path) -> Self {
+        self.run_dir = path.parent().map(std::path::Path::to_path_buf);
+        self
     }
 
     /// Troca o resolvedor do nome tmux do remetente; os testes não dependem do tmux da máquina.
@@ -80,7 +89,7 @@ impl LineParser {
     /// Só passa a linha pelo filtro de reescrita, sem gerar evento: o leitor compartilhado começa
     /// no fim do arquivo e precisa do relógio das linhas anteriores, como o Python que lê a cauda.
     pub fn seed(&mut self, line: &[u8]) {
-        if self.provider == Provider::Codex {
+        if !matches!(self.provider, Provider::Claude | Provider::ClaudeHeadless) {
             return;
         }
         let text = String::from_utf8_lossy(line);
@@ -94,6 +103,7 @@ impl LineParser {
         let Some(value) = line_value(line) else { return Vec::new() };
         let mut evs = match (self.provider, &value) {
             (Provider::Codex, _) => codex::parse_rollout_obj(&value),
+            (Provider::Orq, _) => crate::orchestration::timeline::parse_obj(&value, self.run_dir.as_deref()),
             (Provider::Claude | Provider::ClaudeHeadless, Value::Object(obj)) if self.rewrite.keep(obj) => {
                 claude::parse_obj(obj, self.peer_resolver)
             }
@@ -140,5 +150,24 @@ pub(crate) fn finish(ev: &mut ChatEvent) {
     }
     for hunk in ev.patch.iter_mut().flatten() {
         hunk.lines.iter_mut().for_each(py::scrub_str);
+    }
+}
+
+#[cfg(test)]
+mod orq_contract {
+    use super::*;
+
+    #[test]
+    fn orq_history_and_live_parser_preserve_the_python_notice_contract() {
+        let provider = Provider::parse("orq");
+        assert!(provider.is_some(), "o histórico do orq precisa ser lido pelo Rust");
+        let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/orq-events/events.json")).unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let events = LineParser::new(provider.unwrap()).feed(case["input"].to_string().as_bytes(), 0);
+            let actual: Vec<Value> = events.iter().map(|event| {
+                serde_json::json!({"kind": event.kind, "id": event.id, "text": event.text, "ts": event.ts, "orq": event.orq})
+            }).collect();
+            assert_eq!(serde_json::to_value(actual).unwrap(), case["expected"], "{}", case["input"]);
+        }
     }
 }

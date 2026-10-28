@@ -1,0 +1,954 @@
+{
+  "source_commit": "a0860f26b6e3f611806e780acf87588f6065b328",
+  "command": "python crates/hangar-server/src/orchestration/fixtures/generate_http.py",
+  "cases": [
+    {
+      "method": "PUT",
+      "path": "/api/orquestracao/politica/account",
+      "body": "{}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "provider"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "mtime"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/orquestracao/politica/account",
+      "body": "[]",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/orquestracao/politica/account",
+      "body": "null",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/orquestracao/politica/account",
+      "body": "{\"unknown\": true}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "provider"
+            ],
+            "msg": "Field required",
+            "input": {
+              "unknown": true
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "mtime"
+            ],
+            "msg": "Field required",
+            "input": {
+              "unknown": true
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "unknown"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": true
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "papel"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "provider"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "conta"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "mtime"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "[]",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "null",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{\"unknown\": true}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "papel"
+            ],
+            "msg": "Field required",
+            "input": {
+              "unknown": true
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "provider"
+            ],
+            "msg": "Field required",
+            "input": {
+              "unknown": true
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "conta"
+            ],
+            "msg": "Field required",
+            "input": {
+              "unknown": true
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "mtime"
+            ],
+            "msg": "Field required",
+            "input": {
+              "unknown": true
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "unknown"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": true
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papeis",
+      "body": "{}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "papeis"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "mtime"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papeis",
+      "body": "[]",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papeis",
+      "body": "null",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papeis",
+      "body": "{\"unknown\": true}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "papeis"
+            ],
+            "msg": "Field required",
+            "input": {
+              "unknown": true
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "mtime"
+            ],
+            "msg": "Field required",
+            "input": {
+              "unknown": true
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "unknown"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": true
+          }
+        ]
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "papel"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "mtime"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "[]",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "null",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{\"unknown\": true}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "papel"
+            ],
+            "msg": "Field required",
+            "input": {
+              "unknown": true
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "mtime"
+            ],
+            "msg": "Field required",
+            "input": {
+              "unknown": true
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "unknown"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": true
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/grupo",
+      "body": "{}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "gid"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "mtime"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/grupo",
+      "body": "[]",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/grupo",
+      "body": "null",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/grupo",
+      "body": "{\"unknown\": true}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "gid"
+            ],
+            "msg": "Field required",
+            "input": {
+              "unknown": true
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "mtime"
+            ],
+            "msg": "Field required",
+            "input": {
+              "unknown": true
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "unknown"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": true
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{\"papel\": 42, \"provider\": \"claude\", \"conta\": \"padrao\", \"mtime\": 0}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "papel"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 42
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{\"papel\": \"executor\", \"provider\": false, \"conta\": \"padrao\", \"mtime\": 0}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "provider"
+            ],
+            "msg": "Input should be a valid string",
+            "input": false
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{\"papel\": \"executor\", \"provider\": \"claude\", \"conta\": \"padrao\", \"mtime\": 0, \"headless\": \"what\"}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "bool_parsing",
+            "loc": [
+              "body",
+              "headless"
+            ],
+            "msg": "Input should be a valid boolean, unable to interpret input",
+            "input": "what"
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{\"papel\": \"executor\", \"provider\": \"claude\", \"conta\": \"padrao\", \"mtime\": \"bad\"}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "float_parsing",
+            "loc": [
+              "body",
+              "mtime"
+            ],
+            "msg": "Input should be a valid number, unable to parse string as a number",
+            "input": "bad"
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{\"papel\": \"executor\", \"provider\": \"claude\", \"conta\": \"padrao\", \"mtime\": null}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "float_type",
+            "loc": [
+              "body",
+              "mtime"
+            ],
+            "msg": "Input should be a valid number",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{\"papel\": \"executor\", \"provider\": \"claude\", \"conta\": \"padrao\", \"mtime\": 0, \"jev\": []}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "bool_type",
+            "loc": [
+              "body",
+              "jev"
+            ],
+            "msg": "Input should be a valid boolean",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{\"papel\": \"executor\", \"provider\": \"claude\", \"conta\": \"padrao\", \"mtime\": 0, \"vez\": null}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "vez"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{\"papel\": \"executor\", \"provider\": \"claude\", \"conta\": \"padrao\", \"mtime\": 0, \"unknown\": true}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "unknown"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": true
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papeis",
+      "body": "{\"papeis\": [{\"papel\": \"executor\", \"provider\": \"claude\", \"conta\": \"padrao\", \"mtime\": 0, \"unknown\": true}], \"mtime\": 0}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "papeis",
+              0,
+              "mtime"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": 0
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "papeis",
+              0,
+              "unknown"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": true
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papeis",
+      "body": "{\"papeis\": \"bad\", \"mtime\": 0}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "list_type",
+            "loc": [
+              "body",
+              "papeis"
+            ],
+            "msg": "Input should be a valid list",
+            "input": "bad"
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/comecar",
+      "body": "{\"unknown\": true}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "unknown"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": true
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{\"x\":",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              5
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting value"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "[}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting value"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "{} {}",
+      "content_type": "application/json",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              3
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Extra data"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/planner/orq/papel",
+      "body": "texto",
+      "content_type": "text/plain",
+      "status": 422,
+      "output": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "texto"
+          }
+        ]
+      }
+    }
+  ]
+}

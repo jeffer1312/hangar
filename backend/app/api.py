@@ -38,7 +38,6 @@ from app.bastao import montar as bastao_montar
 from app.fs import FsError, allowed_roots, list_roots, make_dir, scan_dir
 from app.model_picker import PickerError
 from app.mensagens import erro
-from app import kimi_models
 from app import claude_models
 from app import dictation_bridge
 from app import claude_customizations
@@ -49,13 +48,9 @@ from app import filesearch, filetree, git_ops, worktrees
 from app.file_response import file_response
 from app.filesearch import SearchError
 from app.filetree import FileError
-from app import orq, orq_conductor, orq_context, orq_md, orq_papeis, orq_politica, orq_start, orq_timeline
-from app import pi_catalog
 from app import cli_probe
-from app import pi_models
-from app import pi_inbox
-from app.pi_inbox import INBOX
 from app import registry as registry_mod
+from app import providers_bridge
 from app.registry import KillFailed, SessionRegistry, sanitize_cwd
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, CreatedSessionInfo, ChatEvent, CostReport, UsoReport, RunnersResponse, RunBody,
@@ -71,7 +66,6 @@ from app.terminal_input import TerminalInput, drain
 from app.adapters import CLAUDE_HEADLESS, get_adapter
 from app.adapters.claude_headless import sessions as headless_sessions
 from app.adapters.codex import sessions as codex_sessions
-from app.adapters.orq import runs as orq_runs
 from app.sse import invalidate_recent_list, merged_events, nav_confirmar, nav_pendente
 from app.state import corrige_ocioso_kimi, forget_frame, menu_codex
 from app.uploads import MAX_BYTES
@@ -114,7 +108,6 @@ from app.codex_contas_login import CodexContasLogin
 from app.pair import PairLink
 from app.hook_state import hook_state
 from app import push
-from app.omp_plugin_sync import PluginSynchronizer, PluginSyncLoop
 from app.sync import sync_admin_router, sync_router
 from app.deploy import deploy_router
 from app import desktop_palette
@@ -277,12 +270,8 @@ async def _lifespan(app: FastAPI):
     # montar(). Sem aquecer aqui, o primeiro /api/costs depois de todo restart paga a coleta fria
     # (657ms medidos) MAIS até 3s de câmbio, contra o AbortSignal.timeout(4000) do cliente.
     threading.Thread(target=_usd_brl, name="usd-brl-warm", daemon=True).start()
-    # Catálogo do pi/omp em fundo: a primeira lista de modelos depois do restart levava segundos.
-    pi_catalog.warm()
     from app import transcript_index
     transcript_index.start_background()
-    # A linha vive no loop do servidor, mas o send_prompt roda em thread — ver pi_inbox.entregar_sync.
-    INBOX.ligar_loop(asyncio.get_running_loop())
     # Mesmo motivo, outro caminho: o drain do Codex e assincrono (app-server) e quem o chama sao
     # threads (Timer da confirmacao, gatilho de hook). Ver `_drenar`.
     global _loop_servidor
@@ -297,14 +286,6 @@ async def _lifespan(app: FastAPI):
     app.state.codex_contas_login = codex_contas_login
     # Referência guardada: task sem dono pode ser coletada no meio.
     app.state.codex_auth_aquecer = asyncio.create_task(codex_contas_login.aquecer())
-    omp_sync = PluginSyncLoop(
-        PluginSynchronizer(home=Path.home(), claude_dir=_backend_config_base()),
-        enabled=settings.omp_plugin_sync_enabled,
-        interval=settings.omp_plugin_sync_interval,
-        permitted=automations_enabled,
-    )
-    app.state.omp_plugin_sync = omp_sync
-    await omp_sync.start()
     try:
         yield
     finally:
@@ -326,7 +307,6 @@ async def _lifespan(app: FastAPI):
         task.cancel()
         loop_monitor_task.cancel()
         prune_task.cancel()
-        await omp_sync.close()
         try:
             await task
         except asyncio.CancelledError:
@@ -446,16 +426,6 @@ async def _git_failed(request: Request, exc: GitError):
     return JSONResponse(status_code=exc.status, content={"detail": detail})
 
 
-@app.get("/api/omp/plugin-sync", dependencies=[Depends(require_auth)])
-async def omp_plugin_sync_status(request: Request):
-    service = getattr(request.app.state, "omp_plugin_sync", None)
-    if service is None:
-        return {"enabled": settings.omp_plugin_sync_enabled,
-                "state": "idle" if settings.omp_plugin_sync_enabled else "disabled",
-                "interval": settings.omp_plugin_sync_interval, "last_report": None}
-    return service.status()
-
-
 @app.exception_handler(tmux.MuxIndisponivel)
 async def _mux_indisponivel(request: Request, exc: tmux.MuxIndisponivel):
     """503 em QUALQUER rota que esbarre num multiplexador que não responde.
@@ -518,6 +488,47 @@ async def _repasse_ao_rust(request: Request, sem_rust: dict, destino: str, **rep
     if account_bridge.owner_mode() == "python":
         return JSONResponse({"detail": sem_rust}, status_code=503)
     return await account_bridge.forward_public(request, destino, **repasse)
+
+
+_PROVIDER_ROUTES = re.compile(r"^/api/sessions/[^/]+/(pi/models?|kimi/models?|orq(?:/(panel|papel|papeis|grupo|comecar))?)$")
+
+
+@app.middleware("http")
+async def _providers_via_rust(request: Request, call_next):
+    path = request.url.path
+    owned = (_PROVIDER_ROUTES.fullmatch(path) is not None
+             or path == "/api/omp/plugin-sync"
+             or path == "/api/orq" or path.startswith("/api/orq/")
+             or path == "/api/orquestracao/politica" or path.startswith("/api/orquestracao/politica/")
+             or path == "/api/model-options" and request.query_params.get("provider") in {"pi", "omp", "kimi"})
+    read = re.fullmatch(r"/api/sessions/([^/]+-orq)/(history|events)", path)
+    write = re.fullmatch(r"/api/sessions/([^/]+-orq)(?:/(input|interrupt))?", path)
+    write = write if write and (request.method == "DELETE" and write.group(2) is None
+                               or request.method == "POST" and write.group(2) is not None) else None
+    if read or write:
+        try:
+            require_auth(request)
+        except HTTPException as error:
+            return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
+        owned = True
+    if not owned:
+        return await call_next(request)
+    if read:
+        from app import account_bridge
+        try:
+            require_auth(request)
+        except HTTPException as error:
+            return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
+        if account_bridge.owner_mode() == "python":
+            return JSONResponse({"detail": {"code": "providers_need_rust_server"}}, status_code=503)
+        response = await account_bridge.forward_stream(request, guest=guest_of(request) is not None or guest_users.current.get() is not None)
+        return await call_next(request) if response.status_code == 421 else response
+    unavailable = (erro("orq_conductor_need_rust_server", "o condutor precisa do servidor Rust, que não está rodando")
+                   if re.fullmatch(r"/api/orq/[^/]+/conductor", path) else
+                   _groups_need_rust() if re.fullmatch(r"/api/sessions/[^/]+/orq/grupo", path) else
+                   {"code": "providers_need_rust_server"})
+    response = await _repasse_ao_rust(request, unavailable, "/__hangar_server/forwarded", limit=None)
+    return await call_next(request) if write and response.status_code == 421 else response
 
 
 @app.middleware("http")
@@ -778,141 +789,6 @@ app.include_router(migration_status.router)
 app.include_router(internal_api.router)
 registry = SessionRegistry()
 terminal = TerminalInput()
-
-# Teto de mensagem: o _BodySizeLimitMiddleware ignora scope != http de propósito (api.py:83), então
-# a rota WebSocket nasceria sem limite nenhum. 256 KiB cobre com folga qualquer texto de chat.
-_WS_MAX = 256 * 1024
-# Heartbeat DO SERVIDOR, não eco do cliente: socket aberto não prova que tem alguém lendo (extensão
-# com laço travado, notebook suspenso). Sem isto, uma linha zumbi faria toda mensagem pagar o
-# PRAZO_ACK inteiro antes de cair pro fallback — a lentidão que o caminho de tecla não tinha.
-_WS_PING = 20.0
-# Teto de heartbeats SEGUIDOS sem resposta antes de fechar. `send_json` sozinho não pega o zumbi que
-# o comentário acima descreve: com o laço de eventos travado (ou notebook suspenso), o buffer TCP do
-# SO absorve o ping sem erro nenhum — é exatamente esse caso que o heartbeat existe pra cobrir. Dois
-# pings perdidos (~2×_WS_PING) é rápido o bastante pra não atrasar a decisão "linha ou tecla" da
-# Task 4, e generoso o bastante pra não fechar por uma rajada de latência isolada.
-_WS_PINGS_SEM_RESPOSTA_MAX = 2
-
-
-# Aviso-uma-vez-ate-mudar da recusa de conexao (achado ALTA da revisao 02/08/2026): sem isto, um
-# token girado / bind mudado / firewall no meio faz TODA tentativa de retry da extensao (laco com
-# recuo, hangar-state.ts) virar linha de log — e a mesma enxurrada que o retry em si tenta evitar do
-# lado dela. Mesma politica de terminal_input._avisa_deferred/_limpa_deferred: WARNING na 1a recusa
-# por host, calado ate uma conexao daquele host DAR CERTO (o que também reabre o aviso se a falha
-# voltar depois — nao e "avisa uma vez na vida do processo").
-_ws_origem_avisada: set[str] = set()
-_ws_token_avisado: set[str] = set()
-
-
-# Única rota WebSocket do backend. Quem LIGA é a extensão do Pi; o backend nunca procura ninguém —
-# é isso que faz o custo ser zero pra quem não tem Pi.
-# Auth pela query e não por header: é o mesmo caminho que o SSE já usa (auth.py:86-94), e cliente
-# WebSocket não manda Authorization de forma portável.
-@app.websocket("/api/pi/inbox")
-async def pi_inbox_ws(ws: WebSocket):
-    host = ws.client.host if ws.client else ""
-    # bind_host: o endereco em que o PROPRIO uvicorn subiu (resolve_bind_ip == main.py). Com
-    # CP_LAN_BIND_IP=auto ou IP fixo de LAN (modo celular documentado), o processo nao escuta em
-    # loopback -- so aceitar 127.0.0.1 fechava a linha do Pi em silencio pra sempre (achado da
-    # revisao final). Aceitar TAMBEM o bind continua seguro: uma conexao TCP com origem igual ao
-    # endereco que o proprio host bindou so acontece self-connect (a mesma maquina falando com uma
-    # interface dela mesma) -- um host remoto na LAN nunca aparece aqui com ESSE endereco de
-    # origem, porque a origem eh o IP DELE, nao o do servidor (TCP nao deixa forjar isso).
-    if host not in ("127.0.0.1", "::1", "localhost", resolve_bind_ip(settings)):
-        # A defesa real é esta. Em loopback o token não protege de quem já está logado na máquina
-        # (o próprio auth.py:42-46 registra isso), mas conexão de FORA não tem o que fazer aqui.
-        # Achado ALTA da revisao 02/08/2026: ate aqui a recusa era MUDA — nem no terminal do Pi nem
-        # no log do backend sobrava rastro de por que a linha rapida nunca ligava.
-        if host not in _ws_origem_avisada:
-            _ws_origem_avisada.add(host)
-            _log.warning("pi_inbox: origem recusada host=%s (fora do bind aceito) — linha do Pi "
-                         "vai continuar caindo pra tecla (aviso unico ate mudar)", host)
-        await ws.close(code=1008)
-        return
-    if not settings.auth_token or not secrets.compare_digest(
-            ws.query_params.get("token", ""), settings.auth_token):
-        # Mesmo achado: inconsistente com auth.py:75, que loga toda virada de bloqueio de token —
-        # aqui nao logava NADA. Token girado / sidecar desatualizado ficava indistinguivel de
-        # "extensao nao instalada".
-        if host not in _ws_token_avisado:
-            _ws_token_avisado.add(host)
-            _log.warning("pi_inbox: token recusado host=%s — linha do Pi vai continuar caindo pra "
-                         "tecla (aviso unico ate acertar)", host)
-        await ws.close(code=1008)
-        return
-    # Conectou: qualquer recusa ANTERIOR deste host era um estado velho — se voltar a falhar depois,
-    # merece aviso de novo (nao e "avisou uma vez na vida do processo, calado pra sempre").
-    _ws_origem_avisada.discard(host)
-    _ws_token_avisado.discard(host)
-    await ws.accept()
-    pane = ""
-    linha = None
-    try:
-        # Texto cru primeiro, igual ao loop abaixo: receive_json() direto pularia o teto de
-        # tamanho pra ESTA mensagem (achado da revisão — só as do loop passavam pelo len(bruto)).
-        bruto = await asyncio.wait_for(ws.receive_text(), _WS_PING)
-        if len(bruto) > _WS_MAX:
-            _log.warning("pi_inbox: primeira mensagem de %d bytes — fechando", len(bruto))
-            await ws.close(code=1009)
-            return
-        primeira = json.loads(bruto)
-        # `chave` e o que a extensao declara como identidade da sessao: o nome do psmux quando
-        # existe, o pane quando nao (tmux). Extensao ANTIGA nao manda o campo e cai no pane, que e
-        # exatamente o comportamento de antes — ninguem precisa dar /reload pra continuar
-        # funcionando no Linux. Ver pi_inbox: no psmux o pane e `%1` em TODA sessao, e por isso a
-        # linha da segunda sessao Pi tomava o lugar da primeira.
-        pane = str(primeira.get("chave") or primeira.get("pane") or "")
-        if not pane:
-            await ws.close(code=1008)
-            return
-        linha = INBOX.registrar(pane, ws.send_json)
-        _log.info("pi_inbox: linha aberta chave=%s", pane)
-        pings_sem_resposta = 0
-        while True:
-            try:
-                bruto = await asyncio.wait_for(ws.receive_text(), _WS_PING)
-            except asyncio.TimeoutError:
-                # Silêncio: cobra sinal de vida. Se o socket estiver morto, o send levanta e a
-                # linha cai aqui mesmo, em vez de ficar registrada como viva pra sempre. Mas o send
-                # sozinho não pega o zumbi (buffer do SO absorvendo o ping) — daí o contador: sem
-                # NENHUMA resposta por _WS_PINGS_SEM_RESPOSTA_MAX rodadas, fecha por conta própria.
-                pings_sem_resposta += 1
-                if pings_sem_resposta > _WS_PINGS_SEM_RESPOSTA_MAX:
-                    _log.warning("pi_inbox: %d heartbeats sem resposta pane=%s — linha zumbi, "
-                                 "fechando", pings_sem_resposta, pane)
-                    await ws.close(code=1000)
-                    return
-                await ws.send_json({"ping": True})
-                continue
-            # Qualquer mensagem é sinal de vida, não só o pong: zera antes de olhar o conteúdo.
-            pings_sem_resposta = 0
-            if len(bruto) > _WS_MAX:
-                _log.warning("pi_inbox: mensagem de %d bytes pane=%s — fechando", len(bruto), pane)
-                await ws.close(code=1009)
-                return
-            msg = json.loads(bruto)
-            if msg.get("pong") or msg.get("ping"):
-                continue
-            msg_id = str(msg.get("id") or "")
-            if not msg_id:
-                continue
-            if "resposta" in msg:
-                # Resposta de PERGUNTA (leitura), nao confirmacao de entrega — chaves diferentes
-                # de proposito: a extensao responde `{id, resposta}` e nunca `ok`, entao uma
-                # mensagem jamais cai nos dois caminhos. `None` explicito (a extensao dizendo "nao
-                # sei") chega como None e o backend cai no plano B; string vazia e resposta.
-                valor = msg.get("resposta")
-                INBOX.responder(pane, msg_id, valor if isinstance(valor, str) else None)
-                continue
-            INBOX.confirmar(pane, msg_id, bool(msg.get("ok")), msg.get("erro"))
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        _log.warning("pi_inbox: linha caiu pane=%s: %r", pane, e)
-    finally:
-        if linha is not None:
-            INBOX.remover(pane, linha)
-
 
 @app.websocket("/api/sessions/{name}/term")
 async def term_ws_route(ws: WebSocket, name: str):
@@ -2233,7 +2109,6 @@ async def kill_session(name: str, by: str | None = None, request: Request = None
     # 500 quando a sessao SOBREVIVE ao kill — mesmo padrao do /rename logo abaixo, que ja confere e
     # responde 404/500. Antes era {"ok": true} incondicional: o card sumia da UI e a sessao reaparecia
     # na varredura seguinte, sem fila e sem pareamento (ver SessionRegistry.kill).
-    await asyncio.to_thread(_recusa_orq, name)
     # Marca do Rust: ele já encerrou o Codex com terminal dele (e o grupo); aqui só as lojas daqui.
     marked = lambda h: bool(request and internal_api._secret) and secrets.compare_digest(request.headers.get(h, "").encode(), internal_api._secret.encode())
     closed = marked("x-hangar-rust-closed")
@@ -2265,8 +2140,7 @@ async def kill_session(name: str, by: str | None = None, request: Request = None
     if sidecar == "unreadable":
         diag.registrar("grupos.sidecar_ilegivel", "erro", sessao=name)
     grouped = sidecar != "absent"
-    phases = (await asyncio.to_thread(_route_facts, name, None))["phases"] \
-        if grouped and groups_bridge.rust_owns_groups() else None
+    phases = {} if grouped and groups_bridge.rust_owns_groups() else None
     # Sem o Rust a saída do grupo não acontece: fechar segue, e a falta vai no aviso e no diário.
     orphan = grouped and phases is None
     # Fechada pelo Rust a sessão já saiu da lista: o transcript vem no cabeçalho ou na resposta dele.
@@ -3427,7 +3301,7 @@ def _send_one_available(name: str, text: str, track_entry: bool = False) -> dict
     # respeitar/disputar o _send_lock. Mover so o append() e necessario, mas sozinho e insuficiente.
     # `pi_inbox.linha_de` (nome primeiro, pane depois), nunca o pane cru: no psmux o pane e `%1`
     # em toda sessao Pi e a busca por pane achava a linha da OUTRA — ver pi_inbox.
-    is_pi = (provider in ("pi", "omp") and pi_inbox.linha_de(name, pane_id) is not None
+    is_pi = (provider in ("pi", "omp") and providers_bridge.inbox_call("line", name=name, pane=pane_id)["line"] is not None
              and not stripped.startswith("/"))
     if is_pi:
         try:
@@ -3858,14 +3732,6 @@ def _session_exists(name: str) -> bool:
     return codex_sessions.exists(name) or headless_sessions.exists(name) or tmux.has_session(name)
 
 
-def _recusa_orq(name: str) -> None:
-    """O orquestrador não tem pane nem processo: sem esta recusa, entrada, nome, fim e interrupção
-    cairiam no tmux de uma sessão que não existe."""
-    if orq_runs.find(name):
-        raise HTTPException(409, detail=erro("erro_sessao_orq",
-                                             "o orquestrador não recebe mensagens; fale com o árbitro"))
-
-
 def _headless(name: str) -> bool:
     """Sessão Claude SEM terminal (sidecar do adapter headless). Provider continua "claude"; só o
     transporte muda — quem ramifica por isto é a entrada, o interrupt, a opção e a resposta."""
@@ -3880,7 +3746,6 @@ async def input_prompt(name: str, body: InputBody):
     # (nao o default do asyncio, que a decoracao — git_summary/capture_pane — pode ocupar). Assim um
     # git status pendurado + refine (60s, pool do anyio) + check (600s, thread propria) nao seguram
     # o POST /input. Ver _send_thread.
-    await _send_thread(_recusa_orq, name)
     if not await _send_thread(_session_exists, name):
         raise HTTPException(404, detail=erro("erro_sessao_recado_nao_enfileirado", "sessão não encontrada — recado NÃO enfileirado"))
     provider = _provider_of(name)
@@ -4099,69 +3964,16 @@ def _require_rust_groups() -> None:
         raise HTTPException(503, detail=_groups_need_rust())
 
 
-def _route_facts(name: str, body: dict | None, route: str | None = None) -> dict:
-    """Fatos do `orq` que a rota de grupo usaria, lidos antes da ponte (I-5A): dentro dela o Rust não
-    pergunta ao Python. Orquestradores = execuções ativas, só nas rotas que recusam orquestrador
-    (`pair`, `pair-remote`); fase = gid `orq` dos nomes citados."""
-    from app.adapters.orq import runs
-    body = body or {}
-    names = [name, *(body.get("peers") or []), *([body["peer"]] if body.get("peer") else [])]
-    phases = {}
-    for n in names:
-        link = PairLink(n).get() or {} if "::" not in n else {}
-        if link.get("orq") and link.get("gid"):
-            phases[link["gid"]] = runs.group_phase(link["gid"])
-    orchestrators = [r["name"] for r in runs.active()] if route in ("pair", "pair-remote") else []
-    return {"orchestrators": orchestrators, "phases": phases}
 
 
 async def _route_after(out: dict) -> None:
     """O que o Rust devolveu para o Python fazer depois da ponte, num sentido: entregar o recado a
     sessão que só ele atende e promover o time do `orq`. Promoção que falha desfaz o grupo novo."""
     failed = await _deliver_deferred(out.get("deliveries"))
-    notes: list[dict] = []
-    for post in out.get("post") or []:
-        undone: list = []
-        refused = post.get("op") == "promote" and await asyncio.to_thread(_promote_or_undo, post["name"], post["gid"], undone, notes)
-        failed += await _deliver_deferred(undone)
-        if refused:
-            out["status"], out["body"] = 409, {"detail": refused}
-            break
     body = out.get("body")
-    for note in notes:
-        if isinstance(body, dict) and body.get("warning") is None:
-            body["warning"] = note
-        else:
-            failed.append({"sessao": note["params"]["sessao"], "erro": note})
     _report_failed(body, failed, "grupos.entrega_pela_ponte")
 
 
-def _promote_or_undo(name: str, gid: str, deliveries: list, notes: list) -> dict | None:
-    """`orq_context.promote` (os arquivos do `orq` são do Python). Conflito ou falha de disco = o grupo
-    recém-criado sai, membro a membro, pela ponte; todos estavam soltos (grupo novo), então sair volta
-    ao que era. Os recados que a saída devolve vão para `deliveries`, entregues por quem chamou. Sem
-    identidade o grupo fica e o aviso vai para `notes`."""
-    from app import orq_context, orq_md
-    try:
-        orq_context.promote(name, gid)
-    except orq_context.IdentityUnavailable as e:
-        _log.warning("pair: sem identidade para promover o grupo %s", gid)
-        diag.registrar("grupos.promocao_sem_identidade", "aviso", sessao=name, detalhe=gid)
-        notes.append(erro("erro_orq_promocao_sem_identidade", f"o grupo ficou, mas o time não foi promovido: {e}",
-                          sessao=name, grupo=gid, detalhe=str(e)))
-    except (orq_context.PromotionConflict, orq_md.Conflito, OSError) as e:
-        link = PairLink(name).get() or {}
-        stayed = []
-        for member in [name, *(p for p in link.get("peers", []) if "::" not in p)]:
-            try:
-                out = groups_bridge.call("group.leave", name=member, phases={gid: "ended"})
-                deliveries.extend(out.get("deliveries") or [])
-            except groups_bridge.GroupsBridgeError as undo:
-                _log.warning("pair: o grupo %s não foi desfeito em %s: %s", gid, member, undo.code)
-                diag.registrar("grupos.promocao_desfeita_falhou", "erro", sessao=member, codigo=undo.code, detalhe=gid)
-                stayed.append(member)
-        return erro("erro_orq_arquivo_mudou", str(e), **({"nao_sairam": stayed} if stayed else {}))
-    return None
 
 
 async def _group_route(method: str, name: str, route: str, body: BaseModel | None = None):
@@ -4169,10 +3981,9 @@ async def _group_route(method: str, name: str, route: str, body: BaseModel | Non
     há reserva Python."""
     _require_rust_groups()
     data = body.model_dump() if body is not None else None
-    facts = await asyncio.to_thread(_route_facts, name, data, route)
     try:
         out = await asyncio.to_thread(groups_bridge.call, "group.route", method=method, name=name, route=route,
-                                      body=data, facts=facts)
+                                      body=data, facts={})
     except groups_bridge.GroupsBridgeError as e:
         raise _group_unavailable(e.code) from None
     await _route_after(out)
@@ -4228,358 +4039,6 @@ async def group_message(name: str, body: GroupMsgBody):
     um [grupo:] com --group) — é o que impede o loop de N sessões se avisando em cascata.
     Slash-command fora (mesmo racional do /broadcast)."""
     return await _group_route("POST", name, "group-message", body)
-
-
-# ----------------------------------------------------------------- orquestração (política + papéis)
-
-def _catalogo_claude_cache(dir_conta: Path) -> tuple[list[dict], bool]:
-    """Leitor do cache do picker pro inventário — o MESMO cache de /api/model-options."""
-    cacheado = _models_cache_get(_chave_config(dir_conta))
-    if cacheado is not None:
-        return list(cacheado.get("models") or []), False
-    return orq_politica._modelos_claude_reduzidos(dir_conta)
-
-
-def _inventario() -> list[orq_politica.ContaInventario]:
-    return orq_politica.inventario(_catalogo_claude_cache)
-
-
-class PoliticaContaBody(_StrictBody):
-    provider: str
-    apelido: str = ""
-    modelos: list[str] = ["*"]
-    trocar: bool = True
-    ligada: bool = True
-    mtime: float
-
-
-@app.get("/api/orquestracao/politica", dependencies=[Depends(require_auth)])
-async def orq_politica_get():
-    texto, mtime = orq_md.ler_arquivo(orq_politica.caminho())
-    inv = await asyncio.to_thread(_inventario)
-    return {"arquivo": str(orq_politica.caminho()), "mtime": mtime,
-            "politica": [asdict(c) for c in orq_politica.ler(texto)],
-            "inventario": [asdict(i) for i in inv]}
-
-
-@app.put("/api/orquestracao/politica/{conta}", dependencies=[Depends(require_auth)])
-async def orq_politica_put(conta: str, body: PoliticaContaBody):
-    inv = await asyncio.to_thread(_inventario)
-    item = next((i for i in inv if i.provider == body.provider
-                 and orq_md.normalizar(i.conta) == orq_md.normalizar(conta)), None)
-    if item is None:
-        raise HTTPException(400, detail=erro("erro_orq_conta_desconhecida",
-                                             f"conta {conta!r} ({body.provider}) não existe nesta máquina"))
-    modelos = tuple(m.strip() for m in body.modelos if m.strip()) or ("*",)
-    if "*" not in modelos and not item.reduced and item.modelos:
-        conhecidos = {m["id"] for m in item.modelos}
-        ruim = [m for m in modelos if m not in conhecidos]
-        if ruim:
-            raise HTTPException(400, detail=erro("erro_orq_modelo_desconhecido",
-                                                 f"modelo(s) fora do catálogo da conta: {', '.join(ruim)}",
-                                                 modelos=ruim))
-    try:
-        for v in (conta, body.apelido, *modelos):
-            orq_md.validar_celula(v)
-        if body.ligada:
-            c = orq_politica.ContaPolitica(item.conta, body.provider, body.apelido, modelos, body.trocar)
-            mtime = await asyncio.to_thread(orq_politica.gravar_conta, c, body.mtime)
-        else:
-            mtime = await asyncio.to_thread(orq_politica.desligar, item.conta, body.mtime)
-    except ValueError as e:
-        raise HTTPException(400, detail=erro("erro_orq_celula_invalida", str(e)))
-    except orq_md.Conflito:
-        raise HTTPException(409, detail=erro("erro_orq_arquivo_mudou",
-                                             "o arquivo mudou desde a leitura — recarregue"))
-    return {"ok": True, "mtime": mtime}
-
-
-class PapelBody(_StrictBody):
-    papel: str
-    sessao: str = ""
-    provider: str
-    conta: str
-    modelo: str = ""
-    esforco: str = ""
-    headless: bool | None = None
-    permissao: str = ""
-    motor: str = ""
-    jev: bool = False
-    subagente: str = ""
-    perfil: str = ""
-    mtime: float
-
-
-def _context_de(name: str) -> orq_context.Context:
-    try:
-        return orq_context.resolve(name)
-    except orq_context.IdentityUnavailable as e:
-        raise HTTPException(409, detail=erro("erro_orq_celula_invalida", str(e)))
-    except (OSError, ValueError) as e:
-        raise HTTPException(409, detail=erro("erro_orq_arquivo_mudou", str(e)))
-
-
-def _papeis_de(gid: str) -> tuple[str, float, list[orq_papeis.Papel]]:
-    texto, mtime = orq_md.ler_arquivo(orq_papeis.regras_path(gid))
-    return texto, mtime, orq_papeis.ler(texto)
-
-
-def _orq_identity(name: str) -> str | None:
-    try:
-        return orq_context.identity(name)
-    except orq_context.IdentityUnavailable:
-        return None
-
-
-@app.get("/api/sessions/{name}/orq", dependencies=[Depends(require_auth)])
-async def orq_get(name: str):
-    context = await asyncio.to_thread(_context_de, name)
-    _texto, mtime, papeis = await asyncio.to_thread(_papeis_de, context.gid)
-    # A lista fresca do registry (sem git nem pane): `casar_viva` só precisa de nome + last_activity.
-    infos = await asyncio.to_thread(registry.list)
-    arbitro = next((p for p in papeis if p.e_arbitro()), None)
-    cwd = next((s.cwd for s in infos if s.name == name), None)
-    pronto = await asyncio.to_thread(orq_start.readiness, cwd, context.grouped, bool(papeis))
-    return {
-        "gid": context.gid, "grouped": context.grouped, "session_prefix": context.session_prefix,
-        "session_identity": await asyncio.to_thread(_orq_identity, name),
-        "arquivo": str(context.path), "mtime": mtime, "prontidao": pronto,
-        "arbitro": orq_papeis.casar_viva(arbitro, infos) if arbitro else None,
-        "papeis": [{**asdict(p), "viva": orq_papeis.casar_viva(p, infos),
-                    "id_cota": orq_politica.id_cota(p.provider, p.conta)} for p in papeis],
-    }
-
-
-@app.get("/api/sessions/{name}/orq/panel", dependencies=[Depends(require_auth)])
-async def orq_panel(name: str):
-    """Painel da sessão do orquestrador sem LLM: um retrato por execução, lido dos arquivos dela."""
-    # A pasta vem da linha em cache da lista: `runs.find` releria todas as execuções a cada pedido.
-    info = await asyncio.to_thread(_cached_info_sync, name)
-    if info is None or info.provider != "orq" or not info.jsonl:
-        raise HTTPException(404, detail=erro("erro_nao_encontrado", "execucao nao encontrada"))
-    return await asyncio.to_thread(orq_timeline.panel, Path(info.jsonl).parent, _guardar_snap)
-
-
-class PapelItem(_StrictBody):
-    papel: str
-    sessao: str = ""
-    provider: str
-    conta: str
-    modelo: str = ""
-    esforco: str = ""
-    # Vazio = o papel roda numa conta só (formato original). "1", "2", "3"… = rodízio, e a Task N
-    # cabe à conta de índice (N-1) % total. "par" = todas ao mesmo tempo.
-    vez: str = ""
-    # Abertura da sessão do papel: as mesmas escolhas da criação de sessão, gravadas como flags.
-    headless: bool | None = None
-    permissao: str = ""
-    motor: str = ""
-    jev: bool = False
-    subagente: str = ""
-    perfil: str = ""
-    # Teto de contexto do papel, em % da janela da sessão ("" = 50%). O vigia lê daqui.
-    # None = cliente que não conhece o campo: mantém o valor gravado em vez de apagá-lo.
-    janela: str | None = None
-
-
-async def _validar_abertura(p: orq_papeis.Papel) -> None:
-    """Mesmas regras da criação de sessão: o árbitro não pode receber uma linha que o
-    `hangar-send --new` recusaria."""
-    def recusa(codigo: str, msg: str):
-        raise HTTPException(400, detail=erro(codigo, f"{msg}: {p.papel}"))
-    if p.headless and p.provider not in ("claude", "codex"):
-        recusa("erro_orq_headless_provider", "sem terminal só vale para claude ou codex")
-    if p.headless and "--read-only" in (p.abertura_extra or ""):
-        recusa("erro_orq_headless_read_only",
-               "sem terminal não aceita --read-only (o backend recusa a sessão): desligue o sem terminal")
-    if p.motor:
-        if p.provider != "claude":
-            recusa("erro_motor_sem_claude", "motor so vale para provider claude")
-        if p.motor not in await asyncio.to_thread(engines.listar):
-            recusa("erro_motor_invalido", "motor invalido")
-    if p.permissao:
-        if p.provider == "codex" and p.headless:
-            from app.adapters.codex import sem_terminal
-            if p.permissao not in {m[0] for m in sem_terminal.MODOS}:
-                recusa("erro_permissao_invalida", "modo de permissao invalido")
-        elif p.provider != "claude":
-            recusa("erro_permissao_so_claude", "modo de permissao so vale para claude")
-        else:
-            try:
-                model_args.validar("claude", None, None, p.permissao)
-            except ValueError:
-                recusa("erro_permissao_invalida", "modo de permissao invalido")
-    if p.subagente:
-        if p.provider != "claude" or p.motor:
-            recusa("erro_subagente_so_claude", "modelo dos subagentes so vale para claude sem motor")
-        try:
-            model_args.validar("claude", p.subagente, None)
-        except ValueError as e:
-            recusa("erro_orq_celula_invalida", str(e))
-    if p.perfil:
-        if p.provider != "omp":
-            recusa("erro_perfil_so_omp", "perfil so vale para provider omp")
-        # A mesma regra de nome do omp que a criação de sessão usa.
-        from app.omp_plugin_sync import InventoryError, resolve_omp_directories
-        try:
-            resolve_omp_directories(Path.home(), {"OMP_PROFILE": p.perfil}, Path.home())
-        except InventoryError as e:
-            recusa("erro_orq_celula_invalida", str(e))
-
-
-class PapeisBody(_StrictBody):
-    papeis: list[PapelItem]
-    mtime: float
-    # Sem efeito: salvar nunca acorda o árbitro. Fica porque o corpo é estrito e clientes antigos o mandam.
-    avisar: bool = True
-
-
-async def _aplicar_papeis(name: str, itens: list[PapelItem], mtime_lido: float) -> dict:
-    """Grava TODAS as linhas numa escrita só: o usuário edita vários papéis e salva no fim, e
-    salvar um por vez descartava o resto sem aviso."""
-    if not itens:
-        raise HTTPException(400, detail=erro("erro_orq_celula_invalida", "nenhum papel"))
-    context = await asyncio.to_thread(_context_de, name)
-    texto, _mtime, papeis = await asyncio.to_thread(_papeis_de, context.gid)
-    novos: list[orq_papeis.Papel] = []
-    try:
-        for it in itens:
-            # Herda a sessão da linha de MESMO papel e MESMA vez: num papel que reveza, cada conta
-            # tem a sua, e casar só pelo papel copiaria a sessão da primeira pras demais.
-            #
-            # Consequência a saber ao escrever um chamador novo: converter um papel de conta única
-            # (`vez` vazia) em rodízio (`vez` = "1") não casa linha nenhuma, então a sessão NÃO é
-            # herdada — quem faz essa conversão tem de mandar `sessao` explícito, como o painel faz
-            # em `adicionarConta`. Omitir ali perderia a sessão viva do papel, calado.
-            vez = it.vez.strip()
-            atual = next((p for p in papeis
-                          if orq_md.normalizar(p.papel) == orq_md.normalizar(it.papel)
-                          and orq_md.normalizar(p.vez) == orq_md.normalizar(vez)), None)
-            novo = orq_papeis.Papel(it.papel.strip(), (it.sessao or (atual.sessao if atual else "")).strip(),
-                                    it.provider.strip().lower(), it.conta.strip(),
-                                    it.modelo.strip(), it.esforco.strip(), vez,
-                                    it.headless, it.permissao.strip(), it.motor.strip(), it.jev,
-                                    it.subagente.strip(), perfil=it.perfil.strip(),
-                                    abertura_extra=atual.abertura_extra if atual else "",
-                                    janela=(atual.janela if atual else "") if it.janela is None
-                                    else it.janela.strip().rstrip("%").strip())
-            motivo = await asyncio.to_thread(orq_politica.permitido, novo.provider, novo.conta, novo.modelo, novo.esforco)
-            if motivo:
-                raise HTTPException(400, detail=erro(motivo, "a política de contas não permite esta escolha: " + novo.papel))
-            await _validar_abertura(novo)
-            # ponytail: validar_celula roda dentro de escrever_papel — texto do cliente nunca chega
-            # ao arquivo sem passar por ali.
-            texto = orq_papeis.escrever_papel(texto, novo)
-            novos.append(novo)
-        mtime = await asyncio.to_thread(orq_context.write, context, texto, mtime_lido)
-    except ValueError as e:
-        raise HTTPException(400, detail=erro("erro_orq_celula_invalida", str(e)))
-    except orq_md.Conflito:
-        raise HTTPException(409, detail=erro("erro_orq_arquivo_mudou",
-                                             "o contrato mudou desde a leitura — recarregue"))
-    # A linha vale na próxima sessão de cada papel: o árbitro lê a tabela ao abrir. Nada que está
-    # rodando é fechado nem trocado por causa de um salvar.
-    return {"papeis": [asdict(p) for p in novos], "papel": asdict(novos[0]), "mtime": mtime,
-            "arbitro": None, "aviso": "proxima_sessao", "erro": None}
-
-
-@app.post("/api/sessions/{name}/orq/papel", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def orq_papel_set(name: str, body: PapelBody):
-    return await _aplicar_papeis(name, [PapelItem(**body.model_dump(exclude={"mtime"}))], body.mtime)
-
-
-@app.post("/api/sessions/{name}/orq/papeis", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def orq_papeis_set(name: str, body: PapeisBody):
-    return await _aplicar_papeis(name, body.papeis, body.mtime)
-
-
-class OrqGroupBody(_StrictBody):
-    gid: str
-    mtime: float
-
-
-@app.post("/api/sessions/{name}/orq/grupo", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def orq_group_set(name: str, body: OrqGroupBody):
-    """Associa o time da planejadora ao grupo real, inclusive com um árbitro novo. Os fatos do `orq`
-    vão no pedido e o Rust associa sob o lock de grupo, sem perguntar de volta."""
-    _require_rust_groups()
-    try:
-        facts = await asyncio.to_thread(orq_context.associate_facts, name, body.gid)
-    except orq_md.Conflito:
-        raise HTTPException(409, detail=erro("erro_orq_arquivo_mudou",
-                                             "o time mudou desde a leitura — recarregue"))
-    except ValueError as e:
-        raise HTTPException(409, detail=erro("erro_orq_celula_invalida", str(e)))
-    except OSError as e:
-        raise HTTPException(409, detail=erro("erro_orq_arquivo_mudou", str(e)))
-    try:
-        out = await asyncio.to_thread(groups_bridge.call, "group.orq_associate", name=name,
-                                      gid=body.gid, mtime=body.mtime, facts=facts)
-    except groups_bridge.GroupsBridgeError as e:
-        raise _group_unavailable(e.code) from None
-    return _bridge_reply(out)
-
-
-class ComecarBody(_StrictBody):
-    mtime: float = 0.0
-
-
-@app.post("/api/sessions/{name}/orq/comecar", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def orq_comecar(name: str, body: ComecarBody):
-    """Põe ESTA sessão pra tocar a orquestração como árbitra. Quem planejou vira árbitro (é o que a
-    skill manda: a sessão da fase 1 assume a fase 2), então o alvo é a própria sessão, não uma nova
-    — uma sessão nova começaria relendo tudo que esta já sabe.
-
-    Recusa sem plano: o árbitro despacha Tasks e as Tasks vêm do plano. Um botão que acorda alguém
-    sem ter o que despachar é pior que botão nenhum."""
-    info = next((s for s in await asyncio.to_thread(registry.list) if s.name == name), None)
-    if info is None:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    gid, pronto = await asyncio.to_thread(_prontidao, name, info.cwd)
-    res = await _enviar(name, orq_start.kickoff(pronto, str(orq_papeis.regras_path(gid))))
-    if not res["ok"]:
-        raise HTTPException(409, detail=erro("erro_orq_comecar_falhou",
-                                             f"não deu pra avisar a sessão: {_erro_texto(res['error'])}",
-                                             erro=res["error"]))
-    plano = pronto["plan"]
-    return {"ok": True, "entregue": bool(res.get("delivered")), "fase": pronto["phase"],
-            "plano": Path(plano["path"]).name if plano else ""}
-
-
-def _prontidao(name: str, cwd: str | None) -> tuple[str, dict]:
-    context = _context_de(name)
-    _texto, _mt, papeis = _papeis_de(context.gid)
-    return context.gid, orq_start.readiness(cwd, context.grouped, bool(papeis))
-
-
-class RemoverPapelBody(_StrictBody):
-    papel: str
-    vez: str = ""
-    mtime: float
-
-
-@app.delete("/api/sessions/{name}/orq/papel", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def orq_papel_del(name: str, body: RemoverPapelBody):
-    """Tira UMA linha da tabela: um papel inteiro (sem `vez`) ou uma conta do rodízio dele. NÃO
-    avisa o árbitro — quem mexe na fila normalmente mexe em várias linhas seguidas, e o aviso sai
-    uma vez no fim, pelo botão. A sessão viva daquele papel não é tocada: o contrato diz quem
-    DEVE rodar, não mata quem está rodando."""
-    context = await asyncio.to_thread(_context_de, name)
-    texto, _mtime, papeis = await asyncio.to_thread(_papeis_de, context.gid)
-    alvo = next((p for p in papeis
-                 if orq_md.normalizar(p.papel) == orq_md.normalizar(body.papel)
-                 and orq_md.normalizar(p.vez) == orq_md.normalizar(body.vez)), None)
-    if alvo is None:
-        raise HTTPException(404, detail=erro("erro_orq_papel_inexistente",
-                                             f"não há linha para {body.papel!r} nesta configuração"))
-    cab = orq_papeis.cabecalho_atual(texto) or orq_papeis.CABECALHO
-    texto = orq_md.remover_linha(texto, cab, orq_papeis.chave_da_linha(cab, alvo.papel, alvo.vez))
-    try:
-        mtime = await asyncio.to_thread(orq_context.write, context, texto, body.mtime)
-    except orq_md.Conflito:
-        raise HTTPException(409, detail=erro("erro_orq_arquivo_mudou",
-                                             "o contrato mudou desde a leitura — recarregue"))
-    return {"papeis": [asdict(p) for p in orq_papeis.ler(texto)], "mtime": mtime}
 
 
 @app.get("/api/sessions/{name}/pair/contract", dependencies=[Depends(require_auth)])
@@ -5040,7 +4499,6 @@ async def plugin_input(name: str, request: Request):
 
 @app.post("/api/sessions/{name}/interrupt", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
 async def interrupt(name: str, clear: bool = False):
-    await asyncio.to_thread(_recusa_orq, name)
     # Codex: interrompe a propria TUI pelo tmux, mantendo celular e terminal no mesmo controlador.
     if _provider_of(name) == "codex":
         try:
@@ -6211,53 +5669,6 @@ def _session_git_cwd(name: str) -> str:
     """O git segue o agente até a worktree; arquivos, uploads e execução ficam no cwd."""
     return _session_info_with_cwd(name).git_dir
 
-
-@app.get("/api/orq", dependencies=[Depends(require_auth)])
-async def orq_lista():
-    """Execucoes de orquestracao (eventos.jsonl escrito pelo arbitro), mais recentes primeiro.
-    A lista vem SEM os eventos crus — quem quer a linha do tempo pede o detalhe. Cada uma leva o
-    `watchdog` do chip do card: um systemctl por pedido, nunca um por execução."""
-    raiz = orq.raiz_padrao()
-    execs = await asyncio.to_thread(orq.listar_execucoes, raiz)
-    unidades = await asyncio.to_thread(orq_conductor.units)
-    vigias = await asyncio.to_thread(
-        lambda: {e.id: orq_conductor.watchdog(raiz / e.id, unidades) for e in execs})
-
-    def _resumo(e):
-        d = asdict(e)
-        d.pop("eventos_execucao", None)
-        for t in d["tasks"]:
-            t.pop("eventos", None)
-        d["watchdog"] = vigias[e.id]
-        d["metadata"] = orq.run_metadata(raiz / e.id, e.plano)
-        return d
-
-    return await asyncio.to_thread(lambda: {"execucoes": [_resumo(e) for e in execs], "fichas": orq.fichas(execs)})
-
-
-@app.get("/api/orq/{exec_id}", dependencies=[Depends(require_auth)])
-async def orq_detalhe(exec_id: str):
-    e = await asyncio.to_thread(orq.detalhe, orq.raiz_padrao(), exec_id)
-    if e is None:
-        raise HTTPException(404, detail=erro("erro_nao_encontrado", "execucao nao encontrada"))
-    metadata = await asyncio.to_thread(orq.run_metadata, orq.raiz_padrao() / e.id, e.plano)
-    return {**asdict(e), "metadata": metadata}
-
-
-@app.get("/api/orq/{exec_id}/panel", dependencies=[Depends(require_auth)])
-async def orq_history_panel(exec_id: str):
-    """O mesmo painel por execução, sem exigir uma sessão viva."""
-    d = orq.exec_dir(orq.raiz_padrao(), exec_id)
-    if d is None or not await asyncio.to_thread((d / "eventos.jsonl").is_file):
-        raise HTTPException(404, detail=erro("erro_nao_encontrado", "execucao nao encontrada"))
-    return await asyncio.to_thread(orq_timeline.panel, d, _guardar_snap)
-
-
-@app.get("/api/orq/{exec_id}/conductor", dependencies=[Depends(require_auth)])
-async def orq_conductor_panel(exec_id: str, request: Request):
-    """O Rust monta o painel; nesta porta fica somente o repasse autenticado."""
-    return await _repasse_ao_rust(request, erro("orq_conductor_need_rust_server", "o condutor precisa do servidor Rust, que não está rodando"),
-                                  "/__hangar_server/forwarded")
 
 @app.get("/api/sessions/{name}/branches", dependencies=[Depends(require_auth)])
 def branches(name: str):
@@ -8336,34 +7747,6 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "",
     """
     if engine_account is not None and (provider != "claude" or not engine):
         raise HTTPException(400, detail=erro("erro_cliproxy_conta", "conta ChatGPT exige Claude com motor CLIProxyAPI local"))
-    if provider in ("pi", "omp"):
-        try:
-            return {"kind": provider, "reduced": False,
-                    "models": await asyncio.to_thread(pi_catalog.listar, provider)}
-        except pi_catalog.PiAusente as e:
-            # Codigo proprio: "nao achei o pi" nao e "o pi falhou". Antes isso chegava como
-            # `[WinError 2] O sistema nao pode encontrar o arquivo especificado` dentro da mensagem
-            # de falha do comando — a pessoa ia procurar defeito no `pi --list-models` de um pi que
-            # nem estava instalado ali.
-            # Codigo proprio por provider, mesmo motivo do erro_omp_list_models: o front traduz por
-            # `code`, entao um codigo so mandaria a sessao omp instalar o Pi.
-            codigo = "erro_omp_ausente" if provider == "omp" else "erro_pi_ausente"
-            raise HTTPException(502, detail=erro(codigo, str(e), erro=str(e)))
-        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
-            # Codigo proprio por provider: o front traduz por `code` (a `msg` do backend so aparece
-            # pra codigo DESCONHECIDO), entao um so codigo pros dois faria a falha do omp renderizar
-            # o texto fixo "pi --list-models falhou" na tela.
-            if provider == "omp":
-                raise HTTPException(502, detail=erro("erro_omp_list_models", f"omp models --json falhou: {e}", erro=str(e)))
-            raise HTTPException(502, detail=erro("erro_pi_list_models", f"pi --list-models falhou: {e}", erro=str(e)))
-    if provider == "kimi":
-        # Sem subprocess aqui (não existe `kimi --list-models`): o catálogo é o config.toml.
-        cat = kimi_models.read_catalog()
-        if cat is None:
-            raise HTTPException(409, detail=erro("erro_catalogo_kimi_indisponivel",
-                                                 "catalogo do Kimi indisponível — ~/.kimi-code/config.toml "
-                                                 "ausente ou sem seções [models.*]"))
-        return {"kind": "kimi", "reduced": False, "models": cat["models"], "default": cat["default"]}
     if provider == "codex":
         account = _resolve_codex_account(codex_account or None)
         await _codex_require_idle_preparation(account, _codex_service())
@@ -8493,18 +7876,6 @@ async def engine_model_set(name: str, body: EngineModelBody):
     return {**res, "model": body.model}
 
 
-# ── Modelo + raciocinio de uma sessao Pi ────────────────────────────────────────────────────────
-# Rotas separadas das do Claude (/model-effort, picker do TUI) e das do Codex (/models, app-server)
-# porque o mecanismo e um terceiro: a extensao hangar-state.ts publica o catalogo num sidecar e expoe
-# dois comandos que aplicam a troca pela API do Pi. Ver app/pi_models.py pro porque de nao raspar
-# o TUI aqui.
-
-class PiModelBody(_StrictBody):
-    provider: str | None = None
-    model: str | None = None
-    effort: str | None = None
-
-
 def _session_config_dir(name: str) -> Path | None:
     """CLAUDE_CONFIG_DIR do processo do pane (o sidecar do Pi e o settings.json moram la dentro).
     None -> ~/.claude.
@@ -8523,166 +7894,6 @@ def _session_config_dir(name: str) -> Path | None:
                      exc_info=True)
         return None
 
-
-async def _pi_catalog(name: str) -> tuple[dict, str]:
-    info = await _cached_info(name)
-    if not info or not info.jsonl:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao ou transcript nao encontrado"))
-    if info.provider not in ("pi", "omp"):
-        raise HTTPException(400, detail=erro("erro_rota_so_pi", "esta rota so existe pra sessoes Pi"))
-    cat = await asyncio.to_thread(pi_models.read_catalog, info.jsonl, _session_config_dir(name))
-    if cat is None:
-        # Falha ALTA: sem o sidecar nao ha catalogo real, e inventar um faria o app oferecer
-        # modelos que o `/cp-model` nao encontraria. Instrucao junto porque a causa e sempre a
-        # mesma (extensao velha/ausente) — mas o conserto E o CODIGO mudam por provider: o front
-        # traduz pelo `code` (a `msg` do backend so aparece pra codigo DESCONHECIDO), entao um so
-        # codigo pros dois faria uma sessao omp mostrar a instrucao do Pi.
-        if info.provider == "omp":
-            raise HTTPException(409, detail=erro(
-                "erro_catalogo_omp_indisponivel",
-                "catalogo do omp indisponivel — rode ./scripts/install-claude-wrapper.sh e feche "
-                "e reabra a sessao (o /reload do omp nao recarrega a extensao)"))
-        raise HTTPException(409, detail=erro(
-            "erro_catalogo_pi_indisponivel",
-            "catalogo do Pi indisponivel — rode ./scripts/install-claude-wrapper.sh e reinicie a "
-            "sessao (extensao hangar-state.ts desatualizada)"))
-    return cat, info.jsonl
-
-
-@app.get("/api/sessions/{name}/pi/models", dependencies=[Depends(require_auth)])
-async def pi_models_list(name: str):
-    cat, _ = await _pi_catalog(name)
-    return {"models": cat.get("models", []), "current": cat.get("current"),
-            "thinking": cat.get("thinking"), "levels": cat.get("levels", [])}
-
-
-@app.post("/api/sessions/{name}/pi/model", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def pi_model_set(name: str, body: PiModelBody):
-    cat, jsonl = await _pi_catalog(name)
-    cmds: list[str] = []
-    try:
-        if body.model:
-            if not body.provider:
-                raise pi_models.PiModelError(422, "provider obrigatorio junto com model")
-            pi_models.check_known(cat, body.provider, body.model)
-            cmds.append(pi_models.model_command(body.provider, body.model))
-        if body.effort:
-            cmds.append(pi_models.think_command(body.effort))
-    except pi_models.PiModelError as e:
-        raise HTTPException(e.status, e.detail)
-    if not cmds:
-        raise HTTPException(422, detail=erro("erro_model_effort_faltando", "informe model (com provider) e/ou effort"))
-    try:
-        await asyncio.to_thread(terminal.send_pi_commands, name, cmds)
-    except terminal_input.DriveError as e:
-        raise HTTPException(409, str(e))
-    # Re-le o sidecar ATE ele confirmar (ou estourar 2s): o Pi CLAMPA o nivel pro que o modelo
-    # suporta, entao o que voltamos e o que FICOU, nao o que foi pedido — e o `/cp-model` pode
-    # RECUSAR sem levantar nada (sem chave pro provedor: notifica no TUI e o sidecar segue no modelo
-    # velho). Devolver ok=True sem comparar era declarar sucesso sobre um no-op, com a folha
-    # fechando calada.
-    after = await asyncio.to_thread(pi_models.read_back, jsonl, _session_config_dir(name),
-                                    body.provider, body.model, body.effort)
-    if after is not None and pi_models.confirms(after, body.provider, body.model, body.effort):
-        return {"ok": True, "current": after.get("current"), "thinking": after.get("thinking"),
-                "levels": after.get("levels", [])}
-    # Nao confirmou. As duas causas pedem acoes diferentes do usuario, entao nao viram a mesma frase:
-    # sidecar ilegivel ou parado no MESMO `ts` = o Pi nem republicou o catalogo (comando pode nao ter
-    # chegado) -> indeterminado; `ts` novo com o modelo velho = o Pi processou e RECUSOU.
-    if after is None or after.get("ts") == cat.get("ts"):
-        raise HTTPException(409, detail=erro("erro_sem_confirmacao_troca",
-                                             "comandos digitados, mas o Pi nao republicou o catalogo — nao da "
-                                             "pra confirmar a troca; veja o modelo no proprio terminal"))
-    cur = after.get("current") or {}
-    raise HTTPException(409, detail=erro("erro_pi_recusou_troca",
-                                             f"o Pi recusou a troca — segue em "
-                                             f"{cur.get('provider')}/{cur.get('id')} (raciocinio "
-                                             f"{after.get('thinking')}). Causa mais comum: sem chave configurada "
-                                             f"pro provedor pedido (o Pi avisa dentro do TUI)",
-                                             provider=cur.get("provider"), id=cur.get("id"),
-                                             thinking=after.get("thinking")))
-
-
-# ── Modelo de uma sessão Kimi ─────────────────────────────────────────────────────────────────
-# Quarto mecanismo, diferente dos três vizinhos: sem picker legível (Claude), sem extensão com
-# sidecar (Pi), sem app-server (Codex). O catálogo mora no ~/.kimi-code/config.toml e a troca
-# dirige a busca do picker + Alt+S, confirmada pela linha "Switched to …" do scrollback — ver
-# app/kimi_models.py pro que foi medido na TUI.
-
-class KimiModelBody(_StrictBody):
-    model: str | None = None
-    effort: str | None = None
-
-
-def _kimi_catalog() -> dict:
-    cat = kimi_models.read_catalog()
-    if cat is None:
-        # Mesma política do _pi_catalog: falha ALTA com instrução, nunca lista inventada.
-        raise HTTPException(409, detail=erro("erro_catalogo_kimi_indisponivel",
-                                             "catalogo do Kimi indisponível — ~/.kimi-code/config.toml "
-                                             "ausente ou sem seções [models.*]"))
-    return cat
-
-
-async def _kimi_info(name: str):
-    info = await _cached_info(name)
-    if not info:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessão não encontrada"))
-    if info.provider != "kimi":
-        raise HTTPException(400, detail=erro("erro_rota_so_kimi", "esta rota só existe pra sessões Kimi"))
-    return info
-
-
-@app.get("/api/sessions/{name}/kimi/models", dependencies=[Depends(require_auth)])
-async def kimi_models_list(name: str):
-    await _kimi_info(name)
-    cat = _kimi_catalog()
-    # "current" ao vivo não tem fonte barata (a TUI não expõe e o marcador da statusline é display
-    # name, que repete entre providers): quem mostra o atual é a pill do composer, que já lê a
-    # statusline. Aqui vai o default do config como referência da abertura.
-    return {"models": cat["models"], "default": cat["default"]}
-
-
-@app.post("/api/sessions/{name}/kimi/model", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def kimi_model_set(name: str, body: KimiModelBody):
-    info = await _kimi_info(name)
-    await asyncio.to_thread(_recusa_se_painel_aberto, name)
-    # Sessão TRABALHANDO: o `/model` digitado cairia no composer e o Enter o enfileiraria como
-    # MENSAGEM — a troca viraria um "/model" pro modelo ler. No Claude o _require_drivable cobre
-    # isso pelo spinner; o do Kimi são fases de lua, fora do que ele detecta, então a guarda é o
-    # marcador do hook (corrigido: pode ser o idle CONGELADO do turno anterior).
-    if info.jsonl:
-        m = hook_state.get_state(session_key(info.jsonl))
-        if m:
-            m = corrige_ocioso_kimi(m, info.jsonl)
-        if m and m[0] == "working":
-            raise HTTPException(409, detail=erro("erro_sessao_trabalhando",
-                                                 "a sessão está trabalhando — espere ela terminar"))
-    cat = _kimi_catalog()
-    try:
-        alvo = kimi_models.check_known(cat, body.model) if body.model else None
-        nivel = None
-        if body.effort:
-            # Com modelo junto, valida contra o support_efforts DELE. Sozinho, quem valida é o
-            # picker ao vivo (a linha Thinking mostra os níveis do modelo ATUAL — o backend não
-            # sabe o alias vigente sem perguntar à TUI).
-            nivel = (kimi_models.check_effort(alvo, body.effort) if alvo
-                     else kimi_models.clean_alias(body.effort).lower())
-    except kimi_models.KimiModelError as e:
-        raise HTTPException(e.status, e.detail)
-    if alvo is None and nivel is None:
-        raise HTTPException(422, detail=erro("erro_model_effort_faltando",
-                                             "informe model e/ou effort"))
-    try:
-        res = await asyncio.to_thread(terminal.set_kimi_model, name,
-                                      alvo and alvo["alias"], alvo and alvo["name"], nivel)
-    except terminal_input.DriveError as e:
-        raise HTTPException(409, str(e))
-    except PickerError as e:
-        raise HTTPException(e.status, e.detail)
-    return {"ok": True,
-            "current": {"alias": alvo["alias"], "name": alvo["name"]} if alvo else None,
-            "effort": nivel, "result": res.get("result")}
 
 
 @app.get("/api/fs/roots", dependencies=[Depends(require_auth)])

@@ -49,9 +49,6 @@ pub struct RowState {
     pub limit_reset: Option<String>,
     #[serde(default)]
     pub stalled: bool,
-    /// A descoberta não sabe a credencial.
-    #[serde(default)]
-    pub conta: Option<String>,
     /// O histórico deles ainda é lido pelo Python.
     #[serde(default)]
     pub last_reply: Option<String>,
@@ -283,7 +280,6 @@ pub fn apply(rows: Vec<SessionRow>, facts: &ListFacts, ok: bool) -> (Vec<Session
             row.limited = s.limited;
             row.limit_reset.clone_from(&s.limit_reset);
             row.stalled = s.stalled;
-            row.conta.clone_from(&s.conta);
             row.last_reply.clone_from(&s.last_reply);
             row.last_reply_at = s.last_reply_at;
         }
@@ -380,7 +376,11 @@ mod tests {
         let client = FactsClient::new(addr, "s".into());
         let got = client.fetch(&[pi("p")], &BTreeMap::from([("p".into(), 7)])).await;
         assert!(got.ok && got.fresh);
-        assert_eq!(got.states["p"].conta.as_deref(), Some("pi:x"));
+        let mut row = pi("p");
+        row.conta = Some("kimi:known".into());
+        let facts = ListFacts { states: got.states.clone(), ..Default::default() };
+        let (rows, _) = apply(vec![row], &facts, true);
+        assert_eq!(rows[0].conta.as_deref(), Some("kimi:known"), "os fatos Python não substituem a credencial do Rust");
         let body = seen.lock().unwrap()[0].1.clone();
         let mut keys: Vec<_> = body.as_object().unwrap().keys().cloned().collect();
         keys.sort();

@@ -1,0 +1,126 @@
+{
+  "source_commit": "a0860f26b6e3f611806e780acf87588f6065b328",
+  "command": "python crates/hangar-server/src/orchestration/fixtures/generate.py",
+  "cases": [
+    {
+      "input": 2.675,
+      "digits": 1,
+      "output": 2.7
+    },
+    {
+      "input": 2.675,
+      "digits": 2,
+      "output": 2.67
+    },
+    {
+      "input": 2.675,
+      "digits": 4,
+      "output": 2.675
+    },
+    {
+      "input": 2.685,
+      "digits": 1,
+      "output": 2.7
+    },
+    {
+      "input": 2.685,
+      "digits": 2,
+      "output": 2.69
+    },
+    {
+      "input": 2.685,
+      "digits": 4,
+      "output": 2.685
+    },
+    {
+      "input": 0.00015,
+      "digits": 1,
+      "output": 0.0
+    },
+    {
+      "input": 0.00015,
+      "digits": 2,
+      "output": 0.0
+    },
+    {
+      "input": 0.00015,
+      "digits": 4,
+      "output": 0.0001
+    },
+    {
+      "input": 0.00025,
+      "digits": 1,
+      "output": 0.0
+    },
+    {
+      "input": 0.00025,
+      "digits": 2,
+      "output": 0.0
+    },
+    {
+      "input": 0.00025,
+      "digits": 4,
+      "output": 0.0003
+    },
+    {
+      "input": 1.00005,
+      "digits": 1,
+      "output": 1.0
+    },
+    {
+      "input": 1.00005,
+      "digits": 2,
+      "output": 1.0
+    },
+    {
+      "input": 1.00005,
+      "digits": 4,
+      "output": 1.0001
+    },
+    {
+      "input": -1.00005,
+      "digits": 1,
+      "output": -1.0
+    },
+    {
+      "input": -1.00005,
+      "digits": 2,
+      "output": -1.0
+    },
+    {
+      "input": -1.00005,
+      "digits": 4,
+      "output": -1.0001
+    },
+    {
+      "input": 1.01235,
+      "digits": 1,
+      "output": 1.0
+    },
+    {
+      "input": 1.01235,
+      "digits": 2,
+      "output": 1.01
+    },
+    {
+      "input": 1.01235,
+      "digits": 4,
+      "output": 1.0124
+    },
+    {
+      "input": 99999.99995,
+      "digits": 1,
+      "output": 100000.0
+    },
+    {
+      "input": 99999.99995,
+      "digits": 2,
+      "output": 100000.0
+    },
+    {
+      "input": 99999.99995,
+      "digits": 4,
+      "output": 99999.9999
+    }
+  ]
+}

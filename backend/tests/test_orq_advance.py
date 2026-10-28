@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("hangar_server_bin")
+
 ORQ = Path(__file__).resolve().parents[2] / "skills" / "orquestrar" / "scripts" / "orq.py"
 
 # One line per hangar-send call ("$*"); `--new` also writes the sidecar the backend would, with
@@ -724,7 +726,7 @@ CONTRACT7 = """## Quem é quem
 
 @pytest.mark.parametrize("contract", [CONTRACT, CONTRACT6, CONTRACT7])
 def test_team_table_reads_like_the_backend(contract):
-    from app import orq_papeis
+    from orq_contract_client import roles as orq_papeis
     m = orq_mod()
     ours = [(x["papel"], x["vez"], x["sessao"], x["provider"].lower(), x["conta"], x["modelo"], x["esforco"])
             for x in m.team_rows(contract)]

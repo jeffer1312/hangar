@@ -426,13 +426,16 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   e sem `execucao_fim`, nunca o batimento do vigia; acabada (ou não iniciada em 1 h), a varredura
   do `list()` dissolve o grupo e arquiva o contrato.
 - **Sessão orq: a conversa e o painel saem dos arquivos da execução, por um parser só**
-  (`orq_timeline.py`). O `ChatEvent` leva `orq` (texto cru mantido); o painel é um `GET` por
+  (`orchestration/timeline.rs`). O `ChatEvent` leva `orq` (texto cru mantido); o painel é um `GET` por
   execução em `/api/sessions/{name}/orq/panel`, fora do alcance do convidado e sem escrita, e o
   Time lê o estado da lista de sessões. O `orq.py` só grava o que não dá para derivar.
-- **O feed de `GET /api/orq/{id}/conductor` é do Rust; o watchdog continua compartilhado no Python.**
-  O fato interno valida a pasta e calcula `units`/`watchdog` sem importar a API nem chamar o Rust.
-  A porta do Connect só repassa; sem Rust, responde `orq_conductor_need_rust_server`. Lista, timeline
-  e lançamento de orquestração continuam no Python. [Contrato](docs/decisoes/plataforma.md#feed-do-condutor-no-rust-watchdog-compartilhado-no-python).
+- **Modelos Pi/omp/Kimi, sincronização omp e backend de orquestração pertencem ao Rust.**
+  `provider_models/` decide catálogo, troca e confirmação no agente, incluindo o inbox Pi;
+  `omp_sync/` reconcilia plugins e contexto e conduz o sincronizador em background;
+  `orchestration/` lê execuções, watchdog, política, time, plano, timeline e painel e lança pelo
+  lançador único. O motor externo da skill usa esses leitores pelo CLI Rust. As portas do Python
+  só autenticam e repassam; sem Rust, respondem 503, sem implementação de reserva. Os fatos
+  internos `orq/*` foram removidos. [Contrato](docs/decisoes/plataforma.md#provedores-e-orquestração-no-rust).
 - **Worktrees mescladas usam a origem e a base publicada.** Base explícita vence; sem ela,
   referência nomeada de criação no reflog, com fallback para a branch principal. Base local usa
   seu upstream ou o único remoto correspondente. Ambiguidade e falha de leitura impedem marcar
@@ -637,17 +640,17 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     `stats` (`stats.rs`), faixa e avisos de mod (`mods`) e pedido de navegador (`nav_requests.rs`)
     são do hub do Rust, sem conexão ao Python. O `sse.merged_events` só serve o `/events` do próprio
     Python: Pi/omp/Kimi, convidado com login próprio (lê o canal privado do hub) e o modo `python`;
-    o `stats.py` serve esse `/events` e o consumo da orquestração.
+    o `stats.py` serve esse `/events`. O consumo da orquestração é calculado no Rust.
   - Lista do dono: montada pelo Rust; só com linha Pi/omp/Kimi o tique pede `POST
     /internal/list/facts` (`list/facts.rs` → `list_facts.py`), levando só essas linhas: estado,
-    conta e última resposta delas.
+    e última resposta delas. A associação da credencial Pi/omp/Kimi à cota é do Rust.
   - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (só contas Codex; a
     reconciliação das contas Claude é do Rust, `accounts/claude_config.rs`),
     `accounts/claude-window`, `accounts/codex-invalidate`, `workspace/context`,
-    `worktrees/context`, `orq/*` (`group-phase`, `promote`, `is-orchestrator`, `conductor-facts`),
+    `worktrees/context`,
     `transcription/config`, `costs/scopes`, `migration/status`, `diag` e `ping`.
-  - Partes inteiras ainda no Python: Pi, omp e Kimi; Arquivo; orquestração (lista, timeline,
-    lançamento); transferência Claude→Codex; navegador (`navegador`, `nav-remoto`); peers;
+  - Partes ainda no Python: transcript, estado e entrada geral de Pi, omp e Kimi; Arquivo;
+    transferência Claude→Codex; navegador (`navegador`, `nav-remoto`); peers;
     workflows e runners; login de convidado. O Connect (8768) está inativo.
   - Atualização: na máquina migrada (pacote ou modo desenvolvedor) as rotas `/api/atualizacao*`
     são do Rust (`update/http.rs`); na não migrada, ao motor `git` do Python (`atualizar.py`). No
@@ -772,7 +775,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   ligado enquanto houver lista aberta, tique de 1,5 s, JSON só quando a assinatura muda; cada
   conexão só lê o publicado. Escrita nas pastas de estado das contas (marcador, registro nativo,
   pergunta aberta) reclassifica só a sessão afetada sobre a última rodada boa, juntada em 150 ms;
-  observador que falha vai ao diário e o tique continua valendo. Só estado, conta e resposta de
+  observador que falha vai ao diário e o tique continua valendo. Só estado e resposta de
   Pi/omp/Kimi vêm de `POST /internal/list/facts`, e só com linha deles; transferências, `orq`,
   acesso de convidado, atalhos e problema do Claude sem terminal a ponte lê do disco
   (`list/local_*.rs`); sessão sem terminal e Codex com terminal adotado, do

@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("hangar_server_bin")
+
 ROOT = Path(__file__).resolve().parents[2]
 VIGIA = ROOT / "skills" / "orquestrar" / "scripts" / "vigia.sh"
 ORQ = ROOT / "skills" / "orquestrar" / "scripts" / "orq.py"

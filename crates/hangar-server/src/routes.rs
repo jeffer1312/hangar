@@ -34,6 +34,7 @@ const COMMENT_EVERY: Duration = Duration::from_secs(15);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct AppState {
+    pub omp_sync: Arc<std::sync::OnceLock<Arc<crate::omp_sync::Service>>>,
     pub interactions: Arc<crate::interactions::InteractionStore>,
     pub dictation_models: Arc<crate::dictation::catalog::Models>,
     /// Vagas para processos e chamadas de organização do ditado (catálogo sem cache e execução).
@@ -176,11 +177,15 @@ impl AppState {
                 .with_config(Arc::new(move || crate::runtime::codex_launch::runtime_config(&env))))
         };
         let groups = crate::groups::from_env(list.env().dirs.as_ref(), server_id.clone(),
-            Arc::new(crate::groups::orq::PythonOrq::new(cfg.upstream, cfg.internal_secret.clone(), http.clone())), list.clone(), diag.clone());
+            Arc::new(crate::groups::orq::PythonOrq::new(cfg.upstream, cfg.internal_secret.clone(), http.clone())
+                .with_paths(list.env().dirs.as_ref().map(|d| d.home.clone()).unwrap_or_default(),
+                    list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
+                .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone());
         AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             interactions, plugin,
             transcription: Arc::default(),
+            omp_sync: Arc::default(),
             dictation_models: Arc::default(),
             dictation_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             transcription_slots: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -260,6 +265,7 @@ pub async fn serve_with_state(listener: TcpListener, state: AppState) -> std::io
 
 /// `guest`: endereço da porta do convidado. Ocupada não derruba a principal: tenta até soltar.
 pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest: Option<SocketAddr>) -> std::io::Result<()> {
+    crate::omp_sync::validate_environment(&crate::push::server_env()).map_err(std::io::Error::other)?;
     let guest = guest.filter(|addr| state.share.is_some() || {
         tracing::error!(listen = %addr, "porta do convidado pedida sem HANGAR_SHARES_FILE: fica fechada");
         false
@@ -271,6 +277,17 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     state.voice.set_self(listener.local_addr()?, &state.cfg.auth_token);
     let public_v6 = state.public_v6.take();
     let state = Arc::new(state);
+    if crate::config::Config::runtime_instance().map_err(std::io::Error::other)?.is_some() {
+        let omp_sync = crate::omp_sync::Service::start(state.clone());
+        let _ = state.omp_sync.set(omp_sync.clone());
+        omp_sync.ready().await;
+        crate::provider_models::inbox::install_endpoint(state.clone()).await;
+        crate::provider_models::warm();
+        let policy_home = state.accounts.env.home.clone();
+        let policy_claude = state.accounts.env.claude_base.clone();
+        tokio::task::spawn_blocking(move || crate::orchestration::policy::migrate(&policy_home, &policy_claude)).await
+            .map_err(|_| std::io::Error::other("orq_policy_migrate_interrupted"))?;
+    }
     let _worktree_sweep=crate::AbortOnDrop(crate::worktree_policy::spawn(state.clone()));
     let _keyring_watch = crate::AbortOnDrop(crate::keyring::spawn(state.list.keyring.clone()));
     let v6_state = state.clone();
@@ -811,8 +828,36 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
 pub(crate) async fn pass_any(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    req: Request,
+    mut req: Request,
 ) -> Response {
+    if crate::provider_models::inbox_http_request(req.method(), req.uri().path(), req.headers()) {
+        return crate::session_write::json_response(StatusCode::NOT_FOUND, serde_json::json!({"detail":"Not Found"}));
+    }
+    if let Some(mut response) = crate::provider_info::wrong_method(req.method(), req.uri().path(), req.uri().query()) {
+        cors(req.headers(), response.headers_mut());
+        return response;
+    }
+    let models = crate::provider_models::matches(req.method(), req.uri().path())
+        || crate::provider_models::catalog_request(req.method(), req.uri().path(), req.uri().query());
+    let orchestration = crate::orchestration::matches(req.method(), req.uri().path());
+    let sync = crate::omp_sync::matches(req.method(), req.uri().path());
+    if models || orchestration || sync {
+        let (forward, caller) = who(&st, peer, &req);
+        let allowed = matches!(&caller, Some(Caller::Owner)) || (models && req.extensions().get::<SessionPath>()
+            .is_some_and(|path| caller.as_ref().is_some_and(|who| who.can(&path.session, req.method()))));
+        if !allowed {
+            return if caller.is_some() { StatusCode::FORBIDDEN.into_response() }
+                else { crate::share_reach::unauthorized(&st, &forward.client_ip) };
+        }
+        req.extensions_mut().insert(ConnectInfo(peer));
+        let headers = req.headers().clone();
+        let mut response = if models { crate::provider_models::serve(&st, req).await }
+            else if orchestration { crate::orchestration::serve(&st, req).await }
+            else if let Some(service) = st.omp_sync.get() { crate::omp_sync::serve(&st, service, req).await }
+            else { crate::session_write::json_response(StatusCode::SERVICE_UNAVAILABLE, serde_json::json!({"code":"omp_sync_unavailable"})) };
+        cors(&headers, response.headers_mut());
+        return response;
+    }
     // Anexos e contas do dono são do Rust; o anexo também do convidado da sessão (o porteiro já
     // limitou ao nível: par só baixa um arquivo).
     let uploads = crate::uploads::http::matches(req.method(), req.uri().path());
@@ -902,7 +947,7 @@ pub(crate) fn diag_req(req: &Request) -> String {
         .unwrap_or_default()
 }
 
-async fn history(
+pub(crate) async fn history(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<String>, PathRejection>,
@@ -920,6 +965,9 @@ async fn history(
             Ok(n) if n > 0 => usize::try_from(n).ok(),
             Ok(_) => None,
             // Texto ou vazio fica com o FastAPI e o 422 dele.
+            Err(_) if req.extensions().get::<crate::forwarded::ReadGuest>().is_some() => return crate::session_write::json_response(
+                StatusCode::UNPROCESSABLE_ENTITY, serde_json::json!({"detail":[{"type":"int_parsing","loc":["query","limit"],
+                "msg":"Input should be a valid integer, unable to parse string as an integer","input":v}]})),
             Err(_) => return pass(&st, req, &fwd).await,
         },
     };
@@ -983,7 +1031,7 @@ async fn history(
     resp
 }
 
-async fn events(
+pub(crate) async fn events(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<String>, PathRejection>,
@@ -995,7 +1043,7 @@ async fn events(
         _ => return pass(&st, req, &fwd).await,
     };
     // Convidado não recebe aviso de mod nem pedido de navegador, e não conta como app do dono.
-    let guest = matches!(who, Some(Caller::Guest(_)));
+    let guest = matches!(who, Some(Caller::Guest(_))) || req.extensions().get::<crate::forwarded::ReadGuest>().is_some_and(|guest| guest.0);
     let Ok(info) = st.info(&name).await else {
         return route_failed(&st, req.headers(), "rust.events_failed", &name, "internal_info", INFO_REASON);
     };
@@ -1137,6 +1185,87 @@ pub(crate) fn maybe_gzip(req: &HeaderMap, resp: &mut HeaderMap, body: Vec<u8>) -
 mod tests {
     use super::*;
     use std::io::Read;
+
+    #[tokio::test]
+    async fn migrated_provider_routes_authenticate_before_validation_and_never_fall_back() {
+        let state = state_with_upstream().await;
+        let peer = "127.0.0.1:5000".parse().unwrap();
+        for path in ["/api/sessions/demo/pi/model", "/api/sessions/demo/kimi/model", "/api/sessions/demo/orq/papeis"] {
+            for (token, expected) in [("errado", StatusCode::UNAUTHORIZED), ("dono", StatusCode::UNPROCESSABLE_ENTITY)] {
+                let mut req = request(path, "198.51.100.50", false, token);
+                *req.method_mut() = Method::POST;
+                req.headers_mut().insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+                *req.body_mut() = axum::body::Body::from("[]");
+                let response = pass_any(State(state.clone()), ConnectInfo(peer), req).await;
+                assert_eq!(response.status(), expected, "{path}, token {token}");
+            }
+        }
+        let response = pass_any(State(state.clone()), ConnectInfo(peer), request("/api/omp/plugin-sync", "198.51.100.51", false, "dono")).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap(), serde_json::json!({"code":"omp_sync_unavailable"}));
+        for method in [Method::GET, Method::POST, Method::OPTIONS, Method::HEAD] {
+            let mut req = request("/api/pi/inbox", "198.51.100.53", false, "errado");
+            *req.method_mut() = method;
+            let response = pass_any(State(state.clone()), ConnectInfo(peer), req).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+    }
+
+    #[tokio::test]
+    async fn migrated_provider_forwarding_checks_the_private_secret_and_preserves_guest_limits() {
+        let state = state_with_upstream().await;
+        let peer = "127.0.0.1:5000".parse().unwrap();
+        for (path, guest, secret, expected) in [
+            ("/api/sessions/demo/pi/model", false, "errado", StatusCode::NOT_FOUND),
+            ("/api/sessions/demo/pi/model", true, "s", StatusCode::UNPROCESSABLE_ENTITY),
+            ("/api/sessions/demo/orq/papeis", true, "s", StatusCode::NOT_FOUND),
+            ("/api/sessions/demo/orq/papeis", false, "s", StatusCode::UNPROCESSABLE_ENTITY),
+        ] {
+            let req = Request::builder().method(Method::POST).uri("/__hangar_server/forwarded")
+                .header("x-hangar-internal", secret).header("x-hangar-path", path)
+                .header("x-hangar-forwarded-guest", if guest { "1" } else { "0" })
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from("[]")).unwrap();
+            let response = crate::forwarded::private(State(state.clone()), ConnectInfo(peer), req).await;
+            assert_eq!(response.status(), expected, "{path}, convidado {guest}, segredo {secret}");
+        }
+    }
+
+    #[tokio::test]
+    async fn orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports() {
+        let dir = tempfile::tempdir().unwrap();
+        let timeline = dir.path().join("timeline.jsonl");
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../backend/tests/fixtures/contract/orq-events/events.json")).unwrap();
+        let lines = fixture["cases"].as_array().unwrap().iter().map(|case| format!("{}\n", case["input"])).collect::<String>();
+        std::fs::write(&timeline, lines).unwrap();
+        let mut state = Arc::try_unwrap(state_with_upstream().await).ok().unwrap();
+        state.side.locate = Arc::new(crate::locate::Fixed(Some(InternalInfo {
+            provider: "orq".into(), jsonl: Some(timeline), session_key: "run".into(),
+            history: serde_json::Value::Null, headless: false, lifecycle_id: Some("life".into()), cwd: None,
+        })));
+        let state = Arc::new(state);
+        let peer = "127.0.0.1:5000".parse().unwrap();
+        let public = history(State(state.clone()), ConnectInfo(peer), Ok(Path("run-orq".into())),
+            request("/api/sessions/run-orq/history", "198.51.100.52", false, "dono")).await;
+        assert_eq!(public.status(), StatusCode::OK);
+        let expected = axum::body::to_bytes(public.into_body(), 1024 * 1024).await.unwrap();
+        assert!(!serde_json::from_slice::<Vec<serde_json::Value>>(&expected).unwrap().is_empty());
+        for guest in [false, true] {
+            let req = Request::builder().uri("/__hangar_server/forwarded")
+                .header("x-hangar-internal", "s").header("x-hangar-path", "/api/sessions/run-orq/history")
+                .header("x-hangar-forwarded-guest", if guest { "1" } else { "0" })
+                .body(axum::body::Body::empty()).unwrap();
+            let response = crate::forwarded::private(State(state.clone()), ConnectInfo(peer), req).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap(), expected);
+        }
+        let req = Request::builder().uri("/__hangar_server/forwarded?limit=invalido")
+            .header("x-hangar-internal", "s").header("x-hangar-path", "/api/sessions/run-orq/history")
+            .body(axum::body::Body::empty()).unwrap();
+        let response = crate::forwarded::private(State(state), ConnectInfo(peer), req).await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
 
     /// Estado com um Python mínimo: `/ws` recusa com 403, `/limited` responde 429.
     async fn state_with_upstream() -> Arc<AppState> {

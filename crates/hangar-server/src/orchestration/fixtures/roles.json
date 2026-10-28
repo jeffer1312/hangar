@@ -1,0 +1,191 @@
+{
+  "source_commit": "a0860f26b6e3f611806e780acf87588f6065b328",
+  "command": "python crates/hangar-server/src/orchestration/fixtures/generate.py",
+  "cases": [
+    {
+      "input": {
+        "papel": "executor",
+        "sessao": "w-t*",
+        "provider": "claude",
+        "conta": "padrao",
+        "modelo": "opus",
+        "esforco": "high",
+        "vez": "",
+        "headless": null,
+        "permissao": "",
+        "motor": "",
+        "jev": false,
+        "subagente": "",
+        "perfil": "",
+        "abertura_extra": "",
+        "janela": ""
+      },
+      "text": "# Título\n\n## Quem é quem\n\n| Papel | Sessão | Provider | Conta | Modelo | Esforço |\n|---|---|---|---|---|---|\n| **Árbitro** | `a` | claude | p | opus | - |\n| executor | w-t* | claude | padrao | opus | high |\n\n## Gates\n\n- Intacto\n",
+      "output": [
+        {
+          "papel": "Árbitro",
+          "sessao": "a",
+          "provider": "claude",
+          "conta": "p",
+          "modelo": "opus",
+          "esforco": "",
+          "vez": "",
+          "headless": null,
+          "permissao": "",
+          "motor": "",
+          "jev": false,
+          "subagente": "",
+          "perfil": "",
+          "abertura_extra": "",
+          "janela": ""
+        },
+        {
+          "papel": "executor",
+          "sessao": "w-t*",
+          "provider": "claude",
+          "conta": "padrao",
+          "modelo": "opus",
+          "esforco": "high",
+          "vez": "",
+          "headless": null,
+          "permissao": "",
+          "motor": "",
+          "jev": false,
+          "subagente": "",
+          "perfil": "",
+          "abertura_extra": "",
+          "janela": ""
+        }
+      ]
+    },
+    {
+      "input": {
+        "papel": "executor",
+        "sessao": "w-t*",
+        "provider": "codex",
+        "conta": "openai-codex",
+        "modelo": "gpt",
+        "esforco": "high",
+        "vez": "2",
+        "headless": true,
+        "permissao": "Full Access",
+        "motor": "",
+        "jev": false,
+        "subagente": "",
+        "perfil": "",
+        "abertura_extra": "--read-only",
+        "janela": "60"
+      },
+      "text": "# Título\n\n## Quem é quem\n\n| papel | vez | sessão | provider | conta | modelo | esforço | janela | abertura |\n|---|---|---|---|---|---|---|---|---|\n| Árbitro | - | a | claude | p | opus | - | - | - |\n| executor | - | b | claude | p | sonnet | low | - | - |\n| executor | 2 | w-t* | codex | openai-codex | gpt | high | 60% | --headless --permissao 'Full Access' --read-only |\n\n## Gates\n\n- Intacto\n",
+      "output": [
+        {
+          "papel": "Árbitro",
+          "sessao": "a",
+          "provider": "claude",
+          "conta": "p",
+          "modelo": "opus",
+          "esforco": "",
+          "vez": "",
+          "headless": null,
+          "permissao": "",
+          "motor": "",
+          "jev": false,
+          "subagente": "",
+          "perfil": "",
+          "abertura_extra": "",
+          "janela": ""
+        },
+        {
+          "papel": "executor",
+          "sessao": "b",
+          "provider": "claude",
+          "conta": "p",
+          "modelo": "sonnet",
+          "esforco": "low",
+          "vez": "",
+          "headless": null,
+          "permissao": "",
+          "motor": "",
+          "jev": false,
+          "subagente": "",
+          "perfil": "",
+          "abertura_extra": "",
+          "janela": ""
+        },
+        {
+          "papel": "executor",
+          "sessao": "w-t*",
+          "provider": "codex",
+          "conta": "openai-codex",
+          "modelo": "gpt",
+          "esforco": "high",
+          "vez": "2",
+          "headless": true,
+          "permissao": "Full Access",
+          "motor": "",
+          "jev": false,
+          "subagente": "",
+          "perfil": "",
+          "abertura_extra": "--read-only",
+          "janela": "60"
+        }
+      ]
+    },
+    {
+      "input": {
+        "papel": "executor",
+        "sessao": "w-t*",
+        "provider": "omp",
+        "conta": "api",
+        "modelo": "m",
+        "esforco": "max",
+        "vez": "",
+        "headless": null,
+        "permissao": "",
+        "motor": "",
+        "jev": false,
+        "subagente": "",
+        "perfil": "trabalho",
+        "abertura_extra": "",
+        "janela": ""
+      },
+      "text": "# Título\n\n## Quem é quem\n\n| papel | sessão | provider | conta | modelo | esforço | abertura |\n|---|---|---|---|---|---|---|\n| Árbitro | a | claude | p | opus | - | - |\n| executor | w-t* | omp | api | m | max | --profile trabalho |\n\n## Gates\n\n- Intacto\n",
+      "output": [
+        {
+          "papel": "Árbitro",
+          "sessao": "a",
+          "provider": "claude",
+          "conta": "p",
+          "modelo": "opus",
+          "esforco": "",
+          "vez": "",
+          "headless": null,
+          "permissao": "",
+          "motor": "",
+          "jev": false,
+          "subagente": "",
+          "perfil": "",
+          "abertura_extra": "",
+          "janela": ""
+        },
+        {
+          "papel": "executor",
+          "sessao": "w-t*",
+          "provider": "omp",
+          "conta": "api",
+          "modelo": "m",
+          "esforco": "max",
+          "vez": "",
+          "headless": null,
+          "permissao": "",
+          "motor": "",
+          "jev": false,
+          "subagente": "",
+          "perfil": "trabalho",
+          "abertura_extra": "",
+          "janela": ""
+        }
+      ]
+    }
+  ]
+}

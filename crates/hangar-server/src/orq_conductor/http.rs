@@ -1,4 +1,4 @@
-use super::{feed_bytes, int, load, nesting, run_with_stack, serialize};
+use super::feed_bytes;
 use crate::routes::AppState;
 use axum::{
     body::Body,
@@ -6,10 +6,8 @@ use axum::{
     http::{Method, StatusCode},
     response::Response,
 };
-use http_body_util::BodyExt;
-use serde_json::{Value, json};
-use std::path::Path;
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use serde_json::json;
+use std::{net::SocketAddr, sync::Arc};
 pub fn matches(method: &Method, path: &str) -> bool {
     *method == Method::GET && exec_id(path).is_some()
 }
@@ -29,6 +27,10 @@ pub async fn public(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
+    if let Some(mut response) = crate::provider_info::wrong_method(req.method(), req.uri().path(), req.uri().query()) {
+        crate::routes::cors(req.headers(), response.headers_mut());
+        return response;
+    }
     let (forward, owner) = crate::routes::gate(&st, peer, &req);
     if !owner || req.method() != Method::GET {
         return crate::routes::pass(&st, req, &forward).await;
@@ -51,116 +53,35 @@ fn missing() -> Response {
         "execução não encontrada",
     )
 }
-fn valid_watchdog(value: &Value, marker: &str) -> bool {
-    let Some(fields) = value.as_object() else {
-        return false;
-    };
-    [
-        "alive",
-        "last_cycle",
-        "since",
-        "restarts",
-        "unit",
-        "unit_state",
-        "arbiter",
-        "watching",
-        "source",
-    ]
-    .iter()
-    .all(|key| fields.contains_key(*key))
-        && value["alive"].is_boolean()
-        && matches!(
-            value["source"].as_str(),
-            Some("heartbeat" | "systemd" | "none" | "unavailable")
-        )
-        && value["watching"]
-            .as_array()
-            .is_some_and(|values| values.iter().all(Value::is_string))
-        && ["last_cycle", "since"]
-            .iter()
-            .all(|key| value[*key].is_null() || value[*key].is_string())
-        && (value["restarts"].is_null() || !int(&value["restarts"], marker).is_null())
-}
-fn facts(raw: Vec<u8>) -> Result<(String, Vec<u8>), &'static str> {
-    let text = String::from_utf8(raw).map_err(|_| "orq_conductor_facts_invalid")?;
-    run_with_stack(nesting(&text), move || {
-        let baseline = load(&text, "")
-            .ok_or("orq_conductor_facts_invalid")?
-            .to_string();
-        let mut marker = super::MARK.to_owned();
-        while baseline.contains(&marker) {
-            marker.push('#')
-        }
-        let value = load(&text, &marker).ok_or("orq_conductor_facts_invalid")?;
-        let path = value["path"]
-            .as_str()
-            .filter(|path| Path::new(path).is_absolute())
-            .ok_or("orq_conductor_facts_invalid")?
-            .to_owned();
-        if !valid_watchdog(&value["watchdog"], &marker) {
-            return Err("orq_conductor_facts_invalid");
-        }
-        Ok((path, serialize(&value["watchdog"], &marker)?))
-    })
-}
 pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
     let Some(id) = exec_id(req.uri().path()).filter(|id| valid_id(id)) else {
         return missing();
     };
-    let url = format!(
-        "http://{}/internal/orq/{}/conductor-facts",
-        st.cfg.upstream,
-        crate::groups::exit::segment(&id)
-    );
-    let request = axum::http::Request::get(url)
-        .header("x-hangar-internal", &st.cfg.internal_secret)
-        .body(Body::empty())
-        .unwrap();
-    let work = async {
-        let response = st
-            .http
-            .request(request)
-            .await
-            .map_err(|_| "orq_conductor_facts_unreachable")?;
-        if response.status() == StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        if response.status() != StatusCode::OK {
-            return Err("orq_conductor_facts_status");
-        }
-        let raw = response
-            .into_body()
-            .collect()
-            .await
-            .map_err(|_| "orq_conductor_facts_body")?
-            .to_bytes();
-        let facts = tokio::task::spawn_blocking(move || facts(raw.to_vec()))
-            .await
-            .map_err(|_| "orq_conductor_facts_invalid")??;
-        Ok(Some(facts))
-    };
-    let (path, watchdog) = match tokio::time::timeout(Duration::from_secs(5), work).await {
-        Ok(Ok(Some(facts))) => facts,
-        Ok(Ok(None)) => return missing(),
-        outcome => {
-            let code = match outcome {
-                Ok(Err(code)) => code,
-                _ => "orq_conductor_facts_timeout",
-            };
-            st.diag.report(
-                "rust.orq_conductor_failed",
-                &id,
-                code,
-                "fatos do condutor indisponíveis",
-            );
+    let path = crate::orchestration::runs::root(&st.accounts.env.home).join(&id);
+    if !path.is_dir() {
+        return missing();
+    }
+    let root = path.clone();
+    let watchdog = match tokio::task::spawn_blocking(move || {
+        let units = crate::orchestration::runs::units();
+        serde_json::to_vec(&crate::orchestration::runs::watchdog(
+            &root,
+            units.as_ref(),
+            crate::orchestration::runs::now(),
+        ))
+    })
+    .await
+    {
+        Ok(Ok(value)) => value,
+        _ => {
             return failure(
                 StatusCode::SERVICE_UNAVAILABLE,
-                code,
+                "orq_conductor_watchdog_failed",
                 "Não foi possível consultar o condutor.",
             );
         }
     };
-    match tokio::task::spawn_blocking(move || feed_bytes(Path::new(&path), watchdog)).await {
+    match tokio::task::spawn_blocking(move || feed_bytes(&path, watchdog)).await {
         Ok(Ok(bytes)) => axum::response::Response::builder()
             .status(StatusCode::OK)
             .header(axum::http::header::CONTENT_TYPE, "application/json")

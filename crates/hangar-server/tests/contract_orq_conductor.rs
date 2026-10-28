@@ -80,6 +80,9 @@ struct Servers {
     upstream: SocketAddr,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     calls: Arc<std::sync::Mutex<Vec<String>>>,
+    _home: tempfile::TempDir,
+    fixture: std::path::PathBuf,
+    expected_watchdog: Value,
 }
 impl Drop for Servers {
     fn drop(&mut self) {
@@ -148,7 +151,56 @@ async fn servers(root: &std::path::Path) -> Servers {
         log_path: None,
         trusted: hangar_server::auth::TrustedHosts::parse("127.0.0.1"),
     };
-    let state = Arc::new(hangar_server::routes::AppState::new(cfg));
+    let home = tempfile::tempdir().unwrap();
+    let runs = home.path().join(".hangar/orq");
+    std::fs::create_dir_all(&runs).unwrap();
+    let mut expected_watchdog = watchdog();
+    let ts = chrono::Local::now().to_rfc3339();
+    expected_watchdog["last_cycle"] = json!(ts);
+    for id in [
+        "empty",
+        "fixture",
+        "large-watchdog",
+        "broken",
+        "invalid",
+        "incomplete",
+        "array",
+        "null",
+        "malformed",
+        "oversized",
+        "slow",
+    ] {
+        let dir = runs.join(id);
+        std::fs::create_dir(&dir).unwrap();
+        for file in std::fs::read_dir(root).unwrap().flatten() {
+            if file.path().is_file() {
+                std::fs::copy(file.path(), dir.join(file.file_name())).unwrap();
+            }
+        }
+        let watching = if id == "large-watchdog" {
+            json!(["x".repeat(100_000)])
+        } else {
+            json!([])
+        };
+        std::fs::write(
+            dir.join("vigia.json"),
+            json!({"ts":ts,"pid":std::process::id(),"interval_s":60,"watching":watching})
+                .to_string(),
+        )
+        .unwrap();
+    }
+    let fixture = runs.join("fixture");
+    let mut state = hangar_server::routes::AppState::new(cfg);
+    state.accounts.env = hangar_server::accounts::environment::AccountEnvironment::from_map(
+        std::collections::BTreeMap::from([
+            ("HOME".into(), home.path().to_string_lossy().into_owned()),
+            (
+                "USERPROFILE".into(),
+                home.path().to_string_lossy().into_owned(),
+            ),
+        ]),
+    );
+    let state = Arc::new(state);
     let (public, t2) = bind(hangar_server::routes::router(state.clone())).await;
     let (private, t3) = bind(hangar_server::routes::terminal_router(state)).await;
     Servers {
@@ -157,6 +209,9 @@ async fn servers(root: &std::path::Path) -> Servers {
         upstream,
         tasks: vec![t1, t2, t3],
         calls,
+        _home: home,
+        fixture,
+        expected_watchdog,
     }
 }
 #[tokio::test]
@@ -183,33 +238,22 @@ async fn conductor_http_owner_auth_forwarded_and_readonly() {
     let bytes = answer.bytes().await.unwrap();
     assert!(bytes.starts_with(b"{\"watchdog\":"));
     let answer: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(answer["watchdog"], watchdog());
+    assert_eq!(answer["watchdog"], servers.expected_watchdog);
     assert_eq!(answer["feed"][0]["text"], "ação");
     assert_eq!(answer.as_object().unwrap().len(), 4);
     assert_eq!(
         client.get(&url).send().await.unwrap().status(),
         StatusCode::UNAUTHORIZED
     );
-    assert_eq!(
-        client
-            .head(&url)
-            .bearer_auth("fixture-owner")
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        client
-            .post(&url)
-            .bearer_auth("fixture-owner")
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
+    for method in [reqwest::Method::HEAD, reqwest::Method::POST] {
+        for authenticated in [false, true] {
+            let request = client.request(method.clone(), &url);
+            let request = if authenticated { request.bearer_auth("fixture-owner") } else { request };
+            let response = request.send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+            assert_eq!(response.headers()["allow"], "GET");
+        }
+    }
     assert_eq!(
         client
             .get(format!(
@@ -277,9 +321,8 @@ async fn conductor_http_owner_auth_forwarded_and_readonly() {
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
     let calls = servers.calls.lock().unwrap();
     assert!(
-        calls
-            .iter()
-            .any(|path| path == "/internal/orq/empty/conductor-facts")
+        calls.iter().all(|path| !path.starts_with("/internal/orq/")),
+        "o Rust nunca pergunta ao Python pelos fatos que já possui"
     );
     assert!(
         calls
@@ -293,25 +336,32 @@ async fn conductor_http_factual_errors_are_visible() {
     let root = tempfile::tempdir().unwrap();
     let servers = servers(root.path()).await;
     let client = reqwest::Client::new();
-    for (id, code) in [
-        ("broken", "orq_conductor_facts_status"),
-        ("invalid", "orq_conductor_facts_invalid"),
-        ("incomplete", "orq_conductor_facts_invalid"),
-        ("array", "orq_conductor_facts_invalid"),
-        ("null", "orq_conductor_facts_invalid"),
-        ("malformed", "orq_conductor_facts_invalid"),
-        ("oversized", "orq_conductor_facts_invalid"),
-        ("slow", "orq_conductor_facts_timeout"),
+    // Os oito retornos da ponte antiga não podem influenciar o leitor local.
+    for id in [
+        "broken",
+        "invalid",
+        "incomplete",
+        "array",
+        "null",
+        "malformed",
+        "oversized",
+        "slow",
     ] {
-        let answer = client
+        let response = client
             .get(format!("http://{}/api/orq/{id}/conductor", servers.public))
             .bearer_auth("fixture-owner")
             .send()
             .await
             .unwrap();
-        assert_eq!(answer.status(), StatusCode::SERVICE_UNAVAILABLE, "{id}");
-        assert_eq!(decoded(answer).await["detail"]["code"], code);
+        assert_eq!(response.status(), StatusCode::OK, "{id}");
+        let body = decoded(response).await;
+        assert_eq!(body["watchdog"], servers.expected_watchdog, "{id}");
+        assert!(body["feed"].as_array().unwrap().is_empty());
     }
+    assert!(
+        servers.calls.lock().unwrap().is_empty(),
+        "nenhuma fonte da área volta ao Python"
+    );
 }
 
 fn reply(value: Value) -> axum::response::Response {
@@ -381,9 +431,9 @@ async fn conductor_http_python_errors_remain_visible() {
             "orq_conductor_python_nonfinite_output",
         ),
     ] {
-        std::fs::write(root.path().join("registro.md"), journal).unwrap();
-        std::fs::write(root.path().join("eventos.jsonl"), events).unwrap();
-        std::fs::write(root.path().join("jev-shadow.jsonl"), shadow).unwrap();
+        std::fs::write(servers.fixture.join("registro.md"), journal).unwrap();
+        std::fs::write(servers.fixture.join("eventos.jsonl"), events).unwrap();
+        std::fs::write(servers.fixture.join("jev-shadow.jsonl"), shadow).unwrap();
         let response = client
             .get(format!(
                 "http://{}/api/orq/fixture/conductor",

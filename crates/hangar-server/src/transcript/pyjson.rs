@@ -65,15 +65,47 @@ fn write_indented(out: &mut String, v: &Value, indent: usize, level: usize, asci
 
 /// `json.loads` que aceita surrogate solto como o Python. O valor guarda o surrogate como marcador;
 /// para o valor final, sem marcador, use `transcript::decode_line`.
-// ponytail: inteiro além de u64 vira f64 e NaN/Infinity não são aceitos (o Python aceita os dois);
-// `arbitrary_precision` do serde_json se aparecer num transcript.
+// Não finitos continuam recusados neste leitor; o cofre ORQ tem o próprio codec para eles.
 pub fn loads_lossless(s: &str) -> Option<Value> {
-    match serde_json::from_str(s) {
-        Ok(v) => Some(v),
-        Err(_) if s.contains("\\u") => serde_json::from_str(&mark_lone_surrogates(s)).ok(),
-        Err(_) => None,
-    }
+    decode_raw(s).or_else(|| s.contains("\\u").then(||decode_raw(&mark_lone_surrogates(s))).flatten())
 }
+
+pub(crate) fn decode_raw(raw: &str) -> Option<Value> {
+        use serde::Deserialize;
+        fn typed<'de, T: Deserialize<'de>>(raw: &'de str) -> Option<T> {
+            let mut decoder = serde_json::Deserializer::from_str(raw);
+            decoder.disable_recursion_limit();
+            let value = T::deserialize(&mut decoder).ok()?;
+            decoder.end().ok()?;
+            Some(value)
+        }
+        let raw = raw.trim_matches([' ', '\t', '\r', '\n']);
+        match raw.as_bytes().first()? {
+            b'{' => {
+                let entries: indexmap::IndexMap<String, Box<serde_json::value::RawValue>> = typed(raw)?;
+                let mut map = serde_json::Map::new();
+                for (key,value) in entries { map.insert(key,decode_raw(value.get())?); }
+                Some(Value::Object(map))
+            }
+            b'[' => {
+                let entries: Vec<Box<serde_json::value::RawValue>> = typed(raw)?;
+                Some(Value::Array(entries.into_iter().map(|v|decode_raw(v.get())).collect::<Option<_>>()?))
+            }
+            b'"' => typed(raw).map(Value::String),
+            b't' | b'f' => typed(raw).map(Value::Bool),
+            b'n' if raw == "null" => Some(Value::Null),
+            _ => {
+                if raw == "-0" || raw.contains(['.','e','E']) {
+                    let number: f64 = typed(raw)?;
+                    Number::from_f64(number).map(Value::Number)
+                } else {
+                    let _: Number = typed(raw)?;
+                    let canonical = raw.parse::<num_bigint::BigInt>().ok()?.to_string();
+                    canonical.parse::<Number>().ok().map(Value::Number)
+                }
+            },
+        }
+    }
 
 /// Troca cada `\uD8xx`..`\uDFxx` sem par, dentro de string JSON, pelo marcador cru.
 fn mark_lone_surrogates(s: &str) -> String {
@@ -189,12 +221,11 @@ fn write_str(out: &mut String, s: &str, ascii: bool) {
 
 /// `repr` de um número do `json.loads`: inteiro em dígitos, float como o Python.
 pub(crate) fn number_repr(n: &Number) -> String {
-    if let Some(i) = n.as_i64() {
-        i.to_string()
-    } else if let Some(u) = n.as_u64() {
-        u.to_string()
+    let raw = n.to_string();
+    if !raw.contains(['.', 'e', 'E']) {
+        raw
     } else {
-        float_repr(n.as_f64().unwrap_or(f64::NAN))
+        float_repr(n.as_f64().or_else(|| raw.parse().ok()).unwrap_or(f64::NAN))
     }
 }
 
@@ -232,4 +263,15 @@ pub fn float_repr(x: f64) -> String {
         format!("{int}.{frac}")
     };
     if neg { format!("-{body}") } else { body }
+}
+
+#[cfg(test)]
+mod numeric_width_tests {
+    #[test]
+    fn integer_width_does_not_change_python_canonical_float_or_integer_representations() {
+        for (raw,expected) in [("-9223372036854775808","-9223372036854775808"),("18446744073709551615","18446744073709551615"),("340282366920938463463374607431768211579","340282366920938463463374607431768211579"),("1.0","1.0"),("1e-5","1e-05"),("1e20","1e+20")] {
+            let value=serde_json::from_str(raw).unwrap();
+            assert_eq!(super::dumps(&value,false),expected,"{raw}");
+        }
+    }
 }

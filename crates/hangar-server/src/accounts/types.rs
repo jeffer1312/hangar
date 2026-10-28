@@ -51,7 +51,7 @@ pub fn normalize_windows_path(value: &str) -> String {
         .to_owned()
 }
 
-fn resolve_missing(path: &Path) -> io::Result<PathBuf> {
+pub(crate) fn resolve_missing(path: &Path) -> io::Result<PathBuf> {
     match path.canonicalize() {
         Ok(path) => Ok(path),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {

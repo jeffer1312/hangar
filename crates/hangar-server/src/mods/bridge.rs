@@ -37,8 +37,7 @@ const ELEMENT_MAX: usize = 256;
 const CAPS_MAX: usize = 16;
 
 /// O que toda chamada da ponte traz: a sessão (o nome com que o processo nasceu) e o token dela.
-#[derive(Deserialize)]
-struct Envelope<T> { sessao: String, token: String, #[serde(flatten)] body: T }
+use crate::json_envelope::Envelope;
 
 /// Corpo do `press-start` e do `pressed`. `plugin`: o mod do press, que o plugin do Hangar carregado antes
 /// desta versão não manda. O Python, que atende a sessão fora do Rust, ignora o campo.

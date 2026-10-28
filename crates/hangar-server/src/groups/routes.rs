@@ -260,7 +260,7 @@ pub(super) async fn pair(State(st): State<Arc<AppState>>, ConnectInfo(peer): Con
     let children = if body.link { others.clone() } else { Vec::new() };
     let joined = asked.groups.join(JoinOwned { name, others, task: body.task, replace_task: body.replace_task, harness: harness.clone(),
         orq: body.orq, outside, linked: body.link }).await;
-    let JoinOutcome { members, gid, task, orq, newcomers, before } = match joined {
+    let JoinOutcome { members, gid, task, orq, newcomers, before, promotion_warning } = match joined {
         Ok(outcome) => outcome,
         Err(GroupError::Refused(JoinRefusal::Mix)) => return asked.refuse(StatusCode::BAD_REQUEST, "erro_pareamento_mistura_cross", MIX_MSG, json!({})),
         Err(GroupError::Refused(JoinRefusal::OrqOutside)) => return asked.refuse(StatusCode::CONFLICT, ORQ_OUTSIDE_CODE, ORQ_OUTSIDE_MSG, json!({})),
@@ -270,6 +270,8 @@ pub(super) async fn pair(State(st): State<Arc<AppState>>, ConnectInfo(peer): Con
         Err(GroupError::Refused(JoinRefusal::Orq)) => return asked.refuse(StatusCode::CONFLICT, "erro_link_orq",
             "grupo de orquestração não recebe sessão ligada", json!({})),
         Err(GroupError::Orq(PromoteError::Conflict(text))) => return asked.refuse(StatusCode::CONFLICT, "erro_orq_arquivo_mudou", &text, json!({})),
+        Err(GroupError::Orq(PromoteError::ConflictWithRemaining { message, names })) => return asked.refuse(
+            StatusCode::CONFLICT, "erro_orq_arquivo_mudou", &message, json!({"nao_sairam": names})),
         Err(GroupError::Orq(PromoteError::Unavailable(code))) => return asked.refuse(StatusCode::SERVICE_UNAVAILABLE,
             "erro_grupo_indisponivel", UNAVAILABLE_MSG, json!({"detalhe": code})),
         Err(error) => return asked.store_failed(&error),
@@ -299,7 +301,10 @@ pub(super) async fn pair(State(st): State<Arc<AppState>>, ConnectInfo(peer): Con
     }
     // Falhar aqui só deixa o membro novo invisível para quem é de fora: o lado seguro, mas visível.
     let denied = match &asked.st.share { Some(share) => crate::share::pair_routes::grant_members(share, &members).await, None => Vec::new() };
-    let warning = if errs.is_empty() { access_warning(&denied) } else {
+    let warning = if let Some(message) = promotion_warning {
+        envelope("erro_orq_promocao_sem_identidade", format!("o grupo ficou, mas o time não foi promovido: {message}"),
+            json!({"sessao": asked.name, "grupo": gid, "detalhe": message}))
+    } else if errs.is_empty() { access_warning(&denied) } else {
         envelope("erro_pareamento_aviso_parcial", format!("aviso falhou em: {}", failures_text(&errs)), json!({"avisos": errs, "acesso": denied}))
     };
     asked.reply(StatusCode::OK, json!({"ok": true, "members": members, "gid": gid, "warning": warning}))

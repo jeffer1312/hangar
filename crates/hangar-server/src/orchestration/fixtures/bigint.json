@@ -1,0 +1,4101 @@
+{
+  "source_commit": "d2a42410f9fe6df4ea491b296c7fea7b98d8b844",
+  "command": "python crates/hangar-server/src/orchestration/fixtures/generate_bigint.py <referência Python congelada> <saída>",
+  "source_hashes": {
+    "backend/app/orq.py": "4e63aeaf3b88f6511f65f9e47c424c95923e856c3dd8f9cffa219fd40c8a246b",
+    "backend/app/orq_timeline.py": "15be9b57fd984771019dba58ea50b712d73016f591ddf9839581eb5b11874386",
+    "skills/orquestrar/scripts/orq.py": "cdc2edc9698520a76e3cb6081ff3e629f69bc168dcd2e2b883f290a081d00341"
+  },
+  "cases": [
+    {
+      "task_digits": "1",
+      "config": {
+        "arbiter": "arb",
+        "auto": true
+      },
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g",
+          "ts": "2026-10-01T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 1,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Task sintética",
+          "ts": "2026-10-01T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": 1,
+          "rodada": 1,
+          "ts": "2026-10-01T10:02:00+00:00"
+        },
+        {
+          "tipo": "veredito",
+          "task": 1,
+          "rodada": 1,
+          "resultado": "aprova",
+          "fase": "final",
+          "ts": "2026-10-01T10:03:00+00:00"
+        }
+      ],
+      "closed": [
+        {
+          "task": 1,
+          "hash": "abcdef",
+          "ts": "2026-10-01T10:04:00+00:00"
+        }
+      ],
+      "state": {
+        "roles": {
+          "1": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [],
+        "owners": [],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [],
+        "ended": false,
+        "replaced": []
+      },
+      "state_open": {
+        "roles": {
+          "1": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [
+          "ex"
+        ],
+        "owners": [
+          "ex"
+        ],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [
+          1
+        ],
+        "ended": false,
+        "replaced": []
+      },
+      "detail": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 1,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 1,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 1,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 1,
+                "rodada": 1,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 1,
+                "rodada": 1,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 1,
+        "reconstruida": false,
+        "metadata": {
+          "title": "run",
+          "plan": "",
+          "repo": "",
+          "total_tasks": null,
+          "tasks": [],
+          "error": null
+        }
+      },
+      "summary": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 1,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 1,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 1,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 1,
+                "rodada": 1,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 1,
+                "rodada": 1,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 1,
+        "reconstruida": false
+      },
+      "cards": [
+        {
+          "par": "rev",
+          "aceitas": 1,
+          "nao_aceitas": 0,
+          "aprovadas_primeira": 1,
+          "rodadas_media": 1.0
+        }
+      ],
+      "team": [
+        {
+          "name": "arb",
+          "role": "arbiter",
+          "task": null,
+          "last": null,
+          "current": true
+        },
+        {
+          "name": "ex",
+          "role": "executor",
+          "task": 1,
+          "last": {
+            "code": "delivered",
+            "round": 1,
+            "ts": "2026-10-01T10:02:00+00:00"
+          },
+          "current": true
+        },
+        {
+          "name": "rev",
+          "role": "reviewer",
+          "task": 1,
+          "last": {
+            "code": "started",
+            "round": null,
+            "ts": "2026-10-01T10:01:00+00:00"
+          },
+          "current": true
+        }
+      ],
+      "rows": [
+        {
+          "n": 1,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 1
+        }
+      ],
+      "integrated_rows": [
+        {
+          "n": 1,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 1
+        }
+      ]
+    },
+    {
+      "task_digits": "9223372036854775808",
+      "config": {
+        "arbiter": "arb",
+        "auto": true
+      },
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g",
+          "ts": "2026-10-01T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 9223372036854775808,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Task sintética",
+          "ts": "2026-10-01T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": 9223372036854775808,
+          "rodada": 9223372036854775808,
+          "ts": "2026-10-01T10:02:00+00:00"
+        },
+        {
+          "tipo": "veredito",
+          "task": 9223372036854775808,
+          "rodada": 9223372036854775808,
+          "resultado": "aprova",
+          "fase": "final",
+          "ts": "2026-10-01T10:03:00+00:00"
+        }
+      ],
+      "closed": [
+        {
+          "task": 9223372036854775808,
+          "hash": "abcdef",
+          "ts": "2026-10-01T10:04:00+00:00"
+        }
+      ],
+      "state": {
+        "roles": {
+          "9223372036854775808": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [],
+        "owners": [],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [],
+        "ended": false,
+        "replaced": []
+      },
+      "state_open": {
+        "roles": {
+          "9223372036854775808": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [
+          "ex"
+        ],
+        "owners": [
+          "ex"
+        ],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [
+          9223372036854775808
+        ],
+        "ended": false,
+        "replaced": []
+      },
+      "detail": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 9223372036854775808,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 9223372036854775808,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 9223372036854775808,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 9223372036854775808,
+                "rodada": 9223372036854775808,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 9223372036854775808,
+                "rodada": 9223372036854775808,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false,
+        "metadata": {
+          "title": "run",
+          "plan": "",
+          "repo": "",
+          "total_tasks": null,
+          "tasks": [],
+          "error": null
+        }
+      },
+      "summary": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 9223372036854775808,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 9223372036854775808,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 9223372036854775808,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 9223372036854775808,
+                "rodada": 9223372036854775808,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 9223372036854775808,
+                "rodada": 9223372036854775808,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false
+      },
+      "cards": [
+        {
+          "par": "rev",
+          "aceitas": 1,
+          "nao_aceitas": 0,
+          "aprovadas_primeira": 0,
+          "rodadas_media": 9.223372036854776e+18
+        }
+      ],
+      "team": [
+        {
+          "name": "arb",
+          "role": "arbiter",
+          "task": null,
+          "last": null,
+          "current": true
+        },
+        {
+          "name": "ex",
+          "role": "executor",
+          "task": 9223372036854775808,
+          "last": {
+            "code": "delivered",
+            "round": 9223372036854775808,
+            "ts": "2026-10-01T10:02:00+00:00"
+          },
+          "current": true
+        },
+        {
+          "name": "rev",
+          "role": "reviewer",
+          "task": 9223372036854775808,
+          "last": {
+            "code": "started",
+            "round": null,
+            "ts": "2026-10-01T10:01:00+00:00"
+          },
+          "current": true
+        }
+      ],
+      "rows": [
+        {
+          "n": 9223372036854775808,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 9223372036854775808
+        }
+      ],
+      "integrated_rows": [
+        {
+          "n": 9223372036854775808,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 9223372036854775808
+        }
+      ]
+    },
+    {
+      "task_digits": "18446744073709551615",
+      "config": {
+        "arbiter": "arb",
+        "auto": true
+      },
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g",
+          "ts": "2026-10-01T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 18446744073709551615,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Task sintética",
+          "ts": "2026-10-01T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": 18446744073709551615,
+          "rodada": 18446744073709551615,
+          "ts": "2026-10-01T10:02:00+00:00"
+        },
+        {
+          "tipo": "veredito",
+          "task": 18446744073709551615,
+          "rodada": 18446744073709551615,
+          "resultado": "aprova",
+          "fase": "final",
+          "ts": "2026-10-01T10:03:00+00:00"
+        }
+      ],
+      "closed": [
+        {
+          "task": 18446744073709551615,
+          "hash": "abcdef",
+          "ts": "2026-10-01T10:04:00+00:00"
+        }
+      ],
+      "state": {
+        "roles": {
+          "18446744073709551615": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [],
+        "owners": [],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [],
+        "ended": false,
+        "replaced": []
+      },
+      "state_open": {
+        "roles": {
+          "18446744073709551615": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [
+          "ex"
+        ],
+        "owners": [
+          "ex"
+        ],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [
+          18446744073709551615
+        ],
+        "ended": false,
+        "replaced": []
+      },
+      "detail": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 18446744073709551615,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 18446744073709551615,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 18446744073709551615,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 18446744073709551615,
+                "rodada": 18446744073709551615,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 18446744073709551615,
+                "rodada": 18446744073709551615,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false,
+        "metadata": {
+          "title": "run",
+          "plan": "",
+          "repo": "",
+          "total_tasks": null,
+          "tasks": [],
+          "error": null
+        }
+      },
+      "summary": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 18446744073709551615,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 18446744073709551615,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 18446744073709551615,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 18446744073709551615,
+                "rodada": 18446744073709551615,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 18446744073709551615,
+                "rodada": 18446744073709551615,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false
+      },
+      "cards": [
+        {
+          "par": "rev",
+          "aceitas": 1,
+          "nao_aceitas": 0,
+          "aprovadas_primeira": 0,
+          "rodadas_media": 1.8446744073709552e+19
+        }
+      ],
+      "team": [
+        {
+          "name": "arb",
+          "role": "arbiter",
+          "task": null,
+          "last": null,
+          "current": true
+        },
+        {
+          "name": "ex",
+          "role": "executor",
+          "task": 18446744073709551615,
+          "last": {
+            "code": "delivered",
+            "round": 18446744073709551615,
+            "ts": "2026-10-01T10:02:00+00:00"
+          },
+          "current": true
+        },
+        {
+          "name": "rev",
+          "role": "reviewer",
+          "task": 18446744073709551615,
+          "last": {
+            "code": "started",
+            "round": null,
+            "ts": "2026-10-01T10:01:00+00:00"
+          },
+          "current": true
+        }
+      ],
+      "rows": [
+        {
+          "n": 18446744073709551615,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 18446744073709551615
+        }
+      ],
+      "integrated_rows": [
+        {
+          "n": 18446744073709551615,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 18446744073709551615
+        }
+      ]
+    },
+    {
+      "task_digits": "18446744073709551616",
+      "config": {
+        "arbiter": "arb",
+        "auto": true
+      },
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g",
+          "ts": "2026-10-01T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 18446744073709551616,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Task sintética",
+          "ts": "2026-10-01T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": 18446744073709551616,
+          "rodada": 18446744073709551616,
+          "ts": "2026-10-01T10:02:00+00:00"
+        },
+        {
+          "tipo": "veredito",
+          "task": 18446744073709551616,
+          "rodada": 18446744073709551616,
+          "resultado": "aprova",
+          "fase": "final",
+          "ts": "2026-10-01T10:03:00+00:00"
+        }
+      ],
+      "closed": [
+        {
+          "task": 18446744073709551616,
+          "hash": "abcdef",
+          "ts": "2026-10-01T10:04:00+00:00"
+        }
+      ],
+      "state": {
+        "roles": {
+          "18446744073709551616": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [],
+        "owners": [],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [],
+        "ended": false,
+        "replaced": []
+      },
+      "state_open": {
+        "roles": {
+          "18446744073709551616": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [
+          "ex"
+        ],
+        "owners": [
+          "ex"
+        ],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [
+          18446744073709551616
+        ],
+        "ended": false,
+        "replaced": []
+      },
+      "detail": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 18446744073709551616,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 18446744073709551616,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 18446744073709551616,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 18446744073709551616,
+                "rodada": 18446744073709551616,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 18446744073709551616,
+                "rodada": 18446744073709551616,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false,
+        "metadata": {
+          "title": "run",
+          "plan": "",
+          "repo": "",
+          "total_tasks": null,
+          "tasks": [],
+          "error": null
+        }
+      },
+      "summary": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 18446744073709551616,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 18446744073709551616,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 18446744073709551616,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 18446744073709551616,
+                "rodada": 18446744073709551616,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 18446744073709551616,
+                "rodada": 18446744073709551616,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false
+      },
+      "cards": [
+        {
+          "par": "rev",
+          "aceitas": 1,
+          "nao_aceitas": 0,
+          "aprovadas_primeira": 0,
+          "rodadas_media": 1.8446744073709552e+19
+        }
+      ],
+      "team": [
+        {
+          "name": "arb",
+          "role": "arbiter",
+          "task": null,
+          "last": null,
+          "current": true
+        },
+        {
+          "name": "ex",
+          "role": "executor",
+          "task": 18446744073709551616,
+          "last": {
+            "code": "delivered",
+            "round": 18446744073709551616,
+            "ts": "2026-10-01T10:02:00+00:00"
+          },
+          "current": true
+        },
+        {
+          "name": "rev",
+          "role": "reviewer",
+          "task": 18446744073709551616,
+          "last": {
+            "code": "started",
+            "round": null,
+            "ts": "2026-10-01T10:01:00+00:00"
+          },
+          "current": true
+        }
+      ],
+      "rows": [
+        {
+          "n": 18446744073709551616,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 18446744073709551616
+        }
+      ],
+      "integrated_rows": [
+        {
+          "n": 18446744073709551616,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 18446744073709551616
+        }
+      ]
+    },
+    {
+      "task_digits": "170141183460469231731687303715884105728",
+      "config": {
+        "arbiter": "arb",
+        "auto": true
+      },
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g",
+          "ts": "2026-10-01T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 170141183460469231731687303715884105728,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Task sintética",
+          "ts": "2026-10-01T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": 170141183460469231731687303715884105728,
+          "rodada": 170141183460469231731687303715884105728,
+          "ts": "2026-10-01T10:02:00+00:00"
+        },
+        {
+          "tipo": "veredito",
+          "task": 170141183460469231731687303715884105728,
+          "rodada": 170141183460469231731687303715884105728,
+          "resultado": "aprova",
+          "fase": "final",
+          "ts": "2026-10-01T10:03:00+00:00"
+        }
+      ],
+      "closed": [
+        {
+          "task": 170141183460469231731687303715884105728,
+          "hash": "abcdef",
+          "ts": "2026-10-01T10:04:00+00:00"
+        }
+      ],
+      "state": {
+        "roles": {
+          "170141183460469231731687303715884105728": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [],
+        "owners": [],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [],
+        "ended": false,
+        "replaced": []
+      },
+      "state_open": {
+        "roles": {
+          "170141183460469231731687303715884105728": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [
+          "ex"
+        ],
+        "owners": [
+          "ex"
+        ],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [
+          170141183460469231731687303715884105728
+        ],
+        "ended": false,
+        "replaced": []
+      },
+      "detail": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 170141183460469231731687303715884105728,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 170141183460469231731687303715884105728,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 170141183460469231731687303715884105728,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 170141183460469231731687303715884105728,
+                "rodada": 170141183460469231731687303715884105728,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 170141183460469231731687303715884105728,
+                "rodada": 170141183460469231731687303715884105728,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false,
+        "metadata": {
+          "title": "run",
+          "plan": "",
+          "repo": "",
+          "total_tasks": null,
+          "tasks": [],
+          "error": null
+        }
+      },
+      "summary": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 170141183460469231731687303715884105728,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 170141183460469231731687303715884105728,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 170141183460469231731687303715884105728,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 170141183460469231731687303715884105728,
+                "rodada": 170141183460469231731687303715884105728,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 170141183460469231731687303715884105728,
+                "rodada": 170141183460469231731687303715884105728,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false
+      },
+      "cards": [
+        {
+          "par": "rev",
+          "aceitas": 1,
+          "nao_aceitas": 0,
+          "aprovadas_primeira": 0,
+          "rodadas_media": 1.7014118346046923e+38
+        }
+      ],
+      "team": [
+        {
+          "name": "arb",
+          "role": "arbiter",
+          "task": null,
+          "last": null,
+          "current": true
+        },
+        {
+          "name": "ex",
+          "role": "executor",
+          "task": 170141183460469231731687303715884105728,
+          "last": {
+            "code": "delivered",
+            "round": 170141183460469231731687303715884105728,
+            "ts": "2026-10-01T10:02:00+00:00"
+          },
+          "current": true
+        },
+        {
+          "name": "rev",
+          "role": "reviewer",
+          "task": 170141183460469231731687303715884105728,
+          "last": {
+            "code": "started",
+            "round": null,
+            "ts": "2026-10-01T10:01:00+00:00"
+          },
+          "current": true
+        }
+      ],
+      "rows": [
+        {
+          "n": 170141183460469231731687303715884105728,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 170141183460469231731687303715884105728
+        }
+      ],
+      "integrated_rows": [
+        {
+          "n": 170141183460469231731687303715884105728,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 170141183460469231731687303715884105728
+        }
+      ]
+    },
+    {
+      "task_digits": "340282366920938463463374607431768211579",
+      "config": {
+        "arbiter": "arb",
+        "auto": true
+      },
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g",
+          "ts": "2026-10-01T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 340282366920938463463374607431768211579,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Task sintética",
+          "ts": "2026-10-01T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": 340282366920938463463374607431768211579,
+          "rodada": 340282366920938463463374607431768211579,
+          "ts": "2026-10-01T10:02:00+00:00"
+        },
+        {
+          "tipo": "veredito",
+          "task": 340282366920938463463374607431768211579,
+          "rodada": 340282366920938463463374607431768211579,
+          "resultado": "aprova",
+          "fase": "final",
+          "ts": "2026-10-01T10:03:00+00:00"
+        }
+      ],
+      "closed": [
+        {
+          "task": 340282366920938463463374607431768211579,
+          "hash": "abcdef",
+          "ts": "2026-10-01T10:04:00+00:00"
+        }
+      ],
+      "state": {
+        "roles": {
+          "340282366920938463463374607431768211579": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [],
+        "owners": [],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [],
+        "ended": false,
+        "replaced": []
+      },
+      "state_open": {
+        "roles": {
+          "340282366920938463463374607431768211579": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [
+          "ex"
+        ],
+        "owners": [
+          "ex"
+        ],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [
+          340282366920938463463374607431768211579
+        ],
+        "ended": false,
+        "replaced": []
+      },
+      "detail": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 340282366920938463463374607431768211579,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 340282366920938463463374607431768211579,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 340282366920938463463374607431768211579,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 340282366920938463463374607431768211579,
+                "rodada": 340282366920938463463374607431768211579,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 340282366920938463463374607431768211579,
+                "rodada": 340282366920938463463374607431768211579,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false,
+        "metadata": {
+          "title": "run",
+          "plan": "",
+          "repo": "",
+          "total_tasks": null,
+          "tasks": [],
+          "error": null
+        }
+      },
+      "summary": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 340282366920938463463374607431768211579,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 340282366920938463463374607431768211579,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 340282366920938463463374607431768211579,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 340282366920938463463374607431768211579,
+                "rodada": 340282366920938463463374607431768211579,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 340282366920938463463374607431768211579,
+                "rodada": 340282366920938463463374607431768211579,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false
+      },
+      "cards": [
+        {
+          "par": "rev",
+          "aceitas": 1,
+          "nao_aceitas": 0,
+          "aprovadas_primeira": 0,
+          "rodadas_media": 3.402823669209385e+38
+        }
+      ],
+      "team": [
+        {
+          "name": "arb",
+          "role": "arbiter",
+          "task": null,
+          "last": null,
+          "current": true
+        },
+        {
+          "name": "ex",
+          "role": "executor",
+          "task": 340282366920938463463374607431768211579,
+          "last": {
+            "code": "delivered",
+            "round": 340282366920938463463374607431768211579,
+            "ts": "2026-10-01T10:02:00+00:00"
+          },
+          "current": true
+        },
+        {
+          "name": "rev",
+          "role": "reviewer",
+          "task": 340282366920938463463374607431768211579,
+          "last": {
+            "code": "started",
+            "round": null,
+            "ts": "2026-10-01T10:01:00+00:00"
+          },
+          "current": true
+        }
+      ],
+      "rows": [
+        {
+          "n": 340282366920938463463374607431768211579,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 340282366920938463463374607431768211579
+        }
+      ],
+      "integrated_rows": [
+        {
+          "n": 340282366920938463463374607431768211579,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 340282366920938463463374607431768211579
+        }
+      ]
+    },
+    {
+      "task_digits": "1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007",
+      "config": {
+        "arbiter": "arb",
+        "auto": true
+      },
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g",
+          "ts": "2026-10-01T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Task sintética",
+          "ts": "2026-10-01T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+          "rodada": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+          "ts": "2026-10-01T10:02:00+00:00"
+        },
+        {
+          "tipo": "veredito",
+          "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+          "rodada": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+          "resultado": "aprova",
+          "fase": "final",
+          "ts": "2026-10-01T10:03:00+00:00"
+        }
+      ],
+      "closed": [
+        {
+          "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+          "hash": "abcdef",
+          "ts": "2026-10-01T10:04:00+00:00"
+        }
+      ],
+      "state": {
+        "roles": {
+          "1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [],
+        "owners": [],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [],
+        "ended": false,
+        "replaced": []
+      },
+      "state_open": {
+        "roles": {
+          "1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [
+          "ex"
+        ],
+        "owners": [
+          "ex"
+        ],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [
+          1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007
+        ],
+        "ended": false,
+        "replaced": []
+      },
+      "detail": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+                "rodada": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+                "rodada": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false,
+        "metadata": {
+          "title": "run",
+          "plan": "",
+          "repo": "",
+          "total_tasks": null,
+          "tasks": [],
+          "error": null
+        }
+      },
+      "summary": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+                "rodada": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+                "rodada": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false
+      },
+      "cards": [
+        {
+          "par": "rev",
+          "aceitas": 1,
+          "nao_aceitas": 0,
+          "aprovadas_primeira": 0,
+          "rodadas_media": 1e+90
+        }
+      ],
+      "team": [
+        {
+          "name": "arb",
+          "role": "arbiter",
+          "task": null,
+          "last": null,
+          "current": true
+        },
+        {
+          "name": "ex",
+          "role": "executor",
+          "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+          "last": {
+            "code": "delivered",
+            "round": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+            "ts": "2026-10-01T10:02:00+00:00"
+          },
+          "current": true
+        },
+        {
+          "name": "rev",
+          "role": "reviewer",
+          "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+          "last": {
+            "code": "started",
+            "round": null,
+            "ts": "2026-10-01T10:01:00+00:00"
+          },
+          "current": true
+        }
+      ],
+      "rows": [
+        {
+          "n": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007
+        }
+      ],
+      "integrated_rows": [
+        {
+          "n": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007
+        }
+      ]
+    },
+    {
+      "task_digits": "-18446744073709551616",
+      "config": {
+        "arbiter": "arb",
+        "auto": true
+      },
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g",
+          "ts": "2026-10-01T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": -18446744073709551616,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Task sintética",
+          "ts": "2026-10-01T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": -18446744073709551616,
+          "rodada": 18446744073709551616,
+          "ts": "2026-10-01T10:02:00+00:00"
+        },
+        {
+          "tipo": "veredito",
+          "task": -18446744073709551616,
+          "rodada": 18446744073709551616,
+          "resultado": "aprova",
+          "fase": "final",
+          "ts": "2026-10-01T10:03:00+00:00"
+        }
+      ],
+      "closed": [
+        {
+          "task": -18446744073709551616,
+          "hash": "abcdef",
+          "ts": "2026-10-01T10:04:00+00:00"
+        }
+      ],
+      "state": {
+        "roles": {
+          "-18446744073709551616": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [],
+        "owners": [],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [],
+        "ended": false,
+        "replaced": []
+      },
+      "state_open": {
+        "roles": {
+          "-18446744073709551616": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [
+          "ex"
+        ],
+        "owners": [
+          "ex"
+        ],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [
+          -18446744073709551616
+        ],
+        "ended": false,
+        "replaced": []
+      },
+      "detail": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": -18446744073709551616,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 18446744073709551616,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": -18446744073709551616,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": -18446744073709551616,
+                "rodada": 18446744073709551616,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": -18446744073709551616,
+                "rodada": 18446744073709551616,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false,
+        "metadata": {
+          "title": "run",
+          "plan": "",
+          "repo": "",
+          "total_tasks": null,
+          "tasks": [],
+          "error": null
+        }
+      },
+      "summary": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": -18446744073709551616,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 18446744073709551616,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": -18446744073709551616,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": -18446744073709551616,
+                "rodada": 18446744073709551616,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": -18446744073709551616,
+                "rodada": 18446744073709551616,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false
+      },
+      "cards": [
+        {
+          "par": "rev",
+          "aceitas": 1,
+          "nao_aceitas": 0,
+          "aprovadas_primeira": 0,
+          "rodadas_media": 1.8446744073709552e+19
+        }
+      ],
+      "team": [
+        {
+          "name": "arb",
+          "role": "arbiter",
+          "task": null,
+          "last": null,
+          "current": true
+        },
+        {
+          "name": "ex",
+          "role": "executor",
+          "task": -18446744073709551616,
+          "last": {
+            "code": "delivered",
+            "round": 18446744073709551616,
+            "ts": "2026-10-01T10:02:00+00:00"
+          },
+          "current": true
+        },
+        {
+          "name": "rev",
+          "role": "reviewer",
+          "task": -18446744073709551616,
+          "last": {
+            "code": "started",
+            "round": null,
+            "ts": "2026-10-01T10:01:00+00:00"
+          },
+          "current": true
+        }
+      ],
+      "rows": [
+        {
+          "n": -18446744073709551616,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 18446744073709551616
+        }
+      ],
+      "integrated_rows": [
+        {
+          "n": -18446744073709551616,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 18446744073709551616
+        }
+      ]
+    },
+    {
+      "task_digits": "-340282366920938463463374607431768211461",
+      "config": {
+        "arbiter": "arb",
+        "auto": true
+      },
+      "events": [
+        {
+          "tipo": "execucao_inicio",
+          "gid": "g",
+          "ts": "2026-10-01T10:00:00+00:00"
+        },
+        {
+          "tipo": "task_inicio",
+          "task": -340282366920938463463374607431768211461,
+          "executor": "ex",
+          "par": "rev",
+          "titulo": "Task sintética",
+          "ts": "2026-10-01T10:01:00+00:00"
+        },
+        {
+          "tipo": "entrega",
+          "task": -340282366920938463463374607431768211461,
+          "rodada": 340282366920938463463374607431768211461,
+          "ts": "2026-10-01T10:02:00+00:00"
+        },
+        {
+          "tipo": "veredito",
+          "task": -340282366920938463463374607431768211461,
+          "rodada": 340282366920938463463374607431768211461,
+          "resultado": "aprova",
+          "fase": "final",
+          "ts": "2026-10-01T10:03:00+00:00"
+        }
+      ],
+      "closed": [
+        {
+          "task": -340282366920938463463374607431768211461,
+          "hash": "abcdef",
+          "ts": "2026-10-01T10:04:00+00:00"
+        }
+      ],
+      "state": {
+        "roles": {
+          "-340282366920938463463374607431768211461": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [],
+        "owners": [],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [],
+        "ended": false,
+        "replaced": []
+      },
+      "state_open": {
+        "roles": {
+          "-340282366920938463463374607431768211461": {
+            "executor": "ex",
+            "par": "rev"
+          }
+        },
+        "ball": [
+          "ex"
+        ],
+        "owners": [
+          "ex"
+        ],
+        "waiting": [],
+        "arbiter": "arb",
+        "open": [
+          -340282366920938463463374607431768211461
+        ],
+        "ended": false,
+        "replaced": []
+      },
+      "detail": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": -340282366920938463463374607431768211461,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 340282366920938463463374607431768211461,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": -340282366920938463463374607431768211461,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": -340282366920938463463374607431768211461,
+                "rodada": 340282366920938463463374607431768211461,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": -340282366920938463463374607431768211461,
+                "rodada": 340282366920938463463374607431768211461,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false,
+        "metadata": {
+          "title": "run",
+          "plan": "",
+          "repo": "",
+          "total_tasks": null,
+          "tasks": [],
+          "error": null
+        }
+      },
+      "summary": {
+        "id": "run",
+        "plano": "",
+        "branch": "",
+        "gid": "g",
+        "inicio": "2026-10-01T10:00:00+00:00",
+        "fim": null,
+        "resultado": null,
+        "tasks": [
+          {
+            "task": -340282366920938463463374607431768211461,
+            "titulo": "Task sintética",
+            "executor": "ex",
+            "par": "rev",
+            "rodadas": 340282366920938463463374607431768211461,
+            "resultado": "aprova",
+            "inicio": "2026-10-01T10:01:00+00:00",
+            "fim": "2026-10-01T10:03:00+00:00",
+            "eventos": [
+              {
+                "tipo": "task_inicio",
+                "task": -340282366920938463463374607431768211461,
+                "executor": "ex",
+                "par": "rev",
+                "titulo": "Task sintética",
+                "ts": "2026-10-01T10:01:00+00:00"
+              },
+              {
+                "tipo": "entrega",
+                "task": -340282366920938463463374607431768211461,
+                "rodada": 340282366920938463463374607431768211461,
+                "ts": "2026-10-01T10:02:00+00:00"
+              },
+              {
+                "tipo": "veredito",
+                "task": -340282366920938463463374607431768211461,
+                "rodada": 340282366920938463463374607431768211461,
+                "resultado": "aprova",
+                "fase": "final",
+                "ts": "2026-10-01T10:03:00+00:00"
+              }
+            ]
+          }
+        ],
+        "eventos_execucao": [],
+        "voltas": 0,
+        "aprovadas_primeira": 0,
+        "reconstruida": false
+      },
+      "cards": [
+        {
+          "par": "rev",
+          "aceitas": 1,
+          "nao_aceitas": 0,
+          "aprovadas_primeira": 0,
+          "rodadas_media": 3.402823669209385e+38
+        }
+      ],
+      "team": [
+        {
+          "name": "arb",
+          "role": "arbiter",
+          "task": null,
+          "last": null,
+          "current": true
+        },
+        {
+          "name": "ex",
+          "role": "executor",
+          "task": -340282366920938463463374607431768211461,
+          "last": {
+            "code": "delivered",
+            "round": 340282366920938463463374607431768211461,
+            "ts": "2026-10-01T10:02:00+00:00"
+          },
+          "current": true
+        },
+        {
+          "name": "rev",
+          "role": "reviewer",
+          "task": -340282366920938463463374607431768211461,
+          "last": {
+            "code": "started",
+            "round": null,
+            "ts": "2026-10-01T10:01:00+00:00"
+          },
+          "current": true
+        }
+      ],
+      "rows": [
+        {
+          "n": -340282366920938463463374607431768211461,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 340282366920938463463374607431768211461
+        }
+      ],
+      "integrated_rows": [
+        {
+          "n": -340282366920938463463374607431768211461,
+          "title": "Task sintética",
+          "state": "approved",
+          "round": 340282366920938463463374607431768211461
+        }
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "input": {
+        "kind": "notice",
+        "task": 1,
+        "text": "mensagem sintética"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 1,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:86d157ffbe6d5604"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "text": "Task 1 terminou"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 1,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Task 1 terminou",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:40fa0600482b4cef"
+    },
+    {
+      "input": {
+        "kind": "woke",
+        "text": "[T1 r1] mensagem sintética"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": 1,
+        "line": null,
+        "origin": "orchestrator",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "[T1 r1] mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "rule",
+          "rule": "orchestrator",
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      },
+      "id": "orq:f67f52add01024af"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "task": 9223372036854775808,
+        "text": "mensagem sintética"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 9223372036854775808,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:f7ede7ac3a13b6e8"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "text": "Task 9223372036854775808 terminou"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 9223372036854775808,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Task 9223372036854775808 terminou",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:ff96077b321537d1"
+    },
+    {
+      "input": {
+        "kind": "woke",
+        "text": "[T9223372036854775808 r9223372036854775808] mensagem sintética"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": 9223372036854775808,
+        "line": null,
+        "origin": "orchestrator",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "[T9223372036854775808 r9223372036854775808] mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "rule",
+          "rule": "orchestrator",
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      },
+      "id": "orq:b459adf294081aca"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "task": 18446744073709551615,
+        "text": "mensagem sintética"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 18446744073709551615,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:1d255e0c3b34e016"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "text": "Task 18446744073709551615 terminou"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 18446744073709551615,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Task 18446744073709551615 terminou",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:b86cf45055bb746d"
+    },
+    {
+      "input": {
+        "kind": "woke",
+        "text": "[T18446744073709551615 r18446744073709551615] mensagem sintética"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": 18446744073709551615,
+        "line": null,
+        "origin": "orchestrator",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "[T18446744073709551615 r18446744073709551615] mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "rule",
+          "rule": "orchestrator",
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      },
+      "id": "orq:4332e24a6d43ab4e"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "task": 18446744073709551616,
+        "text": "mensagem sintética"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 18446744073709551616,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:7f62e0585c996e34"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "text": "Task 18446744073709551616 terminou"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 18446744073709551616,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Task 18446744073709551616 terminou",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:aa99cb4cb4f96d31"
+    },
+    {
+      "input": {
+        "kind": "woke",
+        "text": "[T18446744073709551616 r18446744073709551616] mensagem sintética"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": 18446744073709551616,
+        "line": null,
+        "origin": "orchestrator",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "[T18446744073709551616 r18446744073709551616] mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "rule",
+          "rule": "orchestrator",
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      },
+      "id": "orq:5ab239e9a588b6db"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "task": 170141183460469231731687303715884105728,
+        "text": "mensagem sintética"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 170141183460469231731687303715884105728,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:8a6c636904c7fb63"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "text": "Task 170141183460469231731687303715884105728 terminou"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 170141183460469231731687303715884105728,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Task 170141183460469231731687303715884105728 terminou",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:15cbda8b9551aad9"
+    },
+    {
+      "input": {
+        "kind": "woke",
+        "text": "[T170141183460469231731687303715884105728 r170141183460469231731687303715884105728] mensagem sintética"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": 170141183460469231731687303715884105728,
+        "line": null,
+        "origin": "orchestrator",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "[T170141183460469231731687303715884105728 r170141183460469231731687303715884105728] mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "rule",
+          "rule": "orchestrator",
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      },
+      "id": "orq:5164ad02300ef038"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "task": 340282366920938463463374607431768211579,
+        "text": "mensagem sintética"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 340282366920938463463374607431768211579,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:b9d2b547e8741e14"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "text": "Task 340282366920938463463374607431768211579 terminou"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 340282366920938463463374607431768211579,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Task 340282366920938463463374607431768211579 terminou",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:22d47f5d62a32187"
+    },
+    {
+      "input": {
+        "kind": "woke",
+        "text": "[T340282366920938463463374607431768211579 r340282366920938463463374607431768211579] mensagem sintética"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": 340282366920938463463374607431768211579,
+        "line": null,
+        "origin": "orchestrator",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "[T340282366920938463463374607431768211579 r340282366920938463463374607431768211579] mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "rule",
+          "rule": "orchestrator",
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      },
+      "id": "orq:062cb8f0296eebc6"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+        "text": "mensagem sintética"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:e20f2e7ae5d74a50"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "text": "Task 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007 terminou"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Task 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007 terminou",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:8b9a8d4a9fc7d3cb"
+    },
+    {
+      "input": {
+        "kind": "woke",
+        "text": "[T1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007 r1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007] mensagem sintética"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+        "line": null,
+        "origin": "orchestrator",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "[T1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007 r1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007] mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "rule",
+          "rule": "orchestrator",
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      },
+      "id": "orq:731c84fd4b849262"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "task": -18446744073709551616,
+        "text": "mensagem sintética"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": -18446744073709551616,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:68707830ec7d62b7"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "text": "Task 18446744073709551616 terminou"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 18446744073709551616,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Task 18446744073709551616 terminou",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:aa99cb4cb4f96d31"
+    },
+    {
+      "input": {
+        "kind": "woke",
+        "text": "[T18446744073709551616 r18446744073709551616] mensagem sintética"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": 18446744073709551616,
+        "line": null,
+        "origin": "orchestrator",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "[T18446744073709551616 r18446744073709551616] mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "rule",
+          "rule": "orchestrator",
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      },
+      "id": "orq:5ab239e9a588b6db"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "task": -340282366920938463463374607431768211461,
+        "text": "mensagem sintética"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": -340282366920938463463374607431768211461,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:c4e9681f5f6f1d45"
+    },
+    {
+      "input": {
+        "kind": "notice",
+        "text": "Task 340282366920938463463374607431768211461 terminou"
+      },
+      "entry": {
+        "kind": "notice",
+        "task": 340282366920938463463374607431768211461,
+        "line": null,
+        "origin": null,
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Task 340282366920938463463374607431768211461 terminou",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": null
+      },
+      "id": "orq:16ca51340895999f"
+    },
+    {
+      "input": {
+        "kind": "woke",
+        "text": "[T340282366920938463463374607431768211461 r340282366920938463463374607431768211461] mensagem sintética"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": 340282366920938463463374607431768211461,
+        "line": null,
+        "origin": "orchestrator",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "[T340282366920938463463374607431768211461 r340282366920938463463374607431768211461] mensagem sintética",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "rule",
+          "rule": "orchestrator",
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      },
+      "id": "orq:2eccff1da7b04e93"
+    }
+  ],
+  "mixed": {
+    "events": [
+      {
+        "tipo": "task_inicio",
+        "task": -340282366920938463463374607431768211461,
+        "executor": "ex",
+        "par": "rev",
+        "titulo": "Task sintética",
+        "ts": "2026-10-01T10:01:00+00:00"
+      },
+      {
+        "tipo": "entrega",
+        "task": -340282366920938463463374607431768211461,
+        "rodada": 340282366920938463463374607431768211461,
+        "ts": "2026-10-01T10:02:00+00:00"
+      },
+      {
+        "tipo": "veredito",
+        "task": -340282366920938463463374607431768211461,
+        "rodada": 340282366920938463463374607431768211461,
+        "resultado": "aprova",
+        "fase": "final",
+        "ts": "2026-10-01T10:03:00+00:00"
+      },
+      {
+        "tipo": "task_inicio",
+        "task": -18446744073709551616,
+        "executor": "ex",
+        "par": "rev",
+        "titulo": "Task sintética",
+        "ts": "2026-10-01T10:01:00+00:00"
+      },
+      {
+        "tipo": "entrega",
+        "task": -18446744073709551616,
+        "rodada": 18446744073709551616,
+        "ts": "2026-10-01T10:02:00+00:00"
+      },
+      {
+        "tipo": "veredito",
+        "task": -18446744073709551616,
+        "rodada": 18446744073709551616,
+        "resultado": "aprova",
+        "fase": "final",
+        "ts": "2026-10-01T10:03:00+00:00"
+      },
+      {
+        "tipo": "task_inicio",
+        "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+        "executor": "ex",
+        "par": "rev",
+        "titulo": "Task sintética",
+        "ts": "2026-10-01T10:01:00+00:00"
+      },
+      {
+        "tipo": "entrega",
+        "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+        "rodada": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+        "ts": "2026-10-01T10:02:00+00:00"
+      },
+      {
+        "tipo": "veredito",
+        "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+        "rodada": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+        "resultado": "aprova",
+        "fase": "final",
+        "ts": "2026-10-01T10:03:00+00:00"
+      },
+      {
+        "tipo": "task_inicio",
+        "task": 340282366920938463463374607431768211579,
+        "executor": "ex",
+        "par": "rev",
+        "titulo": "Task sintética",
+        "ts": "2026-10-01T10:01:00+00:00"
+      },
+      {
+        "tipo": "entrega",
+        "task": 340282366920938463463374607431768211579,
+        "rodada": 340282366920938463463374607431768211579,
+        "ts": "2026-10-01T10:02:00+00:00"
+      },
+      {
+        "tipo": "veredito",
+        "task": 340282366920938463463374607431768211579,
+        "rodada": 340282366920938463463374607431768211579,
+        "resultado": "aprova",
+        "fase": "final",
+        "ts": "2026-10-01T10:03:00+00:00"
+      },
+      {
+        "tipo": "task_inicio",
+        "task": 170141183460469231731687303715884105728,
+        "executor": "ex",
+        "par": "rev",
+        "titulo": "Task sintética",
+        "ts": "2026-10-01T10:01:00+00:00"
+      },
+      {
+        "tipo": "entrega",
+        "task": 170141183460469231731687303715884105728,
+        "rodada": 170141183460469231731687303715884105728,
+        "ts": "2026-10-01T10:02:00+00:00"
+      },
+      {
+        "tipo": "veredito",
+        "task": 170141183460469231731687303715884105728,
+        "rodada": 170141183460469231731687303715884105728,
+        "resultado": "aprova",
+        "fase": "final",
+        "ts": "2026-10-01T10:03:00+00:00"
+      },
+      {
+        "tipo": "task_inicio",
+        "task": 18446744073709551616,
+        "executor": "ex",
+        "par": "rev",
+        "titulo": "Task sintética",
+        "ts": "2026-10-01T10:01:00+00:00"
+      },
+      {
+        "tipo": "entrega",
+        "task": 18446744073709551616,
+        "rodada": 18446744073709551616,
+        "ts": "2026-10-01T10:02:00+00:00"
+      },
+      {
+        "tipo": "veredito",
+        "task": 18446744073709551616,
+        "rodada": 18446744073709551616,
+        "resultado": "aprova",
+        "fase": "final",
+        "ts": "2026-10-01T10:03:00+00:00"
+      },
+      {
+        "tipo": "task_inicio",
+        "task": 18446744073709551615,
+        "executor": "ex",
+        "par": "rev",
+        "titulo": "Task sintética",
+        "ts": "2026-10-01T10:01:00+00:00"
+      },
+      {
+        "tipo": "entrega",
+        "task": 18446744073709551615,
+        "rodada": 18446744073709551615,
+        "ts": "2026-10-01T10:02:00+00:00"
+      },
+      {
+        "tipo": "veredito",
+        "task": 18446744073709551615,
+        "rodada": 18446744073709551615,
+        "resultado": "aprova",
+        "fase": "final",
+        "ts": "2026-10-01T10:03:00+00:00"
+      },
+      {
+        "tipo": "task_inicio",
+        "task": 9223372036854775808,
+        "executor": "ex",
+        "par": "rev",
+        "titulo": "Task sintética",
+        "ts": "2026-10-01T10:01:00+00:00"
+      },
+      {
+        "tipo": "entrega",
+        "task": 9223372036854775808,
+        "rodada": 9223372036854775808,
+        "ts": "2026-10-01T10:02:00+00:00"
+      },
+      {
+        "tipo": "veredito",
+        "task": 9223372036854775808,
+        "rodada": 9223372036854775808,
+        "resultado": "aprova",
+        "fase": "final",
+        "ts": "2026-10-01T10:03:00+00:00"
+      },
+      {
+        "tipo": "task_inicio",
+        "task": 1,
+        "executor": "ex",
+        "par": "rev",
+        "titulo": "Task sintética",
+        "ts": "2026-10-01T10:01:00+00:00"
+      },
+      {
+        "tipo": "entrega",
+        "task": 1,
+        "rodada": 1,
+        "ts": "2026-10-01T10:02:00+00:00"
+      },
+      {
+        "tipo": "veredito",
+        "task": 1,
+        "rodada": 1,
+        "resultado": "aprova",
+        "fase": "final",
+        "ts": "2026-10-01T10:03:00+00:00"
+      }
+    ],
+    "rows": [
+      {
+        "n": -340282366920938463463374607431768211461,
+        "title": "Task sintética",
+        "state": "approved",
+        "round": 340282366920938463463374607431768211461
+      },
+      {
+        "n": -18446744073709551616,
+        "title": "Task sintética",
+        "state": "approved",
+        "round": 18446744073709551616
+      },
+      {
+        "n": 1,
+        "title": "Task sintética",
+        "state": "approved",
+        "round": 1
+      },
+      {
+        "n": 9223372036854775808,
+        "title": "Task sintética",
+        "state": "approved",
+        "round": 9223372036854775808
+      },
+      {
+        "n": 18446744073709551615,
+        "title": "Task sintética",
+        "state": "approved",
+        "round": 18446744073709551615
+      },
+      {
+        "n": 18446744073709551616,
+        "title": "Task sintética",
+        "state": "approved",
+        "round": 18446744073709551616
+      },
+      {
+        "n": 170141183460469231731687303715884105728,
+        "title": "Task sintética",
+        "state": "approved",
+        "round": 170141183460469231731687303715884105728
+      },
+      {
+        "n": 340282366920938463463374607431768211579,
+        "title": "Task sintética",
+        "state": "approved",
+        "round": 340282366920938463463374607431768211579
+      },
+      {
+        "n": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+        "title": "Task sintética",
+        "state": "approved",
+        "round": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007
+      }
+    ],
+    "summary": {
+      "id": "run",
+      "plano": "",
+      "branch": "",
+      "gid": "",
+      "inicio": null,
+      "fim": null,
+      "resultado": null,
+      "tasks": [
+        {
+          "task": -340282366920938463463374607431768211461,
+          "titulo": "Task sintética",
+          "executor": "ex",
+          "par": "rev",
+          "rodadas": 340282366920938463463374607431768211461,
+          "resultado": "aprova",
+          "inicio": "2026-10-01T10:01:00+00:00",
+          "fim": "2026-10-01T10:03:00+00:00",
+          "eventos": [
+            {
+              "tipo": "task_inicio",
+              "task": -340282366920938463463374607431768211461,
+              "executor": "ex",
+              "par": "rev",
+              "titulo": "Task sintética",
+              "ts": "2026-10-01T10:01:00+00:00"
+            },
+            {
+              "tipo": "entrega",
+              "task": -340282366920938463463374607431768211461,
+              "rodada": 340282366920938463463374607431768211461,
+              "ts": "2026-10-01T10:02:00+00:00"
+            },
+            {
+              "tipo": "veredito",
+              "task": -340282366920938463463374607431768211461,
+              "rodada": 340282366920938463463374607431768211461,
+              "resultado": "aprova",
+              "fase": "final",
+              "ts": "2026-10-01T10:03:00+00:00"
+            }
+          ]
+        },
+        {
+          "task": -18446744073709551616,
+          "titulo": "Task sintética",
+          "executor": "ex",
+          "par": "rev",
+          "rodadas": 18446744073709551616,
+          "resultado": "aprova",
+          "inicio": "2026-10-01T10:01:00+00:00",
+          "fim": "2026-10-01T10:03:00+00:00",
+          "eventos": [
+            {
+              "tipo": "task_inicio",
+              "task": -18446744073709551616,
+              "executor": "ex",
+              "par": "rev",
+              "titulo": "Task sintética",
+              "ts": "2026-10-01T10:01:00+00:00"
+            },
+            {
+              "tipo": "entrega",
+              "task": -18446744073709551616,
+              "rodada": 18446744073709551616,
+              "ts": "2026-10-01T10:02:00+00:00"
+            },
+            {
+              "tipo": "veredito",
+              "task": -18446744073709551616,
+              "rodada": 18446744073709551616,
+              "resultado": "aprova",
+              "fase": "final",
+              "ts": "2026-10-01T10:03:00+00:00"
+            }
+          ]
+        },
+        {
+          "task": 1,
+          "titulo": "Task sintética",
+          "executor": "ex",
+          "par": "rev",
+          "rodadas": 1,
+          "resultado": "aprova",
+          "inicio": "2026-10-01T10:01:00+00:00",
+          "fim": "2026-10-01T10:03:00+00:00",
+          "eventos": [
+            {
+              "tipo": "task_inicio",
+              "task": 1,
+              "executor": "ex",
+              "par": "rev",
+              "titulo": "Task sintética",
+              "ts": "2026-10-01T10:01:00+00:00"
+            },
+            {
+              "tipo": "entrega",
+              "task": 1,
+              "rodada": 1,
+              "ts": "2026-10-01T10:02:00+00:00"
+            },
+            {
+              "tipo": "veredito",
+              "task": 1,
+              "rodada": 1,
+              "resultado": "aprova",
+              "fase": "final",
+              "ts": "2026-10-01T10:03:00+00:00"
+            }
+          ]
+        },
+        {
+          "task": 9223372036854775808,
+          "titulo": "Task sintética",
+          "executor": "ex",
+          "par": "rev",
+          "rodadas": 9223372036854775808,
+          "resultado": "aprova",
+          "inicio": "2026-10-01T10:01:00+00:00",
+          "fim": "2026-10-01T10:03:00+00:00",
+          "eventos": [
+            {
+              "tipo": "task_inicio",
+              "task": 9223372036854775808,
+              "executor": "ex",
+              "par": "rev",
+              "titulo": "Task sintética",
+              "ts": "2026-10-01T10:01:00+00:00"
+            },
+            {
+              "tipo": "entrega",
+              "task": 9223372036854775808,
+              "rodada": 9223372036854775808,
+              "ts": "2026-10-01T10:02:00+00:00"
+            },
+            {
+              "tipo": "veredito",
+              "task": 9223372036854775808,
+              "rodada": 9223372036854775808,
+              "resultado": "aprova",
+              "fase": "final",
+              "ts": "2026-10-01T10:03:00+00:00"
+            }
+          ]
+        },
+        {
+          "task": 18446744073709551615,
+          "titulo": "Task sintética",
+          "executor": "ex",
+          "par": "rev",
+          "rodadas": 18446744073709551615,
+          "resultado": "aprova",
+          "inicio": "2026-10-01T10:01:00+00:00",
+          "fim": "2026-10-01T10:03:00+00:00",
+          "eventos": [
+            {
+              "tipo": "task_inicio",
+              "task": 18446744073709551615,
+              "executor": "ex",
+              "par": "rev",
+              "titulo": "Task sintética",
+              "ts": "2026-10-01T10:01:00+00:00"
+            },
+            {
+              "tipo": "entrega",
+              "task": 18446744073709551615,
+              "rodada": 18446744073709551615,
+              "ts": "2026-10-01T10:02:00+00:00"
+            },
+            {
+              "tipo": "veredito",
+              "task": 18446744073709551615,
+              "rodada": 18446744073709551615,
+              "resultado": "aprova",
+              "fase": "final",
+              "ts": "2026-10-01T10:03:00+00:00"
+            }
+          ]
+        },
+        {
+          "task": 18446744073709551616,
+          "titulo": "Task sintética",
+          "executor": "ex",
+          "par": "rev",
+          "rodadas": 18446744073709551616,
+          "resultado": "aprova",
+          "inicio": "2026-10-01T10:01:00+00:00",
+          "fim": "2026-10-01T10:03:00+00:00",
+          "eventos": [
+            {
+              "tipo": "task_inicio",
+              "task": 18446744073709551616,
+              "executor": "ex",
+              "par": "rev",
+              "titulo": "Task sintética",
+              "ts": "2026-10-01T10:01:00+00:00"
+            },
+            {
+              "tipo": "entrega",
+              "task": 18446744073709551616,
+              "rodada": 18446744073709551616,
+              "ts": "2026-10-01T10:02:00+00:00"
+            },
+            {
+              "tipo": "veredito",
+              "task": 18446744073709551616,
+              "rodada": 18446744073709551616,
+              "resultado": "aprova",
+              "fase": "final",
+              "ts": "2026-10-01T10:03:00+00:00"
+            }
+          ]
+        },
+        {
+          "task": 170141183460469231731687303715884105728,
+          "titulo": "Task sintética",
+          "executor": "ex",
+          "par": "rev",
+          "rodadas": 170141183460469231731687303715884105728,
+          "resultado": "aprova",
+          "inicio": "2026-10-01T10:01:00+00:00",
+          "fim": "2026-10-01T10:03:00+00:00",
+          "eventos": [
+            {
+              "tipo": "task_inicio",
+              "task": 170141183460469231731687303715884105728,
+              "executor": "ex",
+              "par": "rev",
+              "titulo": "Task sintética",
+              "ts": "2026-10-01T10:01:00+00:00"
+            },
+            {
+              "tipo": "entrega",
+              "task": 170141183460469231731687303715884105728,
+              "rodada": 170141183460469231731687303715884105728,
+              "ts": "2026-10-01T10:02:00+00:00"
+            },
+            {
+              "tipo": "veredito",
+              "task": 170141183460469231731687303715884105728,
+              "rodada": 170141183460469231731687303715884105728,
+              "resultado": "aprova",
+              "fase": "final",
+              "ts": "2026-10-01T10:03:00+00:00"
+            }
+          ]
+        },
+        {
+          "task": 340282366920938463463374607431768211579,
+          "titulo": "Task sintética",
+          "executor": "ex",
+          "par": "rev",
+          "rodadas": 340282366920938463463374607431768211579,
+          "resultado": "aprova",
+          "inicio": "2026-10-01T10:01:00+00:00",
+          "fim": "2026-10-01T10:03:00+00:00",
+          "eventos": [
+            {
+              "tipo": "task_inicio",
+              "task": 340282366920938463463374607431768211579,
+              "executor": "ex",
+              "par": "rev",
+              "titulo": "Task sintética",
+              "ts": "2026-10-01T10:01:00+00:00"
+            },
+            {
+              "tipo": "entrega",
+              "task": 340282366920938463463374607431768211579,
+              "rodada": 340282366920938463463374607431768211579,
+              "ts": "2026-10-01T10:02:00+00:00"
+            },
+            {
+              "tipo": "veredito",
+              "task": 340282366920938463463374607431768211579,
+              "rodada": 340282366920938463463374607431768211579,
+              "resultado": "aprova",
+              "fase": "final",
+              "ts": "2026-10-01T10:03:00+00:00"
+            }
+          ]
+        },
+        {
+          "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+          "titulo": "Task sintética",
+          "executor": "ex",
+          "par": "rev",
+          "rodadas": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+          "resultado": "aprova",
+          "inicio": "2026-10-01T10:01:00+00:00",
+          "fim": "2026-10-01T10:03:00+00:00",
+          "eventos": [
+            {
+              "tipo": "task_inicio",
+              "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+              "executor": "ex",
+              "par": "rev",
+              "titulo": "Task sintética",
+              "ts": "2026-10-01T10:01:00+00:00"
+            },
+            {
+              "tipo": "entrega",
+              "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+              "rodada": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+              "ts": "2026-10-01T10:02:00+00:00"
+            },
+            {
+              "tipo": "veredito",
+              "task": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+              "rodada": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+              "resultado": "aprova",
+              "fase": "final",
+              "ts": "2026-10-01T10:03:00+00:00"
+            }
+          ]
+        }
+      ],
+      "eventos_execucao": [],
+      "voltas": 0,
+      "aprovadas_primeira": 1,
+      "reconstruida": false
+    }
+  },
+  "plan": {
+    "input": "## Tasks\n\n| # | What it is | Files | Verification | Wave | Risk | Roteiro |\n|---|---|---|---|---|---|---|\n| 1 | Task sintética | `src/main.rs` | check | 1 | low | |\n| 9223372036854775808 | Task sintética | `src/main.rs` | check | 1 | low | |\n| 18446744073709551615 | Task sintética | `src/main.rs` | check | 1 | low | |\n| 18446744073709551616 | Task sintética | `src/main.rs` | check | 1 | low | |\n| 170141183460469231731687303715884105728 | Task sintética | `src/main.rs` | check | 1 | low | |\n| 340282366920938463463374607431768211579 | Task sintética | `src/main.rs` | check | 1 | low | |\n| 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007 | Task sintética | `src/main.rs` | check | 1 | low | |\n| -18446744073709551616 | Task sintética | `src/main.rs` | check | 1 | low | |\n| -340282366920938463463374607431768211461 | Task sintética | `src/main.rs` | check | 1 | low | |\n",
+    "output": [
+      {
+        "n": 1,
+        "title": "Task sintética",
+        "files": [
+          "src/main.rs"
+        ],
+        "verification": "check",
+        "wave": "1",
+        "risk": "low",
+        "roteiro": ""
+      },
+      {
+        "n": 9223372036854775808,
+        "title": "Task sintética",
+        "files": [
+          "src/main.rs"
+        ],
+        "verification": "check",
+        "wave": "1",
+        "risk": "low",
+        "roteiro": ""
+      },
+      {
+        "n": 18446744073709551615,
+        "title": "Task sintética",
+        "files": [
+          "src/main.rs"
+        ],
+        "verification": "check",
+        "wave": "1",
+        "risk": "low",
+        "roteiro": ""
+      },
+      {
+        "n": 18446744073709551616,
+        "title": "Task sintética",
+        "files": [
+          "src/main.rs"
+        ],
+        "verification": "check",
+        "wave": "1",
+        "risk": "low",
+        "roteiro": ""
+      },
+      {
+        "n": 170141183460469231731687303715884105728,
+        "title": "Task sintética",
+        "files": [
+          "src/main.rs"
+        ],
+        "verification": "check",
+        "wave": "1",
+        "risk": "low",
+        "roteiro": ""
+      },
+      {
+        "n": 340282366920938463463374607431768211579,
+        "title": "Task sintética",
+        "files": [
+          "src/main.rs"
+        ],
+        "verification": "check",
+        "wave": "1",
+        "risk": "low",
+        "roteiro": ""
+      },
+      {
+        "n": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+        "title": "Task sintética",
+        "files": [
+          "src/main.rs"
+        ],
+        "verification": "check",
+        "wave": "1",
+        "risk": "low",
+        "roteiro": ""
+      }
+    ]
+  },
+  "labels": [
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": \"1__000\", \"maxTokens\": \"1__000\"}]}",
+      "output": [
+        {
+          "provider": "fixture",
+          "id": "one",
+          "context": "0",
+          "max_out": "0",
+          "thinking": false,
+          "images": false
+        }
+      ]
+    },
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": \"_1000\", \"maxTokens\": \"_1000\"}]}",
+      "output": [
+        {
+          "provider": "fixture",
+          "id": "one",
+          "context": "0",
+          "max_out": "0",
+          "thinking": false,
+          "images": false
+        }
+      ]
+    },
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": \"1000_\", \"maxTokens\": \"1000_\"}]}",
+      "output": [
+        {
+          "provider": "fixture",
+          "id": "one",
+          "context": "0",
+          "max_out": "0",
+          "thinking": false,
+          "images": false
+        }
+      ]
+    },
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": \"\\u0661_\\u0660\\u0660\\u0660\", \"maxTokens\": \"\\u0661_\\u0660\\u0660\\u0660\"}]}",
+      "output": [
+        {
+          "provider": "fixture",
+          "id": "one",
+          "context": "1K",
+          "max_out": "1K",
+          "thinking": false,
+          "images": false
+        }
+      ]
+    },
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": \"+\\uff11\\uff12\\uff13\\uff14\", \"maxTokens\": \"+\\uff11\\uff12\\uff13\\uff14\"}]}",
+      "output": [
+        {
+          "provider": "fixture",
+          "id": "one",
+          "context": "1K",
+          "max_out": "1K",
+          "thinking": false,
+          "images": false
+        }
+      ]
+    },
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": \" \\u001c\\uff11\\uff12\\uff13\\uff14\\u001f\", \"maxTokens\": \" \\u001c\\uff11\\uff12\\uff13\\uff14\\u001f\"}]}",
+      "output": [
+        {
+          "provider": "fixture",
+          "id": "one",
+          "context": "0",
+          "max_out": "0",
+          "thinking": false,
+          "images": false
+        }
+      ]
+    },
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": true, \"maxTokens\": true}]}",
+      "output": [
+        {
+          "provider": "fixture",
+          "id": "one",
+          "context": "1",
+          "max_out": "1",
+          "thinking": false,
+          "images": false
+        }
+      ]
+    },
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": 1000.9, \"maxTokens\": 1000.9}]}",
+      "output": [
+        {
+          "provider": "fixture",
+          "id": "one",
+          "context": "1K",
+          "max_out": "1K",
+          "thinking": false,
+          "images": false
+        }
+      ]
+    },
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": 340282366920938463463374607431768211456, \"maxTokens\": 340282366920938463463374607431768211456}]}",
+      "output": [
+        {
+          "provider": "fixture",
+          "id": "one",
+          "context": "340282366920938463463374607431768211K",
+          "max_out": "340282366920938463463374607431768211K",
+          "thinking": false,
+          "images": false
+        }
+      ]
+    },
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": null, \"maxTokens\": null}]}",
+      "output": [
+        {
+          "provider": "fixture",
+          "id": "one",
+          "context": "0",
+          "max_out": "0",
+          "thinking": false,
+          "images": false
+        }
+      ]
+    },
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": 0, \"maxTokens\": 0}]}",
+      "output": [
+        {
+          "provider": "fixture",
+          "id": "one",
+          "context": "0",
+          "max_out": "0",
+          "thinking": false,
+          "images": false
+        }
+      ]
+    },
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": -1001, \"maxTokens\": -1001}]}",
+      "output": [
+        {
+          "provider": "fixture",
+          "id": "one",
+          "context": "-1001",
+          "max_out": "-1001",
+          "thinking": false,
+          "images": false
+        }
+      ]
+    },
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": NaN, \"maxTokens\": NaN}]}",
+      "output": [
+        {
+          "provider": "fixture",
+          "id": "one",
+          "context": "0",
+          "max_out": "0",
+          "thinking": false,
+          "images": false
+        }
+      ]
+    },
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": Infinity, \"maxTokens\": Infinity}]}",
+      "error": "OverflowError"
+    },
+    {
+      "raw": "{\"models\": [{\"provider\": \"fixture\", \"id\": \"one\", \"contextWindow\": -Infinity, \"maxTokens\": -Infinity}]}",
+      "error": "OverflowError"
+    }
+  ],
+  "mtime": {
+    "stamp_ns": 1800000000000000000,
+    "delta_ns": 100,
+    "first": "first",
+    "after": "first"
+  },
+  "raw_cases": [
+    {
+      "raw": "{\"kind\": \"notice\", \"extra\": {\"$serde_json::private::Number\": \"literal\", \"n\": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}, \"text\": \"chave literal\"}",
+      "dump": "{\"extra\": {\"$serde_json::private::Number\": \"literal\", \"n\": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}, \"kind\": \"notice\", \"text\": \"chave literal\"}",
+      "entry_raw": "{\"kind\": \"notice\", \"task\": null, \"line\": null, \"origin\": null, \"sender\": null, \"mark\": null, \"alarm\": false, \"rejected_round\": null, \"body\": \"chave literal\", \"question\": null, \"parecer\": null, \"error\": null, \"decided_by\": null}",
+      "id": "orq:69c5cf1ea8d93cfa"
+    },
+    {
+      "raw": "{\"kind\": \"notice\", \"extra\": {\"$serde_json::private::RawValue\": \"literal\"}, \"text\": \"chave literal\"}",
+      "dump": "{\"extra\": {\"$serde_json::private::RawValue\": \"literal\"}, \"kind\": \"notice\", \"text\": \"chave literal\"}",
+      "entry_raw": "{\"kind\": \"notice\", \"task\": null, \"line\": null, \"origin\": null, \"sender\": null, \"mark\": null, \"alarm\": false, \"rejected_round\": null, \"body\": \"chave literal\", \"question\": null, \"parecer\": null, \"error\": null, \"decided_by\": null}",
+      "id": "orq:6092658a1687ad5b"
+    },
+    {
+      "raw": "{\"kind\": \"notice\", \"extra\": {\"\\ud800\": \"um\", \"\\ue000\": \"dois\", \"\\ud800\\udc00\": \"tr\\u00eas\"}, \"text\": \"ordem de chaves\"}",
+      "dump": "{\"extra\": {\"\\ud800\": \"um\", \"\\ue000\": \"dois\", \"\\ud800\\udc00\": \"tr\\u00eas\"}, \"kind\": \"notice\", \"text\": \"ordem de chaves\"}",
+      "entry_raw": "{\"kind\": \"notice\", \"task\": null, \"line\": null, \"origin\": null, \"sender\": null, \"mark\": null, \"alarm\": false, \"rejected_round\": null, \"body\": \"ordem de chaves\", \"question\": null, \"parecer\": null, \"error\": null, \"decided_by\": null}",
+      "id": "orq:91821513108fd8bc"
+    },
+    {
+      "raw": "{\"kind\": \"notice\", \"task\": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000, \"text\": \"surrogate: \\ud800\"}",
+      "dump": "{\"kind\": \"notice\", \"task\": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000, \"text\": \"surrogate: \\ud800\"}",
+      "entry_raw": "{\"kind\": \"notice\", \"task\": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000, \"line\": null, \"origin\": null, \"sender\": null, \"mark\": null, \"alarm\": false, \"rejected_round\": null, \"body\": \"surrogate: \\ud800\", \"question\": null, \"parecer\": null, \"error\": null, \"decided_by\": null}",
+      "id": "orq:54e1d6be3e8fa2ea"
+    },
+    {
+      "raw": "{\"kind\": \"notice\", \"text\": \"n\\u00fameros n\\u00e3o finitos\", \"extra\": [NaN, Infinity, -Infinity]}",
+      "dump": "{\"extra\": [NaN, Infinity, -Infinity], \"kind\": \"notice\", \"text\": \"n\\u00fameros n\\u00e3o finitos\"}",
+      "entry_raw": "{\"kind\": \"notice\", \"task\": null, \"line\": null, \"origin\": null, \"sender\": null, \"mark\": null, \"alarm\": false, \"rejected_round\": null, \"body\": \"n\\u00fameros n\\u00e3o finitos\", \"question\": null, \"parecer\": null, \"error\": null, \"decided_by\": null}",
+      "id": "orq:0bdffca381dce25c"
+    },
+    {
+      "raw": "{\"kind\": \"notice\", \"task\": 1e+90, \"text\": \"float largo\"}",
+      "dump": "{\"kind\": \"notice\", \"task\": 1e+90, \"text\": \"float largo\"}",
+      "entry_raw": "{\"kind\": \"notice\", \"task\": 999999999999999966484112715463900049825186092620125502979674597309179755437379230686511104, \"line\": null, \"origin\": null, \"sender\": null, \"mark\": null, \"alarm\": false, \"rejected_round\": null, \"body\": \"float largo\", \"question\": null, \"parecer\": null, \"error\": null, \"decided_by\": null}",
+      "id": "orq:095323a94517a517"
+    },
+    {
+      "raw": "{\"kind\": \"notice\", \"task\": \" +\\u0661_\\u0662\\u0663\\u0664 \", \"text\": \"inteiro Unicode\"}",
+      "dump": "{\"kind\": \"notice\", \"task\": \" +\\u0661_\\u0662\\u0663\\u0664 \", \"text\": \"inteiro Unicode\"}",
+      "entry_raw": "{\"kind\": \"notice\", \"task\": 1234, \"line\": null, \"origin\": null, \"sender\": null, \"mark\": null, \"alarm\": false, \"rejected_round\": null, \"body\": \"inteiro Unicode\", \"question\": null, \"parecer\": null, \"error\": null, \"decided_by\": null}",
+      "id": "orq:aa819ef4f4d6ac79"
+    },
+    {
+      "raw": "{\"kind\": \"notice\", \"task\": \"1__2\", \"text\": \"inteiro inv\\u00e1lido\"}",
+      "dump": "{\"kind\": \"notice\", \"task\": \"1__2\", \"text\": \"inteiro inv\\u00e1lido\"}",
+      "entry_raw": "{\"kind\": \"notice\", \"task\": null, \"line\": null, \"origin\": null, \"sender\": null, \"mark\": null, \"alarm\": false, \"rejected_round\": null, \"body\": \"inteiro inv\\u00e1lido\", \"question\": null, \"parecer\": null, \"error\": null, \"decided_by\": null}",
+      "id": "orq:4974be0b0c252187"
+    }
+  ],
+  "shadow": {
+    "raw": "{\"ts\": \"2026-10-01T10:00:00+00:00\", \"text\": \"mensagem sint\\u00e9tica\", \"p\": NaN, \"probs\": {\"bom\": 0.75, \"ruim\": NaN}, \"mode\": \"active\", \"choice\": \"wake\"}",
+    "input": {
+      "kind": "woke",
+      "from": "fixture",
+      "text": "acordou o árbitro: mensagem sintética",
+      "ts": "2026-10-01T10:00:01+00:00"
+    },
+    "entry": {
+      "kind": "woke",
+      "task": null,
+      "line": null,
+      "origin": "notify",
+      "sender": "fixture",
+      "mark": null,
+      "alarm": false,
+      "rejected_round": null,
+      "body": "mensagem sintética",
+      "question": null,
+      "parecer": null,
+      "error": null,
+      "decided_by": {
+        "source": "jev",
+        "rule": null,
+        "jev": {
+          "mode": "active",
+          "choice": "wake",
+          "p": null,
+          "veto": {},
+          "held": [],
+          "would_drop": null,
+          "error": null,
+          "probs": {
+            "bom": 0.75
+          }
+        },
+        "regex": {
+          "verdict": "wake",
+          "category": null
+        },
+        "regex_agreed": true
+      }
+    }
+  },
+  "metadata_warning_count": 1,
+  "code": [
+    {
+      "input": "Veja src/main.rs",
+      "output": "Veja `src/main.rs`",
+      "obj": {
+        "kind": "woke",
+        "text": "acordou o árbitro: Veja src/main.rs"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": null,
+        "line": null,
+        "origin": "notify",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Veja `src/main.rs`",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "regex",
+          "rule": null,
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      }
+    },
+    {
+      "input": "Veja fooBar",
+      "output": "Veja `fooBar`",
+      "obj": {
+        "kind": "woke",
+        "text": "acordou o árbitro: Veja fooBar"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": null,
+        "line": null,
+        "origin": "notify",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Veja `fooBar`",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "regex",
+          "rule": null,
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      }
+    },
+    {
+      "input": "Veja src/main.rs.",
+      "output": "Veja `src/main.rs`.",
+      "obj": {
+        "kind": "woke",
+        "text": "acordou o árbitro: Veja src/main.rs."
+      },
+      "entry": {
+        "kind": "woke",
+        "task": null,
+        "line": null,
+        "origin": "notify",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Veja `src/main.rs`.",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "regex",
+          "rule": null,
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      }
+    },
+    {
+      "input": "Veja fooBar, agora",
+      "output": "Veja `fooBar`, agora",
+      "obj": {
+        "kind": "woke",
+        "text": "acordou o árbitro: Veja fooBar, agora"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": null,
+        "line": null,
+        "origin": "notify",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Veja `fooBar`, agora",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "regex",
+          "rule": null,
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      }
+    },
+    {
+      "input": "Veja `fooBar`",
+      "output": "Veja `fooBar`",
+      "obj": {
+        "kind": "woke",
+        "text": "acordou o árbitro: Veja `fooBar`"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": null,
+        "line": null,
+        "origin": "notify",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Veja `fooBar`",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "regex",
+          "rule": null,
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      }
+    },
+    {
+      "input": "foo_bar",
+      "output": "foo_bar",
+      "obj": {
+        "kind": "woke",
+        "text": "acordou o árbitro: foo_bar"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": null,
+        "line": null,
+        "origin": "notify",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "foo_bar",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "regex",
+          "rule": null,
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      }
+    },
+    {
+      "input": "Veja src/main.rs\n",
+      "output": "Veja `src/main.rs`\n",
+      "obj": {
+        "kind": "woke",
+        "text": "acordou o árbitro: Veja src/main.rs\n"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": null,
+        "line": null,
+        "origin": "notify",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Veja `src/main.rs`",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "regex",
+          "rule": null,
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      }
+    },
+    {
+      "input": "Veja função",
+      "output": "Veja função",
+      "obj": {
+        "kind": "woke",
+        "text": "acordou o árbitro: Veja função"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": null,
+        "line": null,
+        "origin": "notify",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Veja função",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "regex",
+          "rule": null,
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      }
+    },
+    {
+      "input": "Veja fooBar!",
+      "output": "Veja fooBar!",
+      "obj": {
+        "kind": "woke",
+        "text": "acordou o árbitro: Veja fooBar!"
+      },
+      "entry": {
+        "kind": "woke",
+        "task": null,
+        "line": null,
+        "origin": "notify",
+        "sender": null,
+        "mark": null,
+        "alarm": false,
+        "rejected_round": null,
+        "body": "Veja fooBar!",
+        "question": null,
+        "parecer": null,
+        "error": null,
+        "decided_by": {
+          "source": "regex",
+          "rule": null,
+          "jev": null,
+          "regex": null,
+          "regex_agreed": null
+        }
+      }
+    }
+  ],
+  "integers": [
+    {
+      "input": 1,
+      "digits": "1"
+    },
+    {
+      "input": 9223372036854775808,
+      "digits": "9223372036854775808"
+    },
+    {
+      "input": 18446744073709551615,
+      "digits": "18446744073709551615"
+    },
+    {
+      "input": 18446744073709551616,
+      "digits": "18446744073709551616"
+    },
+    {
+      "input": 170141183460469231731687303715884105728,
+      "digits": "170141183460469231731687303715884105728"
+    },
+    {
+      "input": 340282366920938463463374607431768211579,
+      "digits": "340282366920938463463374607431768211579"
+    },
+    {
+      "input": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007,
+      "digits": "1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007"
+    },
+    {
+      "input": -18446744073709551616,
+      "digits": "-18446744073709551616"
+    },
+    {
+      "input": -340282366920938463463374607431768211461,
+      "digits": "-340282366920938463463374607431768211461"
+    },
+    {
+      "input": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,
+      "digits": "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "input": 1.0,
+      "digits": null
+    },
+    {
+      "input": true,
+      "digits": null
+    },
+    {
+      "input": null,
+      "digits": null
+    },
+    {
+      "input": "1",
+      "digits": null
+    }
+  ]
+}
