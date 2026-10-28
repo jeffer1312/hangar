@@ -60,11 +60,13 @@ export function janelaEsgotada(c: CotaContaResumo | undefined): string | null {
 /** Uso a partir do qual a conta cede a vez: o `QUOTA_LIMIT` do servidor (session_open/resolve.rs). */
 export const COTA_LIMITE = 95;
 
-type CotaUso = { id: string; estado: string; janelas: { pct: number }[] };
+type CotaUso = { id: string; estado: string; janelas: { pct: number; reset_ts?: number | null }[] };
 
-/** Maior janela lida, de qualquer tipo (como o servidor conta); null sem leitura. */
-function usoDaConta(c: CotaUso | undefined): number | null {
-  const pcts = c?.estado === 'lida' ? c.janelas.map((j) => j.pct).filter((p) => typeof p === 'number' && isFinite(p)) : [];
+/** Maior janela, de qualquer tipo, como no servidor: a última leitura guardada de conta `expirada` conta;
+ *  janela que já virou (reset no passado) recomeçou do zero. null sem leitura. */
+function usoDaConta(c: CotaUso | undefined, agora: number): number | null {
+  const pcts = (c?.janelas ?? []).filter((j) => typeof j.pct === 'number' && isFinite(j.pct))
+    .map((j) => (typeof j.reset_ts === 'number' && j.reset_ts <= agora ? 0 : j.pct));
   return pcts.length ? Math.max(...pcts) : null;
 }
 
@@ -75,13 +77,14 @@ export function contaComFolga(
   atual: string | null | undefined,
   contas: { path: string; active?: boolean }[],
   cotas: CotaUso[],
+  agora = Date.now() / 1000,
 ): string | null {
-  const agora = atual ? usoDaConta(cotaDaConta(cotas, atual)) : null;
-  if (agora === null || agora < COTA_LIMITE) return null;
+  const usoAtual = atual ? usoDaConta(cotaDaConta(cotas, atual), agora) : null;
+  if (usoAtual === null || usoAtual < COTA_LIMITE) return null;
   let best: { uso: number; ativa: boolean; path: string } | null = null;
   for (const conta of contas) {
-    const uso = conta.path === atual ? null : usoDaConta(cotaDaConta(cotas, conta.path));
-    if (uso === null || uso >= agora) continue;
+    const uso = conta.path === atual ? null : usoDaConta(cotaDaConta(cotas, conta.path), agora);
+    if (uso === null || uso >= usoAtual) continue;
     const ativa = !!conta.active;
     if (!best || uso < best.uso || (uso === best.uso && ativa && !best.ativa)) best = { uso, ativa, path: conta.path };
   }

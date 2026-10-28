@@ -38,7 +38,7 @@ describe('cota antiga com a falha nova', () => {
 describe('contaComFolga', () => {
   const cota = (path: string, janelas: CotaContaResumo['janelas'], estado: CotaContaResumo['estado'] = 'lida'): CotaContaResumo =>
     ({ id: `claude:${path}`, estado, janelas });
-  const cheia = [{ rotulo: '5h', pct: 100, reset_ts: 2000 }];
+  const cheia = [{ rotulo: '5h', pct: 100, reset_ts: 9_999_999_999 }];
   const usada = (path: string, pct: number) => cota(path, [{ rotulo: '7d', pct }]);
   const contas = (...paths: string[]) => paths.map((path) => ({ path }));
   it('a 95% ou mais vai para a de mais folga, contando todas as janelas; sem leitura não entra', () => {
@@ -48,6 +48,8 @@ describe('contaComFolga', () => {
     expect(contaComFolga('/a', contas('/a', '/b'), [usada('/a', 97), usada('/b', 40)])).toBe('/b');
     // Janela por modelo conta, como no servidor.
     expect(contaComFolga('/a', contas('/a', '/c'), [cota('/a', [{ rotulo: '7d opus', pct: 100, por_modelo: true }]), usada('/c', 20)])).toBe('/c');
+    // A última leitura guardada de conta expirada conta, como no servidor.
+    expect(contaComFolga('/a', contas('/a', '/b'), [cota('/a', cheia, 'expirada'), usada('/b', 10)])).toBe('/b');
   });
   it('todas a 95% ou mais: a de mais folga, se tiver mais que a atual', () => {
     expect(contaComFolga('/a', contas('/a', '/b', '/c'), [usada('/a', 99), usada('/b', 98), usada('/c', 96)])).toBe('/c');
@@ -56,8 +58,9 @@ describe('contaComFolga', () => {
     expect(contaComFolga('/a', contas('/a', '/c'), [usada('/a', 94), usada('/c', 10)])).toBeNull();
     expect(contaComFolga('/a', contas('/a', '/b', '/c'), [usada('/a', 96), usada('/b', 100), cota('/c', cheia)])).toBeNull();
     expect(contaComFolga('/a', contas('/a', '/b'), [cota('/a', cheia), cota('/b', cheia)])).toBeNull();
-    expect(contaComFolga('/a', contas('/a', '/b'), [cota('/a', cheia, 'expirada'), usada('/b', 10)])).toBeNull();
     expect(contaComFolga(null, contas('/a', '/c'), [cota('/a', cheia), usada('/c', 20)])).toBeNull();
+    // Janela que já virou não conta: os 100% guardados são de antes do reset.
+    expect(contaComFolga('/a', contas('/a', '/c'), [cota('/a', [{ rotulo: '5h', pct: 100, reset_ts: 500 }]), usada('/c', 20)], 1000)).toBeNull();
   });
   it('empate fica com a ativa, em qualquer ordem', () => {
     const cotas = [cota('/a', cheia), cota('/c', [{ rotulo: '5h', pct: 20 }]), cota('/e', [{ rotulo: '5h', pct: 20 }])];

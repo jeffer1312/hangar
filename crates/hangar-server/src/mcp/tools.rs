@@ -224,8 +224,11 @@ async fn remote_session(peers: &PeerClient, server: &str, mut a: NewSession) -> 
     }
     if let Some(sid) = resume {
         let info = call(reqwest::Method::POST, format!("/api/archive/-/{}/resume", segment(&sid)), Some(a.clone_for_resume()?)).await?;
-        return Ok(dict(json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"],
-            "server": server})));
+        let mut out = json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"],
+            "server": server});
+        // O aviso de troca de conta por cota é a única notícia de que a sessão nasceu noutra conta.
+        if info["avisos"].as_array().is_some_and(|a| !a.is_empty()) { out["avisos"] = info["avisos"].clone(); }
+        return Ok(dict(out));
     }
     let info = call(reqwest::Method::POST, "/api/sessions".into(), Some(a.create_body(cwd.unwrap_or_default()))).await?;
     created(&info, Some(server))
@@ -448,11 +451,12 @@ impl Tools {
         if a.headless == Some(true) && let Some(provider) = a.provider.as_deref().filter(|p| !matches!(*p, "claude" | "codex")) {
             return Err(format!("headless só vale com provider claude ou codex (veio: {provider})"));
         }
+        // Quem chama precisa ser resolvido também para abrir noutra máquina, mesmo sem herdar nada.
+        let (me, voice) = self.caller(headers).await?;
         if let Some((server, name)) = remote_target(&a.nome)? {
             a.nome = name;
             return remote_session(&self.st.peers, &server, a).await;
         }
-        let (me, voice) = self.caller(headers).await?;
         if let Some(sid) = a.resume.as_deref().filter(|s| !s.is_empty()) { return self.resume_session(sid, a.clone_for_resume()).await; }
         let (inherit, link) = (a.inherit, a.link);
         let cwd = a.cwd.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| self.home().display().to_string());

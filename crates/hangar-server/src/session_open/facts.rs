@@ -455,13 +455,18 @@ impl OpenFacts for LocalFacts {
         // de integração é outro processo e desliga pelo ambiente.
         let offline = cfg!(test) || !crate::accounts::quotas::open_network_read()
             || self.env().base.get("HANGAR_QUOTA_NETWORK").is_some_and(|v| v == "0");
-        let rows = if network && !offline {
-            self.runtime.block_on(self.accounts.quotas_within(None, false, std::time::Duration::from_secs(5), None)).0
+        let (rows, timed_out) = if network && !offline {
+            self.runtime.block_on(self.accounts.quotas_within(None, false, std::time::Duration::from_secs(5), None))
         } else {
-            self.runtime.block_on(self.accounts.quotas(None, false, true))
+            (self.runtime.block_on(self.accounts.quotas(None, false, true)), false)
         };
-        // Sem leitura, a regra não sabe a cota e quem chama registra isso.
-        rows.unwrap_or(Value::Null).as_array().into_iter().flatten()
+        // A conta sem cota conhecida é registrada por quem chama; aqui fica a causa.
+        if timed_out { tracing::warn!(code = "open_quota_read_timeout", "cota não respondeu em 5 s na abertura; valeu o cache"); }
+        let rows = rows.unwrap_or_else(|e| {
+            tracing::warn!(code = "open_quota_read_failed", cause = e.code, message = %e.message, "leitura de cota falhou na abertura");
+            Value::Null
+        });
+        rows.as_array().into_iter().flatten()
             .filter(|row| matches!(row["provedor"].as_str(), Some("claude" | "codex"))).cloned().collect()
     }
 

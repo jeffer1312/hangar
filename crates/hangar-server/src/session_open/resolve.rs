@@ -462,7 +462,10 @@ enum QuotaCheck { Room, Unknown { current: QuotaAccount, best: Option<QuotaAccou
 /// 100% enquanto o limite que a troca automática gravou não volta.
 fn quota_usage(row: Option<&Value>, spent_until: Option<f64>, now: f64) -> Option<f64> {
     let read = row.filter(|row| row["estado"] == "lida" || row["ts"].is_number())
-        .and_then(|row| row["janelas"].as_array()?.iter().filter_map(|w| w["pct"].as_f64()).reduce(f64::max));
+        // Janela que já virou (reset no passado) recomeçou do zero; a leitura guardada ficaria 100% para sempre.
+        .and_then(|row| row["janelas"].as_array()?.iter()
+            .filter_map(|w| if w["reset_ts"].as_f64().is_some_and(|r| r <= now) { Some(0.) } else { w["pct"].as_f64() })
+            .reduce(f64::max));
     read.into_iter().chain(spent_until.filter(|until| *until > now).map(|_| 100.0)).reduce(f64::max)
 }
 
@@ -731,3 +734,17 @@ fn folder_name(cwd: &str, take_reserved: bool, facts: &dyn OpenFacts) -> Result<
 
 /// O Codex nunca herda o modo da criadora: só o pedido conta.
 fn request_permission(request: &SessionOpenRequest) -> Option<&str> { request.permission_mode.as_deref() }
+
+#[cfg(test)]
+mod quota_usage_tests {
+    use super::*;
+
+    #[test]
+    fn a_window_past_its_reset_no_longer_counts() {
+        let row = json!({"estado": "expirada", "ts": 1.0, "janelas": [{"pct": 100.0, "reset_ts": 500.0}, {"pct": 30.0, "reset_ts": 9000.0}]});
+        assert_eq!(quota_usage(Some(&row), None, 1000.), Some(30.));
+        assert_eq!(quota_usage(Some(&row), None, 100.), Some(100.));
+        let renewed = json!({"estado": "lida", "janelas": [{"pct": 100.0, "reset_ts": 500.0}]});
+        assert_eq!(quota_usage(Some(&renewed), None, 1000.), Some(0.));
+    }
+}
