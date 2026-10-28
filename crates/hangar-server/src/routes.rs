@@ -486,7 +486,7 @@ fn session_routes<H, T>(fallback: H) -> Router<Arc<AppState>>
 where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
     Router::new()
         .route("/api/sessions/{name}/term", get(crate::term::session_ws).fallback(fallback.clone()))
-        .route("/api/sessions/{name}/nav-remoto", get(crate::remote_browser::ws::public).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/nav-remoto", get(crate::remote_browser::ws::public).head(fallback.clone()).fallback(fallback.clone()))
         // Outro método nessas rotas (preflight OPTIONS, HEAD) segue ao Python.
         .route("/api/sessions", get(crate::list::hub::list).post(crate::session_open::create).fallback(fallback.clone()))
         .route("/api/sessions/events", get(crate::list::hub::events).fallback(fallback.clone()))

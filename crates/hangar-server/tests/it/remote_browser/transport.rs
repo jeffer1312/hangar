@@ -1685,3 +1685,209 @@ async fn subframe_navigation_never_replaces_the_main_frame_url() {
     desktop.server.close().await;
     scene.close().await;
 }
+
+fn review_contract() -> Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../backend/tests/fixtures/contract/remote-browser/transport-review-supplement.json");
+    let raw = std::fs::read(path).expect(
+        "referência Python da revisão pendente: execute generate_transport_supplement.py --review-only --output backend/tests/fixtures/contract/remote-browser/transport-review-supplement.json",
+    );
+    serde_json::from_slice(&raw).unwrap()
+}
+
+struct RaceController {
+    address: std::net::SocketAddr,
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+    changed: Arc<Notify>,
+    completed: Arc<std::sync::atomic::AtomicUsize>,
+    requests: Arc<Mutex<Vec<Value>>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl RaceController {
+    async fn new(outcome: String) -> Self {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let changed = Arc::new(Notify::new());
+        let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let (began, resume, updates, finished, seen) = (
+            started.clone(), release.clone(), changed.clone(), completed.clone(), requests.clone(),
+        );
+        let task = tokio::spawn(async move {
+            let mut armed = true;
+            let mut current = "mobile".to_owned();
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    headers.push(stream.read_u8().await.unwrap());
+                    assert!(headers.len() < 65536);
+                }
+                let length: usize = String::from_utf8(headers).unwrap().lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                    .unwrap().1.trim().parse().unwrap();
+                let mut bytes = vec![0; length];
+                stream.read_exact(&mut bytes).await.unwrap();
+                let body: Value = serde_json::from_slice(&bytes).unwrap();
+                seen.lock().unwrap().push(body.clone());
+                let arguments = body["args"].as_array().unwrap();
+                let gated = armed && !arguments.is_empty();
+                if gated {
+                    armed = false;
+                    began.notify_one();
+                    resume.notified().await;
+                    if outcome == "error" {
+                        let _ = stream.shutdown().await;
+                        finished.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        updates.notify_waiters();
+                        continue;
+                    }
+                }
+                let proposed = arguments.iter().map(|value| value.as_str().unwrap())
+                    .collect::<Vec<_>>().join("x");
+                let text = if gated && outcome == "refused" {
+                    format!("erro: layout {proposed}: recusado")
+                } else {
+                    if !arguments.is_empty() {
+                        current = proposed;
+                    }
+                    format!("layout: {current}")
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n{text}",
+                    text.len(),
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+                let _ = stream.shutdown().await;
+                finished.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                updates.notify_waiters();
+            }
+        });
+        Self { address, started, release, changed, completed, requests, task: Some(task) }
+    }
+
+    async fn wait_completed(&self, count: usize) {
+        tokio::time::timeout(Duration::from_secs(4), async {
+            loop {
+                let changed = self.changed.notified();
+                if self.completed.load(std::sync::atomic::Ordering::SeqCst) >= count {
+                    break;
+                }
+                changed.await;
+            }
+        }).await.expect("controlador não concluiu os comandos esperados");
+    }
+
+    async fn close(mut self) {
+        let task = self.task.take().unwrap();
+        task.abort();
+        let _ = task.await;
+        crate::assert_closed(self.address, "controlador de layout do ensaio").await;
+    }
+}
+
+impl Drop for RaceController {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+#[tokio::test]
+async fn layout_wait_only_overwrites_live_dimensions_after_confirmed_size() {
+    if support::isolated(
+        "remote_browser::transport::layout_wait_only_overwrites_live_dimensions_after_confirmed_size",
+        |root| assert!(!root.join("git.calls").exists()),
+    ).await {
+        return;
+    }
+    let reference = review_contract();
+    let scene = Scene::new().await;
+    seed_session(&scene);
+    let desktop = Desktop::new(&json!({})).await;
+    for (index, case) in reference["observed"]["layout_races"].as_array().unwrap().iter().enumerate() {
+        desktop.publish(&scene, KEY);
+        let (mut client, _) = connect(&scene, "").await.unwrap();
+        let mut events = Vec::new();
+        until(&mut client, &mut events, |event| event["url"] == "http://contract.test/ready").await;
+        let controller = RaceController::new(case["outcome"].as_str().unwrap().to_owned()).await;
+        std::fs::write(scene.nav_dir().join("_srv.json"), json!({
+            "porta": controller.address.port(), "token": DESKTOP_TOKEN, "pid": 123,
+        }).to_string()).unwrap();
+        client.send(ClientMessage::Text(case["input"].to_string().into())).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(4), controller.started.notified()).await.unwrap();
+        let before = desktop.state.lock().unwrap().commands.iter()
+            .filter(|command| command["peer"] == index && command["message"]["method"] == "Page.screencastFrameAck")
+            .count();
+        let mut frame = support::contract("chromium")["frame"].clone();
+        frame["metadata"]["deviceWidth"] = case["frame_dimensions"][0].clone();
+        frame["metadata"]["deviceHeight"] = case["frame_dimensions"][1].clone();
+        desktop.state.lock().unwrap().peers[index]
+            .send(json!({"method": "Page.screencastFrame", "params": frame})).unwrap();
+        desktop.wait(|state| state.commands.iter()
+            .filter(|command| command["peer"] == index && command["message"]["method"] == "Page.screencastFrameAck")
+            .count() > before).await;
+        controller.release.notify_one();
+        until(&mut client, &mut events, |event| event["t"] == "layout" || event["t"] == "erro").await;
+        assert_eq!(events.last().unwrap()["t"], case["layout_event"]["t"]);
+        client.send(ClientMessage::Text(case["mouse_input"].to_string().into())).await.unwrap();
+        barrier(&mut client, &mut events).await;
+        {
+            let state = desktop.state.lock().unwrap();
+            let mouse = state.commands.iter().find(|command|
+                command["peer"] == index && command["message"]["method"] == "Input.dispatchMouseEvent"
+            ).unwrap();
+            assert_eq!(mouse["message"]["params"], case["mouse_params"], "{}", case["outcome"]);
+        }
+        until(&mut client, &mut events, |event| event["t"] == "q" && event["lento"] == true).await;
+        assert_eq!(events.last().unwrap(), &case["screenshot_event"], "{}", case["outcome"]);
+        client.close(None).await.unwrap();
+        while client.next().await.is_some() {}
+        controller.wait_completed(case["cmd"].as_array().unwrap().len()).await;
+        assert_eq!(*controller.requests.lock().unwrap(), *case["cmd"].as_array().unwrap());
+        controller.close().await;
+    }
+    scene.upstream.assert_no_browser_or_discovery_calls();
+    desktop.server.close().await;
+    scene.close().await;
+}
+
+#[tokio::test]
+async fn plain_http_get_and_head_keep_the_previous_forwarding_without_discovery() {
+    if support::isolated(
+        "remote_browser::transport::plain_http_get_and_head_keep_the_previous_forwarding_without_discovery",
+        |root| assert!(!root.join("git.calls").exists()),
+    ).await {
+        return;
+    }
+    let scene = Scene::new().await;
+    let program = std::path::PathBuf::from(scene.state.list.env().capture_program.clone());
+    assert!(program.starts_with(scene.root.path()));
+    let original = std::fs::read(&program).unwrap();
+    let probe = scene.root.path().join("unexpected-discovery.calls");
+    std::fs::write(&program, format!("#!/bin/sh\n: > '{}'\nexit 2\n", probe.display())).unwrap();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let path = format!("/api/sessions/headless/nav-remoto?token={OWNER}&w=390");
+    for method in [axum::http::Method::GET, axum::http::Method::HEAD] {
+        let response = client.request(method.clone(), format!("http://{}{path}", scene.owner.address))
+            .send().await.unwrap();
+        assert_eq!(response.status(), 503, "o status deve vir do upstream anterior");
+        let body = response.bytes().await.unwrap();
+        if method == axum::http::Method::GET {
+            assert_eq!(body.as_ref(), b"remote_browser_test_upstream_refused");
+        } else {
+            assert!(body.is_empty());
+        }
+    }
+    assert!(!probe.exists(), "HTTP comum entrou na descoberta do navegador");
+    assert_eq!(scene.upstream.paths(), vec![path.clone(), path]);
+    std::fs::write(program, original).unwrap();
+    scene.close().await;
+}

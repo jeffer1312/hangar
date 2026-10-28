@@ -302,21 +302,172 @@ async def capture(source: Path) -> dict:
     return result
 
 
+async def capture_review(source: Path) -> dict:
+    import copy
+    import app
+
+    module = types.ModuleType("app.navsock")
+    exec(compile(source.read_text(), str(source), "exec"), module.__dict__)
+    sys.modules["app.navsock"] = module
+    app.navsock = module
+    shell_source = source.with_name("navshell.py")
+    shell = types.ModuleType("app.navshell")
+    exec(compile(shell_source.read_text(), str(shell_source), "exec"), shell.__dict__)
+    sys.modules["app.navshell"] = shell
+    app.navshell = shell
+
+    measured = json.loads((HERE / "chromium.json").read_text())
+    nav = Path.home() / ".hangar" / "nav"
+    nav.mkdir(parents=True)
+    name, key = "nav-contract", "contract::nav-contract"
+    (nav / "browser.json").write_text(json.dumps({"chave": key, "pid": 123, "targetId": None}))
+    result = {"layout_races": []}
+
+    class Screen:
+        def __init__(self):
+            self.incoming = asyncio.Queue()
+            self.events = []
+            self.changed = asyncio.Condition()
+
+        async def receive_text(self):
+            return await self.incoming.get()
+
+        async def send_text(self, raw):
+            async with self.changed:
+                self.events.append(json.loads(raw))
+                self.changed.notify_all()
+
+        async def wait(self, predicate):
+            async with asyncio.timeout(5):
+                async with self.changed:
+                    await self.changed.wait_for(lambda: predicate(self.events))
+
+    class Cdp:
+        def __init__(self):
+            self.eventos = asyncio.Queue()
+            self.commands = []
+            self.mouse = asyncio.Event()
+
+        async def cmd(self, method, params=None, espera=10):
+            return {"result": copy.deepcopy(measured["screenshot"])} if method == "Page.captureScreenshot" else {"result": {}}
+
+        def envia(self, method, params=None):
+            self.commands.append({"method": method, "params": params or {}})
+            if method == "Input.dispatchMouseEvent":
+                self.mouse.set()
+
+    for outcome in ("mode", "refused", "error", "confirmed"):
+        module._imposto.clear()
+        module._travas.clear()
+        started, release = asyncio.Event(), asyncio.Event()
+        requests, handlers = [], set()
+        current, armed = "mobile", True
+
+        async def controller(reader, writer):
+            nonlocal current, armed
+            try:
+                headers = await reader.readuntil(b"\r\n\r\n")
+                length = next(int(value.strip()) for field, value in
+                              (line.split(b":", 1) for line in headers.split(b"\r\n") if b":" in line)
+                              if field.lower() == b"content-length")
+                body = json.loads(await reader.readexactly(length))
+                requests.append(body)
+                arguments = body["args"]
+                gated = armed and bool(arguments)
+                if gated:
+                    armed = False
+                    started.set()
+                    await release.wait()
+                    if outcome == "error":
+                        return
+                proposed = "x".join(arguments)
+                if gated and outcome == "refused":
+                    text = f"erro: layout {proposed}: recusado"
+                else:
+                    if arguments:
+                        current = proposed
+                    text = f"layout: {current}"
+                data = text.encode()
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\nContent-Length: "
+                             + str(len(data)).encode() + b"\r\n\r\n" + data)
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        def accept(reader, writer):
+            task = asyncio.create_task(controller(reader, writer))
+            handlers.add(task)
+
+        server = await asyncio.start_server(accept, "127.0.0.1", 0)
+        (nav / "_srv.json").write_text(json.dumps({
+            "porta": server.sockets[0].getsockname()[1], "token": "remote-browser-contract-desktop", "pid": 123,
+        }))
+        screen, cdp = Screen(), Cdp()
+        state = {"w": 800, "h": 600}
+        message = {"t": "layout", "modo": "desktop"} if outcome == "mode" else {"t": "layout", "w": 900, "h": 700}
+        mouse = {"t": "m", "acao": "press", "x": 0.5, "y": 0.5}
+        flow = asyncio.create_task(module._fluxo_de_quadros(cdp, screen, state))
+        client = asyncio.create_task(module._ler_cliente(cdp, screen, state, name))
+        try:
+            await screen.incoming.put(json.dumps(message))
+            await asyncio.wait_for(started.wait(), 3)
+            frame = copy.deepcopy(measured["frame"])
+            frame["metadata"].update(deviceWidth=1000, deviceHeight=500)
+            await cdp.eventos.put({"method": "Page.screencastFrame", "params": frame})
+            await screen.wait(lambda events: any(event.get("t") == "q" for event in events))
+            release.set()
+            await screen.wait(lambda events: any(event.get("t") in ("layout", "erro") for event in events))
+            await screen.incoming.put(json.dumps(mouse))
+            await asyncio.wait_for(cdp.mouse.wait(), 3)
+            await screen.wait(lambda events: any(event.get("lento") for event in events))
+            layout_event = next(event for event in screen.events if event.get("t") in ("layout", "erro"))
+            screenshot = next(event for event in screen.events if event.get("lento"))
+            mouse_params = next(command["params"] for command in cdp.commands if command["method"] == "Input.dispatchMouseEvent")
+            dimensions = [state["w"], state["h"]]
+        finally:
+            release.set()
+            flow.cancel()
+            client.cancel()
+            await asyncio.gather(flow, client, return_exceptions=True)
+            await module._devolver_layout(name, state)
+            server.close()
+            await server.wait_closed()
+            if handlers:
+                await asyncio.wait_for(asyncio.gather(*handlers), 3)
+        result["layout_races"].append({
+            "outcome": outcome, "input": message, "frame_dimensions": [1000, 500],
+            "layout_event": layout_event, "state_dimensions": dimensions,
+            "mouse_input": mouse, "mouse_params": mouse_params,
+            "screenshot_event": screenshot, "cmd": requests,
+        })
+
+    remaining = [task for task in asyncio.all_tasks() if task is not asyncio.current_task() and not task.done()]
+    if remaining:
+        raise AssertionError(f"tarefas sobreviventes: {[task.get_name() for task in remaining]}")
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--child", type=Path)
-    parser.add_argument("--output", type=Path, default=HERE / "transport-supplement.json")
+    parser.add_argument("--review-only", action="store_true")
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.child:
-        result = asyncio.run(capture(args.child / "navsock.py"))
+        capture_function = capture_review if args.review_only else capture
+        result = asyncio.run(capture_function(args.child / "navsock.py"))
         (args.child / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
         return
     raw = subprocess.check_output(["git", "show", f"{SOURCE}:backend/app/navsock.py"], cwd=REPO)
+    shell_raw = subprocess.check_output(["git", "show", f"{SOURCE}:backend/app/navshell.py"], cwd=REPO) if args.review_only else None
     with tempfile.TemporaryDirectory(prefix="hangar-nav-original-") as temporary:
         root = Path(temporary)
         home = root / "home"
         home.mkdir()
         (root / "navsock.py").write_bytes(raw)
+        if shell_raw is not None:
+            (root / "navshell.py").write_bytes(shell_raw)
         env = {"PATH": "/usr/bin:/bin", "HOME": str(home), "USERPROFILE": str(home),
                "XDG_CONFIG_HOME": str(home / ".config"), "XDG_CACHE_HOME": str(home / ".cache"),
                "XDG_DATA_HOME": str(home / ".local/share"), "CLAUDE_CONFIG_DIR": str(home / ".claude"),
@@ -324,7 +475,10 @@ def main():
                "CP_PROJECTS_DIR": str(root / "workspace"), "CP_AUTH_TOKEN": "isolated-original",
                "PYTHONPATH": str(REPO / "backend"), "PYTHONDONTWRITEBYTECODE": "1",
                "NO_PROXY": "127.0.0.1,localhost", "PYTHONNOUSERSITE": "1"}
-        subprocess.run([sys.executable, str(Path(__file__).resolve()), "--child", str(root)],
+        command = [sys.executable, str(Path(__file__).resolve()), "--child", str(root)]
+        if args.review_only:
+            command.append("--review-only")
+        subprocess.run(command,
                        cwd=root, env=env, timeout=75, check=True)
         result = json.loads((root / "result.json").read_text())
     output = {"source_commit": SOURCE, "source_sha256": hashlib.sha256(raw).hexdigest(),
@@ -338,7 +492,20 @@ def main():
                          "O prazo do Ping e o prazo de comando foram executados com os defaults reais, sem relógio simulado.",
                          "A concorrência observa Input.insertText na borda externa durante screenshot pendente; não espera URL do emissor ocupado."],
               "observed": result}
-    args.output.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n")
+    if args.review_only:
+        output["generator"] += " --review-only"
+        output["related_source_sha256"] = {"backend/app/navshell.py": hashlib.sha256(shell_raw).hexdigest()}
+        output["isolation"] = "filho env_clear, HOME/config/cwd temporários; HTTP real de loopback e fronteira CDP de ensaio"
+        output["seam"] = "_ler_cliente e _fluxo_de_quadros originais concorrentes; navshell.verbo original contra controlador HTTP"
+        output["comparison"] = {"measured_fields": []}
+        output["limits"] = [
+            "Somente os quatro casos da corrida de dimensões; Linux, sem desktop ou sessão real.",
+            "Estado/CDP são fronteiras de ensaio; o layout usa navshell original com HTTP real de loopback.",
+            "Metadata recebe dimensão controlada enquanto /cmd aguarda; o JPEG conserva os bytes medidos.",
+            "A prova Rust desta corrida compara categoria do evento, comando, mouse e screenshot; não equipara texto de erro de urllib e reqwest.",
+        ]
+    destination = args.output or HERE / ("transport-review-supplement.json" if args.review_only else "transport-supplement.json")
+    destination.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n")
 
 
 if __name__ == "__main__":

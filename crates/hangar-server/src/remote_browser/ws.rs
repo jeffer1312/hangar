@@ -106,6 +106,9 @@ pub async fn public(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
+    if !crate::share::gate::is_websocket(&req) {
+        return crate::routes::pass_any(State(st), ConnectInfo(peer), req).await;
+    }
     let (ip, _) = st.cfg.trusted.resolve(peer.ip(), req.headers());
     let guest = caller(&req)
         .and_then(Caller::grant)
@@ -336,9 +339,7 @@ async fn read(
         if !message.is_object() {
             continue;
         }
-        let size = view.lock().await.size;
         if message["t"] == "layout" {
-            let mut resized = size;
             let result = st
                 .remote_browser
                 .apply(
@@ -346,16 +347,20 @@ async fn read(
                     name,
                     &message,
                     owner,
-                    &mut resized,
                 )
                 .await;
-            view.lock().await.size = resized;
             match result {
-                Ok(Some(event)) => send(output, event).await?,
+                Ok(Some(change)) => {
+                    if let Some(dimensions) = change.dimensions {
+                        view.lock().await.size = dimensions;
+                    }
+                    send(output, change.event).await?;
+                }
                 Ok(None) => {}
                 Err(error) => send(output, json!({"t":"erro","m":error.message})).await?,
             }
         } else {
+            let size = view.lock().await.size;
             input::apply(cdp, &message, size.0, size.1)?;
         }
     }

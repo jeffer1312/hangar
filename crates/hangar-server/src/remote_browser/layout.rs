@@ -16,6 +16,11 @@ struct Record {
     imposed: String,
 }
 type Slot = Arc<tokio::sync::Mutex<Option<Record>>>;
+pub(super) struct LayoutChange {
+    pub event: Value,
+    pub dimensions: Option<(i64, i64)>,
+}
+
 pub struct Layouts {
     slots: Mutex<HashMap<String, Slot>>,
     next: AtomicU64,
@@ -53,8 +58,7 @@ impl Layouts {
         name: &str,
         message: &Value,
         owner: &mut Option<u64>,
-        size: &mut (i64, i64),
-    ) -> Result<Option<Value>, Failure> {
+    ) -> Result<Option<LayoutChange>, Failure> {
         if message.get("w").is_some() || message.get("h").is_some() {
             let dimension = |key| {
                 input::integer(&message[key])
@@ -72,7 +76,10 @@ impl Layouts {
                 None => {
                     let answer = shell::verb(&self.http, dir, name, &[]).await?;
                     let Some(label) = label(&answer) else {
-                        return Ok(Some(json!({"t":"erro","m":answer})));
+                        return Ok(Some(LayoutChange {
+                            event: json!({"t":"erro","m":answer}),
+                            dimensions: None,
+                        }));
                     };
                     label.to_owned()
                 }
@@ -84,22 +91,30 @@ impl Layouts {
                 &[width.to_string(), height.to_string()],
             )
             .await?;
-            if label(&answer).is_some() {
+            let dimensions = if label(&answer).is_some() {
                 *record = Some(Record {
                     owner: id,
                     original,
                     imposed: format!("{width}x{height}"),
                 });
-                *size = (width, height);
-            }
-            Ok(Some(json!({"t":"layout","resposta":answer})))
+                Some((width, height))
+            } else {
+                None
+            };
+            Ok(Some(LayoutChange {
+                event: json!({"t":"layout","resposta":answer}),
+                dimensions,
+            }))
         } else {
             let mode = message["modo"].as_str().unwrap_or("");
             if !["mobile", "desktop"].contains(&mode) {
                 return Ok(None);
             }
             let answer = shell::verb(&self.http, dir, name, &[mode.to_owned()]).await?;
-            Ok(Some(json!({"t":"layout","modo":mode,"resposta":answer})))
+            Ok(Some(LayoutChange {
+                event: json!({"t":"layout","modo":mode,"resposta":answer}),
+                dimensions: None,
+            }))
         }
     }
     pub(super) async fn restore(&self, dir: &Path, name: &str, owner: Option<u64>) {
