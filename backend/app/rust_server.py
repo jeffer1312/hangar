@@ -35,6 +35,7 @@ HEALTH_PATH = "/__hangar_server/health"
 RUST_SERVER_PROTOCOL = 94
 START_TIMEOUT = 10.0
 OP_TIMEOUT_S = 75
+PROTECTED_SHUTDOWN_SECONDS = 120
 CRASH_WINDOW = 60.0
 MAX_CRASHES = 3
 # Depois da desistência, espera antes de cada tentativa de religar o Rust (a última se repete).
@@ -544,7 +545,7 @@ class Supervisor:
             # Fechar o cano é o pedido de saída que o binário entende em todo sistema.
             _close_stdin(proc)
             try:
-                await asyncio.to_thread(proc.wait, 5)
+                await asyncio.to_thread(proc.wait, PROTECTED_SHUTDOWN_SECONDS)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 await asyncio.to_thread(proc.wait)
