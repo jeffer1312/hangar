@@ -70,7 +70,9 @@ it.each([false, true])('estado null só mantém execução com confirmação no 
   } });
   try {
     await tick(); await tick();
-    expect(target.textContent?.includes(m.atividade_rodando_agora())).toBe(known);
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog!.textContent?.includes(m.atividade_rodando_agora())).toBe(known);
   } finally { await unmount(comp); }
 });
 
