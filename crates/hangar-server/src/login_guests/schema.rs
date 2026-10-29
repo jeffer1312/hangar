@@ -9,6 +9,8 @@ enum Kind {
     Text(usize, usize),
     Boolean(bool),
     Integer,
+    IntegerRange(i64, i64),
+    PlainText,
     Dictionary,
     Blob,
     Credential(usize),
@@ -37,6 +39,10 @@ fn optional(name: &'static str, kind: Kind) -> Field {
 fn schema(name: &str) -> (Vec<Field>, bool) {
     use Kind::*;
     match name {
+        "LoopCreate" => (vec![field("goal", Text(1, usize::MAX)), optional("check_cmd", PlainText), optional("max_iters", IntegerRange(1,100)), optional("require_branch", Boolean(true))], true),
+        "LoopResolve" => (vec![field("accept", Boolean(false))], true),
+        "LoopRefine" => (vec![field("goal", Text(1,2000)), optional("check_cmd", PlainText)], true),
+        "ThenLinkBody" => (vec![field("target", Text(1,usize::MAX)), field("text", Text(1,usize::MAX))], true),
         "NewGuest" | "GuestSettings" => {
             let mut fields = vec![
                 field("root", Text(1, 4096)),
@@ -174,7 +180,7 @@ fn collect(name: &str, body: &Value, loc: Vec<Value>, errors: &mut Vec<Value>) -
             }
             continue;
         };
-        if f.optional && value.is_null() && !matches!(f.kind, Kind::Boolean(_)) {
+        if f.optional && value.is_null() && !matches!(f.kind, Kind::Boolean(_) | Kind::IntegerRange(..)) {
             output.insert(f.name.into(), Value::Null);
             continue;
         }
@@ -254,7 +260,7 @@ fn collect(name: &str, body: &Value, loc: Vec<Value>, errors: &mut Vec<Value>) -
                         continue;
                     }
                 },
-                Kind::Integer => match integer(value) {
+                Kind::Integer | Kind::IntegerRange(..) => match integer(value) {
                     Some(v) => v,
                     None => {
                         let size_error=value.as_str().is_some_and(|text|text.trim().replace('_', "").len()>4300)
@@ -278,6 +284,10 @@ fn collect(name: &str, body: &Value, loc: Vec<Value>, errors: &mut Vec<Value>) -
                         continue;
                     }
                 },
+                Kind::PlainText => match value.as_str() {
+                    Some(text) => Value::String(text.to_owned()),
+                    None => {errors.push(issue(at,"string_type","Input should be a valid string",value,None));continue;}
+                },
                 Kind::Dictionary if value.is_object() || value.is_null() => crate::orchestration::codec::clone_value(value),
                 Kind::Dictionary => {
                     errors.push(issue(
@@ -289,10 +299,19 @@ fn collect(name: &str, body: &Value, loc: Vec<Value>, errors: &mut Vec<Value>) -
                     ));
                     continue;
                 }
-                Kind::Blob => collect("SetupBlob", value, at, errors),
+                Kind::Blob => collect("SetupBlob", value, at.clone(), errors),
                 _ => unreachable!(),
             }
         };
+        if let Kind::IntegerRange(min,max)=f.kind {
+            let number=normalized.as_i64();
+            let below=number.map_or_else(||normalized.to_string().starts_with('-'),|n|n<min);
+            if below || number.is_none_or(|n|n>max) {
+                let (kind,msg,key,bound)=if below {("greater_than_equal",format!("Input should be greater than or equal to {min}"),"ge",min)} else {("less_than_equal",format!("Input should be less than or equal to {max}"),"le",max)};
+                errors.push(issue(at,kind,&msg,value,Some(super::object([(key,json!(bound))]))));
+                continue;
+            }
+        }
         output.insert(f.name.into(), normalized);
     }
     if extras {

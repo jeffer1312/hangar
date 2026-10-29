@@ -94,11 +94,26 @@ fn unwritable(e: std::io::Error) -> Reply {
 
 /// Corpo estrito (`_StrictBody`): objeto JSON só com as chaves conhecidas.
 fn object(bytes: &[u8], allowed: &[&str]) -> Result<Map<String, Value>, Reply> {
-    let Ok(Value::Object(m)) = serde_json::from_slice::<Value>(bytes) else { return Err(unprocessable("Input should be a valid dictionary")) };
-    if let Some(extra) = m.keys().find(|k| !allowed.contains(&k.as_str())) {
-        return Err(unprocessable(&format!("Extra inputs are not permitted: {extra}")));
+    let schema=match allowed {
+        ["target","text"]=>"ThenLinkBody",
+        ["goal","check_cmd","max_iters","require_branch"]=>"LoopCreate",
+        ["goal","check_cmd"]=>"LoopRefine",
+        ["accept"]=>"LoopResolve",
+        _=>unreachable!("formulário de loop conhecido"),
+    };
+    let parsed=crate::orchestration::body::parse(bytes)?;
+    let normalized=crate::login_guests::schema::validate(schema,&parsed);
+    crate::orchestration::codec::discard(parsed);
+    match normalized {
+        Ok(Value::Object(m))=>Ok(m),
+        Ok(value)=>{crate::orchestration::codec::discard(value);unreachable!("schema retorna objeto")},
+        Err(failure)=>{
+            if crate::orchestration::codec::contains_surrogate(&failure.body) || crate::orchestration::codec::contains_nonfinite(&failure.body) {
+                crate::orchestration::codec::discard(failure.body);
+                Err((StatusCode::INTERNAL_SERVER_ERROR,Value::String("Internal Server Error".into())))
+            } else {Err((StatusCode::from_u16(failure.status).unwrap(),failure.body))}
+        }
     }
-    Ok(m)
 }
 
 fn text(m: &Map<String, Value>, key: &str, max: Option<usize>) -> Result<String, Reply> {

@@ -123,3 +123,39 @@ proptest::proptest! {
         }
     }
 }
+
+#[tokio::test]
+async fn guest_loop_validation_preserves_original_errors() {
+    let fixtures:Value=serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/loop-validation.json")).unwrap();
+    let mut failures=Vec::new();
+    for (index, case) in fixtures["rows"].as_array().unwrap().iter().enumerate() {
+        if case["status"]!=422 {continue;}
+        let dir=tempfile::tempdir().unwrap();
+        let fake=Fake {store:Store::new(dir.path()),rows:vec![],automations:true,branch:None,queued:Mutex::default(),pushed:Mutex::default()};
+        let operation=match case["model"].as_str().unwrap() {"LoopCreate"=>Op::Create,"LoopResolve"=>Op::Resolve,"LoopRefine"=>Op::Refine,"ThenLinkBody"=>Op::ThenSet,other=>panic!("modelo {other}")};
+        let body=serde_json::to_vec(&case["body"]).unwrap();
+        let (status, response)=handle(&fake,"cc",operation,&body).await;
+        if status.as_u16()!=422 || response!=case["response"] {failures.push((index,response));}
+        assert!(fake.queued.lock().unwrap().is_empty());assert!(fake.store.get("cc").is_none());
+    }
+    assert!(failures.is_empty(),"GUE-083: validação divergente {failures:?}");
+}
+
+#[tokio::test]
+async fn guest_loop_checkcmd_preserves_original_file_normalization() {
+    let fixtures:Value=crate::orchestration::codec::loads(include_str!("../../../../../backend/tests/fixtures/contract/guests/loop-checkcmd.json")).unwrap();
+    for case in fixtures["rows"].as_array().unwrap() {
+        let dir=tempfile::tempdir().unwrap();
+        let fake=Fake {store:Store::new(dir.path()),rows:vec![row(json!({"name":"cc","provider":"claude"}))],automations:true,branch:None,queued:Mutex::default(),pushed:Mutex::default()};
+        let body=crate::orchestration::codec::dumps(&json!({"goal":"fixture","check_cmd":case["check_cmd"]}),false);
+        let (status,mut response)=handle(&fake,"cc",Op::Create,body.as_bytes()).await;
+        assert_eq!(status.as_u16(),case["status"].as_u64().unwrap() as u16,"GUE-083: {body}");
+        // A identidade da entrada vem da fila de prova; o contrato compara seu vínculo.
+        let queued=fake.queued.lock().unwrap();
+        assert_eq!(response["loop"]["goal_entry_id"],queued["cc"][0]["id"]);
+        response["loop"]["goal_entry_id"]=case["response"]["loop"]["goal_entry_id"].clone();
+        assert_eq!(response,case["response"]);
+        let mut disk=Value::Object(fake.store.get("cc").unwrap());disk["goal_entry_id"]=case["disk"]["goal_entry_id"].clone();
+        assert_eq!(disk,case["disk"]);
+    }
+}
