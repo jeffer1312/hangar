@@ -88,7 +88,9 @@ pub fn permission_gate(app_present: bool, terminal_attached: Option<bool>, mode:
     PermissionGate { app_present, terminal_attached: terminal_attached.unwrap_or(true), mode_without_dialog }
 }
 
-pub struct NativeSources { state: Weak<AppState>, io: Arc<dyn TerminalIo>, refused_adoption: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> }
+/// A adoção recusada por sessão, chave e conversa: outra conversa (depois de `/clear`) ou outra vida tenta na hora.
+type Refused = std::collections::HashMap<(String, String, String), std::time::Instant>;
+pub struct NativeSources { state: Weak<AppState>, io: Arc<dyn TerminalIo>, refused_adoption: std::sync::Mutex<Refused> }
 
 /// O plugin repete o `/pull` a cada poucos segundos: a adoção que falhou não varre processos e pane de novo
 /// antes disto.
@@ -181,10 +183,11 @@ impl Sources for NativeSources {
     fn adopt<'a>(&'a self, name: &'a str, key: &'a str, conversation: &'a str) -> SourceFuture<'a, bool> {
         Box::pin(async move {
             let now = std::time::Instant::now();
+            let attempt = (name.to_owned(), key.to_owned(), conversation.to_owned());
             {
                 let mut refused = self.refused_adoption.lock().map_err(|_| ServiceError("plugin_source_unbound"))?;
                 refused.retain(|_, at| now.duration_since(*at) < ADOPTION_RETRY);
-                if refused.contains_key(name) { return Ok(false); }
+                if refused.contains_key(&attempt) { return Ok(false); }
             }
             let state = self.state()?;
             let registry = state.state.runtime.get().ok_or(ServiceError("plugin_runtime_absent"))?;
@@ -200,10 +203,10 @@ impl Sources for NativeSources {
             };
             let mut refused = self.refused_adoption.lock().map_err(|_| ServiceError("plugin_source_unbound"))?;
             if adopted {
-                refused.remove(name);
+                refused.retain(|(session, _, _), _| session != name);
                 tracing::info!(session = %name, code = "plugin_adopted", "Claude com terminal adotado pela conversa do /pull do plugin");
             } else {
-                refused.insert(name.to_owned(), now);
+                refused.insert(attempt, now);
             }
             Ok(adopted)
         })

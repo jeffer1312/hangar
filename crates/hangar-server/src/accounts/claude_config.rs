@@ -229,9 +229,11 @@ fn unlink_sessions(link: &Path, shared: &Path, owner: &dyn Fn(i64) -> Owner, eve
             finish(event, &mut moved, "no_link");
             return Err(error).between(&staging, link);
         }
-        // Um Claude que nasceu no intervalo criou a pasta: as cópias entram nela.
-        moved.copy(&staging, link, &|_| Owner::Mine, false)?;
-        let _ = fs::remove_dir_all(&staging);
+        // Um Claude que nasceu no intervalo criou a pasta: as cópias entram nela. Só saem depois disso.
+        match moved.copy(&staging, link, &|_| Owner::Mine, false) {
+            Ok(_) => { let _ = fs::remove_dir_all(&staging); }
+            Err(error) => tracing::warn!(staging = %staging.display(), %error, "conta: cópias de 'sessions' ficaram ao lado"),
+        }
     }
     if let Err(error) = unlink(&parked) {
         tracing::warn!(link = %parked.display(), kind = ?error.kind(), "conta: o atalho antigo 'sessions' ficou ao lado");
