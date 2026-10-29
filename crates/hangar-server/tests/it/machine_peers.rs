@@ -80,6 +80,9 @@ async fn python_store_contracts_through_http() {
             )
             .unwrap();
         }
+        if let Some(raw) = case["raw"].as_str() {
+            std::fs::write(config.join("peers.json"), raw).unwrap();
+        }
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let mut state = AppState::new(Config {
@@ -130,15 +133,19 @@ async fn python_store_contracts_through_http() {
         task.abort();
         let disk = std::fs::read(config.join("peers.json"))
             .ok()
-            .map(|v| serde_json::from_slice::<Value>(&v).unwrap())
+            .map(|v| serde_json::from_slice::<Value>(&v).unwrap_or_else(|_| json!(String::from_utf8_lossy(&v))))
             .unwrap_or(Value::Null);
         let env = std::fs::read_to_string(config.join(".env")).unwrap();
         checked += 1;
-        let expected_response = if case["difference"] == "rust-body-envelope" {
+        let mut expected_response = if case["difference"] == "rust-body-envelope" {
             json!({"detail":{"code":"erro_corpo_invalido","params":{},"msg":"corpo inválido"}})
         } else {
             case["response"].clone()
         };
+        if matches!(name, "delete-truncated" | "enabled-truncated") {
+            assert!(response["detail"]["msg"].as_str().unwrap().starts_with("peers.json ilegível ("));
+            expected_response["detail"]["msg"] = response["detail"]["msg"].clone();
+        }
         if status != case["status"].as_u64().unwrap() as u16
             || response != expected_response
             || disk != case["peers"]
@@ -147,7 +154,7 @@ async fn python_store_contracts_through_http() {
             failures.push(format!("{name}: status {status}; resposta {response}; disco {disk}; env {env:?}; esperado {}",case));
         }
     }
-    assert_eq!(checked, 92);
+    assert_eq!(checked, 98);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -356,6 +363,7 @@ fn pairing_svg_decodes_the_exact_url() {
         "http://192.0.2.1:5173/?token=á&b=sim",
     ] {
         let svg = hangar_server::machine_peers::network::qr_svg(url).unwrap();
+        if let Ok(path) = std::env::var("HANGAR_QR_PROOF") { std::fs::write(path, &svg).unwrap(); }
         assert!(svg.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\""));
         let size = regex::Regex::new(r#"viewBox="0 0 (\d+) (\d+)""#)
             .unwrap()
@@ -430,6 +438,7 @@ async fn real_peer_checks_classify_http_and_drop_auth_on_redirect() {
             }
         }),
     );
+    let router = router.route("/same/api/peers/identificador", get(|| async { (StatusCode::FOUND, [("location", "/api/peers/identificador")]) }));
     let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     for (status, body, expected) in [
         (200, json!({"identificador":"remote"}), "ok"),
@@ -482,6 +491,9 @@ async fn real_peer_checks_classify_http_and_drop_auth_on_redirect() {
         vec![None],
         "D04: token do peer não atravessa origem num redirect"
     );
+    state.lock().unwrap().2.clear();
+    assert_eq!(network::check(&service, &format!("http://{address}/same"), "remote").await["estado"], "ok");
+    assert_eq!(state.lock().unwrap().2, vec![Some("Bearer peer-only-secret".into())], "redirect na mesma origem conserva a credencial");
     task.abort();
     redirect_task.abort();
     let dead = crate::refused_address();
@@ -519,4 +531,58 @@ fn peers_cli_reads_disabled_explicitly_and_filters_enumeration_offline() {
     let missing = run(&["peers", "config", "missing"]);
     assert_eq!(missing.status.code(), Some(1));
     assert!(missing.stdout.is_empty());
+}
+
+#[tokio::test]
+async fn owner_routes_keep_failed_attempts_and_block_correct_token() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".hangar/config")).unwrap();
+    std::fs::write(home.path().join(".hangar/config/.env"), "").unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut state = AppState::new(Config { listen: address, upstream: crate::refused_address(), internal_secret: "fixture".into(), auth_token: "owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
+    state.accounts = AccountService::new(AccountEnvironment::from_map([("HOME".into(),home.path().display().to_string()),("USERPROFILE".into(),home.path().display().to_string())].into()));
+    let router=hangar_server::routes::router(Arc::new(state));
+    let task=tokio::spawn(async move { axum::serve(listener,router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap(); });
+    let client=reqwest::Client::new();
+    for _ in 0..8 { assert_eq!(client.get(format!("http://{address}/api/peers")).header("X-Forwarded-For","192.0.2.15").send().await.unwrap().status(),401); }
+    let response=client.get(format!("http://{address}/api/peers")).header("X-Forwarded-For","192.0.2.15").bearer_auth("owner").send().await.unwrap();
+    task.abort();
+    assert_eq!(response.status(),429,"a origem bloqueada não testa nem o token correto");
+    assert_eq!(response.headers()["Retry-After"],"30");
+}
+
+async fn child_identity(home: &std::path::Path, inherited: Option<&str>) -> Value {
+    use std::process::{Command,Stdio};
+    let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address=listener.local_addr().unwrap();drop(listener);
+    let mut command=Command::new(env!("CARGO_BIN_EXE_hangar-server"));
+    command.env_clear().env("HOME",home).env("USERPROFILE",home).env("PATH",home)
+        .env("HANGAR_SERVER_ID","before").env("HANGAR_SERVER_LISTEN",address.to_string())
+        .env("HANGAR_SERVER_UPSTREAM",crate::refused_address().to_string()).env("HANGAR_INTERNAL_SECRET","proof").env("CP_AUTH_TOKEN","proof")
+        .current_dir(home).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+    if let Some(value)=inherited { command.env("CP_SERVER_ID",value); }
+    struct Child(std::process::Child);
+    impl Drop for Child { fn drop(&mut self) { let _=self.0.kill(); let _=self.0.wait(); } }
+    let _child=Child(command.spawn().unwrap());
+    let client=reqwest::Client::new();
+    for _ in 0..100 {
+        if let Ok(response)=client.get(format!("http://{address}/api/peers/identificador")).bearer_auth("proof").send().await {
+            return response.json().await.unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("filho de prova não abriu a porta temporária");
+}
+
+#[tokio::test]
+async fn child_restart_reads_the_persisted_identity_without_python_snapshot() {
+    let home=tempfile::tempdir().unwrap();let config=home.path().join(".hangar/config");
+    std::fs::create_dir_all(&config).unwrap();std::fs::write(config.join("peers.json"),"{}").unwrap();std::fs::write(config.join(".env"),"CP_SERVER_ID=after\n").unwrap();
+    assert_eq!(child_identity(home.path(),None).await["identificador"],"after");
+    let mut service=hangar_server::machine_peers::Service::new(home.path(),None,"proof".into(),8765,"127.0.0.1".into(),"before".into()).unwrap();
+    service.environment=[("CP_SERVER_ID".into(),"before".into())].into();
+    service.save_identity(&json!({"identificador":"published"})).unwrap();
+    assert_eq!(child_identity(home.path(),Some("before")).await["identificador"],"published");
+    assert_eq!(child_identity(home.path(),Some("manual")).await["identificador"],"manual");
 }

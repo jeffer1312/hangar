@@ -61,6 +61,11 @@ with tempfile.TemporaryDirectory(prefix='hangar-peers-reference-') as scratch:
         try: effect = json.loads(effect) if effect is not None else None
         except ValueError: pass
         cases.append(dict(name=name,method=method,path=path,body=body,initial=initial,raw=raw,auth=auth,initial_env=initial_env,wire_body=wire_body,difference=difference,status=response.status_code,response=response.json(),peers=effect,env=peers_api._ENV_ARQUIVO.read_text()))
+    capture('proof-query-missing','GET','/api/peers/prova',auth=False)
+    capture('pairing-query-missing','GET','/api/alcance/pareamento')
+    for name,raw in [('truncated','{'),('array','[]')]:
+        capture('delete-'+name,'DELETE','/api/peers/a',raw=raw)
+        capture('enabled-'+name,'PUT','/api/peers/a/enabled',{'enabled':False},raw=raw)
     for method,path in [('POST','/api/peers'),('PUT','/api/peers/app-list'),('PUT','/api/peers/a/enabled'),('PUT','/api/peers/identificador')]:
         for kind,wire in [('missing',''),('array','[]'),('invalid','{'),('null','null'),('string','"text"')]:
             capture('body-'+path+'-'+kind,method,path,wire_body=wire,difference='rust-body-envelope')

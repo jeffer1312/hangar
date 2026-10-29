@@ -4,7 +4,7 @@ pub mod doctor;
 pub mod network;
 pub mod store;
 use crate::{
-    routes::{AppState, gate},
+    routes::{AppState, owner_gate},
     session_write::{detail_body, json_response},
 };
 use axum::{
@@ -30,6 +30,39 @@ pub fn config_value(
         Err(std::env::VarError::NotPresent) => crate::user_data::env_value(home, backend, key),
         Err(error) => Err(format!("configuração {key} inválida: {error}")),
     }
+}
+
+const ID_PUBLICATION: &str = "# hangar-server-id-publication=";
+
+/// Uma gravação do dono supera só o override que o Supervisor ainda herdou antes dela.
+pub fn startup_identity(home: &Path, backend: Option<&Path>) -> Result<String, String> {
+    let inherited = std::env::var("CP_SERVER_ID").ok();
+    resolve_identity(home, backend, inherited.as_deref())
+}
+pub fn resolve_identity(home: &Path, backend: Option<&Path>, inherited: Option<&str>) -> Result<String, String> {
+    let Some(path) = crate::user_data::path(home, backend, ".env").map_err(|e| e.to_string())? else {
+        return Ok(inherited.unwrap_or_default().into());
+    };
+    let _lock = store::lock(&path).map_err(|e| e.msg)?;
+    let effective = inherited.map(str::to_owned).or(crate::user_data::env_value(home, backend, "CP_SERVER_ID")?).unwrap_or_default();
+    let marker = std::fs::read(path.with_extension("env.server-id.json")).ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    if let Some(marker) = marker {
+        let raw = match crate::runtime::queue::read_replaced_to_string(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error.to_string()),
+        };
+        let published = marker["published"].as_str();
+        let nonce = marker["nonce"].as_str().unwrap_or("");
+        if !nonce.is_empty() && published.is_some()
+            && inherited == marker["inherited"].as_str()
+            && crate::user_data::env_value(home, backend, "CP_SERVER_ID")?.unwrap_or_default() == published.unwrap()
+            && raw.lines().any(|line| line.strip_prefix(ID_PUBLICATION) == Some(nonce)) {
+            return Ok(published.unwrap().into());
+        }
+    }
+    Ok(effective)
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +177,9 @@ impl Service {
         self.initial_id.clone()
     }
     pub fn save_identity(&self, value: &Value) -> Result<String, Error> {
+        self.save_identity_using(value, &crate::runtime::queue::atomic_write)
+    }
+    fn save_identity_using(&self, value: &Value, write: &dyn Fn(&Path, &[u8]) -> std::io::Result<()>) -> Result<String, Error> {
         let value = store::truthy_field(value, "identificador");
         if store::truthy(&value) {
             store::valid_id(&value).map_err(|mut e| {
@@ -161,6 +197,7 @@ impl Service {
         let mut seen = false;
         let mut output = String::new();
         for line in old.split_inclusive('\n') {
+            if line.starts_with(ID_PUBLICATION) { continue; }
             if line.starts_with("CP_SERVER_ID=") {
                 seen = true;
                 if !value.is_empty() {
@@ -176,8 +213,18 @@ impl Service {
             }
             output.push_str(&format!("CP_SERVER_ID={value}\n"));
         }
+        if let Some(inherited) = self.environment.get("CP_SERVER_ID") {
+            let mut random = [0u8; 16];
+            ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut random).map_err(|_| Error::unavailable())?;
+            let nonce = random.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+            let marker = json!({"inherited": inherited, "published": value, "nonce": nonce});
+            write(&self.env.with_extension("env.server-id.json"), &serde_json::to_vec(&marker).map_err(|_| Error::unavailable())?)
+                .map_err(|_| Error::unavailable())?;
+            if !output.is_empty() && !output.ends_with('\n') { output.push('\n'); }
+            output.push_str(&format!("{ID_PUBLICATION}{nonce}\n"));
+        }
         store::clean_temporary(&self.env)?;
-        crate::runtime::queue::atomic_write(&self.env, output.as_bytes())
+        write(&self.env, output.as_bytes())
             .map_err(|_| Error::unavailable())?;
         if let Some(changed) = &self.on_identity {
             changed(value.into());
@@ -253,13 +300,8 @@ pub async fn handle(
     let method = request.method().clone();
     let public =
         method == Method::GET && matches!(path.as_str(), "/api/peers/ping" | "/api/peers/prova");
-    if !public && !gate(&st, peer, &request).1 {
-        return Error {
-            status: 401,
-            code: "erro_nao_autorizado",
-            msg: "unauthorized".into(),
-        }
-        .response();
+    if !public && let Err(response) = owner_gate(&st, peer, &request) {
+        return response;
     }
     if path == "/api/peers/ping" && method == Method::GET {
         return json_response(StatusCode::OK, json!({"hangar":true}));
@@ -268,6 +310,14 @@ pub async fn handle(
         form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
             .into_owned()
             .collect();
+    let required = match (method.as_str(), path.as_str()) {
+        ("GET", "/api/peers/prova") => Some("desafio"),
+        ("GET", "/api/alcance/pareamento") => Some("endereco"),
+        _ => None,
+    };
+    if let Some(key) = required && !query.contains_key(key) {
+        return json_response(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail":[{"type":"missing","loc":["query",key],"msg":"Field required","input":null}]}));
+    }
     let needs_body = (method == Method::POST && path == "/api/peers")
         || (method == Method::PUT
             && (matches!(
@@ -409,5 +459,49 @@ pub async fn dispatch(
             .await
             .map_err(|_| Error::unavailable())?
         }
+    }
+}
+
+#[cfg(test)]
+mod identity_publication_tests {
+    use super::*;
+    #[test]
+    fn publication_failures_never_announce_or_activate_an_uncommitted_identity() {
+        for failure in [1, 2] {
+            let home=tempfile::tempdir().unwrap();
+            let config=home.path().join(".hangar/config");std::fs::create_dir_all(&config).unwrap();
+            std::fs::write(config.join("peers.json"),"{}").unwrap();
+            let env=config.join(".env");let original="CP_SERVER_ID=after\nOTHER=preserved\n";
+            std::fs::write(&env,original).unwrap();
+            let mut service=Service::new(home.path(),None,"proof".into(),8765,"127.0.0.1".into(),"before".into()).unwrap();
+            service.environment= [("CP_SERVER_ID".into(),"before".into())].into();
+            let announced=Arc::new(std::sync::atomic::AtomicBool::new(false));let changed=announced.clone();
+            service.on_identity=Some(Arc::new(move |_| {changed.store(true,std::sync::atomic::Ordering::Relaxed);}));
+            let calls=std::cell::Cell::new(0);
+            let result=service.save_identity_using(&json!({"identificador":"after"}), &|path,bytes| {
+                calls.set(calls.get()+1);
+                if calls.get()==failure {return Err(std::io::Error::other("falha de publicação simulada"));}
+                crate::runtime::queue::atomic_write(path,bytes)
+            });
+            assert!(result.is_err());assert!(!announced.load(std::sync::atomic::Ordering::Relaxed));
+            assert_eq!(std::fs::read_to_string(&env).unwrap(),original);
+            assert_eq!(resolve_identity(home.path(),None,Some("before")).unwrap(),"before");
+        }
+    }
+    #[test]
+    fn published_identity_only_replaces_the_unchanged_inherited_override() {
+        let home=tempfile::tempdir().unwrap();let config=home.path().join(".hangar/config");std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("peers.json"),"{}").unwrap();
+        std::fs::write(config.join(".env"),"CP_SERVER_ID=before\nOTHER=preserved\n").unwrap();
+        let mut service=Service::new(home.path(),None,"proof".into(),8765,"127.0.0.1".into(),"before".into()).unwrap();
+        service.environment=[("CP_SERVER_ID".into(),"before".into())].into();
+        service.save_identity(&json!({"identificador":"after"})).unwrap();
+        assert_eq!(resolve_identity(home.path(),None,Some("before")).unwrap(),"after");
+        assert_eq!(resolve_identity(home.path(),None,Some("manual-env")).unwrap(),"manual-env");
+        let raw=std::fs::read_to_string(&service.env).unwrap();
+        assert_eq!(raw.lines().filter(|line| !line.starts_with(ID_PUBLICATION)).collect::<Vec<_>>(),vec!["CP_SERVER_ID=after","OTHER=preserved"]);
+        std::fs::write(&service.env,raw.replace("CP_SERVER_ID=after","CP_SERVER_ID=manual-file")).unwrap();
+        assert_eq!(resolve_identity(home.path(),None,Some("before")).unwrap(),"before");
+        assert_eq!(resolve_identity(home.path(),None,None).unwrap(),"manual-file");
     }
 }

@@ -25,15 +25,10 @@ impl Store {
                 ));
             }
         };
-        serde_json::from_slice::<Value>(&bytes)
-            .ok()
-            .and_then(|v| v.as_object().cloned())
-            .ok_or_else(|| {
-                Error::invalid(
-                    "peers.json não é um objeto JSON — corrija o arquivo antes de gravar",
-                )
-            })
+        let value = serde_json::from_slice::<Value>(&bytes).map_err(|e| Error::invalid(format!("peers.json ilegível ({e}) — corrija o arquivo antes de gravar")))?;
+        value.as_object().cloned().ok_or_else(|| Error::invalid("peers.json não é um objeto JSON — corrija o arquivo antes de gravar"))
     }
+
     pub fn tolerant(&self) -> Map<String, Value> {
         self.read().unwrap_or_else(|_| {
             tracing::warn!(code = "peers_unreadable", "peers.json ilegível");
@@ -108,7 +103,7 @@ impl Store {
                 data.remove(id);
             }
             Ok(list(data))
-        })
+        }).map_err(|e| if e.code == "peers_registro_invalido" { Error::missing(e.msg) } else { e })
     }
     pub fn enabled(&self, id: &str, value: &Value) -> Result<Value, Error> {
         let enabled = value
@@ -122,7 +117,7 @@ impl Store {
                 .ok_or_else(|| unknown(id))?;
             entry["enabled"] = json!(enabled);
             Ok(list(data))
-        })
+        }).map_err(|e| if e.code == "peers_registro_invalido" { Error::missing(e.msg) } else { e })
     }
     pub fn token(&self, id: &str) -> Result<Value, Error> {
         let data = self.tolerant();

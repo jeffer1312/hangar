@@ -127,7 +127,7 @@ impl AppState {
         Self::with_server_id(cfg, String::new())
     }
 
-    /// `server_id` = `HANGAR_SERVER_ID`, lido só no `main`.
+    /// Identidade publicada nesta vida do servidor.
     pub fn current_server_id(&self) -> String {
         self.machine_identity.read().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| self.server_id.clone())
     }
@@ -823,6 +823,22 @@ pub(crate) fn gate(st: &AppState, peer: SocketAddr, req: &Request)
     if owner { *admitted = Some((context, receipt.clone())); }
     Ok((Forward { client_ip, https, guest: None, auth_receipt: receipt }, owner))
     }
+}
+
+/// Porta exclusiva do dono: conta a recusa aqui, pois ela não passa pelo Python.
+pub(crate) fn owner_gate(st: &AppState, peer: SocketAddr, req: &Request) -> Result<Forward, Response> {
+    let (forward, owner) = gate(st, peer, req);
+    if owner { return Ok(forward); }
+    let blocked = !auth::is_loopback(&forward.client_ip) && st.auth.blocked(&forward.client_ip);
+    let (status, code, msg) = if blocked {
+        (StatusCode::TOO_MANY_REQUESTS, "erro_muitas_tentativas", "muitas tentativas — aguarde")
+    } else {
+        st.auth.record_fail(&forward.client_ip);
+        (StatusCode::UNAUTHORIZED, "erro_nao_autorizado", "unauthorized")
+    };
+    let mut response = crate::session_write::json_response(status, serde_json::json!({"detail":{"code":code,"params":{},"msg":msg}}));
+    if blocked { response.headers_mut().insert(header::RETRY_AFTER, axum::http::HeaderValue::from_static("30")); }
+    Err(response)
 }
 
 /// Quem pede. Na 8766 só o convidado que o porteiro pôs (nunca `is_owner`, nem `X-Forwarded-For`);

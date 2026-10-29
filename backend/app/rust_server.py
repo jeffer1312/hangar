@@ -371,8 +371,7 @@ class Supervisor:
             lists = {"HANGAR_LIST_DIRS": ""}
         from app import pair
         from app.config import settings
-        # Grupos: o id desta máquina, as outras máquinas e o arquivo de contratos são do Python.
-        groups = {"HANGAR_SERVER_ID": settings.server_id or "",
+        groups = {
                   "HANGAR_PAIR_ARCHIVE": str(pair._arquivo_dir())}
         from app.config import GUEST_PORT, _backend_config_base
         # Convites: o Rust é o único dono do arquivo e da porta. Pela internet quem chega é o Funnel

@@ -3,6 +3,154 @@
   "command": "python backend/tests/fixtures/contract/peers/generate.py --reference <checkout-Python> --output backend/tests/fixtures/contract/peers/cases.json",
   "cases": [
     {
+      "name": "proof-query-missing",
+      "method": "GET",
+      "path": "/api/peers/prova",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": false,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "query",
+              "desafio"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "pairing-query-missing",
+      "method": "GET",
+      "path": "/api/alcance/pareamento",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "query",
+              "endereco"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "delete-truncated",
+      "method": "DELETE",
+      "path": "/api/peers/a",
+      "body": null,
+      "initial": null,
+      "raw": "{",
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 404,
+      "response": {
+        "detail": {
+          "code": "peers_desconhecido",
+          "params": {},
+          "msg": "peers.json ilegível (Expecting property name enclosed in double quotes: line 1 column 2 (char 1)) — corrija o arquivo antes de gravar"
+        }
+      },
+      "peers": "{",
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "enabled-truncated",
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "body": {
+        "enabled": false
+      },
+      "initial": null,
+      "raw": "{",
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 404,
+      "response": {
+        "detail": {
+          "code": "peers_desconhecido",
+          "params": {},
+          "msg": "peers.json ilegível (Expecting property name enclosed in double quotes: line 1 column 2 (char 1)) — corrija o arquivo antes de gravar"
+        }
+      },
+      "peers": "{",
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "delete-array",
+      "method": "DELETE",
+      "path": "/api/peers/a",
+      "body": null,
+      "initial": null,
+      "raw": "[]",
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 404,
+      "response": {
+        "detail": {
+          "code": "peers_desconhecido",
+          "params": {},
+          "msg": "peers.json não é um objeto JSON — corrija o arquivo antes de gravar"
+        }
+      },
+      "peers": [],
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "enabled-array",
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "body": {
+        "enabled": false
+      },
+      "initial": null,
+      "raw": "[]",
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 404,
+      "response": {
+        "detail": {
+          "code": "peers_desconhecido",
+          "params": {},
+          "msg": "peers.json não é um objeto JSON — corrija o arquivo antes de gravar"
+        }
+      },
+      "peers": [],
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
       "name": "body-/api/peers-missing",
       "method": "POST",
       "path": "/api/peers",
