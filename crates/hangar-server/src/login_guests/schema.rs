@@ -333,9 +333,10 @@ pub fn validate(name: &str, body: &Value) -> Result<Value> {
     if errors.is_empty() {
         Ok(normalized)
     } else {
+        crate::orchestration::codec::discard(normalized);
         Err(Failure {
             status: 422,
-            body: json!({"detail":errors}),
+            body: super::object([("detail", Value::Array(errors))]),
         })
     }
 }

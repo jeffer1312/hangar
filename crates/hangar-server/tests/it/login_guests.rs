@@ -1173,7 +1173,7 @@ async fn login_guests_scalar_errors_match_public_http_models() {
 async fn deep_routes_child_helper() {
     let Ok(index)=std::env::var("HANGAR_GUEST_DEEP_CASE") else{return};
     use hangar_server::login_guests::{Service,Settings};
-    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/deep-routes.json")).unwrap();
+    let fixture:Value=serde_json::from_str(if std::env::var_os("HANGAR_GUEST_DEEP_ERRORS").is_some() { include_str!("../../../../backend/tests/fixtures/contract/guests/deep-errors.json") } else { include_str!("../../../../backend/tests/fixtures/contract/guests/deep-routes.json") }).unwrap();
     let row=&fixture["rows"][index.parse::<usize>().unwrap()];
     let home=tempfile::tempdir().unwrap();let vault=home.path().join("vault.json");
     let (open,close)=if row["shape"]=="array" {("[","]")}else{("{\"x\":","}")};let depth=row["depth"].as_u64().unwrap() as usize;
@@ -1184,19 +1184,29 @@ async fn deep_routes_child_helper() {
     std::fs::write(&vault,&disk).unwrap();
     let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:vault.clone(),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
     service.now=||2000000000;let service=Arc::new(service);
-    let raw=if operation=="login" {format!("{{\"user\":\"fixture\",\"auth_hash\":\"fixture\",\"extra\":{nested}}}")}else{String::new()};
-    let request=axum::http::Request::builder().method(if operation=="login" {"POST"}else{"GET"}).uri(format!("/api/sync/{operation}"))
+    let raw=if operation=="invalid_vault" {format!("{{\"enc_blob\":{{\"nested\":{nested}}},\"base_rev\":\"bad\"}}")}else if operation=="invalid" {format!("{{\"user\":{nested},\"auth_hash\":\"fixture\"}}")}else if operation=="login" {format!("{{\"user\":\"fixture\",\"auth_hash\":\"fixture\",\"extra\":{nested}}}")}else{String::new()};
+    let request=axum::http::Request::builder().method(if operation=="invalid_vault" {"PUT"}else if operation=="vault" {"GET"}else{"POST"}).uri(format!("/api/sync/{}",if operation=="invalid" {"login"}else if operation=="invalid_vault" {"vault"}else{operation}))
         .header("content-type","application/json").header("cookie",format!("cp_sync={}",fixture["cookie"].as_str().unwrap())).body(axum::body::Body::from(raw)).unwrap();
     let response=service.respond(true,"127.0.0.1".into(),false,request).await;
-    assert_eq!(response.status().as_u16(),200,"D30 conserva resposta válida sem limite de pilha");
+    assert_eq!(response.status().as_u16(),if operation.starts_with("invalid") {422}else{200},"D29/D30 conserva JSON completo sem limite de pilha");
     let raw=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
-    let expected=if operation=="vault" {row["before_encoder"].as_str().unwrap()}else{row["raw_response"].as_str().unwrap()};
+    let expected=if operation!="login" {row["before_encoder"].as_str().unwrap()}else{row["raw_response"].as_str().unwrap()};
     assert_eq!(raw.as_ref(),expected.as_bytes());assert_eq!(std::fs::read_to_string(vault).unwrap(),disk);
 }
 
 #[tokio::test]
 async fn login_guests_deep_routes_preserve_ignored_extras_and_valid_vaults() {
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/deep-routes.json")).unwrap();
+    deep_cases(fixture,false).await;
+}
+
+#[tokio::test]
+async fn login_guests_deep_errors_preserve_complete_validation() {
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/deep-errors.json")).unwrap();
+    deep_cases(fixture,true).await;
+}
+
+async fn deep_cases(fixture:Value, errors:bool) {
     let mut failures=Vec::new();
     for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate(){
         let home=tempfile::tempdir().unwrap();
@@ -1204,6 +1214,7 @@ async fn login_guests_deep_routes_preserve_ignored_extras_and_valid_vaults() {
         command.args(["--exact","login_guests::deep_routes_child_helper","--nocapture"]).env_clear()
             .env("HOME",home.path()).env("USERPROFILE",home.path()).env("CLAUDE_CONFIG_DIR",home.path())
             .env("HANGAR_GUEST_DEEP_CASE",index.to_string()).kill_on_drop(true);
+        if errors {command.env("HANGAR_GUEST_DEEP_ERRORS","1");}
         #[cfg(unix)]
         unsafe { command.pre_exec(|| {let limit=libc::rlimit{rlim_cur:0,rlim_max:0};if libc::setrlimit(libc::RLIMIT_CORE,&limit)==0{Ok(())}else{Err(std::io::Error::last_os_error())}}); }
         let result=tokio::time::timeout(std::time::Duration::from_secs(20),command.output()).await;
@@ -1211,3 +1222,4 @@ async fn login_guests_deep_routes_preserve_ignored_extras_and_valid_vaults() {
     }
     assert!(failures.is_empty(),"rotas profundas: {failures:?}");
 }
+
