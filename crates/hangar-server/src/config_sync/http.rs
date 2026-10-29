@@ -4,7 +4,7 @@ use super::{
     export::{self, Context},
     paths::Roots,
 };
-use crate::routes::{AppState, cors, gate};
+use crate::routes::{AppState, cors, owner_gate};
 use crate::session_write::{detail_body, json_response};
 use axum::{
     extract::{ConnectInfo, Request, State},
@@ -87,9 +87,8 @@ pub async fn handle(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
-    let (_, owner) = gate(&st, peer, &req);
-    if !owner {
-        return json_response(StatusCode::UNAUTHORIZED, json!({"detail":"Unauthorized"}));
+    if let Err(response) = owner_gate(&st, peer, &req) {
+        return response;
     }
     let headers = req.headers().clone();
     let path = req.uri().path().to_owned();
@@ -105,7 +104,7 @@ pub async fn handle(
         manifest_stream(st.clone())
     } else if path.ends_with("/manifest") {
         let ctx = context(&st);
-        let machine = st.server_id.clone();
+        let machine = st.current_server_id();
         match tokio::task::spawn_blocking(move || {
             export::export(
                 &ctx,
@@ -202,7 +201,7 @@ fn manifest_stream(st: Arc<AppState>) -> Response {
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<Value>();
     let mut context = context(&st);
     context.progress = Some(sender.clone());
-    let machine = st.server_id.clone();
+    let machine = st.current_server_id();
     // A tarefa possui o trabalho; fechar a conexão só deixa de receber o progresso.
     tokio::spawn(async move {
         let work = tokio::task::spawn_blocking(move || {
