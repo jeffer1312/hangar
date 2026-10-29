@@ -32,7 +32,7 @@ REPO = HERE.parents[4]
 
 
 def clean_environment(root: Path) -> dict[str, str]:
-    keep = ("PATH", "SYSTEMROOT", "WINDIR", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH")
+    keep = ("PATH", "SYSTEMROOT", "WINDIR", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "TMPDIR")
     env = {key: os.environ[key] for key in keep if key in os.environ}
     home = root / "home"
     env.update({

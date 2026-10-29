@@ -238,8 +238,7 @@ async fn cmd_connection_refused() {
         assert!(!root.join("git.calls").exists());
     }).await { return; }
     let frozen = case("cmd_connection_refused");
-    assert_eq!(support::contract("url-commands")["sys_platform"], std::env::consts::OS,
-        "o texto de conexão recusada precisa de referência da plataforma atual");
+    support::assert_python_platform(&support::contract("url-commands")["sys_platform"]);
     let scene = Scene::new().await;
     let desktop = Desktop::new(&json!({})).await;
     let (mut client, mut events) = ready(&scene, &desktop).await;

@@ -44,3 +44,30 @@ externa fixa; não sobrescreva `chromium.json` ao conferir a regeneração dos o
 Esta referência foi executada no Linux. Não prova a migração Rust, o porteiro Rust, Electron,
 WebView2, encerramento/reabertura completos do Hangar ou desempenho comparado. A aprovação das
 diferenças e as provas restantes ficam nos documentos da migração.
+
+## Referências do sistema no CI Unix
+
+O job Server instala as dependências do `backend/uv.lock` com `uv sync --locked`, busca apenas
+o commit original acima e executa `generate_url_commands.py` e `generate_url_gaps.py` com
+`--output` em uma pasta temporária fora do checkout. Os JSON versionados ficam intactos.
+As referências novas vêm dos handlers e clientes Python originais; nenhuma saída Rust as alimenta.
+
+`HANGAR_REMOTE_BROWSER_CONTRACT_DIR` aponta para essa pasta absoluta, com `url-commands.json`
+e `url-gaps.json`. Só esses dois corpora aceitam a substituição; arquivo ausente ou inválido
+interrompe o teste. Os demais continuam usando os JSON versionados. Os filhos isolados recebem
+essa variável mesmo depois da limpeza do ambiente.
+
+Os dois geradores recebem `TMPDIR` de uma pasta privada curta criada com `mktemp` em `/tmp`.
+`HANGAR_REMOTE_BROWSER_TMPDIR` faz somente as suítes `url`, `commands` e `url_gaps` criarem
+seus temporários nessa mesma base. O `TMPDIR` dos testes de tmux e dos demais testes não muda.
+A enumeração continua sendo comparada por inteiro e na ordem medida, sem ordenação adicional.
+O identificador Python `darwin` corresponde a `macos` no Rust; outra plataforma é recusada.
+
+O suplemento `url-gaps` prepara os casos de arquivos ruins ou auxiliares antes de executar
+o Python: tenta primeiro `browser.json` e a criação original, depois a criação reversa e nomes
+ASCII alternativos para o único navegador válido. São até 132 tentativas (66 nomes, duas ordens),
+sem modificar o conteúdo dos arquivos. Todos os demais arquivos precisam anteceder o válido.
+Nome escolhido, ordem de criação, arquivos exigidos antes do válido e tentativa ficam nas entradas
+capturadas; o Rust recria a lista e exige a mesma enumeração. Se nenhuma tentativa conservar
+essas condições, a captura falha; status, eventos, efeitos e avisos continuam sendo medidos no
+Python original, sem ajustes posteriores para satisfazer o Rust.

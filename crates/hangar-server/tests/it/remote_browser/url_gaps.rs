@@ -13,12 +13,9 @@ const DESKTOP_TOKEN: &str = "remote-browser-contract-desktop";
 const BARRIER: &str = "__remote_browser_contract_barrier__";
 
 fn reference(name: &str) -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../backend/tests/fixtures/contract/remote-browser/url-gaps.json");
-    assert!(path.is_file(), "captura original ainda pendente: {}", path.display());
     let corpus = support::contract("url-gaps");
     assert_eq!(corpus["source_commit"], SOURCE);
-    assert_eq!(corpus["platform"], std::env::consts::OS);
+    support::assert_python_platform(&corpus["platform"]);
     corpus["cases"].as_array().unwrap().iter().find(|case| case["name"] == name)
         .unwrap_or_else(|| panic!("caso não capturado pelo Python original: {name}")).clone()
 }
@@ -65,7 +62,7 @@ fn assert_order(scene: &Scene, expected: &Value) {
         json!(std::fs::read_dir(scene.nav_dir()).unwrap().map(|entry| entry.unwrap().file_name().to_str().unwrap().to_owned())
             .filter(|name| name.ends_with(".json")).collect::<Vec<_>>())
     } else { Value::Null };
-    assert_eq!(actual, *expected, "enumeração diferente da captura original; conservar o tmpfs e a ordem, sem ordenar ou ajustar esperado");
+    assert_eq!(actual, *expected, "enumeração diferente da captura original; usar o mesmo filesystem e a ordem de criação, sem ordenar ou ajustar esperado");
 }
 
 fn seed(scene: &Scene, name: &str) {

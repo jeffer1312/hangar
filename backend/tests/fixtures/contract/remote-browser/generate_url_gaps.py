@@ -124,6 +124,29 @@ def directory_order(nav):
     return [path.name for path in nav.glob("*.json")] if nav.is_dir() else None
 
 
+def prepare_before_valid(nav, files, port):
+    assert sum(entry["name"] == "browser.json" for entry in files) == 1, "a preparação exige um navegador válido"
+    required = [entry["name"] for entry in files if entry["name"] != "browser.json"]
+    candidates = ["browser.json", "z-browser.json"] + [f"z-browser-{index:03d}.json" for index in range(64)]
+    attempts = 0
+    last_order = None
+    for valid_name in candidates:
+        renamed = [{**entry, "name": valid_name} if entry["name"] == "browser.json" else copy.deepcopy(entry)
+                   for entry in files]
+        for creation_order in (renamed, list(reversed(renamed))):
+            attempts += 1
+            write_files(nav, creation_order, port)
+            last_order = directory_order(nav)
+            if not all(last_order.index(name) < last_order.index(valid_name) for name in required):
+                continue
+            assert all(last_order.index(name) < last_order.index(valid_name) for name in required), "todos os arquivos ruins e auxiliares precisam anteceder o válido"
+            return creation_order, last_order, {
+                "valid_name": valid_name, "required_before_valid": required,
+                "creation_order": [entry["name"] for entry in creation_order], "attempts": attempts,
+            }
+    raise AssertionError(f"não foi possível preparar todos os arquivos ruins e auxiliares antes do válido em {attempts} tentativas; última enumeração: {last_order}")
+
+
 class Isolation:
     def __init__(self, root):
         self.root = root
@@ -356,13 +379,11 @@ async def capture(root):
                 for phase in case["inputs"]["phases"]:
                     seed(phase["session"])
                     current = Peer(phase["evaluate"])
-                    write_files(nav, phase["files"], port)
-                    phase["directory_order"] = directory_order(nav)
-                    if "before_valid" in case["name"] and "unreadable" in case["name"]:
-                        assert all(phase["directory_order"].index(name) < phase["directory_order"].index("browser.json")
-                                   for name in ("array.json", "null.json", "scalar.json", "broken.json", "bytes.json", "directory.json")), "a enumeração não conserva os arquivos ruins antes do válido"
-                    if case["name"] == "ws_underscore_match_is_ignored":
-                        assert phase["directory_order"].index("_matching.json") < phase["directory_order"].index("browser.json"), "o auxiliar precisa anteceder o navegador válido"
+                    if "before_valid" in case["name"] or case["name"] == "ws_underscore_match_is_ignored":
+                        phase["files"], phase["directory_order"], phase["input_selection"] = prepare_before_valid(nav, phase["files"], port)
+                    else:
+                        write_files(nav, phase["files"], port)
+                        phase["directory_order"] = directory_order(nav)
                     before = snapshot(nav)
                     logs.rows.clear()
                     auth.reset_backoff()
@@ -400,11 +421,12 @@ async def capture(root):
                 inputs = []
                 logs.rows.clear()
                 for files in stages:
-                    write_files(nav, files, port)
-                    order = directory_order(nav)
+                    prepared = None
                     if name.startswith("cmd_warning"):
-                        assert all(order.index(item) < order.index("browser.json") for item in (
-                            "array.json", "null.json", "scalar.json", "broken.json", "bytes.json", "directory.json")), "arquivos ruins precisam anteceder o navegador válido"
+                        files, order, prepared = prepare_before_valid(nav, files, port)
+                    else:
+                        write_files(nav, files, port)
+                        order = directory_order(nav)
                     before = snapshot(nav)
                     await ws.send(json.dumps({"t": "layout", "modo": "mobile"}))
                     from generate_transport import receive_until
@@ -412,7 +434,10 @@ async def capture(root):
                     await barrier(ws, [])
                     assert snapshot(nav) == before
                     outcomes.append(outcome)
-                    inputs.append({"files": files, "directory_order": order})
+                    stage = {"files": files, "directory_order": order}
+                    if prepared is not None:
+                        stage["input_selection"] = prepared
+                    inputs.append(stage)
                 await finish(ws, current)
                 results.append({"name": name, "ids": ids, "kind": "commands", "inputs": {"initial_files": initial_files, "initial_directory_order": initial_order, "stages": inputs},
                                 "expected": {"outcomes": outcomes, "requests": current.mode_requests, "warnings": copy.deepcopy(logs.rows)}})

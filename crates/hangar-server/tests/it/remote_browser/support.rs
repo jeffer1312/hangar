@@ -34,7 +34,17 @@ pub async fn isolated(test: &str, inspect: impl FnOnce(&Path)) -> bool {
 #[cfg(unix)]
 pub async fn isolated_with_timeout(test: &str, deadline: Duration, inspect: impl FnOnce(&Path)) -> bool {
     if std::env::var("HANGAR_REMOTE_BROWSER_TEST").as_deref() == Ok(test) { return false; }
-    let root = tempfile::tempdir().unwrap();
+    let uses_local_reference = ["remote_browser::url::", "remote_browser::commands::", "remote_browser::url_gaps::"]
+        .iter().any(|prefix| test.starts_with(prefix));
+    let reference_tmp = uses_local_reference.then(|| std::env::var_os("HANGAR_REMOTE_BROWSER_TMPDIR"))
+        .flatten().map(PathBuf::from);
+    if let Some(path) = &reference_tmp {
+        assert!(path.is_absolute() && path.is_dir(), "HANGAR_REMOTE_BROWSER_TMPDIR precisa ser uma pasta absoluta existente: {}", path.display());
+    }
+    let root = match &reference_tmp {
+        Some(path) => tempfile::tempdir_in(path),
+        None => tempfile::tempdir(),
+    }.unwrap();
     let home = root.path().join("home");
     std::fs::create_dir_all(home.join(".claude")).unwrap();
     std::fs::create_dir_all(root.path().join("tmp")).unwrap();
@@ -44,11 +54,15 @@ pub async fn isolated_with_timeout(test: &str, deadline: Duration, inspect: impl
         .env("HANGAR_REMOTE_BROWSER_TEST", test).env("HANGAR_REMOTE_BROWSER_ROOT", root.path())
         .env("HOME", &home).env("USERPROFILE", &home)
         .env("XDG_CONFIG_HOME", home.join(".config")).env("XDG_DATA_HOME", home.join(".local/share"))
-        .env("XDG_CACHE_HOME", home.join(".cache")).env("TMPDIR", root.path().join("tmp"))
+        .env("XDG_CACHE_HOME", home.join(".cache"))
+        .env("TMPDIR", reference_tmp.clone().unwrap_or_else(|| root.path().join("tmp")))
         .env("CLAUDE_CONFIG_DIR", home.join(".claude")).env("CODEX_HOME", home.join(".codex"))
         .env("CP_CLAUDE_CONFIG_DIRS", home.join(".claude")).env("HANGAR_LIST_DIRS", dirs_json(&home))
         .env("HANGAR_SHARES_FILE", home.join("shares.json"))
         .env("PATH", format!("{}:/usr/bin:/bin", bin.display()));
+    if let Some(path) = std::env::var_os("HANGAR_REMOTE_BROWSER_CONTRACT_DIR") {
+        command.env("HANGAR_REMOTE_BROWSER_CONTRACT_DIR", path);
+    }
     let output = tokio::time::timeout(deadline, command.output()).await
         .expect("processo de ensaio não encerrou").unwrap();
     crate::assert_ran_one(&output.stdout);
@@ -73,9 +87,22 @@ pub fn git_probe(root: &Path) -> PathBuf {
 }
 
 pub fn contract(name: &str) -> Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../backend/tests/fixtures/contract/remote-browser").join(format!("{name}.json"));
-    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    let reference_dir = if matches!(name, "url-commands" | "url-gaps") {
+        std::env::var_os("HANGAR_REMOTE_BROWSER_CONTRACT_DIR").map(PathBuf::from)
+    } else { None };
+    if let Some(path) = &reference_dir {
+        assert!(path.is_absolute(), "HANGAR_REMOTE_BROWSER_CONTRACT_DIR precisa ser absoluto: {}", path.display());
+    }
+    let path = reference_dir.unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../backend/tests/fixtures/contract/remote-browser")).join(format!("{name}.json"));
+    let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("referência Python indisponível em {}: {error}", path.display()));
+    serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("referência Python inválida em {}: {error}", path.display()))
+}
+
+pub fn assert_python_platform(platform: &Value) {
+    let platform = platform.as_str().expect("referência Python sem identificador da plataforma");
+    let rust_platform = match platform { "darwin" => "macos", other => other };
+    assert_eq!(rust_platform, std::env::consts::OS, "a referência Python precisa ser da plataforma atual");
 }
 
 /// O JPEG veio do Chromium medido, nunca de um gerador substituto do protocolo.
