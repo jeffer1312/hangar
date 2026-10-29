@@ -270,3 +270,145 @@ impl Drop for Cdp {
         }
     }
 }
+
+#[cfg(test)]
+mod gap_tests {
+    use super::*;
+
+    fn reference() -> Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../backend/tests/fixtures/contract/remote-browser/transport-gaps.json");
+        serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap()["cdp"].clone()
+    }
+
+    async fn connect(address: std::net::SocketAddr) -> Cdp {
+        Cdp::connect(&format!("ws://{address}/cdp"), None).await
+            .unwrap_or_else(|error| panic!("abertura do ensaio falhou: {}", error.message))
+    }
+
+    #[tokio::test]
+    async fn complete_out_of_order_replies_ignore_duplicate_and_unknown_ids() {
+        let expected = reference();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let peer = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let first: Value = serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+            let second: Value = serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+            assert_eq!(first, json!({"id": 1, "method": "Gap.first", "params": {}}));
+            assert_eq!(second, json!({"id": 2, "method": "Gap.second", "params": {}}));
+            for value in [
+                json!({"id": second["id"], "error": {"code": -32001, "message": "second refused", "data": {"full": [1, "ação 😀"]}}, "extra": "kept"}),
+                json!({"id": first["id"], "result": {"first": true}, "extra": {"nested": [false, null]}}),
+                json!({"id": first["id"], "method": "Must.not.be.event", "result": {"duplicate": true}}),
+                json!({"id": 99999, "method": "Must.not.be.event", "result": {"unknown": true}}),
+                json!({"method": "Gap.done", "params": {"complete": true}}),
+            ] { socket.send(Message::Text(value.to_string().into())).await.unwrap(); }
+            while let Some(message) = socket.next().await {
+                if matches!(message.unwrap(), Message::Close(_)) { socket.flush().await.unwrap(); break; }
+            }
+        });
+        let mut cdp = connect(address).await;
+        let (first, second) = tokio::join!(
+            cdp.cmd("Gap.first", json!([]), Duration::from_secs(10)),
+            cdp.cmd("Gap.second", json!(false), Duration::from_secs(10)));
+        let replies = [first, second].into_iter().map(|value| value.unwrap_or_else(|error| panic!("resposta perdida: {}", error.message))).collect::<Vec<_>>();
+        let event = tokio::time::timeout(Duration::from_secs(3), cdp.event()).await.unwrap();
+        assert_eq!(json!({"replies": replies, "event": event,
+            "events_remaining": cdp.events.queue.lock().unwrap().len(), "pending": cdp.pending.lock().unwrap().len()}), expected["out_of_order"]);
+        cdp.close().await;
+        peer.await.unwrap();
+        assert_eq!(Arc::strong_count(&cdp.pending), 1);
+        assert_eq!(Arc::strong_count(&cdp.events), 1);
+    }
+
+    #[tokio::test]
+    async fn timeout_and_closed_receiver_remove_all_waiters_without_waiting_ten_seconds() {
+        let expected = reference();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let received = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let changed = Arc::new(Notify::new());
+        let (count, notify) = (received.clone(), changed.clone());
+        let peer = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(message) = socket.next().await {
+                match message.unwrap() {
+                    Message::Text(raw) => {
+                        let value: Value = serde_json::from_str(&raw).unwrap();
+                        count.fetch_add(1, Ordering::SeqCst); notify.notify_one();
+                        if value["method"] == "Gap.finish" { socket.close(None).await.unwrap(); }
+                    }
+                    Message::Close(_) => { socket.flush().await.unwrap(); break; }
+                    _ => {}
+                }
+            }
+        });
+        let mut cdp = connect(address).await;
+        let error = cdp.cmd("Gap.timeout", json!({}), Duration::from_secs(10)).await.unwrap_err();
+        assert_eq!(json!({"message": error.message, "repr": error.repr, "pending": cdp.pending.lock().unwrap().len()}), expected["timeout"]);
+        let finish = async {
+            loop {
+                let change = changed.notified();
+                if received.load(Ordering::SeqCst) >= 3 { break; }
+                change.await;
+            }
+            cdp.send("Gap.finish", json!({}));
+        };
+        let began = tokio::time::Instant::now();
+        let (first, second, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(cdp.cmd("Gap.pending", json!({}), Duration::from_secs(10)),
+                cdp.cmd("Gap.pending", json!({}), Duration::from_secs(10)), finish)
+        }).await.expect("fechar o receptor deixou comandos esperando o prazo próprio");
+        assert!(began.elapsed() < Duration::from_secs(2));
+        let errors = [first, second].into_iter().map(|result| {
+            let error = result.unwrap_err(); json!({"message": error.message, "repr": error.repr})
+        }).collect::<Vec<_>>();
+        assert_eq!(json!(errors), expected["closed_waiters"]["errors"]);
+        assert_eq!(json!(cdp.pending.lock().unwrap().len()), expected["closed_waiters"]["pending"]);
+        assert_eq!(json!(cdp.events.queue.lock().unwrap().len()), expected["closed_waiters"]["events_remaining"]);
+        let input = cdp.send("Input.insertText", json!({"text": "depois da queda"}));
+        let ack = cdp.send("Page.screencastFrameAck", json!({"sessionId": 701}));
+        assert_eq!(json!([input, ack]), expected["silent_send_failures"]["results"]);
+        cdp.close().await;
+        peer.await.unwrap();
+        assert!(cdp.task.is_none()); assert!(cdp.send.is_closed());
+        assert_eq!(cdp.pending.lock().unwrap().len(), expected["silent_send_failures"]["pending"].as_u64().unwrap() as usize);
+        assert_eq!(expected["after_exit"], json!({"pump_done": true, "loose_pending": 0, "pending": 0}));
+        assert_eq!(Arc::strong_count(&cdp.pending), 1);
+        assert_eq!(Arc::strong_count(&cdp.events), 1);
+    }
+
+    #[tokio::test]
+    async fn fire_and_forget_input_and_ack_are_written_and_leave_no_receiver_after_exit() {
+        let expected = reference();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (written, ready) = oneshot::channel();
+        let peer = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut wire = Vec::new();
+            for _ in 0..2 { wire.push(serde_json::from_str::<Value>(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap()); }
+            written.send(()).unwrap();
+            while let Some(message) = socket.next().await {
+                if matches!(message.unwrap(), Message::Close(_)) { socket.flush().await.unwrap(); break; }
+            }
+            wire
+        });
+        let mut cdp = connect(address).await;
+        cdp.send("Input.insertText", json!({"text": "ação 😀"}));
+        cdp.send("Page.screencastFrameAck", json!({"sessionId": 702}));
+        tokio::time::timeout(Duration::from_secs(3), ready).await.unwrap().unwrap();
+        cdp.close().await;
+        assert_eq!(json!(peer.await.unwrap()), expected["fire_and_forget_exit"]["wire"]);
+        assert!(expected["fire_and_forget_exit"]["pump_done"].as_bool().unwrap());
+        assert!(cdp.task.is_none()); assert!(cdp.send.is_closed());
+        assert_eq!(cdp.pending.lock().unwrap().len(), expected["fire_and_forget_exit"]["pending"].as_u64().unwrap() as usize);
+        assert_eq!(expected["fire_and_forget_exit"]["loose_pending"], 0);
+        assert_eq!(Arc::strong_count(&cdp.pending), 1);
+        assert_eq!(Arc::strong_count(&cdp.events), 1);
+    }
+}
