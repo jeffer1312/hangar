@@ -41,8 +41,17 @@ fn language_name(language: &str) -> Option<&'static str> {
     }
 }
 
-fn key(language: &str, text: &str) -> String {
-    text_client::digest(&format!("{language}\0{text}"))
+fn cache_identity(config: &SpeechConfig) -> String {
+    let (endpoint, _, model) = config.text_provider();
+    let effort = config.string("llm_reasoning_effort");
+    text_client::digest(
+        &serde_json::json!([endpoint, model, text_client::trim(&effort)]).to_string(),
+    )
+}
+
+fn key(identity: &str, language: &str, text: &str) -> String {
+    // A credencial não muda o texto escolhido; trocar endpoint ou modelo muda.
+    text_client::digest(&format!("descriptions:v2\0{identity}\0{language}\0{text}"))
 }
 
 fn already_in(text: &str, language: &str) -> bool {
@@ -208,6 +217,7 @@ impl Service {
         }
         let _lock = self.lock.lock().await;
         let path = config.home.join(".hangar/config-sync/traducoes.json");
+        let identity = cache_identity(config);
         let loaded = load(path.clone()).await;
         // Sem uma leitura completa não sabemos quais entradas uma gravação apagaria.
         let writable = loaded.error.is_none();
@@ -218,7 +228,7 @@ impl Service {
             .iter()
             .filter(|text| {
                 !text.is_empty()
-                    && !cache.contains_key(&key(language, text))
+                    && !cache.contains_key(&key(&identity, language, text))
                     && !already_in(text, language)
                     && seen.insert(text.as_str())
             })
@@ -231,7 +241,7 @@ impl Service {
                         batch
                             .iter()
                             .zip(values)
-                            .map(|(text, value)| (key(language, text), value)),
+                            .map(|(text, value)| (key(&identity, language, text), value)),
                     );
                     if writable {
                         if let Err(reason) = save(&path, &cache).await {
@@ -264,7 +274,7 @@ impl Service {
                 .iter()
                 .map(|text| {
                     cache
-                        .get(&key(language, text))
+                        .get(&key(&identity, language, text))
                         .cloned()
                         .unwrap_or_else(|| text.clone())
                 })
@@ -442,8 +452,9 @@ mod tests {
             .home
             .join(".hangar/config-sync/traducoes.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let old = serde_json::json!({key("pt","Runs the tests for the file."):17,
-            key("pt","Opens the browser for the user."):"Abre o navegador."})
+        let identity = cache_identity(&server.config);
+        let old = serde_json::json!({key(&identity,"pt","Runs the tests for the file."):17,
+            key(&identity,"pt","Opens the browser for the user."):"Abre o navegador."})
         .to_string();
         std::fs::write(&path, &old).unwrap();
         let (translated, error) = Service::default()
@@ -518,7 +529,7 @@ mod tests {
             .home
             .join(".hangar/config-sync/traducoes.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let original=serde_json::json!({key("pt","Runs the tests for the file."):"Executa os testes.","damaged":17}).to_string();
+        let original=serde_json::json!({key(&cache_identity(&server.config),"pt","Runs the tests for the file."):"Executa os testes.","damaged":17}).to_string();
         std::fs::write(&path, &original).unwrap();
         let (translated, error) = Service::default()
             .translate(
@@ -566,6 +577,53 @@ mod tests {
             );
         }
         assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn changing_endpoint_or_model_refreshes_the_cache_but_rotating_a_key_does_not() {
+        let server = fake(vec![
+            content("[\"Primeira tradução.\"]"),
+            content("[\"Outro modelo.\"]"),
+        ])
+        .await;
+        let other = fake(vec![content("[\"Outro serviço.\"]")]).await;
+        let texts = vec!["Runs the tests for the file.".to_owned()];
+        let service = Service::default();
+        assert_eq!(
+            service.translate(&server.config, &texts, "pt").await.0,
+            vec!["Primeira tradução."]
+        );
+        let mut changed = server.config.clone();
+        changed.values["llm_model"] = serde_json::json!("different-model");
+        assert_eq!(
+            service.translate(&changed, &texts, "pt").await.0,
+            vec!["Outro modelo."]
+        );
+        let identity = cache_identity(&changed);
+        changed.values["llm_api_key"] = serde_json::json!("rotated-fixture");
+        assert_eq!(cache_identity(&changed), identity);
+        assert_eq!(
+            service.translate(&changed, &texts, "pt").await.0,
+            vec!["Outro modelo."]
+        );
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+        changed.values["llm_base_url"] = other.config.values["llm_base_url"].clone();
+        assert_eq!(
+            service.translate(&changed, &texts, "pt").await.0,
+            vec!["Outro serviço."]
+        );
+        assert_eq!(other.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let cache = std::fs::read_to_string(
+            server
+                .config
+                .home
+                .join(".hangar/config-sync/traducoes.json"),
+        )
+        .unwrap();
+        assert!(!cache.contains("fixture-key"));
+        assert!(!cache.contains("rotated-fixture"));
+        assert!(!cache.contains("different-model"));
+        assert!(!cache.contains("http://"));
     }
 
     #[tokio::test]
