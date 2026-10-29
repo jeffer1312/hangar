@@ -9,6 +9,7 @@ pub(super) struct AudioFile {
     pub data: Data,
     // A posse acompanha o arquivo até a publicação ou o descarte do temporário.
     _lease: Option<Lease>,
+    _engine: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 impl std::fmt::Debug for AudioFile {
@@ -41,6 +42,7 @@ pub(super) struct Transfer {
     sender: Option<mpsc::Sender<bytes::Bytes>>,
     task: Option<JoinHandle<Result<Data, SpeechError>>>,
     lease: Option<Lease>,
+    engine: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 impl Transfer {
@@ -101,7 +103,12 @@ impl Transfer {
             sender: Some(sender),
             task: Some(task),
             lease: Some(lease),
+            engine: None,
         })
+    }
+
+    pub fn hold_engine(&mut self, engine: Option<tokio::sync::OwnedSemaphorePermit>) {
+        self.engine = engine;
     }
 
     pub async fn write(&self, data: &[u8]) -> io::Result<()> {
@@ -139,6 +146,7 @@ impl Transfer {
         Ok(AudioFile {
             data,
             _lease: self.lease.take(),
+            _engine: self.engine.take(),
         })
     }
 
@@ -206,6 +214,7 @@ impl Drop for Transfer {
         self.close();
         let Some(task) = self.task.take() else { return };
         let lease = self.lease.take();
+        let engine = self.engine.take();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
                 // Nunca abortar o escritor: ele fecha o arquivo antes de apagar o temporário.
@@ -218,6 +227,7 @@ impl Drop for Transfer {
                 }
                 drop(result);
                 drop(lease);
+                drop(engine);
             });
         }
     }

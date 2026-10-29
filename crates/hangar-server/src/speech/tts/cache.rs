@@ -3,7 +3,8 @@ use std::{
     fs,
     io::{ErrorKind, Read},
     path::{Path, PathBuf},
-    time::{Duration, SystemTime},
+    sync::{Arc, Mutex, TryLockError},
+    time::{Duration, Instant, SystemTime},
 };
 
 pub(super) fn path(directory: &Path, hash: &str) -> PathBuf {
@@ -118,35 +119,91 @@ pub(super) fn store(directory: &Path, hash: &str, audio: AudioFile) -> Result<()
     fs::File::open(directory)
         .and_then(|file| file.sync_all())
         .map_err(|_| SpeechError::new(500, "Falha ao sincronizar a pasta de cache do áudio."))?;
-    clean(directory, SystemTime::now());
     Ok(())
 }
 
-pub(super) fn clean(directory: &Path, now: SystemTime) {
+pub(super) fn clean(directory: &Path, now: SystemTime) -> bool {
     let Some(cutoff) = now.checked_sub(Duration::from_secs(30 * 86400)) else {
-        return;
+        return true;
     };
     let Ok(entries) = fs::read_dir(directory) else {
         tracing::warn!(
             code = "speech_cache_cleanup_failed",
             "Não foi possível listar os áudios antigos."
         );
-        return;
+        return false;
     };
+    let mut success = true;
     for entry in entries {
         let result = (|| -> std::io::Result<()> {
             let entry = entry?;
-            let metadata = entry.metadata()?;
+            let name = entry.file_name();
+            let owned = name
+                .to_str()
+                .and_then(|name| name.rsplit_once('.'))
+                .is_some_and(|(hash, extension)| {
+                    hash.len() == 64
+                        && hash
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                        && matches!(extension, "mp3" | "wav")
+                });
+            if !owned || !entry.file_type()?.is_file() {
+                return Ok(());
+            }
+            let metadata = fs::symlink_metadata(entry.path())?;
             if metadata.is_file() && metadata.modified()? < cutoff {
                 fs::remove_file(entry.path())?;
             }
             Ok(())
         })();
         if result.is_err() {
+            success = false;
             tracing::warn!(
                 code = "speech_cache_cleanup_failed",
                 "Não foi possível remover um áudio antigo."
             );
         }
+    }
+    success
+}
+
+type Schedule = Arc<Mutex<Option<Instant>>>;
+
+#[derive(Default)]
+pub(super) struct Maintenance {
+    directories: Mutex<std::collections::HashMap<PathBuf, Schedule>>,
+}
+
+impl Maintenance {
+    pub fn run(&self, directory: &Path, now: Instant) -> bool {
+        let state = match self.directories.lock() {
+            Ok(mut directories) => directories.entry(directory.to_owned()).or_default().clone(),
+            Err(_) => {
+                tracing::warn!(
+                    code = "speech_cache_cleanup_failed",
+                    "O controle de limpeza do cache está indisponível."
+                );
+                return false;
+            }
+        };
+        // Uma varredura por pasta e por hora; pedidos concorrentes não disputam o disco.
+        let mut next = match state.try_lock() {
+            Ok(next) => next,
+            Err(TryLockError::WouldBlock) => return false,
+            Err(TryLockError::Poisoned(_)) => {
+                tracing::warn!(
+                    code = "speech_cache_cleanup_failed",
+                    "O agendamento da limpeza do cache está indisponível."
+                );
+                return false;
+            }
+        };
+        if next.is_some_and(|deadline| now < deadline) {
+            return false;
+        }
+        let success = clean(directory, SystemTime::now());
+        *next = Some(now + Duration::from_secs(if success { 3600 } else { 60 }));
+        true
     }
 }

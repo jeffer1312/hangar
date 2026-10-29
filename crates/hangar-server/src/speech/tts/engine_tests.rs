@@ -62,8 +62,9 @@ fn a_short_or_interrupted_read_fills_the_prefix_before_audio_validation() {
 #[tokio::test]
 async fn an_invalid_mp3_falls_back_to_the_existing_wav_without_running_a_provider() {
     let directory = tempfile::tempdir().unwrap();
-    let c = config(directory.path());
-    let hash = hash_value("oi", "", "local", &json!({}), "");
+    let mut c = config(directory.path());
+    c.values["tts_local_cmd"] = json!("fixture-provider-never-run");
+    let hash = effective_hash(&c, "oi", "", "local", &json!({}), "").unwrap();
     std::fs::create_dir_all(&c.cache_dir).unwrap();
     let mp3 = c.cache_dir.join(format!("{hash}.mp3"));
     let wav = c.cache_dir.join(format!("{hash}.wav"));
@@ -341,7 +342,7 @@ async fn an_old_empty_mp3_never_hides_a_new_wav_and_disk_failures_are_explicit()
     let dir = tempfile::tempdir().unwrap();
     let mut c = config(dir.path());
     c.values["tts_local_cmd"] = json!(command(dir.path(), "wav", &[]));
-    let hash = hash_value("oi", "", "local", &json!({}), "");
+    let hash = effective_hash(&c, "oi", "", "local", &json!({}), "").unwrap();
     std::fs::create_dir_all(&c.cache_dir).unwrap();
     std::fs::write(c.cache_dir.join(format!("{hash}.mp3")), b"").unwrap();
     let service = Service::default();
@@ -371,8 +372,9 @@ async fn an_old_empty_mp3_never_hides_a_new_wav_and_disk_failures_are_explicit()
 #[tokio::test]
 async fn a_read_only_cached_audio_survives_a_failed_retention_touch_without_a_provider() {
     let dir = tempfile::tempdir().unwrap();
-    let c = config(dir.path());
-    let hash = hash_value("oi", "", "local", &json!({}), "");
+    let mut c = config(dir.path());
+    c.values["tts_local_cmd"] = json!("fixture-provider-never-run");
+    let hash = effective_hash(&c, "oi", "", "local", &json!({}), "").unwrap();
     std::fs::create_dir_all(&c.cache_dir).unwrap();
     let path = c.cache_dir.join(format!("{hash}.mp3"));
     std::fs::write(&path, b"ID3audio").unwrap();
@@ -391,26 +393,241 @@ async fn a_read_only_cached_audio_survives_a_failed_retention_touch_without_a_pr
     assert_eq!(std::fs::read(&path).unwrap(), b"ID3audio");
 }
 
-#[test]
-fn retention_removes_only_old_regular_files_and_never_directories() {
-    let dir = tempfile::tempdir().unwrap();
-    let old = dir.path().join("old.mp3");
-    let current = dir.path().join("new.wav");
-    let folder = dir.path().join("folder");
-    std::fs::create_dir(&folder).unwrap();
-    std::fs::write(&old, b"ID3old").unwrap();
-    std::fs::write(&current, b"RIFFnew").unwrap();
-    let now = SystemTime::now();
+fn mark_old(path: &Path, now: SystemTime) {
     std::fs::OpenOptions::new()
         .write(true)
-        .open(&old)
+        .open(path)
         .unwrap()
         .set_times(std::fs::FileTimes::new().set_modified(now - Duration::from_secs(31 * 86400)))
         .unwrap();
-    cache::clean(dir.path(), now);
+}
+
+#[test]
+fn retention_removes_only_old_owned_audio_and_preserves_other_files_directories_and_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = SystemTime::now();
+    let old = dir.path().join(format!("{}.mp3", "a".repeat(64)));
+    let old_wav = dir.path().join(format!("{}.wav", "b".repeat(64)));
+    let current = dir.path().join(format!("{}.wav", "c".repeat(64)));
+    for path in [&old, &old_wav, &current] {
+        std::fs::write(path, b"ID3audio").unwrap();
+    }
+    mark_old(&old, now);
+    mark_old(&old_wav, now);
+    let mut foreign = Vec::new();
+    for name in [
+        "old.mp3".to_owned(),
+        "notes.txt".to_owned(),
+        ".speech-audio-active".to_owned(),
+        format!("{}.mp3", "A".repeat(64)),
+        format!("{}.wav", "g".repeat(64)),
+        format!("{}.MP3", "d".repeat(64)),
+        format!("{}.json", "e".repeat(64)),
+    ] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, b"foreign").unwrap();
+        mark_old(&path, now);
+        foreign.push(path);
+    }
+    let folder = dir.path().join(format!("{}.mp3", "f".repeat(64)));
+    std::fs::create_dir(&folder).unwrap();
+    #[cfg(unix)]
+    let link = {
+        let link = dir.path().join(format!("{}.wav", "1".repeat(64)));
+        std::os::unix::fs::symlink(&foreign[0], &link).unwrap();
+        link
+    };
+    assert!(cache::clean(dir.path(), now));
     assert!(!old.exists());
+    assert!(!old_wav.exists());
     assert!(current.exists());
     assert!(folder.exists());
+    for path in foreign {
+        assert_eq!(std::fs::read(path).unwrap(), b"foreign");
+    }
+    #[cfg(unix)]
+    assert!(
+        std::fs::symlink_metadata(link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[test]
+fn maintenance_scans_once_per_folder_and_interval_and_retries_a_failed_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let maintenance = Arc::new(cache::Maintenance::default());
+    let now = std::time::Instant::now();
+    let completed = std::thread::scope(|scope| {
+        let mut threads = Vec::new();
+        for _ in 0..16 {
+            let maintenance = maintenance.clone();
+            let path = dir.path();
+            threads.push(scope.spawn(move || maintenance.run(path, now)));
+        }
+        threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .filter(|ran| *ran)
+            .count()
+    });
+    assert_eq!(completed, 1);
+    let old = dir.path().join(format!("{}.mp3", "a".repeat(64)));
+    std::fs::write(&old, b"ID3old").unwrap();
+    mark_old(&old, SystemTime::now());
+    assert!(!maintenance.run(dir.path(), now + Duration::from_secs(3599)));
+    assert!(old.exists());
+    assert!(maintenance.run(dir.path(), now + Duration::from_secs(3600)));
+    assert!(!old.exists());
+    let missing = dir.path().join("missing");
+    assert!(maintenance.run(&missing, now));
+    std::fs::create_dir(&missing).unwrap();
+    let expired = missing.join(format!("{}.wav", "b".repeat(64)));
+    std::fs::write(&expired, b"RIFFold").unwrap();
+    mark_old(&expired, SystemTime::now());
+    assert!(!maintenance.run(&missing, now + Duration::from_secs(59)));
+    assert!(maintenance.run(&missing, now + Duration::from_secs(60)));
+    assert!(!expired.exists());
+}
+
+#[tokio::test]
+async fn local_command_identity_tracks_a_b_a_normalizes_argv_and_never_adopts_legacy_audio() {
+    let dir = tempfile::tempdir().unwrap();
+    let count = dir.path().join("count");
+    let mut c = config(dir.path());
+    let service = Service::default();
+    c.values["tts_local_cmd"] = json!(command(dir.path(), "wav", &[&count]));
+    let original = c.string("tts_local_cmd");
+    let legacy = hash_value("oi", "", "local", &json!({}), "");
+    std::fs::create_dir_all(&c.cache_dir).unwrap();
+    let legacy_path = c.cache_dir.join(format!("{legacy}.mp3"));
+    std::fs::write(&legacy_path, b"ID3legacy").unwrap();
+    let a = service.synthesize(&c, "oi", "", "local", "").await.unwrap();
+    assert!(!a.cached);
+    assert_ne!(a.hash, legacy);
+    assert_eq!(std::fs::read(cache_path(&c, &a.hash)).unwrap(), b"RIFFoi");
+    c.values["tts_local_cmd"] = json!(command(dir.path(), "echo", &[&count]));
+    let b = service.synthesize(&c, "oi", "", "local", "").await.unwrap();
+    assert!(!b.cached);
+    assert_ne!(a.hash, b.hash);
+    assert_eq!(std::fs::read(cache_path(&c, &b.hash)).unwrap(), b"ID3oi");
+    c.values["tts_local_cmd"] = json!(format!("  {original}  "));
+    let occupied = service.engines.clone().acquire_many_owned(2).await.unwrap();
+    let again = service.synthesize(&c, "oi", "", "local", "").await.unwrap();
+    assert!(again.cached);
+    assert_eq!(again.hash, a.hash);
+    drop(occupied);
+    assert_eq!(std::fs::read_to_string(count).unwrap(), "call\ncall\n");
+    c.values = json!({});
+    let error = service
+        .synthesize(&c, "oi", "", "local", "")
+        .await
+        .unwrap_err();
+    assert_eq!(error.status, 503);
+    assert_eq!(error.detail, "Comando de voz local não configurado.");
+    assert_eq!(cache_path(&c, &legacy), legacy_path);
+    assert_eq!(std::fs::read(legacy_path).unwrap(), b"ID3legacy");
+}
+
+#[test]
+fn effective_identity_normalizes_quoting_preserves_remote_keys_and_persists_no_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = config(dir.path());
+    c.values["tts_local_cmd"] = json!("engine --voice 'Ana Maria' --key fixture-secret");
+    let first = effective_hash(&c, "oi", "", "local", &json!({}), "").unwrap();
+    c.values["tts_local_cmd"] = json!("  engine\t--voice \"Ana Maria\" --key fixture-secret  ");
+    assert_eq!(
+        effective_hash(&c, "oi", "", "local", &json!({}), "").unwrap(),
+        first
+    );
+    assert_eq!(first.len(), 64);
+    assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert_ne!(
+        effective_hash(&c, "oi", "other", "local", &json!({}), "").unwrap(),
+        first
+    );
+    c.values["tts_local_cmd"] = json!("engine --voice Outra --key fixture-secret");
+    assert_ne!(
+        effective_hash(&c, "oi", "", "local", &json!({}), "").unwrap(),
+        first
+    );
+    c.values = json!({});
+    let settings = json!({"stability": 0.4});
+    assert_eq!(
+        effective_hash(&c, "oi", "v", "elevenlabs", &settings, "i").unwrap(),
+        hash_value("oi", "v", "elevenlabs", &settings, "i")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn distinct_local_texts_share_two_engine_slots_and_cancellation_admits_the_next_client() {
+    let dir = tempfile::tempdir().unwrap();
+    let count = dir.path().join("started");
+    let release = dir.path().join("release");
+    let mut c = config(dir.path());
+    c.values["tts_local_cmd"] = json!(command(dir.path(), "gate", &[&count, &release]));
+    let c = Arc::new(c);
+    let service = Arc::new(Service::default());
+    let start = |text: &'static str| {
+        let c = c.clone();
+        let service = service.clone();
+        tokio::spawn(async move { service.synthesize(&c, text, "", "local", "").await })
+    };
+    let wait_calls = |expected: usize| {
+        let path = count.clone();
+        async move {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if std::fs::read_to_string(&path)
+                        .unwrap_or_default()
+                        .lines()
+                        .count()
+                        == expected
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+    };
+    let first = start("primeiro");
+    let second = start("segundo");
+    wait_calls(2).await;
+    assert_eq!(service.engines.available_permits(), 0);
+    let overload = acquire_engine(service.engines.clone(), Duration::from_millis(40))
+        .await
+        .unwrap_err();
+    assert_eq!(overload.status, 503);
+    let mut third = start("terceiro");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(80), &mut third)
+            .await
+            .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&count).unwrap().lines().count(), 2);
+    first.abort();
+    let _ = first.await;
+    wait_calls(3).await;
+    std::fs::write(&release, b"release").unwrap();
+    for task in [second, third] {
+        let result = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(!result.cached);
+        assert_eq!(
+            std::fs::read(cache_path(&c, &result.hash)).unwrap(),
+            b"ID3complete"
+        );
+    }
+    assert_eq!(service.engines.available_permits(), 2);
+    let cancelled = effective_hash(&c, "primeiro", "", "local", &json!({}), "").unwrap();
+    assert!(!cache_path(&c, &cancelled).exists());
 }
 
 async fn pid_at(path: &Path) -> u32 {
@@ -855,7 +1072,14 @@ proptest! {
         prop_assert!(!prepared.ends_with(char::is_whitespace));
         let hash=hash_value(&text,"","local",&json!({}),"");
         prop_assert_eq!(hash.len(),64);
-        let _=local::split(&text);
+        let mut c = config(Path::new(""));
+        c.values["tts_local_cmd"] = json!(text);
+        let effective = effective_hash(&c, &text, "", "local", &json!({}), "");
+        if local::arguments(&c).is_ok() {
+            prop_assert_eq!(effective.unwrap().len(), 64);
+        } else {
+            prop_assert!(effective.is_err());
+        }
     }
     #[test]
     fn arbitrary_audio_prefixes_never_panic(bytes in proptest::collection::vec(any::<u8>(),0..256)) {

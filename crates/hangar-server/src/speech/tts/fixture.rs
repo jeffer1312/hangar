@@ -46,6 +46,20 @@ fn main() {
         print!("ID3providers:{providers};authority:{authority}");
         return;
     }
+    if mode == "gate" {
+        let mut started = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&args[1])
+            .unwrap();
+        started.write_all(b"call\n").unwrap();
+        drop(started);
+        while !Path::new(&args[2]).exists() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        print!("ID3complete");
+        return;
+    }
     if mode == "large" {
         let mut output = std::io::stdout().lock();
         output.write_all(b"RIFF").unwrap();

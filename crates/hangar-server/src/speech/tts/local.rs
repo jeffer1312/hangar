@@ -69,6 +69,17 @@ pub(super) fn split(command: &str) -> Result<Vec<String>, SpeechError> {
     Ok(args)
 }
 
+pub(super) fn arguments(config: &SpeechConfig) -> Result<Vec<String>, SpeechError> {
+    let configured = config.string("tts_local_cmd");
+    if configured.trim().is_empty() {
+        return Err(SpeechError::new(
+            503,
+            "Comando de voz local não configurado.",
+        ));
+    }
+    split(configured.trim())
+}
+
 struct Managed<T: OwnedTree + 'static = CommandTree> {
     child: Option<Child>,
     tree: Option<T>,
@@ -157,8 +168,9 @@ pub(super) async fn run(
     config: &SpeechConfig,
     text: &str,
     lease: Lease,
+    engine: tokio::sync::OwnedSemaphorePermit,
 ) -> Result<AudioFile, SpeechError> {
-    run_inner(config, text, Duration::from_secs(180), lease).await
+    run_inner(config, text, Duration::from_secs(180), lease, Some(engine)).await
 }
 
 pub(super) fn isolate(command: &mut Command) {
@@ -177,7 +189,7 @@ pub(super) async fn run_with_deadline(
     let lease = std::sync::Arc::new(tokio::sync::Mutex::new(()))
         .lock_owned()
         .await;
-    run_inner(config, text, timeout, lease).await
+    run_inner(config, text, timeout, lease, None).await
 }
 
 async fn deadline<T, F>(timeout: Duration, work: F) -> Result<T, SpeechError>
@@ -199,19 +211,15 @@ async fn run_inner(
     text: &str,
     timeout: Duration,
     lease: Lease,
+    engine: Option<tokio::sync::OwnedSemaphorePermit>,
 ) -> Result<AudioFile, SpeechError> {
-    let configured = config.string("tts_local_cmd");
-    if configured.trim().is_empty() {
-        return Err(SpeechError::new(
-            503,
-            "Comando de voz local não configurado.",
-        ));
-    }
-    let args = split(configured.trim())?;
+    let args = arguments(config)?;
+    let mut transfer = Transfer::new(&config.cache_dir, lease)?;
+    transfer.hold_engine(engine);
     let mut owned = Managed {
         child: None,
         tree: None,
-        transfer: Some(Transfer::new(&config.cache_dir, lease)?),
+        transfer: Some(transfer),
     };
     let mut command = Command::new(&args[0]);
     command
@@ -320,6 +328,7 @@ mod tests {
         let gate = Arc::new(tokio::sync::Mutex::new(()));
         let active = Arc::new(AtomicBool::new(true));
         let attempts = Arc::new(AtomicUsize::new(0));
+        let engines = Arc::new(tokio::sync::Semaphore::new(1));
         let mut owned = Managed {
             child: None,
             tree: Some(DelayedTree {
@@ -330,6 +339,11 @@ mod tests {
                 Transfer::new(directory.path(), gate.clone().lock_owned().await).unwrap(),
             ),
         };
+        owned
+            .transfer
+            .as_mut()
+            .unwrap()
+            .hold_engine(Some(engines.clone().acquire_owned().await.unwrap()));
         owned
             .transfer
             .as_ref()
@@ -351,6 +365,12 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(1));
         drop(owned);
         assert!(gate.try_lock().is_err());
+        assert_eq!(engines.available_permits(), 0);
+        let overloaded = super::super::acquire_engine(engines.clone(), Duration::from_millis(40))
+            .await
+            .unwrap_err();
+        assert_eq!(overloaded.status, 503);
+        assert_eq!(engines.available_permits(), 0);
         let waiting = super::super::acquire(gate.clone(), Duration::from_millis(40))
             .await
             .unwrap_err();
@@ -370,5 +390,9 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+        let _engine = tokio::time::timeout(Duration::from_secs(5), engines.acquire())
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

@@ -33,6 +33,8 @@ async fn acquire(
 pub struct Service {
     api: String,
     flights: Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>,
+    maintenance: Arc<cache::Maintenance>,
+    engines: Arc<tokio::sync::Semaphore>,
 }
 
 impl Default for Service {
@@ -40,6 +42,8 @@ impl Default for Service {
         Self {
             api: network::API.to_owned(),
             flights: Mutex::default(),
+            maintenance: Arc::default(),
+            engines: Arc::new(tokio::sync::Semaphore::new(2)),
         }
     }
 }
@@ -104,6 +108,43 @@ fn hash_value(
         .collect()
 }
 
+fn effective_hash(
+    config: &SpeechConfig,
+    text: &str,
+    voice: &str,
+    provider: &str,
+    adjustments: &Value,
+    instruction: &str,
+) -> Result<String, SpeechError> {
+    let settings = if provider == "local" {
+        // O argv define a voz real; só o digest entra na identidade persistida.
+        let args = local::arguments(config)?;
+        let command = crate::orchestration::codec::dumps(&json!(args), true);
+        let digest = ring::digest::digest(&ring::digest::SHA256, command.as_bytes());
+        let fingerprint: String = digest.as_ref().iter().map(|v| format!("{v:02x}")).collect();
+        json!({"local_command_v1": fingerprint})
+    } else {
+        adjustments.clone()
+    };
+    Ok(hash_value(text, voice, provider, &settings, instruction))
+}
+
+async fn acquire_engine(
+    engines: Arc<tokio::sync::Semaphore>,
+    wait: std::time::Duration,
+) -> Result<tokio::sync::OwnedSemaphorePermit, SpeechError> {
+    tokio::time::timeout(wait, engines.acquire_owned())
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .ok_or_else(|| {
+            SpeechError::new(
+                503,
+                "Os motores de voz local estão ocupados. Tente novamente.",
+            )
+        })
+}
+
 fn valid_audio(audio: &[u8]) -> bool {
     audio.starts_with(b"RIFF")
         || audio.starts_with(b"ID3")
@@ -116,6 +157,8 @@ impl Service {
         Self {
             api,
             flights: Mutex::default(),
+            maintenance: Arc::default(),
+            engines: Arc::new(tokio::sync::Semaphore::new(2)),
         }
     }
 
@@ -172,7 +215,7 @@ impl Service {
         } else {
             adjustments(config)
         };
-        let hash = hash_value(text, &voice, provider, &adjustments, instruction);
+        let hash = effective_hash(config, text, &voice, provider, &adjustments, instruction)?;
         let identity = config.cache_dir.join(&hash);
         let flight = {
             let mut flights = self
@@ -191,15 +234,21 @@ impl Service {
         let guard = acquire(flight, std::time::Duration::from_secs(30)).await?;
         let directory = config.cache_dir.clone();
         let key = hash.clone();
+        let maintenance = self.maintenance.clone();
         let (cached, guard) = tokio::task::spawn_blocking(move || {
             cache::prepare(&directory)?;
-            cache::lookup(&directory, &key).map(|cached| (cached, guard))
+            let cached = cache::lookup(&directory, &key)?;
+            maintenance.run(&directory, std::time::Instant::now());
+            Ok::<_, SpeechError>((cached, guard))
         })
         .await
         .map_err(|_| SpeechError::new(500, "Não foi possível conferir o cache de áudio."))??;
         if !cached {
             let audio = if provider == "local" {
-                local::run(config, text, guard).await?
+                let engine =
+                    acquire_engine(self.engines.clone(), std::time::Duration::from_secs(30))
+                        .await?;
+                local::run(config, text, guard, engine).await?
             } else {
                 network::synthesize(config, &self.api, text, &voice, adjustments, guard).await?
             };
