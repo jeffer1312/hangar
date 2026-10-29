@@ -61,13 +61,21 @@ pub fn run_with_env(
     run_with_reader(args, cwd, timeout, env, log, |reader| Box::new(reader))
 }
 
-fn run_with_reader(
+/// Captura os dois canais sem misturar diagnósticos ao valor retornado pelo programa.
+pub fn run_capture_with_env(args:&[String],cwd:&Path,timeout:Duration,env:&BTreeMap<String,String>)->Result<ProcessOutput,ProcessError>{
+    execute(args,cwd,timeout,env,&|_|{},|reader|Box::new(reader),true)
+}
+fn run_with_reader(args:&[String],cwd:&Path,timeout:Duration,env:&BTreeMap<String,String>,log:&dyn Fn(&str),reader:impl FnOnce(std::io::PipeReader)->Box<dyn Read+Send>)->Result<ProcessOutput,ProcessError>{
+    execute(args,cwd,timeout,env,log,reader,false)
+}
+fn execute(
     args: &[String],
     cwd: &Path,
     timeout: Duration,
     env: &BTreeMap<String, String>,
     log: &dyn Fn(&str),
     reader: impl FnOnce(std::io::PipeReader) -> Box<dyn Read + Send>,
+    capture: bool,
 ) -> Result<ProcessOutput, ProcessError> {
     let Some(program) = args.first() else {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "comando vazio").into());
@@ -75,6 +83,7 @@ fn run_with_reader(
     log(&format!("$ {}", args.join(" ")));
     let (pipe_reader, writer) = std::io::pipe()?;
     let reader = reader(pipe_reader);
+    let (error_reader,error_writer)=if capture{let (reader,writer)=std::io::pipe()?;(Some(reader),writer)}else{(None,writer.try_clone()?)};
     let mut command = Command::new(program);
     command
         .args(&args[1..])
@@ -84,7 +93,8 @@ fn run_with_reader(
         .envs(env)
         .stdin(Stdio::null())
         .stdout(writer.try_clone()?)
-        .stderr(writer);
+        .stderr(error_writer);
+    drop(writer);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -104,20 +114,28 @@ fn run_with_reader(
     }
     drop(command);
     let (send, receive) = mpsc::channel();
-    std::thread::spawn(move || read_lines(reader, send));
+    std::thread::spawn(move || if capture{read_chunks(reader,send)}else{read_lines(reader, send)});
+    let errors=error_reader.map(|mut reader|{
+        let (send,receive)=mpsc::channel();
+        std::thread::spawn(move||{let mut bytes=Vec::new();let result=reader.read_to_end(&mut bytes).map(|_|bytes);let _=send.send(result);});
+        receive
+    });
+    let mut stdout_bytes=Vec::new();
+    let mut stderr_bytes=Vec::new();
     static ANSI: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]").unwrap());
     let mut lines = Vec::new();
     let mut pending = Vec::new();
     let mut flushed = Instant::now();
     let mut read_error = None;
-    let timed_out = loop {
+    let mut timed_out = loop {
         let now = Instant::now();
         if now >= deadline {
             break true;
         }
         match receive.recv_timeout((deadline - now).min(Duration::from_secs(1))) {
             Ok(Ok(Some(bytes))) => {
+                if capture{stdout_bytes.extend(bytes);continue;}
                 let text = String::from_utf8_lossy(&bytes);
                 let clean = ANSI.replace_all(&text, "");
                 let line = clean.trim_end().to_owned();
@@ -146,7 +164,15 @@ fn run_with_reader(
     if !pending.is_empty() {
         log(&pending.join("\n"));
     }
-    let output = lines.join("\n");
+    if !timed_out && read_error.is_none() && let Some(errors)=errors{
+        match errors.recv_timeout(deadline.saturating_duration_since(Instant::now())){
+            Ok(Ok(bytes))=>stderr_bytes=bytes,
+            Ok(Err(error))=>read_error=Some(error),
+            Err(mpsc::RecvTimeoutError::Timeout)=>timed_out=true,
+            Err(mpsc::RecvTimeoutError::Disconnected)=>read_error=Some(std::io::Error::other("a leitura do diagnóstico foi interrompida")),
+        }
+    }
+    let output = if capture{String::from_utf8_lossy(&stdout_bytes).into_owned()}else{lines.join("\n")};
     if timed_out || read_error.is_some() {
         #[cfg(unix)]
         kill_tree(&mut child);
@@ -193,10 +219,11 @@ fn run_with_reader(
     if code != 0 {
         log(&format!("[saiu com {code}]"));
     }
+    let decode=|bytes:Vec<u8>|String::from_utf8(bytes).map(|text|text.replace("\r\n","\n").replace('\r',"\n")).map_err(|error|ProcessError::Read{source:std::io::Error::new(std::io::ErrorKind::InvalidData,error),stdout:output.clone()});
     Ok(ProcessOutput {
         code,
-        stdout: output,
-        stderr: String::new(),
+        stdout: if capture{decode(stdout_bytes)?}else{output.clone()},
+        stderr: if capture{decode(stderr_bytes)?}else{String::new()},
     })
 }
 #[cfg(unix)]
@@ -218,6 +245,16 @@ fn kill_tree(child: &mut std::process::Child) {
         }
     }
     let _ = child.kill();
+}
+
+fn read_chunks(mut reader:impl Read,send:mpsc::Sender<Result<Option<Vec<u8>>,std::io::Error>>){
+    let mut buffer=[0u8;8192];
+    loop{match reader.read(&mut buffer){
+        Ok(0)=>{let _=send.send(Ok(None));return;},
+        Ok(count)=>if send.send(Ok(Some(buffer[..count].to_vec()))).is_err(){return;},
+        Err(error) if error.kind()==std::io::ErrorKind::Interrupted=>{},
+        Err(error)=>{let _=send.send(Err(error));return;},
+    }}
 }
 
 fn read_lines(mut reader: impl Read, send: mpsc::Sender<Result<Option<Vec<u8>>, std::io::Error>>) {

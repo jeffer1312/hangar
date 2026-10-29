@@ -17,7 +17,7 @@ pub fn publish(root:&Path,snapshot:Snapshot)->Snapshot{slot(root).get_or_init(||
 pub fn capture(root:&Path,environment:&BTreeMap<String,String>)->Snapshot{
     capture_with(root,|args,timeout|{
         let mut command=vec!["git".to_owned()];command.extend(args.iter().map(|v|(*v).to_owned()));
-        crate::update::process::run_with_env(&command,root,timeout,environment,&|_|{}).map(|output|output.stdout).map_err(|_|())
+        crate::update::process::run_capture_with_env(&command,root,timeout,environment).map(|output|output.stdout).map_err(|_|())
     })
 }
 /// A fonte injetada conserva os argumentos e prazos do subprocesso, sem exigir git nas provas.
