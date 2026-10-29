@@ -1,5 +1,5 @@
 {
-  "source_commit": "6e65432290d067fe304f99d471f918229b85b1d4",
+  "source_commit": "39ff842c6e9c23967830f61e6540ee5e66f2e648",
   "command": "cd backend && uv run python tests/fixtures/contract/config_sync/generate_config_http.py",
   "injections": [
     "autenticação comparada nas provas do porteiro",
@@ -582,6 +582,24 @@
       "body": "",
       "calls": [],
       "allow": "GET",
+      "files": {}
+    },
+    {
+      "method": "POST",
+      "raw": "",
+      "status": 500,
+      "body": "Internal Server Error",
+      "calls": [],
+      "allow": null,
+      "files": {}
+    },
+    {
+      "method": "POST",
+      "raw": " ",
+      "status": 500,
+      "body": "Internal Server Error",
+      "calls": [],
+      "allow": null,
       "files": {}
     },
     {

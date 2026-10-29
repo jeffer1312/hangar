@@ -26,6 +26,11 @@ scenarios.extend([
     ('external-last-infinite', {}, None, {'mostrar_pensamento': 1, 'upload_retention_days': float('inf')}),
     ('python-strip', {}, '\x1c{}\x1f', {'mostrar_pensamento': True, 'editor': '\x1cvim\x1f'}),
 ])
+for key, kind in rc.EDITAVEIS.items():
+    if kind is str:
+        for value in [float('nan'), float('inf'), float('-inf')]:
+            scenarios.append(('nonfinite-text-' + key, {}, None, {key: value}))
+scenarios.append(('legacy-python-strip', {}, None, {'jev_windows_api_key': '\x1c\x1f'}))
 cases = []
 for name, initial, thinking, changes in scenarios:
     with tempfile.TemporaryDirectory() as folder, MonkeyPatch.context() as mp, patch.dict(

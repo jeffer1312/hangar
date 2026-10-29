@@ -127,7 +127,7 @@ impl RuntimeConfig {
             let legacy=self.legacy_aux(&current,true)?;
             current.extend(legacy.into_iter().filter(|(_,value)|truthy(value)));
         }
-        if changes.get("jev_windows_api_key").and_then(Value::as_str).is_some_and(|s|!s.trim().is_empty()&&!s.contains('•')) {
+        if changes.get("jev_windows_api_key").and_then(Value::as_str).is_some_and(|s|!crate::transcript::py::strip(s).is_empty()&&!s.contains('•')) {
             return Err("jev_windows_api_key: a chave do Computer Use agora é a da página Jev".into());
         }
         for key in remove {if preferences::editable(key) && let Some(value)=current.shift_remove(key){codec::discard(value);}}

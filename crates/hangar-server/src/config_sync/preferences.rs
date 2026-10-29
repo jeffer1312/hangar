@@ -208,6 +208,7 @@ pub fn coerce(key: &str, value: &Value) -> Result<Value, String> {
     }
     let text = value
         .as_str()
+        .filter(|_|!crate::orchestration::codec::contains_nonfinite(value))
         .ok_or_else(|| format!("{key}: esperado texto"))?;
     let mut text = crate::transcript::py::strip(text).to_owned();
     if key == "dictation_organization_mode"

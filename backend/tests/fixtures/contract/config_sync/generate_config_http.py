@@ -24,7 +24,7 @@ nodes=[n for n in ast.parse((BACKEND/'app/api.py').read_text()).body if isinstan
 for node in nodes:node.decorator_list=[]
 code=compile(ast.Module(body=nodes,type_ignores=[]),'config-api','exec')
 cases=[]
-for method,raw in [('GET',''),('HEAD',''),('POST','{}'),('PATCH','{"editor":"vim"}'),('POST','[]'),('POST','null'),('POST','false'),('POST','"texto"'),('POST','{'),('POST','{"mostrar_pensamento":true}'),('POST','{"upload_retention_days":"inválido"}'),('POST','{"claude_function_hooks":false}'),
+for method,raw in [('GET',''),('HEAD',''),('POST',''),('POST',' '),('POST','{}'),('PATCH','{"editor":"vim"}'),('POST','[]'),('POST','null'),('POST','false'),('POST','"texto"'),('POST','{'),('POST','{"mostrar_pensamento":true}'),('POST','{"upload_retention_days":"inválido"}'),('POST','{"claude_function_hooks":false}'),
                    ('POST','{"editor":"\\ud800"}'),('POST','{"editor":"\\u0000"}'),
                    ('POST','{"upload_retention_days":NaN}'),('POST','{"upload_retention_days":Infinity}'),
                    ('POST','{"unknown":NaN}'),('POST','{"unknown":"\\ud800"}'),

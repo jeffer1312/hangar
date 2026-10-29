@@ -27,7 +27,9 @@ fn runtime_apply_errors_preserve_precedence_mask_and_both_files() {
         if actual_state != expected_state {differences.push(format!("{index}: máscara"));}
         let result = service.apply_checked(case["changes"].as_object().unwrap(), &Default::default());
         if let Err(error) = &result {
-            assert_eq!(error.kind, case["result"]["kind"].as_str().unwrap(), "categoria {index}");
+            if Some(error.kind) != case["result"]["kind"].as_str() {
+                differences.push(format!("{index}: categoria {} versus {}",error.kind,case["result"]["kind"]));
+            }
         }
         let actual = result.map(Value::Object).map_err(|error|error.message);
         let mut expected = case["result"].get("ok").cloned()
