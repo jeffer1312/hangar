@@ -926,12 +926,12 @@ pub(crate) fn html_escape(text: &str) -> String {
         .replace('"', "&quot;")
         .replace('\'', "&#x27;")
 }
-enum RangeError {
+pub(crate) enum RangeError {
     Malformed(&'static str),
     Unsatisfiable,
 }
 
-fn ranges(value: &str, size: u64) -> Result<Vec<(u64, u64)>, RangeError> {
+pub(crate) fn ranges(value: &str, size: u64) -> Result<Vec<(u64, u64)>, RangeError> {
     let (units, text) = value
         .split_once('=')
         .ok_or(RangeError::Malformed("Malformed range header."))?;

@@ -543,7 +543,6 @@ fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> 
     let router = Router::new()
         .route("/__hangar_server/terminal", axum::routing::post(crate::terminal_routes::terminal))
         .route("/__hangar_server/workspace", axum::routing::post(crate::workspace_routes::private))
-        .route("/__hangar_server/transcription/{operation}", axum::routing::post(crate::transcription::routes::private))
         .route("/__hangar_server/dictation/{operation}", axum::routing::post(crate::dictation::routes::private))
         .route("/__hangar_server/claude/customizations", axum::routing::post(crate::claude_customizations::private))
         .route("/__hangar_server/forwarded", axum::routing::any(crate::forwarded::private))
@@ -831,6 +830,9 @@ pub(crate) async fn pass_any(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     mut req: Request,
 ) -> Response {
+    if crate::dictation::http::matches(req.method(), req.uri().path()) {
+        return crate::dictation::http::public(st, peer, req).await;
+    }
     if crate::provider_models::inbox_http_request(req.method(), req.uri().path(), req.headers()) {
         return crate::session_write::json_response(StatusCode::NOT_FOUND, serde_json::json!({"detail":"Not Found"}));
     }

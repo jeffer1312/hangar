@@ -67,7 +67,7 @@ pub(crate) async fn organize_text(
         log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1"),
     });
-    let router = hangar_server::routes::terminal_router(Arc::new(state));
+    let router = hangar_server::routes::router(Arc::new(state));
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
@@ -77,10 +77,10 @@ pub(crate) async fn organize_text(
         .unwrap();
     });
     let response = reqwest::Client::new()
-        .post(format!("http://{addr}/__hangar_server/dictation/organize"))
-        .header("x-hangar-internal", "dictation-secret")
+        .post(format!("http://{addr}/api/ditado/relimpar"))
+        .bearer_auth("fixture-owner")
         .header("content-type", "application/json")
-        .body(json!({"raw":raw, "style":style}).to_string())
+        .body(json!({"texto":raw, "estilo":style}).to_string())
         .send()
         .await
         .unwrap();
@@ -91,7 +91,7 @@ pub(crate) async fn organize_text(
     llm_task.abort();
     assert_eq!(status, 200, "organização não respondeu: {body}");
     (
-        serde_json::from_str::<Value>(&body).unwrap()["result"].clone(),
+        serde_json::from_str::<Value>(&body).unwrap(),
         hits.load(Ordering::SeqCst),
     )
 }
@@ -191,7 +191,7 @@ async fn post_organize(upstream: std::net::SocketAddr, body: Value) -> Value {
         log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1"),
     });
-    let router = hangar_server::routes::terminal_router(Arc::new(state));
+    let router = hangar_server::routes::router(Arc::new(state));
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
@@ -201,10 +201,10 @@ async fn post_organize(upstream: std::net::SocketAddr, body: Value) -> Value {
         .unwrap();
     });
     let response = reqwest::Client::new()
-        .post(format!("http://{addr}/__hangar_server/dictation/organize"))
-        .header("x-hangar-internal", "dictation-secret")
+        .post(format!("http://{addr}/api/ditado/relimpar"))
+        .bearer_auth("fixture-owner")
         .header("content-type", "application/json")
-        .body(body.to_string())
+        .body(json!({"texto":body["raw"], "estilo":body["style"]}).to_string())
         .send()
         .await
         .unwrap();
@@ -212,7 +212,7 @@ async fn post_organize(upstream: std::net::SocketAddr, body: Value) -> Value {
     let text = response.text().await.unwrap();
     server.abort();
     assert_eq!(status, 200, "organização não respondeu: {text}");
-    serde_json::from_str::<Value>(&text).unwrap()["result"].clone()
+    serde_json::from_str::<Value>(&text).unwrap()
 }
 
 #[tokio::test]

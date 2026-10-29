@@ -78,6 +78,7 @@ pub fn router(st: Arc<AppState>, api: Router) -> Router {
     let service = service(Handler { tools: Arc::new(tools::Tools::new(st.clone(), api)) });
     Router::new().route_service("/mcp", service.clone()).route_service("/mcp/", service)
         .layer(axum::middleware::from_fn_with_state(st, gate))
+        .layer(axum::middleware::from_fn(crate::migration_status::count_public))
 }
 
 fn service<H: ServerHandler + Clone + Send + Sync + 'static>(handler: H) -> StreamableHttpService<H, LocalSessionManager> {
