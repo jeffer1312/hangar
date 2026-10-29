@@ -2291,11 +2291,6 @@ async def _durante_troca(name: str, troca):
             def _move_life():
                 life = session_life(name)
                 share_bridge.set_life(name, life)
-                try:
-                    guest_users.set_life(name, life)
-                except Exception:
-                    # Não troca o resultado da troca pelo erro de gravar o dono.
-                    _log.exception("[guests] dono de %s nao acompanhou a troca de modo", name)
             await asyncio.to_thread(_move_life)
         finally:
             share_bridge.changing_mode.discard(name)

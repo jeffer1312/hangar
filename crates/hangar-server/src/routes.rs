@@ -618,7 +618,8 @@ fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
     let api = public_routes(state.clone(), pair);
     // O MCP chama as tools pelas mesmas rotas que o `hangar-send` chama: o roteador público inteiro.
     api.clone().merge(crate::mcp::router(state.clone(), api))
-        .layer(axum::middleware::from_fn_with_state(state, crate::login_guests::gate::guard))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::login_guests::gate::guard))
+        .layer(axum::middleware::from_fn_with_state(state, crate::login_guests::body_limit))
 }
 
 fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {

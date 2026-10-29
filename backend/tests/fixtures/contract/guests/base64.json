@@ -1,0 +1,386 @@
+{
+  "source_commit": "55995dfe0247cef582829429623d9337390b08fa",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_base64.py",
+  "rows": [
+    {
+      "path": "/api/sync/register",
+      "name": "canonical",
+      "body": {
+        "user": "ana",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "bootstrap": "bootstrap"
+      },
+      "status": 200,
+      "response": {
+        "ok": true
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "L4zmXMQsZM6I0JlnxlL7rMjbN+hV8VNUxWxPcdZXWTQ=",
+        "enc_blob": null,
+        "rev": 0
+      }
+    },
+    {
+      "path": "/api/sync/register",
+      "name": "auth_pad_bits",
+      "body": {
+        "user": "ana",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh=",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "bootstrap": "bootstrap"
+      },
+      "status": 200,
+      "response": {
+        "ok": true
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "yKK3WWe+Ry2NPJYnQ4fVbSCHprHqPeab8IjQMI3Ecbk=",
+        "enc_blob": null,
+        "rev": 0
+      }
+    },
+    {
+      "path": "/api/sync/register",
+      "name": "salt_pad_bits",
+      "body": {
+        "user": "ana",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eB==",
+        "bootstrap": "bootstrap"
+      },
+      "status": 200,
+      "response": {
+        "ok": true
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eB==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "L4zmXMQsZM6I0JlnxlL7rMjbN+hV8VNUxWxPcdZXWTQ=",
+        "enc_blob": null,
+        "rev": 0
+      }
+    },
+    {
+      "path": "/api/sync/register",
+      "name": "extra_padding",
+      "body": {
+        "user": "ana",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg==",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "bootstrap": "bootstrap"
+      },
+      "status": 200,
+      "response": {
+        "ok": true
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "xOuQAiTwW+PfIutUYuhlwNPErKBOyk3lzEI9CjeL+x8=",
+        "enc_blob": null,
+        "rev": 0
+      }
+    },
+    {
+      "path": "/api/sync/register",
+      "name": "missing_padding",
+      "body": {
+        "user": "ana",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "bootstrap": "bootstrap"
+      },
+      "status": 200,
+      "response": {
+        "ok": true
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "h/R670wUCSXLl+ynLMOrmd51/og9rIe77h0tGTG1bn8=",
+        "enc_blob": null,
+        "rev": 0
+      }
+    },
+    {
+      "path": "/api/sync/register",
+      "name": "space",
+      "body": {
+        "user": "ana",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg= ",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "bootstrap": "bootstrap"
+      },
+      "status": 200,
+      "response": {
+        "ok": true
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "0NPqMkaNbcBQfdBbNOVMFPXrDEz7l21sFeRN78PdF1I=",
+        "enc_blob": null,
+        "rev": 0
+      }
+    },
+    {
+      "path": "/api/sync/register",
+      "name": "newline",
+      "body": {
+        "user": "ana",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=\n",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "bootstrap": "bootstrap"
+      },
+      "status": 200,
+      "response": {
+        "ok": true
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "XzcZqdIFHGhRQUTfQC+PtKXIyQktrPzOOD7We1kme+4=",
+        "enc_blob": null,
+        "rev": 0
+      }
+    },
+    {
+      "path": "/api/sync/register",
+      "name": "unicode",
+      "body": {
+        "user": "ana",
+        "auth_hash": "éHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "bootstrap": "bootstrap"
+      },
+      "status": 200,
+      "response": {
+        "ok": true
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "QAAJyy/lcZhqlnxVAYz+pAl3nhtSPX6N8gpvuMSN27E=",
+        "enc_blob": null,
+        "rev": 0
+      }
+    },
+    {
+      "path": "/api/sync/setup",
+      "name": "canonical",
+      "body": {
+        "user": "ana",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA=="
+      },
+      "status": 200,
+      "response": {
+        "enabled": true,
+        "registered": true,
+        "user": "ana"
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "L4zmXMQsZM6I0JlnxlL7rMjbN+hV8VNUxWxPcdZXWTQ=",
+        "enc_blob": null,
+        "rev": 0
+      }
+    },
+    {
+      "path": "/api/sync/setup",
+      "name": "auth_pad_bits",
+      "body": {
+        "user": "ana",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh=",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA=="
+      },
+      "status": 200,
+      "response": {
+        "enabled": true,
+        "registered": true,
+        "user": "ana"
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "yKK3WWe+Ry2NPJYnQ4fVbSCHprHqPeab8IjQMI3Ecbk=",
+        "enc_blob": null,
+        "rev": 0
+      }
+    },
+    {
+      "path": "/api/sync/setup",
+      "name": "salt_pad_bits",
+      "body": {
+        "user": "ana",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eB=="
+      },
+      "status": 200,
+      "response": {
+        "enabled": true,
+        "registered": true,
+        "user": "ana"
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eB==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "L4zmXMQsZM6I0JlnxlL7rMjbN+hV8VNUxWxPcdZXWTQ=",
+        "enc_blob": null,
+        "rev": 0
+      }
+    },
+    {
+      "path": "/api/sync/setup",
+      "name": "extra_padding",
+      "body": {
+        "user": "ana",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg==",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA=="
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_too_long",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "String should have at most 44 characters",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg==",
+            "ctx": {
+              "max_length": 44
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "path": "/api/sync/setup",
+      "name": "missing_padding",
+      "body": {
+        "user": "ana",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA=="
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Value error, Incorrect padding",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "path": "/api/sync/setup",
+      "name": "space",
+      "body": {
+        "user": "ana",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg= ",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA=="
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_too_long",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "String should have at most 44 characters",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg= ",
+            "ctx": {
+              "max_length": 44
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "path": "/api/sync/setup",
+      "name": "newline",
+      "body": {
+        "user": "ana",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=\n",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA=="
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_too_long",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "String should have at most 44 characters",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=\n",
+            "ctx": {
+              "max_length": 44
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "path": "/api/sync/setup",
+      "name": "unicode",
+      "body": {
+        "user": "ana",
+        "auth_hash": "éHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA=="
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Value error, string argument should contain only ASCII characters",
+            "input": "éHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    }
+  ]
+}

@@ -1,0 +1,368 @@
+{
+  "source_commit": "1bceae0e60618283d2aeee59cab7aa981b5544f7",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_push.py",
+  "awaiting": [
+    {
+      "provider": "pi",
+      "scenario": "real",
+      "notices": [
+        [
+          "session",
+          "pergunta"
+        ]
+      ],
+      "sleeps": [],
+      "pane_reads": 1
+    },
+    {
+      "provider": "pi",
+      "scenario": "late_pane",
+      "notices": [
+        [
+          "session",
+          "pergunta"
+        ]
+      ],
+      "sleeps": [
+        1.5
+      ],
+      "pane_reads": 2
+    },
+    {
+      "provider": "pi",
+      "scenario": "late_question",
+      "notices": [
+        [
+          "session",
+          "pergunta"
+        ]
+      ],
+      "sleeps": [
+        1.5
+      ],
+      "pane_reads": 1
+    },
+    {
+      "provider": "pi",
+      "scenario": "idle",
+      "notices": [],
+      "sleeps": [
+        1.5
+      ],
+      "pane_reads": 2
+    },
+    {
+      "provider": "pi",
+      "scenario": "absent",
+      "notices": [],
+      "sleeps": [],
+      "pane_reads": 0
+    },
+    {
+      "provider": "omp",
+      "scenario": "real",
+      "notices": [
+        [
+          "session",
+          "pergunta"
+        ]
+      ],
+      "sleeps": [],
+      "pane_reads": 1
+    },
+    {
+      "provider": "omp",
+      "scenario": "late_pane",
+      "notices": [
+        [
+          "session",
+          "pergunta"
+        ]
+      ],
+      "sleeps": [
+        1.5
+      ],
+      "pane_reads": 2
+    },
+    {
+      "provider": "omp",
+      "scenario": "late_question",
+      "notices": [
+        [
+          "session",
+          "pergunta"
+        ]
+      ],
+      "sleeps": [
+        1.5
+      ],
+      "pane_reads": 1
+    },
+    {
+      "provider": "omp",
+      "scenario": "idle",
+      "notices": [],
+      "sleeps": [
+        1.5
+      ],
+      "pane_reads": 2
+    },
+    {
+      "provider": "omp",
+      "scenario": "absent",
+      "notices": [],
+      "sleeps": [],
+      "pane_reads": 0
+    },
+    {
+      "provider": "kimi",
+      "scenario": "real",
+      "notices": [
+        [
+          "session",
+          "pergunta"
+        ]
+      ],
+      "sleeps": [],
+      "pane_reads": 1
+    },
+    {
+      "provider": "kimi",
+      "scenario": "late_pane",
+      "notices": [
+        [
+          "session",
+          "pergunta"
+        ]
+      ],
+      "sleeps": [
+        1.5
+      ],
+      "pane_reads": 2
+    },
+    {
+      "provider": "kimi",
+      "scenario": "late_question",
+      "notices": [
+        [
+          "session",
+          "pergunta"
+        ]
+      ],
+      "sleeps": [
+        1.5
+      ],
+      "pane_reads": 1
+    },
+    {
+      "provider": "kimi",
+      "scenario": "idle",
+      "notices": [],
+      "sleeps": [
+        1.5
+      ],
+      "pane_reads": 2
+    },
+    {
+      "provider": "kimi",
+      "scenario": "absent",
+      "notices": [],
+      "sleeps": [],
+      "pane_reads": 0
+    }
+  ],
+  "finished": [
+    {
+      "provider": "pi",
+      "scenario": "long",
+      "notices": [
+        [
+          "session"
+        ]
+      ],
+      "sleeps": [
+        20.0
+      ],
+      "series": {}
+    },
+    {
+      "provider": "pi",
+      "scenario": "short",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {}
+    },
+    {
+      "provider": "pi",
+      "scenario": "disabled",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {}
+    },
+    {
+      "provider": "pi",
+      "scenario": "working",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {
+        "sid": 1000.0
+      }
+    },
+    {
+      "provider": "pi",
+      "scenario": "new_idle",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {
+        "sid": 1000.0
+      }
+    },
+    {
+      "provider": "pi",
+      "scenario": "new_series",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {
+        "sid": 999.0
+      }
+    },
+    {
+      "provider": "omp",
+      "scenario": "long",
+      "notices": [
+        [
+          "session"
+        ]
+      ],
+      "sleeps": [
+        20.0
+      ],
+      "series": {}
+    },
+    {
+      "provider": "omp",
+      "scenario": "short",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {}
+    },
+    {
+      "provider": "omp",
+      "scenario": "disabled",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {}
+    },
+    {
+      "provider": "omp",
+      "scenario": "working",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {
+        "sid": 1000.0
+      }
+    },
+    {
+      "provider": "omp",
+      "scenario": "new_idle",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {
+        "sid": 1000.0
+      }
+    },
+    {
+      "provider": "omp",
+      "scenario": "new_series",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {
+        "sid": 999.0
+      }
+    },
+    {
+      "provider": "kimi",
+      "scenario": "long",
+      "notices": [
+        [
+          "session"
+        ]
+      ],
+      "sleeps": [
+        20.0
+      ],
+      "series": {}
+    },
+    {
+      "provider": "kimi",
+      "scenario": "short",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {}
+    },
+    {
+      "provider": "kimi",
+      "scenario": "disabled",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {}
+    },
+    {
+      "provider": "kimi",
+      "scenario": "working",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {
+        "sid": 1000.0
+      }
+    },
+    {
+      "provider": "kimi",
+      "scenario": "new_idle",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {
+        "sid": 1000.0
+      }
+    },
+    {
+      "provider": "kimi",
+      "scenario": "new_series",
+      "notices": [],
+      "sleeps": [
+        20.0
+      ],
+      "series": {
+        "sid": 999.0
+      }
+    }
+  ]
+}

@@ -4,6 +4,6 @@ pub mod store;
 mod sync;
 mod validation;
 mod schema;
-pub use http::{Service, Settings, route};
+pub use http::{Service, Settings, route, body_limit};
 
 pub mod gate;

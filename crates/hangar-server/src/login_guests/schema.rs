@@ -1,6 +1,6 @@
 //! Validação dos formulários na ordem dos campos publicada pelo FastAPI.
 use super::store::{Failure, Result};
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::Engine;
 use serde_json::{Value, json};
 
 #[derive(Clone, Copy)]
@@ -122,24 +122,34 @@ fn push_failure(errors: &mut Vec<Value>, failure: Failure, loc: &[Value]) {
         errors.push(e);
     }
 }
-fn base64_bytes(text: &str) -> std::result::Result<Vec<u8>, String> {
-    if !text.is_ascii() {
-        return Err("string argument should contain only ASCII characters".into());
+pub(super) fn base64_bytes(text: &str) -> std::result::Result<Vec<u8>, String> {
+    if !text.is_ascii() { return Err("string argument should contain only ASCII characters".into()); }
+    let (mut position, mut padding, mut count) = (0usize, 0usize, 0usize);
+    for (index, byte) in text.bytes().enumerate() {
+        if byte == b'=' {
+            if index == 0 { return Err("Leading padding not allowed".into()); }
+            if position == 0 { return Err("Excess padding not allowed".into()); }
+            padding += 1;
+            if position >= 2 && position + padding >= 4 {
+                if index + 1 != text.len() { return Err("Excess data after padding".into()); }
+                position = 0;
+                break;
+            }
+        } else if byte.is_ascii_alphanumeric() || b"+/".contains(&byte) {
+            if padding > 0 { return Err("Discontinuous padding not allowed".into()); }
+            count += 1;
+            position = (position + 1) % 4;
+        } else { return Err("Only base64 data is allowed".into()); }
     }
-    if text
-        .bytes()
-        .any(|b| !b.is_ascii_alphanumeric() && !b"+/=".contains(&b))
-    {
-        return Err("Only base64 data is allowed".into());
+    if position == 1 {
+        return Err(format!("Invalid base64-encoded string: number of data characters ({count}) cannot be 1 more than a multiple of 4"));
     }
-    STANDARD.decode(text).map_err(|_|{
-        let count=text.bytes().take_while(|b|*b!=b'=').count();
-        if count%4==1{format!("Invalid base64-encoded string: number of data characters ({count}) cannot be 1 more than a multiple of 4")}
-        else if text.starts_with('='){"Leading padding not allowed".into()}
-        else if text.find('=').is_some_and(|i|text[i..].bytes().any(|b|b!=b'=')){"Discontinuous padding not allowed".into()}
-        else{"Incorrect padding".into()}
-    })
+    if position != 0 { return Err("Incorrect padding".into()); }
+    let engine = base64::engine::GeneralPurpose::new(&base64::alphabet::STANDARD,
+        base64::engine::GeneralPurposeConfig::new().with_decode_allow_trailing_bits(true));
+    engine.decode(text).map_err(|_| "Incorrect padding".into())
 }
+
 fn integer(value: &Value) -> Option<Value> {
     if let Some(b) = value.as_bool() {
         return Some(json!(u8::from(b)));

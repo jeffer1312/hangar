@@ -1,0 +1,670 @@
+{
+  "source_commit": "55995dfe0247cef582829429623d9337390b08fa",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_blobs.py",
+  "rows": [
+    {
+      "name": "full_quantum",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4"
+        }
+      },
+      "status": 200,
+      "response": {
+        "enabled": true,
+        "registered": true,
+        "user": "ana"
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "L4zmXMQsZM6I0JlnxlL7rMjbN+hV8VNUxWxPcdZXWTQ=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4"
+        },
+        "rev": 1
+      }
+    },
+    {
+      "name": "extra_padding_full",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4==="
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Excess padding not allowed",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4===",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "padding_bits",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eB=="
+        }
+      },
+      "status": 200,
+      "response": {
+        "enabled": true,
+        "registered": true,
+        "user": "ana"
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "L4zmXMQsZM6I0JlnxlL7rMjbN+hV8VNUxWxPcdZXWTQ=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eB=="
+        },
+        "rev": 1
+      }
+    },
+    {
+      "name": "excess_padding",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eA==="
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Excess data after padding",
+            "input": "eHh4eHh4eHh4eHh4eHh4eA===",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "discontinuous",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4=AAAA"
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Excess padding not allowed",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4=AAAA",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "leading",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "=eHh4eHh4eHh4eHh4eHh4eHh4"
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Leading padding not allowed",
+            "input": "=eHh4eHh4eHh4eHh4eHh4eHh4",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "invalid_count",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4A"
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Invalid base64-encoded string: number of data characters (25) cannot be 1 more than a multiple of 4",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4A",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "missing_padding",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHg"
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_too_short",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "String should have at least 24 characters",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHg",
+            "ctx": {
+              "min_length": 24
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "suffix_A=",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4A="
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Invalid base64-encoded string: number of data characters (25) cannot be 1 more than a multiple of 4",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4A=",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "suffix_A==",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4A=="
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Invalid base64-encoded string: number of data characters (25) cannot be 1 more than a multiple of 4",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4A==",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "suffix_A=A",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4A=A"
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Discontinuous padding not allowed",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4A=A",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "suffix_AA=",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4AA="
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Incorrect padding",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4AA=",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "suffix_AA==",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4AA=="
+        }
+      },
+      "status": 200,
+      "response": {
+        "enabled": true,
+        "registered": true,
+        "user": "ana"
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "L4zmXMQsZM6I0JlnxlL7rMjbN+hV8VNUxWxPcdZXWTQ=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4AA=="
+        },
+        "rev": 1
+      }
+    },
+    {
+      "name": "suffix_AA===",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4AA==="
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Excess data after padding",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4AA===",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "suffix_AA=!",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4AA=!"
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Only base64 data is allowed",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4AA=!",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "suffix_AAA=",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4AAA="
+        }
+      },
+      "status": 200,
+      "response": {
+        "enabled": true,
+        "registered": true,
+        "user": "ana"
+      },
+      "vault": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "L4zmXMQsZM6I0JlnxlL7rMjbN+hV8VNUxWxPcdZXWTQ=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4AAA="
+        },
+        "rev": 1
+      }
+    },
+    {
+      "name": "suffix_AAA==",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4AAA=="
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Excess data after padding",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4AAA==",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "suffix_AAA=A",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4AAA=A"
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Excess data after padding",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4AAA=A",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "suffix_AA==!",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4AA==!"
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Excess data after padding",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4AA==!",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "suffix_AAAA=",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4AAAA="
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Excess padding not allowed",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4AAAA=",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    },
+    {
+      "name": "suffix_AAAA=AAAA",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_hash": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+        "enc_blob": {
+          "iv": "eHh4eHh4eHh4eHh4",
+          "data": "eHh4eHh4eHh4eHh4eHh4eHh4AAAA=AAAA"
+        }
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Value error, Excess padding not allowed",
+            "input": "eHh4eHh4eHh4eHh4eHh4eHh4AAAA=AAAA",
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      },
+      "vault": null
+    }
+  ]
+}

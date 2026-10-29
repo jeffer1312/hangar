@@ -55,6 +55,7 @@ impl Settings {
 }
 pub struct Service {
     pub store: Arc<Store>,
+    pub body_limit: usize,
     pub(crate) lives: std::sync::OnceLock<Arc<crate::share::life::Lives>>,
     pub(super) sync: Sync,
     pub now: fn() -> u64,
@@ -72,6 +73,7 @@ impl Service {
         sync.rate_window = settings.rate_window;
         Self {
             store: Store::shared(settings.guests),
+            body_limit: 100 * 1024 * 1024,
             lives: std::sync::OnceLock::new(),
             sync,
             now: || {
@@ -92,19 +94,8 @@ impl Service {
         https: bool,
         request: Request,
     ) -> Response {
-        const LIMIT: usize = 100 * 1024 * 1024;
-        if request
-            .headers()
-            .get(header::CONTENT_LENGTH)
-            .and_then(|h| h.to_str().ok())
-            .and_then(|s| s.parse::<u64>().ok())
-            .is_some_and(|n| n > LIMIT as u64)
-        {
-            return (
-                axum::http::StatusCode::PAYLOAD_TOO_LARGE,
-                "request body too large",
-            )
-                .into_response();
+        if declared_too_large(request.headers(), self.body_limit) {
+            return too_large();
         }
         let (parts, body) = request.into_parts();
         let headers = parts.headers.clone();
@@ -113,23 +104,18 @@ impl Service {
             .decode_utf8_lossy()
             .into_owned();
         let query = parts.uri.query().map(str::to_owned);
-        let bytes = match to_bytes(body, LIMIT).await {
-            Ok(b) => b,
-            Err(_) => {
-                return (
-                    axum::http::StatusCode::PAYLOAD_TOO_LARGE,
-                    "request body too large",
-                )
-                    .into_response();
-            }
-        };
         let expects_body = match (method.as_str(), path.as_str()) {
             ("POST", "/api/guests" | "/api/sync/setup" | "/api/sync/register" | "/api/sync/login" | "/api/sync/guests") => true,
             ("PUT", "/api/sync/vault") => true,
             ("POST", path) => path.strip_prefix("/api/guests/").is_some_and(|id| !id.contains('/')),
             _ => false,
         };
-        let parsed = if expects_body { crate::orchestration::body::parse(&bytes) } else { Ok(Value::Null) };
+        let parsed = if expects_body {
+            match to_bytes(body, self.body_limit).await {
+                Ok(bytes) => crate::orchestration::body::parse(&bytes),
+                Err(_) => Err((axum::http::StatusCode::BAD_REQUEST, json!({"detail":"There was an error parsing the body"}))),
+            }
+        } else { Ok(Value::Null) };
         let body = match parsed {
             Ok(value) => value,
             Err((status, body)) => {
@@ -358,6 +344,21 @@ fn reply(f: Failure, headers: &HeaderMap) -> Response {
         .into_response();
     crate::routes::cors(headers, r.headers_mut());
     r
+}
+fn declared_too_large(headers: &HeaderMap, limit: usize) -> bool {
+    let Some(raw) = headers.get(header::CONTENT_LENGTH).and_then(|value| value.to_str().ok()) else { return false };
+    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) { return false; }
+    let digits = raw.trim_start_matches('0');
+    let limit = limit.to_string();
+    digits.len() > limit.len() || digits.len() == limit.len() && digits > limit.as_str()
+}
+fn too_large() -> Response {
+    (axum::http::StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response()
+}
+/// O tamanho declarado é recusado antes do porteiro; o fluxo só é consumido pela rota que o lê.
+pub async fn body_limit(State(st): State<Arc<AppState>>, request: Request, next: axum::middleware::Next) -> Response {
+    if declared_too_large(request.headers(), st.login_guests.body_limit) { return too_large(); }
+    next.run(request).await
 }
 pub async fn route(
     State(st): State<Arc<AppState>>,

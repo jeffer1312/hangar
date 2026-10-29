@@ -1,0 +1,160 @@
+{
+  "source_commit": "55995dfe0247cef582829429623d9337390b08fa",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_limit_routes.py",
+  "rows": [
+    {
+      "method": "POST",
+      "path": "/api/guests",
+      "who": "owner",
+      "kind": "content_length",
+      "limit": 8,
+      "input_bytes": 9,
+      "status": 413,
+      "response": "request body too large",
+      "consumed": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/guests",
+      "who": "owner",
+      "kind": "chunked",
+      "limit": 8,
+      "input_bytes": 9,
+      "status": 400,
+      "response": {
+        "detail": "There was an error parsing the body"
+      },
+      "consumed": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/me",
+      "who": "owner",
+      "kind": "content_length",
+      "limit": 8,
+      "input_bytes": 9,
+      "status": 413,
+      "response": "request body too large",
+      "consumed": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/me",
+      "who": "owner",
+      "kind": "chunked",
+      "limit": 8,
+      "input_bytes": 9,
+      "status": 200,
+      "response": {
+        "role": "owner",
+        "name": null
+      },
+      "consumed": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/guests",
+      "who": "unknown",
+      "kind": "content_length",
+      "limit": 8,
+      "input_bytes": 9,
+      "status": 413,
+      "response": "request body too large",
+      "consumed": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/guests",
+      "who": "unknown",
+      "kind": "chunked",
+      "limit": 8,
+      "input_bytes": 9,
+      "status": 400,
+      "response": {
+        "detail": "There was an error parsing the body"
+      },
+      "consumed": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/me",
+      "who": "unknown",
+      "kind": "content_length",
+      "limit": 8,
+      "input_bytes": 9,
+      "status": 413,
+      "response": "request body too large",
+      "consumed": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/me",
+      "who": "unknown",
+      "kind": "chunked",
+      "limit": 8,
+      "input_bytes": 9,
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "consumed": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/guests",
+      "who": "guest",
+      "kind": "content_length",
+      "limit": 8,
+      "input_bytes": 9,
+      "status": 413,
+      "response": "request body too large",
+      "consumed": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/guests",
+      "who": "guest",
+      "kind": "chunked",
+      "limit": 8,
+      "input_bytes": 9,
+      "status": 403,
+      "response": {
+        "detail": {
+          "code": "erro_fora_do_convidado",
+          "params": {},
+          "msg": "fora do acesso do convidado"
+        }
+      },
+      "consumed": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/me",
+      "who": "guest",
+      "kind": "content_length",
+      "limit": 8,
+      "input_bytes": 9,
+      "status": 413,
+      "response": "request body too large",
+      "consumed": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/me",
+      "who": "guest",
+      "kind": "chunked",
+      "limit": 8,
+      "input_bytes": 9,
+      "status": 200,
+      "response": {
+        "role": "guest",
+        "name": "Ana"
+      },
+      "consumed": false
+    }
+  ]
+}

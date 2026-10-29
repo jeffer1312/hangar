@@ -1,0 +1,70 @@
+{
+  "source_commit": "55995dfe0247cef582829429623d9337390b08fa",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_transfer_failure.py",
+  "rows": [
+    {
+      "guest_write_fails": false,
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        [
+          "mode",
+          "session",
+          true
+        ],
+        [
+          "share_life",
+          "session",
+          "k:new"
+        ],
+        [
+          "guest_life",
+          "session",
+          "k:new"
+        ],
+        [
+          "mode",
+          "session",
+          false
+        ],
+        [
+          "invalidate"
+        ]
+      ],
+      "changing": []
+    },
+    {
+      "guest_write_fails": true,
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        [
+          "mode",
+          "session",
+          true
+        ],
+        [
+          "share_life",
+          "session",
+          "k:new"
+        ],
+        [
+          "guest_life",
+          "session",
+          "k:new"
+        ],
+        [
+          "mode",
+          "session",
+          false
+        ],
+        [
+          "invalidate"
+        ]
+      ],
+      "changing": []
+    }
+  ]
+}

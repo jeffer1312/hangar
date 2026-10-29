@@ -43,6 +43,19 @@ As capturas adicionais executam o Python isolado pelo comando registrado em cada
 | `setup.json` | 17 estados de ativação/desativação; status, corpo, cookie e arquivos |
 | `credentials.json` | 13 combinações de Bearer, query e cookies HTTP/HTTPS |
 | `identity-types.json` | 24 combinações de campo estrutural e tipo, com leitura autenticada e tentativa de escrita |
+| `terminal.json` | Oito combinações de credencial e Origin executadas no porteiro Python, sem criar PTY |
+| `visibility.json` | 11 valores históricos de `owner_sees`, pela filtragem Python |
+| `ignored-body.json` | 14 requisições com JSON malformado em rotas sem modelo de corpo |
+| `claim.json` | Três sequências de descoberta de vida e seis trocas com ou sem proprietário |
+| `transfer-failure.json` | Resultado e limpeza da transferência com gravação do dono bem-sucedida ou falha |
+| `limit-routes.json` | 12 combinações de rota, credencial e transporte, incluindo se o corpo foi consumido |
+| `push.json` | 15 decisões de aviso de espera e 18 de conclusão para Pi, omp e Kimi |
+| `placeholder.json` | 18 textos na guarda de marcador pendente do atalho |
+| `base64.json` | 16 formulários de cadastro e configuração, incluindo bits de preenchimento não canônicos |
+| `blobs.json` | 21 combinações de preenchimento, caracteres e precedência de erro no bloco cifrado |
+| `cookies.json` | 24 cookies e contextos de origem, com expiração, geração, renovação e CSRF |
+| `rate.json` | Dez sequências do limitador, com relógio fracionário, retrocesso e limites extremos |
+| `request-body.json` | 38 corpos e tipos de conteúdo; inclui UTF-16/32, surrogates, parser e falha posterior da resposta |
 
 Diferenças deliberadas autorizadas para esta migração:
 
@@ -58,3 +71,15 @@ Diferenças deliberadas autorizadas para esta migração:
 O teste do SSE usa a matriz Python e um multiplexador falso: verifica a lista publicada e o
 encerramento após revogação, sem sessões reais. As entradas HTTP e os arquivos também passam
 por `proptest`. Essas provas não substituem a conferência de Windows e do uso real.
+
+`limits.json` executa somente o middleware de tamanho, com uma aplicação ASGI mínima;
+`limit-routes.json` executa também o FastAPI e o porteiro reais. O limite é reduzido a oito
+bytes para comparar os mesmos ramos sem arquivos grandes. Na rota real, tamanho declarado
+excessivo retorna 413; excesso ao ler o modelo JSON retorna 400 porque o FastAPI captura a
+exceção. Um login recusado não consome o fluxo e retorna 403. GET sem corpo declarado também
+não o consome. O 413 do middleware isolado para fluxo sem tamanho não comprova a resposta da
+rota pública.
+
+As capturas por AST executam os corpos originais das funções nomeadas, com dependências e
+entrega isoladas. Depois da remoção do Python, a reprodução exige o commit de origem registrado
+no JSON; as capturas congeladas continuam sendo a referência dos testes Rust.

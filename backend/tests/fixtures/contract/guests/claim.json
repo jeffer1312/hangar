@@ -1,0 +1,311 @@
+{
+  "source_commit": "1bceae0e60618283d2aeee59cab7aa981b5544f7",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_claim.py",
+  "claims": [
+    {
+      "before": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "root": "⟦ROOT⟧",
+            "token_hash": "hash"
+          }
+        ],
+        "sessions": {}
+      },
+      "sequence": [
+        null,
+        null,
+        null
+      ],
+      "calls": 3,
+      "sleeps": [
+        0.2,
+        0.2,
+        0.2
+      ],
+      "disk": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "token_hash": "hash",
+            "root": "⟦ROOT⟧",
+            "sees_owner": false,
+            "owner_sees": true
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "guest",
+            "life": null
+          }
+        }
+      }
+    },
+    {
+      "before": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "root": "⟦ROOT⟧",
+            "token_hash": "hash"
+          }
+        ],
+        "sessions": {}
+      },
+      "sequence": [
+        null,
+        null,
+        "k:third"
+      ],
+      "calls": 3,
+      "sleeps": [
+        0.2,
+        0.2
+      ],
+      "disk": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "token_hash": "hash",
+            "root": "⟦ROOT⟧",
+            "sees_owner": false,
+            "owner_sees": true
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "guest",
+            "life": "k:third"
+          }
+        }
+      }
+    },
+    {
+      "before": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "root": "⟦ROOT⟧",
+            "token_hash": "hash"
+          }
+        ],
+        "sessions": {}
+      },
+      "sequence": [
+        "k:first"
+      ],
+      "calls": 1,
+      "sleeps": [],
+      "disk": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "token_hash": "hash",
+            "root": "⟦ROOT⟧",
+            "sees_owner": false,
+            "owner_sees": true
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "guest",
+            "life": "k:first"
+          }
+        }
+      }
+    }
+  ],
+  "changes": [
+    {
+      "before": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "root": "⟦ROOT⟧",
+            "token_hash": "hash"
+          }
+        ],
+        "sessions": {}
+      },
+      "life": null,
+      "disk": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "root": "⟦ROOT⟧",
+            "token_hash": "hash"
+          }
+        ],
+        "sessions": {}
+      }
+    },
+    {
+      "before": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "root": "⟦ROOT⟧",
+            "token_hash": "hash"
+          }
+        ],
+        "sessions": {}
+      },
+      "life": "k:new",
+      "disk": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "root": "⟦ROOT⟧",
+            "token_hash": "hash"
+          }
+        ],
+        "sessions": {}
+      }
+    },
+    {
+      "before": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "root": "⟦ROOT⟧",
+            "token_hash": "hash"
+          }
+        ],
+        "sessions": {}
+      },
+      "life": "",
+      "disk": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "root": "⟦ROOT⟧",
+            "token_hash": "hash"
+          }
+        ],
+        "sessions": {}
+      }
+    },
+    {
+      "before": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "root": "⟦ROOT⟧",
+            "token_hash": "hash"
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "guest",
+            "life": "k:old"
+          }
+        }
+      },
+      "life": null,
+      "disk": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "root": "⟦ROOT⟧",
+            "token_hash": "hash"
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "guest",
+            "life": "k:old"
+          }
+        }
+      }
+    },
+    {
+      "before": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "root": "⟦ROOT⟧",
+            "token_hash": "hash"
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "guest",
+            "life": "k:old"
+          }
+        }
+      },
+      "life": "k:new",
+      "disk": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "token_hash": "hash",
+            "root": "⟦ROOT⟧",
+            "sees_owner": false,
+            "owner_sees": true
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "guest",
+            "life": "k:new"
+          }
+        }
+      }
+    },
+    {
+      "before": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "root": "⟦ROOT⟧",
+            "token_hash": "hash"
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "guest",
+            "life": "k:old"
+          }
+        }
+      },
+      "life": "",
+      "disk": {
+        "guests": [
+          {
+            "id": "guest",
+            "name": "Ana",
+            "token_hash": "hash",
+            "root": "⟦ROOT⟧",
+            "sees_owner": false,
+            "owner_sees": true
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "guest",
+            "life": ""
+          }
+        }
+      }
+    }
+  ]
+}

@@ -217,8 +217,7 @@ impl Sync {
                 ));
             }
             for (k, size) in [("salt", 16), ("verifier_salt", 16), ("auth_verifier", 32)] {
-                if STANDARD
-                    .decode(v[k].as_str().unwrap_or_default())
+                if super::schema::base64_bytes(v[k].as_str().unwrap_or_default())
                     .ok()
                     .is_none_or(|b| b.len() != size)
                 {
@@ -480,7 +479,7 @@ pub fn unauthorized() -> Failure {
 }
 fn validate_key(b: &Value, key: &str, size: usize, max: usize) -> Result<()> {
     let s = v::text(b, key, 0, max)?;
-    if STANDARD.decode(&s).ok().is_none_or(|v| v.len() != size) {
+    if super::schema::base64_bytes(&s).ok().is_none_or(|v| v.len() != size) {
         return Err(v::value_error(
             key,
             b[key].clone(),
@@ -493,7 +492,7 @@ fn validate_blob(b: &Value) -> Result<()> {
     v::forbid_extra(b, &["iv", "data"])?;
     for (key, min, max, size) in [("iv", 16, 16, 12), ("data", 24, 104_857_600, 16)] {
         let s = v::text(b, key, min, max)?;
-        if STANDARD.decode(&s).ok().is_none_or(|v| {
+        if super::schema::base64_bytes(&s).ok().is_none_or(|v| {
             if key == "iv" {
                 v.len() != size
             } else {

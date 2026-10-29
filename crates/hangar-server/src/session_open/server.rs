@@ -68,53 +68,22 @@ pub struct LoginGuest { pub id: String, pub name: String, pub root: PathBuf }
 /// `guest_users.lookup_token`, só lendo: o hash do token contra o `token_hash` de cada um. Ausente,
 /// ilegível ou com um convidado torto é "nenhum convidado", como no `_load` de lá.
 pub fn login_guest(claude_base: &Path, token: &[u8]) -> Option<LoginGuest> {
-    use subtle::ConstantTimeEq;
-    let raw: Value = serde_json::from_slice(&std::fs::read(claude_base.join("guests.json")).ok()?).ok()?;
-    let hash: String = ring::digest::digest(&ring::digest::SHA256, token).as_ref().iter().map(|b| format!("{b:02x}")).collect();
-    let text = |guest: &Value, key: &str| guest[key].as_str().map(str::to_owned);
-    let guests: Option<Vec<(String, LoginGuest)>> = raw["guests"].as_array()?.iter().map(|g| Some((text(g, "token_hash")?,
-        LoginGuest { id: text(g, "id")?, name: text(g, "name")?, root: text(g, "root")?.into() }))).collect();
-    guests?.into_iter().find(|(stored, _)| bool::from(stored.as_bytes().ct_eq(hash.as_bytes()))).map(|(_, guest)| guest)
+    crate::login_guests::store::Store::shared(claude_base.join("guests.json")).lookup(token)
+        .map(|g| LoginGuest { id:g.id, name:g.name, root:g.root })
 }
 
 /// `guest_users.claim`: o dono da sessão no `guests.json`, sob a `guests.lock` que o Python também
 /// pega (`atomico.locked`), relendo o arquivo dentro da trava. Ilegível não é sobrescrito.
 pub fn claim_guest(claude_base: &Path, session: &str, guest: &str, life: Option<&str>) -> std::io::Result<()> {
-    use std::io::{Error, ErrorKind};
-    std::fs::create_dir_all(claude_base)?;
-    let lock = std::fs::OpenOptions::new().read(true).append(true).create(true).open(claude_base.join("guests.lock"))?;
-    lock.lock()?;
-    let path = claude_base.join("guests.json");
-    let mut state = match crate::runtime::queue::read_replaced(&path) {
-        Ok(raw) => serde_json::from_slice::<Value>(&raw).ok().filter(Value::is_object)
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "guests.json ilegível"))?,
-        Err(error) if error.kind() == ErrorKind::NotFound => json!({}),
-        Err(error) => return Err(error),
-    };
-    if state.get("guests").is_none() { state["guests"] = json!([]); }
-    if state.get("sessions").is_none() { state["sessions"] = json!({}); }
-    let sessions = state["sessions"].as_object_mut().ok_or_else(|| Error::new(ErrorKind::InvalidData, "guests.json ilegível"))?;
-    sessions.insert(session.into(), json!({"guest": guest, "life": life}));
-    crate::runtime::queue::atomic_write(&path, &serde_json::to_vec_pretty(&state)?)
+    crate::login_guests::store::Store::shared(claude_base.join("guests.json")).claim(session, guest, life)
+        .map_err(|_| std::io::Error::other("registro de convidados indisponível"))
 }
 
 /// `guest_users.set_life`: a vida nova da sessão que o convidado criou, sob a mesma `guests.lock`.
 /// Sem dono gravado não há o que mudar; ilegível não é sobrescrito.
 pub fn guest_set_life(claude_base: &Path, session: &str, life: &str) -> std::io::Result<()> {
-    use std::io::{Error, ErrorKind};
-    let lock = std::fs::OpenOptions::new().read(true).append(true).create(true).open(claude_base.join("guests.lock"))?;
-    lock.lock()?;
-    let path = claude_base.join("guests.json");
-    let mut state = match crate::runtime::queue::read_replaced(&path) {
-        Ok(raw) => serde_json::from_slice::<Value>(&raw).ok().filter(Value::is_object)
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "guests.json ilegível"))?,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    let Some(owner) = state["sessions"].get_mut(session).filter(|o| o.is_object()) else { return Ok(()) };
-    if owner["life"] == life { return Ok(()); }
-    owner["life"] = json!(life);
-    crate::runtime::queue::atomic_write(&path, &serde_json::to_vec_pretty(&state)?)
+    crate::login_guests::store::Store::shared(claude_base.join("guests.json")).set_life(session, Some(life))
+        .map_err(|_| std::io::Error::other("registro de convidados indisponível"))
 }
 
 /// O convidado do envelope da ponte: `guest` ausente ou nulo é o dono; o id, o convidado dele.
@@ -131,9 +100,8 @@ pub fn bridge_guest(envelope: &Value, claude_base: &Path) -> Result<Option<Login
 
 /// O convidado `id` do `guests.json`, para a ponte do Connect, que chega com o id já autenticado lá.
 pub fn guest_by_id(claude_base: &Path, id: &str) -> Option<LoginGuest> {
-    let raw: Value = serde_json::from_slice(&std::fs::read(claude_base.join("guests.json")).ok()?).ok()?;
-    let guest = raw["guests"].as_array()?.iter().find(|g| g["id"] == id)?;
-    Some(LoginGuest { id: id.into(), name: guest["name"].as_str()?.into(), root: guest["root"].as_str()?.into() })
+    crate::login_guests::store::Store::shared(claude_base.join("guests.json")).by_id(id)
+        .map(|g| LoginGuest { id:g.id, name:g.name, root:g.root })
 }
 
 /// A fila que a sessão morta deixou no nome (a projeção `.hangar-queue/<nome>.jsonl`, que o Rust lê

@@ -259,6 +259,9 @@ impl Store {
             .and_then(guest)
     }
     pub fn mutate<T>(&self, f: impl FnOnce(&mut Value) -> Result<T>) -> Result<T> {
+        self.mutate_optional(|state| f(state).map(Some)).map(|result| result.expect("mutação sempre produz resultado"))
+    }
+    fn mutate_optional<T>(&self, f: impl FnOnce(&mut Value) -> Result<Option<T>>) -> Result<Option<T>> {
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let parent = self
             .path
@@ -274,11 +277,27 @@ impl Store {
         file.lock().map_err(Failure::io)?;
         let mut state = self.load()?;
         let result = f(&mut state)?;
+        if result.is_none() { return Ok(None); }
         write(&self.path, &state).map_err(Failure::io)?;
         *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) =
             file_stamp(&self.path).map(|stamp| (stamp, state.clone()));
         *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
         Ok(result)
+    }
+    pub fn claim(&self, name: &str, id: &str, life: Option<&str>) -> Result<()> {
+        self.mutate(|state| {
+            state["sessions"][name] = json!({"guest":id, "life":life});
+            Ok(())
+        })
+    }
+    pub fn set_life(&self, name: &str, life: Option<&str>) -> Result<()> {
+        let Some(life) = life else { return Ok(()) };
+        self.mutate_optional(|state| {
+            let Some(entry) = state["sessions"].get_mut(name).filter(|entry| !entry.is_null()) else { return Ok(None) };
+            let object = entry.as_object_mut().ok_or_else(|| Failure::io(io::Error::other("propriedade inválida")))?;
+            object.insert("life".into(), json!(life));
+            Ok(Some(()))
+        }).map(|_| ())
     }
     pub fn create(
         &self,
