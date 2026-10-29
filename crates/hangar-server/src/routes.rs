@@ -36,6 +36,7 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct AppState {
     pub config_sync_context: Option<crate::config_sync::export::Context>,
     pub config_sync_translation: crate::config_sync::translate::Translator,
+    pub migration_branch: Arc<crate::migration_branch::Service>,
     settings_snapshot: std::sync::OnceLock<Result<Arc<crate::machine_peers::dotenv::SettingsSnapshot>,String>>,
     pub omp_sync: Arc<std::sync::OnceLock<Arc<crate::omp_sync::Service>>>,
     pub interactions: Arc<crate::interactions::InteractionStore>,
@@ -209,7 +210,7 @@ impl AppState {
                 .with_paths(list.env().dirs.as_ref().map(|d| d.home.clone()).unwrap_or_default(),
                     list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
                 .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone());
-        AppState { settings_snapshot: std::sync::OnceLock::new(), accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peer_network: Arc::new(crate::machine_peers::network::SystemNetwork), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
+        AppState { migration_branch: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peer_network: Arc::new(crate::machine_peers::network::SystemNetwork), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             interactions, plugin,
             remote_browser: Arc::default(),
