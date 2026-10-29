@@ -504,13 +504,13 @@ impl Apply {
                 json!({"account":name}),
             );
         }
-        if let Some(alias) = entry["alias"].as_str().filter(|s| !s.trim().is_empty()) {
+        if let Some(alias) = entry["alias"].as_str().map(crate::transcript::py::strip).filter(|s| !s.is_empty()) {
             let id = format!("claude:{}", catalog::resolved(&path).display());
-            let clean: String = alias.trim().chars().take(40).collect();
+            let clean = crate::orchestration::codec::truncate_string(alias, 40);
             if aliases::read(&self.accounts.env)
                 .get(&id)
                 .and_then(Value::as_str)
-                != Some(&clean)
+                != Some(clean)
             {
                 aliases::set(&self.accounts.env, &id, Some(alias))?;
                 touched = true;
