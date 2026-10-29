@@ -91,6 +91,7 @@ impl Hangar {
         self.remote.retain(|key, _| wanted.iter().any(|s| &norm(&s.address) == key));
         // Máquina desligada ou removida não deixa o aviso do chaveiro para trás.
         self.keyring.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
+        self.tags.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
         for s in &self.servers { api::route::seed(&s.address, s.invite, s.lan.as_ref()); }
         for entry in wanted {
             let key = norm(&entry.address);
@@ -154,6 +155,11 @@ impl Hangar {
                     }
                     // Quem o mostra (chip, blocos, painel) é acertado por `live_changed`, na volta desta função.
                     "shortcut_terminals" => { list.live_terms = super::terminal::parse_live_terms(&frame.data); changed = false; true }
+                    "tags" => {
+                        let stored = super::tags::store(&mut self.tags, &key, &frame.data);
+                        changed = stored == Some(true);
+                        stored.is_some()
+                    }
                     _ => { changed = false; true }
                 };
                 let _ = frame.applied.send(applied);

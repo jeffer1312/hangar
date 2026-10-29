@@ -13,6 +13,76 @@ pub(in crate::app) const CODEX_PERMISSIONS: [&str; 3] = ["Ask for approval", "Ap
 const QUOTA_WARN: f64 = 80.;
 const QUOTA_FULL: f64 = 90.;
 
+/// Qual gravação o "Em todas as minhas máquinas" repete.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::app) enum SpreadOf { Default, Context }
+
+/// O resultado numa máquina: `Old` = servidor sem a rota (404); `Absent` = o motor ou o Codex não existe nela.
+#[derive(Clone, Debug, PartialEq)]
+pub(in crate::app) enum Applied { Pending, Ok, Offline, Old, Absent, Failed(String) }
+
+/// A gravação a repetir: o padrão do harness (escopo, valor, espelho do Claude e o motor que precisa existir lá) ou o 1M.
+#[derive(Clone, Debug)]
+enum SpreadWrite {
+    Default { scope: Vec<(&'static str, String)>, value: Option<(String, String, String)>, mirror: bool, engine: Option<String> },
+    Context(bool),
+}
+
+/// "Em todas as minhas máquinas": marcado, a última gravação e o resultado de cada outra máquina (chave, nome, resultado).
+/// Sem fila durável: quem não respondeu é tentado de novo pela tela.
+#[derive(Default)]
+pub(in crate::app) struct Spread { on: bool, seq: u64, write: Option<SpreadWrite>, results: Vec<(String, String, Applied)> }
+
+/// `Ok(false)` = o alvo não existe na máquina. Sem status HTTP o pedido não chegou a uma resposta.
+fn applied(result: Result<bool, Failure>) -> Applied {
+    match result {
+        Ok(true) => Applied::Ok,
+        Ok(false) => Applied::Absent,
+        Err(error) if error.status == Some(404) => Applied::Old,
+        Err(error) if error.status.is_none() => Applied::Offline,
+        Err(error) => Applied::Failed(Hangar::fetch_failure(&error)),
+    }
+}
+
+/// Codex instalado, pela lista de `/api/harness`.
+fn has_codex(harness: &Value) -> bool {
+    harness.as_array().is_some_and(|list| list.iter().any(|cli| cli.get("id").and_then(Value::as_str) == Some("codex")
+        && cli.get("instalado").and_then(Value::as_bool) == Some(true)))
+}
+
+/// Motor de mesmo nome em `/api/engines`.
+fn has_engine(engines: &Value, name: &str) -> bool { engines.get("motores").and_then(|m| m.get(name)).is_some() }
+
+/// Conta de proxy do motor naquela máquina: id de conta é local, gravar sem ela deixaria um padrão morto.
+fn has_engine_account(engines: &Value, name: &str, account: &str) -> bool {
+    engines.get("motores").and_then(|m| m.get(name)).and_then(|m| serde_json::from_value::<Motor>(m.clone()).ok())
+        .is_some_and(|m| engine_account_ready(&m, account) && m.cliproxy_accounts.is_some())
+}
+
+/// Repete a gravação numa máquina; `Ok(false)` quando o alvo dela não existe ali.
+async fn spread_one(api: Api, write: SpreadWrite) -> Result<bool, Failure> {
+    match write {
+        SpreadWrite::Context(on) => {
+            if !has_codex(&api.server_read(&["harness"], &[], 30).await?) { return Ok(false); }
+            api.server_send(reqwest::Method::POST, &["harness", "codex", "opcoes"], Some(json!({"contexto_estendido": on})), 8).await?;
+        }
+        SpreadWrite::Default { scope, value, mirror, engine } => {
+            if let Some(engine) = engine {
+                let engines = api.server_read(&["engines"], &[], 15).await?;
+                let account = scope.iter().find(|(k, _)| *k == "engine_account").map(|(_, v)| v.as_str()).filter(|a| !a.is_empty());
+                if !has_engine(&engines, &engine) || account.is_some_and(|a| !has_engine_account(&engines, &engine, a)) { return Ok(false); }
+            }
+            let scope: Vec<_> = scope.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            api.save_session_default(&scope, value.clone(), false).await?;
+            if let Some((model, effort, permission)) = value.filter(|_| mirror) {
+                api.server_send(reqwest::Method::POST, &["claude", "defaults"],
+                    Some(json!({"model": model, "effort": effort, "permission": permission})), 10).await?;
+            }
+        }
+    }
+    Ok(true)
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub(super) struct ModelOption {
     id: String,
@@ -164,15 +234,23 @@ pub(super) fn exhausted(quota: &QuotaLine, now: f64) -> Option<Option<f64>> {
     Some(full.iter().filter_map(|w| w.reset_ts).reduce(f64::max))
 }
 
-/// A conta para onde sair quando a escolhida (`selected`) tem a janela geral esgotada: a de mais folga (100 menos a maior
-/// janela, a regra do `sugerir_claude` do backend) entre as de cota lida e não esgotada, empate com a ativa. `None` quando a
-/// escolhida não está esgotada, não tem cota conhecida ou nenhuma outra serve.
+/// Uso a partir do qual a conta cede a vez: o `QUOTA_LIMIT` do servidor (session_open/resolve.rs), o `COTA_LIMITE` do core.
+const QUOTA_LIMIT: f64 = 95.;
+
+/// A regra do servidor ao abrir (`quota_verdict`), para a tela mostrar a conta em que a sessão vai nascer: a escolhida
+/// (`selected`) a 95% ou mais sai para a lida de menor uso (a maior janela, de qualquer tipo), se ela tiver mais folga que
+/// a escolhida; empate fica com a ativa. `None` = fica (abaixo do limite, sem cota conhecida ou nenhuma melhor).
 fn quota_switch(selected: Option<&str>, accounts: &[(&str, bool, Option<&QuotaLine>)], now: f64) -> Option<String> {
-    exhausted(accounts.iter().find(|a| Some(a.0) == selected)?.2?, now)?;
-    accounts.iter().filter_map(|&(path, active, quota)| {
-        let quota = quota.filter(|q| exhausted(q, now).is_none() && q.state == "lida")?;
-        Some((100. - quota.windows().map(|(_, p)| p).reduce(f64::max)?, active, path))
-    }).max_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))).map(|(_, _, path)| path.to_owned())
+    // Como no servidor: a última leitura guardada de conta `expirada` conta; janela que já virou recomeçou do zero.
+    let usage = |quota: Option<&QuotaLine>| quota?.windows().map(|(w, p)| if w.reset_ts.is_some_and(|r| r <= now) { 0. } else { p })
+        .reduce(f64::max);
+    let current = usage(accounts.iter().find(|a| Some(a.0) == selected)?.2)?;
+    if current < QUOTA_LIMIT { return None; }
+    // Destino só com leitura atual, como no servidor: a guardada de conta expirada vale só para a escolhida.
+    accounts.iter().filter(|a| Some(a.0) != selected)
+        .filter_map(|&(path, active, quota)| Some((usage(quota.filter(|q| q.state == "lida"))?, active, path)))
+        .filter(|a| a.0 < current)
+        .min_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1))).map(|(_, _, path)| path.to_owned())
 }
 
 /// "2h10", "35m", "3d4h": quanto falta para a janela voltar (`faltaPara` do web).
@@ -379,7 +457,8 @@ impl NewSession {
         if self.proxy_accounts().is_some() && !self.engine_ready() { return None; }
         let checked = self.saved_default.as_ref() == Some(&self.current_choice());
         let label = tr("create_default_for_harness").replace("{harness}", provider_name(self.provider));
-        Some(div().px(px(4.)).child(Checkbox::new("create-default-harness").label(label).checked(checked).disabled(self.creating || self.default_saving || !self.defaults_ready)
+        let spread = self.render_spread(SpreadOf::Default, cx);
+        Some(div().px(px(4.)).flex().flex_col().gap(px(6.)).child(Checkbox::new("create-default-harness").label(label).checked(checked).disabled(self.creating || self.default_saving || !self.defaults_ready)
             .on_change(cx.listener(|this, on: &bool, _, cx| {
                 if this.default_saving { return; }
                 let value = on.then(|| this.current_choice());
@@ -387,6 +466,10 @@ impl NewSession {
                 this.default_save_seq += 1;
                 let (save_seq, scope_seq, scope) = (this.default_save_seq, this.models.seq, this.default_scope());
                 let mirror = this.provider == "claude" && this.engine.is_empty() && this.proxy_accounts().is_none();
+                if this.spreads[SpreadOf::Default as usize].on {
+                    this.spreads[SpreadOf::Default as usize].write = Some(this.default_write(value.clone()));
+                    this.spread(SpreadOf::Default, None, cx);
+                }
                 this.request(cx, move |api, send| Box::pin(async move {
                     let scope: Vec<_> = scope.iter().map(|(k, v)| (*k, v.as_str())).collect();
                     let result = api.save_session_default(&scope, value.clone(), false).await;
@@ -398,7 +481,86 @@ impl NewSession {
                     }
                 }));
                 cx.notify();
-            }))))
+            }))).children(spread))
+    }
+
+    /// O padrão de agora como gravação a repetir; com motor, ele precisa existir na outra máquina.
+    fn default_write(&self, value: Option<(String, String, String)>) -> SpreadWrite {
+        SpreadWrite::Default {
+            scope: self.default_scope(), value,
+            mirror: self.provider == "claude" && self.engine.is_empty() && self.proxy_accounts().is_none(),
+            engine: (self.provider == "claude" && !self.engine.is_empty()).then(|| self.engine.clone()),
+        }
+    }
+
+    /// As outras máquinas próprias: a desta tela já recebe a gravação pelo caminho de sempre.
+    fn other_servers(&self) -> Vec<ServerChoice> {
+        self.link.servers.iter().filter(|s| !self.current_server(s)).cloned().collect()
+    }
+
+    /// Repete a última gravação em cada outra máquina (ou só em `only`, no tentar de novo), em paralelo; cada uma responde
+    /// por si.
+    fn spread(&mut self, of: SpreadOf, only: Option<String>, cx: &mut Context<Self>) {
+        let targets: Vec<ServerChoice> = self.other_servers().into_iter().filter(|s| only.as_ref().is_none_or(|key| *key == s.key)).collect();
+        let spread = &mut self.spreads[of as usize];
+        let Some(write) = spread.write.clone() else { return };
+        if only.is_none() {
+            spread.seq += 1;
+            spread.results = targets.iter()
+                .map(|s| (s.key.clone(), crate::app::tags::machine_name(None, &s.label, &s.address), Applied::Pending)).collect();
+        }
+        for result in spread.results.iter_mut().filter(|r| targets.iter().any(|s| s.key == r.0)) { result.2 = Applied::Pending; }
+        let seq = spread.seq;
+        for server in targets {
+            let write = write.clone();
+            self.request(cx, move |_, send| Box::pin(async move {
+                let result = match Api::new(&server.address, &server.token) { Ok(api) => spread_one(api, write).await, Err(error) => Err(error) };
+                send(CreateReply::Spread(of, seq, server.key, applied(result))).await
+            }));
+        }
+        cx.notify();
+    }
+
+    /// Marcar repete na hora o que já está valendo aqui (o padrão marcado, o 1M lido); desmarcar só esconde os resultados.
+    fn set_spread(&mut self, of: SpreadOf, on: bool, cx: &mut Context<Self>) {
+        let write = match of {
+            SpreadOf::Default => self.saved_default.clone().filter(|saved| *saved == self.current_choice()).map(|v| self.default_write(Some(v))),
+            SpreadOf::Context => self.context_on.map(SpreadWrite::Context),
+        };
+        let spread = &mut self.spreads[of as usize];
+        spread.on = on;
+        if !on { (spread.write, spread.results) = (None, Vec::new()); spread.seq += 1; cx.notify(); return; }
+        spread.write = write;
+        self.spread(of, None, cx);
+        cx.notify();
+    }
+
+    /// A caixa "Em todas as minhas máquinas" e uma linha por outra máquina, com tentar de novo para quem não respondeu ou recusou.
+    fn render_spread(&self, of: SpreadOf, cx: &mut Context<Self>) -> Option<Div> {
+        if self.other_servers().is_empty() || self.is_transfer() { return None; }
+        let spread = &self.spreads[of as usize];
+        let id = match of { SpreadOf::Default => "create-spread-default", SpreadOf::Context => "create-spread-context" };
+        let lines = spread.results.iter().map(|(key, name, status)| {
+            let (text, color, retry) = match status {
+                Applied::Pending => (tr("loading"), theme::muted(), false),
+                Applied::Ok => (tr_shared("tags_apply_ok", &[]), theme::success(), false),
+                Applied::Offline => (tr_shared("tags_apply_offline", &[]), theme::warning(), true),
+                Applied::Old => (tr_shared("tags_apply_old", &[]), theme::muted(), false),
+                Applied::Absent => (tr_shared("tags_apply_absent", &[]), theme::muted(), false),
+                Applied::Failed(reason) => (tr_shared("tags_apply_failed", &[("reason", reason)]), theme::danger(), true),
+            };
+            let key = key.clone();
+            div().flex().items_center().gap(px(8.)).pl(px(24.)).text_size(px(12.))
+                .child(div().min_w_0().truncate().text_color(theme::muted()).child(name.clone()))
+                .child(div().id(SharedString::from(format!("{id}-{key}"))).role(Role::Status).min_w_0().text_color(color).whitespace_normal().child(text))
+                .when(retry, |el| el.child(Button::new(SharedString::from(format!("{id}-retry-{key}"))).ghost().xsmall()
+                    .label(tr_shared("tags_apply_retry", &[])).disabled(self.creating)
+                    .on_click(cx.listener(move |this, _, _, cx| this.spread(of, Some(key.clone()), cx)))))
+        }).collect::<Vec<_>>();
+        Some(div().flex().flex_col().gap(px(4.))
+            .child(Checkbox::new(id).label(tr_shared("tags_apply_all", &[])).checked(spread.on).disabled(self.creating)
+                .on_change(cx.listener(move |this, on: &bool, _, cx| this.set_spread(of, *on, cx))))
+            .children(lines))
     }
 
     pub(super) fn receive_models(&mut self, seq: u64, result: Result<Value, Failure>, remembered: (String, String),
@@ -697,7 +859,7 @@ impl NewSession {
         }, window, cx));
     }
 
-    /// A conta Claude escolhida com a cota esgotada troca sozinha pela de mais folga, salvo escolha à mão no menu.
+    /// A conta Claude escolhida a 95% ou mais troca sozinha pela de mais folga (`quota_switch`), salvo escolha à mão no menu.
     /// A conversa fechada não passa por aqui: lá o envio fica bloqueado. `true` quando trocou.
     pub(super) fn leave_exhausted_account(&mut self) -> bool {
         // Com o menu de conta aberto, a lista não muda debaixo do clique: fechar ou a próxima cota reavalia.
@@ -765,6 +927,11 @@ impl NewSession {
                 }
             }
             CreateReply::Account(seq, done) => self.account_done(seq, done, window, cx),
+            CreateReply::Spread(of, seq, key, status) => {
+                let spread = &mut self.spreads[of as usize];
+                if seq != spread.seq { return; }
+                if let Some(line) = spread.results.iter_mut().find(|line| line.0 == key) { line.2 = status; }
+            }
             _ => {}
         }
     }
@@ -799,6 +966,10 @@ impl NewSession {
         self.context_seq += 1;
         let seq = self.context_seq;
         (self.context_busy, self.context_want, self.context_error) = (true, Some(!on), None);
+        if self.spreads[SpreadOf::Context as usize].on {
+            self.spreads[SpreadOf::Context as usize].write = Some(SpreadWrite::Context(!on));
+            self.spread(SpreadOf::Context, None, cx);
+        }
         self.request(cx, move |api, send| Box::pin(async move {
             let body = json!({"contexto_estendido": !on});
             send(CreateReply::Context(seq, api.server_send(reqwest::Method::POST, &["harness", "codex", "opcoes"], Some(body), 8).await)).await
@@ -1082,6 +1253,7 @@ impl NewSession {
             .when_some(self.context_error.clone(), |el, error| el.child(alert("create-context-error", error))
                 .child(div().child(Button::new("create-context-retry").outline().small().label(tr("create_try_again")).disabled(self.context_busy)
                     .on_click(cx.listener(|this, _, _, cx| { this.load_context(cx); cx.notify(); })))))
+            .children(self.render_spread(SpreadOf::Context, cx))
     }
 
     /// Motor logo abaixo do provedor, como no seletor da conversa: a conta e a lista de modelos dependem dele.
@@ -1364,26 +1536,66 @@ mod tests {
     }
 
     #[test]
-    fn exhausted_account_switches_to_the_roomiest() {
+    fn account_at_95_switches_to_the_roomiest() {
+        fn switch(selected: Option<&str>, accounts: &[(&str, bool, Option<&QuotaLine>)]) -> Option<String> { quota_switch(selected, accounts, 1000.) }
         let quota = |windows: serde_json::Value| -> QuotaLine {
             serde_json::from_value(serde_json::json!({"id": "claude:/x", "estado": "lida", "janelas": windows})).unwrap()
         };
-        let now = 1000.;
+        let used = |pct: f64| quota(serde_json::json!([{"rotulo": "7d", "pct": pct}]));
         let full = quota(serde_json::json!([{"rotulo": "5h", "pct": 100.0, "reset_ts": 2000.0}]));
         let busy = quota(serde_json::json!([{"rotulo": "5h", "pct": 70.0}, {"rotulo": "7d", "pct": 10.0}]));
         let free = quota(serde_json::json!([{"rotulo": "5h", "pct": 20.0}, {"rotulo": "7d opus", "pct": 40.0}]));
         let model_full = quota(serde_json::json!([{"rotulo": "7d opus", "pct": 100.0}, {"rotulo": "5h", "pct": 10.0}]));
         // Esgotada: vai para a de mais folga, contando todas as janelas; a sem leitura não entra.
-        assert_eq!(quota_switch(Some("/a"), &[("/a", true, Some(&full)), ("/b", false, Some(&busy)), ("/c", false, Some(&free)), ("/d", false, None)], now),
+        assert_eq!(switch(Some("/a"), &[("/a", true, Some(&full)), ("/b", false, Some(&busy)), ("/c", false, Some(&free)), ("/d", false, None)]),
             Some("/c".into()));
-        // Janela por modelo cheia não é esgotada: fica onde está.
-        assert_eq!(quota_switch(Some("/a"), &[("/a", true, Some(&model_full)), ("/c", false, Some(&free))], now), None);
-        // Nenhuma serve: fica.
-        assert_eq!(quota_switch(Some("/a"), &[("/a", true, Some(&full)), ("/b", false, Some(&full)), ("/d", false, None)], now), None);
+        // A 97% com outra a 40%: troca.
+        assert_eq!(switch(Some("/a"), &[("/a", true, Some(&used(97.))), ("/b", false, Some(&used(40.)))]), Some("/b".into()));
+        // Janela por modelo conta, como no servidor.
+        assert_eq!(switch(Some("/a"), &[("/a", true, Some(&model_full)), ("/c", false, Some(&free))]), Some("/c".into()));
+        // A última leitura guardada de conta expirada também conta.
+        let expired: QuotaLine = serde_json::from_value(serde_json::json!({"id": "claude:/a", "estado": "expirada",
+            "janelas": [{"rotulo": "5h", "pct": 100.0}]})).unwrap();
+        assert_eq!(switch(Some("/a"), &[("/a", true, Some(&expired)), ("/c", false, Some(&free))]), Some("/c".into()));
+        // Mas não serve de destino.
+        let expired_low: QuotaLine = serde_json::from_value(serde_json::json!({"id": "claude:/b", "estado": "expirada",
+            "janelas": [{"rotulo": "7d", "pct": 10.0}]})).unwrap();
+        assert_eq!(switch(Some("/a"), &[("/a", true, Some(&used(97.))), ("/b", false, Some(&expired_low))]), None);
+        // Janela que já virou não conta: os 100% guardados são de antes do reset.
+        let renewed = quota(serde_json::json!([{"rotulo": "5h", "pct": 100.0, "reset_ts": 500.0}]));
+        assert_eq!(switch(Some("/a"), &[("/a", true, Some(&renewed)), ("/c", false, Some(&free))]), None);
+        // Todas a 95% ou mais: a de mais folga.
+        assert_eq!(switch(Some("/a"), &[("/a", true, Some(&used(99.))), ("/b", false, Some(&used(98.))), ("/c", false, Some(&used(96.)))]),
+            Some("/c".into()));
+        // Abaixo de 95%: fica.
+        assert_eq!(switch(Some("/a"), &[("/a", true, Some(&used(94.))), ("/c", false, Some(&used(10.)))]), None);
+        // Nenhuma com mais folga que a escolhida: fica.
+        assert_eq!(switch(Some("/a"), &[("/a", true, Some(&used(96.))), ("/b", false, Some(&used(100.))), ("/c", false, Some(&full))]), None);
+        assert_eq!(switch(Some("/a"), &[("/a", true, Some(&full)), ("/b", false, Some(&full)), ("/d", false, None)]), None);
         // Sem conta escolhida conhecida: fica.
-        assert_eq!(quota_switch(None, &[("/a", true, Some(&full)), ("/c", false, Some(&free))], now), None);
+        assert_eq!(switch(None, &[("/a", true, Some(&full)), ("/c", false, Some(&free))]), None);
         // Empate fica com a ativa, em qualquer ordem.
-        assert_eq!(quota_switch(Some("/a"), &[("/a", false, Some(&full)), ("/c", true, Some(&free)), ("/e", false, Some(&free))], now), Some("/c".into()));
-        assert_eq!(quota_switch(Some("/a"), &[("/a", false, Some(&full)), ("/e", false, Some(&free)), ("/c", true, Some(&free))], now), Some("/c".into()));
+        assert_eq!(switch(Some("/a"), &[("/a", false, Some(&full)), ("/c", true, Some(&free)), ("/e", false, Some(&free))]), Some("/c".into()));
+        assert_eq!(switch(Some("/a"), &[("/a", false, Some(&full)), ("/e", false, Some(&free)), ("/c", true, Some(&free))]), Some("/c".into()));
+    }
+
+    #[test]
+    fn spread_result_says_why_each_machine_was_not_applied() {
+        use super::{Applied, applied, has_codex, has_engine};
+        use crate::api::Failure;
+        let refused = |status: u16| Failure { status: Some(status), detail: "HTTP 500".into(), retry_after: None, uncertain: false, code: None };
+        assert_eq!(applied(Ok(true)), Applied::Ok);
+        assert_eq!(applied(Ok(false)), Applied::Absent);
+        assert_eq!(applied(Err(refused(404))), Applied::Old);
+        assert_eq!(applied(Err(Failure::local("network_error"))), Applied::Offline);
+        assert!(matches!(applied(Err(refused(500))), Applied::Failed(_)));
+        let harness = serde_json::json!([{"id": "claude", "instalado": true}, {"id": "codex", "instalado": false}]);
+        assert!(!has_codex(&harness));
+        assert!(has_codex(&serde_json::json!([{"id": "codex", "instalado": true}])));
+        assert!(has_engine(&serde_json::json!({"motores": {"glm": {}}}), "glm"));
+        assert!(!has_engine(&serde_json::json!({"motores": {"glm": {}}}), "kimi"));
+        let proxy = serde_json::json!({"motores": {"gpt": {"cliproxy_accounts": [{"account": "a1", "credential_id": "codex:/h/.codex", "email": "", "label": ""}]}}});
+        assert!(super::has_engine_account(&proxy, "gpt", "a1"));
+        assert!(!super::has_engine_account(&proxy, "gpt", "a2"), "conta que só existe na outra máquina não recebe o padrão");
     }
 }

@@ -142,6 +142,31 @@ pub(crate) fn merged_history_capped(req: &HistoryRequest, max_window: u64) -> io
     Ok(evs)
 }
 
+/// O primeiro evento que `want` aceita, lido do começo do transcript e parando nele: quem só quer o
+/// início da conversa não relê o arquivo inteiro. Transcript ausente = `None`.
+pub(crate) fn first_event(provider: Provider, jsonl: &Path, want: impl Fn(&ChatEvent) -> bool) -> io::Result<Option<ChatEvent>> {
+    let file = match File::open(jsonl) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    for raw in BufReader::new(file).split(b'\n') {
+        let raw = raw?;
+        let line = String::from_utf8_lossy(&raw);
+        let Some(value) = pyjson::loads_lossless(line.trim_end_matches('\r')) else { continue };
+        let Value::Object(obj) = &value else { continue };
+        let events = match provider {
+            Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(obj, peer::name_of_pid),
+            Provider::Codex => codex::parse_rollout_obj(&value),
+            Provider::Orq => return Ok(None),
+        };
+        if let Some(event) = events.into_iter().find(|e| want(e)) {
+            return Ok(Some(event));
+        }
+    }
+    Ok(None)
+}
+
 /// `_tail_offset` (pqueue.py:961): primeira linha completa dentro dos últimos `window` bytes.
 fn tail_offset(path: &Path, window: u64) -> u64 {
     let read = || -> io::Result<u64> {
@@ -356,7 +381,11 @@ pub(crate) fn from_current_session(entry: &Map<String, Value>, min_ts: f64, ts: 
 pub(crate) fn entry_event(entry: &Map<String, Value>) -> ChatEvent {
     let id = entry.get("id").map_or_else(|| "None".to_string(), py::py_str);
     let text = entry.get("text").and_then(Value::as_str).map(str::to_string);
-    let mut ev = if is_local_output(entry) {
+    let hook_error = entry.get("hook_error").and_then(Value::as_str).filter(|_| is_local_output(entry));
+    let mut ev = if let Some(hook_error) = hook_error {
+        let notice = entry.get("notice").and_then(Value::as_str).unwrap_or("hook_failed");
+        ChatEvent { text: Some(notice.into()), hook_error: Some(hook_error.into()), ..event(ChatKind::Notice, format!("local-{id}")) }
+    } else if is_local_output(entry) {
         ChatEvent { text, ..event(ChatKind::AssistantMsg, format!("local-{id}")) }
     } else {
         ChatEvent {
@@ -474,6 +503,19 @@ mod tests {
     fn english_attachment_marker_leaves_the_caption() {
         assert_eq!(super::strip_attach("look — 📎 image: /a.png 📎 file: /b.txt"), "look");
         assert_eq!(super::strip_attach("olha — 📎 arquivo: /b.txt"), "olha");
+    }
+
+    #[test]
+    fn local_row_with_hook_error_is_a_hook_notice_with_its_own_code() {
+        let row = serde_json::json!({"id":"a1","text":"Hook falhou — p · postToolUse: exit 127","papel":"assistant","confirmed":true,
+            "hook_error":"p · postToolUse: exit 127","notice":"hook_failed"});
+        let event = super::entry_event(row.as_object().unwrap());
+        assert_eq!(event.kind, hangar_api::chat::ChatKind::Notice);
+        assert_eq!(event.text.as_deref(), Some("hook_failed"));
+        assert_eq!(event.hook_error.as_deref(), Some("p · postToolUse: exit 127"));
+        assert_eq!(event.id, "local-a1");
+        let plain = serde_json::json!({"id":"a2","text":"outro aviso","papel":"assistant","confirmed":true});
+        assert_eq!(super::entry_event(plain.as_object().unwrap()).kind, hangar_api::chat::ChatKind::AssistantMsg);
     }
 
     use super::{chaves_de_commit, merged_history, merged_history_capped, queue_panel_entries, transcript_start_ts, HistoryRequest, Provider, TAIL_WINDOW};

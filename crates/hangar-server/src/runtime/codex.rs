@@ -8,6 +8,9 @@ use std::sync::Arc;
 use crate::interactions::{ExpectedInteraction,InteractionBinding,InteractionError,InteractionKind,InteractionStore,native_target,runtime_error};
 use super::queue::Status;
 
+#[path="codex_subagents.rs"]
+mod subagents;
+
 struct Rpc {
     operation_id:String,
     method:String,
@@ -17,6 +20,7 @@ struct Rpc {
     continuation:Option<Value>,
     state_revision:u64,
     settings_revision:u64,
+    subagent_revision:u64,
 }
 
 struct ServiceTierChange {
@@ -179,8 +183,16 @@ pub struct Engine {
     response_started:bool,
     first_response_start:Option<(String,f64)>,
     compacting:bool,
-    /// item → (turno, `processId`) dos comandos ainda rodando; o Stop os encerra.
-    running_commands:BTreeMap<String,(String,String)>,
+    /// Comandos ainda rodando, por item; o Stop encerra os do turno, e os que sobram dele seguem até sair.
+    running_commands:BTreeMap<String,RunningCommand>,
+    /// Por `hooks.json` + evento + texto: hooks que falham alternados não quebram a sequência um do outro.
+    hook_streaks:BTreeMap<String,HookStreak>,
+    /// Avisos do Codex já postos na conversa desta thread: o mesmo texto não se repete.
+    notices_seen:BTreeSet<String>,
+    /// A rodada de reaprovação deste turno já terminou (aprovou, falhou ou não tinha o que aprovar).
+    hook_trust_settled:bool,
+    /// Saída nova de comando ainda não publicada: sai no Tick deste instante.
+    output_due:Option<f64>,
     thinking:LiveBuffer,
     /// A vida anterior desta sessão estava no meio de um turno.
     was_working:bool,
@@ -198,6 +210,9 @@ pub struct Engine {
     /// Formatos tortos já mandados ao Python: falha sistemática não vira um aviso por linha.
     reported_formats:BTreeSet<String>,
     async_questions:AsyncQuestions,
+    subagents:BTreeMap<String,subagents::Agent>,
+    subagent_revision:u64,
+    subagent_epoch:Arc<subagents::FamilyEpoch>,
     /// Terminal: respostas assíncronas reservadas na fila, na ordem em que entraram.
     reservations:Vec<Reservation>,
     skill_preparations:BTreeMap<RequestId,RuntimeCommand>,
@@ -229,7 +244,8 @@ fn relaunches(kind:OperationKind) -> bool {
 fn terminal_operation(kind:OperationKind) -> bool {
     type K = OperationKind;
     matches!(kind,K::Input | K::Steer | K::Interrupt | K::Select | K::AnswerQuestions | K::SkipQuestion | K::DispatchAsyncAnswer
-        | K::Compact | K::ListModels | K::ListSkills | K::ReadRateLimits | K::ReadSettings | K::SetModel | K::SetEffort | K::SetServiceTier | K::SetMode)
+        | K::Compact | K::ListModels | K::ListSkills | K::ReadRateLimits | K::ReadSettings | K::SetModel | K::SetEffort | K::SetServiceTier | K::SetMode
+        | K::ReadSubagent | K::SubagentMessage | K::TerminateTerminal)
 }
 fn string(value:&Value) -> Option<String> { value.as_str().map(str::to_owned) }
 fn service_tier(value:&Value) -> Option<String> {
@@ -289,6 +305,28 @@ const TURN_PROBE_AFTER:f64 = 60.0;
 fn missing_rollout(message:&str) -> bool { message.contains("no rollout found") }
 
 const UNPROVEN_THREAD:&str = "o Codex respondeu sem comprovar a conversa pedida";
+/// Texto do Codex quando o conteúdo de um plugin mudou depois da aprovação (`plugin_trust.rs`).
+const HOOK_APPROVAL_REQUIRED:&str = "hook approval required";
+/// O mesmo rabo de saída que o `bash-output` do Claude mostra.
+const OUTPUT_TAIL:usize = 16_000;
+/// O mesmo passo em que o feed junta os eventos.
+const OUTPUT_EVERY:f64 = 0.15;
+
+struct RunningCommand { turn:String, process:String, command:String, started_at:f64, tail:String }
+
+/// Falhas seguidas de um hook: a primeira vai à conversa, as outras só somam até ele passar ou o turno acabar.
+struct HookStreak { notice:&'static str, detail:String, count:u32 }
+
+/// Pasta do plugin no cache (`…/cache/<marketplace>/<plugin>/…`) ou o caminho inteiro do `hooks.json`.
+fn hook_streak_prefix(run:&wire::HookRunSummary) -> String {
+    format!("{}\u{0}{}\u{0}",run.source_path.as_deref().unwrap_or(""),run.event_name)
+}
+
+fn hook_origin(source:&str) -> String {
+    let normalized = source.replace('\\',"/");
+    let parts:Vec<_> = normalized.split('/').collect();
+    parts.iter().position(|part|*part == "cache").and_then(|index|parts.get(index+2)).map_or_else(||source.to_owned(),|plugin|(*plugin).to_owned())
+}
 
 /// Thread principal aberta pela TUI, como `sessions.primary_thread` do Python: subagente e outra pasta não trocam o vínculo.
 fn primary_thread(thread:&Value,cwd:Option<&str>) -> bool {
@@ -468,9 +506,9 @@ impl Engine {
             // já foi recusado no `new_checked`; em nenhum dos dois vira Full Access.
             permission_mode:headless.then(||super::codex_launch::stored_mode(&metadata).ok()).flatten().map(Into::into),token_usage:Value::Null,rate_limits:Value::Null,usage_limited:false,
             preview:LiveBuffer::default(),response_started:false,first_response_start:None,compacting:false,
-            running_commands:BTreeMap::new(),thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
+            running_commands:BTreeMap::new(),hook_streaks:BTreeMap::new(),notices_seen:BTreeSet::new(),hook_trust_settled:false,output_due:None,thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
             rpc:BTreeMap::new(),server_requests:Vec::new(),
-            request_epochs:BTreeMap::new(),answering:BTreeSet::new(),lost_requests:BTreeSet::new(),wires:BTreeMap::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reported_formats:BTreeSet::new(),async_questions,reservations:Vec::new(),skill_preparations:BTreeMap::new(),skips:BTreeMap::new(),last_event:clock.monotonic_s,mode_write:None,metadata }
+            request_epochs:BTreeMap::new(),answering:BTreeSet::new(),lost_requests:BTreeSet::new(),wires:BTreeMap::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reported_formats:BTreeSet::new(),async_questions,subagents:BTreeMap::new(),subagent_revision:0,subagent_epoch:Arc::new(subagents::FamilyEpoch::default()),reservations:Vec::new(),skill_preparations:BTreeMap::new(),skips:BTreeMap::new(),last_event:clock.monotonic_s,mode_write:None,metadata }
     }
 
     pub fn view(&self) -> Value {
@@ -526,6 +564,10 @@ impl Engine {
         state.codex_question = question.and_then(|q|q.as_object().cloned());
         state.codex_mode = self.mode.clone();
         state.codex_service_tier = self.service_tier.clone();
+        state.codex_subagents = Some(self.published_subagents());
+        state.codex_commands = self.running_commands.iter().map(|(id,command)|hangar_api::state::CodexCommand { id:id.clone(),
+            process_id:command.process.clone(),command:command.command.clone(),started_at:command.started_at,
+            background:self.turn_id.as_deref() != Some(command.turn.as_str()) }).collect();
         state.label = self.compacting.then(||"Compactando…".into());
         state.question = None; state.options = None;
         // Pedido que só a TUI atende (ou que a conexão que caiu levou) segura a fila: a sessão não pode
@@ -595,7 +637,8 @@ impl Engine {
             "async_seen":self.async_questions.seen,"async_resolved":self.async_questions.resolved,
             "async_echoes":self.async_questions.echoes,"async_during_load":self.async_questions.during_load,
             "skipped_async_questions":self.async_questions.skipped,
-            "pending_questions":self.async_questions.pending.iter().filter(|(id,_)|!self.answer_queued(id)).count()})
+            "pending_questions":self.async_questions.pending.iter().filter(|(id,_)|!self.answer_queued(id)).count(),
+            "subagents":self.subagent_views()})
     }
 
     fn blocking_question(&self) -> Option<Value> {
@@ -636,7 +679,7 @@ impl Engine {
 
     fn async_transport_ready(&self) -> bool {
         self.alive && self.sendable() && self.server_requests.is_empty() && self.lost_requests.is_empty() && self.skill_preparations.is_empty()
-            && !self.rpc.values().any(|rpc|matches!(rpc.method.as_str(),"turn/start" | "turn/steer" | "thread/compact/start")
+            && !self.rpc.values().any(|rpc|rpc.params["threadId"] == self.thread_id && matches!(rpc.method.as_str(),"turn/start" | "turn/steer" | "thread/compact/start")
                 || rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "skill_lookup"))
     }
 
@@ -752,6 +795,49 @@ impl Engine {
         if self.reported_formats.insert(kind.clone()) { self.policy("unknown_private",json!({"kind":kind,"event":event()}),effects); }
     }
 
+    /// Plugin ou `hooks.json` sincronizado pelo Hangar mudou com a sessão aberta e o Codex passou a
+    /// recusar o hook. Só a conexão desta sessão recarrega a confiança que o app-server dela tem em memória.
+    fn trust_synced_hooks(&mut self,effects:&mut Vec<Effect>) {
+        if self.rpc.values().any(|rpc|!rpc.timed_out && rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust")) { return; }
+        let cwds:Vec<Value> = self.metadata["cwd"].as_str().map(Value::from).into_iter().collect();
+        self.counter += 1;
+        self.rpc(format!("hook_trust:{}:{}",self.generation,self.counter),"hooks/list",json!({"cwds":cwds}),
+            Some(json!({"kind":"hook_trust"})),effects);
+    }
+
+    fn hook_trust_reply(&mut self,rpc:&Rpc,line:&Value,effects:&mut Vec<Effect>) {
+        // Uma rodada por turno: a recusa que voltar depois dela é falha de verdade e aparece como as outras.
+        if rpc.method != "hooks/list" || !line["error"].is_null() { self.hook_trust_settled = true; }
+        if !line["error"].is_null() {
+            self.policy("unknown_private",json!({"kind":"hook_trust_failed","event":{"method":rpc.method,"error":line["error"]["message"]}}),effects);
+            let why = line["error"]["message"].as_str().unwrap_or("erro sem mensagem");
+            self.hook_notice("hook_failed",&format!("o Hangar não conseguiu reaprovar os hooks alterados: {why}"),effects);
+            return;
+        }
+        if rpc.method != "hooks/list" { return; }
+        // Aberta na home, o Codex lista o `hooks.json` da conta como hook de projeto: é o mesmo arquivo que o Hangar escreve.
+        // Barra normalizada: no Windows a chave vem com `\`.
+        let account_hooks = self.metadata["codex_home"].as_str().map(|home|format!("{}/hooks.json:",home.replace('\\',"/").trim_end_matches('/')));
+        // Só o que já foi aprovado antes (`modified` = conteúdo mudou depois da aprovação): hook nunca aprovado
+        // (`untrusted`) continua pedindo a decisão de quem usa.
+        let edits:Vec<Value> = line["result"]["data"].as_array().into_iter().flatten()
+            .flat_map(|entry|entry["hooks"].as_array().into_iter().flatten())
+            .filter(|hook|hook["enabled"] == true && matches!(hook["trustStatus"].as_str(),Some("modified" | "trusted")))
+            .filter_map(|hook|Some((hook["key"].as_str()?,hook["currentHash"].as_str()?,hook["source"].as_str().unwrap_or(""))))
+            .filter(|(key,_,source)|matches!(*source,"user" | "plugin")
+                || account_hooks.as_deref().is_some_and(|prefix|key.replace('\\',"/").starts_with(prefix)))
+            .map(|(key,hash,_)|{
+                let path = ["hooks","state",key,"trusted_hash"].map(|part|Value::from(part).to_string()).join(".");
+                json!({"keyPath":path,"value":hash,"mergeStrategy":"replace"})
+            })
+            .collect();
+        if edits.is_empty() { self.hook_trust_settled = true; return; }
+        // Reescreve também os já confiados: a recarga é o que tira a recusa da memória desta sessão.
+        self.counter += 1;
+        self.rpc(format!("hook_trust:{}:{}",self.generation,self.counter),"config/batchWrite",
+            json!({"edits":edits,"reloadUserConfig":true}),Some(json!({"kind":"hook_trust"})),effects);
+    }
+
     fn send(&mut self,operation_id:String,request:ClientRequest,continuation:Option<Value>,effects:&mut Vec<Effect>) {
         let (method,params) = request.into_parts();
         self.rpc(operation_id,method,params,continuation,effects);
@@ -760,9 +846,9 @@ impl Engine {
     fn rpc(&mut self,operation_id:String,method:&str,params:Value,continuation:Option<Value>,effects:&mut Vec<Effect>) {
         self.counter += 1;
         let request_id = RequestId::String(format!("hangar:{}:{}",self.generation,self.counter));
-        if method == "thread/read" && params["includeTurns"] == true { self.async_questions.during_load = Some(Vec::new()); }
+        if method == "thread/read" && params["threadId"] == self.thread_id && params["includeTurns"] == true { self.async_questions.during_load = Some(Vec::new()); }
         self.rpc.insert(request_id.clone(),Rpc { operation_id:operation_id.clone(),method:method.into(),params:params.clone(),
-            deadline:self.clock.monotonic_s+30.0,timed_out:false,continuation,state_revision:self.state_revision,settings_revision:self.settings_revision });
+            deadline:self.clock.monotonic_s+30.0,timed_out:false,continuation,state_revision:self.state_revision,settings_revision:self.settings_revision,subagent_revision:self.subagent_revision });
         self.wires.insert(operation_id.clone(),Wire { interaction:None,request_id:Some(request_id.clone()),server_request:None,server_epoch:None,final_result:false });
         effects.push(Effect::Write { operation_id:Some(operation_id),frame:json!({"jsonrpc":"2.0","id":request_id,"method":method,"params":params}) });
     }
@@ -884,6 +970,11 @@ impl Engine {
             return;
         };
         if self.rpc.contains_key(&request_id) { return; }
+        // Sem a continuação da família, uma resposta restaurada de filha cairia nas regras do pai.
+        if operation_id.starts_with("subagent:") || frame["params"]["threadId"].as_str().is_some_and(|thread|thread!=self.thread_id) {
+            self.wires.insert(operation_id,Wire {interaction:None,request_id:Some(request_id),server_request:None,server_epoch:None,final_result:true});
+            return;
+        }
         // Thread efêmera da voz antiga, pendente desde antes da atualização: a resposta trocaria a conversa da sessão.
         if method == "thread/start" && frame["params"]["ephemeral"] == true { return; }
         // Assinatura do terminal volta como assinatura: nunca cai no `thread/resume` do sem-terminal (que grava `patch_meta`).
@@ -897,7 +988,7 @@ impl Engine {
             Some(json!({"kind":"service_tier_recovered"}))
         } else { None };
         self.rpc.insert(request_id.clone(),Rpc { operation_id:operation_id.clone(),method:method.into(),params:frame["params"].clone(),
-            deadline:self.clock.monotonic_s,timed_out:true,continuation,state_revision,settings_revision });
+            deadline:self.clock.monotonic_s,timed_out:true,continuation,state_revision,settings_revision,subagent_revision:self.subagent_revision });
         self.wires.insert(operation_id,Wire { interaction:None,request_id:Some(request_id),server_request:None,server_epoch:None,final_result:false });
     }
 
@@ -1106,6 +1197,7 @@ impl Engine {
         }
         self.restore_thread(&response.thread,rpc);
         self.async_questions.hydrate(&self.thread_id,&result["thread"]);
+        self.hydrate_agents(&result["thread"],rpc.subagent_revision);
         self.changed(effects,true);
         effects.push(Effect::WakeQueue);
     }
@@ -1115,7 +1207,9 @@ impl Engine {
         let thread = &params["thread"];
         let Some(id) = thread["id"].as_str().filter(|id|*id != self.thread_id) else { return };
         if !primary_thread(thread,self.metadata["cwd"].as_str()) { return; }
+        self.cancel_subagent_calls(effects);
         let previous = std::mem::replace(&mut self.thread_id,id.to_owned());
+        self.subagents.clear();
         // O vínculo das identidades segue a conversa principal: as da anterior deixam de valer.
         if let Err(failure) = self.bind_interactions() {
             tracing::warn!(session=%self.state.session,code=%failure.code,"identidades não religadas à conversa nova da TUI");
@@ -1124,7 +1218,7 @@ impl Engine {
         self.clear_preview(effects);
         self.in_progress = false; self.turn_id = None; self.compacting = false; self.state_revision += 1;
         self.first_response_start = None; self.response_started = false; self.state.codex_buffering = false;
-        self.running_commands.clear();
+        self.running_commands.clear(); self.hook_streaks.clear(); self.notices_seen.clear(); self.publish_output(effects);
         // Pedido de subagente não é da conversa anterior: continua pendente.
         let stale:Vec<RequestId> = self.server_requests.iter().filter(|(_,request)|request["params"]["threadId"] == previous.as_str())
             .map(|(id,_)|id.clone()).collect();
@@ -1165,6 +1259,47 @@ impl Engine {
 
     fn publish_on(&self,channel:&str,text:String,effects:&mut Vec<Effect>) {
         effects.push(Effect::Publish { channel:channel.into(),data:json!({"session":self.state.session,"text":text,"md":true,"full":true,"vivo":true}) });
+    }
+
+    /// Rabo da saída de cada comando rodando, num objeto `{item: texto}`; vazio quando nenhum escreveu.
+    fn publish_output(&mut self,effects:&mut Vec<Effect>) {
+        self.output_due = None;
+        let tails:serde_json::Map<String,Value> = self.running_commands.iter().filter(|(_,command)|!command.tail.is_empty())
+            .map(|(id,command)|(id.clone(),json!(command.tail))).collect();
+        let text = if tails.is_empty() { String::new() } else { Value::Object(tails).to_string() };
+        effects.push(Effect::Publish { channel:"output".into(),data:json!({"session":self.state.session,"text":text}) });
+    }
+
+    fn hook_failed(&mut self,run:&wire::HookRunSummary,effects:&mut Vec<Effect>) {
+        let origin = hook_origin(run.source_path.as_deref().unwrap_or("hook"));
+        let reason:Vec<_> = run.entries.iter().filter(|entry|["error","warning","stop","feedback"].contains(&entry.kind.as_str()))
+            .filter_map(|entry|entry.text.as_deref()).collect();
+        let reason = if reason.is_empty() { run.status.clone() } else { reason.join("\n") };
+        let key = format!("{}{reason}",hook_streak_prefix(run));
+        if let Some(streak) = self.hook_streaks.get_mut(&key) { streak.count += 1; return; }
+        let detail = format!("{origin} · {}: {reason}",run.event_name);
+        // Bloquear ou parar é o hook decidindo (como o Stop do Claude que reabre o turno), não uma falha dele.
+        let notice = if run.status == "failed" { "hook_failed" } else { "hook_prompt" };
+        self.hook_notice(notice,&detail,effects);
+        self.hook_streaks.insert(key,HookStreak { notice,detail,count:1 });
+    }
+
+    /// Fecha as sequências (todas, ou só as do hook que passou); a que repetiu ganha um aviso com o total.
+    fn flush_hook_streaks(&mut self,prefix:Option<&str>,effects:&mut Vec<Effect>) {
+        let ended:Vec<String> = self.hook_streaks.keys().filter(|key|prefix.is_none_or(|prefix|key.starts_with(prefix))).cloned().collect();
+        for key in ended {
+            let Some(streak) = self.hook_streaks.remove(&key) else { continue };
+            if streak.count > 1 { self.hook_notice(streak.notice,&format!("{} ({}× seguidas)",streak.detail,streak.count),effects); }
+        }
+    }
+
+    fn codex_notice(&mut self,text:String,effects:&mut Vec<Effect>) {
+        if self.notices_seen.insert(text.clone()) { self.policy("local_output",json!({"text":text}),effects); }
+    }
+
+    fn hook_notice(&mut self,notice:&str,detail:&str,effects:&mut Vec<Effect>) {
+        let title = if notice == "hook_failed" { "Hook falhou" } else { "Hook interrompeu" };
+        self.policy("local_output",json!({"text":format!("{title} — {detail}"),"hook_error":detail,"notice":notice}),effects);
     }
 
     fn clear_preview(&mut self,effects:&mut Vec<Effect>) {
@@ -1256,7 +1391,7 @@ impl Engine {
     }
 
     fn terminate_after(&self,turn:&str) -> Option<Value> {
-        let processes:Vec<_> = self.running_commands.values().filter(|(owner,_)|owner == turn).map(|(_,process)|process.clone()).collect();
+        let processes:Vec<_> = self.running_commands.values().filter(|command|command.turn == turn).map(|command|command.process.clone()).collect();
         (!processes.is_empty()).then(||json!({"kind":"terminate_after","processes":processes}))
     }
 
@@ -1358,6 +1493,7 @@ impl Engine {
         let payload = command.payload;
         let mut effects = Vec::new();
         match command.kind {
+            OperationKind::ReadSubagent | OperationKind::SubagentMessage => self.subagent_command(id,command.kind,&payload,&mut effects)?,
             OperationKind::Input => {
                 if !self.deliverable() { return Ok(vec![Effect::Reply { operation_id:id,disposition:Disposition::Deferred,payload:json!({}) }]); }
                 if payload["skill_name"].is_string() && payload["skill_lookup_done"] != true {
@@ -1401,6 +1537,13 @@ impl Engine {
                     self.send(format!("{id}:read"),self.thread_read(true),Some(json!({"kind":"interrupt","parent":id})),&mut effects);
                 }
             }
+            OperationKind::TerminateTerminal => {
+                // Só um comando que o ator vê rodando: o `item/completed` dele é o que tira da lista.
+                let process = payload["process_id"].as_str().filter(|process|self.running_commands.values().any(|command|command.process == *process))
+                    .ok_or_else(||error("esse comando já terminou"))?.to_owned();
+                self.send(id,ClientRequest::ThreadBackgroundTerminalsTerminate(wire::ThreadBackgroundTerminalsTerminateParams {
+                    thread_id:self.thread_id.clone(),process_id:process }),None,&mut effects);
+            }
             OperationKind::Compact => {
                 // Sem assinatura o fim da compactação não chega e a sessão ficaria "Compactando…".
                 if !self.idle() || !self.headless && !self.subscribed { return Err(error("espere o Codex terminar e responda às perguntas antes de compactar")); }
@@ -1408,6 +1551,7 @@ impl Engine {
             }
             OperationKind::Clear => {
                 if !self.idle() { return Err(error("Espere o Codex terminar e responda às perguntas antes de limpar a conversa.")); }
+                self.cancel_subagent_calls(&mut effects);
                 let next = json!({"kind":"clear_thread","parent":id,"effort":self.effort,"mode":self.mode});
                 self.send(format!("{id}:thread"),self.bootstrap_start(),Some(next),&mut effects);
                 self.ready = false;
@@ -1630,6 +1774,8 @@ impl Engine {
                 else if line["type"] == "cano_saiu" {
                     self.alive = false; self.in_progress = false; self.ready = false; self.clear_preview(&mut effects);
                     self.connected = false; self.subscribed = false; self.subscribe_due = None;
+                    // Os comandos morrem com o app-server: o Encerrar deles não teria a quem pedir.
+                    self.running_commands.clear(); self.publish_output(&mut effects);
                     // Fim da vida da conexão terminal: resposta tardia a pedido desta vida não é transplantada.
                     if !self.headless { self.server_requests.clear(); self.answering.clear(); self.request_epochs.clear(); }
                     self.finish_service_tier(Disposition::Unknown,json!({"error":"O Codex desconectou antes de confirmar Fast"}),&mut effects);
@@ -1670,6 +1816,13 @@ impl Engine {
                     let reserved = request_id.as_ref().and_then(|id|self.rpc.get(id)).and_then(reserved_entry);
                     let input = request_id.as_ref().and_then(|id|self.rpc.get(id)).is_some_and(input_turn);
                     let skill = request_id.as_ref().and_then(|id|self.rpc.get(id)).and_then(skill_parent);
+                    let agent_parent = request_id.as_ref().and_then(|id|self.rpc.get_mut(id)).and_then(|rpc| {
+                        let next=rpc.continuation.as_ref().filter(|next|next["kind"].as_str().is_some_and(|kind|kind.starts_with("subagent_")))?;
+                        let parent=next["parent"].as_str()?.to_owned();
+                        // Sem prova de escrita, uma leitura tardia não pode mandar texto depois da recusa ao app.
+                        rpc.timed_out=true;
+                        Some(parent)
+                    });
                     if outcome == WriteOutcome::NotWritten {
                         // Assinatura que nem saiu tenta de novo na espera crescente, senão a sessão ficaria surda calada.
                         if let Some(id) = request_id { if self.rpc.remove(&id).is_some_and(|rpc|subscribe_rpc(&rpc)) { self.schedule_subscribe(); } }
@@ -1695,18 +1848,24 @@ impl Engine {
                     if let Some(parent) = skill.filter(|_|outcome == WriteOutcome::NotWritten) {
                         effects.push(Effect::Reply { operation_id:parent,disposition:Disposition::Deferred,payload:payload.clone() });
                     }
+                    if let Some(parent) = agent_parent.filter(|parent|*parent != operation_id) {
+                        effects.push(Effect::Reply { operation_id:parent,disposition,payload:payload.clone() });
+                    }
                     effects.push(Effect::Reply { operation_id,disposition,payload });
                     self.changed(&mut effects,true);
                 }
             }
             EngineInput::Tick => {
+                if self.output_due.is_some_and(|due|clock.monotonic_s >= due) { self.publish_output(&mut effects); }
                 if let Some(text) = self.preview.tick(clock.monotonic_s) { self.publish(text,&mut effects); }
                 if let Some(text) = self.thinking.tick(clock.monotonic_s) { self.publish_on("thinking",text,&mut effects); }
                 let mut subscribe_lost = false;
                 let mut uncertain = Vec::new();
+                let mut trust_expired = false;
                 for rpc in self.rpc.values_mut() {
                     if !rpc.timed_out && clock.monotonic_s >= rpc.deadline {
                         rpc.timed_out = true;
+                        trust_expired |= rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust");
                         subscribe_lost |= subscribe_rpc(rpc) && rpc.params["threadId"] == self.thread_id.as_str();
                         uncertain.extend(reserved_entry(rpc));
                         effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Unknown,payload:json!({"error":"RPC sem resposta"}) });
@@ -1718,6 +1877,11 @@ impl Engine {
                     }
                 }
                 for entry in uncertain { self.set_reservation(&entry,ReservationState::Uncertain); }
+                // Reaprovação sem resposta: o hook que motivou continua recusado, e a conversa precisa saber.
+                if trust_expired && !self.hook_trust_settled {
+                    self.hook_trust_settled = true;
+                    self.hook_notice("hook_failed","o Codex não respondeu à reaprovação dos hooks alterados",&mut effects);
+                }
                 // Assinatura sem resposta é falha de protocolo, não "ainda sem rollout": aparece em vez de ficar ociosa.
                 if subscribe_lost && !self.subscribed {
                     self.subscription_failed("thread/resume sem resposta",&mut effects);
@@ -1793,11 +1957,17 @@ impl Engine {
         let already_initialized = rpc.method == "initialize" && line["error"]["message"].as_str()
             .is_some_and(|message|message.to_lowercase().contains("already initialized"));
         if let Some(wire) = self.wires.get_mut(&rpc.operation_id) { wire.final_result = true; }
+        if rpc.continuation.as_ref().is_some_and(|next|next["kind"].as_str().is_some_and(|kind|kind.starts_with("subagent_"))) {
+            self.subagent_reply(&rpc,&line,effects);
+            self.changed(effects,false);
+            return Ok(());
+        }
         if rpc.continuation.as_ref().is_some_and(|next|next["kind"].as_str().is_some_and(|kind|kind.starts_with("service_tier"))) {
             self.service_tier_reply(&rpc,&line,effects);
             self.changed(effects,false);
             return Ok(());
         }
+        if rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust") { self.hook_trust_reply(&rpc,&line,effects); return Ok(()); }
         if subscribe_rpc(&rpc) { self.subscribe_reply(&rpc,&line,effects); return Ok(()); }
         // Conversa aberta sem prova segue o caminho da recusa explícita: nunca fica pronta nem acorda a fila.
         let mut opened = None;
@@ -1810,7 +1980,8 @@ impl Engine {
                 self.fail_clear(next["parent"].as_str().unwrap_or(""),next["kind"] == "clear_thread",line["error"]["message"].clone(),effects);
                 return Ok(());
             }
-            if rpc.method == "thread/backgroundTerminals/terminate" {
+            // Só o encerramento que o Stop pediu sozinho; o Encerrar do usuário recebe o erro na própria resposta.
+            if rpc.method == "thread/backgroundTerminals/terminate" && rpc.operation_id.starts_with("terminate:") {
                 let text = format!("O comando do turno interrompido não foi encerrado ({}): {}",
                     rpc.params["processId"].as_str().unwrap_or("?"),line["error"]["message"].as_str().unwrap_or("erro do Codex"));
                 self.policy("local_output",json!({"text":text}),effects);
@@ -1901,8 +2072,12 @@ impl Engine {
                     self.response_started = false;
                 }
                 if response.thread.id != self.thread_id {
+                    self.cancel_subagent_calls(effects);
                     self.finish_service_tier(Disposition::Unknown,json!({"error":"A conversa mudou antes de confirmar Fast"}),effects);
                     self.clear_preview(effects); self.thread_id = response.thread.id.clone();
+                    self.subagents.clear();
+                    // O `item/completed` do comando da conversa anterior não chega mais a esta (filtro de thread).
+                    self.running_commands.clear(); self.hook_streaks.clear(); self.notices_seen.clear(); self.publish_output(effects);
                     self.bind_interactions()?;
                 }
                 // A vista leva o rollout: o Python recusa como velho o patch que difere dela.
@@ -1918,6 +2093,7 @@ impl Engine {
                 }
                 self.restore_thread(&response.thread,&rpc);
                 self.async_questions.hydrate(&self.thread_id,&result["thread"]);
+                self.hydrate_agents(&result["thread"],rpc.subagent_revision);
                 self.policy("session.patch_meta",patch,effects);
             }
             "turn/start" => {
@@ -1941,6 +2117,7 @@ impl Engine {
                 cut = response.thread.status == wire::ThreadStatus::Idle && response.thread.turns.last().is_some_and(|turn|turn.status == "interrupted");
                 self.restore_thread(&response.thread,&rpc);
                 if rpc.params["includeTurns"] == true { self.async_questions.hydrate(&self.thread_id,&result["thread"]); }
+                if rpc.params["includeTurns"] == true { self.hydrate_agents(&result["thread"],rpc.subagent_revision); }
             }
             "thread/settings/update" => {
                 if rpc.settings_revision == self.settings_revision {
@@ -2045,8 +2222,8 @@ impl Engine {
                 }
                 Some("terminate_after") => {
                     // O interrupt fecha o turno mas deixa vivo o comando que ele rodava.
+                    // O comando sai da lista no `item/completed` dele: se o encerramento falhar, ele segue à vista.
                     for process in next["processes"].as_array().into_iter().flatten().filter_map(Value::as_str) {
-                        self.running_commands.retain(|_,(_,running)|running != process);
                         self.counter += 1;
                         let operation_id = format!("terminate:{}:{}",self.generation,self.counter);
                         let request = ClientRequest::ThreadBackgroundTerminalsTerminate(wire::ThreadBackgroundTerminalsTerminateParams {
@@ -2114,6 +2291,12 @@ impl Engine {
     fn notification(&mut self,line:Value,effects:&mut Vec<Effect>) -> Result<(),RuntimeError> {
         let method = line["method"].as_str().unwrap_or("");
         let params = &line["params"];
+        let child_event = params["threadId"].as_str().is_some_and(|id| self.subagents.contains_key(id))
+            || (method == "thread/started" && params["thread"]["parentThreadId"].as_str()
+                .is_some_and(|parent| parent == self.thread_id || self.subagents.contains_key(parent)));
+        let subagent_revision = self.subagent_revision;
+        self.observe_subagent(method,params);
+        if child_event && self.subagent_revision != subagent_revision { effects.push(Effect::StateChanged); }
         // Pedido de outra thread (subagente) entra na fila como os da principal; só o "resolvido" dele
         // também passa, para o pedido sair da fila. O resto vindo de outra thread é descartado.
         let foreign = params["threadId"].as_str().filter(|thread|*thread != self.thread_id);
@@ -2188,7 +2371,7 @@ impl Engine {
                 self.first_response_start = self.turn_id.clone().map(|id|(id,self.clock.monotonic_s));
                 self.response_started = false; self.state.codex_buffering = false; self.clear_preview(effects);
                 self.state.problema = None; self.state.problema_detalhe = None;
-                self.running_commands.clear();
+                // Sem limpar `running_commands`: o comando que sobra do turno só recebe `item/completed` quando sai.
                 self.lost_requests.clear();
                 self.usage_limited = false;
             }
@@ -2198,6 +2381,7 @@ impl Engine {
                 self.lost_requests.clear();
                 self.first_response_start = None;
                 self.state.codex_buffering = false; self.response_started = false; self.clear_preview(effects);
+                self.flush_hook_streaks(None,effects); self.hook_trust_settled = false;
                 // Só os pedidos desta conversa: o subagente segue com o dele, como no Python.
                 let ended:Vec<RequestId> = self.server_requests.iter().filter(|(_,request)|request["params"]["threadId"].as_str().is_none_or(|thread|thread == self.thread_id))
                     .map(|(id,_)|id.clone()).collect();
@@ -2303,10 +2487,18 @@ impl Engine {
                     wire::ThreadItem::Reasoning { .. } if started => {
                         if let Some(text) = self.thinking.clear() { self.publish_on("thinking",text,effects); }
                     }
-                    wire::ThreadItem::CommandExecution { id,process_id } => match (started,process_id,n.turn_id.is_empty()) {
-                        (true,Some(process),false) => { self.running_commands.insert(id.clone(),(n.turn_id.clone(),process.clone())); }
-                        _ => { self.running_commands.remove(id); }
-                    },
+                    wire::ThreadItem::CommandExecution { id,process_id,command,command_actions } => {
+                        match (started,process_id,n.turn_id.is_empty()) {
+                            (true,Some(process),false) => {
+                                // O `command` cru vem embrulhado em `bash -lc '…'`; a ação traz o que o modelo pediu.
+                                let shown = command_actions.iter().find_map(|action|action.command.clone().filter(|c|!c.is_empty())).unwrap_or_else(||command.clone());
+                                self.running_commands.insert(id.clone(),RunningCommand { turn:n.turn_id.clone(),process:process.clone(),
+                                    command:shown,started_at:self.clock.epoch_s,tail:String::new() });
+                            }
+                            _ => { self.running_commands.remove(id); }
+                        }
+                        self.publish_output(effects);
+                    }
                     _ => {},
                 }
                 let new_item = started && current && !matches!(n.item,wire::ThreadItem::UserMessage { .. });
@@ -2331,15 +2523,51 @@ impl Engine {
                     .unwrap_or(if n.will_retry { "codex_sem_conexao" } else { "headless_turno_erro" });
                 self.put_problem(code,error_detail(&n.error));
             }
+            // Só a recusa do próprio Codex (`failed` com a entrada de erro dele), não um texto que o hook escreveu.
+            N::HookCompleted(n) if !self.hook_trust_settled && n.run.status == "failed" && n.run.entries.iter()
+                .any(|entry|entry.kind == "error" && entry.text.as_deref().is_some_and(|text|text.contains(HOOK_APPROVAL_REQUIRED))) => {
+                self.trust_synced_hooks(effects);
+                return Ok(());
+            }
             N::HookCompleted(n) if n.run.event_name == "userPromptSubmit" && ["blocked","stopped"].contains(&n.run.status.as_str()) => {
-                let source = n.run.source_path.as_deref().unwrap_or("hook");
-                let normalized = source.replace('\\',"/");
-                let parts:Vec<_> = normalized.split('/').collect();
-                let origin = parts.iter().position(|part|*part == "cache").and_then(|index|parts.get(index+2)).copied().unwrap_or(source);
+                let origin = hook_origin(n.run.source_path.as_deref().unwrap_or("hook"));
                 let reason = n.run.entries.iter().find(|entry|["stop","feedback","error"].contains(&entry.kind.as_str()) && entry.text.is_some())
                     .and_then(|entry|entry.text.as_deref()).unwrap_or("");
                 self.state.problema = Some("codex_prompt_bloqueado".into());
                 self.state.problema_detalhe = Some(format!("{origin}: {reason}").trim_matches([' ',':']).chars().take(300).collect());
+            }
+            N::HookCompleted(n) if n.thread_id == self.thread_id && ["failed","blocked","stopped"].contains(&n.run.status.as_str()) => {
+                self.hook_failed(&n.run,effects);
+                return Ok(());
+            }
+            N::HookCompleted(n) => {
+                self.flush_hook_streaks(Some(&hook_streak_prefix(&n.run)),effects);
+                return Ok(());
+            }
+            N::CommandExecutionOutputDelta(n) => {
+                let Some(command) = self.running_commands.get_mut(&n.item_id) else { return Ok(()) };
+                command.tail.push_str(&n.delta);
+                if command.tail.len() > OUTPUT_TAIL {
+                    let cut = (command.tail.len() - OUTPUT_TAIL..).find(|&at|command.tail.is_char_boundary(at)).unwrap_or(0);
+                    command.tail.drain(..cut);
+                }
+                // O delta chega sem limite de ritmo: o rabo sai no Tick, no máximo a cada `OUTPUT_EVERY`.
+                if self.output_due.is_none() { self.output_due = Some(self.clock.monotonic_s + OUTPUT_EVERY); }
+                return Ok(());
+            }
+            N::Warning(n) | N::GuardianWarning(n) if n.thread_id.as_deref().is_none_or(|thread|thread == self.thread_id) => {
+                self.codex_notice(format!("Aviso do Codex: {}",n.message),effects);
+                return Ok(());
+            }
+            // Não são falha e o app-server os repete a cada subida: vão ao diário, não à conversa.
+            N::ConfigWarning(_) | N::DeprecationNotice(_) => {
+                self.policy("unknown_private",json!({"kind":"codex_startup_warning","event":{"method":method,"params":params}}),effects);
+                return Ok(());
+            }
+            N::McpServerStatusUpdated(n) if n.status == "failed" && n.thread_id.as_deref().is_none_or(|thread|thread == self.thread_id) => {
+                let why = n.error.map(|error|format!(": {error}")).unwrap_or_default();
+                self.codex_notice(format!("O servidor MCP `{}` não subiu{why}",n.name),effects);
+                return Ok(());
             }
             _ => return Ok(()),
         }
@@ -2350,7 +2578,7 @@ impl Engine {
     pub fn next_deadline(&self) -> Option<f64> {
         self.preview.deadline().into_iter().chain(self.thinking.deadline()).chain(self.rpc.values().filter(|rpc|!rpc.timed_out).map(|rpc|rpc.deadline))
             .chain(self.service_tier_pending.as_ref().map(|pending|pending.deadline)).chain(self.subscribe_due).chain(self.unsubscribed_turn_due())
-            .chain(self.turn_probe_due()).min_by(f64::total_cmp)
+            .chain(self.turn_probe_due()).chain(self.output_due).min_by(f64::total_cmp)
     }
 
     /// Conferência do turno calado: só com a assinatura (ou o cano) entregando eventos e nenhuma em voo.
@@ -2401,7 +2629,10 @@ impl Engine {
             // Resposta reservada só sai enquanto a pergunta dela continua aberta.
             && wire.request_id.as_ref().and_then(|id|self.rpc.get(id)).and_then(|rpc|rpc.continuation.as_ref())
                 .filter(|next|next["kind"] == "async_answer" && next["reserved"] == true)
-                .is_none_or(|next|next["request_id"].as_str().is_some_and(|id|self.async_pending(id))))
+                .is_none_or(|next|next["request_id"].as_str().is_some_and(|id|self.async_pending(id)))
+            && wire.request_id.as_ref().and_then(|id|self.rpc.get(id))
+                .filter(|rpc|rpc.continuation.as_ref().is_some_and(|next|next["kind"].as_str().is_some_and(|kind|kind.starts_with("subagent_"))))
+                .is_none_or(|rpc|!rpc.timed_out && self.alive && rpc.continuation.as_ref().is_some_and(|next|next["root"]==self.thread_id)))
     }
 }
 

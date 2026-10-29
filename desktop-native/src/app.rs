@@ -36,6 +36,8 @@ mod group_sheet;
 mod hangar_live;
 mod harness;
 mod keyring;
+mod rename_suggest;
+mod tags;
 mod viewer;
 mod window_tray;
 mod presence;
@@ -70,6 +72,10 @@ mod pair_accept;
 mod external;
 mod servers;
 pub(crate) use servers::{ServerEntry, new_id as new_server_id};
+// Partes de vista que a miniatura das novidades (`crate::news`) também desenha.
+pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
+pub(crate) use tags::{account_icon, machine_icon};
+pub(crate) use rename_suggest::rename_strip;
 mod shortcuts;
 mod shortcut_transfer;
 mod keyboard;
@@ -259,7 +265,7 @@ fn conversation_metrics(user: bool) -> (f32, f32) { if user { (16., 1.55) } else
 
 /// Texto da conversa com a fonte, o tamanho e a entrelinha escolhidos em Aparência. Em 100% são os do web no desktop:
 /// resposta 17 px/1,7 (`.prose`, AssistantBubble.svelte) e bolha do usuário 16 px/1,55 (`.bubble-text`, UserBubble.svelte).
-fn conversation_text(el: Div, user: bool) -> Div {
+pub(crate) fn conversation_text(el: Div, user: bool) -> Div {
     let a = crate::appearance::get();
     let (size, line) = conversation_metrics(user);
     el.font_family(a.font.family())
@@ -421,7 +427,7 @@ fn delivery_is_current(connection: u64, selection: Option<u64>, current_connecti
 }
 /// `offset`: onde a fonte deste pedaço começa na fonte inteira da resposta desenhada em pedaços (`{id}#s0`…).
 struct RichText { source: String, view: Entity<TextViewState>, _observer: Subscription, touched: u64, row: String, offset: Option<usize> }
-enum ChatUpdate { Message(ChatEvent), Preview(Preview), State(SessionState), Question(Option<Ask>), Thinking(String), LiveTool(Option<LiveTool>), Reset }
+enum ChatUpdate { Message(ChatEvent), Preview(Preview), State(SessionState), Question(Option<Ask>), Thinking(String), LiveTool(Option<LiveTool>), CommandOutput(HashMap<String, String>), Reset }
 
 #[derive(Default)]
 struct SystemNotifications {
@@ -589,6 +595,10 @@ pub struct Hangar {
     /// Máquinas (chave `servers::norm`, ativa e outras) com o chaveiro trancado, pelo evento `keyring` da lista de cada uma.
     /// Só a queda do stream dela limpa: o servidor reenvia o estado ao reconectar.
     keyring: HashMap<String, keyring::Prompt>,
+    rename_suggest: rename_suggest::RenameSuggest,
+    /// Último evento `tags` da lista de cada máquina (chave `servers::norm`); máquina sem ele é servidor antigo.
+    /// Fica na queda do stream: a etiqueta não muda por a máquina estar fora.
+    tags: HashMap<String, tags::Event>,
     /// Cartão da pergunta aberto: (máquina, dono — vazio = No Hangar, terminal) e o diálogo que o mostra.
     question_open: Option<(String, String, String)>,
     question_card: Option<Entity<hangar_live::QuestionCard>>,
@@ -1067,7 +1077,7 @@ impl Hangar {
             history_installed: false, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
-            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), question_open: None, question_card: None,
+            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
@@ -1882,6 +1892,13 @@ impl Hangar {
                     if visible { self.redraw(panes::Area::Nav, cx); }
                     state.is_some()
                 }
+                else if frame.event == "tags" {
+                    let server = self.active_key();
+                    let stored = tags::store(&mut self.tags, &server, &frame.data);
+                    visible = stored == Some(true);
+                    if visible { self.redraw(panes::Area::Nav, cx); }
+                    stored.is_some()
+                }
                 else if frame.event == "shortcut_terminals" {
                     let list = terminal::parse_live_terms(&frame.data);
                     // Lista igual à de antes não redesenha; o tempo de "rodando" anda pelo relógio próprio.
@@ -1925,6 +1942,7 @@ impl Hangar {
                         self.discover_plan();
                         // A primeira conta de subagentes espera a conversa chegar, como o `aoAquecer` do web.
                         if first { self.restart_subagent_count(cx); }
+                        if first { self.request_rename_suggestion(); }
                         // Primeira página cheia: a janela inteira vem por baixo, sem aviso de carregando e sem o
                         // "Carregar anteriores" de uma janela que já está crescendo.
                         if first && limit < HISTORY_PAGE && self.has_older {
@@ -2267,6 +2285,7 @@ impl Hangar {
             "message" | "queue_confirmed" => serde_json::from_value(data).map(ChatUpdate::Message),
             "preview" => serde_json::from_value(data).map(ChatUpdate::Preview),
             "state" => serde_json::from_value(data).map(ChatUpdate::State),
+            "saida" => serde_json::from_value(data).map(ChatUpdate::CommandOutput),
             "ask_question" if data.is_null() => Ok(ChatUpdate::Question(None)),
             "ask_question" => serde_json::from_value(data.clone()).map(|payload| ChatUpdate::Question(Some(Ask::new(payload, &data)))),
             "reset" => Ok(ChatUpdate::Reset),
@@ -2363,6 +2382,7 @@ impl Hangar {
             // O mesmo estado repetido não redesenha: a conversa guardada sairia do cache à toa.
             ChatUpdate::State(state) if *state == self.chat.state && self.chat.ask.is_none() => Changed::Nothing,
             ChatUpdate::State(_) => Changed::Screen,
+            ChatUpdate::CommandOutput(_) => Changed::Nothing,
             ChatUpdate::Preview(_) | ChatUpdate::Thinking(_) | ChatUpdate::LiveTool(_) => Changed::Tail,
             _ => Changed::Rows,
         };
@@ -2379,7 +2399,10 @@ impl Hangar {
                         self.delivery.confirm_real(&key, &event.id, text);
                     }
                 }
+                // O primeiro pedido feito com a conversa aberta também vale para a sugestão de nome.
+                let asked = event.kind == "user_msg" && !event.queued();
                 self.chat.apply(event);
+                if asked && self.history_installed { self.request_rename_suggestion(); }
                 if self.chat.preview.text.is_empty() {
                     self.cancel_preview_drop();
                     self.clear_visible_preview();
@@ -2418,7 +2441,9 @@ impl Hangar {
                     && self.action_feedback.get(&key).is_some_and(|(text, _)| *text == tr("option_sent")) {
                     self.action_feedback.remove(&key);
                 }
+                let native_changed = self.chat.state.codex_subagents != state.codex_subagents;
                 self.chat.update_state(state);
+                if native_changed { self.sync_codex_subagents(cx); self.sync_rows(cx); }
                 self.sync_working_row(cx);
                 if turned { self.restart_subagent_count(cx); }
                 self.sync_activity(cx);
@@ -2431,6 +2456,10 @@ impl Hangar {
                     self.defer_live_clear(Live::Thinking, cx);
                     self.defer_live_clear(Live::Tool, cx);
                 }
+            }
+            ChatUpdate::CommandOutput(output) => {
+                self.chat.command_output = output;
+                self.sync_activity(cx);
             }
             ChatUpdate::Question(ask) => if self.chat.update_ask(ask) { self.ask_form = AskForm::default(); },
             ChatUpdate::Thinking(text) => {
@@ -3333,7 +3362,7 @@ impl Hangar {
             Action::Select(_) | Action::SelectText(..) | Action::Submit => Some(select_snapshot(&self.chat.state)),
             Action::Implement => self.codex_plan().map(|(_, plan)| plan),
             Action::Discard(id) => self.chat.events.iter().any(|e| e.id == format!("queued-{id}")
-                && (e.desistiu == Some(true) || holds_queue(e, self.chat.state.problema.as_deref()))).then(|| id.clone()),
+                && (e.desistiu == Some(true) || discardable(e, self.chat.state.problema.as_deref()))).then(|| id.clone()),
             Action::Cancel | Action::Steer => Some(String::new()),
             // O instantâneo é o id: a entrada ainda tem de estar no painel.
             Action::QueueCancel(id) | Action::QueueEdit(id, _) | Action::QueueSteer(id) | Action::QueueReorder(id, _) =>
@@ -3467,6 +3496,8 @@ impl Hangar {
     fn sync_rows(&mut self, cx: &mut Context<Self>) {
         let a = appearance::get();
         let stable = self.chat.take_unsynced();
+        self.conversation.require_agent_states(self.provider().0 == "codex");
+        self.conversation.set_agent_states(self.codex_agent_states());
         let delta = self.conversation.update(&self.chat.events, stable, conversation::View {
             thinking: a.thinking_tools, tasks: a.task_list,
             merge_thinking: a.tool_look == appearance::ToolLook::Tree,
@@ -3515,7 +3546,10 @@ impl Hangar {
         if !self.visible_preview.text.is_empty() { ids.push(PREVIEW.into()); signatures.push(String::new()); }
         if opening { ids.push(landing::OPENING.into()); signatures.push(String::new()); }
         if self.working_row_shown() { ids.push(WORKING.into()); signatures.push(String::new()); }
-        for agent in self.conversation.running_agents() { ids.push(format!("{PINNED}{}", events[agent.call].id)); signatures.push(String::new()); }
+        for agent in self.conversation.running_agents().filter(|agent| self.subagent_pin_running(agent)) {
+            ids.push(format!("{PINNED}{}", events[agent.call].id));
+            signatures.push(if agent.waiting { "waiting".into() } else { String::new() });
+        }
         let patch = row_patch::RowPatch::between(from, &self.row_ids[from..], &self.row_signatures[from..],
             &ids, &signatures, if rebuilt.is_some() { items - from } else { 0 });
         let prefix = patch.remove.start;
@@ -5165,14 +5199,15 @@ impl Hangar {
                 _ => tr("unknown"),
             };
             let mut notes = Vec::new();
-            if event.desistiu == Some(true) || event.id.starts_with("held:") || event.hook_error.is_some() {
+            if (event.desistiu == Some(true) || event.id.starts_with("held:") || event.hook_error.is_some())
+                && !(event.kind == "notice" && matches!(event.text.as_deref(), Some("hook_prompt" | "hook_failed"))) {
                 notes.push(event.hook_error.clone().unwrap_or_else(|| tr("delivery_failed")));
             }
             // Só entrada desistida sai da fila; o backend recusa descartar o que ainda está por entregar.
             if event.desistiu == Some(true) { discard = event.id.strip_prefix("queued-").map(str::to_owned); }
             else if holds_queue(event, self.chat.state.problema.as_deref()) {
                 notes.push(tr("delivery_unproved"));
-                discard = event.id.strip_prefix("queued-").map(str::to_owned);
+                if discardable(event, self.chat.state.problema.as_deref()) { discard = event.id.strip_prefix("queued-").map(str::to_owned); }
             }
             else if let Some(note) = stuck_note(event, self.chat.state.problema.as_deref()) { notes.push(tr(note)); }
             else if event.queued() && event.queued_consumed != Some(true) { notes.push(tr(if event.queued_delivered == Some(true) { "delivering" } else { "queued" })); }
@@ -5375,8 +5410,8 @@ fn render_history_skeleton() -> Div {
         .child(in_column(div().flex().flex_col().gap(px(28.)).children(turns)))
 }
 
-/// Bolha do usuário, na conversa e no subagente.
-fn user_bubble(content: impl IntoElement) -> Div {
+/// Bolha do usuário, na conversa, no subagente e na miniatura das novidades.
+pub(crate) fn user_bubble(content: impl IntoElement) -> Div {
     div().max_w(relative(0.78)).px(px(14.)).py(px(10.)).rounded(px(18.)).bg(theme::user_bubble()).child(content)
 }
 
@@ -6383,6 +6418,13 @@ fn select_text_body(snapshot: &str, option: usize, text: &str) -> Option<Value> 
 fn display_body(event: &ChatEvent) -> String {
     match event.kind.as_str() {
         // Skill injetada: o corpo é o SKILL.md, que a linha recolhida só mostra ao abrir.
+        "notice" if matches!(event.text.as_deref(), Some("hook_prompt" | "hook_failed")) => {
+            let title = activity::web(if event.text.as_deref() == Some("hook_failed") { "notice_hook_failed" } else { "notice_hook_prompt" });
+            match event.hook_error.as_deref().filter(|detail| !detail.is_empty()) {
+                Some(detail) => format!("{title}\n\n{}", conversation::fenced(detail)),
+                None => title,
+            }
+        }
         "notice" => event.loaded_skill().map(|skill| skill.body).unwrap_or_else(|| tr(&event.body())),
         "assistant_msg" => interaction::plan_display(&event.body()),
         // Anexos viram cartões próprios; o texto mostra só a legenda.
@@ -6478,7 +6520,14 @@ fn prepare_detail(full: String) -> Prepared {
 
 /// A bolha entregue sem prova que segura a fila: o servidor aceita descartá-la (desiste e tira).
 fn holds_queue(event: &ChatEvent, problem: Option<&str>) -> bool {
-    problem == Some("terminal_input_delivery_unproved") && event.queued() && event.queued_delivered == Some(true) && event.desistiu != Some(true)
+    matches!(problem, Some("terminal_input_delivery_unproved" | "terminal_input_delivery_composer_busy"))
+        && event.queued() && event.queued_consumed != Some(true) && event.queued_delivered == Some(true) && event.desistiu != Some(true)
+}
+
+/// Descartar tira a entrada, não o texto do campo do terminal: com texto lá, um Enter depois o mandaria como
+/// mensagem nova. A pessoa apaga ou envia no terminal, e o Descartar volta.
+fn discardable(event: &ChatEvent, problem: Option<&str>) -> bool {
+    holds_queue(event, problem) && problem != Some("terminal_input_delivery_composer_busy")
 }
 
 /// Mensagem sem entrega com o processo vivo e surdo: só a pessoa reabre, pelo painel "Na fila", onde ela espera.
@@ -6488,7 +6537,7 @@ const STALLED: &str = "headless_delivery_stalled";
 fn stuck_note(event: &ChatEvent, problem: Option<&str>) -> Option<&'static str> {
     if !event.queued() || event.queued_delivered == Some(true) || event.desistiu == Some(true) { return None; }
     match problem {
-        Some("terminal_input_delivery_unproved") => Some("queue_held"),
+        Some("terminal_input_delivery_unproved" | "terminal_input_delivery_composer_busy") => Some("queue_held"),
         Some("terminal_input_no_safe_delivery") => Some("no_safe_delivery"),
         _ => None,
     }
@@ -7088,6 +7137,7 @@ impl Hangar {
         } else { None };
         let plan_bar = if readable && !read_only && card.is_none() {
             self.render_plan_bar(busy, cx).or_else(|| self.render_headless_plan(cx)).or_else(|| self.render_plan_preview(cx))
+                .or_else(|| self.render_rename_suggestion(cx))
         } else { None };
         let steer = readable && self.steer_offered();
         let queued = self.queued_count();
@@ -7117,6 +7167,7 @@ impl Hangar {
                 }))))))
             .when_some(delivery_note, |el, (note, warning)| el.child(in_column(div().py_1().text_xs().text_color(if warning { theme::warning() } else { theme::muted() }).child(note))))
             .when_some(stop_note, |el, (note, warning)| el.child(in_column(div().py_1().text_xs().text_color(if warning { theme::warning() } else { theme::muted() }).child(note))))
+            .when_some(self.render_codex_commands_chip(cx), |el, chip| el.child(in_column(chip)))
             .children(plugin_space)
             .map(|el| match orq {
                 Some(orq) => el.child(in_column(self.render_orq_footer(&orq, cx))),
@@ -7605,6 +7656,21 @@ impl Render for Hangar {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hook_notice_title_comes_from_text_and_keeps_the_cause_visible() {
+        for (text, label, detail) in [
+            ("hook_prompt", "notice_hook_prompt", "Continue reviewing the result"),
+            ("hook_failed", "notice_hook_failed", "hook exited with code 127 (falhou 3× seguidas)"),
+        ] {
+            let event = serde_json::from_value(serde_json::json!({
+                "id": "local-1", "kind": "notice", "text": text, "hook_error": detail
+            })).unwrap();
+            let body = super::display_body(&event);
+            assert!(body.starts_with(&super::activity::web(label)));
+            assert!(body.contains(detail));
+            assert_eq!(body.matches(detail).count(), 1);
+        }
+    }
     use super::{message_card, preview_step, safe_markdown, stream_motion, working_tokens, working_verb};
     use crate::{api::dto::ChatEvent, cards::Card, i18n::tr};
     use std::{collections::HashSet, time::Duration};

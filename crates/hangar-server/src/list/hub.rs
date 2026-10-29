@@ -73,6 +73,9 @@ struct Published {
     /// `{state}` do chaveiro desta máquina; só o dono recebe.
     keyring: Option<Bytes>,
     keyring_seq: u64,
+    /// Etiquetas de máquina e contas; só o dono recebe.
+    tags: Option<Bytes>,
+    tags_seq: u64,
     /// (nome, `ts` do pedido, quadro `{name, url}`)
     nav: Arc<Vec<(String, f64, Bytes)>>,
 }
@@ -137,7 +140,7 @@ impl InternalSubscription {
 /// O que o produtor guarda entre tiques para só publicar mudança.
 #[derive(Default)]
 struct Last { sig: Option<String>, nav: Vec<(String, crate::nav_requests::Marker)>, shortcuts: Option<String>,
-    keyring: Option<crate::keyring::KeyringState> }
+    keyring: Option<crate::keyring::KeyringState>, tags: Option<Arc<str>>, tags_error: Option<&'static str> }
 
 /// Pânico fora da produção (assinatura, publicação) não deixa o hub sem produtor: as listas abertas
 /// ficariam só com `ping`, e nenhuma nova religaria.
@@ -188,6 +191,10 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, diag: DiagClient) {
         publish(&hub.tx, &mut last, outcome, &diag);
         publish_nav(&hub.tx, &mut last, list.nav.live(crate::nav_requests::now()));
         publish_keyring(&hub.tx, &mut last, *keyring.borrow_and_update());
+        // Só a lista do dono recebe: sem ela (convidado, assinatura interna) nada é lido.
+        if clients > 0 {
+            publish_tags(&hub.tx, &mut last, list.tags.read().await, &diag);
+        }
         let tick = tokio::time::Instant::now() + TICK;
         // Até o tique, escrita numa pasta de estado reclassifica só a sessão dela.
         loop {
@@ -199,6 +206,10 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, diag: DiagClient) {
                 }
                 Ok(()) = keyring.changed() => {
                     publish_keyring(&hub.tx, &mut last, *keyring.borrow_and_update());
+                    continue;
+                }
+                () = list.tags.changed.notified(), if clients > 0 => {
+                    publish_tags(&hub.tx, &mut last, list.tags.read().await, &diag);
                     continue;
                 }
                 w = files.recv() => w,
@@ -454,6 +465,28 @@ fn publish_keyring(tx: &watch::Sender<Arc<Published>>, last: &mut Last, state: c
     tx.send_replace(Arc::new(next));
 }
 
+/// Fora da rodada; sai só quando o texto muda (mesmo `Arc` compara pelo ponteiro). Leitura com falha
+/// mantém o último publicado.
+fn publish_tags(tx: &watch::Sender<Arc<Published>>, last: &mut Last, read: Option<Result<Arc<str>, &'static str>>, diag: &DiagClient) {
+    match read {
+        None => {}
+        Some(Err(code)) => {
+            if last.tags_error.replace(code) != Some(code) {
+                diag.report("rust.list_tags", "", code, "etiquetas sem leitura; vale a última publicada");
+            }
+        }
+        Some(Ok(json)) => {
+            last.tags_error = None;
+            if last.tags.as_ref() == Some(&json) { return; }
+            let mut next = (**tx.borrow()).clone();
+            next.tags = Some(sse_frame("tags", &json, None));
+            next.tags_seq += 1;
+            last.tags = Some(json);
+            tx.send_replace(Arc::new(next));
+        }
+    }
+}
+
 /// Na transição ou na troca de motivo: lista vazia por falha seria igual a nenhuma sessão.
 fn fail(prev: &Published, next: &mut Published, code: &'static str) -> bool {
     if prev.error.as_ref().map(|e| e.0) == Some(code) {
@@ -471,7 +504,7 @@ fn nav_entries(nav: &[(String, crate::nav_requests::Marker)]) -> Vec<(String, f6
 
 /// O que uma conexão já entregou.
 #[derive(Default)]
-struct Sent { sessions: u64, error: u64, shortcuts: u64, keyring: u64, nav: HashMap<String, f64> }
+struct Sent { sessions: u64, error: u64, shortcuts: u64, keyring: u64, tags: u64, nav: HashMap<String, f64> }
 
 /// Quadros que esta conexão ainda não mandou do que está publicado.
 fn frames(p: &Published, sent: &mut Sent) -> Vec<Bytes> {
@@ -492,6 +525,10 @@ fn frames(p: &Published, sent: &mut Sent) -> Vec<Bytes> {
     if let Some(k) = p.keyring.as_ref().filter(|_| sent.keyring != p.keyring_seq) {
         sent.keyring = p.keyring_seq;
         out.push(k.clone());
+    }
+    if let Some(t) = p.tags.as_ref().filter(|_| sent.tags != p.tags_seq) {
+        sent.tags = p.tags_seq;
+        out.push(t.clone());
     }
     for (name, ts, frame) in p.nav.iter() {
         if sent.nav.get(name) != Some(ts) {
@@ -544,6 +581,8 @@ fn guest_rows<'a>(rows: impl IntoIterator<Item = &'a SessionRow>, guest: &Guest)
         r.pair_lead = r.pair_lead.filter(|p| guest.sees(p));
         if guest.invite { r.pair_task = None; }
         (r.pair_external, r.pair_externals, r.then_target) = (None, None, None);
+        // Renomear pela sugestão é do dono.
+        r.rename_suggestion = None;
         r.guest_kind = guest.kind_of(&r.name).map(|k| match k { Kind::Share => "share", Kind::Pair => "pair" }.to_owned());
         r
     }).collect()

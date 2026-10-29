@@ -263,6 +263,12 @@ struct Executor {
     /// `stall_notice`, a vista mostra `no_safe_delivery`.
     unproved_since:Option<tokio::time::Instant>,
     no_safe_delivery:bool,
+    /// Com a entrega incerta segurando a escrita, o campo do terminal tem texto: só a pessoa o tira.
+    composer_held:bool,
+    composer_read_at:Option<tokio::time::Instant>,
+    /// O plugin pedindo (`/pull`) no último tique; `None` antes de saber. A mudança vai ao diário.
+    plugin_alive:Option<bool>,
+    born:tokio::time::Instant,
     /// Quando a reabertura deste incidente foi pedida. Reabertura que falhou é pedida de novo depois do
     /// intervalo do registro, senão a fila ficava parada para sempre com o aviso prometendo reabrir.
     heal_requested:Option<tokio::time::Instant>,
@@ -302,6 +308,25 @@ const CLEAR_APPLY_WAIT:Duration=Duration::from_secs(10);
 const START_GRACE:Duration=Duration::from_secs(60);
 /// O `give_up_after` padrão: a prova chega em segundos; minutos sem ela, com o Claude parado, é perda.
 const GIVE_UP_AFTER:Duration=Duration::from_secs(180);
+const COMPOSER_READ_EVERY:Duration=Duration::from_secs(5);
+/// Sem `/pull` aceito há mais que isso o plugin conta como fora: o `/pull` dura até 25 s e o seguinte sai em 50 ms.
+const PLUGIN_OFF_AFTER:Duration=Duration::from_secs(120);
+
+/// Estado do plugin depois deste tique e a borda que vai ao diário (`Some(true)` voltou, `Some(false)` caiu).
+/// A primeira leitura da vida não é borda; plugin que nunca pediu (desligado, não instalado) não cai.
+/// `life`: idade desta vida no ator; antes do prazo, quem ainda não pediu está subindo.
+fn plugin_edge(was:Option<bool>,status:Option<&crate::plugin::PullStatus>,life:Duration)->(Option<bool>,Option<bool>) {
+    let Some(status)=status else { return (was,None) };
+    let on=status.open || status.last_seen_s.is_some_and(|s|s<=PLUGIN_OFF_AFTER.as_secs());
+    match (was,on) {
+        (Some(false),true)=>(Some(true),Some(true)),
+        (_,true)=>(Some(true),None),
+        (Some(true),false)=>(Some(false),Some(false)),
+        (None,false) if status.last_seen_s.is_none() || life<PLUGIN_OFF_AFTER=>(None,None),
+        (None,false)=>(Some(false),Some(false)),
+        (Some(false),false)=>(was,None),
+    }
+}
 /// Quanto o aviso de `/clear` não aplicado fica na vista.
 const CLEAR_NOTICE:Duration=Duration::from_secs(60);
 /// Até quando um transcript novo começado por `/clear` segura a trava esperando o Python trocar o
@@ -377,7 +402,7 @@ impl TerminalActor {
         if let Some(sender)=&status { sender.send_replace(Default::default()); }
         let modes_cache=read_modes(&target.state_path);
         let executor=Executor {batch_blocked:false,target,queue:Arc::new(queue),local,options,events,revision,sequence,receipt,deliverable:false,last_error:None,uncertain:vec![],unprovable:false,mode_unproved:false,modes_cache,uncertain_since:None,loan:None,stall:None,hold:None,hold_checked:false,focus_refused:false,parked:VecDeque::new(),away:None,clear_watch:None,clear_notice:None,footer_misses:None,reconciliation:None,confirm_until:None,confirm_seen:None,
-            unproved_since:None,no_safe_delivery:false,heal_requested:None,turn_wait:None,diag:policy.diag(),conversation_proved:false};
+            unproved_since:None,no_safe_delivery:false,composer_held:false,composer_read_at:None,plugin_alive:None,born:tokio::time::Instant::now(),heal_requested:None,turn_wait:None,diag:policy.diag(),conversation_proved:false};
         let run=executor.run(receiver,closed.clone());
         let task=tokio::spawn(async move {
             let mut guard=terminal_status::PanicMark(status);
@@ -453,7 +478,7 @@ impl Executor {
         Ok(json!({"key":self.target.key,"generation":self.target.generation,"revision":self.revision.load(Ordering::Acquire),
             "view":{"terminal":true,"working_revision":self.working_revision(),"conversation":self.target.binding.conversation,"deliverable":self.deliverable && !self.cleared(&state),"preserve_binding":state.runtime_state["preserve_binding"],"clear_barrier":state.runtime_state["clear_barrier"],
                 "input_stalled":self.stall.as_ref().filter(|s|s.surfaced).map(|s|s.code.clone()).or_else(||self.clear_notice.map(|_|"clear_not_applied".into()))
-                    .or_else(||state.terminal_write_blocked(&self.target.binding.conversation).then(||"delivery_unproved".to_owned()))
+                    .or_else(||state.terminal_write_blocked(&self.target.binding.conversation).then(||if self.composer_held {"delivery_composer_busy"} else {"delivery_unproved"}.to_owned()))
                     .or_else(||self.no_safe_delivery.then(||"no_safe_delivery".to_owned()))
                     .or_else(||self.batch_blocked.then(||super::queue::BATCH_TOO_LARGE.to_owned()))},"channels":{},"error":self.last_error}))
     }
@@ -517,6 +542,7 @@ impl Executor {
                     _=tokio::time::sleep_until(release_at.unwrap_or_else(tokio::time::Instant::now)),if release_at.is_some()=>continue,
                     _=timer.tick(),if !closed.load(Ordering::Acquire) && (self.last_error.is_none() || self.last_error.as_deref()==Some("terminal_facts") || self.reconciling() || self.clear_watch.is_some() || self.clear_notice.is_some() || self.options.lifecycle.is_some())=>{
                         if self.clear_notice.is_some_and(|until|tokio::time::Instant::now()>=until) {self.clear_notice=None; self.publish().await?;}
+                        self.watch_plugin();
                         // Clique de mod em curso, ou o que ele guardou ainda por sair: a fila não entrega nem
                         // reconcilia no pane antes disso (C6).
                         if self.held() || !self.parked.is_empty() {continue;}
@@ -1280,7 +1306,9 @@ impl Executor {
     }
     async fn conversation_unproved(&self)->bool {
         let binding=crate::terminal_facts::LocalTerminalFacts::binding(&self.target);
-        if self.options.plugin.as_ref().is_some_and(|store|store.conversation_proved(&binding).unwrap_or(false)) {return false;}
+        // Só o `/pull` aberto: o visto há pouco pode ser do agente anterior com o mesmo vínculo, e o intervalo
+        // entre dois `/pull` já não pisca pelo `stall_notice`.
+        if self.options.plugin.as_ref().is_some_and(|store|store.conversation_pulling(&binding).unwrap_or(false)) {return false;}
         let (config,pid)=(self.target.metadata.config_dir.clone(),i64::from(self.target.metadata.agent_pid));
         // Qualquer falha de leitura (ausente, corrompido, de outro pid) deixa a conversa sem prova.
         tokio::task::spawn_blocking(move||super::lifecycle::read_native_conversation(&config,pid).is_err()).await.unwrap_or(true)
@@ -1566,24 +1594,36 @@ impl Executor {
         };
         let state=match self.queue.snapshot().await {Ok(state)=>state, Err(_)=>{skip(&self.target.key,"give_up_queue_io","prazo da entrega incerta: fila ilegível, tenta no próximo tique"); return}};
         let owner=state.runtime_state["terminal_write_barrier"]["operation_id"].as_str().map(str::to_owned);
-        let Some(entry)=owner.as_deref().and_then(|id|state.operations.get(id)).and_then(|op|op.entry_id.clone()) else {self.uncertain_since=None; return};
+        let Some(entry)=owner.as_deref().and_then(|id|state.operations.get(id)).and_then(|op|op.entry_id.clone()) else {self.uncertain_since=None; self.composer_read_at=None; self.hold_composer(false).await; return};
+        // Lido só pelo pane, sem os fatos da conversa: com eles fora, o campo ocupado ainda aparece na vista.
+        let services=self.services("maintenance","maintenance","");
+        let driver=TerminalDriver::new(self.target.binding.clone(),services.clone(),self.options.io.clone(),self.options.limits.clone());
         let now=tokio::time::Instant::now();
+        // Uma captura do pane a cada poucos segundos basta para o aviso; o tique é mais curto.
+        let read_due=self.composer_read_at.is_none_or(|at|now.duration_since(at)>=COMPOSER_READ_EVERY);
+        if read_due {
+            self.composer_read_at=Some(now);
+            // Leitura que falhou não afirma texto no campo: a tela não pede para apagar o que pode não existir.
+            let busy=driver.composer_empty().await==Some(false);
+            self.hold_composer(busy).await;
+        }
         let since=match &self.uncertain_since {Some((seen,at)) if *seen==entry=>*at, _=>{self.uncertain_since=Some((entry,now)); return}};
         if now.duration_since(since)<self.options.give_up_after {return;}
-        let services=self.services("maintenance","maintenance","");
         match services.facts(&self.target.binding).await {
             Ok(facts) if facts.binding==self.target.binding && facts.idle=>{},
             Ok(_)=>return,
             Err(_)=>{skip(&self.target.key,"give_up_facts","prazo da entrega incerta: fatos indisponíveis, sem saber se o Claude parou"); return},
         }
-        // Texto ainda no composer é a própria entrega parada: desistir deixaria o dono com ele preso no prompt.
-        let driver=TerminalDriver::new(self.target.binding.clone(),services,self.options.io.clone(),self.options.limits.clone());
-        if !driver.composer_free().await {
+        // Última chance da prova antes de desistir.
+        if self.confirm_rows().await.is_err() {skip(&self.target.key,"give_up_receipt","prazo da entrega incerta: transcript ilegível, tenta no próximo tique"); return;}
+        // Texto ainda no composer é a própria entrega parada: desistir deixaria o dono com ele preso no prompt. Lido
+        // logo antes de desistir, porque a pessoa pode ter digitado durante as esperas acima.
+        let empty=driver.composer_empty().await;
+        if empty!=Some(true) {
+            self.hold_composer(empty==Some(false)).await;
             skip(&self.target.key,"give_up_composer_busy","prazo da entrega incerta: o composer tem texto; a desistência fica com o Descartar");
             return;
         }
-        // Última chance da prova antes de desistir.
-        if self.confirm_rows().await.is_err() {skip(&self.target.key,"give_up_receipt","prazo da entrega incerta: transcript ilegível, tenta no próximo tique"); return;}
         let id=format!("give_up:{entry}:{}",self.sequence.fetch_add(1,Ordering::Relaxed));
         let given=self.queue.exec(self.target.generation,&id,sample(),Action::GiveUp {entry_id:entry.clone()}).await;
         self.uncertain_since=None;
@@ -1621,6 +1661,30 @@ impl Executor {
                 tracing::warn!(key=%self.target.key,code="give_up_unproved_queue_io","desistência da entrega sem prova não gravou; tenta no próximo tique");
             },
         }
+    }
+    /// Diário de quando o plugin desta sessão liga e some: sem isso, a queda dele só aparecia como a entrada em erro.
+    fn watch_plugin(&mut self) {
+        let Some(store)=&self.options.plugin else { return };
+        let status=store.pull_status(&crate::terminal_facts::LocalTerminalFacts::binding(&self.target),std::time::Instant::now()).ok();
+        let (now,edge)=plugin_edge(self.plugin_alive,status.as_ref(),self.born.elapsed());
+        self.plugin_alive=now;
+        match edge {
+            Some(true)=>{
+                tracing::info!(key=%self.target.key,session=%self.target.name,code="plugin_on","plugin da sessão pedindo de novo");
+                self.diag.report("rust.plugin_on",&self.target.name,"plugin_on","o plugin da sessão voltou a pedir (/pull)");
+            }
+            Some(false)=>{
+                let since=status.and_then(|s|s.last_seen_s).map_or("nunca".to_owned(),|s|format!("{s}s"));
+                tracing::warn!(key=%self.target.key,session=%self.target.name,code="plugin_off",last_pull=%since,"plugin da sessão sem /pull aceito");
+                self.diag.report("rust.plugin_off",&self.target.name,"plugin_off","o plugin da sessão parou de pedir (/pull)");
+            }
+            None=>{}
+        }
+    }
+    async fn hold_composer(&mut self,held:bool) {
+        if self.composer_held==held {return;}
+        self.composer_held=held;
+        if let Err(failure)=self.publish().await {tracing::warn!(key=%self.target.key,code=%failure.code,"vista do campo ocupado não publicou");}
     }
     /// Depois de uma desistência: a memória da entrega incerta só sai quando o disco não segura mais a escrita.
     async fn release_uncertain(&mut self) {
@@ -1773,6 +1837,26 @@ fn validate(kind:&str,payload:&Value)->Result<(),RuntimeError> {
 
 #[cfg(test)]
 mod tests {
+    /// O diário ganha uma linha quando o plugin liga e outra quando some: a queda tem hora, mesmo sem nenhum erro.
+    #[test]
+    fn plugin_on_and_off_are_edges_with_a_grace_for_a_fresh_life() {
+        use crate::plugin::PullStatus;
+        use std::time::Duration;
+        let seen = |s: u64| PullStatus { open: false, last_seen_s: Some(s), reported: false, ended: false };
+        let open = PullStatus { open: true, last_seen_s: Some(0), reported: false, ended: false };
+        let never = PullStatus { open: false, last_seen_s: None, reported: false, ended: false };
+        let short = Duration::from_secs(10);
+        let long = Duration::from_secs(300);
+        assert_eq!(super::plugin_edge(None, Some(&never), short), (None, None), "vida recém-aberta: o plugin ainda está subindo");
+        assert_eq!(super::plugin_edge(None, Some(&never), long), (None, None), "nunca pediu: desligado ou não instalado, não caiu");
+        assert_eq!(super::plugin_edge(None, Some(&seen(500)), long), (Some(false), Some(false)), "pediu nesta vida e parou");
+        assert_eq!(super::plugin_edge(None, Some(&open), short), (Some(true), None), "a primeira leitura da vida não é volta");
+        assert_eq!(super::plugin_edge(Some(true), Some(&seen(30)), long), (Some(true), None), "entre um /pull e o seguinte segue ligado");
+        assert_eq!(super::plugin_edge(Some(true), Some(&seen(121)), long), (Some(false), Some(false)));
+        assert_eq!(super::plugin_edge(Some(false), Some(&seen(500)), long), (Some(false), None), "uma linha por queda");
+        assert_eq!(super::plugin_edge(Some(false), Some(&open), long), (Some(true), Some(true)), "voltou");
+        assert_eq!(super::plugin_edge(Some(true), None, long), (Some(true), None), "vínculo ilegível não decide nada");
+    }
     /// argv ilegível (processo que sumiu, `/proc` negado) é erro com código, não "sem bypass".
     #[test]
     fn unreadable_argv_is_a_coded_error_not_a_reopen() {

@@ -61,6 +61,8 @@ export interface SessionInfo {
   worktree_gone?: boolean;
   /** Raiz do repositório onde o agente trabalha quando saiu do da pasta de abertura; o git da sessão é lido ali. */
   git_cwd?: string | null;
+  /** Nome sugerido para a sessão de nome genérico; some quando a pessoa renomeia ou diz "agora não". */
+  rename_suggestion?: string | null;
   /** Servidores MCP criados por plugin (`$.tool.register`); a pele 'terminal' deixa as chamadas deles fora da dobra. */
   plugin_tool_servers?: string[] | null;
   // Linhas adicionadas/removidas no working tree vs HEAD (git diff --numstat, staged+unstaged;
@@ -108,6 +110,8 @@ export interface SessionInfo {
   // Statusline crua da sessão (cache ~20s no backend) — o card do board/canvas parseia com
   // parseStatusLine (modelo/contexto no composer; ⚡5h/📅7d na RateStrip). Chat usa a versão ao vivo.
   status_line?: string | null;
+  // Contexto lido do transcript pela lista do Rust (só Claude); vence a statusline no anel.
+  context?: { used: number; 'window': number } | null;
   // Id do modelo em uso na sessão Claude (`claude-opus-5-5[1m]`), resolvido pelo backend: dá nome à
   // pílula quando a statusline não é a do Hangar ou ainda não chegou.
   model?: string | null;
@@ -172,6 +176,10 @@ export interface AggSession extends SessionInfo {
   serverColor: string;
   // A linha veio de um servidor de convite: é a sessão de outra pessoa, compartilhada com você.
   serverInvite?: boolean;
+  // Do evento `tags` da lista; `null` = servidor sem etiqueta ou versão antiga.
+  machineTag?: import('./tags').Tag | null;
+  // Conta da linha (`conta`) como o servidor a mostra; `null` = conta desconhecida ou sem evento.
+  accountTag?: import('./tags').AccountBadge | null;
   // Sessão de fora posta no grupo local por `placeExternalRows`; `serverId` continua o da entrada
   // do convite (é por ela que a sessão é chamada).
   outside?: OutsideMark;
@@ -230,7 +238,27 @@ export interface ChatEvent {
   skill?: { name: string; path?: string | null; body: string } | null;
 }
 
+export interface CodexCommand {
+  id: string;
+  process_id: string;
+  command: string;
+  started_at: number;
+  background: boolean;
+}
+
+export interface CodexSubagent {
+  agent_path: string | null;
+  activity_revision?: number;
+  state: 'running' | 'finished' | 'failed' | null;
+  ended_at: number | null;
+  can_message: boolean;
+  message_blocked: string | null;
+}
+export type CodexSubagents = Record<string, CodexSubagent>;
+
 export interface StateEvent {
+  codex_subagents?: CodexSubagents;
+  codex_commands?: CodexCommand[];
   interaction_id?: string | null;
   codex_service_tier?: string | null;
   codex_buffering?: boolean;
@@ -340,6 +368,8 @@ export interface WorkflowAgent {
 // Subagente solto (tool Agent), lido do transcript dele em <session-dir>/subagents/.
 export interface SubagentRun {
   agentId: string;
+  agentPath?: string | null;
+  nickname?: string | null;
   agentType: string | null;
   prompt: string | null;
   startedAt: string;

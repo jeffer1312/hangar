@@ -15,7 +15,9 @@ import { textoProblema } from '../lib/problema';
   import { dragChave } from '../lib/dragToGroup';
   import WorktreeSheet from './WorktreeSheet.svelte';
   import { chipDaConta } from '../lib/conta';
-  import { loopBadge, LOOP_TONE_COLOR } from '@hangar/core';
+  import { loopBadge, LOOP_TONE_COLOR, sessionContextPct, tagHex } from '@hangar/core';
+  import TagIcon from './icons/TagIcon.svelte';
+  import ContextRing from './ContextRing.svelte';
   import IconFolder from './icons/IconFolder.svelte';
   import IconWorktree from './icons/IconWorktree.svelte';
   import BottomSheet from './BottomSheet.svelte';
@@ -46,6 +48,8 @@ import { textoProblema } from '../lib/problema';
     // Pasta na linha de meta: o nativo só a mostra na lista por servidor (por projeto o
     // cabeçalho já a diz); worktree aparece sempre.
     showFolder?: boolean;
+    // A lista decide quando a linha diz a máquina (a mesma regra que punha o nome dela no selo).
+    showMachine?: boolean;
     // Sessões do mesmo servidor (encadear e agrupar pelo toque longo); lidas só ao abrir o subnível.
     peers?: () => AggSession[];
     onShare?: () => void;
@@ -57,7 +61,7 @@ import { textoProblema } from '../lib/problema';
   let {
     session, groupBadge = null, onClick, onDelete, onResume, onRename, onGit, onGroupDrag,
     selectMode = false, selected = false, onToggleSelect,
-    showFolder = false, peers, onShare, onPairAccept, onBastao, onOpenArbiter,
+    showFolder = false, showMachine = false, peers, onShare, onPairAccept, onBastao, onOpenArbiter,
   }: Props = $props();
 
 
@@ -111,6 +115,15 @@ import { textoProblema } from '../lib/problema';
   // volta HH:MM" e a marca para de animar — a sessão está `working` pro hook, não pra pessoa.
   const limited = $derived(session.limited === true);
   const contaChip = $derived(chipDaConta(session.conta));
+  // Placa [máquina] [conta], do evento `tags`. Sem etiqueta da conta (servidor antigo ou conta
+  // fora do evento) fica o chip de antes; cor nula = a cor por hash de sempre.
+  const row = $derived(session as AggSession);
+  const machinePlate = $derived(showMachine && row.serverLabel
+    ? { name: row.serverLabel, icon: row.machineTag?.icon ?? 'monitor', color: row.serverColor ?? null } : null);
+  const accountPlate = $derived(row.accountTag
+    ? { name: row.accountTag.name, icon: row.accountTag.icon, color: tagHex(row.accountTag.color) ?? contaChip?.cor ?? null } : null);
+  // Contexto da sessão em volta do ícone.
+  const ctxPct = $derived(sessionContextPct(session));
 
   const loopChip = $derived(loopBadge(session.loop_status, session.loop_iter, session.loop_max));
   // Orquestrador sem LLM: sem renomear e sem excluir; o backend recusa os dois.
@@ -499,17 +512,24 @@ import { textoProblema } from '../lib/problema';
     onpointerup={onUp}
     onpointercancel={onCancel}
   >
-    <span class="lead" aria-hidden="true">
-      {#if selectMode}
-        <!-- Checkbox visual (a semantica de check fica no role="checkbox" da row -> so decorativo). -->
-        <input type="checkbox" class="select-check" checked={selected} tabindex="-1" aria-hidden="true" />
-      {:else if session.state === 'working' && !limited}
+    {#snippet leadMark(ring: boolean)}
+      {#if session.state === 'working' && !limited}
         <!-- Working -> a marca desenhando, na COR DO ESTADO. Este herda via currentColor, então
              quem pinta é o container. -->
-        <span class="work-mark" style="color: {stateColors[session.state]};"><HangarWorking size={18} /></span>
+        <span class="work-mark" style="color: {stateColors[session.state]};"><HangarWorking size={ring ? 13 : 18} /></span>
       {:else}
         <!-- Parada -> ponto na COR do estado: é ele, e não uma pílula, que diz o estado na lista. -->
         <span class="state-dot" style="background: {limited ? 'var(--pill-limite-fg)' : stateColors[session.state]};"></span>
+      {/if}
+    {/snippet}
+    <span class="lead" class:lead-ring={!selectMode && ctxPct !== null} aria-hidden="true">
+      {#if selectMode}
+        <!-- Checkbox visual (a semantica de check fica no role="checkbox" da row -> so decorativo). -->
+        <input type="checkbox" class="select-check" checked={selected} tabindex="-1" aria-hidden="true" />
+      {:else if ctxPct !== null}
+        <ContextRing pct={ctxPct} size={24}>{@render leadMark(true)}</ContextRing>
+      {:else}
+        {@render leadMark(false)}
       {/if}
     </span>
 
@@ -549,9 +569,23 @@ import { textoProblema } from '../lib/problema';
             <span class="untracked-badge" title={untrackedReason(session.provider)}>⚠ {m.sessao_sem_id()}</span>
           {/if}
         {/if}
-        {#if contaChip || replyTime}
+        {#if machinePlate || accountPlate || contaChip || replyTime}
           <span class="name-end">
-            {#if contaChip}
+            {#if machinePlate || accountPlate}
+              <span class="plate conta-no-nome">
+                {#if machinePlate}
+                  <span class="plate-seg plate-machine" style="--conta-cor: {machinePlate.color ?? 'currentColor'};" title={m.tags_plate_machine({ name: machinePlate.name })}>
+                    <span class="plate-icon"><TagIcon icon={machinePlate.icon} size={11} /></span><span class="sr-only">{m.tags_plate_machine({ name: machinePlate.name })}</span><span class="conta-label" aria-hidden="true">{machinePlate.name}</span>
+                  </span>
+                {/if}
+                {#if accountPlate}
+                  <span class="plate-seg plate-account" style="--conta-cor: {accountPlate.color ?? 'currentColor'};" title={m.tags_plate_account({ name: accountPlate.name })}>
+                    <span class="plate-icon"><TagIcon icon={accountPlate.icon} provider={session.provider} size={11} /></span><span class="sr-only">{m.tags_plate_account({ name: accountPlate.name })}</span><span class="conta-label" aria-hidden="true">{accountPlate.name}</span>
+                  </span>
+                {/if}
+              </span>
+            {/if}
+            {#if contaChip && !accountPlate}
               <span class="conta-chip conta-no-nome" style="--conta-cor: {contaChip.cor};" title={m.sessao_conta({ n: contaChip.nome })}><span class="conta-label">{contaChip.label}</span></span>
             {/if}
             {#if replyTime}
@@ -653,6 +687,7 @@ import { textoProblema } from '../lib/problema';
       <!-- O estado na lista é só a cor da marca (o .lead é aria-hidden): texto para leitor de tela
            (SC 1.4.1). -->
       <span class="sr-only">{rotuloEstado(session.state)}</span>
+      {#if ctxPct !== null}<span class="sr-only">{m.tags_context_ring({ pct: Math.round(ctxPct) })}</span>{/if}
       <!-- Caminho por TECLADO/leitor de tela pras acoes do swipe (git / excluir), que e
            pointer-only. Escondidos visualmente, sempre focaveis e anunciados; reaparecem como botao
            de 40px no foco de teclado (:focus-visible). -->
@@ -1231,6 +1266,20 @@ import { textoProblema } from '../lib/problema';
     background: var(--fill-subtle); color: var(--text-secondary); min-width: 0;
   }
   .conta-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Placa [máquina][conta]: as duas metades numa pílula só; a cor da etiqueta pinta o ícone. */
+  .plate {
+    position: relative; display: inline-flex; align-items: center; min-width: 0;
+    font-size: 10px; font-weight: var(--fw-medium); letter-spacing: 0.02em;
+    border-radius: var(--radius-full); background: var(--fill-subtle); color: var(--text-secondary);
+    overflow: hidden;
+  }
+  .conta-no-nome.plate { max-width: 160px; }
+  .plate-seg { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; min-width: 0; }
+  .plate-seg + .plate-seg { border-left: 1px solid var(--border-subtle); }
+  .plate-machine { flex: 0 2 auto; }
+  .plate-account { flex: 0 1 auto; }
+  .plate-icon { display: inline-flex; flex: 0 0 auto; color: var(--conta-cor); }
+  .lead.lead-ring { width: 24px; height: 24px; }
   .conta-chip::before {
     content: ''; flex: 0 0 auto;
     width: 5px; height: 5px; border-radius: 50%;

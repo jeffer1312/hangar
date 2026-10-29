@@ -6,6 +6,59 @@ use super::*;
 use super::subagent::SubConversation;
 use crate::appearance::SideTab;
 use crate::conversation::{Activity, AgentRun, TaskStatus};
+use hangar_api::state::{CodexCommand, CodexSubagent};
+type NativeAgents = std::collections::BTreeMap<String, CodexSubagent>;
+
+fn native_agent<'a>(states: &'a NativeAgents, id: &str, path: Option<&str>) -> Option<&'a CodexSubagent> {
+    if !id.is_empty() { return states.get(id); }
+    path.and_then(|path| states.values().find(|state| state.agent_path.as_deref() == Some(path)))
+}
+
+fn project_native_subs(subs: &mut [SubRun], states: Option<&NativeAgents>) {
+    let Some(states) = states else { return; };
+    for sub in subs {
+        let Some(state) = native_agent(states, &sub.agent_id, sub.agent_path.as_deref()) else {
+            if sub.state.as_deref() == Some("running") {
+                sub.state = None;
+                sub.finished = false;
+                sub.ended = None;
+                sub.problem = Some("erro_subagente_estado_indisponivel".into());
+            }
+            sub.can_message = false;
+            sub.message_blocked = Some("erro_subagente_estado_indisponivel".into());
+            continue;
+        };
+        if let Some(status) = &state.state {
+            sub.state = Some(status.clone());
+            sub.ended = state.ended_at;
+            sub.finished = status != "running";
+            sub.failed = status == "failed";
+        }
+        sub.can_message = state.can_message;
+        sub.message_blocked = state.message_blocked.clone();
+        sub.problem = state.state.is_none().then(|| "erro_subagente_estado_indisponivel".into());
+    }
+}
+
+fn native_running(agent: &AgentRun, subs: &[SubRun], states: Option<&NativeAgents>, loaded: bool) -> bool {
+    if let Some(state) = states.and_then(|states| native_agent(states, agent.agent_id.as_deref().unwrap_or(""), agent.agent_path.as_deref())) {
+        if let Some(status) = &state.state { return status == "running"; }
+    }
+    loaded && match_agent(subs, agent).is_some_and(|sub| sub.state.as_deref() == Some("running"))
+}
+
+fn project_native_detail(value: &mut Value, states: Option<&NativeAgents>, id: &str) {
+    if !value.is_object() { return; }
+    let Some(state) = states.and_then(|states| native_agent(states, id, value["agentPath"].as_str())) else { return; };
+    value["canMessage"] = json!(state.can_message);
+    value["messageBlocked"] = json!(state.message_blocked);
+    value["problema"] = json!(state.state.is_none().then_some("erro_subagente_estado_indisponivel"));
+    if state.state.is_none() { return; }
+    value["state"] = json!(state.state);
+    value["finished"] = json!(state.state.as_deref().map(|state| state != "running"));
+    value["failed"] = json!(state.state.as_deref() == Some("failed"));
+    value["endedAt"] = json!(state.ended_at.and_then(|seconds| chrono::DateTime::from_timestamp_millis((seconds * 1000.) as i64)).map(|at| at.to_rfc3339()));
+}
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::tab::{Tab, TabBar};
 
@@ -36,12 +89,15 @@ pub(super) enum ActivityReply {
     TabDetail(u64, u64, Result<Value, Failure>),
     /// Resposta do envio de mensagem ao subagente: a aba (nenhuma = o detalhe da lista) e o número do envio.
     Sent(Option<u64>, u64, Result<Value, Failure>),
+    CommandStopped(SessionKey, String, Result<Value, Failure>),
 }
 
 /// Um subagente do disco (`GET …/subagents`), só com o que a lista mostra e casa.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct SubRun {
     agent_id: String, agent_type: Option<String>, prompt: Option<String>, calls: u64, last_tool: Option<String>,
+    agent_path: Option<String>,
+    nickname: Option<String>,
     finished: bool, unreadable: bool, tools: Vec<(String, u64)>,
     /// Erro de API no fim do registro (campo `failed` do Claude); servidor sem o campo, `false`.
     failed: bool,
@@ -79,6 +135,8 @@ fn parse_sub(item: &Value) -> Option<SubRun> {
         problem: text(item, "problema").filter(|s| !s.is_empty()),
         model: text(item, "model").filter(|s| !s.is_empty()),
         agent_id: text(item, "agentId")?,
+        agent_path: text(item, "agentPath"),
+        nickname: text(item, "nickname"),
         agent_type: text(item, "agentType").filter(|t| !t.is_empty()),
         prompt: text(item, "prompt"),
         calls: item.get("toolCalls").and_then(Value::as_u64).unwrap_or(0),
@@ -146,10 +204,13 @@ fn norm(text: &str) -> String { text.split_whitespace().collect::<Vec<_>>().join
 
 /// O subagente do disco de um Agent: prompt normalizado inteiro, senão os 400 primeiros caracteres (o mais recente
 /// vence, e a lista já vem do mais recém-escrito).
-fn agent_model(subs: &[SubRun], agent_id: Option<&str>, prompt: Option<&str>, asked: Option<String>) -> Option<String> {
+fn agent_model(subs: &[SubRun], agent_id: Option<&str>, agent_path: Option<&str>, prompt: Option<&str>, asked: Option<String>) -> Option<String> {
     let sub = match agent_id {
         Some(id) => subs.iter().find(|s| s.agent_id == id),
-        None => match_sub(subs, prompt),
+        None => match agent_path {
+            Some(path) => subs.iter().find(|sub| sub.agent_path.as_deref() == Some(path)),
+            None => match_sub(subs, prompt),
+        },
     };
     // Na lista sem modelo (só erro de API, ilegível): o apelido seria afirmar o que não rodou.
     match sub { Some(s) => s.model.clone(), None => asked }
@@ -157,10 +218,34 @@ fn agent_model(subs: &[SubRun], agent_id: Option<&str>, prompt: Option<&str>, as
 
 fn match_sub<'a>(subs: &'a [SubRun], prompt: Option<&str>) -> Option<&'a SubRun> {
     let full = norm(prompt?);
-    subs.iter().find(|s| s.prompt.as_deref().is_some_and(|p| norm(p) == full)).or_else(|| {
+    if full.is_empty() { return None; }
+    let only = |test: &dyn Fn(&str) -> bool| {
+        let mut found = subs.iter().filter(|s| s.prompt.as_deref().is_some_and(test));
+        match (found.next(), found.next()) { (Some(sub), None) => Some(sub), _ => None }
+    };
+    only(&|prompt| norm(prompt) == full).or_else(|| {
         let head: String = full.chars().take(400).collect();
-        subs.iter().find(|s| s.prompt.as_deref().is_some_and(|p| norm(p).starts_with(&head)))
+        only(&|prompt| norm(prompt).starts_with(&head))
     })
+}
+
+fn match_agent<'a>(subs: &'a [SubRun], agent: &AgentRun) -> Option<&'a SubRun> {
+    if let Some(id) = &agent.agent_id { return subs.iter().find(|sub| &sub.agent_id == id); }
+    if let Some(path) = &agent.agent_path { return subs.iter().find(|sub| sub.agent_path.as_ref() == Some(path)); }
+    match_sub(subs, agent.prompt.as_deref())
+}
+
+fn agent_running(agent: &AgentRun, agents: &[AgentRun], subs: &[SubRun], now: f64) -> bool {
+    match match_agent(subs, agent) {
+        Some(sub) => sub_status(agents, subs, sub, now) == SubStatus::Running,
+        None => agent.running,
+    }
+}
+
+fn running_count(activity: &Activity, subs: &[SubRun], now: f64) -> usize {
+    let running: Vec<_> = activity.agents.iter().filter(|agent| agent_running(agent, &activity.agents, subs, now)).collect();
+    let shown: HashSet<_> = running.iter().filter_map(|agent| match_agent(subs, agent)).map(|sub| sub.agent_id.as_str()).collect();
+    running.len() + subs.iter().filter(|sub| !shown.contains(sub.agent_id.as_str()) && sub_status(&activity.agents, subs, sub, now) == SubStatus::Running).count()
 }
 
 /// Terminou: o backend diz (Kimi, Pi) ou o Agent do pai que o lançou já teve o fim real — o registro do Claude não traz
@@ -178,12 +263,13 @@ fn sub_silent(agents: &[AgentRun], subs: &[SubRun], run: &SubRun) -> bool {
 /// Rodando, terminado ou falho, com o horário do fim (o `endedAt`, senão a última escrita); ou sem notícia desde a
 /// última escrita.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum SubStatus { Running, Finished(Option<f64>), Failed(Option<f64>), Silent(f64) }
+enum SubStatus { Running, Finished(Option<f64>), Failed(Option<f64>), Silent(f64), Unknown }
 
 /// O `state` do servidor decide; sem ele, o fim do backend ou do Agent do pai, e o registro sem Agent do pai parado há
 /// mais de 10 min fica sem notícia desde a última escrita (subagente de outra conversa não fica "Pensando" para sempre,
 /// e o silêncio não prova o fim).
 fn sub_status(agents: &[AgentRun], subs: &[SubRun], run: &SubRun, now: f64) -> SubStatus {
+    if run.problem.as_deref() == Some("erro_subagente_estado_indisponivel") { return SubStatus::Unknown; }
     let at = run.ended.or(run.updated);
     match run.state.as_deref() {
         Some("running") => return SubStatus::Running,
@@ -193,19 +279,16 @@ fn sub_status(agents: &[AgentRun], subs: &[SubRun], run: &SubRun, now: f64) -> S
     }
     if run.failed { return SubStatus::Failed(at); }
     if ended_by_parent(agents, subs, run) { return SubStatus::Finished(at); }
-    let parent = agents.iter().any(|a| match &a.agent_id {
-        Some(id) => id == &run.agent_id,
-        None => match_sub(std::slice::from_ref(run), a.prompt.as_deref()).is_some(),
-    });
+    let parent = agents.iter().any(|a| match_agent(std::slice::from_ref(run), a).is_some());
     if let Some(updated) = run.updated.filter(|updated| !parent && now - updated > STALE_SECS) { return SubStatus::Silent(updated); }
     SubStatus::Running
 }
 
 fn ended_by_parent(agents: &[AgentRun], subs: &[SubRun], run: &SubRun) -> bool {
     if run.finished { return true; }
-    if let Some(agent) = agents.iter().find(|a| a.agent_id.as_deref() == Some(run.agent_id.as_str())) { return !agent.running; }
+    if let Some(agent) = agents.iter().find(|a| (a.agent_id.is_some() || a.agent_path.is_some()) && match_agent(std::slice::from_ref(run), a).is_some()) { return !agent.running; }
     let subs_of = |prompt: Option<&str>| subs.iter().filter(|s| match_sub(std::slice::from_ref(*s), prompt).is_some()).count();
-    let mut by_prompt = agents.iter().filter(|a| a.agent_id.is_none() && match_sub(std::slice::from_ref(run), a.prompt.as_deref()).is_some());
+    let mut by_prompt = agents.iter().filter(|a| a.agent_id.is_none() && a.agent_path.is_none() && match_sub(std::slice::from_ref(run), a.prompt.as_deref()).is_some());
     match (by_prompt.next(), by_prompt.next()) {
         (Some(agent), None) => !agent.running && subs_of(agent.prompt.as_deref()) == 1,
         _ => false,
@@ -216,11 +299,11 @@ fn ended_by_parent(agents: &[AgentRun], subs: &[SubRun], run: &SubRun) -> bool {
 /// pelo prompt, só quando um subagente sem dono e este Agent casam um com o outro e mais ninguém.
 fn agent_failed(agents: &[AgentRun], subs: &[SubRun], call: usize) -> bool {
     let Some(agent) = agents.iter().find(|a| a.call == call) else { return false };
-    if let Some(id) = &agent.agent_id { return subs.iter().any(|s| &s.agent_id == id && s.failed); }
-    let owned = |s: &SubRun| agents.iter().any(|a| a.agent_id.as_deref() == Some(s.agent_id.as_str()));
+    if agent.agent_id.is_some() || agent.agent_path.is_some() { return match_agent(subs, agent).is_some_and(|sub| sub.failed); }
+    let owned = |s: &SubRun| agents.iter().any(|a| (a.agent_id.is_some() || a.agent_path.is_some()) && match_agent(std::slice::from_ref(s), a).is_some());
     let mut candidates = subs.iter().filter(|s| !owned(s) && match_sub(std::slice::from_ref(*s), agent.prompt.as_deref()).is_some());
     let (Some(sub), None) = (candidates.next(), candidates.next()) else { return false };
-    let claimants = agents.iter().filter(|a| a.agent_id.is_none() && match_sub(std::slice::from_ref(sub), a.prompt.as_deref()).is_some()).count();
+    let claimants = agents.iter().filter(|a| a.agent_id.is_none() && a.agent_path.is_none() && match_sub(std::slice::from_ref(sub), a.prompt.as_deref()).is_some()).count();
     claimants == 1 && sub.failed
 }
 
@@ -229,7 +312,9 @@ fn base_title(sub: &SubRun) -> String {
     let prompt = sub.prompt.as_deref().unwrap_or("");
     let lines: Vec<&str> = prompt.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     let useful = lines.iter().find(|l| !l.to_lowercase().starts_with("base directory for this skill:") && !l.starts_with('#'));
-    useful.or(lines.first()).copied().unwrap_or(&sub.agent_id).chars().take(90).collect()
+    let label = sub.agent_path.as_deref().and_then(|path| path.rsplit('/').find(|part| !part.is_empty()))
+        .or(sub.nickname.as_deref()).unwrap_or(&sub.agent_id);
+    useful.or(lines.first()).copied().unwrap_or(label).chars().take(90).collect()
 }
 
 /// Título repetido (os itens de um AgentSwarm abrem igual) leva o `agentId`.
@@ -259,7 +344,7 @@ struct TaskLine { mark: &'static str, text: String, status: TaskStatus }
 struct Lines {
     agents: Vec<AgentLine>,
     /// Subagentes do disco: rodando (fora das linhas de Agent), terminados hoje e os de antes de hoje.
-    running: Vec<OrphanLine>, finished: Vec<OrphanLine>, older: Vec<OrphanLine>,
+    running: Vec<OrphanLine>, finished: Vec<OrphanLine>, older: Vec<OrphanLine>, uncertain: Vec<OrphanLine>,
     shells: Vec<ShellLine>, processes: Vec<ShellLine>, tasks: Vec<TaskLine>, timed: bool,
 }
 
@@ -280,7 +365,15 @@ pub(super) struct ActivityPanel {
     shown: bool,
     activity: Activity,
     processes: Vec<ShellAlive>,
+    commands: Vec<CodexCommand>,
+    command_output: HashMap<String, String>,
+    command_open: Option<String>,
+    command_pending: HashSet<String>,
+    command_error: Option<String>,
+    command_view: Option<(String, Entity<TextViewState>)>,
+    read_only: bool,
     subs: Vec<SubRun>,
+    native_states: Option<NativeAgents>,
     seq: u64,
     loading: bool,
     failed: bool,
@@ -314,7 +407,9 @@ pub(super) struct ActivityPanel {
 
 impl ActivityPanel {
     fn new(cx: &mut Context<Self>) -> Self {
-        Self { link: None, key: None, shown: false, activity: Activity::default(), processes: Vec::new(), subs: Vec::new(), seq: 0,
+        Self { link: None, key: None, shown: false, activity: Activity::default(), processes: Vec::new(), subs: Vec::new(), native_states: None, seq: 0,
+            commands: Vec::new(), command_output: HashMap::new(), command_open: None, command_pending: HashSet::new(),
+            command_error: None, command_view: None, read_only: false,
             loading: false, failed: false, lines: Lines::default(), clock: None, scroll: ScrollHandle::new(), opened: None, detail_seq: 0,
             poll: None, notice: None, pending: None, conversation: cx.new(|_| SubConversation::new()), back_focus: cx.focus_handle().tab_stop(true),
             marks: Default::default(), tab_id: None, older_open: false, input: None, sending: false, send_seq: 0, send_error: None,
@@ -325,27 +420,31 @@ impl ActivityPanel {
     fn prepare(&mut self) -> bool {
         let now = now_seconds();
         let mut timed = false;
-        let agents = self.activity.running_agents().map(|a| {
-            let sub = match_sub(&self.subs, a.prompt.as_deref());
+        let live = |agent: &&AgentRun| self.native_states.as_ref().map_or_else(
+            || agent_running(agent, &self.activity.agents, &self.subs, now),
+            |states| native_running(agent, &self.subs, Some(states), !self.loading));
+        let agents = self.activity.agents.iter().filter(live).map(|a| {
+            let sub = match_agent(&self.subs, a);
             let mut tags = Vec::new();
             if let Some(t) = &a.subagent_type { tags.push((t.clone(), false)); }
-            if let Some(m) = agent_model(&self.subs, a.agent_id.as_deref(), a.prompt.as_deref(), a.model.clone()) { tags.push((m, true)); }
+            if let Some(m) = match sub { Some(sub) => sub.model.clone(), None => a.model.clone() } { tags.push((m, true)); }
             AgentLine { key: a.id.clone(), description: a.description.clone(), tags, now: sub.map(calls_line), sub: sub.map(|s| s.agent_id.clone()) }
         }).collect();
         // Quem já está na linha de um Agent rodando não se repete entre os subagentes rodando.
-        let shown: HashSet<String> = self.activity.running_agents()
-            .filter_map(|a| match_sub(&self.subs, a.prompt.as_deref())).map(|s| s.agent_id.clone()).collect();
+        let shown: HashSet<String> = self.activity.agents.iter().filter(live)
+            .filter_map(|a| match_agent(&self.subs, a)).map(|s| s.agent_id.clone()).collect();
         let midnight = today_start();
-        let (mut running, mut finished, mut older_lines) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut running, mut finished, mut older_lines, mut uncertain) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for s in &self.subs {
             let status = sub_status(&self.activity.agents, &self.subs, s, now);
-            let (ended, failed) = match status { SubStatus::Running | SubStatus::Silent(_) => (None, false), SubStatus::Finished(at) => (Some(at), false), SubStatus::Failed(at) => (Some(at), true) };
+            let (ended, failed) = match status { SubStatus::Running | SubStatus::Silent(_) | SubStatus::Unknown => (None, false), SubStatus::Finished(at) => (Some(at), false), SubStatus::Failed(at) => (Some(at), true) };
             let silent = match status { SubStatus::Silent(at) => Some(at), _ => None };
             // Ilegível não diz "0 chamadas": os campos vêm zerados porque o registro não foi lido.
             let calls = if s.unreadable { web("atividade_sub_ilegivel") } else { calls_line(s) };
             let line = OrphanLine { key: s.agent_id.clone(), title: sub_title(&self.subs, s), tag: s.agent_type.clone(), done: ended.is_some() || silent.is_some(), failed,
                 now: match (ended, silent) {
                     (None, Some(at)) => format!("{} · {calls}", web_with("atividade_sem_noticia", "t", interval(now - at))),
+                    (None, None) if status == SubStatus::Unknown => web("atividade_estado_indisponivel"),
                     (None, None) => calls,
                     (Some(at), _) => {
                         let mark = match at.and_then(clock) {
@@ -357,6 +456,7 @@ impl ActivityPanel {
                 },
             };
             match ended {
+                None if status == SubStatus::Unknown => uncertain.push(line),
                 None if shown.contains(&s.agent_id) => {}
                 None => running.push(line),
                 Some(at) if older(at, midnight) => older_lines.push(line),
@@ -387,7 +487,7 @@ impl ActivityPanel {
         }).collect();
         // O subagente parado vira terminado com o tempo: o relógio da aba relê.
         timed |= !running.is_empty();
-        let lines = Lines { agents, running, finished, older: older_lines, shells, processes, tasks, timed };
+        let lines = Lines { agents, running, finished, older: older_lines, uncertain, shells, processes, tasks, timed };
         if lines == self.lines { return false; }
         self.lines = lines;
         true
@@ -402,8 +502,59 @@ impl ActivityPanel {
         if self.poll.is_some() && self.opened.as_ref().is_some_and(|o| !o.done && self.done(&o.run)) { self.fetch_detail(); }
     }
 
+    fn set_commands(&mut self, commands: &[CodexCommand], output: &HashMap<String, String>, read_only: bool, cx: &mut Context<Self>) {
+        if self.commands == commands && &self.command_output == output && self.read_only == read_only { return; }
+        self.commands = commands.to_vec();
+        self.command_output = output.clone();
+        self.read_only = read_only;
+        if self.command_open.as_ref().is_some_and(|id| !commands.iter().any(|command| &command.id == id)) {
+            self.command_open = None;
+            self.command_view = None;
+        }
+        self.command_pending.retain(|id| commands.iter().any(|command| &command.id == id));
+        cx.notify();
+    }
+
+    fn stop_command(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.read_only || self.command_pending.contains(id) { return; }
+        let (Some(link), Some(key)) = (self.link.clone(), self.key.clone()) else { return; };
+        let Some(command) = self.commands.iter().find(|command| command.id == id) else { return; };
+        let (id, process_id) = (command.id.clone(), command.process_id.clone());
+        self.command_pending.insert(id.clone());
+        self.command_error = None;
+        link.runtime.spawn(async move {
+            let result = link.api.act(&key.name, &["codex", "terminate"], Some(json!({"process_id": process_id})), false, 15).await;
+            let _ = link.tx.send(Envelope { connection: link.connection, selection: None, payload: Payload::Activity(ActivityReply::CommandStopped(key, id, result)) }).await;
+        });
+        cx.notify();
+    }
+
+    fn receive_command_stopped(&mut self, key: &SessionKey, id: &str, result: Result<Value, Failure>, cx: &mut Context<Self>) {
+        if self.key.as_ref() != Some(key) || !self.command_pending.remove(id) { return; }
+        if let Err(failure) = result {
+            self.command_error = Some(if failure.status.is_none() { tr(&failure.detail) } else { failure.detail });
+        }
+        cx.notify();
+    }
+
     pub(super) fn set_plugin_servers(&mut self, servers: &[String], cx: &mut Context<Self>) {
         self.conversation.update(cx, |view, cx| view.set_plugin_servers(servers, cx));
+    }
+
+    fn set_native_states(&mut self, states: Option<&NativeAgents>, cx: &mut Context<Self>) {
+        if self.native_states.as_ref() == states { return; }
+        self.native_states = states.cloned();
+        if let Some(opened) = self.opened.as_mut() {
+            if let Some(raw) = opened.raw.as_mut() { project_native_detail(raw, states, &opened.run.agent_id); }
+        }
+        let mut subs = self.subs.clone();
+        project_native_subs(&mut subs, states);
+        if self.subs != subs {
+            self.seq += 1;
+            self.receive(self.seq, Ok(subs), cx);
+        } else if self.prepare() {
+            cx.notify();
+        }
     }
 
     fn done(&self, run: &SubRun) -> bool { sub_done(&self.activity.agents, &self.subs, run) }
@@ -424,7 +575,10 @@ impl ActivityPanel {
             // sessão anterior não entra na desta.
             self.seq += 1;
             (self.subs, self.failed, self.loading) = (Vec::new(), false, false);
-            if other { self.close_detail(cx); (self.notice, self.pending) = (None, None); }
+            if other {
+                self.close_detail(cx); (self.notice, self.pending) = (None, None);
+                self.command_open = None; self.command_pending.clear(); self.command_error = None; self.command_view = None;
+            }
             self.key = Some(key);
             self.link = Some(link);
             self.prepare();
@@ -456,11 +610,35 @@ impl ActivityPanel {
         if seq != self.seq { return; }
         self.loading = false;
         // Falha mantém o que já se sabia e avisa em cima de tudo.
-        match result { Ok(subs) => (self.subs, self.failed) = (subs, false), Err(_) => self.failed = true }
+        match result {
+            Ok(mut subs) => { project_native_subs(&mut subs, self.native_states.as_ref()); (self.subs, self.failed) = (subs, false); }
+            Err(_) => self.failed = true,
+        }
         self.prepare();
+        if let Some(run) = self.opened.as_ref().and_then(|opened| self.subs.iter().find(|run| run.agent_id == opened.run.agent_id)).cloned() {
+            let done = self.done(&run);
+            let unavailable = run.problem.is_some();
+            let mut changed = false;
+            if let Some(opened) = self.opened.as_mut() {
+                changed = opened.done != done || opened.run.state != run.state;
+                if changed { self.detail_seq += 1; opened.busy = false; }
+                opened.run = run;
+                if !done { opened.done = false; }
+            }
+            if changed { self.fetch_detail(); }
+            if !done && !unavailable && self.poll.is_none() { self.start_poll(cx); }
+            if unavailable { self.poll = None; }
+        }
         // Pedido do cartão que esperava a lista: com a lista falhando, o aviso dela já diz por quê.
         if let Some((prompt, title)) = self.pending.take().filter(|_| !self.failed) { self.resolve(prompt.as_deref(), title, cx); }
         cx.notify();
+    }
+
+    fn receive_snapshot(&mut self, key: &SessionKey, subs: &[SubRun], cx: &mut Context<Self>) {
+        if self.key.as_ref() != Some(key) || self.subs == subs { return; }
+        // A recontagem já leu a lista; invalida a leitura anterior da aba antes de publicá-la.
+        self.seq += 1;
+        self.receive(self.seq, Ok(subs.to_vec()), cx);
     }
 
     /// Clique no cartão Agent da conversa: abre a conversa daquele agente, casada pelo prompt. Sem a lista ainda,
@@ -475,7 +653,12 @@ impl ActivityPanel {
     }
 
     fn resolve(&mut self, prompt: Option<&str>, title: String, cx: &mut Context<Self>) {
-        match match_sub(&self.subs, prompt).cloned() {
+        let mut candidates = self.activity.agents.iter().filter(|agent| agent.prompt.as_deref() == prompt && agent.description == title);
+        let matched = match (candidates.next(), candidates.next()) {
+            (Some(agent), None) => match_agent(&self.subs, agent),
+            _ => match_sub(&self.subs, prompt),
+        };
+        match matched.cloned() {
             Some(run) => self.open_sub(run, title, cx),
             None => {
                 // Sem avisar, a tela ficaria no agente anterior: a conversa errada com cara de certa.
@@ -572,6 +755,10 @@ impl ActivityPanel {
 
     fn receive_detail(&mut self, seq: u64, result: Result<Value, Failure>, cx: &mut Context<Self>) {
         if seq != self.detail_seq { return; }
+        let result = result.map(|mut value| {
+            if let Some(opened) = &self.opened { project_native_detail(&mut value, self.native_states.as_ref(), &opened.run.agent_id); }
+            value
+        });
         let Some(opened) = self.opened.as_mut() else { return };
         opened.busy = false;
         let older_done = std::mem::take(&mut opened.loading_older);
@@ -581,7 +768,7 @@ impl ActivityPanel {
                 let run = parse_sub(&value).unwrap_or_else(|| opened.run.clone());
                 let done = self.done(&run);
                 // Terminou: esta leitura já traz o fim, e a consulta para aqui.
-                if done { self.poll = None; }
+                if done || run.problem.is_some() { self.poll = None; }
                 let Some(opened) = self.opened.as_mut() else { return };
                 opened.fails = 0;
                 let first = !opened.loaded;
@@ -649,6 +836,50 @@ fn shell_row(prefix: &str, line: &ShellLine) -> AnyElement {
 }
 
 impl ActivityPanel {
+    fn render_commands(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.commands.is_empty() { return None; }
+        let mut group = section(web("codex_commands_title"), Some(self.commands.len()));
+        for command in self.commands.clone() {
+            let (open_id, stop_id) = (command.id.clone(), command.id.clone());
+            let open = self.command_open.as_deref() == Some(command.id.as_str());
+            let mut row = div().min_w_0().flex().flex_col().gap_1()
+                .child(div().font_family(theme::MONO).text_sm().whitespace_normal().child(command.command.clone()))
+                .child(div().flex().items_center().gap_2()
+                .child(Button::new(SharedString::from(format!("command-open-{}", command.id))).ghost().label(web("codex_command_output"))
+                    .accessibility_label(format!("{}: {}", web("codex_command_output"), command.command))
+                    .icon(if open { IconName::ChevronDown } else { IconName::ChevronRight })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.command_open = if this.command_open.as_ref() == Some(&open_id) { None } else { Some(open_id.clone()) };
+                        this.command_view = None;
+                        cx.notify();
+                    })))
+                .when(!self.read_only, |row| row.child(Button::new(SharedString::from(format!("command-stop-{}", command.id))).small().ghost()
+                    .accessibility_label(web_with("codex_command_stop_label", "command", command.command.clone()))
+                    .label(web(if self.command_pending.contains(&command.id) { "codex_command_stopping" } else { "codex_command_stop" }))
+                    .disabled(self.command_pending.contains(&command.id))
+                    .on_click(cx.listener(move |this, _, _, cx| this.stop_command(&stop_id, cx))))))
+                .child(now_text(format!("pid {} · {}", command.process_id, if command.background { web_with("codex_terminals_count", "n", "1".into()) } else { web("native_tool_running") })));
+            if open {
+                let text = self.command_output.get(&command.id).filter(|text| !text.is_empty()).cloned().unwrap_or_else(|| web("codex_command_no_output"));
+                let source = conversation::fenced(&text);
+                if self.command_view.as_ref().is_none_or(|(old, _)| old != &source) {
+                    match &self.command_view {
+                        Some((_, view)) => view.update(cx, |view, cx| view.set_text(&source, cx)),
+                        None => self.command_view = Some((source.clone(), cx.new(|cx| TextViewState::markdown(&source, cx)))),
+                    }
+                    if let Some((old, _)) = &mut self.command_view { *old = source; }
+                }
+                if let Some((_, view)) = &self.command_view {
+                    row = row.child(div().id("command-output").max_h(px(240.)).overflow_y_scroll()
+                        .child(gpui_kit::base::TextView::new(view).selectable(true).scrollable(false).style(theme::conversation_markdown(cx))));
+                }
+            }
+            group = group.child(row);
+        }
+        if let Some(error) = &self.command_error { group = group.child(warning_line(error.clone())); }
+        Some(group.into_any_element())
+    }
+
     /// Views guardadas dentro desta, que redesenham junto na troca de aba (`side_tab_in`).
     pub(super) fn views(&self) -> Vec<EntityId> { vec![self.conversation.entity_id()] }
 }
@@ -657,6 +888,7 @@ impl Render for ActivityPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.marks.borrow_mut().clear();
         if self.opened.is_some() { return self.render_detail(window, cx); }
+        let commands = self.render_commands(cx);
         let lines = &self.lines;
         let mut body = div().px_4().py(px(14.)).flex().flex_col().gap_4();
         if self.failed {
@@ -707,6 +939,10 @@ impl Render for ActivityPanel {
             }
             body = body.child(group);
         }
+        if !lines.uncertain.is_empty() {
+            body = body.child(section(web("atividade_subagentes"), None)
+                .children(lines.uncertain.iter().map(|sub| sub_row(sub, window, cx))));
+        }
         if !lines.shells.is_empty() {
             body = body.child(section(web("atividade_shells"), Some(lines.shells.len()))
                 .children(lines.shells.iter().map(|s| shell_row("act-shell", s))));
@@ -715,6 +951,7 @@ impl Render for ActivityPanel {
             body = body.child(section(web("atividade_processos"), Some(lines.processes.len()))
                 .children(lines.processes.iter().map(|p| shell_row("act-proc", p))));
         }
+        body = body.when_some(commands, |body, commands| body.child(commands));
         if !lines.tasks.is_empty() {
             body = body.child(section(web("atividade_tarefas"), None).children(lines.tasks.iter().map(|t| {
                 let (mark, text) = match t.status {
@@ -727,7 +964,7 @@ impl Render for ActivityPanel {
                     .child(div().text_sm().text_color(text).when(t.status == TaskStatus::Completed, |el| el.line_through()).child(t.text.clone()))
             })));
         }
-        let empty = lines.agents.is_empty() && lines.running.is_empty() && lines.finished.is_empty() && lines.older.is_empty() && lines.shells.is_empty() && lines.processes.is_empty() && lines.tasks.is_empty();
+        let empty = lines.agents.is_empty() && lines.running.is_empty() && lines.finished.is_empty() && lines.older.is_empty() && lines.uncertain.is_empty() && lines.shells.is_empty() && lines.processes.is_empty() && lines.tasks.is_empty() && self.commands.is_empty();
         if empty {
             // Antes da primeira resposta não se afirma que não há nada.
             let text = if self.loading && self.subs.is_empty() && !self.failed { tr("activity_loading") } else { web("atividade_vazio") };
@@ -818,7 +1055,7 @@ impl ActivityPanel {
         let Some(opened) = &self.opened else { return div().into_any_element() };
         let run = &opened.run;
         let empty = |text: String| div().px_4().py_4().text_center().text_sm().text_color(theme::faint()).child(text).into_any_element();
-        let running = !opened.done && !run.failed && !run.unreadable && !sub_silent(&self.activity.agents, &self.subs, run);
+        let running = !opened.done && !run.failed && !run.unreadable && run.problem.is_none() && !sub_silent(&self.activity.agents, &self.subs, run);
         let body = if !opened.loaded { empty(tr("subagent_loading")) }
             else if opened.has_events {
                 let conversation = super::panes::cached_selectable(self.conversation.clone().into(), StyleRefinement::default().size_full());
@@ -839,6 +1076,7 @@ impl ActivityPanel {
             }
             // Já chamou ferramentas (ou o registro não foi lido): é falha de leitura, não agente parado.
             else if run.unreadable || run.calls > 0 { empty(web("atividade_erro_transcript")) }
+            else if run.problem.as_deref() == Some("erro_subagente_estado_indisponivel") { div().into_any_element() }
             else { empty(web("atividade_pensando")) };
         let title = if opened.title.trim().is_empty() { web("atividade_subagente") } else { opened.title.clone() };
         let back = web("comum_voltar");
@@ -857,6 +1095,7 @@ impl ActivityPanel {
                     })))
                 .child(div().flex_1().min_w_0().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(title))))
             .when_some(self.notice.clone(), |el, notice| el.child(div().flex_shrink_0().px_4().py_2().child(warning_line(notice))))
+            .when(run.problem.as_deref() == Some("erro_subagente_estado_indisponivel"), |el| el.child(div().flex_shrink_0().px_4().py_1().text_xs().text_color(theme::muted()).child(web("atividade_estado_indisponivel"))))
             .child(div().flex_1().min_h_0().child(body))
             .child(composer)
             .into_any_element()
@@ -870,6 +1109,9 @@ pub(super) struct ActivityState {
     count: usize,
     count_seq: u64,
     count_busy: bool,
+    count_loaded: bool,
+    count_again: bool,
+    native_ids: HashSet<String>,
     /// A lista da mesma leitura da conta: o cartão Agent do pai sabe da falha do seu subagente sem a aba aberta.
     subs: Vec<SubRun>,
     count_timer: Option<Task<()>>,
@@ -890,17 +1132,69 @@ fn tab_after_close(active: Option<u64>, closed: u64, previous: Option<u64>, rema
 
 impl ActivityState {
     pub fn new(cx: &mut App) -> Self {
-        Self { view: cx.new(ActivityPanel::new), count: 0, count_seq: 0, count_busy: false, subs: Vec::new(), count_timer: None,
+        Self { view: cx.new(ActivityPanel::new), count: 0, count_seq: 0, count_busy: false, count_loaded: false, count_again: false, native_ids: HashSet::new(), subs: Vec::new(), count_timer: None,
             tabs: Vec::new(), active_tab: None, tab_seq: 0, pending_tab: None, tab_error: None,
             tab_scroll: ScrollHandle::new() }
     }
 }
 
 impl Hangar {
+    pub(super) fn subagent_pin_running(&self, agent: &AgentRun) -> bool {
+        self.provider().0 != "codex" || native_running(agent, &self.act.subs, self.chat.state.codex_subagents.as_ref(), self.act.count_loaded)
+    }
+
+    pub(super) fn codex_agent_state_note(&self, call: usize) -> Option<String> {
+        if self.provider().0 != "codex" { return None; }
+        let agent = self.conversation.activity.agents.iter().find(|agent| agent.call == call)?;
+        if let Some(state) = self.chat.state.codex_subagents.as_ref().and_then(|states|
+            native_agent(states, agent.agent_id.as_deref().unwrap_or(""), agent.agent_path.as_deref())) {
+            return state.state.is_none().then(|| web("atividade_estado_indisponivel"));
+        }
+        if match_agent(&self.act.subs, agent).is_some_and(|sub| sub.problem.as_deref() == Some("erro_subagente_estado_indisponivel")) {
+            return Some(web("atividade_estado_indisponivel"));
+        }
+        (!self.act.count_loaded).then(|| web("atividade_estado_pendente"))
+    }
+
+    fn running_subagent_count(&self) -> usize {
+        if self.provider().0 == "codex" {
+            let mut ids: HashSet<_> = self.act.subs.iter().filter(|sub| self.act.count_loaded && sub.state.as_deref() == Some("running")).map(|sub| sub.agent_id.as_str()).collect();
+            ids.extend(self.chat.state.codex_subagents.iter().flat_map(|states| states.iter())
+                .filter(|(_, state)| state.state.as_deref() == Some("running")).map(|(id, _)| id.as_str()));
+            ids.len()
+        } else { running_count(&self.conversation.activity, &self.act.subs, now_seconds()) }
+    }
+
+    pub(super) fn sync_codex_subagents(&mut self, cx: &mut Context<Self>) {
+        if self.provider().0 != "codex" { return; }
+        let states = self.chat.state.codex_subagents.as_ref();
+        let ids: HashSet<_> = states.into_iter().flat_map(|states| states.iter())
+            .map(|(id, state)| format!("{id}:{}:{}:{}", state.agent_path.as_deref().unwrap_or(""), state.state.as_deref().unwrap_or(""), state.activity_revision)).collect();
+        let added = ids.difference(&self.act.native_ids).next().is_some();
+        self.act.native_ids = ids;
+        project_native_subs(&mut self.act.subs, states);
+        if let Some(key) = self.selected_key() {
+            self.act.view.update(cx, |view, cx| view.receive_snapshot(&key, &self.act.subs, cx));
+            for tab in &self.act.tabs { tab.view.update(cx, |view, cx| view.receive_snapshot(&key, &self.act.subs, cx)); }
+        }
+        if added {
+            if self.act.count_busy { self.act.count_again = true; } else { self.count_subagents(); }
+        }
+    }
+
+    pub(super) fn render_codex_commands_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let commands = &self.chat.state.codex_commands;
+        if commands.is_empty() { return None; }
+        let background = commands.iter().filter(|command| command.background).count();
+        let (key, count) = if background > 0 { ("codex_terminals_count", background) } else { ("codex_commands_count", commands.len()) };
+        Some(Button::new("codex-commands-chip").small().ghost().label(web_with(key, "n", count.to_string()))
+            .on_click(cx.listener(|this, _, window, cx| this.open_activity(window, cx))).into_any_element())
+    }
+
     /// Tarefas, agentes (mesmo os que terminaram), shells rodando, subagentes no disco ou processos vivos.
     pub(super) fn has_activity(&self) -> bool {
         let a = &self.conversation.activity;
-        !a.tasks.is_empty() || !a.agents.is_empty() || a.running_shells().next().is_some() || self.act.count > 0 || !self.chat.state.shells.is_empty()
+        !a.tasks.is_empty() || !a.agents.is_empty() || a.running_shells().next().is_some() || self.act.count > 0 || !self.chat.state.shells.is_empty() || !self.chat.state.codex_commands.is_empty()
     }
 
     pub(super) fn activity_tab(&self) -> bool {
@@ -937,8 +1231,12 @@ impl Hangar {
         let target = key.filter(|_| self.side.open && !self.side_menu_shown() && self.side_tab() == SideTab::Activity).zip(self.activity_link());
         let servers = self.selected.as_ref().map(|s| s.plugin_tool_servers.clone()).unwrap_or_default();
         let (activity, processes) = (&self.conversation.activity, &self.chat.state.shells);
-        self.act.view.update(cx, |view, cx| { view.set_data(activity, processes, cx); view.set_plugin_servers(&servers, cx); view.show(target, cx); });
-        for tab in &self.act.tabs { tab.view.update(cx, |view, cx| { view.set_data(activity, processes, cx); view.set_plugin_servers(&servers, cx); }); }
+        let (commands, output, read_only) = (&self.chat.state.codex_commands, &self.chat.command_output, self.open_read_only());
+        let empty_states = NativeAgents::new();
+        let states = self.chat.state.codex_subagents.as_ref()
+            .or_else(|| (self.provider().0 == "codex").then_some(&empty_states));
+        self.act.view.update(cx, |view, cx| { view.set_native_states(states, cx); view.set_data(activity, processes, cx); view.set_commands(commands, output, read_only, cx); view.set_plugin_servers(&servers, cx); view.show(target, cx); });
+        for tab in &self.act.tabs { tab.view.update(cx, |view, cx| { view.set_native_states(states, cx); view.set_data(activity, processes, cx); view.set_plugin_servers(&servers, cx); }); }
     }
 
     /// Clique numa aba do painel: fecha a aba de subagente aberta e grava a escolha como as outras preferências de tela.
@@ -980,6 +1278,9 @@ impl Hangar {
         self.act.subs.clear();
         self.act.count_seq += 1;
         self.act.count_busy = false;
+        self.act.count_loaded = false;
+        self.act.count_again = false;
+        self.act.native_ids.clear();
         self.act.count_timer = None;
     }
 
@@ -987,11 +1288,23 @@ impl Hangar {
     /// conversa carregar.
     pub(super) fn restart_subagent_count(&mut self, cx: &mut Context<Self>) {
         if !self.history_installed { return; }
+        if self.provider().0 == "codex" {
+            if !self.act.count_loaded { self.count_subagents(); }
+            return;
+        }
         self.count_subagents();
-        self.act.count_timer = (self.chat.state.state == "working").then(|| cx.spawn(async move |this, cx| loop {
+        self.act.count_timer = self.should_count_subagents().then(|| cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(COUNT_EVERY).await;
-            if this.update(cx, |this, _| this.count_subagents()).is_err() { break; }
+            if this.update(cx, |this, _| {
+                if !this.should_count_subagents() { return false; }
+                this.count_subagents();
+                true
+            }).ok() != Some(true) { break; }
         }));
+    }
+
+    fn should_count_subagents(&self) -> bool {
+        self.provider().0 != "codex" && self.chat.state.state == "working"
     }
 
     /// Um pedido por vez: com um em voo, a batida seguinte não pede outro.
@@ -1011,22 +1324,36 @@ impl Hangar {
             ActivityReply::Count(key, seq, result) => {
                 if seq != self.act.count_seq || self.selected_key().as_ref() != Some(&key) { return; }
                 self.act.count_busy = false;
-                let Ok(subs) = result else {
+                let Ok(mut subs) = result else {
                     if self.act.pending_tab.take().is_some() { self.act.tab_error = Some(web("atividade_erro_vivo")); cx.notify(); }
+                    if self.provider().0 == "codex" {
+                        self.act.count_timer = Some(cx.spawn(async move |this, cx| {
+                            cx.background_executor().timer(COUNT_EVERY).await;
+                            let _ = this.update(cx, |this, _| this.count_subagents());
+                        }));
+                    }
                     return;
                 };
+                if self.provider().0 == "codex" { self.act.count_timer = None; }
+                let first = !self.act.count_loaded;
+                self.act.count_loaded = true;
+                project_native_subs(&mut subs, self.chat.state.codex_subagents.as_ref());
                 let before = self.has_activity();
                 self.act.count = subs.len();
                 // Redesenha só quando muda quem falhou ou o modelo de alguém: a batida de 5 s não refaz a conversa a cada chamada contada.
-                let shown = |subs: &[SubRun]| subs.iter().map(|s| (s.agent_id.clone(), s.failed, s.model.clone())).collect::<Vec<_>>();
+                let shown = |subs: &[SubRun]| subs.iter().map(|s| (s.agent_id.clone(), s.failed, s.model.clone(), s.state.clone(), s.finished, s.ended)).collect::<Vec<_>>();
                 let changed = shown(&subs) != shown(&self.act.subs);
                 self.act.subs = subs;
+                self.act.view.update(cx, |view, cx| view.receive_snapshot(&key, &self.act.subs, cx));
+                for tab in &self.act.tabs { tab.view.update(cx, |view, cx| view.receive_snapshot(&key, &self.act.subs, cx)); }
                 if let Some(request) = self.act.pending_tab.take() { self.resolve_agent_tab(request, cx); }
-                if changed { cx.notify(); }
+                if first || changed { self.sync_rows(cx); self.sync_activity(cx); cx.notify(); }
                 // Só a presença da aba e do botão depende da conta: o número dela não aparece.
                 if self.has_activity() != before { self.sync_activity(cx); cx.notify(); }
+                if std::mem::take(&mut self.act.count_again) { self.count_subagents(); }
             }
             ActivityReply::List(seq, result) => self.act.view.update(cx, |view, cx| view.receive(seq, result, cx)),
+            ActivityReply::CommandStopped(key, id, result) => self.act.view.update(cx, |view, cx| view.receive_command_stopped(&key, &id, result, cx)),
             ActivityReply::Detail(seq, result) => self.act.view.update(cx, |view, cx| view.receive_detail(seq, result, cx)),
             ActivityReply::Sent(None, seq, result) => self.act.view.update(cx, |view, cx| view.receive_sent(seq, result, cx)),
             ActivityReply::Sent(Some(id), seq, result) => {
@@ -1060,7 +1387,46 @@ impl Hangar {
     /// O modelo do card do Agent: o que respondeu, quando o subagente já está na lista; antes, o apelido pedido.
     pub(super) fn agent_card_model(&self, call: usize, asked: Option<String>) -> Option<String> {
         let Some(agent) = self.conversation.activity.agents.iter().find(|a| a.call == call) else { return asked };
-        agent_model(&self.act.subs, agent.agent_id.as_deref(), agent.prompt.as_deref(), asked)
+        agent_model(&self.act.subs, agent.agent_id.as_deref(), agent.agent_path.as_deref(), agent.prompt.as_deref(), asked)
+    }
+
+    pub(super) fn effective_agent(&self, call: usize) -> Option<AgentRun> {
+        let mut agent = self.conversation.activity.agents.iter().find(|agent| agent.call == call)?.clone();
+        if let Some(sub) = match_agent(&self.act.subs, &agent) {
+            agent.started_at = agent.started_at.or(sub.started);
+            if let Some(running) = match sub.state.as_deref() {
+                Some("running") => Some(true),
+                Some("finished" | "failed") => Some(false),
+                _ => sub.finished.then_some(false),
+            } {
+                agent.running = running;
+                if !running { agent.finished_at = sub.ended.or(sub.updated).or(agent.finished_at); }
+            }
+        }
+        Some(agent)
+    }
+
+    pub(super) fn codex_agent_states(&self) -> Vec<(String, bool, Option<f64>)> {
+        if self.provider().0 != "codex" { return Vec::new(); }
+        let mut states: HashMap<String, (bool, Option<f64>)> = self.act.subs.iter().filter_map(|sub| {
+            let running = match sub.state.as_deref() {
+                Some("running") => true,
+                Some("finished" | "failed") => false,
+                _ => return None,
+            };
+            Some((sub, running))
+        }).flat_map(|(sub, running)| {
+            std::iter::once(sub.agent_id.as_str()).chain(sub.agent_path.as_deref())
+                .map(move |identity| (identity.to_owned(), running, sub.ended.or(sub.updated)))
+        }).map(|(id, running, ended)| (id, (running, ended))).collect();
+        for (id, state) in self.chat.state.codex_subagents.iter().flat_map(|states| states.iter()) {
+            if state.state.is_none() { continue; }
+            let running = state.state.as_deref() == Some("running");
+            for id in std::iter::once(id.as_str()).chain(state.agent_path.as_deref()) {
+                states.insert(id.to_owned(), (running, state.ended_at));
+            }
+        }
+        states.into_iter().map(|(id, (running, ended))| (id, running, ended)).collect()
     }
 
     pub(super) fn agent_failed(&self, call: usize) -> bool {
@@ -1082,7 +1448,12 @@ impl Hangar {
     }
 
     fn resolve_agent_tab(&mut self, (prompt, title): (Option<String>, String), cx: &mut Context<Self>) {
-        let Some(run) = match_sub(&self.act.subs, prompt.as_deref()).cloned() else {
+        let mut candidates = self.conversation.activity.agents.iter().filter(|agent| agent.prompt == prompt && agent.description == title);
+        let matched = match (candidates.next(), candidates.next()) {
+            (Some(agent), None) => match_agent(&self.act.subs, agent),
+            _ => match_sub(&self.act.subs, prompt.as_deref()),
+        };
+        let Some(run) = matched.cloned() else {
             self.act.tab_error = Some(web("atividade_agente_nao_achado"));
             cx.notify();
             return;
@@ -1146,7 +1517,7 @@ impl Hangar {
             let id = tab.id;
             let view = tab.view.read(cx);
             let opened = view.opened.as_ref();
-            let unavailable = view.notice.is_some() || opened.is_some_and(|o| o.run.unreadable);
+            let unavailable = view.notice.is_some() || opened.is_some_and(|o| o.run.unreadable || o.run.problem.is_some());
             let silent = opened.is_some_and(|o| sub_silent(&view.activity.agents, &view.subs, &o.run));
             let running = !unavailable && !silent && opened.is_some_and(|o| !o.done);
             let failed = opened.is_some_and(|o| o.run.failed);
@@ -1174,9 +1545,12 @@ impl Hangar {
 
 /// O cartão Agent (só ele) abre a conversa do agente: prompt, que casa com o disco, e o título do detalhe.
 pub(super) fn agent_request(call: &ChatEvent) -> Option<(Option<String>, String)> {
-    if call.tool_name.as_deref() != Some("Agent") { return None; }
+    if !crate::conversation::is_agent_call(call.tool_name.as_deref()) { return None; }
     let text = |key: &str| call.tool_input.as_ref().and_then(|i| i.get(key)).and_then(Value::as_str).map(str::to_owned);
-    Some((text("prompt"), text("description").filter(|d| !d.trim().is_empty()).unwrap_or_else(|| web("atividade_subagente"))))
+    let codex = crate::conversation::is_codex_agent_spawn(call.tool_name.as_deref());
+    let prompt = text(if codex { "message" } else { "prompt" }).filter(|prompt| !codex || !prompt.starts_with("gAAAA"));
+    let title = if codex { text("task_name").or_else(|| text("description")).or_else(|| text("agent_type")) } else { text("description") };
+    Some((prompt, title.filter(|d| !d.trim().is_empty()).unwrap_or_else(|| web("atividade_subagente"))))
 }
 
 impl Hangar {
@@ -1247,24 +1621,20 @@ impl Hangar {
             .into_any_element()
     }
 
-    /// "Em segundo plano · N": N = agentes e subagentes rodando, contados como a seção Rodando da aba.
+    /// "Em segundo plano · N": agentes, subagentes e comandos ainda rodando.
     fn background_label(&self) -> String {
-        let activity = &self.conversation.activity;
-        let subs = &self.act.subs;
-        let now = now_seconds();
-        let shown: HashSet<&str> = activity.running_agents().filter_map(|a| match_sub(subs, a.prompt.as_deref())).map(|s| s.agent_id.as_str()).collect();
-        let running = activity.running_agents().count()
-            + subs.iter().filter(|s| !shown.contains(s.agent_id.as_str()) && sub_status(&activity.agents, subs, s, now) == SubStatus::Running).count();
+        let running = self.running_subagent_count() + self.chat.state.codex_commands.len();
         if running == 0 { tr("activity_background") } else { format!("{} · {running}", tr("activity_background")) }
     }
 
     /// O botão Atividade do cabeçalho: só com atividade e com o painel fora de vista (à vista, a entrada é a aba, como o
-    /// web, que esconde a barra de cima com o painel aberto); número = tarefas em andamento + agentes e shells rodando;
+    /// web, que esconde a barra de cima com o painel aberto); número = tarefas, agentes, shells e comandos rodando;
     /// com agente rodando, cor de destaque e o ícone respirando.
     pub(super) fn render_activity_button(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.has_activity() || self.side_shown(window) { return None; }
-        let running = self.conversation.running_agents().next().is_some();
-        let badge = self.conversation.activity_badge();
+        let count = self.running_subagent_count() + self.chat.state.codex_commands.len();
+        let running = count > 0;
+        let badge = self.conversation.activity_badge().saturating_sub(self.conversation.activity.running_agents().count()) + count;
         let label = tr("activity_background");
         let color = if running { theme::accent() } else { theme::muted() };
         let icon: AnyElement = if running { chrome::Breathing::new("activity-breath", IconName::ListChecks, px(16.), color).into_any_element() }
@@ -1285,6 +1655,158 @@ impl Hangar {
 #[cfg(test)]
 mod tests {
     use super::{AgentRun, SubRun, agent_failed, base_title, has_older, interval, match_sub, next_limit, sub_done, sub_title, DETAIL_PAGE};
+
+    #[test]
+    fn codex_history_waits_for_proven_state_and_late_detail_cannot_reopen_finished_child() {
+        let agent = AgentRun { call: 0, id: "spawn".into(), description: "review".into(), subagent_type: None,
+            model: None, prompt: None, running: true, waiting: false, agent_id: None, agent_path: Some("/root/review".into()), started_at: None, finished_at: None };
+        assert!(!super::native_running(&agent, &[], None, false));
+        let mut states = super::NativeAgents::from([("child".into(), super::CodexSubagent {
+            agent_path: Some("/root/review".into()), state: Some("finished".into()), ended_at: Some(1000.), ..Default::default()
+        })]);
+        assert!(!super::native_running(&agent, &[], Some(&states), false));
+        let mut detail = serde_json::json!({"agentId":"child","agentPath":"/root/review","state":"running","canMessage":true});
+        super::project_native_detail(&mut detail, Some(&states), "child");
+        assert_eq!(detail["state"], "finished");
+        assert_eq!(detail["canMessage"], false);
+        states.get_mut("child").unwrap().state = None;
+        super::project_native_detail(&mut detail, Some(&states), "child");
+        assert_eq!(detail["finished"], true);
+        assert_eq!(detail["problema"], "erro_subagente_estado_indisponivel");
+        let mut unknown_detail = serde_json::json!({"agentId":"child","state":null});
+        super::project_native_detail(&mut unknown_detail, Some(&states), "child");
+        assert_eq!(unknown_detail["state"], serde_json::Value::Null);
+        assert_eq!(unknown_detail["finished"], serde_json::Value::Null);
+        let mut unknown = sub("child", "review");
+        unknown.state = None;
+        unknown.problem = Some("erro_subagente_estado_indisponivel".into());
+        assert_eq!(super::sub_status(&[], &[], &unknown, 1000.), super::SubStatus::Unknown);
+        assert!(!super::sub_done(&[], &[], &unknown));
+        states.get_mut("child").unwrap().state = Some("running".into());
+        assert!(super::native_running(&agent, &[], Some(&states), false));
+        super::project_native_detail(&mut serde_json::json!("invalid"), Some(&states), "child");
+    }
+
+    #[test]
+    fn removing_a_live_child_clears_its_active_state_without_erasing_history() {
+        let states = super::NativeAgents::from([("child".into(), super::CodexSubagent {
+            agent_path: Some("/root/review".into()), state: Some("running".into()), can_message: true, ..Default::default()
+        })]);
+        let mut subs = vec![sub("child", "review"), SubRun { state: Some("finished".into()), finished: true, ..sub("old", "older work") }];
+        super::project_native_subs(&mut subs, Some(&states));
+        assert_eq!(subs[0].state.as_deref(), Some("running"));
+        assert!(subs[0].can_message);
+        super::project_native_subs(&mut subs, Some(&super::NativeAgents::new()));
+        assert_eq!(subs.len(), 2);
+        assert_eq!(subs[0].state, None);
+        assert!(!subs[0].can_message);
+        assert_eq!(super::sub_status(&[], &subs, &subs[0], 1000.), super::SubStatus::Unknown);
+        assert_eq!(subs[1].state.as_deref(), Some("finished"));
+        super::project_native_subs(&mut subs, Some(&states));
+        assert_eq!(subs[0].state.as_deref(), Some("running"));
+        assert!(subs[0].problem.is_none());
+    }
+
+    #[gpui::test]
+    fn native_state_changes_rebuild_lines_even_without_subagent_metadata(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, cx| {
+            panel.activity.agents = vec![parent("spawn", "review", Some("child"), true)];
+            let mut states = super::NativeAgents::from([("child".into(), super::CodexSubagent {
+                state: Some("running".into()), ..Default::default()
+            })]);
+            panel.set_native_states(Some(&states), cx);
+            assert_eq!(panel.lines.agents.len(), 1);
+            states.get_mut("child").unwrap().state = Some("finished".into());
+            panel.set_native_states(Some(&states), cx);
+            assert!(panel.lines.agents.is_empty());
+            assert!(panel.subs.is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn command_stop_sends_the_selected_session_route_and_process_id(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        let runtime = super::Arc::new(super::Runtime::new().unwrap());
+        let listener = runtime.block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = runtime.spawn(async move {
+            let (stream, _) = tokio::time::timeout(super::Duration::from_secs(3), listener.accept()).await.unwrap().unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut line = String::new();
+            stream.read_line(&mut line).await.unwrap();
+            assert_eq!(line.trim(), "POST /api/sessions/fixture-session/codex/terminate HTTP/1.1");
+            let (mut length, mut authorized) = (0, false);
+            loop {
+                line.clear();
+                stream.read_line(&mut line).await.unwrap();
+                if line == "\r\n" { break; }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") { length = value.trim().parse::<usize>().unwrap(); }
+                    if name.eq_ignore_ascii_case("authorization") { authorized = value.trim() == "Bearer fixture-owner"; }
+                }
+            }
+            assert!(authorized);
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).await.unwrap();
+            assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap(), serde_json::json!({"process_id":"4242"}));
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}").await.unwrap();
+        });
+        let (tx, rx) = async_channel::unbounded();
+        let key = super::SessionKey { server: "server-b".into(), name: "fixture-session".into(), jsonl: "thread-1".into() };
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, cx| {
+            panel.key = Some(key.clone());
+            panel.link = Some(super::Link { api: super::Api::new(&format!("http://{address}"), "fixture-owner").unwrap(), runtime: runtime.clone(), tx, connection: 7 });
+            panel.commands = vec![super::CodexCommand { id: "exec-a".into(), process_id: "4242".into(), ..Default::default() }];
+            panel.stop_command("exec-a", cx);
+            assert!(panel.command_pending.contains("exec-a"));
+        });
+        let reply = runtime.block_on(async { tokio::time::timeout(super::Duration::from_secs(3), rx.recv()).await.unwrap().unwrap() });
+        assert_eq!(reply.connection, 7);
+        match reply.payload {
+            super::Payload::Activity(super::ActivityReply::CommandStopped(reply_key, id, result)) => {
+                assert_eq!(reply_key, key);
+                assert_eq!(id, "exec-a");
+                assert_eq!(result.unwrap(), serde_json::json!({"ok":true}));
+            }
+            _ => panic!("unexpected command reply"),
+        }
+        runtime.block_on(server).unwrap();
+    }
+
+    #[gpui::test]
+    fn command_stop_clears_each_request_and_rejects_another_conversation(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, cx| {
+            let key = super::SessionKey { server: "server-b".into(), name: "session".into(), jsonl: "thread-1".into() };
+            let other = super::SessionKey { jsonl: "thread-2".into(), ..key.clone() };
+            let command = super::CodexCommand { id: "exec-a".into(), process_id: "4242".into(), command: "npm run dev".into(), background: true, ..Default::default() };
+            let second = super::CodexCommand { id: "exec-b".into(), process_id: "4243".into(), ..command.clone() };
+            panel.key = Some(key.clone());
+            panel.set_commands(&[command.clone(), second.clone()], &super::HashMap::from([("exec-a".into(), "old".into())]), false, cx);
+            panel.command_pending.extend([command.id.clone(), second.id.clone()]);
+            panel.command_open = Some(command.id.clone());
+            panel.receive_command_stopped(&other, &command.id, Err(super::Failure::local("late-error")), cx);
+            assert!(panel.command_error.is_none());
+            assert!(panel.command_pending.contains(&command.id));
+            panel.receive_command_stopped(&key, &command.id, Ok(serde_json::json!({"ok": true})), cx);
+            assert_eq!(panel.commands, [command.clone(), second.clone()]);
+            assert!(!panel.command_pending.contains(&command.id));
+            assert!(panel.command_pending.contains(&second.id));
+            panel.receive_command_stopped(&key, &second.id, Err(super::Failure::local("stop-failed")), cx);
+            assert!(panel.command_error.is_some());
+            assert!(panel.command_pending.is_empty());
+            panel.set_commands(&[command], &super::HashMap::new(), false, cx);
+            assert!(panel.command_output.is_empty());
+            panel.set_commands(&[], &super::HashMap::new(), false, cx);
+            assert!(panel.command_pending.is_empty());
+            assert!(panel.command_open.is_none());
+        });
+    }
 
     #[test]
     fn a_full_page_may_have_older_events_and_the_next_asks_one_page_more() {
@@ -1315,7 +1837,7 @@ mod tests {
 
     fn parent(id: &str, prompt: &str, agent_id: Option<&str>, running: bool) -> AgentRun {
         AgentRun { call: 0, id: id.into(), description: String::new(), subagent_type: None, model: None, prompt: Some(prompt.into()),
-            running, agent_id: agent_id.map(Into::into), started_at: None, finished_at: None }
+            running, waiting: false, agent_id: agent_id.map(Into::into), agent_path: None, started_at: None, finished_at: None }
     }
 
     #[test]
@@ -1356,7 +1878,7 @@ mod tests {
     }
 
     fn sub(id: &str, prompt: &str) -> SubRun {
-        SubRun { agent_id: id.into(), agent_type: None, prompt: Some(prompt.into()), calls: 0, last_tool: None, finished: false, unreadable: false, tools: Vec::new(), failed: false, started: None,
+        SubRun { agent_id: id.into(), agent_path: None, nickname: None, agent_type: None, prompt: Some(prompt.into()), calls: 0, last_tool: None, finished: false, unreadable: false, tools: Vec::new(), failed: false, started: None,
             state: None, ended: None, updated: None, can_message: false, message_blocked: None, problem: None, model: None }
     }
 
@@ -1412,13 +1934,16 @@ mod tests {
     #[test]
     fn the_model_shown_is_the_one_that_answered_and_the_alias_only_until_it_is_known() {
         use super::{agent_model, parse_sub};
-        let answered = parse_sub(&serde_json::json!({"agentId": "a", "prompt": "faz X", "model": "gpt-6.1-sol"})).unwrap();
+        let answered = parse_sub(&serde_json::json!({"agentId": "a", "agentPath":"/root/review", "prompt": "faz X", "model": "gpt-6.1-sol"})).unwrap();
         let subs = vec![answered, sub("b", "faz Y")];
-        assert_eq!(agent_model(&subs, None, Some("faz X"), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
-        assert_eq!(agent_model(&subs, Some("a"), Some("outro prompt"), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
-        assert_eq!(agent_model(&subs, None, Some("faz Y"), Some("opus".into())), None);
-        assert_eq!(agent_model(&subs, None, Some("ainda não listado"), Some("opus".into())).as_deref(), Some("opus"));
-        assert_eq!(agent_model(&[], None, Some("faz X"), None), None);
+        assert_eq!(agent_model(&subs, None, None, Some("faz X"), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(agent_model(&subs, Some("a"), None, Some("outro prompt"), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(agent_model(&subs, None, None, Some("faz Y"), Some("opus".into())), None);
+        assert_eq!(agent_model(&subs, None, None, Some("ainda não listado"), Some("opus".into())).as_deref(), Some("opus"));
+        assert_eq!(agent_model(&[], None, None, Some("faz X"), None), None);
+        assert_eq!(agent_model(&[], None, Some("/root/review"), None, Some("asked".into())).as_deref(), Some("asked"));
+        assert_eq!(agent_model(&subs, None, Some("/root/review"), None, Some("asked".into())).as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(agent_model(&subs, Some("other-uuid"), Some("/root/review"), None, Some("asked".into())).as_deref(), Some("asked"));
     }
 
     #[test]

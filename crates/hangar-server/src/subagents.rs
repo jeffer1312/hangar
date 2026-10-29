@@ -5,6 +5,8 @@
 //!   Claude `<transcript sem .jsonl>/subagents/agent-<id>.jsonl` (+ `.meta.json`),
 //!   Kimi   `<sessão>/agents/<id>/wire.jsonl` ao lado do `agents/main/wire.jsonl`,
 //!   Pi     `<transcript sem .jsonl>/<taskId>/run-<n>/session.jsonl` (só o run mais alto).
+//!   Codex  rollouts da mesma conta com `parent_thread_id` igual à conversa principal.
+mod codex;
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -82,6 +84,7 @@ const NO_PLUGIN: &str = "erro_subagente_mensagem_sem_plugin";
 /// O vínculo ou a memória do plugin não puderam ser lidos: o estado é desconhecido, não "sem sinal".
 const STATE_UNAVAILABLE: &str = "erro_subagente_estado_indisponivel";
 const STALE_BINDING: &str = "erro_subagente_mensagem_vinculo_desatualizado";
+const CODEX_MESSAGE_UNAVAILABLE: &str = "erro_subagente_mensagem_codex_indisponivel";
 const MESSAGE_BODY_MAX: usize = 64 * 1024;
 
 /// O vínculo do plugin desta sessão, só se ele for da mesma conversa listada; `Ok(None)` = vínculo de outra conversa.
@@ -136,7 +139,7 @@ fn decorate(a: &mut Map<String, Value>, life: Option<&AgentLife>, blocked: Optio
         (Some(life), _) => (json!(life.state), json!(life.ended_at)),
         (None, Some(true)) => (json!("finished"), a.get("updatedAt").filter(|v| v.as_str().is_some_and(|t| !t.is_empty())).cloned().unwrap_or(Value::Null)),
         (None, Some(false)) => (json!("running"), Value::Null),
-        (None, None) => (Value::Null, Value::Null),
+        (None, None) => (a.get("state").cloned().unwrap_or(Value::Null), a.get("endedAt").cloned().unwrap_or(Value::Null)),
     };
     a.insert("state".into(), state);
     a.insert("endedAt".into(), ended);
@@ -165,6 +168,8 @@ async fn serve(st: &AppState, (name, agent): (String, Option<String>), query: Op
     };
     let mut blocked = message_blocked(&provider);
     let mut lives = HashMap::new();
+    let mut codex_status = Value::Null;
+    let mut codex_detail = None;
     let mut problem = None;
     if blocked.is_none() {
         match plugin_binding(st, &name, &jsonl).await {
@@ -193,22 +198,80 @@ async fn serve(st: &AppState, (name, agent): (String, Option<String>), query: Op
             None => {}
         }
     }
+    if provider == "codex" {
+        blocked = Some(CODEX_MESSAGE_UNAVAILABLE);
+        let Some(parent) = codex::parent_thread_id(&jsonl) else {
+            return route_failed(st, headers, "rust.subagents_failed", &name, "codex_subagents_source_unavailable", "a conversa Codex não pôde ser lida");
+        };
+        if let Some(id) = &agent {
+            let (path, id) = (jsonl.clone(), id.clone());
+            codex_detail = match tokio::task::spawn_blocking(move || codex::get_checked(&path, &id, events)).await {
+                Ok(Ok(found)) => found,
+                Ok(Err(code)) => return route_failed(st, headers, "rust.subagents_failed", &name, code, "a família do subagente Codex não pôde ser lida"),
+                Err(error) => {
+                    tracing::warn!(session = %name, panic = error.is_panic(), "leitura do subagente Codex caiu");
+                    return route_failed(st, headers, "rust.subagents_failed", &name, "subagents_panic", "a leitura dos subagentes caiu no servidor");
+                }
+            };
+        }
+        if let Some(runtime) = st.state.runtime.get() {
+            match runtime.codex_subagents(&name, &parent).await {
+                Some(Ok(map)) => { lives.extend(headless_lives(&map)); codex_status = map; }
+                Some(Err(error)) => {
+                    warn_once(&name, "runtime_subagents_unavailable");
+                    tracing::debug!(session = %name, ?error, "subagentes Codex do runtime");
+                    problem = Some("runtime_subagents_unavailable".into());
+                }
+                None => {}
+            }
+            if let Some(id) = &agent {
+                // Só consulta o filho depois de conferir a família no histórico desta conta.
+                if codex_detail.is_some() {
+                    match runtime.codex_subagent_status(&name, &parent, id).await {
+                        Some(Ok(status)) => {
+                            let map = Value::Object(Map::from_iter([(id.clone(), status)]));
+                            lives.extend(headless_lives(&map));
+                            if !codex_status.is_object() { codex_status = json!({}); }
+                            codex_status[id] = map[id].clone();
+                        }
+                        Some(Err(error)) => { tracing::debug!(session = %name, ?error, "leitura do subagente Codex"); }
+                        None => {}
+                    }
+                }
+            }
+        }
+    }
     let problem = problem.map(|_| STATE_UNAVAILABLE);
     let done = tokio::task::spawn_blocking(move || {
         let mut fill = |mut a: Map<String, Value>| {
             let life = a.get("agentId").and_then(Value::as_str).and_then(|id| lives.get(id));
             decorate(&mut a, life, blocked, problem);
+            if provider == "codex" {
+                let status = a.get("agentId").and_then(Value::as_str).map(|id| &codex_status[id]);
+                let can_message = status.is_some_and(|status| status["can_message"] == true);
+                a.insert("canMessage".into(), json!(can_message));
+                a.insert("messageBlocked".into(), if can_message { Value::Null } else {
+                    status.and_then(|status| status.get("message_blocked")).filter(|v| v.is_string()).cloned().unwrap_or_else(|| json!(CODEX_MESSAGE_UNAVAILABLE))
+                });
+            }
             a
         };
         match agent {
-            None => Ok(json!(list_subagents(&provider, &jsonl).into_iter().map(&mut fill).collect::<Vec<_>>())),
-            Some(id) => get_subagent(&provider, &jsonl, &id, events).map(|a| Value::Object(fill(a))).ok_or(()),
+            None => {
+                let rows = if provider == "codex" { codex::list_checked(&jsonl).map_err(Some)? } else { list_subagents(&provider, &jsonl) };
+                Ok(json!(rows.into_iter().map(&mut fill).collect::<Vec<_>>()))
+            }
+            Some(id) => {
+                let found = if provider == "codex" { codex_detail } else { get_subagent(&provider, &jsonl, &id, events) };
+                found.map(|a| Value::Object(fill(a))).ok_or(None)
+            }
         }
     })
     .await;
     match done {
         Ok(Ok(v)) => reply(StatusCode::OK, v, headers),
-        Ok(Err(())) => refusal(StatusCode::NOT_FOUND, "erro_subagente_inexistente", "subagent not found", headers),
+        Ok(Err(None)) => refusal(StatusCode::NOT_FOUND, "erro_subagente_inexistente", "subagent not found", headers),
+        Ok(Err(Some(code))) => route_failed(st, headers, "rust.subagents_failed", &name, code, "os arquivos dos subagentes Codex não puderam ser lidos"),
         Err(e) => {
             tracing::warn!(session = %name, panic = e.is_panic(), "subagentes no Rust caiu");
             route_failed(st, headers, "rust.subagents_failed", &name, "subagents_panic", "a leitura dos subagentes caiu no servidor")
@@ -232,21 +295,40 @@ pub async fn message(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         Ok(None) => return refusal(StatusCode::NOT_FOUND, "erro_sessao_inexistente", "session or transcript not found", &headers),
         Err(code) => return route_failed(&st, &headers, "rust.subagents_failed", &name, code, crate::routes::INFO_REASON),
     };
-    if let Some(code) = message_blocked(&row.provider) {
+    if row.provider != "codex" && let Some(code) = message_blocked(&row.provider) {
         return refusal(StatusCode::CONFLICT, code, "this session cannot message its subagents", &headers);
     }
     let Some((provider, jsonl)) = conversation(&row, st.side.hubs.bound(&name)) else {
         return refusal(StatusCode::CONFLICT, "erro_subagentes_conversa_desconhecida", "the session's conversation is not known yet", &headers);
     };
     let exists = { let (provider, jsonl, id) = (provider.clone(), jsonl.clone(), agent_id.clone());
-        tokio::task::spawn_blocking(move || get_subagent(&provider, &jsonl, &id, 0).is_some()).await };
+        tokio::task::spawn_blocking(move || if provider == "codex" { codex::get_checked(&jsonl, &id, 0).map(|v| v.is_some()) }
+            else { Ok(get_subagent(&provider, &jsonl, &id, 0).is_some()) }).await };
     match exists {
-        Ok(true) => {}
-        Ok(false) => return refusal(StatusCode::CONFLICT, "erro_subagente_inexistente", "subagent not found in this conversation", &headers),
+        Ok(Ok(true)) => {}
+        Ok(Ok(false)) => return refusal(StatusCode::CONFLICT, "erro_subagente_inexistente", "subagent not found in this conversation", &headers),
+        Ok(Err(code)) => return route_failed(&st, &headers, "rust.subagents_failed", &name, code, "a família do subagente Codex não pôde ser lida"),
         Err(e) => {
             tracing::warn!(session = %name, panic = e.is_panic(), "leitura do subagente caiu antes da mensagem");
             return route_failed(&st, &headers, "rust.subagents_failed", &name, "subagents_panic", "a leitura dos subagentes caiu no servidor");
         }
+    }
+    if provider == "codex" {
+        let Some(parent) = codex::parent_thread_id(&jsonl) else {
+            return refusal(StatusCode::CONFLICT, STALE_BINDING, "a conversa Codex não pôde ser conferida", &headers);
+        };
+        let Some(runtime) = st.state.runtime.get() else {
+            return refusal(StatusCode::SERVICE_UNAVAILABLE, CODEX_MESSAGE_UNAVAILABLE, "o runtime Codex não está disponível", &headers);
+        };
+        return match runtime.codex_subagent_message(&name, &parent, &agent_id, &text).await {
+            Some(Ok(body)) => reply(StatusCode::OK, body, &headers),
+            Some(Err(error)) => {
+                let status = if error.code == "erro_subagente_mensagem_sem_resposta" { StatusCode::GATEWAY_TIMEOUT }
+                    else if error.code.starts_with("erro_subagente") { StatusCode::CONFLICT } else { StatusCode::SERVICE_UNAVAILABLE };
+                refusal(status, &error.code, &error.message, &headers)
+            }
+            None => refusal(StatusCode::SERVICE_UNAVAILABLE, CODEX_MESSAGE_UNAVAILABLE, "o runtime Codex não está disponível", &headers),
+        };
     }
     let binding = match plugin_binding(&st, &name, &jsonl).await {
         Ok(Some(binding)) => binding,
@@ -316,6 +398,7 @@ pub(crate) fn conversation(row: &SessionRow, bound: Option<Binding>) -> Option<(
 
 /// Todos os subagentes da conversa, do mais recém-escrito pro mais antigo.
 pub fn list_subagents(provider: &str, jsonl: &Path) -> Vec<Map<String, Value>> {
+    if provider == "codex" { return codex::list(jsonl); }
     let mut out = Vec::new();
     if let Some(root) = pi_agents_dir(provider, jsonl) {
         for task in sorted_dirs(&root) {
@@ -349,6 +432,7 @@ pub fn list_subagents(provider: &str, jsonl: &Path) -> Vec<Map<String, Value>> {
 /// Um subagente com a cauda maior e, com `events != 0`, o transcript dele nos `ChatEvent` do chat.
 /// None = não existe (404); arquivo existente e ilegível volta marcado `ilegivel`.
 pub fn get_subagent(provider: &str, jsonl: &Path, agent_id: &str, events: i64) -> Option<Map<String, Value>> {
+    if provider == "codex" { return codex::get(jsonl, agent_id, events); }
     let limit = usize::try_from(events.max(0)).unwrap_or(0);
     let (mut a, file, kind) = if let Some(root) = pi_agents_dir(provider, jsonl) {
         let task = child(&root, agent_id)?;
@@ -473,11 +557,14 @@ fn tool_target(name: &str, input: Option<&Value>) -> String {
     if name.eq_ignore_ascii_case("bash") {
         return s(inp, "command").unwrap_or("").to_owned();
     }
+    if matches!(name, "exec_command" | "functions.exec_command") {
+        return s(inp, "cmd").unwrap_or("").to_owned();
+    }
     ["pattern", "query", "url", "prompt", "description"].iter().find_map(|k| s(inp, k)).unwrap_or("").to_owned()
 }
 
 /// O que as três leituras acumulam, no mesmo dicionário de saída.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Acc {
     prompt: Option<String>,
     agent_type: Option<String>,

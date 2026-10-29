@@ -6,6 +6,7 @@
   import * as m from '../../paraglide/messages';
   import ModalDialog from '../ModalDialog.svelte';
   import EscopoChip from './EscopoChip.svelte';
+  import TagEditor from './TagEditor.svelte';
   import { estadoDaLinha, recadosCard, sessionsState, type EstadoPeer, type LinhaMaquina } from '../../lib/maquinas';
   import type { EnderecoAlcance } from '../../lib/alcance';
   import type { Server } from '../../lib/auth';
@@ -21,6 +22,7 @@
     tokenSalvando: boolean;
     tokenErro: string;
     erro?: string;
+    desktop?: boolean;
     onAcompanhar: (linha: LinhaMaquina, ligar: boolean) => void;
     onFalar: (linha: LinhaMaquina, ligar: boolean) => void;
     onToggleScan: (linha: LinhaMaquina, ligar: boolean) => void;
@@ -34,7 +36,7 @@
     onSalvarIdentificador: (linha: LinhaMaquina, valor: string) => void;
     onFechar: () => void;
   }
-  let { linha, estado, meuIdentificador, esteNome, enderecos, idSalvando, idErro, tokenSalvando, tokenErro, erro = '',
+  let { linha, estado, meuIdentificador, esteNome, enderecos, idSalvando, idErro, tokenSalvando, tokenErro, erro = '', desktop = false,
         onAcompanhar, onFalar, onToggleScan, onEditar, onTirar, onInformarToken, onTestar, onUsarEndereco,
         onAbrirEste, onRemover, onSalvarIdentificador, onFechar }: Props = $props();
 
@@ -168,6 +170,13 @@
       {/each}
       {#if linha.navegadores.length > 1}<p class="sd-dup">{m.servidores_guardado_explica({ n: linha.navegadores.length })}</p>{/if}
     </div>
+
+    <!-- Gravada no servidor dela e vista igual em todos os clientes; convite não tem a rota.
+         A vista desktop web é legada e não ganha recurso novo. -->
+    {#if !desktop && linha.navegador && !linha.navegador.invite}
+      <p class="sd-grupo">{m.tags_machine_title()} <EscopoChip escopo="servidor" /></p>
+      <div class="sd-cartao"><TagEditor server={linha.navegador} /></div>
+    {/if}
 
     <p class="sd-grupo">{m.maquinas_falar()} <EscopoChip escopo="servidor" /></p>
     <div class="sd-cartao">

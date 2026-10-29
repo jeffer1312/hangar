@@ -339,14 +339,21 @@ impl AccountService {
             }
         }
     }
-    pub async fn claude_states(&self) -> Result<Value, AccountError> {
-        use futures_util::StreamExt;
-        let accounts = self.claude_accounts()?.into_iter().filter(|(_, account)| {
+    /// Contas Claude que as telas mostram: a padrão e as marcadas.
+    pub fn claude_listed(&self) -> Result<Vec<(Value, Account)>, AccountError> {
+        Ok(self.claude_accounts()?.into_iter().filter(|(_, account)| {
             account.is_default
                 || super::storage::real_file(&account.home.join(super::storage::CLAUDE_MARKER))
-        });
+        }).collect())
+    }
+    pub async fn claude_states(&self) -> Result<Value, AccountError> {
+        Ok(json!(self.claude_states_of(self.claude_listed()?).await))
+    }
+    /// Login e limite de cada conta dada, na mesma ordem.
+    pub async fn claude_states_of(&self, accounts: Vec<(Value, Account)>) -> Vec<Value> {
+        use futures_util::StreamExt;
         // Cada leitura pode subir a CLI: algumas em paralelo poupam a soma sem subir uma por conta de uma vez.
-        let output: Vec<Value> = futures_util::stream::iter(accounts)
+        futures_util::stream::iter(accounts)
             .map(|(mut row, account)| async move {
                 row["login"] = self.read_claude_auth(&account).await;
                 row["limite"] = limit(&account.home);
@@ -354,8 +361,7 @@ impl AccountService {
             })
             .buffered(4)
             .collect()
-            .await;
-        Ok(json!(output))
+            .await
     }
 }
 

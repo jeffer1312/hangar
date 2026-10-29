@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { formatElapsed, getSubagents, getWorkflow, getWorkflowAgent, getWorkflows } from '@hangar/core';
-import type { AgentRun, SubagentRun, WorkflowDetail, WorkflowAgentDetail, WorkflowSummary } from '@hangar/core';
+import { codexSubagentActivityKey, codexSubagentState, formatElapsed, getSubagents, getWorkflow, getWorkflowAgent, getWorkflows, projectSubagentActivity, projectCodexSubagent, isCodexAgentSpawn } from '@hangar/core';
+import type { AgentRun, CodexCommand, ShellVivo, SubagentRun, WorkflowDetail, WorkflowAgentDetail, WorkflowSummary } from '@hangar/core';
 import { chatStore } from '../../stores/chat';
 import { useServers } from '../../stores/servers';
+import { useSessions } from '../../stores/sessions';
 import { useActivity } from './useActivity';
 import { ActivityTimeout, useActivityRequest } from './useActivityRequest';
 import { TaskRows } from './TaskRows';
@@ -18,8 +19,11 @@ import * as m from '../../paraglide/messages';
 import { superficie } from '../../theme/superficie';
 import { HeaderBack } from '../../ui/glassHeader';
 import { Icon } from '../../ui/Icon';
+import { CodexCommands } from './CodexCommands';
 
 type Level = 'list' | 'workflow' | 'agent' | 'subagent';
+const EMPTY_SHELLS: ShellVivo[] = [];
+const EMPTY_COMMANDS: CodexCommand[] = [];
 
 interface Props {
   serverId: string;
@@ -39,8 +43,12 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   const events = chat.use((s) => s.events);
   const eventsRevision = chat.use((s) => s.eventsRevision);
   // Processos vivos lidos do sistema pelo backend (vêm no `state` do stream que o chat já mantém).
-  const processos = chat.use((s) => s.stateEvent?.shells) ?? [];
-  const activity = useActivity(events, eventsRevision);
+  const processos = chat.use((s) => s.stateEvent?.shells) ?? EMPTY_SHELLS;
+  const commands = chat.use((s) => s.stateEvent?.codex_commands) ?? EMPTY_COMMANDS;
+  const nativeStates = chat.use((s) => s.stateEvent?.codex_subagents);
+  const readOnly = useSessions(state => state.rows.find(row => row.serverId === serverId && row.name === name)?.guest_kind === 'pair');
+  const transcriptActivity = useActivity(events, eventsRevision);
+  const agentIds = useMemo(() => agentIdentities(events), [events, eventsRevision]);
   // Relógio do "há N" dos shells enquanto o painel está visível.
   const [agora, setAgora] = useState(Date.now() / 1000);
   useEffect(() => {
@@ -56,7 +64,11 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   const [list, setList] = useState<{ key: string; workflows: WorkflowSummary[]; subs: SubagentRun[]; workflowLoading: boolean; subLoading: boolean; workflowError: string; subError: string }>({ key: listKey, workflows: [], subs: [], workflowLoading: true, subLoading: true, workflowError: '', subError: '' });
   const currentList = list.key === listKey;
   const workflows = currentList ? list.workflows : [];
-  const subs = currentList ? list.subs : [];
+  const subs = useMemo(() => currentList ? list.subs.map(run => projectCodexSubagent(run, nativeStates)) : [], [currentList, list.subs, nativeStates]);
+  const nativeSubagents = nativeStates !== undefined || events.some(event => event.kind === 'tool_use' && isCodexAgentSpawn(event.tool_name ?? ''))
+    || subs.some(sub => !!sub.agentPath);
+  const nativeIds = codexSubagentActivityKey(nativeStates);
+  const activity = projectSubagentActivity(transcriptActivity, subs, agentIds, nativeStates);
   const listLoading = !currentList || ((list.workflowLoading || list.subLoading) && workflows.length === 0 && subs.length === 0);
   const workflowListError = currentList ? list.workflowError : '';
   const subError = currentList ? list.subError : '';
@@ -150,7 +162,7 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
     return () => { genList.current += 1; };
   }, [fetchAll, name, serverId]);
 
-  const agentSignature = JSON.stringify(activity.agents.filter((agent) => agent.kind === 'agent').map((agent) => [agent.id, agent.running]));
+  const agentSignature = JSON.stringify(transcriptActivity.agents.filter((agent) => agent.kind === 'agent').map((agent) => [agent.id, agent.running]));
   const previousAgents = useRef({ key: listKey, signature: agentSignature });
   useEffect(() => {
     const previous = previousAgents.current;
@@ -158,13 +170,18 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
     if (previous.key === listKey && previous.signature !== agentSignature) void refreshSubs();
   }, [agentSignature, listKey, refreshSubs]);
 
+  const previousNativeIds = useRef(nativeIds);
   useEffect(() => {
-    if (!focused || level !== 'list') return;
+    const changed = previousNativeIds.current !== nativeIds;
+    previousNativeIds.current = nativeIds;
+    if (changed && nativeSubagents) void refreshSubs();
+  }, [nativeIds, nativeSubagents, refreshSubs]);
+  useEffect(() => {
+    if (!focused || level !== 'list' || nativeSubagents) return;
     const timer = setInterval(() => void refreshSubs(false), 5_000);
     return () => clearInterval(timer);
-  }, [focused, level, refreshSubs]);
+  }, [focused, level, nativeSubagents, refreshSubs]);
 
-  const agentIds = useMemo(() => agentIdentities(events), [events, eventsRevision]);
   const matchSub = useCallback((agent: AgentRun) => matchAgentSubagent(subs, agent, agentIds), [subs, agentIds]);
 
   function parentRunning(agentId: string): boolean | null {
@@ -180,6 +197,7 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   const runningAgents = activity.agents.filter((a) => {
     if (a.kind !== 'agent' || !a.running) return false;
     const sub = matchSub(a);
+    if (nativeSubagents && codexSubagentState(nativeStates, a.agentId ?? agentIds.get(a.id), a.agentPath)?.state !== 'running' && sub?.state !== 'running') return false;
     return !sub || subRows.find((row) => row.run.agentId === sub.agentId)?.status === 'running';
   });
   const shown = new Set(runningAgents.map((a) => matchSub(a)?.agentId));
@@ -197,7 +215,7 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   function tituloDoSub(s2: SubagentRun): string {
     const linhas = (s2.prompt ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
     const util = linhas.find((l) => !/^base directory for this skill:/i.test(l) && !l.startsWith('#'));
-    return (util ?? linhas[0] ?? s2.agentId).slice(0, 90);
+    return (util ?? linhas[0] ?? s2.agentPath?.split('/').filter(Boolean).at(-1) ?? s2.nickname ?? s2.agentId).slice(0, 90);
   }
 
   function renderSub({ run, status, at }: (typeof subRows)[number]) {
@@ -289,7 +307,7 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
       setSubAgentId(null);
       setSubTitle('');
       setLevel('list');
-      void refreshSubs();
+      if (!nativeSubagents) void refreshSubs();
       return;
     }
     if (level === 'agent') {
@@ -302,7 +320,7 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
       setDetail(null);
       setRunId(null);
     }
-  }, [level, refreshSubs]);
+  }, [level, refreshSubs, nativeSubagents]);
 
   useEffect(() => {
     onBackRequest?.(() => {
@@ -462,6 +480,7 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
               </View>
             ) : null}
 
+            <CodexCommands key={listKey} commands={commands} name={name} serverId={serverId} server={server} readOnly={readOnly} />
             {activity.tasks.length > 0 ? <TaskRows tasks={activity.tasks} /> : null}
             {workflowListError ? <Text style={[styles.err, { color: theme.tokens.status.warning }]} accessibilityRole="alert">{workflowListError}</Text> : null}
             {subError ? <Text style={[styles.err, { color: theme.tokens.status.warning }]} accessibilityRole="alert">{subError}</Text> : null}
@@ -470,7 +489,7 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
                 <Text style={[styles.muted, { color: theme.tokens.accent.base }]}>{m.sync_retry()}</Text>
               </Pressable>
             ) : null}
-            {!listLoading && !workflowListError && !subError && workflows.length === 0 && activity.tasks.length === 0 && runningAgents.length === 0 && subs.length === 0 && shellsVivos.length === 0 && processos.length === 0 ? <Text style={[styles.empty, { color: theme.tokens.text.muted }]}>{m.atividade_vazio()}</Text> : null}
+            {!listLoading && !workflowListError && !subError && workflows.length === 0 && activity.tasks.length === 0 && runningAgents.length === 0 && subs.length === 0 && shellsVivos.length === 0 && processos.length === 0 && commands.length === 0 ? <Text style={[styles.empty, { color: theme.tokens.text.muted }]}>{m.atividade_vazio()}</Text> : null}
           </ScrollView>
         ) : level === 'workflow' ? (
           <View style={[styles.detail, { paddingBottom: insets.bottom }]}>
@@ -493,7 +512,7 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
           </View>
         ) : level === 'subagent' && subAgentId ? (
           <View style={[styles.detail, { paddingBottom: insets.bottom }]}>
-            <SubagentLive key={`${serverId}::${name}::${subAgentId}`} server={server} sessionName={name} agentId={subAgentId} paiRodando={paiRodando} />
+            <SubagentLive key={`${serverId}::${name}::${subAgentId}`} server={server} sessionName={name} agentId={subAgentId} paiRodando={paiRodando} states={nativeStates} />
           </View>
         ) : (
           <View style={styles.center}>

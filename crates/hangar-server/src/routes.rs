@@ -279,6 +279,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     state.voice.set_self(listener.local_addr()?, &state.cfg.auth_token);
     let public_v6 = state.public_v6.take();
     let state = Arc::new(state);
+    // Ligado com o estado final: o evento lê as mesmas contas que a rota `/api/tags`.
+    state.list.tags.bind(state.accounts.clone(), state.server_id.clone());
     if crate::config::Config::runtime_instance().map_err(std::io::Error::other)?.is_some() {
         let omp_sync = crate::omp_sync::Service::start(state.clone());
         let _ = state.omp_sync.set(omp_sync.clone());
@@ -524,6 +526,7 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/codex/mode", axum::routing::post(crate::session_write::codex::mode).fallback(fallback.clone()))
         .route("/api/sessions/{name}/limits", get(crate::session_write::codex::limits).fallback(fallback.clone()))
         .route("/api/sessions/{name}/question/skip", axum::routing::post(crate::session_write::codex::skip_question).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/codex/terminate", axum::routing::post(crate::session_write::codex::terminate).fallback(fallback.clone()))
         .route("/api/orq/{exec_id}/conductor", get(crate::orq_conductor::public).fallback(fallback.clone()))
         .route("/api/sessions/{name}/navegador", get(crate::remote_browser::url::route).head(fallback.clone()).fallback(fallback.clone()))
         .route("/api/sessions/{name}/commands", get(crate::commands::route).fallback(fallback.clone()))
@@ -546,7 +549,6 @@ fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> 
     let router = Router::new()
         .route("/__hangar_server/terminal", axum::routing::post(crate::terminal_routes::terminal))
         .route("/__hangar_server/workspace", axum::routing::post(crate::workspace_routes::private))
-        .route("/__hangar_server/transcription/{operation}", axum::routing::post(crate::transcription::routes::private))
         .route("/__hangar_server/dictation/{operation}", axum::routing::post(crate::dictation::routes::private))
         .route("/__hangar_server/claude/customizations", axum::routing::post(crate::claude_customizations::private))
         .route("/__hangar_server/forwarded", axum::routing::any(crate::forwarded::private))
@@ -647,6 +649,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/update/notes", get(crate::update_notes::route))
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_any))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
+        // Sugestão de nome da sessão genérica: só o dono, nunca repassada (o Python não tem a rota).
+        .route("/api/sessions/{name}/rename-suggestion", axum::routing::post(crate::dictation::rename_suggestion::route).delete(crate::dictation::rename_suggestion::route))
+        .route("/api/tags", axum::routing::get(crate::tags::handle).put(crate::tags::handle))
         .route("/api/push/expo/subscribe", axum::routing::post(crate::push_expo::subscribe))
         .route("/api/push/vapid", get(crate::push::http::route).fallback(pass_any))
         .route("/api/push/settings", get(crate::push::http::route).fallback(pass_any))
@@ -877,6 +882,9 @@ pub(crate) async fn pass_any(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     mut req: Request,
 ) -> Response {
+    if crate::dictation::http::matches(req.method(), req.uri().path()) {
+        return crate::dictation::http::public(st, peer, req).await;
+    }
     if crate::provider_models::inbox_http_request(req.method(), req.uri().path(), req.headers()) {
         return crate::session_write::json_response(StatusCode::NOT_FOUND, serde_json::json!({"detail":"Not Found"}));
     }

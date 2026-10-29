@@ -34,6 +34,7 @@ export function textoProblema(codigo: string | null | undefined): string | null 
     case 'terminal_input_capture_failed': return m.problema_terminal_input_capture_failed();
     case 'terminal_input_stalled': return m.problema_terminal_input_stalled();
     case 'terminal_input_delivery_unproved': return m.problema_terminal_input_delivery_unproved();
+    case 'terminal_input_delivery_composer_busy': return m.problema_terminal_input_delivery_composer_busy();
     case 'terminal_input_no_safe_delivery': return m.problema_terminal_input_no_safe_delivery();
     case 'terminal_clear_not_applied': return m.problema_terminal_clear_not_applied();
     case 'list_capture_failed': return m.problema_list_capture_failed();

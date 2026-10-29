@@ -229,7 +229,10 @@ pub enum Action {
     Append { text:String, delivered:bool, ts:Option<f64>, pre_transcript:bool, entry_id:Option<String> },
     /// `confirms`: o comando que a CLI respondeu sozinha, sem linha no transcript.
     AppendLocal { text:String, entry_id:Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] confirms:Option<String> },
+        #[serde(default, skip_serializing_if = "Option::is_none")] confirms:Option<String>,
+        /// Aviso de hook: `notice` é o código do aviso (`hook_failed`, `hook_prompt`) e `hook_error` o detalhe.
+        #[serde(default, skip_serializing_if = "Option::is_none")] hook_error:Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] notice:Option<String> },
     Claim { min_ts:f64, limit:Option<usize>, entry_id:Option<String> },
     ClaimBatch { min_ts:f64 },
     SetDelivered { entry_id:String, value:bool, steered:bool },
@@ -376,7 +379,7 @@ impl Store {
     pub fn open(state_path: &Path, projection_dir: &Path, initial: State) -> io::Result<Self> {
         if let Some(parent) = state_path.parent() { std::fs::create_dir_all(parent)?; }
         std::fs::create_dir_all(projection_dir)?;
-        let state = match std::fs::read(state_path) {
+        let state = match read_replaced(state_path) {
             Ok(bytes) => {
                 let (state, migrated) = State::load(&bytes)?;
                 if state.owner_key != initial.owner_key { return Err(invalid("estado da fila incompatível")); }
@@ -767,9 +770,12 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
             if pre_transcript { row["pre_transcript"] = json!(true); }
             append_row(state,row)?
         }
-        Action::AppendLocal { text, entry_id, confirms } => {
-            let row = append_row(state,json!({"id":entry_id.unwrap_or_else(||call_id.into()),
-                "text":text,"ts":clock.epoch_s,"delivered":true,"confirmed":true,"papel":"assistant"}))?;
+        Action::AppendLocal { text, entry_id, confirms, hook_error, notice } => {
+            let mut row = json!({"id":entry_id.unwrap_or_else(||call_id.into()),
+                "text":text,"ts":clock.epoch_s,"delivered":true,"confirmed":true,"papel":"assistant"});
+            if let Some(hook_error) = hook_error { row["hook_error"] = json!(hook_error); }
+            if let Some(notice) = notice { row["notice"] = json!(notice); }
+            let row = append_row(state,row)?;
             if let Some(source) = confirms { confirm_local_command(state,&source); }
             row
         }

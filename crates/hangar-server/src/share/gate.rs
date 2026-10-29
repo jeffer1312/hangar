@@ -122,7 +122,7 @@ async fn deny(req: Request, status: StatusCode, code: &str, msg: &str) -> Respon
 
 /// O preflight que o `CORSMiddleware` do Python (por fora do porteiro) respondia com `*` em origem,
 /// método e cabeçalho, sem credenciais.
-fn preflight(req: &Request) -> Option<Response> {
+pub(crate) fn preflight(req: &Request) -> Option<Response> {
     let h = req.headers();
     if req.method() != Method::OPTIONS || !h.contains_key(header::ORIGIN) || !h.contains_key(header::ACCESS_CONTROL_REQUEST_METHOD) {
         return None;

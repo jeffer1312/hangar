@@ -56,13 +56,49 @@ pub(super) fn meta_line(session: &SessionInfo, full: bool) -> Option<Div> {
         .children(behind.map(|n| div().flex_shrink_0().text_color(theme::warning()).child(format!("↓{n}")))))
 }
 
-/// A máquina como legenda no canto direito da borda de cima. O fundo cheio corta a linha da borda atrás do texto.
-fn machine_legend(machine: String, on: bool) -> Div {
-    div().absolute().top(px(-6.)).right(px(8.)).max_w(px(110.)).px(px(4.)).h(px(12.)).flex().items_center().gap(px(3.))
+/// Um pedaço da placa: o ícone (ou o logo do provider da conta), a cor dele e o nome.
+pub(crate) enum PlateMark { Icon(IconName), Provider(String) }
+pub(crate) struct PlateSegment { pub(crate) mark: PlateMark, pub(crate) color: Hsla, pub(crate) name: String }
+
+/// A placa no canto direito da borda de cima: a máquina (quando é outra) e a conta. O fundo cheio corta a linha da borda
+/// atrás do texto.
+pub(crate) fn plate(machine: Option<PlateSegment>, account: Option<PlateSegment>, on: bool) -> Div {
+    let segment = |s: PlateSegment| div().min_w_0().flex().items_center().gap(px(3.))
+        .child(match s.mark {
+            PlateMark::Icon(icon) => chrome::small_icon(icon, 9., s.color).into_any_element(),
+            PlateMark::Provider(provider) => super::tags::provider_mark(&provider, 9., s.color),
+        })
+        .child(div().min_w_0().truncate().child(s.name));
+    div().absolute().top(px(-6.)).right(px(8.)).max_w(px(180.)).px(px(4.)).h(px(12.)).flex().items_center().gap(px(6.))
         .rounded(px(3.)).bg(theme::background().alpha(1.)).text_size(px(9.)).line_height(px(12.))
         .text_color(if on { theme::accent_text() } else { theme::muted() })
-        .child(chrome::small_icon(IconName::Monitor, 9., if on { theme::accent_text() } else { theme::faint() }))
-        .child(div().min_w_0().truncate().child(machine))
+        .children(machine.map(segment)).children(account.map(segment))
+}
+
+/// Contexto usado da sessão, em %: o que o backend leu do transcript, senão o da linha de status (a ordem do PWA e do
+/// Expo). Sem a sessão no `parse`: o transcript já foi consultado aqui.
+fn context_pct(session: &SessionInfo) -> Option<f64> {
+    session.context.as_ref().filter(|c| c.window > 0.).map(|c| (c.used / c.window * 100.).clamp(0., 100.))
+        .or_else(|| crate::status::parse(session.status_line.as_deref(), None)?.ctx_pct)
+}
+
+/// O que a placa lê das máquinas, uma vez por desenho da barra: o `machine_id` desta máquina e quais máquinas das abas
+/// estão em loopback.
+struct PlateMachines { local_id: Option<String>, loopback: HashSet<String> }
+
+/// Conta e contexto no rótulo da aba: placa e anel são só desenho.
+fn speak_extras(label: &mut String, account: Option<String>, pct: Option<f64>) {
+    let ring = pct.map(|p| tr_shared("tags_context_ring", &[("pct", &p.round().to_string())]));
+    for extra in [account, ring].into_iter().flatten() { label.push_str(&format!(" · {extra}")); }
+}
+
+/// O anel de contexto logo fora do avatar, sem mudar a medida da aba; sem dado, nenhum anel.
+pub(crate) fn with_context_ring(mark: AnyElement, pct: Option<f64>, side: f32) -> AnyElement {
+    const GAP: f32 = 3.;
+    let Some(pct) = pct else { return mark };
+    div().relative().size(px(side)).flex_shrink_0()
+        .child(div().absolute().top(px(-GAP)).left(px(-GAP)).child(chrome::ring_sized(Some(pct), side + 2. * GAP, side + 2. * GAP - 1., 1.5)))
+        .child(mark).into_any_element()
 }
 
 /// Na Completa, a marca de sessão sem terminal da linha da barra lateral, ao lado do nome.
@@ -88,6 +124,31 @@ pub(super) fn short_names(names: &[&str]) -> Vec<String> {
 const TAB_WIDTH: f32 = 240.;
 const REAR_WIDTH: f32 = 88.;
 const OVERLAP: f32 = 12.;
+
+// Partes da aba por dado simples, sem foco nem clique: a barra põe os dois, a miniatura das novidades (`crate::news`)
+// usa as mesmas sem nenhum.
+
+/// A caixa da aba: medida, borda e as cores de aberta, de grupo ou solta.
+pub(crate) fn tab_frame(on: bool, grouped: bool, compact: bool) -> Div {
+    div().flex_shrink_0().w(px(TAB_WIDTH)).h(px(tab_height())).px(px(8.))
+        .when(compact, |el| el.pl(px(20.)))
+        .flex().items_center().gap(px(if compact { 4. } else { 6. })).rounded(px(6.)).border_1()
+        .map(|el| if on { el.bg(theme::accent_dim()).border_color(theme::accent()).text_color(theme::text()).font_weight(FontWeight::SEMIBOLD) }
+            else if grouped { el.bg(theme::raised()).border_color(theme::border()).text_color(theme::muted()) }
+            // Toda aba tem a borda à vista; a solta fica sem fundo, o que a separa da de grupo.
+            else { el.border_color(theme::border_strong()).text_color(theme::muted()) })
+}
+
+/// O nome da aba, com o rótulo do grupo em cima, a marca sem terminal ao lado e a linha de baixo.
+pub(crate) fn tab_title(name: String, group_label: Option<&str>, grouped: bool, full: bool, terminal: Option<Div>, meta: Option<Div>) -> Div {
+    div().min_w_0().overflow_hidden().flex_1().flex().flex_col().when(full, |el| el.gap(px(1.)))
+        .when_some(group_label, |el, text| el.child(div().truncate().text_size(px(9.)).line_height(px(11.))
+            .text_color(theme::accent_text()).child(text.to_owned())))
+        .child(div().min_w_0().flex().items_center().gap(px(4.))
+            .child(div().min_w_0().truncate().text_size(px(if grouped { 11. } else { 13. })).line_height(px(14.)).child(name))
+            .children(terminal))
+        .children(meta)
+}
 
 impl TabGroup {
     fn slot(&self, index: usize) -> Option<(f32, f32)> {
@@ -164,6 +225,52 @@ pub(super) fn groups(entries: Vec<(Target, &SessionInfo)>, ids: &HashMap<String,
 }
 
 impl Hangar {
+    /// Lido por barra, e não por aba: `machine_api` clona a conexão. "Esta máquina" é a de endereço loopback; o
+    /// `machine_id` do evento dela é o que a placa compara.
+    fn plate_machines(&self, bands: &[TabGroup]) -> PlateMachines {
+        let loopback_of = |key: &str| self.machine_api(key).is_some_and(|api| api.is_loopback());
+        let local_id = self.servers.iter().filter(|s| !s.disabled).map(|s| servers::norm(&s.address))
+            .find(|key| loopback_of(key.as_str())).and_then(|key| self.tags.get(&key)).and_then(|t| t.machine_id.clone());
+        // Só máquina com evento `tags` chega a comparar; a sem ele desenha a legenda antiga.
+        let keys: HashSet<&str> = bands.iter().flat_map(|g| &g.members).map(|t| t.server.as_str())
+            .filter(|key| self.tags.contains_key(*key)).collect();
+        PlateMachines { local_id, loopback: keys.into_iter().filter(|key| loopback_of(*key)).map(str::to_owned).collect() }
+    }
+
+    /// A placa da aba e, para a leitura de tela (que não vê a placa), a conta dela; a máquina o rótulo da aba já diz.
+    /// Máquina sem o evento `tags` (servidor antigo) fica como antes: só a máquina, em `legacy`, quando a legenda antiga aparecia.
+    fn tab_plate(&self, target: &Target, session: &SessionInfo, on: bool, legacy: Option<String>, machines: &PlateMachines)
+        -> Option<(Div, Option<String>)> {
+        let Some(tags) = self.tags.get(&target.server) else {
+            let name = legacy?;
+            let machine = PlateSegment { mark: PlateMark::Icon(IconName::Monitor), color: if on { theme::accent_text() } else { theme::faint() }, name };
+            return Some((plate(Some(machine), None, on), None));
+        };
+        let loopback = machines.loopback.contains(&target.server);
+        let machine = super::tags::shows_machine(tags.machine_id.as_deref(), machines.local_id.as_deref(), loopback).then(|| {
+            let entry = self.server_entry(&target.server);
+            let tag = tags.machine.as_ref();
+            PlateSegment {
+                mark: PlateMark::Icon(tag.map_or(IconName::Monitor, |t| super::tags::machine_icon(&t.icon))),
+                color: tag.and_then(|t| t.color.as_deref()).and_then(theme::tag_color)
+                    .unwrap_or_else(|| theme::server_color(entry.map_or(target.server.as_str(), |e| e.id.as_str()))),
+                name: super::tags::machine_name(tag, entry.map_or("", |e| e.label.as_str()), entry.map_or(target.server.as_str(), |e| e.address.as_str())),
+            }
+        });
+        let account = session.conta.as_deref().and_then(|conta| tags.accounts.get(conta).map(|badge| {
+            let provider = conta.split_once(':').map_or(session.provider.as_str(), |(kind, _)| kind);
+            PlateSegment {
+                mark: super::tags::account_icon(&badge.icon).map_or_else(|| PlateMark::Provider(provider.to_owned()), PlateMark::Icon),
+                color: badge.color.as_deref().and_then(theme::tag_color)
+                    .or_else(|| account_chip(Some(conta)).map(|(_, color)| color)).unwrap_or_else(theme::muted),
+                name: badge.name.clone(),
+            }
+        }));
+        if machine.is_none() && account.is_none() { return None; }
+        let label = account.as_ref().map(|a| tr_shared("tags_plate_account", &[("name", &a.name)]));
+        Some((plate(machine, account, on), label))
+    }
+
     /// Recalculado só quando muda o que `groups` lê: as abas, os campos de grupo delas e os identificadores.
     pub(super) fn tab_groups(&self) -> std::rc::Rc<Vec<TabGroup>> {
         use std::hash::{DefaultHasher, Hash, Hasher};
@@ -358,19 +465,20 @@ impl Hangar {
             self.sidebar.tab_follow.set(seq);
             cx.on_next_frame(window, move |this, window, cx| this.follow_open_tab(seq, new, from, start, None, window, cx));
         }
+        let machines = self.plate_machines(&bands);
         bands.iter().zip(keys).map(|(group, key)| {
             let first = order;
             order += group.members.len();
             let tab = match group.label.as_deref() {
-                None => div().flex_shrink_0().children(self.render_session_tab(&group.members[0], None, None, first, window, cx)).into_any_element(),
-                Some(label) => match group.mother.then(|| self.render_mother_tab(group, label, first, window, cx)).flatten() {
+                None => div().flex_shrink_0().children(self.render_session_tab(&group.members[0], None, None, first, &machines, window, cx)).into_any_element(),
+                Some(label) => match group.mother.then(|| self.render_mother_tab(group, label, first, &machines, window, cx)).flatten() {
                     Some(tab) => tab,
                     None => {
                         let (last, size) = group.slot(group.members.len() - 1).expect("grupo com membro");
                         let width = last + size;
                         // Os de trás pintam primeiro; todos mantêm a mesma altura e deixam uma faixa clicável exposta.
                         let tabs = group.members.iter().enumerate().rev().filter_map(|(index, target)| {
-                            self.render_session_tab(target, (index == 0).then_some(label), group.slot(index), first + index, window, cx)
+                            self.render_session_tab(target, (index == 0).then_some(label), group.slot(index), first + index, &machines, window, cx)
                         }).collect::<Vec<_>>();
                         div().id(SharedString::from(format!("tab-group-{}", group.members[0].id())))
                             .relative().flex_shrink_0().w(px(width)).h(px(tab_height())).children(tabs).into_any_element()
@@ -383,7 +491,8 @@ impl Hangar {
 
     /// Grupo com mãe: uma aba só, a dela. As filhas viram etiquetas pequenas sobre o nome (o clique abre a filha); o clique no
     /// resto abre a mãe e a janela com as abas inteiras das filhas, para cima quando a faixa fica embaixo.
-    fn render_mother_tab(&self, group: &TabGroup, label: &str, tab_index: usize, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_mother_tab(&self, group: &TabGroup, label: &str, tab_index: usize, machines: &PlateMachines, window: &mut Window,
+        cx: &mut Context<Self>) -> Option<AnyElement> {
         let mother = &group.members[0];
         let session = self.target_session(mother)?;
         let focus = self.row_focus(mother)?.clone().tab_index(tab_index as isize);
@@ -443,10 +552,14 @@ impl Hangar {
             }
         }
         let count = tr_shared("tab_group_children", &[("n", &kids.len().to_string())]);
-        let aria = self.session_number_label(mother, format!("{} · {} · {} · {label} · {count}", session.name, machine(mother), state(session)));
-        let mark = self.avatar_slot(panes::Area::Nav, format!("tab-mark-{}", mother.id()), sidebar::session_look(session), 20.);
+        let ctx = context_pct(session);
+        let plate = self.tab_plate(mother, session, on, multi.then(|| machine(mother)), machines);
+        let mut spoken = format!("{} · {} · {} · {label} · {count}", session.name, machine(mother), state(session));
+        speak_extras(&mut spoken, plate.as_ref().and_then(|(_, account)| account.clone()), ctx);
+        let aria = self.session_number_label(mother, spoken);
+        let mark = with_context_ring(self.avatar_slot(panes::Area::Nav, format!("tab-mark-{}", mother.id()), sidebar::session_look(session), 20.), ctx, 20.);
         let window_tabs = was_open.then(|| {
-            let tabs = kids.iter().enumerate().filter_map(|(i, (t, _, _))| self.render_session_tab(t, None, None, tab_index + 1 + i, window, cx))
+            let tabs = kids.iter().enumerate().filter_map(|(i, (t, _, _))| self.render_session_tab(t, None, None, tab_index + 1 + i, machines, window, cx))
                 .collect::<Vec<_>>();
             // O nome do grupo numa linha própria, inteiro, e as filhas embaixo: ao lado delas ele saía cortado.
             let body = div().id("tab-group-window").p(px(6.)).flex().flex_col().gap(px(4.))
@@ -519,11 +632,12 @@ impl Hangar {
         Some(div().relative().flex_shrink_0()
             .child(tab.context_menu(sidebar::session_menu(weak, mother.server.clone(), session.clone())))
             .child(legend)
-            .children(multi.then(|| machine_legend(machine(mother), on))).into_any_element())
+            .children(plate.map(|(plate, _)| plate)).into_any_element())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_session_tab(&self, target: &Target, group_label: Option<&str>, slot: Option<(f32, f32)>, tab_index: usize,
-        window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        machines: &PlateMachines, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let session = self.target_session(target)?;
         let focus = self.row_focus(target)?.clone().tab_index(tab_index as isize);
         let on = self.selected_target().as_ref() == Some(target);
@@ -538,7 +652,12 @@ impl Hangar {
             label.push_str(&format!(" · {}", tr_shared("sessao_grupo_pareado", &[("label", group)])));
         }
         if session.pending_questions > 0 { label.push_str(&format!(" · ? {}", session.pending_questions)); }
-        let mark = self.avatar_slot(panes::Area::Nav, format!("tab-mark-{}", target.id()), sidebar::session_look(session), if compact { 16. } else { 20. });
+        // A aba de trás de um grupo é posicionada pela faixa dele: sem placa.
+        let plate = slot.is_none().then(|| self.tab_plate(target, session, on, self.multi_server().then(|| machine.to_owned()), machines)).flatten();
+        let ctx = context_pct(session);
+        speak_extras(&mut label, plate.as_ref().and_then(|(_, account)| account.clone()), ctx);
+        let side = if compact { 16. } else { 20. };
+        let mark = with_context_ring(self.avatar_slot(panes::Area::Nav, format!("tab-mark-{}", target.id()), sidebar::session_look(session), side), ctx, side);
         let pick = target.clone();
         let open = target.clone();
         let menu_target = target.clone();
@@ -546,22 +665,10 @@ impl Hangar {
         let weak = cx.entity().downgrade();
         // A aba estreita de trás da faixa fica só com a máquina: pasta e branch não cabem nela.
         let full = appearance::get().tabs_full && !compact;
-        let title = div().min_w_0().overflow_hidden().flex_1().flex().flex_col().when(full, |el| el.gap(px(1.)))
-            .when_some(group_label, |el, text| el.child(div().truncate().text_size(px(9.)).line_height(px(11.))
-                .text_color(theme::accent_text()).child(text.to_owned())))
-            .child(div().min_w_0().flex().items_center().gap(px(4.))
-                .child(div().min_w_0().truncate().text_size(px(if grouped { 11. } else { 13. })).line_height(px(14.)).child(session.name.clone()))
-                .children(terminal_mark(session).filter(|_| !compact)))
-            .children(meta_line(session, full));
-        let tab = div().id(SharedString::from(format!("tab-{}", target.id()))).relative().track_focus(&focus)
-            .flex_shrink_0().w(px(TAB_WIDTH)).h(px(tab_height())).px(px(8.))
+        let title = tab_title(session.name.clone(), group_label, grouped, full, terminal_mark(session).filter(|_| !compact), meta_line(session, full));
+        let tab = tab_frame(on, grouped, compact).id(SharedString::from(format!("tab-{}", target.id()))).relative().track_focus(&focus)
             .when_some(slot, |el, (left, width)| el.absolute().top_0().left(px(left)).w(px(width)).block_mouse_except_scroll())
-            .when(compact, |el| el.pl(px(20.)))
-            .flex().items_center().gap(px(if compact { 4. } else { 6. })).rounded(px(6.)).border_1().cursor_pointer()
-            .map(|el| if on { el.bg(theme::accent_dim()).border_color(theme::accent()).text_color(theme::text()).font_weight(FontWeight::SEMIBOLD) }
-                else if grouped { el.bg(theme::raised()).border_color(theme::border()).text_color(theme::muted()).hover(|el| el.border_color(theme::accent())) }
-                // Toda aba tem a borda à vista; a solta fica sem fundo, o que a separa da de grupo.
-                else { el.border_color(theme::border_strong()).text_color(theme::muted()).hover(|el| el.border_color(theme::accent())) })
+            .cursor_pointer().when(!on, |el| el.hover(|el| el.border_color(theme::accent())))
             .when(focus.is_focused(window), |el| el.focus_ring_style(window, cx))
             .role(Role::Tab).aria_selected(on).aria_label(label.clone())
             .when(!appearance::get().tab_preview, |el| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(label.clone()).build(window, cx)))
@@ -581,9 +688,8 @@ impl Hangar {
                 self.group_row(el, session, remote.then_some(target.server.as_str()), 6., cx).ml(px(0.))
             });
         let tab = tab.context_menu(sidebar::session_menu(weak, target.server.clone(), session.clone()));
-        // A aba de trás de um grupo é posicionada pela faixa dele: sem legenda de máquina.
-        if slot.is_some() || !self.multi_server() { return Some(tab.into_any_element()); }
-        Some(div().relative().flex_shrink_0().child(tab).child(machine_legend(machine.to_owned(), on)).into_any_element())
+        let Some((plate, _)) = plate else { return Some(tab.into_any_element()) };
+        Some(div().relative().flex_shrink_0().child(tab).child(plate).into_any_element())
     }
 }
 

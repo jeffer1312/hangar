@@ -13,9 +13,12 @@ import { attachGuest, createExternalPairSync, listExternalPairs, reconcilePairEn
 import { navPelaLista } from './navPelaLista';
 import { forgetServer, setLiveTerminals } from './hangarTerminals.svelte';
 import { ouvirFechamentoNav, podarNavMortos } from './navegadorPanel.svelte';
-import { aggregateSessions, epocasDeRecriacao, jsonlDaSessao, sweepHidden, type Slot, type Aggregate, type Epocas } from '@hangar/core';
+import { aggregateSessions, epocasDeRecriacao, jsonlDaSessao, parseTagsEvent, patchSlot, sweepHidden, type Slot, type Aggregate, type Epocas } from '@hangar/core';
 import { hasOpenChat } from './sessionServer';
 import { avisarSemArmazem, definirArmazem, definirProtegido, definirSemPrazo, estaDesligado, esquecerServidor, onServerRecovered, registrarFalha, registrarSucesso, respondeuRecentemente, retentarAgora, retryAfterMs } from '@hangar/core';
+
+// Fora do ar o chaveiro deixa de valer; lista e etiquetas ficam.
+const OFFLINE: Partial<Slot> = { error: 'offline', keyring: undefined };
 
 function createSessionsStore() {
   let servers = $state<Server[]>([]);
@@ -197,12 +200,12 @@ function createSessionsStore() {
       if (streams.has(s.id)) continue;
       if (intocavel(s.id) && estaDesligado(s.id)) retentarAgora(s.id);
       if (retryAfterMs(s.id) > 0) {
-        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+        slots.set(s.id, patchSlot(slots, s.id, OFFLINE));
         scheduleRetry(s.id);
         continue;
       }
       clearTimeout(retryTimers.get(s.id)); retryTimers.delete(s.id);
-      if (estaDesligado(s.id)) slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+      if (estaDesligado(s.id)) slots.set(s.id, patchSlot(slots, s.id, OFFLINE));
       if (!rotaDecidida(s.id)) {
         void decidirRota(s).then(() => { if (refs > 0 && servers.some((x) => x.id === s.id)) connect(servers, s.id); });
         continue;
@@ -264,7 +267,7 @@ function createSessionsStore() {
           cancelarPrazo();   // o stream acabou; NÃO mede — silêncio não é latência
           // Mesmo tratamento do onerror: o slot que motivou o watchdog está potencialmente velho —
           // marca offline (mantendo a última lista boa) em vez de segui-lo servindo como bom.
-          slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+          slots.set(s.id, patchSlot(slots, s.id, OFFLINE));
           forgetServer(s.id);
           recompute();
           scheduleRetry(s.id);
@@ -285,7 +288,7 @@ function createSessionsStore() {
         if (!isCurrent()) return;
         falhou('primeiro_quadro_timeout', PRIMEIRO_QUADRO_MS);
         if (primeiros.get(s.id) === tPrimeiro) primeiros.delete(s.id);
-        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+        slots.set(s.id, patchSlot(slots, s.id, OFFLINE));
         forgetServer(s.id);
         recompute();
         // Conexão que nunca entregou quadro é o caso da máquina morta atrás da VPN: o socket fica
@@ -348,7 +351,7 @@ function createSessionsStore() {
         try {
           const sessions = JSON.parse(e.data);
           if (!Array.isArray(sessions)) throw new Error('sessions frame must be an array');
-          slots.set(s.id, { sessions, error: null, keyring: slots.get(s.id)?.keyring });
+          slots.set(s.id, patchSlot(slots, s.id, { sessions, error: null }));
           if (!s.invite) notePairs();
           if ((sessions as SessionInfo[]).some((session) => session.pair_owner || session.pair_peers?.some((peer) => peer.includes('::')))) {
             slotsNeedingIdentity.add(s.id);
@@ -370,8 +373,7 @@ function createSessionsStore() {
             codigo: 'json_invalido', tentativa }, s.baseUrl);
           // Frame malformado: sem isto o throw sobe no dispatch do EventSource e o slot congela em
           // silêncio (onerror não dispara pra erro de parse). Mantém a última lista boa e avisa.
-          const prev = slots.get(s.id);
-          slots.set(s.id, { sessions: prev?.sessions ?? null, error: m.sessao_erro_servidor(), keyring: prev?.keyring });
+          slots.set(s.id, patchSlot(slots, s.id, { error: m.sessao_erro_servidor() }));
         }
         recompute();
       });
@@ -382,8 +384,18 @@ function createSessionsStore() {
         let state: unknown;
         try { state = JSON.parse((e as MessageEvent).data)?.state; } catch { return; }
         if (state !== 'locked' && state !== 'unlocked' && state !== 'absent') return;
-        const prev = slots.get(s.id);
-        slots.set(s.id, { sessions: prev?.sessions ?? null, error: prev?.error ?? null, keyring: state });
+        slots.set(s.id, patchSlot(slots, s.id, { keyring: state }));
+        recompute();
+      });
+      // Etiquetas da máquina e das contas: vêm na conexão e a cada troca. Repetido ou torto mantém a anterior.
+      es.addEventListener('tags', (e) => {
+        if (!isCurrent()) return;
+        arm();
+        const data: string = (e as MessageEvent).data;
+        if (slots.get(s.id)?.tagsRaw === data) return;
+        const tags = parseTagsEvent(data);
+        if (!tags) return;
+        slots.set(s.id, patchSlot(slots, s.id, { tags, tagsRaw: data }));
         recompute();
       });
       // O agente abriu o navegador embutido de uma sessão (possivelmente fora da tela) — ver
@@ -414,13 +426,13 @@ function createSessionsStore() {
         // Com linhas na tela a lista boa continua e a falha fica só no diário (um erro anterior sai:
         // o servidor respondeu); sem linha nenhuma o erro distingue "não respondeu" de "não há sessão".
         if (sessions?.length && !slot?.error) return;
-        slots.set(s.id, { sessions, error: sessions?.length ? null : m.sessao_erro_servidor(), keyring: slot?.keyring });
+        slots.set(s.id, patchSlot(slots, s.id, { sessions, error: sessions?.length ? null : m.sessao_erro_servidor() }));
         recompute();
       });
       es.onerror = () => {
         if (!isCurrent()) return;
         falhou(es.readyState === 2 ? 'stream_fechado' : 'stream_interrompido');
-        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+        slots.set(s.id, patchSlot(slots, s.id, OFFLINE));
         forgetServer(s.id);
         recompute();
         // Assume o controle do retry (o nativo martela): fecha e reagenda com backoff.

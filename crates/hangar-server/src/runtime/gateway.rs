@@ -869,11 +869,12 @@ impl RuntimeRegistry {
             "composer_busy"=>"terminal_input_composer_busy","composer_unreadable"=>"terminal_input_composer_unreadable",
             "capture_failed"|"capture_utf8"=>"terminal_input_capture_failed","clear_not_applied"=>"terminal_clear_not_applied",
             "no_safe_delivery"=>"terminal_input_no_safe_delivery",
+            "delivery_unproved"=>"terminal_input_delivery_unproved","delivery_composer_busy"=>"terminal_input_delivery_composer_busy",
             _=>"terminal_input_stalled",
         };
         let input=event.data["view"]["input_stalled"].as_str().filter(|code|!code.is_empty());
-        // Sem prova da conversa, a lista mostra a causa, não o erro que ela mesma causa na fila.
-        let explained=input==Some("no_safe_delivery") && event.data["error"].as_str().is_some_and(|error|crate::state::edges::explained(input,error));
+        // A lista mostra a causa, não o erro que ela mesma causa na fila.
+        let explained=event.data["error"].as_str().is_some_and(|error|crate::state::edges::explained(input,error));
         let problem=if event.data["error"].is_string() && !explained {Some("runtime_falhou")} else {input.map(stalled)};
         let mut map=self.terminal_problems.lock().unwrap_or_else(|e|e.into_inner());
         match problem {
@@ -1800,11 +1801,33 @@ impl RuntimeRegistry {
             *self.barrier(key).await.closed.lock().map_err(|_|failure("lifecycle_closed_record"))?=Some(closed.clone());
             if kill && !park {
                 let lease=wait_lease(&closed.lease_path).await?;
-                let mut store=Store::open(&closed.state_path,&closed.projection,QueueState::new(key,generation,&closed.name,vec![])).map_err(|_|failure("queue_io"))?;
-                if store.state().owner_key!=key || store.state().generation!=generation {return Err(failure("runtime_generation"));}
-                let clock=ClockSample {monotonic_s:0.0,epoch_s:SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64())};
-                store.exec(generation,&format!("close-clear:{key}:{generation}"),clock,Action::Clear).map_err(|_|failure("queue_io"))?;
-                store.exec(generation,&format!("close-record:{key}:{generation}"),clock,Action::AdvanceLifecycle {generation,state:json!({"terminal_lifecycle":{"closed":true,"conversation":closed.binding.conversation},"view":{"alive":false,"conversation":closed.binding.conversation}})}).map_err(|_|failure("queue_io"))?;
+                // Ator parado e processo morto: falha ao gravar o fechamento na fila não prende a sessão
+                // em `runtime_stopping`; vai ao log e ao diário, e a entrada sai.
+                let recorded:std::io::Result<Option<Store>>=(|| {
+                    let mut store=Store::open(&closed.state_path,&closed.projection,QueueState::new(key,generation,&closed.name,vec![]))?;
+                    if store.state().owner_key!=key || store.state().generation!=generation {return Ok(None);}
+                    let clock=ClockSample {monotonic_s:0.0,epoch_s:SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64())};
+                    store.exec(generation,&format!("close-clear:{key}:{generation}"),clock,Action::Clear)?;
+                    store.exec(generation,&format!("close-record:{key}:{generation}"),clock,Action::AdvanceLifecycle {generation,state:json!({"terminal_lifecycle":{"closed":true,"conversation":closed.binding.conversation},"view":{"alive":false,"conversation":closed.binding.conversation}})})?;
+                    Ok(Some(store))
+                })();
+                // Recusa da própria fila (outro dono, outra geração) não é falha de disco: não se libera a entrada.
+                // Arquivo ilegível é falha como as outras: segurar a sessão não o conserta.
+                let refused=|error:&std::io::Error| error.get_ref().is_some_and(|inner|inner.is::<super::queue::QueueRefusal>());
+                let store=match recorded {
+                    Ok(None)=>return Err(failure("runtime_generation")),
+                    Err(error) if refused(&error)=>{
+                        tracing::warn!(key,session=%name,refusal=%error,"fechamento recusado pela fila");
+                        self.diag.report("rust.close_queue_refused",&name,"runtime_generation","fila de outro dono recusou o fechamento");
+                        return Err(failure("runtime_generation"));
+                    },
+                    Ok(Some(store))=>Some(store),
+                    Err(error)=>{
+                        tracing::warn!(key,session=%name,kind=?error.kind(),"fechamento não gravado na fila; sessão liberada mesmo assim");
+                        self.diag.report("rust.close_queue_io",&name,"queue_io","fechamento não gravado na fila; sessão liberada mesmo assim");
+                        None
+                    },
+                };
                 if let Some(target)=&runtime_target {super::lifecycle::delete_sidecar(target,&closed.binding.conversation)?;}
                 drop(store);drop(lease);
             }
@@ -1830,6 +1853,54 @@ impl RuntimeRegistry {
             match &entry.handle {EntryHandle::Headless(handle)=>handle.clone(),_=>return None}
         };
         Some(handle.view().await.map(|view|view["subagents"].clone()))
+    }
+
+    async fn codex_agent_handle(&self,name:&str) -> Option<EntryHandle> {
+        let entries=self.entries.lock().await;
+        let mut matches=entries.values().filter(|entry|entry.name==name && entry.provider=="codex");
+        let entry=matches.next()?;
+        if matches.next().is_some() || matches!(&entry.handle,EntryHandle::Terminal {..}) { return None; }
+        Some(entry.handle.clone())
+    }
+
+    /// O retrato e o pai são conferidos juntos: um `/clear` não empresta os estados da conversa nova à antiga.
+    pub async fn codex_subagents(&self,name:&str,parent_thread_id:&str) -> Option<Result<Value,RuntimeError>> {
+        let handle=self.codex_agent_handle(name).await?;
+        Some(handle.view().await.and_then(|view| {
+            if view["thread_id"] != parent_thread_id {
+                return Err(RuntimeError::new("erro_subagente_mensagem_vinculo_desatualizado","a conversa principal mudou"));
+            }
+            Ok(view["subagents"].as_object().cloned().map(Value::Object).unwrap_or_else(||json!({})))
+        }))
+    }
+
+    /// A primeira abertura do detalhe consulta a capacidade oficial; as seguintes usam o estado observado pelo ator.
+    pub async fn codex_subagent_status(&self,name:&str,parent_thread_id:&str,agent_id:&str) -> Option<Result<Value,RuntimeError>> {
+        let handle=self.codex_agent_handle(name).await?;
+        Some(Self::codex_agent_command(&handle,OperationKind::ReadSubagent,parent_thread_id,agent_id,None).await)
+    }
+
+    pub async fn codex_subagent_message(&self,name:&str,parent_thread_id:&str,agent_id:&str,text:&str) -> Option<Result<Value,RuntimeError>> {
+        let _pass=match self.ingress.enter(name,Duration::ZERO).await {
+            Ok(pass)=>pass,
+            Err(_)=>return Some(Err(RuntimeError::new("session_transfer_busy","a sessão está trocando de agente"))),
+        };
+        let handle=self.codex_agent_handle(name).await?;
+        Some(Self::codex_agent_command(&handle,OperationKind::SubagentMessage,parent_thread_id,agent_id,Some(text)).await)
+    }
+
+    async fn codex_agent_command(handle:&EntryHandle,kind:OperationKind,parent:&str,agent:&str,text:Option<&str>) -> Result<Value,RuntimeError> {
+        static CALLS:AtomicU64=AtomicU64::new(0);
+        let stamp=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|failure("runtime_clock"))?.as_nanos();
+        let command=RuntimeCommand {operation_id:format!("subagent:{}:{stamp}:{}",std::process::id(),CALLS.fetch_add(1,std::sync::atomic::Ordering::Relaxed)),kind,
+            payload:json!({"parent_thread_id":parent,"agent_id":agent,"text":text})};
+        let result=handle.command(command).await?;
+        match result.disposition {
+            Disposition::Accepted=>Ok(result.payload),
+            Disposition::Unknown=>Err(RuntimeError::new("erro_subagente_mensagem_sem_resposta","o Codex não confirmou a operação do subagente")),
+            _=>Err(RuntimeError::new(result.payload["code"].as_str().unwrap_or("erro_subagente_mensagem_codex_indisponivel"),
+                result.payload["error"].as_str().unwrap_or("o Codex recusou a operação do subagente"))),
+        }
     }
 
     /// Leitura do catálogo também com o processo estacionado; não passa pela porta de escrita.
@@ -1926,7 +1997,7 @@ impl RuntimeRegistry {
         // encerra a antiga com `session.end`). Sem ele, vale o registro nativo do processo.
         let binding=crate::terminal_facts::LocalTerminalFacts::binding(&target);
         let (reported,proved)=match &self.plugin {
-            Some(plugin)=>match (plugin.reported_conversation(&binding),plugin.conversation_proved(&binding)) {
+            Some(plugin)=>match (plugin.reported_conversation(&binding),plugin.conversation_pulling(&binding)) {
                 (Ok(reported),proved)=>(reported,proved.unwrap_or(false)),
                 (Err(error),_)=>{
                     if crate::warn_limit::allow(Some(key),error.0) {tracing::warn!(key,session=name,code=error.0,"troca de conversa: sinal do plugin ilegível; vale o registro nativo");}
@@ -2837,6 +2908,17 @@ async fn events(State(state):State<Gateway>) -> Response {
 pub(crate) mod tests {
     use super::*;
     use crate::runtime::queue::acquire_lease;
+
+    #[tokio::test]
+    async fn a_subagent_message_checks_ingress_before_choosing_an_actor() {
+        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "fixture".into(), "instance".into());
+        registry.ingress.hold("session", Duration::from_secs(1)).await.unwrap();
+        let _entries = registry.entries.lock().await;
+        let error = tokio::time::timeout(Duration::from_secs(1), registry.codex_subagent_message("session", "parent", "child", "continue"))
+            .await.expect("a porta fechada recusa antes de esperar a escolha do ator").unwrap().unwrap_err();
+        assert_eq!(error.code, "session_transfer_busy");
+        registry.ingress.release("session");
+    }
 
     #[test]
     fn a_session_recreated_with_the_same_name_is_not_the_dead_life() {

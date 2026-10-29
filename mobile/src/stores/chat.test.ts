@@ -379,6 +379,29 @@ test('mods são isolados por servidor e ignoram quadros de fonte fechada', async
   expect(first.use.getState().pluginUi?.above).toEqual({ type: 'Text', children: ['first'] });
 });
 
+test('saída Codex substitui o retrato, continua após o turno e limpa no reset', async () => {
+  historyResponses = [[]];
+  const chat = chatStore('srv1', 'sess');
+  chat.retain();
+  await tick();
+  const source = created[0];
+  const command = { id: 'exec-a', process_id: '4242', command: 'npm run dev', started_at: 1, background: true };
+  source.trigger('state', JSON.stringify({ session: 'sess', state: 'idle', codex_commands: [command] }));
+  source.trigger('saida', '{"exec-a":"primeiro","exec-b":"antigo"}');
+  source.trigger('saida', '{"exec-a":"segundo"}');
+  expect(chat.use.getState().commandOutput).toEqual({ 'exec-a': 'segundo' });
+  expect(chat.use.getState().stateEvent?.codex_commands).toEqual([command]);
+  source.trigger('saida', '{"exec-a":42}');
+  expect(chat.use.getState().commandOutput).toEqual({ 'exec-a': 'segundo' });
+  source.trigger('saida', '{}');
+  expect(chat.use.getState().commandOutput).toEqual({});
+  source.trigger('saida', '{"exec-a":"último"}');
+  source.trigger('reset', '{}');
+  expect(chat.use.getState().commandOutput).toEqual({});
+  expect(chat.use.getState().stateEvent).toBeNull();
+  chat.release();
+});
+
 test('(b) reset zera tudo e recarrega o history novo', async () => {
   historyResponses = [
     [ev({ id: 'old:1' })],

@@ -22,7 +22,7 @@ import type { AskQuestionPayload, StateEvent } from './types';
 import { discardFile, fileAuthHeader, fileUrlNative, getPairContract, getPlans, listFiles, pathDiff, readFile, searchFiles, setPlanPin, unpairSession, writeFile } from './api';
 import type { Server } from './servers';
 import { createShare, exportShortcuts, sendSubagentMessage } from './api';
-import { cancelQueuedMessage, editQueuedMessage, reorderQueuedMessage, steerQueuedMessage } from './api';
+import { cancelQueuedMessage, editQueuedMessage, reorderQueuedMessage, steerQueuedMessage, terminateCodexCommand } from './api';
 import { fileUrl, uploadUrl, uploadUrlNative } from './api';
 import { editTranscriptionProviderKey, editTranscriptionProviderTarget, moveTranscriptionProvider, parseTranscriptionProviders, transcriptionProviderKeepsKey, transcriptionProviderLabel, transcriptionProvidersMissingKey, testTranscriptionProvider } from './api';
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
@@ -420,6 +420,7 @@ describe('getHistoryDesde', () => {
 describe('contratos de conversa com servidor explícito', () => {
   const target = { id: 'b', label: 'Servidor B', baseUrl: 'https://b.test', token: 'token-b' };
   const mutations = [
+    { path: '/codex/terminate', body: { process_id: '4242' }, run: (s?: Server) => terminateCodexCommand('mesma/sessão', '4242', s), refused: 'recusado' },
     { path: '/interrupt', body: {}, run: (s?: Server) => interrupt('mesma/sessão', false, s) },
     { path: '/interrupt?clear=true', body: {}, run: (s?: Server) => interrupt('mesma/sessão', true, s) },
     { path: '/plugin/press', body: { site: 'above-prompt', key: 'rv-1', plugin: 'pm-review' }, run: (s?: Server) => pressPluginButton('mesma/sessão', 'above-prompt', { plugin: 'pm-review', key: 'rv-1' }, s) },

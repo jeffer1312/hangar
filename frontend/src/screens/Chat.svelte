@@ -17,7 +17,8 @@
   import CiteReplyDialog from '../components/CiteReplyDialog.svelte';
   import { citeDialog } from '../lib/citeDialog.svelte';
   import { contextRefsKey } from '../lib/contextRefsDraft.svelte';
-  import { attachmentCaption, composeWithContextRefs, splitContextRefs, type ContextRef } from '@hangar/core';
+  import { attachmentCaption, composeWithContextRefs, splitContextRefs, parseCodexOutput, type ContextRef } from '@hangar/core';
+  import { codexSubagentActivityKey, codexSubagentState, projectCodexSubagent } from '@hangar/core';
   import { itemModsCelular, modsCelular, modsNaTela } from '../lib/modsCelular.svelte';
   import { activePaneId, applyPluginUiDelta, closePluginPane, fieldSender, followLocalTab, inputPluginField, isMissingRoute, parsePluginToast, pluginFailureText, parsePluginUi, pressPluginButton, safeHref, showPluginPane, tabFollowsServer, type PluginControl, type PluginInputKind, type PluginSource, type PluginNode as PluginTree, type PluginPane as PluginPaneData, type PluginToast } from '@hangar/core';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
@@ -55,6 +56,8 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // abre outro modal (o PairSheet de lá abre o dele, mas o `peerChat` é por instância).
   import PairChatModal from '../components/PairChatModal.svelte';
   import LoopSheet from '../components/LoopSheet.svelte';
+  import RenameSuggestionStrip from '../components/RenameSuggestionStrip.svelte';
+  import { requestRenameSuggestionOnce } from '@hangar/core';
   import DesktopSessionContext from '../components/DesktopSessionContext.svelte';
   import FileViewer from '../components/files/FileViewer.svelte';
   import { filesStores } from '../lib/filesStore.svelte';
@@ -117,8 +120,8 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   import { parentSessionServerId, provideSessionServer } from '../lib/sessionServer';
   import { getIdentificador } from '../lib/peers';
   import { destinoDoRemetente } from '../lib/remetente';
-  import { createActivityFolder } from '@hangar/core';
-  import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail, UploadFile, SessionOpeningExtras } from '@hangar/core';
+  import { createActivityFolder, matchAgentSubagent, projectSubagentActivity } from '@hangar/core';
+  import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail, UploadFile, SessionOpeningExtras, SubagentRun } from '@hangar/core';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { workspaceSessionKey } from '../lib/workspaceCommands';
   import { countAwaiting, nextAwaiting, providerName, untrackedReason, stateColors, isOrq } from '@hangar/core';
@@ -499,6 +502,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // bloco pelo tail do .jsonl: apagar na hora abriria um buraco. Quem apaga é o `thinking` real;
   // o timer só vence se ele nunca vier (interrupção).
   let pensamentoVivo = $state('');
+  let commandOutput = $state<Record<string, string>>({});
   let sugestao = $state('');
   // Faixa acima do prompt que os mods do Claude Code desenham (SSE 'plugin_ui').
   let pluginBand = $state<PluginTree>(null);
@@ -1768,6 +1772,19 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   const sessaoAtual = $derived(allSessions.find((s) => s.name === sessionName));
   // Sessão de outra pessoa num par "ver e recado": o servidor dela recusa toda escrita.
   const soLeituraPar = $derived(sessaoAtual?.guest_kind === 'pair');
+
+  // Faixa "Renomear para X?" só na vista celular: o desktop web não ganha recurso novo.
+  const renameServer = $derived(desktop || nested || soLeituraPar ? undefined : listServers().find((s) => s.id === chatServerId));
+  let renameReturned = $state<string | null>(null);
+  let renameHidden = $state(false);
+  const renameSuggestion = $derived(renameHidden || !renameServer ? null : (sessaoAtual?.rename_suggestion || renameReturned));
+  $effect(() => {
+    const server = renameServer;
+    const row = sessaoAtual;
+    if (!server || !row || row.rename_suggestion) return;
+    const hasUserMessage = events.some((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-'));
+    untrack(() => requestRenameSuggestionOnce(server, row, hasUserMessage))?.then((s) => { if (s) renameReturned = s; });
+  });
   const contaPior = $derived.by(() => {
     const conta = sessaoAtual?.conta;
     const minha = conta ? faixaDeCota(quotaFeed.contas)?.find((c) => c.id === conta) : null;
@@ -1804,6 +1821,10 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // Comando de background que sobrou com o turno encerrado (o "N shells still running" da TUI). O
   // backend só manda quando é isso que segura a sessão, então não há o que filtrar aqui.
   const shellsVivos = $derived(stateEvent?.shells ?? []);
+  const codexCommands = $derived(stateEvent?.codex_commands ?? []);
+  const codexBackground = $derived(codexCommands.filter(command => command.background).length);
+  const codexCommandsLabel = $derived(codexCommands.length ? codexBackground
+    ? m.codex_terminals_count({ n: codexBackground }) : m.codex_commands_count({ n: codexCommands.length }) : undefined);
 
   // Clique no cartão de um subagente: abre a aba de Atividade JÁ na conversa dele. Objeto novo a
   // cada clique de propósito — é o que faz o painel reabrir quando se clica no mesmo agente depois
@@ -1925,10 +1946,21 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // do SSE dá push evento a evento — deriveActivity(events) como $derived re-varria o histórico
   // INTEIRO a cada mensagem (O(n) por evento em sessão longa).
   const actFolder = createActivityFolder();
-  let activity = $state(actFolder.snapshot());
+  let transcriptActivity = $state(actFolder.snapshot());
+  let subagentRuns = $state<SubagentRun[]>([]);
+  let subagentsLoaded = $state(false);
+  let subagentReadError = $state('');
+  let subagentRetry = $state(0);
+  const liveSubagentRuns = $derived(subagentRuns.map(run => projectCodexSubagent(run, stateEvent?.codex_subagents)));
+  const codexAgentIds = $derived(codexSubagentActivityKey(stateEvent?.codex_subagents));
+  const activity = $derived(isCodex ? projectSubagentActivity(transcriptActivity, liveSubagentRuns, undefined, stateEvent?.codex_subagents) : transcriptActivity);
+  const runningAgents = $derived(activity.agents.filter(agent => agent.running && (!isCodex
+    || codexSubagentState(stateEvent?.codex_subagents, agent.agentId, agent.agentPath)?.state === 'running'
+    || (subagentsLoaded && matchAgentSubagent(subagentRuns, agent)?.state === 'running'))));
+  let activityConversation = $state(0);
   // O shell de fundo conta junto: pro app "o que está rodando aqui" é uma coisa só. O terminal já
   // mostrava ("5 shells still running") e o app não mostrava nada.
-  const activityBadge = $derived(activity.inProgress + activity.runningAgents + activity.runningShells);
+  const activityBadge = $derived(activity.inProgress + runningAgents.length + activity.runningShells);
 
   // Subagentes que existem NO DISCO (`<session-dir>/subagents/agent-*.jsonl`), contados pelo
   // backend. Sem isto o painel só abria quando o transcript trazia a ferramenta `Agent` — e o uso
@@ -1938,21 +1970,43 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   let subagentesNoDisco = $state(0);
   const hasActivity = $derived(
     activity.tasks.length > 0 || activity.agents.length > 0 || activity.runningShells > 0
-    || subagentesNoDisco > 0 || shellsVivos.length > 0,
+    || subagentesNoDisco > 0 || shellsVivos.length > 0 || (!desktop && codexCommands.length > 0),
   );
 
   // Quando perguntar: enquanto TRABALHA (é quando nasce subagente) e uma vez ao parar, pra pegar o
   // último que terminou junto com o turno. Sessão parada não fica batendo no backend.
-  let subagentesEmVoo: ReturnType<typeof getSubagents> | null = null;
+  let subagentesEmVoo: { key: string; activity: string; promise: ReturnType<typeof getSubagents> } | null = null;
+  let subagentReadSource = '';
   $effect(() => {
-    const trabalhando = currentState === 'working';
+    const acompanhar = !isCodex && currentState === 'working';
+    const conversation = activityConversation;
+    const source = JSON.stringify([sessionName, sessionServer()?.id, conversation]);
+    const nativeIds = isCodex ? codexAgentIds : '';
+    const attempt = subagentRetry;
+    if (source !== subagentReadSource) {
+      subagentReadSource = source; subagentsLoaded = false; subagentRuns = []; subagentesNoDisco = 0; subagentReadError = '';
+    }
     let vivo = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     async function contar() {
       try {
-        const lista = await (subagentesEmVoo ??= getSubagents(sessionName, sessionServer())
-          .finally(() => { subagentesEmVoo = null; }));
-        if (vivo) subagentesNoDisco = lista.length;
-      } catch { /* offline / sessão sem transcript -> mantém o que tinha */ }
+        const key = JSON.stringify([source, attempt]);
+        if (!subagentesEmVoo || subagentesEmVoo.key !== key) {
+          const request = { key, activity: nativeIds, promise: getSubagents(sessionName, sessionServer()) };
+          request.promise = request.promise.finally(() => { if (subagentesEmVoo === request) subagentesEmVoo = null; });
+          subagentesEmVoo = request;
+        }
+        const request = subagentesEmVoo;
+        const lista = await request.promise;
+        if (vivo && conversation === activityConversation) {
+          subagentesNoDisco = lista.length; subagentRuns = lista; subagentsLoaded = true; subagentReadError = '';
+          if (request.activity !== nativeIds) subagentRetry += 1;
+        }
+      } catch {
+        if (!vivo) return;
+        subagentReadError = m.atividade_erro_subagentes();
+        if (isCodex) retryTimer = setTimeout(() => void contar(), 5000);
+      }
     }
     // A 1ª contagem espera a conversa pintar (ver lib/aquecimento): ela só acende o ponto do botão
     // de Atividade. Depois que o histórico chega a espera já está resolvida e o ciclo de 5s corre
@@ -1961,9 +2015,9 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     void aoAquecer(sessionName, aquecimento.signal).then((liberado) => {
       if (!vivo || liberado === false) return;
       void contar();
-      if (trabalhando) id = setInterval(contar, 5000);
+      if (acompanhar) id = setInterval(contar, 5000);
     });
-    return () => { vivo = false; if (id !== undefined) clearInterval(id); };
+    return () => { vivo = false; clearTimeout(retryTimer); if (id !== undefined) clearInterval(id); };
   });
 
   // Workflow roda em BACKGROUND -> nao da pra inferir "rodando" so pelos eventos (activity.ts marca
@@ -1974,7 +2028,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   let workflowRunning = $state(false);
   let workflowsEmVoo: ReturnType<typeof getWorkflows> | null = null;
   const wfCount = $derived(activity.agents.filter((a) => a.kind === 'workflow').length);
-  const activityRunning = $derived(workflowRunning || activity.runningAgents > 0);
+  const activityRunning = $derived(workflowRunning || runningAgents.length > 0);
   $effect(() => {
     if (!wfCount) { workflowRunning = false; return; }
     const sustain = activityOpen || workflowRunning;
@@ -1994,7 +2048,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // Contadores/folds incrementais re-semeados junto com `events` (reseed completo).
   function reseedDerived() {
     actFolder.reset(events);
-    activity = actFolder.snapshot();
+    transcriptActivity = actFolder.snapshot();
     asstCount = countAssts(events);
     // Reseed NÃO é "commitou bloco novo": trocar o conjunto de eventos (history em dois tempos,
     // /clear, resume) mexe no contador sem nenhum turno ter fechado. Sem sincronizar aqui, abrir a
@@ -2410,7 +2464,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
           // subagente em primeiro plano cujo tool_result o harness não gravou.
           if (ev.kind !== 'notice') {
             actFolder.push(ev);
-            activity = actFolder.snapshot();
+            transcriptActivity = actFolder.snapshot();
           }
           if (ev.kind === 'assistant_msg' && ev.text) {
             asstCount += 1;
@@ -2598,6 +2652,12 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
       }
     });
 
+    es.addEventListener('saida', (e) => {
+      noteAlive();
+      try { commandOutput = parseCodexOutput(e.data); }
+      catch { quadroFalhou('saida'); }
+    });
+
     es.addEventListener('pensamento', (e) => {
       noteAlive();
       try {
@@ -2643,6 +2703,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
       // A cauda do transcript antigo fica sob a chave dele e nunca mais é lida — a chave é o
       // `jsonl`, e o /clear abre outro. Não há o que apagar aqui.
       etagCauda = null;
+      activityConversation += 1;
       events = [];
       sugestao = '';        // era do contexto que o /clear acabou de apagar
       pluginBand = null;    // idem: o mod redesenha para a conversa nova
@@ -2662,6 +2723,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
       limparPensamento();
       limparFerramenta();
       stateEvent = null;
+      commandOutput = {};
       statsEvent = null;      // transcript novo -> a faixa zera junto (o backend recomeça o fold)
       loadHistory(false);
     });
@@ -3419,6 +3481,11 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   <div class="navbar-mount" bind:this={navEl}>
     {#if !splitTab}
     <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} conta={desktop ? null : contaChip} onContaTap={desktop ? undefined : () => (accountsOpen = true)} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} stateLabel={codexWaitKey ? m.chat_codex_opening() : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (ctxPanel.aba = 'atividade') : undefined} {activityBadge} {activityRunning} onOpenTerminal={botaoTerminal ? abrirTerminalReal : undefined} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? alternarNavegador : undefined} onOpenRun={desktop && !orqSession ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    {#if renameSuggestion && renameServer}
+      <RenameSuggestionStrip server={renameServer} {sessionName} suggestion={renameSuggestion}
+        onRenamed={(name) => { if (name !== sessionName) onNavigateToChat(name); }}
+        onDismissed={() => (renameHidden = true)} />
+    {/if}
     {/if}
   </div>
 
@@ -3646,7 +3713,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
       pending={pendingShown}
       {sessionName}
       {pluginServers}
-      agentesRodando={activity.agents.filter((a) => a.running)}
+      agentesRodando={runningAgents}
       onFimDoLocal={pedirMaisAntigos}
       {ancora}
       {dockH}
@@ -3858,6 +3925,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
         {sendToPair}
         onToggleSendToPair={() => (sendToPair = !sendToPair)}
         shellsRodando={activity.runningShells}
+        codexCommandsLabel={desktop ? undefined : codexCommandsLabel}
         onOpenActivity={() => (desktop ? (ctxPanel.aba = 'atividade') : (activityOpen = true))}
         sessionCwd={sessaoAtual?.cwd ?? null}
         sessionBranch={sessaoAtual?.branch ?? null}
@@ -4029,7 +4097,10 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   <PreviewSheet open={previewOpen} {sessionName} onClose={() => (previewOpen = false)} />
 
   <ActivitySheet open={activityOpen} {activity} {sessionName} onClose={() => (activityOpen = false)}
-    showPlan={!desktop} session={planSession} {planDetail} {planLoading} {planError} processos={shellsVivos} />
+    showPlan={!desktop} session={planSession} codex={isCodex} {planDetail} {planLoading} {planError} processos={shellsVivos}
+    commands={desktop ? [] : codexCommands} {commandOutput} readOnly={soLeituraPar}
+    nativeSubs={isCodex ? liveSubagentRuns : undefined} nativeStates={stateEvent?.codex_subagents}
+    nativeReady={!isCodex || subagentsLoaded} nativeError={subagentReadError} onRetryNative={() => (subagentRetry += 1)} />
 
   <TerminalMirror open={mirrorOpen} {sessionName} onClose={closeMirror} />
   <TerminalMobile open={xtermOpen} {sessionName} headless={sessionHeadless} onClose={() => (xtermOpen = false)} />

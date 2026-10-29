@@ -273,6 +273,8 @@ pub struct ListBridge {
     pub nav: Arc<crate::nav_requests::NavStore>,
     /// Chaveiro desta máquina: a lista do dono publica o estado dele.
     pub keyring: Arc<crate::keyring::Keyring>,
+    /// Etiquetas de máquina e contas: a lista do dono publica o evento `tags`.
+    pub tags: crate::tags::Feed,
 }
 
 /// Tarefa bloqueante que entrou em pânico: o hook já registrou onde; aqui fica qual operação.
@@ -290,7 +292,7 @@ impl ListBridge {
         let (caches, demoted) = (Arc::<Caches>::default(), Arc::<crate::state::demote::Demoted>::default());
         caches.classify.with(|c| c.hooks.set_demoted(demoted.clone()));
         let nav = Arc::new(crate::nav_requests::NavStore::load(env.dirs.as_ref().map(|d| d.home.as_path())));
-        Self { nav, keyring: Arc::new(crate::keyring::Keyring::system()), env: Arc::new(env), local: Mutex::default(), shortcuts: Default::default(), facts, caches, runtime: std::sync::OnceLock::new(),
+        Self { nav, keyring: Arc::new(crate::keyring::Keyring::system()), tags: Default::default(), env: Arc::new(env), local: Mutex::default(), shortcuts: Default::default(), facts, caches, runtime: std::sync::OnceLock::new(),
             shares: std::sync::OnceLock::new(), owner_clients: AtomicU32::new(0), seen: Mutex::default(),
             discovery: tokio::sync::Mutex::new(None),
             snapshot: tokio::sync::Mutex::new(None), git_running: Arc::default(),
@@ -577,6 +579,7 @@ impl ListBridge {
         }).await.map_err(|e| joined(e, "rodada parcial interrompida"))?;
         self.flush_notes();
         let Some((mut changed, effects)) = done else { return Ok(Partial::Unchanged) };
+        crate::dictation::rename_suggestion::fill_rows(&self.dirs()?.home, &self.env.mux, &mut changed).await;
         let plugins = self.plugin_facts(&changed).await;
         self.project_plugins(&mut changed, &plugins);
         public_problems(&mut changed);
@@ -688,6 +691,7 @@ impl ListBridge {
         self.refresh_git(git_dirs);
         self.demote(effects);
         let mut rows = rows;
+        crate::dictation::rename_suggestion::fill_rows(&self.dirs()?.home, &self.env.mux, &mut rows).await;
         self.project_plugins(&mut rows, &plugins);
         public_problems(&mut rows);
         rows.extend(aside);

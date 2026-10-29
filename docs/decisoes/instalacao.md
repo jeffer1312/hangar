@@ -311,6 +311,14 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   (checkout: `frontend/dist`). `GET`/`PUT /api/web-ui` (só o dono) grava `~/.hangar/web-ui.json`;
   desligada, a raiz responde 404 `web_ui_disabled` e o atualizador não baixa a tela. O interruptor
   fica no nativo e no Expo: desligar pelo PWA desligaria o próprio PWA.
+  Os arquivos e suas recusas são só do Rust, sem repasse pelas portas do Python (convidado com
+  login próprio, 8768) e sem reserva no modo `python`: lá a tela responde 404. HTML revalida também no 304;
+  assets preservam cache imutável, e GET/HEAD, Range e Last-Modified mantêm o contrato HTTP.
+  O caminho real fica dentro da pasta da tela, inclusive quando há links simbólicos.
+  No Windows, nome inválido ou longo demais retorna 404. A ausência normal de `web-ui.json`
+  não usa a espera por substituição da fila: ela acrescentava cerca de 50 ms a cada arquivo.
+  O caminho HTTP relê a opção sob a mesma trava do escritor, sem cache e sem confundir uma
+  gravação concorrente com a configuração padrão ligada.
 
 ## Pacote por versão em vez de `git pull` (24/10/2026)
 

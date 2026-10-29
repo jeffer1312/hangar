@@ -196,7 +196,7 @@ class Settings(BaseSettings):
     # Default off: ligado, um terminal movimentado enche o log.
     diag_term_input: bool = False
     # CP_FRONT_PORT: onde o PWA é servido — entra no QR e no painel de alcance. VAZIO (0) = o
-    # próprio backend, que monta o `frontend/dist` na raiz (api.py, `_UIStatic`); é a topologia
+    # próprio servidor Rust, que serve o `frontend/dist` na raiz; é a topologia
     # padrão desde que o serviço separado de front deixou de ser instalado. Só quem mantém o
     # `vite preview` (instalação antiga, ou reverse proxy apontado pra lá) grava 5173 aqui — e os
     # instaladores gravam por ele. Cravar 5173 como default fazia o QR apontar pra uma porta que

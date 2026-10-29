@@ -22,7 +22,6 @@ from typing import Annotated, Literal, Optional
 from fastapi import FastAPI, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import ClientDisconnect
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -39,7 +38,6 @@ from app.fs import FsError, allowed_roots, list_roots, make_dir, scan_dir
 from app.model_picker import PickerError
 from app.mensagens import erro
 from app import claude_models
-from app import dictation_bridge
 from app import claude_customizations
 from app import cliproxy
 from app import codex_models
@@ -69,8 +67,6 @@ from app.adapters.codex import sessions as codex_sessions
 from app.sse import invalidate_recent_list, merged_events, nav_confirmar, nav_pendente
 from app.state import corrige_ocioso_kimi, forget_frame, menu_codex
 from app.uploads import MAX_BYTES
-from app.transcribe import (transcribe_with_provider, providers_status, Transcription,
-                            TranscribeError, DICTATION_LIMITS)
 from app.config import (list_config_dirs, _backend_config_base, settings,
                         resolve_scan_roots,
                         automations_enabled, resolve_bind_ip, variaveis_env)
@@ -5490,116 +5486,6 @@ async def engine_cliproxy_management_key(body: CliproxyManagementBody):
     return await asyncio.to_thread(_cliproxy_naming)
 
 
-@app.post("/api/dictation/transcribe", dependencies=[Depends(require_auth)])
-async def transcribe_dictation(request: Request, estilo: str | None = None, limpar: bool = True,
-                               organization_mode: str | None = None, organization_model: str | None = None,
-                               include_recent_messages: bool | None = None):
-    # Antes de existir uma sessão, o áudio não tem uma pasta onde ser guardado.
-    clen = request.headers.get("content-length")
-    if clen and clen.isdigit() and int(clen) > 100 * 1024 * 1024:
-        raise HTTPException(413, detail=erro("erro_arquivo_grande", "arquivo maior que 100 MiB"))
-    data = await request.body()
-    filename = request.headers.get("x-filename") or request.query_params.get("name")
-    try:
-        t = await asyncio.to_thread(transcribe_with_provider, data, filename, DICTATION_LIMITS)
-    except TranscribeError as e:
-        raise HTTPException(e.status, e.payload())
-    if not limpar:
-        return _with_provider({"text": t.text}, t)
-    result = await asyncio.to_thread(dictation_bridge.organize, t.text, estilo, mode=organization_mode,
-                                    model=organization_model, include_recent_messages=include_recent_messages,
-                                    harness_allowed=not _convidado(request))
-    return _with_provider(result, t)
-
-
-def _with_provider(result: dict, t: Transcription) -> dict:
-    """Junta à resposta quem transcreveu. O aviso da reserva vem antes do da limpeza e nenhum dos
-    dois some; `estilo_aplicado` já foi decidido só pelo aviso da limpeza."""
-    out = {**result, "provider": t.provider}
-    if t.aviso:
-        out["aviso_transcricao"] = t.aviso
-    avisos = [a for a in (t.aviso, result.get("aviso")) if a]
-    if avisos:
-        out["aviso"] = " · ".join(avisos)
-    return out
-
-
-
-
-class RelimparBody(_StrictBody):
-    texto: str = Field(min_length=1)
-    estilo: str
-    session: str | None = None
-    generation: str | None = None
-    organization_mode: str | None = None
-    organization_model: str | None = None
-    organization_account: str | None = None
-    include_recent_messages: bool | None = None
-    recent_messages: list[dict] | None = None
-
-
-@app.post("/api/ditado/relimpar", dependencies=[Depends(require_auth)])
-async def relimpar_ditado(body: RelimparBody, request: Request):
-    """Reorganiza o texto cru pelo Rust, sem repetir transcrição ou upload."""
-    if body.estilo not in ("limpar", "prosa", "briefing"):
-        raise HTTPException(400, detail=erro("erro_estilo_invalido", f"Estilo de organização inválido: '{body.estilo}'."))
-    if body.session:
-        from app import guest_users
-        guest = guest_of(request)
-        if guest is not None and not guest.sees(body.session):
-            raise HTTPException(403, "A conversa de destino não está autorizada.")
-        viewer = guest_users.current.get()
-        if viewer is not None and not guest_users.visible_to(viewer, body.session):
-            raise HTTPException(403, "A conversa de destino não está autorizada.")
-    return await asyncio.to_thread(dictation_bridge.organize, body.texto, body.estilo,
-                                  mode=body.organization_mode, model=body.organization_model,
-                                  session=body.session, generation=body.generation,
-                                  account=body.organization_account,
-                                  include_recent_messages=body.include_recent_messages, recent_messages=body.recent_messages,
-                                  harness_allowed=not _convidado(request))
-
-
-@app.get("/api/dictation/models", dependencies=[Depends(require_auth)])
-async def dictation_models(request: Request, session: str, fresh: bool = False):
-    if _convidado(request) or request.scope.get("server", (None, None))[1] == 8768:
-        raise HTTPException(403, "O catálogo de organização é exclusivo do dono.")
-    try:
-        return await asyncio.to_thread(dictation_bridge.request, "catalog", {"session": session, "fresh": fresh})
-    except dictation_bridge.BridgeError as error:
-        raise HTTPException(error.status, detail={"code": error.code, "msg": error.detail}) from None
-
-
-@app.get("/api/transcription/providers/status", dependencies=[Depends(require_auth)])
-def transcription_providers_status(request: Request):
-    """Espera por cota de cada serviço de transcrição, para a tela de configuração. `def` e não
-    `async`: lê um arquivo, e o FastAPI já roda isso na threadpool."""
-    if _convidado(request):
-        raise HTTPException(403, "A configuração de transcrição é exclusiva do dono.")
-    try:
-        return {"providers": providers_status()}
-    except TranscribeError as e:
-        raise HTTPException(e.status, e.payload())
-
-
-@app.post("/api/transcription/providers/{provider_id}/test", dependencies=[Depends(require_auth)])
-async def test_transcription_provider(provider_id: str, request: Request):
-    from app import transcription_bridge
-    if _convidado(request):
-        raise HTTPException(403, "O teste de transcrição é exclusivo do dono.")
-    if not transcription_bridge.owned_by_rust():
-        raise HTTPException(503, detail={"code": "transcription_rust_unavailable", "msg": "O teste requer o servidor Rust disponível."})
-    data = bytearray()
-    async for chunk in request.stream():
-        if len(data) + len(chunk) > 100 * 1024 * 1024:
-            raise HTTPException(413, "O áudio excede o limite de 100 MiB.")
-        data.extend(chunk)
-    filename = request.headers.get("x-filename") or "audio.wav"
-    try:
-        return await asyncio.to_thread(transcription_bridge.transcribe, bytes(data), filename, "dictation", provider_id)
-    except transcription_bridge.BridgeError as e:
-        raise HTTPException(e.status, detail={"code": e.code, "params": {}, "msg": e.detail})
-
-
 class PensamentoPtBody(_StrictBody):
     # Teto por ITEM só contra abuso: o pensamento do Pi e do Kimi vem CRU, sem tamanho previsível,
     # e recusar com 422 acima de `MAX_CHARS` deixava a pessoa abrindo o bloco sem nada acontecer.
@@ -8336,59 +8222,8 @@ async def tts_audio(h: str):
     return FileResponse(caminho, media_type=media_type)
 
 
-# ── Interface (dist do frontend) ────────────────────────────────────────────────────────────────
-# POR ÚLTIMO, depois de TODAS as rotas: o mount na raiz casa qualquer caminho, então registrado
-# antes engoliria /api. Serve o build do Vite — arquivos estáticos comuns; o Vite em si não roda
-# aqui e não precisa. Com isto o 8765 entrega tela E API num endereço só, e o servidor de
-# desenvolvimento deixa de ser infraestrutura: vira ferramenta de quem mexe no layout.
-#
-# Medido em 05/08/2026: o `tailscale serve` publicava só o 5173, então parar o front (um `npm run
-# dev`, que nem servia a tela usada — ela vem da VPS) derrubava a API do celular junto, com 502 em
-# /api/sessions/events e o backend vivo o tempo todo.
-#
-# Ausente = instalação com --no-frontend, ou repo sem build. Sobe igual, só não serve tela.
-class _UIStatic(StaticFiles):
-    """`index.html` sempre revalida; o resto (nome com hash) segue cacheável à vontade.
-
-    O `StaticFiles` manda só `etag`/`last-modified`, sem `cache-control` — e sem essa diretiva o
-    navegador aplica FRESCOR HEURÍSTICO: serve o `index.html` que ele guardou sem nem perguntar ao
-    servidor. Como o nome dos bundles tem hash, a página velha continua pedindo o CSS/JS velho: o
-    build novo está no disco, servido corretamente, e a tela não muda. Fica parecendo bug de CSS.
-
-    Medido em 10/08/2026: uma aba NOVA em 127.0.0.1:8765 carregou `index-DYyp82gq.css` enquanto
-    `curl /` na mesma máquina entregava `index-CDPetMR_.css`; só `reloadIgnoringCache` consertou.
-    Custou uma investigação inteira de "costura vertical na sidebar" que já estava consertada no
-    código. A janela do Electron carrega deste mesmo endereço, então ela sofria igual.
-
-    `no-cache` NÃO é `no-store`: o arquivo continua guardado, só volta a perguntar antes de usar —
-    e com o ETag a resposta vira um 304 de algumas dezenas de bytes. Os assets ficam de fora de
-    propósito; o hash no nome já os torna imutáveis, e revalidar cada um seria pagar ida e volta
-    por arquivo sem ganhar nada.
-
-    Decide pelo CAMINHO, não pelo `content-type` da resposta pronta: quando o pedido chega com
-    `If-None-Match` batendo, o starlette devolve um `NotModifiedResponse`, que copia só uma lista
-    fixa de headers e NÃO inclui o `content-type` — olhar o header ali deixaria justamente a
-    resposta de revalidação sem diretiva nenhuma. Navegador nenhum regride por isso (o 304 mescla
-    com o que ele já guardou), mas um proxy na frente do backend, sim — e tem um: a tela do celular
-    passa por Traefik.
-    """
-
-    def file_response(self, full_path, *args, **kwargs) -> Response:  # type: ignore[no-untyped-def]
-        resp = super().file_response(full_path, *args, **kwargs)
-        if str(full_path).endswith(".html"):
-            resp.headers["cache-control"] = "no-cache"
-        elif Path(full_path).parent.name == "assets":
-            resp.headers["cache-control"] = "public, max-age=31536000, immutable"
-        return resp
-
-
 # O MCP `hangar` é do Rust; sem ele, o código próprio. Antes do estático em "/", que responderia 405.
 @app.api_route("/mcp", methods=["GET", "POST", "DELETE"], dependencies=[Depends(require_auth)])
 @app.api_route("/mcp/", methods=["GET", "POST", "DELETE"], dependencies=[Depends(require_auth)])
 async def mcp_needs_rust():
     raise HTTPException(503, detail=erro("mcp_needs_rust_server", "o MCP do Hangar precisa do servidor Rust"))
-
-
-_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
-if _DIST.is_dir():
-    app.mount("/", _UIStatic(directory=_DIST, html=True), name="ui")

@@ -740,6 +740,16 @@ describe('summarizeText', () => {
 });
 
 describe('summarizeToolInput', () => {
+  it('lançamento nativo do Codex resume a tarefa e nunca usa a mensagem cifrada', () => {
+    const message = `gAAAA${'x'.repeat(80)}`;
+    for (const name of ['spawn_agent', 'collaboration.spawn_agent', 'multi_agent.spawn_agent', 'functions.spawn_agent']) {
+      expect(summarizeToolInput(name, { message, task_name: 'revisar-painel', description: 'Revisar painel', agent_type: 'worker' })).toBe('revisar-painel');
+      expect(summarizeToolInput(name, { message, description: 'Revisar painel' })).toBe('Revisar painel');
+      expect(summarizeToolInput(name, { message })).toBe('');
+    }
+    expect(summarizeToolInput('other.spawn_agent', { message })).toContain('gAAAA');
+  });
+
   it('mostra o VALOR cru, sem prefixo de chave', () => {
     expect(summarizeToolInput('Read', { file_path: '/tmp/x.ts' })).toBe('/tmp/x.ts');
     expect(summarizeToolInput('Write', { path: '/tmp/y.ts' })).toBe('/tmp/y.ts');

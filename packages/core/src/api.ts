@@ -1,5 +1,6 @@
 import { apiEnv, type EventSourceLike } from './apiEnv';
 import type { Server } from './servers';
+import { isOwnMachine } from './machineImport';
 import { baseOf, decidirRota, rotaDecidida, UNCONFIRMED_BASE } from './rota';
 import type { CodexAccount, CodexIntegracaoEstado, CodexLoginAttempt, CodexResetOutcome, Credencial } from './credenciais';
 import * as m from './paraglide/messages';
@@ -13,6 +14,7 @@ import {
   inviteAllows, parsePairLink, SharePrerequisiteError, ShareReachError, tailscaleEnableUrl, type ShareCreated, type ShareInfo, type SharePrereqs,
 } from './share';
 import type { ExternalPair } from './externalPairs';
+import type { TagsChange, TagsDoc } from './tags';
 import type { PairLevel } from './types';
 import type { CotaContaResumo } from './cotaResumo';
 import type { Shortcut, ProjectShortcut, ProjectShortcuts } from './shortcuts';
@@ -448,16 +450,22 @@ export { recentFailures, type RecentFailure };
 export const DIAG_REPORT_TEXT_MAX = 2000;
 
 /** O que a tela diz da falha; só `unsupported` não deixa tentar de novo. */
-export type DiagReportFailureKind = 'unsupported' | 'rate_limited' | 'unreachable' | 'failed';
+/** `expired`: a assinatura do envio venceu; repetir nele não adianta, só um envio novo. */
+export type DiagReportFailureKind = 'unsupported' | 'expired' | 'rate_limited' | 'unreachable' | 'failed';
+
+/** A máquina que falhou e que repetir no mesmo envio pode resolver. */
+export const diagReportRetryable = (r: DiagReportResult): boolean => !r.ok && r.kind !== 'unsupported' && r.kind !== 'expired';
 
 export type DiagReportResult =
-  | { ok: true; code: string; diary: 'sent' | 'failed' }
+  /** `groupToken`: a assinatura que o primeiro relatório recebe para as outras máquinas entrarem no código dele. */
+  | { ok: true; code: string; diary: 'sent' | 'failed'; groupToken?: string }
   /** `code`: o do servidor (C1), `unsupported` (servidor sem a rota), `network` (sem resposta)
    *  ou `unexpected` (resposta sem código). `status` 0 = sem resposta. */
   | { ok: false; code: string; status: number; kind: DiagReportFailureKind };
 
 function diagReportFailure(code: string, status: number): DiagReportResult {
   const kind: DiagReportFailureKind = code === 'unsupported' ? 'unsupported'
+    : code === 'diag_report_group_unknown' ? 'expired'
     : code === 'diag_report_rate_limited' ? 'rate_limited'
     : code === 'diag_report_unreachable' || code === 'network' ? 'unreachable'
     : 'failed';
@@ -470,20 +478,83 @@ export function recentFailuresFor(server: Server): RecentFailure[] {
 }
 
 /** Relatório de diagnóstico ao servidor da tela. Não lança: toda saída vira um `DiagReportResult`. */
-export async function sendDiagReport(server: Server, { text, client }: { text?: string; client: string }): Promise<DiagReportResult> {
-  const body = { ...(text?.trim() ? { text } : {}), client, failures: recentFailuresFor(server) };
+export interface DiagReportGroup { code: string; token: string }
+
+export async function sendDiagReport(server: Server, { text, client, group }: { text?: string; client: string; group?: DiagReportGroup }): Promise<DiagReportResult> {
+  const body = { ...(text?.trim() ? { text } : {}), client, failures: recentFailuresFor(server),
+    ...(group ? { group: group.code, group_token: group.token } : {}) };
   try {
     // Pior caso do servidor: montagem (até 50 s), worker (20 s) e diário inteiro (60 s).
-    const res = await apiFetchForServer<{ code?: unknown; diary?: unknown }>(server, '/api/diag/report',
+    const res = await apiFetchForServer<{ code?: unknown; diary?: unknown; group?: unknown; group_token?: unknown }>(server, '/api/diag/report',
       { method: 'POST', body: JSON.stringify(body) }, 150_000);
     if (typeof res?.code !== 'string') return diagReportFailure('unexpected', 201);
-    return { ok: true, code: res.code, diary: res.diary === 'sent' ? 'sent' : 'failed' };
+    // Servidor antigo ignora o grupo e manda avulso: o relatório não entrou no código do envio.
+    if (group && res.group !== group.code) return diagReportFailure('unsupported', 201);
+    return { ok: true, code: res.code, diary: res.diary === 'sent' ? 'sent' : 'failed',
+      ...(typeof res.group_token === 'string' ? { groupToken: res.group_token } : {}) };
   } catch (e) {
     const { status, code } = (e ?? {}) as { status?: unknown; code?: unknown };
     if (typeof status !== 'number') return diagReportFailure('network', 0);
     if (status === 404) return diagReportFailure('unsupported', status);
     return diagReportFailure(typeof code === 'string' ? code : 'unexpected', status);
   }
+}
+
+export interface DiagReportAllResult {
+  /** O código do envio: o da primeira máquina que deu certo; `null` se nenhuma deu. */
+  code: string | null;
+  /** O código e a assinatura do envio, para reenviar depois às que falharam. */
+  group: DiagReportGroup | null;
+  results: { server: Server; result: DiagReportResult }[];
+}
+
+/** Máquinas de "todas as minhas máquinas": as próprias e ligadas, a da tela primeiro (vira o código do envio).
+ *  `guest`: quem chama sabe se o papel na máquina é de convidado. */
+export function diagReportMachines(servers: Server[], current: Server | null, guest: (s: Server) => boolean = () => false): Server[] {
+  const own = servers.filter((s) => isOwnMachine(s) && !s.disabled && !guest(s));
+  return [...own.filter((s) => s.id === current?.id), ...own.filter((s) => s.id !== current?.id)];
+}
+
+export type DiagReportScope = 'all' | 'this' | 'pick';
+
+/** As máquinas que a escolha manda; marcada sem escolha explícita só a da tela. A da tela só vai quando está
+ *  entre as elegíveis (desligada, par ou removida não recebe relatório). */
+export function diagReportTargets(machines: Server[], current: Server | null, scope: DiagReportScope, picked: Record<string, boolean>): Server[] {
+  if (scope === 'this') return machines.filter((s) => s.id === current?.id);
+  if (machines.length < 2) return machines;
+  return scope === 'all' ? machines : machines.filter((s) => picked[s.id] ?? s.id === current?.id);
+}
+
+/** Um relatório por máquina, uma por vez: a primeira que dá certo vira o código do envio, e as seguintes levam o
+ *  código e a assinatura dela. Sem assinatura (worker ou servidor antigo) as outras não iriam juntas: ficam de fora
+ *  como sem suporte em vez de virar relatórios avulsos que a tela não mostra. */
+export async function sendDiagReportAll(servers: Server[], input: { text?: string; client: string }, previous?: DiagReportGroup): Promise<DiagReportAllResult> {
+  let code: string | null = previous?.code ?? null;
+  let group: DiagReportGroup | null = previous ?? null;
+  const results: DiagReportAllResult['results'] = [];
+  for (const server of servers) {
+    const result = code !== null && group === null ? diagReportFailure('unsupported', 0)
+      : await sendDiagReport(server, { ...input, ...(group ? { group } : {}) });
+    if (result.ok && code === null) {
+      code = result.code;
+      group = result.groupToken ? { code, token: result.groupToken } : null;
+    }
+    results.push({ server, result });
+  }
+  return { code, group, results };
+}
+
+/** Reenvia só às máquinas que falharam num envio, no mesmo código, e junta ao resultado dele. */
+export async function resendDiagReportMissed(previous: DiagReportAllResult, input: { text?: string; client: string }): Promise<DiagReportAllResult> {
+  // Envio com código e sem assinatura: as que faltam iriam avulsas, fora do código que a tela mostra.
+  if (previous.code !== null && previous.group === null) {
+    return { ...previous, results: previous.results.map((r) => diagReportRetryable(r.result) ? { server: r.server, result: diagReportFailure('unsupported', 0) } : r) };
+  }
+  const missed = previous.results.filter((r) => diagReportRetryable(r.result)).map((r) => r.server);
+  const again = await sendDiagReportAll(missed, input, previous.group ?? undefined);
+  const resent = new Set(missed.map((s) => s.id));
+  return { code: previous.code ?? again.code, group: previous.group ?? again.group,
+    results: [...previous.results.filter((r) => !resent.has(r.server.id)), ...again.results] };
 }
 
 export function getSessions(server?: Server | null, init?: RequestInit): Promise<SessionInfo[]> {
@@ -897,6 +968,46 @@ export function uniqueSessionName(base: string, taken: Set<string>): string {
   return `${clean}-${i}`;
 }
 
+/** Nome que o Hangar inventou a partir da pasta (`uniqueSessionName`): só filtra chamadas, quem
+ *  decide é o servidor (409 `erro_nome_nao_generico`). */
+export function looksGenericName(name: string, cwd: string | null | undefined): boolean {
+  const stem = name.replace(/-\d{1,7}$/, '');
+  return [name, stem].some((n) => n === 'sessao' || (!!cwd && n === (sanitizeSessionName(basename(cwd)) || 'sessao')));
+}
+
+const renameSuggestionPath = (name: string) => `/api/sessions/${encodeURIComponent(name)}/rename-suggestion`;
+
+/** Pede o nome sugerido para a sessão genérica. Nunca lança: sem sugestão (204), nome escolhido
+ *  (409), servidor antigo (404) ou falha dão `null`, e a tela não avisa nada. */
+export async function requestRenameSuggestion(server: Server, name: string): Promise<string | null> {
+  try {
+    // O servidor espera o executor do ditado (até 60 s).
+    const res = await apiFetchRes(renameSuggestionPath(name), { method: 'POST', signal: AbortSignal.timeout(75_000) }, server);
+    if (res.status !== 200) return null;
+    const body = await res.json() as { suggestion?: unknown };
+    return typeof body.suggestion === 'string' && body.suggestion ? body.suggestion : null;
+  } catch {
+    return null;
+  }
+}
+
+// Uma vez por sessão e por vida do cliente: o executor é caro e a resposta fica guardada no spec.
+const renameSuggestionAsked = new Set<string>();
+
+/** Gatilho da faixa "Renomear para X?" ao abrir a conversa; `null` = não pediu. */
+export function requestRenameSuggestionOnce(server: Server, row: SessionInfo, hasUserMessage: boolean): Promise<string | null> | null {
+  const key = `${server.id}::${row.name}`;
+  if (server.invite || !hasUserMessage || row.rename_suggestion || renameSuggestionAsked.has(key) || !looksGenericName(row.name, row.cwd)) return null;
+  renameSuggestionAsked.add(key);
+  return requestRenameSuggestion(server, row.name);
+}
+
+/** "Agora não": o servidor guarda a recusa e a linha da lista deixa de trazer a sugestão. */
+export async function dismissRenameSuggestion(server: Server, name: string): Promise<void> {
+  const res = await apiFetchRes(renameSuggestionPath(name), { method: 'DELETE', signal: AbortSignal.timeout(8000) }, server);
+  await ensureOk(res, server);
+}
+
 // Abrir ou retomar sessão leva bem mais que o prazo padrão: estourar antes faz a tela acusar erro
 // com a sessão nascendo e o reenvio duplicá-la.
 const SESSION_BIRTH_MS = 120_000;
@@ -931,6 +1042,26 @@ export async function getSessionDefaultsForServer(server: Server, provider: Prov
   const result = await apiFetchForServer<{ defaults: SessionDefaults | null }>(server,
     `/api/session-defaults?${query}`, { signal: comTeto(signal, 8000) });
   return result.defaults;
+}
+
+// 404 = servidor antigo, sem a rota: `null`, sem erro na tela.
+async function nullOn404<T>(request: Promise<T>): Promise<T | null> {
+  try {
+    return await request;
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) return null;
+    throw e;
+  }
+}
+
+/** Etiquetas da máquina e das contas; `null` = servidor antigo. */
+export function getTagsForServer(server: Server): Promise<TagsDoc | null> {
+  return nullOn404(apiFetchForServer<TagsDoc>(server, '/api/tags'));
+}
+
+/** Devolve o documento inteiro já gravado; `null` = servidor antigo. */
+export function putTagsForServer(server: Server, change: TagsChange): Promise<TagsDoc | null> {
+  return nullOn404(apiFetchForServer<TagsDoc>(server, '/api/tags', { method: 'PUT', body: JSON.stringify(change) }));
 }
 
 // A senha só viaja no corpo, nunca na URL. Prazo largo: o servidor pode reiniciar o daemon do chaveiro.
@@ -1642,8 +1773,8 @@ export async function deleteSession(name: string): Promise<{ ok: boolean; warnin
 }
 
 // Renomeia a sessao do tmux. Devolve o nome final (sanitizado pelo backend).
-export async function renameSession(name: string, newName: string): Promise<{ ok: boolean; name: string }> {
-  return apiFetch<{ ok: boolean; name: string }>(`/api/sessions/${encodeURIComponent(name)}/rename`, {
+export async function renameSession(name: string, newName: string, server?: Server | null): Promise<{ ok: boolean; name: string }> {
+  return sessionFetch<{ ok: boolean; name: string }>(server, `/api/sessions/${encodeURIComponent(name)}/rename`, {
     method: 'POST',
     body: JSON.stringify({ new: newName }),
   });
@@ -3748,6 +3879,12 @@ export function setCodexMode(name: string, mode: 'default' | 'plan', server?: Se
   });
 }
 
+export function terminateCodexCommand(name: string, processId: string, server?: Server | null): Promise<{ ok: boolean }> {
+  return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/codex/terminate`, {
+    method: 'POST', body: JSON.stringify({ process_id: processId }),
+  });
+}
+
 export function implementCodexPlan(name: string, server?: Server | null): Promise<void> {
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/codex/plan/implement`, {
     method: 'POST',
@@ -4064,7 +4201,7 @@ export async function applyConfigSyncForServer(s: Server, items: readonly Config
 
 // Compartilhar sessão (dono). Todas no servidor ATIVO: a Sidebar usa `withServer`.
 /** O link do Funnel só volta depois de abrir de fora (o servidor confere até 3 min); 404/405 =
- * backend sem o Rust (em produção o StaticFiles do Python responde 405 ao POST). */
+ * backend antigo sem essa rota. */
 export async function createShare(name: string, local = false, server?: Server | null, signal?: AbortSignal): Promise<ShareCreated> {
   return postFunnel(`/api/sessions/${encodeURIComponent(name)}/share${local ? '?local=true' : ''}`, undefined, server, signal, true);
 }

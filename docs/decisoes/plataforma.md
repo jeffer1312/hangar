@@ -290,6 +290,26 @@ Este
 
 ## Transcrição no Rust e envio encerra o ditado
 
+**Rotas públicas e auxiliares (28/10/2026):** `/api/dictation/transcribe`,
+`/api/ditado/relimpar`, `/api/dictation/models` e status/teste de provedores de transcrição
+chamam os motores dentro do Rust. As portas Python não as atendem nem repassam: por elas
+(convidado com login próprio, 8768) e no modo `python`, o ditado responde 404.
+Os fatos de configuração continuam no Python, sem chamar o Rust de volta; as pontes de
+catálogo só ficam onde ainda têm consumidores. TTS é outra capacidade e continua identificado
+como Python no painel, enquanto voz ao vivo e transcrição aparecem na mesma área com seu dono real.
+
+As referências de equivalência vêm da execução do Python antes da remoção, em
+`backend/tests/fixtures/contract/dictation_public/`. Elas incluem validação da borda HTTP,
+erros acumulados de query, avisos e seleção de provedor; os testes públicos Rust verificam
+também autorização, limites, conta e referência da conversa. A contagem de MCP inclui a
+requisição externa ao serviço, separada das rotas que suas ferramentas chamam.
+
+Diferença aprovada na migração: áudio acima de 100 MiB enviado em blocos, sem
+`Content-Length`, recebe 413 `request body too large`, como o tamanho declarado. O Python
+retornava 500 nesse caso; as capturas originais foram preservadas. Outros erros de leitura
+mantêm seu tratamento. Catálogo, status dos provedores e transcrição/teste conservam os tetos
+públicos de 60, 15 e 180 segundos, incluindo espera por configuração e consultas concorrentes.
+
 Em 09/10/2026, a issue 116 separou instalação e execução do Whisper: o usuário instala
 whisper.cpp, modelo e FFmpeg, e informa seus caminhos no servidor escolhido. O Hangar inicia
 um processo próprio em loopback, comprova que a porta pertence a ele, serializa inferências e
@@ -1196,7 +1216,7 @@ cada 5 s por até 3 min:
 
 A rota só aceita link com o nome Tailscale desta máquina (`tailscale status --json`), para não virar
 cliente HTTP genérico. Link local (`http://<ip>:8766`) não é conferido. Sem o Rust (modo `python`),
-o Python responde 404 (ou 405, quando serve o `frontend/dist` na raiz) e o cliente diz que a conferência precisa do servidor Rust, sem mostrar o link.
+o Python responde 404 (405 só em backend antigo, que ainda servia o `frontend/dist` na raiz) e o cliente diz que a conferência precisa do servidor Rust, sem mostrar o link.
 Pelo Hangar Connect (8768), o Python só repassa o pedido do dono à rota privada do Rust
 `/__hangar_server/share/reachability`, sem decidir nada; sem o Rust, responde 404
 `share_needs_rust_server`.
@@ -2287,6 +2307,21 @@ As provas usam Git e disco reais descartáveis, chamadas HTTP ao servidor de tes
 componentes dos três clientes. Cobrem confirmação, preservação da branch, retomada, reentrada,
 locks, sessões e revalidação. Nenhuma prova apaga uma pasta residual do ambiente em uso.
 
+### Diretórios ignorados e submódulos na confirmação
+
+**Regra:** a lista do que será perdido inclui os diretórios ignorados inteiros e cada
+submódulo inicializado (`<caminho>/`); a confirmação existente autoriza o descarte deles.
+
+**Por quê (28/10/2026):** `ls-files --others --ignored --directory` devolve diretórios com
+`/` no fim, e o inventário descartava essas linhas. Uma worktree limpa com submódulo
+inicializado parecia não perder nada: o cliente enviava `confirm=false`, e o Git recusava a
+remoção do submódulo com 500. Com `confirm=true`, o `--force` apagava o conteúdo do
+submódulo sem mostrá-lo antes. Os testes HTTP usam Git e disco descartáveis: um com submódulo
+e pastas ignoradas, outro só com o submódulo inicializado. Nos dois, o detalhe lista o que
+some, a tentativa sem confirmação recusa com 409 e conserva os arquivos, e a confirmação
+conclui preservando a branch. No nativo, resposta de falha conserva o motivo do servidor;
+resultado incerto orienta reconferir a lista de worktrees antes de repetir.
+
 ### Base publicada e elegibilidade
 
 **Regra:** `branch.<branch>.hangar-base` tem prioridade. Sem ela, a base vem da referência
@@ -3038,6 +3073,33 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
   herdados como antes. Convidado não recebe o padrão do dono. Registro ilegível vira aviso e a
   abertura segue sem ele. No Codex com terminal o modo salvo entra como o herdado (o pedido
   explícito continua recusado).
+- **Abertura nunca nasce numa conta sem cota (28/10/2026).** Em 28/10, às 15:03, uma sessão aberta
+  sem conta escolhida nasceu numa conta com 100% nos 7 dias, e a troca automática só a tirou de lá
+  depois que bateu o limite. A causa foi a regra dos 95%: ela lia só o cache, e uma leitura com token
+  vencido apagava o 100%, de modo que, sem número, a conta passava calada. Hoje:
+  - o cache guarda a última leitura boa também quando a nova vem `expirada`;
+  - sem cota conhecida, a abertura faz uma leitura de 5 s e considera o `limit-spent.json`. Se ainda
+    não souber, segue e registra `rust.open_quota_unknown` no diário;
+  - a regra vale também para conta Codex;
+  - conta com 95% ou mais sai da escolha mesmo quando a tela a mandou (`config_dir` ou
+    `codex_account`): a sessão nasce direto na de mais folga, sem pergunta e sem trocar depois. Com
+    todas a 95% ou mais, vai para a de uso estritamente menor, mesmo acima dos 95%; nenhuma com
+    menos uso, segue na pedida e o log registra `open_quota_no_room`. A tela mostra o aviso de
+    sempre ("conta X com N% de uso; a sessão nasceu em Y"), e `account_source` vem `quota`.
+    Decisão do usuário em 28/10: a regra é a mesma para todo cliente (D-003 da abertura única),
+    sem confirmação;
+  - cota da conta desconhecida mesmo depois da leitura: a escolhida fica; a padrão ou herdada vai
+    para a de cota lida abaixo dos 95% e de mais folga, com aviso; nenhuma assim, fica;
+  - destino só com leitura atual (`lida`), e conta no limite (100% ou `limit-spent.json` valendo)
+    nunca é destino;
+  - no Codex, a troca só acontece se a conta de destino aceitar o modelo, o esforço e o Fast
+    pedidos; se não aceitar, a sessão fica na pedida, e a troca nunca faz a abertura falhar. A
+    retomada do Arquivo (`account_bound`) não troca. A conta escolhida pelo convidado não troca;
+  - a leitura de cota da abertura usa o serviço de contas do servidor (o mesmo cache, a mesma fila
+    e a mesma espera depois de um 429) e acontece uma vez por abertura, mesmo quando a resolução
+    roda de novo sem o padrão salvo.
+
+  Nos testes, a leitura pela rede é desligada (`disable_open_network_read`, `HANGAR_QUOTA_NETWORK=0`).
 
 ## WebSocket do dono com token não confere Origin (17/10/2026)
 
@@ -3459,3 +3521,56 @@ após Cargo válido e conservação do par anterior quando ele falha.
 **Limites.** Uso real no Linux/Windows, interface e desempenho continuam pendentes; estas provas
 não encerram a migração nem os 136 itens de inventário. Não se afirma igualdade literal da
 representação privada de `InvalidStatus`.
+
+## Etiquetas de máquina e conta moram no servidor da máquina (28/10/2026)
+
+**Regra.** A etiqueta da máquina (nome curto, ícone, cor) e a de cada conta (ícone, cor) ficam em
+`~/.hangar/tags.json` da própria máquina, por `GET/PUT /api/tags` (só o dono, Rust,
+`crates/hangar-server/src/tags.rs`). Os clientes recebem tudo resolvido pelo evento `tags` da
+lista do dono, publicado só quando muda: `machine_id`, a etiqueta da máquina e, por `conta` da
+linha, `{name, icon, color}` com o nome já cortado no `@`. Cor e ícone viajam como chave
+(`slate…violet`; `laptop…cloud`; `credit-card…id-card`); `color: null` é a cor por hash que já
+existia. O apelido da conta continua em `.hangar-apelidos.json`.
+
+**Por quê.** Pedido de 28/10: ver de relance em que máquina e com que conta cada sessão roda, igual
+nos três clientes. O nome da máquina vinha da lista de servidores de cada cliente, que diverge entre
+eles; guardado no servidor, uma troca aparece em todos sem recarregar.
+
+**Id único da conta.** A `conta` da linha e o `id` de `/api/credenciais` saem da mesma função
+(`accounts::catalog::resolved` = `list::links::resolve_lenient`). Antes divergiam com a pasta da
+conta sob link e na rota de motor com conta Codex (`canonicalize` cru, prefixo `\\?\` no Windows).
+
+**Custo.** Um vigia (`notify`, sem recursão) acorda o evento quando muda `tags.json`, apelidos,
+`engines.json`, config do Kimi ou uma pasta `.claude*`/`.codex*` da HOME com os marcadores de conta,
+e um PUT o refaz na hora; só com lista do dono aberta. Sem vigia (erro do `notify`), vale a
+assinatura por metadados a cada tique, avisada uma vez no log (`rust.tags_watch_unavailable`). A
+lista de contas do evento e a do `/api/credenciais` saem de `accounts::credentials::listed_ids`.
+
+**Limites.** A rota não passa pela porta do Connect (8768, Python, inativa). Servidor antigo responde
+404 e fica sem etiqueta, sem aviso na tela. "Em todas as minhas máquinas" (padrão de criação no
+nativo; 1M do Codex nos três) repete a gravação em cada máquina própria e diz por máquina o que não
+foi aplicado: motor, conta de proxy ou Codex ausente ali conta como "não existe nesta máquina".
+
+## Sugestão de nome para sessão com nome genérico (28/10/2026)
+
+**Regra.** Só o nome que o Hangar deu a partir da pasta ganha sugestão: `sanitize(basename(cwd))`,
+ou isso com `-N`, ou `sessao[-N]`. O servidor grava `name_auto` no `SessionSpec` na criação
+(pelo padrão, porque os três clientes mandam o nome da pasta já calculado) e renomear apaga a
+marca. Nome de PM, de branch, dado por outra sessão ou já trocado fica como está. Sessão antiga
+sem a marca cai no padrão.
+
+**Fluxo.** O cliente do dono, ao abrir a conversa de uma sessão genérica que já tem um pedido,
+chama `POST /api/sessions/{name}/rename-suggestion` uma vez; o servidor gera o nome com o executor
+da organização do ditado (`dictation::harness::run_prompt`, mesmo semáforo, trava de conta e prazo,
+com prompt próprio) a partir do primeiro pedido e da branch, guarda no spec, e a linha da lista traz
+`rename_suggestion` aos três clientes. A faixa "Renomear para X?" aplica a rota de renomear que já
+existe; "Agora não" (`DELETE`) fica guardado. Nunca renomeia sozinho: o nome é o endereço da sessão
+em recados, grupos e pares.
+
+**Por quê.** Pedido de 28/10: sessões abertas sem nome ficavam como `hangar-2` e ninguém sabia o
+que eram. Renomear sozinho foi descartado pelo usuário em favor da sugestão com um clique.
+
+**Limites.** Sem modelo de organização configurado para o provedor da sessão, não há sugestão
+(não é falha, não aparece aviso). Erro do executor vira 204 e registro no diário
+(`rust.rename_suggestion`). O executor só roda a pedido do dono, por isso o gatilho é do cliente e
+não um trabalho de fundo.
