@@ -131,10 +131,12 @@ fn make_symlink(target: &Path, link: &Path) -> io::Result<()> {
 /// O processo `pid` vivo, e se ele roda nesta conta (`CLAUDE_CONFIG_DIR`). `Err`: não deu para saber.
 fn account_process(pid: i64, dir: &Path) -> std::result::Result<Option<bool>, ()> {
     use crate::list::procs::ProcessView;
-    let procs = crate::list::procs::SystemProcs::default();
-    if procs.start_time(pid).is_none() { return Ok(None); }
-    let config = procs.env_var(pid, "CLAUDE_CONFIG_DIR").map_err(|_| ())?;
-    Ok(Some(config.is_some_and(|config| same_dir(Path::new(&config), dir))))
+    // Só `NotFound` é processo encerrado: leitura que falha por outro motivo pode ser um vivo, e adia.
+    match crate::list::procs::SystemProcs::default().env_var(pid, "CLAUDE_CONFIG_DIR") {
+        Ok(config) => Ok(Some(config.is_some_and(|config| same_dir(Path::new(&config), dir)))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(()),
+    }
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
@@ -191,7 +193,11 @@ fn unlink_sessions(link: &Path, shared: &Path, owner: &dyn Fn(i64) -> std::resul
         finish(event, &copied, &skipped, "adiado");
         return ready.map(|_| ());
     }
-    unlink(link).at(link)?;
+    if let Err(error) = unlink(link) {
+        let _ = fs::remove_dir_all(&staging);
+        finish(event, &copied, &skipped, "adiado");
+        return Err(error).at(link);
+    }
     if let Err(error) = fs::rename(&staging, link) {
         // Sem a pasta no lugar, o atalho volta: o Claude vivo segue achando o registro do outro lado.
         let restored = make_symlink(shared, link);
