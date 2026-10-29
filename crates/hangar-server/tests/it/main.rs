@@ -290,3 +290,4 @@ mod codex_setup;
 
 mod harness_setup;
 mod dotenv_config;
+mod cliproxy_config;
