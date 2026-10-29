@@ -313,6 +313,8 @@ mod json_deep_output;
 mod engine_aliases;
 mod config_account_alias;
 mod runtime_special;
+mod runtime_apply_errors;
+mod runtime_http;
 mod migration_branch;
 
 mod live_config;

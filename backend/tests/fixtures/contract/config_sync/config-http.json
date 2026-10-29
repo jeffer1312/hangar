@@ -1,0 +1,3185 @@
+{
+  "source_commit": "6e65432290d067fe304f99d471f918229b85b1d4",
+  "command": "cd backend && uv run python tests/fixtures/contract/config_sync/generate_config_http.py",
+  "injections": [
+    "autenticação comparada nas provas do porteiro",
+    "versão fixture-running",
+    "terminal disponível",
+    "tradução indisponível",
+    "origem do dono aceita",
+    "publicação do plugin registrada"
+  ],
+  "cases": [
+    {
+      "method": "GET",
+      "raw": "",
+      "status": 200,
+      "body": {
+        "campos": {
+          "sync": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "groq_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_providers": {
+            "valor": [],
+            "definido": false,
+            "origem": "env"
+          },
+          "upload_retention_days": {
+            "valor": 30,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_finished": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_dead": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "finish_min_seconds": {
+            "valor": 45,
+            "definido": true,
+            "origem": "env"
+          },
+          "stall_seconds": {
+            "valor": 300,
+            "definido": true,
+            "origem": "env"
+          },
+          "automations": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "traduzir_pensamento": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_sync": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_memory_import": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "claude_statusline_update": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "claude_function_hooks": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "editor": {
+            "valor": "code",
+            "definido": true,
+            "origem": "env"
+          },
+          "elevenlabs_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "elevenlabs_voice_id": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_local_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_max_chars": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_stability": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_similarity_boost": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_style": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_speed": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_reasoning_effort": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_vocabulario": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_estilo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "dictation_organization_mode": {
+            "valor": "none",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_claude_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_codex_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_include_recent_messages": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_max_minutes": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "term_origins": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_padrao": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "headless_default": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "last_session_provider": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_endpoint": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_modelo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_base_url": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_modelo": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_esforco": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "scan_roots": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "shortcuts": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "mostrar_pensamento": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          }
+        },
+        "somente_leitura": {
+          "port": 8765,
+          "lan_bind_ip": "127.0.0.1",
+          "server_id": "",
+          "public_url": "",
+          "terminal_panel": true,
+          "traducao_pensamento": false,
+          "terminal_origem_ok": true,
+          "versao": "fixture-running"
+        },
+        "variaveis_env": [
+          {
+            "nome": "CP_LAN_BIND_IP",
+            "valor": "127.0.0.1",
+            "definida": true,
+            "segredo": false,
+            "descricao": "lan_bind_ip",
+            "alerta": null
+          },
+          {
+            "nome": "CP_PORT",
+            "valor": 8765,
+            "definida": true,
+            "segredo": false,
+            "descricao": "port",
+            "alerta": null
+          },
+          {
+            "nome": "CP_AUTH_TOKEN",
+            "valor": null,
+            "definida": true,
+            "segredo": true,
+            "descricao": "auth_token",
+            "alerta": null
+          },
+          {
+            "nome": "CP_PROJECTS_DIR",
+            "valor": "⟦HOME⟧/.claude/projects",
+            "definida": true,
+            "segredo": false,
+            "descricao": "projects_dir",
+            "alerta": null
+          },
+          {
+            "nome": "CP_RELOAD",
+            "valor": false,
+            "definida": true,
+            "segredo": false,
+            "descricao": "reload",
+            "alerta": null
+          },
+          {
+            "nome": "CP_DIAG_TERM_INPUT",
+            "valor": false,
+            "definida": true,
+            "segredo": false,
+            "descricao": "diag_term_input",
+            "alerta": null
+          },
+          {
+            "nome": "CP_FRONT_PORT",
+            "valor": 0,
+            "definida": true,
+            "segredo": false,
+            "descricao": "front_port",
+            "alerta": null
+          },
+          {
+            "nome": "CP_PUBLIC_URL",
+            "valor": "",
+            "definida": false,
+            "segredo": false,
+            "descricao": "public_url",
+            "alerta": null
+          },
+          {
+            "nome": "CP_SERVER_ID",
+            "valor": "",
+            "definida": false,
+            "segredo": false,
+            "descricao": "server_id",
+            "alerta": null
+          },
+          {
+            "nome": "CP_VAPID_PUBLIC",
+            "valor": "",
+            "definida": false,
+            "segredo": false,
+            "descricao": "vapid_public",
+            "alerta": null
+          },
+          {
+            "nome": "CP_VAPID_PRIVATE",
+            "valor": null,
+            "definida": false,
+            "segredo": true,
+            "descricao": "vapid_private",
+            "alerta": null
+          },
+          {
+            "nome": "CP_VAPID_SUBJECT",
+            "valor": "mailto:push@hangar.dev.br",
+            "definida": true,
+            "segredo": false,
+            "descricao": "vapid_subject",
+            "alerta": null
+          },
+          {
+            "nome": "CP_STALL_POLL_SECONDS",
+            "valor": 30,
+            "definida": true,
+            "segredo": false,
+            "descricao": "stall_poll_seconds",
+            "alerta": null
+          },
+          {
+            "nome": "CP_AUTO_RESUME",
+            "valor": false,
+            "definida": true,
+            "segredo": false,
+            "descricao": "auto_resume",
+            "alerta": null
+          },
+          {
+            "nome": "CP_OMP_PLUGIN_SYNC_ENABLED",
+            "valor": false,
+            "definida": true,
+            "segredo": false,
+            "descricao": "omp_plugin_sync",
+            "alerta": null
+          },
+          {
+            "nome": "CP_OMP_PLUGIN_SYNC_INTERVAL",
+            "valor": 300.0,
+            "definida": true,
+            "segredo": false,
+            "descricao": "omp_plugin_sync_interval",
+            "alerta": null
+          },
+          {
+            "nome": "CP_OMP_CLAUDE_CONTEXT_ENABLED",
+            "valor": false,
+            "definida": true,
+            "segredo": false,
+            "descricao": "omp_claude_context",
+            "alerta": null
+          },
+          {
+            "nome": "CP_SYNC_BOOTSTRAP",
+            "valor": null,
+            "definida": false,
+            "segredo": true,
+            "descricao": "sync_bootstrap",
+            "alerta": null
+          },
+          {
+            "nome": "CP_SYNC_DATA",
+            "valor": "⟦HOME⟧/.hangar/sync-vault.json",
+            "definida": true,
+            "segredo": false,
+            "descricao": "sync_data",
+            "alerta": null
+          },
+          {
+            "nome": "CP_SYNC_SESSION_SECRET",
+            "valor": null,
+            "definida": false,
+            "segredo": true,
+            "descricao": "sync_session_secret",
+            "alerta": null
+          },
+          {
+            "nome": "CP_SYNC_RATE_MAX",
+            "valor": 10,
+            "definida": true,
+            "segredo": false,
+            "descricao": "sync_rate_max",
+            "alerta": null
+          },
+          {
+            "nome": "CP_SYNC_RATE_WINDOW",
+            "valor": 300,
+            "definida": true,
+            "segredo": false,
+            "descricao": "sync_rate_window",
+            "alerta": null
+          },
+          {
+            "nome": "CP_FORWARDED_ALLOW_IPS",
+            "valor": "127.0.0.1",
+            "definida": true,
+            "segredo": false,
+            "descricao": "forwarded_allow_ips",
+            "alerta": null
+          },
+          {
+            "nome": "CP_RUST_SERVER",
+            "valor": true,
+            "definida": true,
+            "segredo": false,
+            "descricao": "rust_server",
+            "alerta": null
+          },
+          {
+            "nome": "CP_DEPLOY_SECRET",
+            "valor": null,
+            "definida": false,
+            "segredo": true,
+            "descricao": "deploy_secret",
+            "alerta": null
+          },
+          {
+            "nome": "CP_UPDATE_BRANCH",
+            "valor": "",
+            "definida": false,
+            "segredo": false,
+            "descricao": "update_branch",
+            "alerta": null
+          },
+          {
+            "nome": "CP_UPDATE_LAST_BRANCH",
+            "valor": "",
+            "definida": false,
+            "segredo": false,
+            "descricao": "update_last_branch",
+            "alerta": null
+          },
+          {
+            "nome": "CP_TERMINAL",
+            "valor": "",
+            "definida": false,
+            "segredo": false,
+            "descricao": "terminal",
+            "alerta": null
+          },
+          {
+            "nome": "CP_PRICING_OFFLINE",
+            "valor": "",
+            "definida": false,
+            "segredo": false,
+            "descricao": "pricing_offline",
+            "alerta": null
+          },
+          {
+            "nome": "CP_CLAUDE_CONFIG_DIRS",
+            "valor": "",
+            "definida": false,
+            "segredo": false,
+            "descricao": "claude_config_dirs",
+            "alerta": null
+          },
+          {
+            "nome": "CP_ENGINES_FILE",
+            "valor": "",
+            "definida": false,
+            "segredo": false,
+            "descricao": "engines_file",
+            "alerta": null
+          },
+          {
+            "nome": "CP_CODEX_SYNC_ENABLED",
+            "valor": "",
+            "definida": false,
+            "segredo": false,
+            "descricao": "codex_sync_enabled",
+            "alerta": null
+          }
+        ]
+      },
+      "calls": [],
+      "allow": null,
+      "files": {}
+    },
+    {
+      "method": "HEAD",
+      "raw": "",
+      "status": 405,
+      "body": "",
+      "calls": [],
+      "allow": "GET",
+      "files": {}
+    },
+    {
+      "method": "POST",
+      "raw": "{}",
+      "status": 200,
+      "body": {
+        "campos": {
+          "sync": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "groq_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_providers": {
+            "valor": [],
+            "definido": false,
+            "origem": "env"
+          },
+          "upload_retention_days": {
+            "valor": 30,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_finished": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_dead": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "finish_min_seconds": {
+            "valor": 45,
+            "definido": true,
+            "origem": "env"
+          },
+          "stall_seconds": {
+            "valor": 300,
+            "definido": true,
+            "origem": "env"
+          },
+          "automations": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "traduzir_pensamento": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_sync": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_memory_import": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "claude_statusline_update": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "claude_function_hooks": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "editor": {
+            "valor": "code",
+            "definido": true,
+            "origem": "env"
+          },
+          "elevenlabs_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "elevenlabs_voice_id": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_local_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_max_chars": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_stability": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_similarity_boost": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_style": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_speed": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_reasoning_effort": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_vocabulario": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_estilo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "dictation_organization_mode": {
+            "valor": "none",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_claude_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_codex_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_include_recent_messages": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_max_minutes": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "term_origins": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_padrao": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "headless_default": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "last_session_provider": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_endpoint": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_modelo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_base_url": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_modelo": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_esforco": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "scan_roots": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "shortcuts": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "mostrar_pensamento": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          }
+        },
+        "somente_leitura": {
+          "port": 8765,
+          "lan_bind_ip": "127.0.0.1",
+          "server_id": "",
+          "public_url": "",
+          "terminal_panel": true,
+          "traducao_pensamento": false,
+          "terminal_origem_ok": true,
+          "versao": "fixture-running"
+        }
+      },
+      "calls": [],
+      "allow": null,
+      "files": {
+        ".claude/runtime-config.json": "{}"
+      }
+    },
+    {
+      "method": "PATCH",
+      "raw": "{\"editor\":\"vim\"}",
+      "status": 200,
+      "body": {
+        "campos": {
+          "sync": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "groq_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_providers": {
+            "valor": [],
+            "definido": false,
+            "origem": "env"
+          },
+          "upload_retention_days": {
+            "valor": 30,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_finished": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_dead": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "finish_min_seconds": {
+            "valor": 45,
+            "definido": true,
+            "origem": "env"
+          },
+          "stall_seconds": {
+            "valor": 300,
+            "definido": true,
+            "origem": "env"
+          },
+          "automations": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "traduzir_pensamento": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_sync": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_memory_import": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "claude_statusline_update": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "claude_function_hooks": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "editor": {
+            "valor": "vim",
+            "definido": true,
+            "origem": "app"
+          },
+          "elevenlabs_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "elevenlabs_voice_id": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_local_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_max_chars": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_stability": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_similarity_boost": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_style": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_speed": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_reasoning_effort": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_vocabulario": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_estilo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "dictation_organization_mode": {
+            "valor": "none",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_claude_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_codex_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_include_recent_messages": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_max_minutes": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "term_origins": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_padrao": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "headless_default": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "last_session_provider": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_endpoint": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_modelo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_base_url": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_modelo": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_esforco": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "scan_roots": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "shortcuts": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "mostrar_pensamento": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          }
+        },
+        "somente_leitura": {
+          "port": 8765,
+          "lan_bind_ip": "127.0.0.1",
+          "server_id": "",
+          "public_url": "",
+          "terminal_panel": true,
+          "traducao_pensamento": false,
+          "terminal_origem_ok": true,
+          "versao": "fixture-running"
+        }
+      },
+      "calls": [],
+      "allow": null,
+      "files": {
+        ".claude/runtime-config.json": "{\n  \"editor\": \"vim\"\n}"
+      }
+    },
+    {
+      "method": "POST",
+      "raw": "[]",
+      "status": 400,
+      "body": {
+        "detail": {
+          "code": "erro_corpo_deve_ser_objeto",
+          "params": {},
+          "msg": "corpo deve ser um objeto"
+        }
+      },
+      "calls": [],
+      "allow": null,
+      "files": {}
+    },
+    {
+      "method": "POST",
+      "raw": "null",
+      "status": 400,
+      "body": {
+        "detail": {
+          "code": "erro_corpo_deve_ser_objeto",
+          "params": {},
+          "msg": "corpo deve ser um objeto"
+        }
+      },
+      "calls": [],
+      "allow": null,
+      "files": {}
+    },
+    {
+      "method": "POST",
+      "raw": "false",
+      "status": 400,
+      "body": {
+        "detail": {
+          "code": "erro_corpo_deve_ser_objeto",
+          "params": {},
+          "msg": "corpo deve ser um objeto"
+        }
+      },
+      "calls": [],
+      "allow": null,
+      "files": {}
+    },
+    {
+      "method": "POST",
+      "raw": "\"texto\"",
+      "status": 400,
+      "body": {
+        "detail": {
+          "code": "erro_corpo_deve_ser_objeto",
+          "params": {},
+          "msg": "corpo deve ser um objeto"
+        }
+      },
+      "calls": [],
+      "allow": null,
+      "files": {}
+    },
+    {
+      "method": "POST",
+      "raw": "{",
+      "status": 500,
+      "body": "Internal Server Error",
+      "calls": [],
+      "allow": null,
+      "files": {}
+    },
+    {
+      "method": "POST",
+      "raw": "{\"mostrar_pensamento\":true}",
+      "status": 200,
+      "body": {
+        "campos": {
+          "sync": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "groq_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_providers": {
+            "valor": [],
+            "definido": false,
+            "origem": "env"
+          },
+          "upload_retention_days": {
+            "valor": 30,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_finished": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_dead": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "finish_min_seconds": {
+            "valor": 45,
+            "definido": true,
+            "origem": "env"
+          },
+          "stall_seconds": {
+            "valor": 300,
+            "definido": true,
+            "origem": "env"
+          },
+          "automations": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "traduzir_pensamento": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_sync": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_memory_import": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "claude_statusline_update": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "claude_function_hooks": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "editor": {
+            "valor": "code",
+            "definido": true,
+            "origem": "env"
+          },
+          "elevenlabs_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "elevenlabs_voice_id": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_local_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_max_chars": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_stability": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_similarity_boost": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_style": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_speed": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_reasoning_effort": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_vocabulario": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_estilo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "dictation_organization_mode": {
+            "valor": "none",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_claude_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_codex_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_include_recent_messages": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_max_minutes": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "term_origins": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_padrao": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "headless_default": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "last_session_provider": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_endpoint": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_modelo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_base_url": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_modelo": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_esforco": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "scan_roots": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "shortcuts": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "mostrar_pensamento": {
+            "valor": true,
+            "definido": true,
+            "origem": "app"
+          }
+        },
+        "somente_leitura": {
+          "port": 8765,
+          "lan_bind_ip": "127.0.0.1",
+          "server_id": "",
+          "public_url": "",
+          "terminal_panel": true,
+          "traducao_pensamento": false,
+          "terminal_origem_ok": true,
+          "versao": "fixture-running"
+        }
+      },
+      "calls": [],
+      "allow": null,
+      "files": {
+        ".claude/runtime-config.json": "{}",
+        ".claude/settings.json": "{\n  \"showThinkingSummaries\": true\n}\n"
+      }
+    },
+    {
+      "method": "POST",
+      "raw": "{\"upload_retention_days\":\"inválido\"}",
+      "status": 400,
+      "body": {
+        "detail": "upload_retention_days: esperado número"
+      },
+      "calls": [],
+      "allow": null,
+      "files": {}
+    },
+    {
+      "method": "POST",
+      "raw": "{\"claude_function_hooks\":false}",
+      "status": 200,
+      "body": {
+        "campos": {
+          "sync": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "groq_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_providers": {
+            "valor": [],
+            "definido": false,
+            "origem": "env"
+          },
+          "upload_retention_days": {
+            "valor": 30,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_finished": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_dead": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "finish_min_seconds": {
+            "valor": 45,
+            "definido": true,
+            "origem": "env"
+          },
+          "stall_seconds": {
+            "valor": 300,
+            "definido": true,
+            "origem": "env"
+          },
+          "automations": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "traduzir_pensamento": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_sync": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_memory_import": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "claude_statusline_update": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "claude_function_hooks": {
+            "valor": false,
+            "definido": true,
+            "origem": "app"
+          },
+          "editor": {
+            "valor": "code",
+            "definido": true,
+            "origem": "env"
+          },
+          "elevenlabs_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "elevenlabs_voice_id": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_local_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_max_chars": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_stability": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_similarity_boost": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_style": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_speed": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_reasoning_effort": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_vocabulario": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_estilo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "dictation_organization_mode": {
+            "valor": "none",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_claude_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_codex_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_include_recent_messages": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_max_minutes": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "term_origins": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_padrao": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "headless_default": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "last_session_provider": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_endpoint": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_modelo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_base_url": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_modelo": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_esforco": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "scan_roots": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "shortcuts": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "mostrar_pensamento": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          }
+        },
+        "somente_leitura": {
+          "port": 8765,
+          "lan_bind_ip": "127.0.0.1",
+          "server_id": "",
+          "public_url": "",
+          "terminal_panel": true,
+          "traducao_pensamento": false,
+          "terminal_origem_ok": true,
+          "versao": "fixture-running"
+        }
+      },
+      "calls": [
+        "publish"
+      ],
+      "allow": null,
+      "files": {
+        ".claude/runtime-config.json": "{\n  \"claude_function_hooks\": false\n}"
+      }
+    },
+    {
+      "method": "POST",
+      "raw": "{\"editor\":\"\\ud800\"}",
+      "status": 400,
+      "body": {
+        "detail": "'utf-8' codec can't encode character '\\ud800' in position 1: surrogates not allowed"
+      },
+      "calls": [],
+      "allow": null,
+      "files": {}
+    },
+    {
+      "method": "POST",
+      "raw": "{\"editor\":\"\\u0000\"}",
+      "status": 200,
+      "body": {
+        "campos": {
+          "sync": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "groq_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_providers": {
+            "valor": [],
+            "definido": false,
+            "origem": "env"
+          },
+          "upload_retention_days": {
+            "valor": 30,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_finished": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_dead": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "finish_min_seconds": {
+            "valor": 45,
+            "definido": true,
+            "origem": "env"
+          },
+          "stall_seconds": {
+            "valor": 300,
+            "definido": true,
+            "origem": "env"
+          },
+          "automations": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "traduzir_pensamento": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_sync": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_memory_import": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "claude_statusline_update": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "claude_function_hooks": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "editor": {
+            "valor": "\u0000",
+            "definido": true,
+            "origem": "app"
+          },
+          "elevenlabs_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "elevenlabs_voice_id": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_local_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_max_chars": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_stability": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_similarity_boost": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_style": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_speed": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_reasoning_effort": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_vocabulario": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_estilo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "dictation_organization_mode": {
+            "valor": "none",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_claude_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_codex_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_include_recent_messages": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_max_minutes": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "term_origins": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_padrao": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "headless_default": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "last_session_provider": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_endpoint": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_modelo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_base_url": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_modelo": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_esforco": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "scan_roots": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "shortcuts": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "mostrar_pensamento": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          }
+        },
+        "somente_leitura": {
+          "port": 8765,
+          "lan_bind_ip": "127.0.0.1",
+          "server_id": "",
+          "public_url": "",
+          "terminal_panel": true,
+          "traducao_pensamento": false,
+          "terminal_origem_ok": true,
+          "versao": "fixture-running"
+        }
+      },
+      "calls": [],
+      "allow": null,
+      "files": {
+        ".claude/runtime-config.json": "{\n  \"editor\": \"\\u0000\"\n}"
+      }
+    },
+    {
+      "method": "POST",
+      "raw": "{\"upload_retention_days\":NaN}",
+      "status": 400,
+      "body": {
+        "detail": "upload_retention_days: esperado número"
+      },
+      "calls": [],
+      "allow": null,
+      "files": {}
+    },
+    {
+      "method": "POST",
+      "raw": "{\"upload_retention_days\":Infinity}",
+      "status": 500,
+      "body": "Internal Server Error",
+      "calls": [],
+      "allow": null,
+      "files": {}
+    },
+    {
+      "method": "POST",
+      "raw": "{\"unknown\":NaN}",
+      "status": 200,
+      "body": {
+        "campos": {
+          "sync": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "groq_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_providers": {
+            "valor": [],
+            "definido": false,
+            "origem": "env"
+          },
+          "upload_retention_days": {
+            "valor": 30,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_finished": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_dead": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "finish_min_seconds": {
+            "valor": 45,
+            "definido": true,
+            "origem": "env"
+          },
+          "stall_seconds": {
+            "valor": 300,
+            "definido": true,
+            "origem": "env"
+          },
+          "automations": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "traduzir_pensamento": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_sync": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_memory_import": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "claude_statusline_update": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "claude_function_hooks": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "editor": {
+            "valor": "code",
+            "definido": true,
+            "origem": "env"
+          },
+          "elevenlabs_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "elevenlabs_voice_id": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_local_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_max_chars": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_stability": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_similarity_boost": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_style": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_speed": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_reasoning_effort": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_vocabulario": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_estilo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "dictation_organization_mode": {
+            "valor": "none",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_claude_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_codex_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_include_recent_messages": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_max_minutes": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "term_origins": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_padrao": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "headless_default": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "last_session_provider": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_endpoint": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_modelo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_base_url": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_modelo": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_esforco": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "scan_roots": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "shortcuts": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "mostrar_pensamento": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          }
+        },
+        "somente_leitura": {
+          "port": 8765,
+          "lan_bind_ip": "127.0.0.1",
+          "server_id": "",
+          "public_url": "",
+          "terminal_panel": true,
+          "traducao_pensamento": false,
+          "terminal_origem_ok": true,
+          "versao": "fixture-running"
+        }
+      },
+      "calls": [],
+      "allow": null,
+      "files": {
+        ".claude/runtime-config.json": "{}"
+      }
+    },
+    {
+      "method": "POST",
+      "raw": "{\"unknown\":\"\\ud800\"}",
+      "status": 200,
+      "body": {
+        "campos": {
+          "sync": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "groq_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_providers": {
+            "valor": [],
+            "definido": false,
+            "origem": "env"
+          },
+          "upload_retention_days": {
+            "valor": 30,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_finished": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_dead": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "finish_min_seconds": {
+            "valor": 45,
+            "definido": true,
+            "origem": "env"
+          },
+          "stall_seconds": {
+            "valor": 300,
+            "definido": true,
+            "origem": "env"
+          },
+          "automations": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "traduzir_pensamento": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_sync": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_memory_import": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "claude_statusline_update": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "claude_function_hooks": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "editor": {
+            "valor": "code",
+            "definido": true,
+            "origem": "env"
+          },
+          "elevenlabs_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "elevenlabs_voice_id": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_local_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_max_chars": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_stability": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_similarity_boost": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_style": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_speed": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_reasoning_effort": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_vocabulario": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_estilo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "dictation_organization_mode": {
+            "valor": "none",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_claude_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_codex_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_include_recent_messages": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_max_minutes": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "term_origins": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_padrao": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "headless_default": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "last_session_provider": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_endpoint": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_modelo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_base_url": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_modelo": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_esforco": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "scan_roots": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "shortcuts": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "mostrar_pensamento": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          }
+        },
+        "somente_leitura": {
+          "port": 8765,
+          "lan_bind_ip": "127.0.0.1",
+          "server_id": "",
+          "public_url": "",
+          "terminal_panel": true,
+          "traducao_pensamento": false,
+          "terminal_origem_ok": true,
+          "versao": "fixture-running"
+        }
+      },
+      "calls": [],
+      "allow": null,
+      "files": {
+        ".claude/runtime-config.json": "{}"
+      }
+    },
+    {
+      "method": "POST",
+      "raw": "{\"editor\":null}",
+      "status": 200,
+      "body": {
+        "campos": {
+          "sync": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "groq_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "transcription_providers": {
+            "valor": [],
+            "definido": false,
+            "origem": "env"
+          },
+          "upload_retention_days": {
+            "valor": 30,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_finished": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "notify_dead": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "finish_min_seconds": {
+            "valor": 45,
+            "definido": true,
+            "origem": "env"
+          },
+          "stall_seconds": {
+            "valor": 300,
+            "definido": true,
+            "origem": "env"
+          },
+          "automations": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "traduzir_pensamento": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_sync": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_memory_import": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "claude_statusline_update": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "claude_function_hooks": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "editor": {
+            "valor": "code",
+            "definido": true,
+            "origem": "env"
+          },
+          "elevenlabs_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "elevenlabs_voice_id": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_local_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_max_chars": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_stability": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_similarity_boost": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_style": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "tts_speed": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_reasoning_effort": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "llm_briefing_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_vocabulario": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "ditado_estilo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "dictation_organization_mode": {
+            "valor": "none",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_claude_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_codex_model": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_include_recent_messages": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "dictation_max_minutes": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "term_origins": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_padrao": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          },
+          "headless_default": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "last_session_provider": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_endpoint": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_model": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_base_url": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_modelo": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_texto_cmd": {
+            "valor": null,
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_base_url": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_api_key": {
+            "valor": "",
+            "definido": false,
+            "origem": "env"
+          },
+          "jev_aux_modelo": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "jev_aux_esforco": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "scan_roots": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "shortcuts": {
+            "valor": "",
+            "definido": true,
+            "origem": "env"
+          },
+          "mostrar_pensamento": {
+            "valor": false,
+            "definido": true,
+            "origem": "env"
+          }
+        },
+        "somente_leitura": {
+          "port": 8765,
+          "lan_bind_ip": "127.0.0.1",
+          "server_id": "",
+          "public_url": "",
+          "terminal_panel": true,
+          "traducao_pensamento": false,
+          "terminal_origem_ok": true,
+          "versao": "fixture-running"
+        }
+      },
+      "calls": [],
+      "allow": null,
+      "files": {
+        ".claude/runtime-config.json": "{}"
+      }
+    },
+    {
+      "method": "POST",
+      "raw": "{\"mostrar_pensamento\":1}",
+      "status": 400,
+      "body": {
+        "detail": "mostrar_pensamento: esperado true/false"
+      },
+      "calls": [],
+      "allow": null,
+      "files": {}
+    }
+  ]
+}
