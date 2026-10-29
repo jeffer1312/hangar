@@ -20,10 +20,15 @@ pub async fn server(home: &Path) -> SocketAddr { server_with_accounts(home, vec!
 
 /// Como `server`, com as contas Codex que o servidor enxerga.
 pub async fn server_with_accounts(home: &Path, accounts: Vec<String>) -> SocketAddr {
-    let (_python, upstream) = fake::spawn_fake().await;
+    server_with_accounts_and_python(home, accounts).await.0
+}
+
+/// Também devolve o Python falso para provar que a borda da voz não encaminhou o pedido.
+pub async fn server_with_accounts_and_python(home: &Path, accounts: Vec<String>) -> (SocketAddr, Arc<Fake>) {
+    let (python, upstream) = fake::spawn_fake().await;
     let mut state = hangar_server::routes::AppState::new(fake::config(upstream, ""));
     state.voice = hub(home, home.join(".claude"), None, accounts);
-    fake::spawn_state(state).await
+    (fake::spawn_state(state).await, python)
 }
 
 type Seen = Arc<Mutex<Vec<Value>>>;
