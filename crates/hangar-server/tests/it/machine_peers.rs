@@ -137,11 +137,7 @@ async fn python_store_contracts_through_http() {
             .unwrap_or(Value::Null);
         let env = std::fs::read_to_string(config.join(".env")).unwrap();
         checked += 1;
-        let mut expected_response = if case["difference"] == "rust-body-envelope" {
-            json!({"detail":{"code":"erro_corpo_invalido","params":{},"msg":"corpo inválido"}})
-        } else {
-            case["response"].clone()
-        };
+        let mut expected_response = case["response"].clone();
         if matches!(name, "delete-truncated" | "enabled-truncated") {
             assert!(response["detail"]["msg"].as_str().unwrap().starts_with("peers.json ilegível ("));
             expected_response["detail"]["msg"] = response["detail"]["msg"].clone();

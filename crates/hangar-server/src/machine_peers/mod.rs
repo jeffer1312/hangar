@@ -347,13 +347,32 @@ pub async fn handle(
 async fn handle_inner(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    request: Request,
+    mut request: Request,
 ) -> Response {
     let path = percent_encoding::percent_decode_str(request.uri().path()).decode_utf8_lossy().into_owned();
     let method = request.method().clone();
     let decision=crate::http_contract::resolve(HTTP_ROUTES,method.as_str(),&path);
     let (_,https)=st.cfg.trusted.resolve(peer.ip(),request.headers());
     if let Some(response)=crate::http_route_response::response(&decision,&method,request.uri(),request.headers(),https,&st.cfg.listen.to_string()){return response;}
+    let needs_body = (method == Method::POST && path == "/api/peers")
+        || (method == Method::PUT
+            && (matches!(
+                path.as_str(),
+                "/api/peers/app-list" | "/api/peers/identificador"
+            ) || path.starts_with("/api/peers/") && path.ends_with("/enabled")));
+    let input=if needs_body {
+        let bytes=match crate::http_body_limit::read(std::mem::replace(request.body_mut(),axum::body::Body::empty())).await {
+            Ok(bytes)=>bytes,
+            Err(error) if crate::http_body_limit::is_limit(&error)=>return crate::http_body_limit::rejected(),
+            Err(_)=>return json_response(StatusCode::BAD_REQUEST,json!({"detail":"There was an error parsing the body"})),
+        };
+        if bytes.is_empty() || crate::http_body_input::is_json(request.headers()) {
+            match crate::orchestration::body::parse(&bytes) {
+                Ok(value)=>Some(PeerInput::Json(RequestValue(value))),
+                Err((status,body))=>return json_response(status,body),
+            }
+        }else{Some(PeerInput::Raw(bytes.to_vec()))}
+    }else{None};
     let public =
         method == Method::GET && matches!(path.as_str(), "/api/peers/ping" | "/api/peers/prova");
     if !public && let Err(response) = owner_gate(&st, peer, &request).await {
@@ -374,35 +393,17 @@ async fn handle_inner(
     if let Some(key) = required && !query.contains_key(key) {
         return json_response(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail":[{"type":"missing","loc":["query",key],"msg":"Field required","input":null}]}));
     }
-    let needs_body = (method == Method::POST && path == "/api/peers")
-        || (method == Method::PUT
-            && (matches!(
-                path.as_str(),
-                "/api/peers/app-list" | "/api/peers/identificador"
-            ) || path.starts_with("/api/peers/") && path.ends_with("/enabled")));
-    let body = if needs_body {
-        let bytes=match crate::http_body_limit::read(request.into_body()).await {
-            Ok(bytes)=>Some(bytes),
-            Err(error) if crate::http_body_limit::is_limit(&error)=>return crate::http_body_limit::rejected(),
-            Err(_)=>None,
-        };
-        let value=match bytes{
-            Some(bytes)=>match crate::orchestration::body::parse(&bytes){
-                Ok(value)=>Some(value),
-                Err((StatusCode::BAD_REQUEST,body))=>return json_response(StatusCode::BAD_REQUEST,body),
-                Err(_)=>None,
-            },
-            None=>None,
-        };
-        match value{
-            Some(value) if value.is_object()=>value,
-            value=>{
-                if let Some(value)=value{crate::orchestration::codec::discard(value);}
-                return Error{status:422,code:"erro_corpo_invalido",msg:"corpo inválido".into()}.response();
-            }
+    let body=match input {
+        None=>Value::Null,
+        Some(PeerInput::Json(mut value)) if value.is_object()=>std::mem::take(&mut value.0),
+        Some(PeerInput::Json(mut value))=>{
+            let kind=if value.is_null(){"missing"}else{"dict_type"};
+            return body_validation_error(kind,std::mem::take(&mut value.0));
         }
-    } else {
-        Value::Null
+        Some(PeerInput::Raw(bytes))=>return match String::from_utf8(bytes){
+            Ok(input)=>body_validation_error("dict_type",Value::String(input)),
+            Err(_)=>body_server_error(),
+        },
     };
     let mut body = RequestValue(body);
     let service = match Service::from_state(&st) {
@@ -423,6 +424,25 @@ async fn handle_inner(
         Err(e) => e.response(),
     }
 }
+fn body_server_error()->Response {
+    let mut response=Response::builder().status(500).header("content-type","text/plain; charset=utf-8").body(axum::body::Body::from("Internal Server Error")).unwrap();
+    response.extensions_mut().insert(crate::http_cors::UnhandledServerError);
+    response
+}
+fn body_validation_error(kind:&str,input:Value)->Response {
+    use crate::orchestration::codec;
+    if codec::contains_nonfinite(&input)||codec::contains_surrogate(&input){
+        codec::discard(input);
+        return body_server_error();
+    }
+    let msg=if kind=="missing"{"Field required"}else{"Input should be a valid dictionary"};
+    let mut error=json!({"type":kind,"loc":["body"],"msg":msg});
+    error["input"]=input;
+    let mut body=serde_json::Map::new();
+    body.insert("detail".into(),Value::Array(vec![error]));
+    codec::response(StatusCode::UNPROCESSABLE_ENTITY,Value::Object(body))
+}
+enum PeerInput {Json(RequestValue),Raw(Vec<u8>)}
 struct RequestValue(Value);
 impl std::ops::Deref for RequestValue{type Target=Value;fn deref(&self)->&Value{&self.0}}
 impl Drop for RequestValue{fn drop(&mut self){crate::orchestration::codec::discard(std::mem::take(&mut self.0));}}

@@ -1,0 +1,662 @@
+{
+  "source_commit": "295821bee1d34724ec7ff9f4d74c10c086ea455a",
+  "command": "uv run --project backend --with httpx python backend/tests/fixtures/contract/peers/generate-input-order.py --reference <checkout-Python> --output backend/tests/fixtures/contract/peers/input-order.json",
+  "cases": [
+    {
+      "method": "POST",
+      "path": "/api/peers",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "{",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": [],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "POST",
+      "path": "/api/peers",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "POST",
+      "path": "/api/peers",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "null",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "POST",
+      "path": "/api/peers",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "[]",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "POST",
+      "path": "/api/peers",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "{}",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "POST",
+      "path": "/api/peers",
+      "authorized": true,
+      "content_type": null,
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "POST",
+      "path": "/api/peers",
+      "authorized": true,
+      "content_type": "text/plain",
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "POST",
+      "path": "/api/peers",
+      "authorized": true,
+      "content_type": "application/octet-stream",
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "POST",
+      "path": "/api/peers",
+      "authorized": true,
+      "content_type": "",
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "POST",
+      "path": "/api/peers",
+      "authorized": true,
+      "content_type": "application/json",
+      "body": "{",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": [],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "POST",
+      "path": "/api/peers",
+      "authorized": true,
+      "content_type": "application/json",
+      "body": "[]",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":[]}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "POST",
+      "path": "/api/peers",
+      "authorized": true,
+      "content_type": "application/json",
+      "body": "null",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "{",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": [],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "null",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "[]",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "{}",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "authorized": true,
+      "content_type": null,
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "authorized": true,
+      "content_type": "text/plain",
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "authorized": true,
+      "content_type": "application/octet-stream",
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "authorized": true,
+      "content_type": "",
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "authorized": true,
+      "content_type": "application/json",
+      "body": "{",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": [],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "authorized": true,
+      "content_type": "application/json",
+      "body": "[]",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":[]}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "authorized": true,
+      "content_type": "application/json",
+      "body": "null",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "{",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": [],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "null",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "[]",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "{}",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "authorized": true,
+      "content_type": null,
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "authorized": true,
+      "content_type": "text/plain",
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "authorized": true,
+      "content_type": "application/octet-stream",
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "authorized": true,
+      "content_type": "",
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "authorized": true,
+      "content_type": "application/json",
+      "body": "{",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": [],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "authorized": true,
+      "content_type": "application/json",
+      "body": "[]",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":[]}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "authorized": true,
+      "content_type": "application/json",
+      "body": "null",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "{",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": [],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "null",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "[]",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "authorized": false,
+      "content_type": "application/json",
+      "body": "{}",
+      "status": 401,
+      "text": "{\"detail\":\"fixture unauthorized\"}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "authorized": true,
+      "content_type": null,
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "authorized": true,
+      "content_type": "text/plain",
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "authorized": true,
+      "content_type": "application/octet-stream",
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "authorized": true,
+      "content_type": "",
+      "body": "{}",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":\"{}\"}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "authorized": true,
+      "content_type": "application/json",
+      "body": "{",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": [],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "authorized": true,
+      "content_type": "application/json",
+      "body": "[]",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary\",\"input\":[]}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    },
+    {
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "authorized": true,
+      "content_type": "application/json",
+      "body": "null",
+      "status": 422,
+      "text": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}",
+      "auth_calls": [
+        "auth"
+      ],
+      "peers": "{}",
+      "env": ""
+    }
+  ]
+}
