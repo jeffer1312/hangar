@@ -273,8 +273,9 @@ async def _worker(binary):
                     async with connect(base.replace("http:", "ws:") + path + query,
                                        additional_headers={"x-forwarded-for": ip}, proxy=None) as socket:
                         if path == "/api/voice":
-                            # Confere o porteiro real do Rust sem iniciar uma chamada de voz.
+                            # Sem hello não há chamada: o contrato aqui é a admissão HTTP 101.
                             await socket.close(code=1000)
+                            return socket.response.status_code
                         await socket.wait_closed()
                         return socket.close_code
                 except InvalidStatus as error:
@@ -317,7 +318,7 @@ async def _worker(binary):
                 for _ in range(7):
                     assert (await request(root, browser, ip=ip)).status_code == 401
                 assert await ws_status(direct, "/api/auth-ws/browser", OWNER, ip) == 1000
-                assert await ws_status(root, "/api/voice", OWNER, ip) == 1000
+                assert await ws_status(root, "/api/voice", OWNER, ip) == 101
                 assert await ws_status(direct, "/api/auth-ws/terminal", OWNER, ip) == 1000
                 before_upgrade = upgrade_calls
                 assert await ws_status(root, "/api/auth-ws/browser", OWNER, ip) == 1000
