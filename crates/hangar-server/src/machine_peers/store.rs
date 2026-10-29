@@ -139,8 +139,7 @@ impl Store {
         Ok(app_response(&data))
     }
     pub fn app_write(&self, body: &Value) -> Result<Value, Error> {
-        let rev = body["rev"]
-            .as_str()
+        let rev = text(&body["rev"])
             .ok_or_else(|| Error::invalid("rev obrigatório"))?;
         let machines = body["servers"]
             .as_array()
@@ -160,6 +159,9 @@ impl Store {
                     code: "peers_lista_mudou",
                     msg: "a lista mudou em outro app".into(),
                 });
+            }
+            if machines.iter().any(crate::orchestration::codec::contains_surrogate) {
+                return Err(Error::invalid("texto contém Unicode inválido"));
             }
             let mut owners = std::collections::HashMap::new();
             data.retain(|key, cfg| {
@@ -271,7 +273,7 @@ fn app_entry(raw: &Value) -> Result<Value, Error> {
         let s = if raw.get(field).is_none() {
             ""
         } else {
-            v.as_str()
+            text(v)
                 .ok_or_else(|| Error::invalid(format!("{field} precisa ser texto")))?
         };
         out[field] = json!(s);
@@ -293,7 +295,7 @@ fn app_entry(raw: &Value) -> Result<Value, Error> {
         out[field] = json!(v);
     }
     if let Some(lan) = raw.get("lan").filter(|v| !v.is_null()) {
-        if !lan.is_object() || !lan["url"].is_string() || !lan["id"].is_string() {
+        if !lan.is_object() || text(&lan["url"]).is_none() || text(&lan["id"]).is_none() {
             return Err(Error::invalid("lan precisa ser {url, id}"));
         }
         out["lan"] = json!({"url":lan["url"],"id":lan["id"]});

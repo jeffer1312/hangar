@@ -403,11 +403,12 @@ async fn handle_inner(
     } else {
         Value::Null
     };
+    let mut body = RequestValue(body);
     let service = match Service::from_state(&st) {
         Ok(s) => s,
         Err(e) => return e.response(),
     };
-    let result = dispatch(service, &method, &path, &query, body).await;
+    let result = dispatch(service, &method, &path, &query, std::mem::take(&mut body.0)).await;
     match result {
         Ok(v) => json_response(StatusCode::OK, v),
         Err(e) if e.code == "alcance_endereco_desconhecido" => json_response(

@@ -46,3 +46,29 @@ async fn public_peers_special_json_matches_python_and_disk_effects(){
     }
     task.abort();assert!(failures.is_empty(),"{}",failures.join("\n"));
 }
+
+#[tokio::test]
+async fn public_peers_sibling_special_fields_preserve_errors_and_effects(){
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/peer-json-siblings.json")).unwrap();
+    let home=tempfile::tempdir().unwrap();let config=home.path().join(".hangar/config");std::fs::create_dir_all(&config).unwrap();std::fs::write(config.join("peers.json"),"{}").unwrap();std::fs::write(config.join(".env"),"").unwrap();
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+    let mut state=AppState::new(Config{listen:address,upstream:crate::refused_address(),internal_secret:"contract-internal".into(),auth_token:"contract-owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
+    state.accounts=AccountService::new(AccountEnvironment::from_pairs([("HOME",home.path().to_str().unwrap()),("USERPROFILE",home.path().to_str().unwrap())]));
+    let state=Arc::new(state);let service=hangar_server::machine_peers::Service::from_state(&state).unwrap();assert!(service.store.path.starts_with(home.path()));assert!(service.env.starts_with(home.path()));
+    let router=hangar_server::routes::router(state);
+    let task=tokio::spawn(async move{axum::serve(listener,router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap();});
+    let client=reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();let mut failures=vec![];
+    for row in fixture["cases"].as_array().unwrap(){
+        std::fs::write(config.join("peers.json"),row["initial"].as_str().unwrap()).unwrap();std::fs::write(config.join(".env"),"").unwrap();
+        let response=client.put(format!("http://{address}{}",row["path"].as_str().unwrap())).bearer_auth("contract-owner").header("content-type","application/json").body(row["wire"].as_str().unwrap().to_owned()).send().await.unwrap();
+        let status=response.status().as_u16();let mut actual:Value=serde_json::from_str(&response.text().await.unwrap()).unwrap();
+        let mut expected:Value=serde_json::from_str(row["response"].as_str().unwrap()).unwrap();
+        if expected["detail"]["msg"].as_str().is_some_and(|msg|msg.starts_with("'utf-8' codec")){
+            assert_eq!(actual["detail"]["msg"], "texto contém Unicode inválido", "{}", row["name"]);
+            actual["detail"]["msg"]=Value::Null;expected["detail"]["msg"]=Value::Null;
+        }
+        let effect=std::fs::read_to_string(config.join("peers.json")).unwrap();let env=std::fs::read_to_string(config.join(".env")).unwrap();
+        if status!=row["status"].as_u64().unwrap() as u16||actual!=expected||effect!=row["effect"].as_str().unwrap()||env!=row["env"].as_str().unwrap(){failures.push(format!("{}: status{status}/{}, response={actual}",row["name"],row["status"]));}
+    }
+    task.abort();assert!(failures.is_empty(),"{}",failures.join("\n"));
+}

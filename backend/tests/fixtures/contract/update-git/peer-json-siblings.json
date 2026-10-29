@@ -1,0 +1,406 @@
+{
+  "source_commit": "aef350494e76390a1d4d22aa68266237255cd551",
+  "command": "python generate-peer-json-siblings.py <checkout-Python> <fixture>",
+  "cases": [
+    {
+      "name": "id-NaN",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": NaN, \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"id precisa ser texto\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "label-NaN",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": NaN, \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"label precisa ser texto\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "address-NaN",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": NaN, \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"address precisa ser texto\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "token-NaN",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": NaN, \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"token precisa ser texto\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "lan.url-NaN",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": NaN, \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"lan precisa ser {url, id}\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "lan.id-NaN",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": NaN}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"lan precisa ser {url, id}\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "rev-NaN",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": NaN, \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"rev obrigat\u00f3rio\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "extra-NaN",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}], \"extra\": NaN}",
+      "status": 200,
+      "response": "{\"rev\":\"2847e6e42f788e19\",\"servers\":[{\"id\":\"machine\",\"label\":\"Machine\",\"address\":\"https://peer.invalid\",\"token\":\"fixture-token\",\"disabled\":false,\"invite\":false,\"lan\":{\"url\":\"http://192.0.2.1:8765\",\"id\":\"remote\"}}]}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\",\n    \"app\": {\n      \"id\": \"machine\",\n      \"label\": \"Machine\",\n      \"address\": \"https://peer.invalid\",\n      \"token\": \"fixture-token\",\n      \"disabled\": false,\n      \"invite\": false,\n      \"lan\": {\n        \"url\": \"http://192.0.2.1:8765\",\n        \"id\": \"remote\"\n      },\n      \"pos\": 0\n    }\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "enabled-NaN",
+      "path": "/api/peers/remote/enabled",
+      "wire": "{\"enabled\": NaN}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"enabled precisa ser true ou false\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "identificador-NaN",
+      "path": "/api/peers/identificador",
+      "wire": "{\"identificador\": NaN}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_id_invalido\",\"params\":{},\"msg\":\"identificador: use min\u00fasculas, n\u00fameros, '-' ou '_' (at\u00e9 32 caracteres)\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "id-Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": Infinity, \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"id precisa ser texto\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "label-Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": Infinity, \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"label precisa ser texto\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "address-Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": Infinity, \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"address precisa ser texto\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "token-Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": Infinity, \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"token precisa ser texto\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "lan.url-Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": Infinity, \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"lan precisa ser {url, id}\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "lan.id-Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": Infinity}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"lan precisa ser {url, id}\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "rev-Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": Infinity, \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"rev obrigat\u00f3rio\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "extra-Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}], \"extra\": Infinity}",
+      "status": 200,
+      "response": "{\"rev\":\"2847e6e42f788e19\",\"servers\":[{\"id\":\"machine\",\"label\":\"Machine\",\"address\":\"https://peer.invalid\",\"token\":\"fixture-token\",\"disabled\":false,\"invite\":false,\"lan\":{\"url\":\"http://192.0.2.1:8765\",\"id\":\"remote\"}}]}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\",\n    \"app\": {\n      \"id\": \"machine\",\n      \"label\": \"Machine\",\n      \"address\": \"https://peer.invalid\",\n      \"token\": \"fixture-token\",\n      \"disabled\": false,\n      \"invite\": false,\n      \"lan\": {\n        \"url\": \"http://192.0.2.1:8765\",\n        \"id\": \"remote\"\n      },\n      \"pos\": 0\n    }\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "enabled-Infinity",
+      "path": "/api/peers/remote/enabled",
+      "wire": "{\"enabled\": Infinity}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"enabled precisa ser true ou false\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "identificador-Infinity",
+      "path": "/api/peers/identificador",
+      "wire": "{\"identificador\": Infinity}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_id_invalido\",\"params\":{},\"msg\":\"identificador: use min\u00fasculas, n\u00fameros, '-' ou '_' (at\u00e9 32 caracteres)\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "id--Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": -Infinity, \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"id precisa ser texto\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "label--Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": -Infinity, \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"label precisa ser texto\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "address--Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": -Infinity, \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"address precisa ser texto\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "token--Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": -Infinity, \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"token precisa ser texto\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "lan.url--Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": -Infinity, \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"lan precisa ser {url, id}\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "lan.id--Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": -Infinity}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"lan precisa ser {url, id}\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "rev--Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": -Infinity, \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"rev obrigat\u00f3rio\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "extra--Infinity",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}], \"extra\": -Infinity}",
+      "status": 200,
+      "response": "{\"rev\":\"2847e6e42f788e19\",\"servers\":[{\"id\":\"machine\",\"label\":\"Machine\",\"address\":\"https://peer.invalid\",\"token\":\"fixture-token\",\"disabled\":false,\"invite\":false,\"lan\":{\"url\":\"http://192.0.2.1:8765\",\"id\":\"remote\"}}]}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\",\n    \"app\": {\n      \"id\": \"machine\",\n      \"label\": \"Machine\",\n      \"address\": \"https://peer.invalid\",\n      \"token\": \"fixture-token\",\n      \"disabled\": false,\n      \"invite\": false,\n      \"lan\": {\n        \"url\": \"http://192.0.2.1:8765\",\n        \"id\": \"remote\"\n      },\n      \"pos\": 0\n    }\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "enabled--Infinity",
+      "path": "/api/peers/remote/enabled",
+      "wire": "{\"enabled\": -Infinity}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"enabled precisa ser true ou false\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "identificador--Infinity",
+      "path": "/api/peers/identificador",
+      "wire": "{\"identificador\": -Infinity}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_id_invalido\",\"params\":{},\"msg\":\"identificador: use min\u00fasculas, n\u00fameros, '-' ou '_' (at\u00e9 32 caracteres)\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "id-\"\\ud800\"",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"\\ud800\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"'utf-8' codec can't encode character '\\\\ud800' in position 58: surrogates not allowed\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "label-\"\\ud800\"",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"\\ud800\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"'utf-8' codec can't encode character '\\\\ud800' in position 91: surrogates not allowed\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "address-\"\\ud800\"",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"\\ud800\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"endere\u00e7o precisa ser http(s)://\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "token-\"\\ud800\"",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"\\ud800\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"'utf-8' codec can't encode character '\\\\ud800' in position 161: surrogates not allowed\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "lan.url-\"\\ud800\"",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"\\ud800\", \"id\": \"remote\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"'utf-8' codec can't encode character '\\\\ud800' in position 128: surrogates not allowed\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "lan.id-\"\\ud800\"",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"\\ud800\"}}]}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"'utf-8' codec can't encode character '\\\\ud800' in position 113: surrogates not allowed\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "rev-\"\\ud800\"",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"\\ud800\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}]}",
+      "status": 409,
+      "response": "{\"detail\":{\"code\":\"peers_lista_mudou\",\"params\":{},\"msg\":\"a lista mudou em outro app\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "extra-\"\\ud800\"",
+      "path": "/api/peers/app-list",
+      "wire": "{\"rev\": \"4f53cda18c2baa0c\", \"servers\": [{\"id\": \"machine\", \"label\": \"Machine\", \"address\": \"https://peer.invalid\", \"token\": \"fixture-token\", \"lan\": {\"url\": \"http://192.0.2.1:8765\", \"id\": \"remote\"}}], \"extra\": \"\\ud800\"}",
+      "status": 200,
+      "response": "{\"rev\":\"2847e6e42f788e19\",\"servers\":[{\"id\":\"machine\",\"label\":\"Machine\",\"address\":\"https://peer.invalid\",\"token\":\"fixture-token\",\"disabled\":false,\"invite\":false,\"lan\":{\"url\":\"http://192.0.2.1:8765\",\"id\":\"remote\"}}]}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\",\n    \"app\": {\n      \"id\": \"machine\",\n      \"label\": \"Machine\",\n      \"address\": \"https://peer.invalid\",\n      \"token\": \"fixture-token\",\n      \"disabled\": false,\n      \"invite\": false,\n      \"lan\": {\n        \"url\": \"http://192.0.2.1:8765\",\n        \"id\": \"remote\"\n      },\n      \"pos\": 0\n    }\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "enabled-\"\\ud800\"",
+      "path": "/api/peers/remote/enabled",
+      "wire": "{\"enabled\": \"\\ud800\"}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_registro_invalido\",\"params\":{},\"msg\":\"enabled precisa ser true ou false\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    },
+    {
+      "name": "identificador-\"\\ud800\"",
+      "path": "/api/peers/identificador",
+      "wire": "{\"identificador\": \"\\ud800\"}",
+      "status": 400,
+      "response": "{\"detail\":{\"code\":\"peers_id_invalido\",\"params\":{},\"msg\":\"identificador: use min\u00fasculas, n\u00fameros, '-' ou '_' (at\u00e9 32 caracteres)\"}}",
+      "initial": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "effect": "{\n  \"remote\": {\n    \"base_url\": \"https://peer.invalid\",\n    \"token\": \"fixture-token\"\n  }\n}\n",
+      "env": ""
+    }
+  ]
+}
