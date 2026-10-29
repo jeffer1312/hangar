@@ -6,7 +6,6 @@ use crate::{
     transcription::model::{Profile, TranscriptionError},
 };
 use axum::{
-    body::to_bytes,
     extract::Request,
     http::{Method, StatusCode},
     response::{IntoResponse, Response},
@@ -171,7 +170,7 @@ pub async fn serve(
             .unwrap_or("audio.wav")
             .to_owned();
         let headers = req.headers().clone();
-        let data = match to_bytes(req.into_body(), AUDIO_LIMIT).await {
+        let data = match limited_body(req.into_body()).await {
             Ok(v) => v,
             Err(error) => return audio_body_error(error, &headers),
         };
@@ -214,7 +213,7 @@ pub async fn serve(
         .map(str::to_owned)
         .or_else(|| query.get("name").cloned());
     let headers = req.headers().clone();
-    let data = match to_bytes(req.into_body(), AUDIO_LIMIT).await {
+    let data = match limited_body(req.into_body()).await {
         Ok(v) => v,
         Err(error) => return audio_body_error(error, &headers),
     };
@@ -268,7 +267,7 @@ async fn reorganize(
             mime == "application/json"
                 || mime.starts_with("application/") && mime.ends_with("+json")
         });
-    let bytes = match to_bytes(req.into_body(), AUDIO_LIMIT).await {
+    let bytes = match limited_body(req.into_body()).await {
         Ok(v) => v,
         Err(_) => return reply(400, json!({"detail":"There was an error parsing the body"})),
     };
@@ -354,13 +353,31 @@ fn declared_too_large(req: &Request) -> bool {
         })
 }
 
-fn audio_body_error(error: axum::Error, headers: &axum::http::HeaderMap) -> Response {
-    if std::error::Error::source(&error)
-        .is_some_and(|source| source.is::<http_body_util::LengthLimitError>())
-    {
-        return crate::session_write::too_large(headers);
+enum BodyError { TooLarge, Read }
+
+/// Acima do limite, o resto do corpo é lido e descartado por até 2 s em segundo plano: fechar a
+/// conexão com dados ainda chegando vira RST, e no Windows o RST descarta a resposta não lida.
+async fn limited_body(mut body: axum::body::Body) -> Result<bytes::Bytes, BodyError> {
+    use http_body_util::BodyExt;
+    let mut data = bytes::BytesMut::new();
+    while let Some(frame) = body.frame().await {
+        let Ok(chunk) = frame.map_err(|_| BodyError::Read)?.into_data() else { continue };
+        if data.len() + chunk.len() > AUDIO_LIMIT {
+            tokio::spawn(tokio::time::timeout(std::time::Duration::from_secs(2), async move {
+                while let Some(Ok(_)) = body.frame().await {}
+            }));
+            return Err(BodyError::TooLarge);
+        }
+        data.extend_from_slice(&chunk);
     }
-    (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+    Ok(data.freeze())
+}
+
+fn audio_body_error(error: BodyError, headers: &axum::http::HeaderMap) -> Response {
+    match error {
+        BodyError::TooLarge => crate::session_write::too_large(headers),
+        BodyError::Read => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response(),
+    }
 }
 
 /// O prazo público inclui configuração e todas as tentativas; cancelar solta o future e sua vaga.
