@@ -1160,8 +1160,13 @@ async fn seed_committed(hub: &Weak<Hub>, only_if_empty: bool) {
             tracing::warn!(code = "state_committed_seed_timeout", "estado: leitura da resposta gravada passou do prazo; a prévia segue sem ela");
             let Some(h) = hub.upgrade() else { return };
             h.mark_seeded(generation);
-            drop(h);
-            read.await
+            // Fora do laço de `watch_commits`: as respostas novas do transcript não esperam o disco travado.
+            // Atrasada, só preenche o vazio: a resposta ao vivo que chegou nesse meio-tempo vence.
+            let hub = hub.clone();
+            tokio::spawn(async move {
+                if let (Ok(Some(text)), Some(h)) = (read.await, hub.upgrade()) { h.set_committed(generation, text, true); }
+            });
+            return;
         }
     };
     let Some(h) = hub.upgrade() else { return };
