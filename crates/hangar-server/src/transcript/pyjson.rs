@@ -23,11 +23,18 @@ pub fn dumps_unicode(v: &Value, sort_keys: bool) -> String {
     out
 }
 
+/// Separadores e Unicode da resposta HTTP, sem copiar a árvore recebida.
+pub fn dumps_compact_unicode(v: &Value) -> String {
+    let mut out = String::new();
+    super::json_writer::write(&mut out, v, false, None, None, true);
+    out
+}
+
 /// `json.dumps(v, indent=indent, ensure_ascii=ascii)`: um item por linha, separadores "," e ": ", `{}` e
 /// `[]` vazios compactos.
 pub fn dumps_indent(v: &Value, indent: usize, ascii: bool) -> String {
     let mut out = String::new();
-    super::json_writer::write(&mut out, v, ascii, Some(indent), None);
+    super::json_writer::write(&mut out, v, ascii, Some(indent), None, false);
     out
 }
 
@@ -92,13 +99,13 @@ fn write_value(out: &mut String, v: &Value, sort_keys: bool, ascii: bool) {
     let compare = |left: &str, right: &str| {
         left.chars().map(py::py_code).cmp(right.chars().map(py::py_code))
     };
-    super::json_writer::write(out, v, ascii, None, if sort_keys { Some(&compare) } else { None });
+    super::json_writer::write(out, v, ascii, None, if sort_keys { Some(&compare) } else { None }, false);
 }
 
 /// O codec do cofre usa marcadores próprios e fornece a ordem dos pontos de código.
 pub(crate) fn dumps_ordered(v: &Value, compare: &dyn Fn(&str, &str) -> std::cmp::Ordering) -> String {
     let mut out = String::new();
-    super::json_writer::write(&mut out, v, true, None, Some(compare));
+    super::json_writer::write(&mut out, v, true, None, Some(compare), false);
     out
 }
 

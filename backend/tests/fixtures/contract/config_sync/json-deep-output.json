@@ -1,5 +1,5 @@
 {
-  "source": "e1a111a1f21442cace1c7d4115fb481ac981365f",
+  "source": "3ab36d6dc9d74c79ef8c5d7952d4401c2e86e1c3",
   "command": "uv run python tests/fixtures/contract/config_sync/generate_json_deep_output.py",
   "rows": [
     {
@@ -19,6 +19,15 @@
       "sha256": "bdac01fae96e38fb30b2955615672752ffb9ddb477ba705aa4e079c50c7021bd"
     },
     {
+      "shape": "array",
+      "depth": 10000,
+      "indent": null,
+      "sort_keys": false,
+      "compact": true,
+      "bytes": 20001,
+      "sha256": "bdac01fae96e38fb30b2955615672752ffb9ddb477ba705aa4e079c50c7021bd"
+    },
+    {
       "shape": "object",
       "depth": 10000,
       "indent": null,
@@ -33,6 +42,15 @@
       "sort_keys": true,
       "bytes": 70001,
       "sha256": "2f9c44de779914dd457f50494e2b869cb3ef86b3dfc54b79ab0ae08b6c40e504"
+    },
+    {
+      "shape": "object",
+      "depth": 10000,
+      "indent": null,
+      "sort_keys": false,
+      "compact": true,
+      "bytes": 60001,
+      "sha256": "72aeda155ce27fdc2408c389743257039f57a15e32a70cae16d4e7fb202280af"
     },
     {
       "shape": "ordered",
@@ -49,6 +67,15 @@
       "sort_keys": true,
       "bytes": 150001,
       "sha256": "449d6a7201c425651b386f0f1ebc56811eaf10667f121b86fb600491bc21d880"
+    },
+    {
+      "shape": "ordered",
+      "depth": 10000,
+      "indent": null,
+      "sort_keys": false,
+      "compact": true,
+      "bytes": 120001,
+      "sha256": "8d0ca81274e927137db72a16edae1fe100d1f2ed01eb6bca05c1088593274216"
     },
     {
       "shape": "array",
@@ -73,6 +100,12 @@
       "sort_keys": false,
       "bytes": 2446201,
       "sha256": "930f0a9062f23b7635d1a82db175335cd422d7b4c721f939f1ff07ed6090bc49"
+    },
+    {
+      "input": "{\"a\u00e7\u00e3o\":[\"ma\u00e7\u00e3\",true,null,{\"x\":1.0}],\"escape\":\"\\n\\t\\u0000\"}",
+      "compact": true,
+      "bytes": 63,
+      "sha256": "89116d2cdcba35b7256a645950324a5b637f3163ec299ab1d9bdf475614085dd"
     }
   ]
 }

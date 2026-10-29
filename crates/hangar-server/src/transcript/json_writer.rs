@@ -15,6 +15,7 @@ pub(super) fn write(
     ascii: bool,
     indent: Option<usize>,
     order: Option<&dyn Fn(&str, &str) -> Ordering>,
+    compact: bool,
 ) {
     use super::pyjson::{number_repr, write_str};
     let mut pending = vec![Task::Value(value, 0)];
@@ -43,7 +44,7 @@ pub(super) fn write(
                             pending.push(Task::Line(level + 1));
                         }
                         if index > 0 {
-                            pending.push(Task::Text(if indent.is_some() { "," } else { ", " }));
+                            pending.push(Task::Text(if indent.is_some() || compact { "," } else { ", " }));
                         }
                     }
                 }
@@ -59,13 +60,13 @@ pub(super) fn write(
                     }
                     for (index, (key, value)) in pairs.into_iter().enumerate().rev() {
                         pending.push(Task::Value(value, level + 1));
-                        pending.push(Task::Text(": "));
+                        pending.push(Task::Text(if compact { ":" } else { ": " }));
                         pending.push(Task::Key(key));
                         if indent.is_some() {
                             pending.push(Task::Line(level + 1));
                         }
                         if index > 0 {
-                            pending.push(Task::Text(if indent.is_some() { "," } else { ", " }));
+                            pending.push(Task::Text(if indent.is_some() || compact { "," } else { ", " }));
                         }
                     }
                 }
