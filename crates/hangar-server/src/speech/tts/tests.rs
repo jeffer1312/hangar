@@ -17,11 +17,14 @@ fn preparation_matches_the_executed_python_reference() {
 
 #[tokio::test]
 async fn an_unknown_provider_is_rejected_before_touching_the_cache() {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = directory.path().join("cache");
     let config = SpeechConfig {
         values: serde_json::json!({}),
-        home: PathBuf::new(),
-        cache_dir: PathBuf::from("must-not-exist"),
+        home: directory.path().to_owned(),
+        cache_dir: cache.clone(),
     };
+    assert!(!cache.exists());
     assert_eq!(
         Service::default()
             .synthesize(&config, "oi", "", "other", "")
@@ -30,4 +33,5 @@ async fn an_unknown_provider_is_rejected_before_touching_the_cache() {
             .status,
         400
     );
+    assert!(!cache.exists());
 }

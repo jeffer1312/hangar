@@ -1,4 +1,4 @@
-use super::{SpeechError, valid_audio};
+use super::{SpeechError, audio::AudioFile, valid_audio};
 use std::{
     fs,
     io::{ErrorKind, Read},
@@ -17,7 +17,30 @@ pub(super) fn path(directory: &Path, hash: &str) -> PathBuf {
 }
 
 pub(super) fn lookup(directory: &Path, hash: &str) -> Result<bool, SpeechError> {
-    let path = path(directory, hash);
+    for extension in ["mp3", "wav"] {
+        if lookup_file(&directory.join(format!("{hash}.{extension}")))? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// `Read` pode entregar um único byte sem EOF; a validade só é decidida com o prefixo completo.
+pub(super) fn read_prefix(reader: &mut impl Read) -> std::io::Result<([u8; 4], usize)> {
+    let mut prefix = [0; 4];
+    let mut length = 0;
+    while length < prefix.len() {
+        match reader.read(&mut prefix[length..]) {
+            Ok(0) => break,
+            Ok(count) => length += count,
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok((prefix, length))
+}
+
+fn lookup_file(path: &Path) -> Result<bool, SpeechError> {
     let metadata = match fs::metadata(&path) {
         Ok(value) => value,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
@@ -42,9 +65,7 @@ pub(super) fn lookup(directory: &Path, hash: &str) -> Result<bool, SpeechError> 
     }
     let mut file = fs::File::open(&path)
         .map_err(|_| SpeechError::new(500, "Não foi possível ler o áudio em cache."))?;
-    let mut prefix = [0; 4];
-    let length = file
-        .read(&mut prefix)
+    let (prefix, length) = read_prefix(&mut file)
         .map_err(|_| SpeechError::new(500, "Não foi possível ler o áudio em cache."))?;
     drop(file);
     if !valid_audio(&prefix[..length]) {
@@ -75,15 +96,28 @@ pub(super) fn prepare(directory: &Path) -> Result<(), SpeechError> {
         .map_err(|_| SpeechError::new(500, "Falha ao preparar a pasta de cache do áudio."))
 }
 
-pub(super) fn store(directory: &Path, hash: &str, audio: &[u8]) -> Result<(), SpeechError> {
-    let extension = if audio.starts_with(b"RIFF") {
+pub(super) fn store(directory: &Path, hash: &str, audio: AudioFile) -> Result<(), SpeechError> {
+    if audio.is_empty() || !valid_audio(audio.prefix()) {
+        return Err(SpeechError::new(
+            502,
+            "O arquivo de áudio não contém um formato reconhecido.",
+        ));
+    }
+    let extension = if audio.prefix().starts_with(b"RIFF") {
         "wav"
     } else {
         "mp3"
     };
-    // O escritor comum usa um temporário exclusivo e a troca que tolera leitores no Windows.
-    crate::runtime::queue::atomic_write(&directory.join(format!("{hash}.{extension}")), audio)
-        .map_err(|_| SpeechError::new(500, "Falha ao gravar o áudio em cache."))?;
+    // O produtor já fechou e sincronizou o temporário; a publicação é uma única troca atômica.
+    crate::runtime::queue::replace(
+        audio.data.path.as_ref(),
+        &directory.join(format!("{hash}.{extension}")),
+    )
+    .map_err(|_| SpeechError::new(500, "Falha ao gravar o áudio em cache."))?;
+    #[cfg(unix)]
+    fs::File::open(directory)
+        .and_then(|file| file.sync_all())
+        .map_err(|_| SpeechError::new(500, "Falha ao sincronizar a pasta de cache do áudio."))?;
     clean(directory, SystemTime::now());
     Ok(())
 }

@@ -1,15 +1,19 @@
-use super::{SpeechConfig, SpeechError, valid_audio};
+use super::{
+    Lease, SpeechConfig, SpeechError,
+    audio::{AudioFile, Transfer},
+    valid_audio,
+};
 use serde_json::{Value, json};
 use std::time::Duration;
 
 pub(super) const API: &str = "https://api.elevenlabs.io/v1";
 
-pub(super) async fn request(
+async fn response(
     config: &SpeechConfig,
     api: &str,
     path: &str,
     body: Option<Value>,
-) -> Result<Vec<u8>, SpeechError> {
+) -> Result<reqwest::Response, SpeechError> {
     let key = config.string("elevenlabs_api_key");
     let key = key.trim();
     if key.is_empty() {
@@ -42,52 +46,55 @@ pub(super) async fn request(
         .await
         .map_err(|_| SpeechError::new(502, "Falha ao contatar a ElevenLabs."))?;
     let status = response.status();
-    // O áudio pode ser WAV sem compressão; seu tamanho não representa o número de caracteres.
-    let limit = if status.is_success() && is_audio {
-        None
-    } else if status.is_success() {
-        Some(8 * 1024 * 1024)
-    } else {
-        Some(16 * 1024)
-    };
+    if status.is_success() {
+        return Ok(response);
+    }
     let mut bytes = Vec::new();
     while let Some(chunk) = response
         .chunk()
         .await
         .map_err(|_| SpeechError::new(502, "Falha ao ler a resposta da ElevenLabs."))?
     {
-        if let Some(limit) = limit
-            && bytes.len().saturating_add(chunk.len()) > limit
-        {
-            if !status.is_success() {
-                bytes.extend_from_slice(&chunk[..limit - bytes.len()]);
-                break;
+        if bytes.len().saturating_add(chunk.len()) > 16 * 1024 {
+            bytes.extend_from_slice(&chunk[..16 * 1024 - bytes.len()]);
+            break;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let detail: String = String::from_utf8_lossy(&bytes)
+        .replace(key, "[segredo removido]")
+        .chars()
+        .take(300)
+        .collect();
+    Err(SpeechError::new(
+        502,
+        format!(
+            "ElevenLabs {}: {}",
+            status.as_u16(),
+            if detail.is_empty() {
+                "(sem corpo)"
+            } else {
+                &detail
             }
+        ),
+    ))
+}
+
+async fn metadata(config: &SpeechConfig, api: &str, path: &str) -> Result<Vec<u8>, SpeechError> {
+    let mut response = response(config, api, path, None).await?;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| SpeechError::new(502, "Falha ao ler a resposta da ElevenLabs."))?
+    {
+        if bytes.len().saturating_add(chunk.len()) > 8 * 1024 * 1024 {
             return Err(SpeechError::new(
                 502,
                 "A ElevenLabs devolveu metadados acima do limite de segurança.",
             ));
         }
         bytes.extend_from_slice(&chunk);
-    }
-    if !status.is_success() {
-        let detail: String = String::from_utf8_lossy(&bytes)
-            .replace(key, "[segredo removido]")
-            .chars()
-            .take(300)
-            .collect();
-        return Err(SpeechError::new(
-            502,
-            format!(
-                "ElevenLabs {}: {}",
-                status.as_u16(),
-                if detail.is_empty() {
-                    "(sem corpo)"
-                } else {
-                    &detail
-                }
-            ),
-        ));
     }
     Ok(bytes)
 }
@@ -98,37 +105,63 @@ pub(super) async fn synthesize(
     text: &str,
     voice: &str,
     adjustments: Value,
-) -> Result<Vec<u8>, SpeechError> {
-    let mut body =
-        json!({"text":text,"model_id":"eleven_multilingual_v2","apply_text_normalization":"on"});
-    if adjustments
-        .as_object()
-        .is_some_and(|values| !values.is_empty())
-    {
-        body["voice_settings"] = adjustments;
-    }
-    let voice = percent_encoding::utf8_percent_encode(voice, percent_encoding::NON_ALPHANUMERIC);
-    let audio = request(
-        config,
-        api,
-        &format!("/text-to-speech/{voice}?output_format=mp3_44100_128"),
-        Some(body),
-    )
-    .await?;
-    if audio.is_empty() {
-        return Err(SpeechError::new(502, "ElevenLabs devolveu áudio vazio."));
-    }
-    if !valid_audio(&audio) {
-        return Err(SpeechError::new(
-            502,
-            "ElevenLabs devolveu um formato de áudio não reconhecido (nem WAV nem MP3).",
-        ));
-    }
-    Ok(audio)
+    lease: Lease,
+) -> Result<AudioFile, SpeechError> {
+    let operation = async {
+        let mut body = json!({"text":text,"model_id":"eleven_multilingual_v2","apply_text_normalization":"on"});
+        if adjustments
+            .as_object()
+            .is_some_and(|values| !values.is_empty())
+        {
+            body["voice_settings"] = adjustments;
+        }
+        let voice =
+            percent_encoding::utf8_percent_encode(voice, percent_encoding::NON_ALPHANUMERIC);
+        let mut response = response(
+            config,
+            api,
+            &format!("/text-to-speech/{voice}?output_format=mp3_44100_128"),
+            Some(body),
+        )
+        .await?;
+        // O tamanho do WAV não representa a duração do texto: o disco recebe o fluxo sem teto artificial.
+        let mut transfer = Transfer::new(&config.cache_dir, lease)?;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| SpeechError::new(502, "Falha ao ler a resposta da ElevenLabs."))?
+        {
+            if transfer.write(&chunk).await.is_err() {
+                // Recolher o escritor recupera a causa de disco, sem transformá-la em erro de rede.
+                let _ = transfer.finish().await?;
+                return Err(SpeechError::new(500, "Falha ao gravar o áudio em cache."));
+            }
+        }
+        let audio = transfer.finish().await?;
+        if audio.is_empty() {
+            return Err(SpeechError::new(502, "ElevenLabs devolveu áudio vazio."));
+        }
+        if !valid_audio(audio.prefix()) {
+            return Err(SpeechError::new(
+                502,
+                "ElevenLabs devolveu um formato de áudio não reconhecido (nem WAV nem MP3).",
+            ));
+        }
+        Ok(audio)
+    };
+    // O prazo também cobre a espera pelo disco, sem abandonar o escritor na expiração.
+    tokio::time::timeout(Duration::from_secs(120), operation)
+        .await
+        .unwrap_or_else(|_| {
+            Err(SpeechError::new(
+                502,
+                "A síntese da ElevenLabs passou do prazo de 120 s.",
+            ))
+        })
 }
 
 pub(super) async fn voices(config: &SpeechConfig, api: &str) -> Result<Value, SpeechError> {
-    let bytes = request(config, api, "/voices", None).await?;
+    let bytes = metadata(config, api, "/voices").await?;
     let value: Value = serde_json::from_slice(&bytes)
         .map_err(|_| SpeechError::new(502, "A ElevenLabs devolveu uma lista de vozes inválida."))?;
     let object = value.as_object().ok_or_else(|| {
@@ -154,7 +187,7 @@ pub(super) async fn voices(config: &SpeechConfig, api: &str) -> Result<Value, Sp
 }
 
 pub(super) async fn balance(config: &SpeechConfig, api: &str) -> Result<Value, SpeechError> {
-    let bytes = request(config, api, "/user/subscription", None).await?;
+    let bytes = metadata(config, api, "/user/subscription").await?;
     let value: Value = serde_json::from_slice(&bytes)
         .map_err(|_| SpeechError::new(502, "A ElevenLabs devolveu um saldo inválido."))?;
     if !value.is_object() {

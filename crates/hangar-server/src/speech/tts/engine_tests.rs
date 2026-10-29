@@ -15,6 +15,72 @@ fn config(dir: &Path) -> SpeechConfig {
     }
 }
 
+async fn empty_cache(directory: &Path) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if std::fs::read_dir(directory).unwrap().next().is_none() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[test]
+fn a_short_or_interrupted_read_fills_the_prefix_before_audio_validation() {
+    struct Short<'a> {
+        bytes: &'a [u8],
+        interrupted: bool,
+    }
+    impl std::io::Read for Short<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.interrupted {
+                self.interrupted = false;
+                return Err(std::io::ErrorKind::Interrupted.into());
+            }
+            if self.bytes.is_empty() || buffer.is_empty() {
+                return Ok(0);
+            }
+            buffer[0] = self.bytes[0];
+            self.bytes = &self.bytes[1..];
+            Ok(1)
+        }
+    }
+    for bytes in [b"RIFF".as_slice(), b"ID3", b"\xff\xfb", b"\xff"] {
+        let (prefix, length) = cache::read_prefix(&mut Short {
+            bytes,
+            interrupted: true,
+        })
+        .unwrap();
+        assert_eq!(&prefix[..length], bytes);
+        assert_eq!(valid_audio(&prefix[..length]), bytes.len() >= 2);
+    }
+}
+
+#[tokio::test]
+async fn an_invalid_mp3_falls_back_to_the_existing_wav_without_running_a_provider() {
+    let directory = tempfile::tempdir().unwrap();
+    let c = config(directory.path());
+    let hash = hash_value("oi", "", "local", &json!({}), "");
+    std::fs::create_dir_all(&c.cache_dir).unwrap();
+    let mp3 = c.cache_dir.join(format!("{hash}.mp3"));
+    let wav = c.cache_dir.join(format!("{hash}.wav"));
+    for invalid in [b"garbage".as_slice(), b""] {
+        std::fs::write(&mp3, invalid).unwrap();
+        std::fs::write(&wav, b"RIFFvalid").unwrap();
+        let result = Service::default()
+            .synthesize(&c, "oi", "", "local", "")
+            .await
+            .unwrap();
+        assert!(result.cached);
+        assert_eq!(cache_path(&c, &result.hash), wav);
+        assert!(!mp3.exists());
+        assert_eq!(std::fs::read(&wav).unwrap(), b"RIFFvalid");
+    }
+}
+
 fn command(directory: &Path, mode: &str, paths: &[&Path]) -> String {
     // O executável pertence ao TempDir do teste e sai junto com ele, inclusive no Windows.
     let program = directory.join(if cfg!(windows) {
@@ -223,7 +289,7 @@ async fn local_errors_are_visible_and_never_poison_the_cache() {
         if mode == "fail" {
             assert_eq!(error.detail.matches('á').count(), 300);
         }
-        assert_eq!(std::fs::read_dir(&c.cache_dir).unwrap().count(), 0);
+        empty_cache(&c.cache_dir).await;
     }
     c.values["tts_local_cmd"] = json!("missing-speech-executable-fixture");
     assert_eq!(
@@ -315,7 +381,9 @@ async fn a_read_only_cached_audio_survives_a_failed_retention_touch_without_a_pr
     read_only.set_readonly(true);
     std::fs::set_permissions(&path, read_only).unwrap();
     assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
-    let result = Service::default().synthesize(&c, "oi", "", "local", "").await;
+    let result = Service::default()
+        .synthesize(&c, "oi", "", "local", "")
+        .await;
     std::fs::set_permissions(&path, writable).unwrap();
     let result = result.unwrap();
     assert!(result.cached);
@@ -409,7 +477,7 @@ async fn cancellation_stops_the_local_engine_and_descendants_without_a_cache_fil
     let _ = task.await;
     gone(parent).await;
     gone(child).await;
-    assert_eq!(std::fs::read_dir(cache).unwrap().count(), 0);
+    empty_cache(&cache).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -419,6 +487,7 @@ async fn deadline_kills_the_tree_even_when_a_descendant_holds_the_pipes() {
     let parent = dir.path().join("parent");
     let child = dir.path().join("child");
     c.values["tts_local_cmd"] = json!(command(dir.path(), "hold", &[&parent, &child]));
+    std::fs::create_dir_all(&c.cache_dir).unwrap();
     let started = tokio::time::Instant::now();
     let error = local::run_with_deadline(&c, "oi", Duration::from_millis(300))
         .await
@@ -717,6 +786,65 @@ async fn uncompressed_local_and_remote_audio_above_64_mib_remains_supported() {
             .len(),
         65 * 1024 * 1024 + 4
     );
+}
+
+#[tokio::test]
+async fn cancelling_a_remote_stream_never_publishes_partial_audio_or_releases_an_unfinished_writer()
+{
+    use axum::response::IntoResponse;
+    use futures_util::StreamExt;
+    let remote = server(|_| {
+        Box::pin(async {
+            let stream = futures_util::stream::once(async {
+                Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"RIFFpartial"))
+            })
+            .chain(futures_util::stream::pending());
+            axum::body::Body::from_stream(stream).into_response()
+        })
+    })
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let mut c = config(directory.path());
+    c.values["elevenlabs_api_key"] = json!("fixture");
+    let service = Arc::new(Service::at(remote.url.clone()));
+    let copied = service.clone();
+    let request = c.clone();
+    let task = tokio::spawn(async move {
+        copied
+            .synthesize(&request, "oi", "", "elevenlabs", "")
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if std::fs::read_dir(&c.cache_dir).is_ok_and(|mut entries| entries.next().is_some()) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let identity = c.cache_dir.join(hash_value(
+        "oi",
+        "ORgG8rwdAiMYRug8RJwR",
+        "elevenlabs",
+        &json!({}),
+        "",
+    ));
+    let gate = service
+        .flights
+        .lock()
+        .unwrap()
+        .get(&identity)
+        .unwrap()
+        .upgrade()
+        .unwrap();
+    task.abort();
+    let _ = task.await;
+    let _guard = tokio::time::timeout(Duration::from_secs(5), gate.lock())
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_dir(&c.cache_dir).unwrap().count(), 0);
 }
 
 proptest! {

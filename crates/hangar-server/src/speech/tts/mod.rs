@@ -7,12 +7,28 @@ use std::{
     sync::{Arc, Mutex, Weak},
 };
 
+mod audio;
 mod cache;
 mod local;
 mod network;
 mod text;
 
 pub const CHARACTER_LIMIT: usize = 10_000;
+type Lease = tokio::sync::OwnedMutexGuard<()>;
+
+async fn acquire(
+    flight: Arc<tokio::sync::Mutex<()>>,
+    wait: std::time::Duration,
+) -> Result<Lease, SpeechError> {
+    tokio::time::timeout(wait, flight.lock_owned())
+        .await
+        .map_err(|_| {
+            SpeechError::new(
+                503,
+                "Uma síntese deste áudio ainda está em andamento. Tente novamente.",
+            )
+        })
+}
 
 pub struct Service {
     api: String,
@@ -172,7 +188,7 @@ impl Service {
             flight
         };
         // Só um produtor paga e publica o mesmo áudio; quem esperou relê o cache já pronto.
-        let guard = flight.lock_owned().await;
+        let guard = acquire(flight, std::time::Duration::from_secs(30)).await?;
         let directory = config.cache_dir.clone();
         let key = hash.clone();
         let (cached, guard) = tokio::task::spawn_blocking(move || {
@@ -183,23 +199,20 @@ impl Service {
         .map_err(|_| SpeechError::new(500, "Não foi possível conferir o cache de áudio."))??;
         if !cached {
             let audio = if provider == "local" {
-                local::run(config, text).await?
+                local::run(config, text, guard).await?
             } else {
-                network::synthesize(config, &self.api, text, &voice, adjustments).await?
+                network::synthesize(config, &self.api, text, &voice, adjustments, guard).await?
             };
             let directory = config.cache_dir.clone();
             let key = hash.clone();
-            tokio::task::spawn_blocking(move || {
-                let _guard = guard;
-                cache::store(&directory, &key, &audio)
-            })
-            .await
-            .map_err(|_| {
-                SpeechError::new(
-                    500,
-                    "Não foi possível concluir a gravação do áudio em cache.",
-                )
-            })??;
+            tokio::task::spawn_blocking(move || cache::store(&directory, &key, audio))
+                .await
+                .map_err(|_| {
+                    SpeechError::new(
+                        500,
+                        "Não foi possível concluir a gravação do áudio em cache.",
+                    )
+                })??;
         }
         Ok(Synthesis {
             hash,
