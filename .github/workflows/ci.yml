@@ -117,10 +117,10 @@ jobs:
         working-directory: crates
         run: |
           cargo build --locked -p hangar-server -p hangar-auth
-          python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so
           cargo build --locked -p hangar-server --example orq_contract
           cargo build --locked -p hangar-workspace --example workspace_contract
           cargo test --locked -p hangar-server --no-run --test it
+          python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so
       # Um arquivo inteiro por processo (há testes com nome fixo de sessão tmux), como no scripts/verificar-local.
       # O runner tem 4 vCPUs. basetemp no RUNNER_TEMP: o omp extrai centenas de MB por caso.
       - run: uv run pytest -q -n 4 --dist loadfile --basetemp="$RUNNER_TEMP/pytest"

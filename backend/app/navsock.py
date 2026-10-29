@@ -8,6 +8,7 @@ import secrets
 import time
 from urllib.parse import urlencode
 
+from anyio import CancelScope
 from fastapi import WebSocket, WebSocketDisconnect
 from uvicorn.protocols.utils import ClientDisconnected
 
@@ -112,25 +113,27 @@ async def nav_ws(ws: WebSocket, name: str, existe=None) -> None:
         tasks = {asyncio.create_task(from_client()), asyncio.create_task(from_rust())}
         await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     finally:
-        try:
-            for task in tasks:
-                task.cancel()
-            if tasks:
-                await asyncio.wait(tasks)
-            for task in tasks:
-                error = None if task.cancelled() else task.exception()
-                if error is not None and not isinstance(error, (ConnectionClosed, WebSocketDisconnect, ClientDisconnected)):
-                    _log.warning("navsock: transporte terminou com %s", type(error).__name__)
-            rust_closed = upstream.state is not State.OPEN
-            if rust_closed:
-                code, reason = upstream.close_code, upstream.close_reason or ""
-            close_code, close_reason = client_close
-            if close_code in (1005, 1006, None):
-                close_code = 1000
-            await upstream.close(code=close_code, reason=close_reason)
-        finally:
-            if upstream.state is not State.CLOSED:
-                upstream.transport.abort()
+        # O cancelamento do ASGI precisa esperar o fechamento da conexão privada.
+        with CancelScope(shield=True):
+            try:
+                for task in tasks:
+                    task.cancel()
+                if tasks:
+                    await asyncio.wait(tasks)
+                for task in tasks:
+                    error = None if task.cancelled() else task.exception()
+                    if error is not None and not isinstance(error, (ConnectionClosed, WebSocketDisconnect, ClientDisconnected)):
+                        _log.warning("navsock: transporte terminou com %s", type(error).__name__)
+                rust_closed = upstream.state is not State.OPEN
+                if rust_closed:
+                    code, reason = upstream.close_code, upstream.close_reason or ""
+                close_code, close_reason = client_close
+                if close_code in (1005, 1006, None):
+                    close_code = 1000
+                await upstream.close(code=close_code, reason=close_reason)
+            finally:
+                if upstream.state is not State.CLOSED:
+                    upstream.transport.abort()
     if rust_closed:
         if code == 1005:
             code = 1000

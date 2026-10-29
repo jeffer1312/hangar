@@ -88,14 +88,21 @@ def test_stream_never_borrows_the_default_thread_pool(rust, monkeypatch):
     """Um upload grande não pode prender uma thread do executor padrão por pedaço: com vários ao
     mesmo tempo, o pool de 8 threads fica sem vaga e o backend inteiro espera."""
     import asyncio
+    from app import auth
 
-    def proibido(*args, **kwargs):
-        raise AssertionError("o repasse usou asyncio.to_thread")
+    original_to_thread = asyncio.to_thread
+    offloads = []
 
-    monkeypatch.setattr(asyncio, "to_thread", proibido)
+    def auth_only(function, *args, **kwargs):
+        assert function is auth._authenticate_request, "o repasse usou asyncio.to_thread"
+        offloads.append(function)
+        return original_to_thread(function, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", auth_only)
     response = TestClient(app).post("/api/sessions/s/upload?audio_only=1", headers=AUTH, content=AUDIO)
     assert (response.status_code, response.content) == (206, b"png")
     assert _Rust.seen[0]["body"] == AUDIO
+    assert offloads == [auth._authenticate_request]
 
 
 def test_head_of_an_upload_also_goes_to_rust(rust):

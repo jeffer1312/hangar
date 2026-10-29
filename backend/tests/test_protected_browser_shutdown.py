@@ -30,7 +30,7 @@ def test_supervisor_protects_six_second_browser_restore(tmp_path):
 
 
 async def _worker(binary):
-    import httpx
+    import httpx2 as httpx
     import uvicorn
     from fastapi import FastAPI, WebSocketDisconnect
     from fastapi.responses import PlainTextResponse

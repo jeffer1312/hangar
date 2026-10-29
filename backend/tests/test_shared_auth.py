@@ -108,7 +108,7 @@ def _pinning_worker(binary):
 
 
 async def _worker(binary):
-    import httpx
+    import httpx2 as httpx
     import uvicorn
     from fastapi import Depends, FastAPI, Request, WebSocket
     from fastapi.responses import StreamingResponse
