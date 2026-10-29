@@ -33,7 +33,7 @@ async fn health_answers_without_token_and_with_cors() {
     assert!(terminal.starts_with("127.0.0.1:"), "{terminal}");
     // Grupos: o Python só passa a pedir ao Rust quando a saúde diz que ele os atende.
     assert!(v["groups"].is_boolean(), "{v}");
-    assert_eq!(hangar_server::INTERNAL_PROTOCOL, 91);
+    assert_eq!(hangar_server::INTERNAL_PROTOCOL, 92);
 }
 
 #[tokio::test]
@@ -139,7 +139,7 @@ async fn unparseable_forwarded_for_from_trusted_peer_uses_the_tcp_peer() {
 async fn proxy_streams_body_without_buffering() {
     let (fake, up) = spawn_fake().await;
     let srv = spawn_server(config(up, "127.0.0.1")).await;
-    let mut r = client().get(format!("http://{srv}/stream")).send().await.unwrap();
+    let mut r = client().get(format!("http://{srv}/api/stream")).send().await.unwrap();
     let first = tokio::time::timeout(Duration::from_secs(5), r.chunk()).await.unwrap().unwrap().unwrap();
     assert_eq!(&first[..], b"um");
     fake.release.notify_one();
@@ -151,10 +151,10 @@ async fn proxy_streams_body_without_buffering() {
 async fn proxy_never_follows_redirects() {
     let (fake, up) = spawn_fake().await;
     let srv = spawn_server(config(up, "127.0.0.1")).await;
-    let r = client().get(format!("http://{srv}/redirect")).send().await.unwrap();
+    let r = client().get(format!("http://{srv}/api/redirect")).send().await.unwrap();
     assert_eq!(r.status(), 302);
-    assert_eq!(r.headers()["location"], "/outro");
-    assert_eq!(fake.hits_to("/outro"), 0);
+    assert_eq!(r.headers()["location"], "/api/outro");
+    assert_eq!(fake.hits_to("/api/outro"), 0);
 }
 
 #[tokio::test]
@@ -163,7 +163,7 @@ async fn proxy_passes_websocket_upgrade_both_ways() {
     let srv = spawn_server(config(up, "10.9.9.9")).await;
     let mut s = tokio::net::TcpStream::connect(srv).await.unwrap();
     s.write_all(
-        b"GET /ws HTTP/1.1\r\nHost: hangar\r\nConnection: Upgrade\r\nUpgrade: eco\r\n\
+        b"GET /api/ws HTTP/1.1\r\nHost: hangar\r\nConnection: Upgrade\r\nUpgrade: eco\r\n\
           X-Forwarded-For: 203.0.113.9\r\nX-Hangar-Internal: segredo-interno\r\n\r\n",
     )
     .await
@@ -210,7 +210,7 @@ async fn blocked_origin_never_gets_the_owner_shortcut() {
     let ip = "198.51.100.7";
     for _ in 0..8 {
         let r = client()
-            .get(format!("http://{srv}/probe"))
+            .get(format!("http://{srv}/api/probe"))
             .header("x-forwarded-for", ip)
             .bearer_auth("errado")
             .send()
@@ -245,7 +245,7 @@ async fn origin_limited_by_python_gets_owner_requests_proxied() {
     let srv = spawn_server(config(up, "127.0.0.1")).await;
     let ip = "198.51.100.9";
     let r = client()
-        .get(format!("http://{srv}/limited"))
+        .get(format!("http://{srv}/api/limited"))
         .header("x-forwarded-for", ip)
         .bearer_auth("errado")
         .send()
@@ -345,7 +345,7 @@ async fn spawn_chunked_upstream(
                     head.push(byte[0]);
                 }
                 // As tarefas auxiliares do servidor podem consultar fatos antes da prova.
-                if !head.starts_with(b"GET /x ") {
+                if !head.starts_with(b"GET /api/x ") {
                     let _=stream.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n").await;
                     return;
                 }
@@ -426,7 +426,7 @@ async fn large_chunked_body_is_not_held_by_nagle() {
         stream.set_nodelay(true).unwrap();
         #[cfg(target_os="linux")]
         let client=stream.local_addr().unwrap();
-        stream.write_all(format!("GET /x HTTP/1.1\r\nHost: h\r\nAuthorization: Bearer {OWNER}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        stream.write_all(format!("GET /api/x HTTP/1.1\r\nHost: h\r\nAuthorization: Bearer {OWNER}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
         let mut reader=tokio::io::BufReader::new(stream);
         let mut head=String::new();
         loop {

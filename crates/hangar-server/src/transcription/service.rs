@@ -137,3 +137,7 @@ impl TranscriptionService {
         self.local.shutdown().await;
     }
 }
+
+#[cfg(test)]
+#[path = "status_deadline_tests.rs"]
+mod public_status_deadline_tests;

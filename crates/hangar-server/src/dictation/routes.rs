@@ -72,7 +72,6 @@ pub async fn private(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
 ) -> Response {
-    let organization_started = tokio::time::Instant::now();
     if !crate::workspace_routes::private_ok(&state, peer, request.headers()) {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -84,9 +83,7 @@ pub async fn private(
         .to_owned();
     if !matches!(
         operation.as_str(),
-        "organize"
-            | "catalog"
-            | "parse_models"
+        "parse_models"
             | "validate_model"
             | "catalog_models"
             | "invalidate_models"
@@ -104,136 +101,98 @@ pub async fn private(
             );
         }
     };
-    if operation != "organize" {
-        let value: Value = match serde_json::from_slice(&body) {
-            Ok(value) => value,
-            Err(_) => {
-                return failure(
-                    400,
-                    "dictation_request_invalid",
-                    "Pedido de catálogo inválido.",
-                );
-            }
-        };
-        if operation == "catalog" {
-            let fresh = value["fresh"].as_bool().unwrap_or(false);
-            let request: OrganizationRequest = match serde_json::from_value(value) {
-                Ok(request) => request,
-                Err(_) => return failure(400, "dictation_request_invalid", "Destino inválido."),
-            };
-            let context = match super::context::resolve(&state, &request).await {
-                Ok(context) => context,
-                Err(code) => return failure(409, code, super::harness::detail(code)),
-            };
-            return match state
-                .dictation_models
-                .get_context(&state.accounts, &state.dictation_slots, &context, fresh)
-                .await
-            {
-                Ok((models, _)) => response(
-                    json!({"ok":true,"result":{"provider":context.provider,"models":models,"generation":context.generation}}),
-                    200,
-                ),
-                Err(code) => failure(502, code, super::harness::detail(code)),
-            };
-        }
-        if matches!(
-            operation.as_str(),
-            "catalog_models" | "invalidate_models" | "raw_model"
-        ) {
-            let provider = value["provider"].as_str().unwrap_or("codex");
-            let home = value["home"]
-                .as_str()
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| {
-                    if provider == "claude" {
-                        state.accounts.env.claude_base.clone()
-                    } else {
-                        state.accounts.env.codex_default.clone()
-                    }
-                });
-            if operation == "invalidate_models" {
-                state
-                    .dictation_models
-                    .invalidate(value["home"].as_str().map(std::path::Path::new));
-                return response(json!({"ok":true,"result":{}}), 200);
-            }
-            if operation == "raw_model" {
-                return match state
-                    .dictation_models
-                    .raw_model(
-                        &state.accounts,
-                        &home,
-                        &value["config"],
-                        value["model"].as_str().unwrap_or(""),
-                        value["version"].as_str().unwrap_or(""),
-                    )
-                    .await
-                {
-                    Ok(model) => response(json!({"ok":true,"result":{"model":model}}), 200),
-                    Err(code) => failure(
-                        502,
-                        code,
-                        "Não foi possível comprovar a capacidade do modelo.",
-                    ),
-                };
-            }
-            return match state
-                .dictation_models
-                .get(
-                    &state.accounts,
-                    &state.dictation_slots,
-                    provider,
-                    &home,
-                    value["fresh"].as_bool().unwrap_or(false),
-                )
-                .await
-            {
-                Ok((models, raw)) => {
-                    response(json!({"ok":true,"result":{"models":models,"raw":raw}}), 200)
-                }
-                // O código vai no texto: quem mostra é o `erro` do Python, que não carrega o código do Rust.
-                Err(code) => failure(
-                    502,
-                    code,
-                    &format!("Não foi possível consultar o catálogo da conta selecionada ({code})."),
-                ),
-            };
-        }
-        if operation == "parse_models" {
-            return match super::catalog::parse(
-                value["provider"].as_str().unwrap_or("codex"),
-                &value["catalog"],
-                value["current"].as_str(),
-            ) {
-                Ok(models) => response(json!({"ok":true,"result":{"models":models}}), 200),
-                Err(detail) => failure(502, "dictation_catalog_unavailable", detail),
-            };
-        }
-        return match super::catalog::validate(
-            value["models"].as_array().map(Vec::as_slice).unwrap_or(&[]),
-            value["model"].as_str(),
-            value["effort"].as_str(),
-            value["service_tier"].as_str(),
-        ) {
-            Ok(()) => response(json!({"ok":true,"result":{}}), 200),
-            Err(detail) => failure(400, "dictation_model_unavailable", &detail),
-        };
-    }
-    let request: OrganizationRequest = match serde_json::from_slice(&body) {
-        Ok(request) => request,
+    let value: Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
         Err(_) => {
             return failure(
                 400,
                 "dictation_request_invalid",
-                "Pedido de organização inválido.",
+                "Pedido de catálogo inválido.",
             );
         }
     };
-    response(
-        json!({"ok":true,"result":organize_request(&state, request, organization_started).await}),
-        200,
-    )
+    if matches!(
+        operation.as_str(),
+        "catalog_models" | "invalidate_models" | "raw_model"
+    ) {
+        let provider = value["provider"].as_str().unwrap_or("codex");
+        let home = value["home"]
+            .as_str()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                if provider == "claude" {
+                    state.accounts.env.claude_base.clone()
+                } else {
+                    state.accounts.env.codex_default.clone()
+                }
+            });
+        if operation == "invalidate_models" {
+            state
+                .dictation_models
+                .invalidate(value["home"].as_str().map(std::path::Path::new));
+            return response(json!({"ok":true,"result":{}}), 200);
+        }
+        if operation == "raw_model" {
+            return match state
+                .dictation_models
+                .raw_model(
+                    &state.accounts,
+                    &home,
+                    &value["config"],
+                    value["model"].as_str().unwrap_or(""),
+                    value["version"].as_str().unwrap_or(""),
+                )
+                .await
+            {
+                Ok(model) => response(json!({"ok":true,"result":{"model":model}}), 200),
+                Err(code) => failure(
+                    502,
+                    code,
+                    "Não foi possível comprovar a capacidade do modelo.",
+                ),
+            };
+        }
+        return match state
+            .dictation_models
+            .get(
+                &state.accounts,
+                &state.dictation_slots,
+                provider,
+                &home,
+                value["fresh"].as_bool().unwrap_or(false),
+            )
+            .await
+        {
+            Ok((models, raw)) => {
+                response(json!({"ok":true,"result":{"models":models,"raw":raw}}), 200)
+            }
+            // O código vai no texto: quem mostra é o `erro` do Python, que não carrega o código do Rust.
+            Err(code) => failure(
+                502,
+                code,
+                &format!("Não foi possível consultar o catálogo da conta selecionada ({code})."),
+            ),
+        };
+    }
+    if operation == "parse_models" {
+        return match super::catalog::parse(
+            value["provider"].as_str().unwrap_or("codex"),
+            &value["catalog"],
+            value["current"].as_str(),
+        ) {
+            Ok(models) => response(json!({"ok":true,"result":{"models":models}}), 200),
+            Err(detail) => failure(502, "dictation_catalog_unavailable", detail),
+        };
+    }
+    match super::catalog::validate(
+        value["models"].as_array().map(Vec::as_slice).unwrap_or(&[]),
+        value["model"].as_str(),
+        value["effort"].as_str(),
+        value["service_tier"].as_str(),
+    ) {
+        Ok(()) => response(json!({"ok":true,"result":{}}), 200),
+        Err(detail) => failure(400, "dictation_model_unavailable", &detail),
+    }
 }
 
 /// A organização de um pedido já lido; falha nunca vira erro, só o texto cru com o motivo.

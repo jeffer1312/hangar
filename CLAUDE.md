@@ -471,8 +471,9 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 - **Transcrição é do Rust; Enviar encerra o ditado.** Configuração local aponta para executável e
   modelo instalados pelo usuário na máquina do servidor selecionado. O Hangar inicia e encerra
   o whisper.cpp em loopback, sem instalar componentes. Texto, imagem, arquivo e ditado passam
-  pela mesma parada, esperando transcrição e organização antes de enviar. O Python conserva a
-  borda HTTP e o transporte da organização, sem motor STT de reserva. Contrato e evidência em
+  pela mesma parada, esperando transcrição e organização antes de enviar. Ditado sem sessão,
+  reorganização, catálogo e status/teste de provedores são atendidos só pelo Rust: as portas do
+  Python não os repassam e não há motor STT de reserva. A tela web segue a mesma regra. Contrato e evidência em
   [plataforma.md](docs/decisoes/plataforma.md#transcrição-no-rust-e-envio-encerra-o-ditado).
 - **Cota tem cache em disco e respeita 429**: restart do backend não relê todas as contas, e
   fonte que levou 429 espera 10 min antes de insistir.

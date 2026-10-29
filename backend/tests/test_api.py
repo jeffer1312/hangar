@@ -1461,46 +1461,6 @@ def test_do_notify_awaiting_no_match_is_noop(monkeypatch):
     assert calls == []
 
 
-def test_relimpar_aplica_outro_estilo_sem_audio(api_client, monkeypatch):
-    # Trocar de estilo NAO reenvia o audio: a Whisper ja rodou e o cru veio no `raw`. O endpoint so
-    # chama a limpeza de novo — nao ha sessao, nem cwd, nem upload envolvidos.
-    visto = {}
-
-    def fake_limpar(texto, estilo_pedido=None, **options):
-        visto["texto"], visto["estilo"] = texto, estilo_pedido
-        return {"text": "**Objetivo**\nfalar.", "raw": texto, "aviso": None, "estilo_aplicado": "briefing", "organization_mode": "external_api"}
-
-    monkeypatch.setattr(api_mod.dictation_bridge, "organize", fake_limpar)
-    r = api_client.post("/api/ditado/relimpar",
-                        json={"texto": "eu queria falar sobre uma coisa aqui", "estilo": "briefing"},
-                        headers=_h())
-    assert r.status_code == 200
-    assert r.json()["text"] == "**Objetivo**\nfalar."
-    assert visto == {"texto": "eu queria falar sobre uma coisa aqui", "estilo": "briefing"}
-
-
-def test_status_dos_servicos_de_transcricao(api_client, monkeypatch):
-    linhas = [{"id": "el", "name": "ElevenLabs", "kind": "elevenlabs",
-               "waiting_until": 1900000000.0, "reason": "sem cota (402)"}]
-    monkeypatch.setattr(api_mod, "providers_status", lambda: linhas)
-    r = api_client.get("/api/transcription/providers/status", headers=_h())
-    assert r.status_code == 200
-    assert r.json() == {"providers": linhas}
-    assert api_client.get("/api/transcription/providers/status").status_code == 401
-
-
-def test_relimpar_recusa_estilo_que_nao_existe(api_client):
-    # 400, e nao "cai no padrao": aqui a pessoa CLICOU num botao. Entregar outro estilo calada seria
-    # mentir sobre o que ela apertou (na transcricao o estilo e palpite da tela, e cair na config e
-    # o certo — por isso a regra e diferente nos dois lugares).
-    r = api_client.post("/api/ditado/relimpar",
-                        json={"texto": "um texto qualquer aqui", "estilo": "resumir"},
-                        headers=_h())
-    assert r.status_code == 400
-    assert r.json()["detail"]["code"] == "erro_estilo_invalido"
-    assert "resumir" in r.json()["detail"]["msg"]
-
-
 def test_push_mute_route(api_client, monkeypatch, tmp_path):
     monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
     r = api_client.post("/api/push/mute", json={"session": "s1", "muted": True}, headers=_h())

@@ -3547,7 +3547,8 @@ impl Hangar {
         if opening { ids.push(landing::OPENING.into()); signatures.push(String::new()); }
         if self.working_row_shown() { ids.push(WORKING.into()); signatures.push(String::new()); }
         for agent in self.conversation.running_agents().filter(|agent| self.subagent_pin_running(agent)) {
-            ids.push(format!("{PINNED}{}", events[agent.call].id)); signatures.push(String::new());
+            ids.push(format!("{PINNED}{}", events[agent.call].id));
+            signatures.push(if agent.waiting { "waiting".into() } else { String::new() });
         }
         let patch = row_patch::RowPatch::between(from, &self.row_ids[from..], &self.row_signatures[from..],
             &ids, &signatures, if rebuilt.is_some() { items - from } else { 0 });

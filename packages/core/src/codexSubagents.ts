@@ -18,7 +18,8 @@ export function projectCodexSubagent(run: SubagentRun, states: CodexSubagents | 
   const ended = new Date(state.ended_at === null ? NaN : state.ended_at * 1000);
   return { ...run, agentPath: state.agent_path ?? run.agentPath, state: state.state,
     finished: state.state ? state.state !== 'running' : undefined, failed: state.state === 'failed',
-    endedAt: Number.isFinite(ended.getTime()) ? ended.toISOString() : null,
+    // Fim sem hora no retrato não apaga a hora que o disco já conhece; retomado não tem fim.
+    endedAt: Number.isFinite(ended.getTime()) ? ended.toISOString() : state.state === 'running' ? null : run.endedAt ?? null,
     canMessage: state.can_message, messageBlocked: state.message_blocked,
     problema: state.state ? undefined : 'erro_subagente_estado_indisponivel' };
 }

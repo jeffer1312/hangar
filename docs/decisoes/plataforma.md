@@ -290,6 +290,26 @@ Este
 
 ## Transcrição no Rust e envio encerra o ditado
 
+**Rotas públicas e auxiliares (28/10/2026):** `/api/dictation/transcribe`,
+`/api/ditado/relimpar`, `/api/dictation/models` e status/teste de provedores de transcrição
+chamam os motores dentro do Rust. As portas Python não as atendem nem repassam: por elas
+(convidado com login próprio, 8768) e no modo `python`, o ditado responde 404.
+Os fatos de configuração continuam no Python, sem chamar o Rust de volta; as pontes de
+catálogo só ficam onde ainda têm consumidores. TTS é outra capacidade e continua identificado
+como Python no painel, enquanto voz ao vivo e transcrição aparecem na mesma área com seu dono real.
+
+As referências de equivalência vêm da execução do Python antes da remoção, em
+`backend/tests/fixtures/contract/dictation_public/`. Elas incluem validação da borda HTTP,
+erros acumulados de query, avisos e seleção de provedor; os testes públicos Rust verificam
+também autorização, limites, conta e referência da conversa. A contagem de MCP inclui a
+requisição externa ao serviço, separada das rotas que suas ferramentas chamam.
+
+Diferença aprovada na migração: áudio acima de 100 MiB enviado em blocos, sem
+`Content-Length`, recebe 413 `request body too large`, como o tamanho declarado. O Python
+retornava 500 nesse caso; as capturas originais foram preservadas. Outros erros de leitura
+mantêm seu tratamento. Catálogo, status dos provedores e transcrição/teste conservam os tetos
+públicos de 60, 15 e 180 segundos, incluindo espera por configuração e consultas concorrentes.
+
 Em 09/10/2026, a issue 116 separou instalação e execução do Whisper: o usuário instala
 whisper.cpp, modelo e FFmpeg, e informa seus caminhos no servidor escolhido. O Hangar inicia
 um processo próprio em loopback, comprova que a porta pertence a ele, serializa inferências e
@@ -1196,7 +1216,7 @@ cada 5 s por até 3 min:
 
 A rota só aceita link com o nome Tailscale desta máquina (`tailscale status --json`), para não virar
 cliente HTTP genérico. Link local (`http://<ip>:8766`) não é conferido. Sem o Rust (modo `python`),
-o Python responde 404 (ou 405, quando serve o `frontend/dist` na raiz) e o cliente diz que a conferência precisa do servidor Rust, sem mostrar o link.
+o Python responde 404 (405 só em backend antigo, que ainda servia o `frontend/dist` na raiz) e o cliente diz que a conferência precisa do servidor Rust, sem mostrar o link.
 Pelo Hangar Connect (8768), o Python só repassa o pedido do dono à rota privada do Rust
 `/__hangar_server/share/reachability`, sem decidir nada; sem o Rust, responde 404
 `share_needs_rust_server`.

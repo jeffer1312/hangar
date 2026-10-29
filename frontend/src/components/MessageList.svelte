@@ -487,6 +487,7 @@
   // ids dos tool_use de Agent ainda rodando: o cartão deles fica "Executando…" mesmo com o
   // tool_result do lançamento em background já gravado.
   const agentesRodandoIds = $derived(new Set(agentesRodando.map((a) => a.id)));
+  const agentesEsperandoIds = $derived(new Set(agentesRodando.filter((a) => a.waiting).map((a) => a.id)));
   const resultadoDe = (id: string) => (agentesRodandoIds.has(id) ? undefined : toolResults.get(id));
   // O tool_use de cada Agent rodando: o cartão dele fica GRUDADO no fim da conversa até terminar,
   // em vez de subir com as mensagens seguintes (decisão do usuário).
@@ -781,7 +782,8 @@
            subiu com a conversa e a sessão parecia ociosa. -->
       <div class="agentes-rodando" aria-live="polite">
         {#each cartoesRodando as ev (ev.id)}
-          <ToolCard event={ev} result={null} {sessionName} animate={false} {onAbrirAgente} />
+          <ToolCard event={ev} result={null} {sessionName} animate={false} {onAbrirAgente}
+                    esperando={agentesEsperandoIds.has(ev.tool_use_id ?? '')} />
         {/each}
       </div>
     {/if}

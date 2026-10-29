@@ -26,8 +26,6 @@ def _env(monkeypatch, tmp_path):
 
 
 def _python_routes(path):
-    # Pela tabela de rotas e não pelo status: com `frontend/dist` presente o estático montado em "/"
-    # responde 405 ao POST que nenhuma rota atende.
     from starlette.routing import Match, Mount
     scope = {"type": "http", "path": path, "method": "POST", "root_path": ""}
     return [r for r in api_mod.app.router.routes if not isinstance(r, Mount) and r.matches(scope)[0] != Match.NONE]

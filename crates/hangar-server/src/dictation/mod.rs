@@ -10,3 +10,6 @@ pub mod references;
 pub mod rename_suggestion;
 pub mod routes;
 pub mod service;
+
+pub mod http;
+mod http_body;
