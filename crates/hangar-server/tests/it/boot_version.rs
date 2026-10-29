@@ -32,3 +32,19 @@ proptest::proptest!{
         proptest::prop_assert_eq!(boot_version::publish(root.path(),Snapshot{describe:"later".into(),readable:None}),snapshot);
     }
 }
+#[test]
+fn boot_version_get_does_not_wait_for_capture_or_block_other_roots(){
+    use std::{sync::mpsc,time::Duration};
+    let root=tempfile::tempdir().unwrap();let ready=tempfile::tempdir().unwrap();
+    let expected=Snapshot{describe:"ready".into(),readable:None};
+    boot_version::publish(ready.path(),expected.clone());
+    let (entered_tx,entered_rx)=mpsc::channel();let (release_tx,release_rx)=mpsc::channel();
+    let capture_root=root.path().to_owned();
+    let capture=std::thread::spawn(move||{let mut first=true;boot_version::capture_with(&capture_root,|_,_|{if first{first=false;entered_tx.send(()).unwrap();release_rx.recv().unwrap();}Err(())})});
+    entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let (read_tx,read_rx)=mpsc::channel();let reading=root.path().to_owned();let ready_path=ready.path().to_owned();
+    let reader=std::thread::spawn(move||read_tx.send((boot_version::get(&reading),boot_version::get(&ready_path))).unwrap());
+    let observed=read_rx.recv_timeout(Duration::from_millis(300));
+    release_tx.send(()).unwrap();capture.join().unwrap();reader.join().unwrap();
+    assert_eq!(observed.unwrap(),(None,Some(expected)),"a consulta não pode aguardar os subprocessos da captura");
+}
