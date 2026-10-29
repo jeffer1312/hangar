@@ -1,6 +1,7 @@
 //! Máquinas do dono, lista dos apps e alcance, sem passagem pelo backend Python.
 pub mod cli;
 pub mod doctor;
+pub mod dotenv;
 pub mod network;
 pub mod store;
 use crate::{
@@ -25,11 +26,33 @@ pub fn config_value(
     backend: Option<&Path>,
     key: &str,
 ) -> Result<Option<String>, String> {
-    match std::env::var(key) {
-        Ok(value) => Ok(Some(value)),
-        Err(std::env::VarError::NotPresent) => crate::user_data::env_value(home, backend, key),
-        Err(error) => Err(format!("configuração {key} inválida: {error}")),
+    let mut environment = std::collections::BTreeMap::new();
+    for (name, value) in std::env::vars_os() {
+        let Ok(name) = name.into_string() else { continue; };
+        match value.into_string() {
+            Ok(value) => { environment.insert(name, value); }
+            Err(_) if name.to_lowercase() == key.to_lowercase() => return Err(format!("configuração {key} inválida: valor fora de UTF-8")),
+            Err(_) => {}
+        }
     }
+    config_value_with_environment(home, backend, key, &environment)
+}
+
+/// Consulta com o ambiente congelado do chamador, sem ler variáveis globais durante a resolução.
+pub fn config_value_with_environment(
+    home: &Path, backend: Option<&Path>, key: &str,
+    environment: &std::collections::BTreeMap<String, String>,
+) -> Result<Option<String>, String> {
+    if let Some((_, value)) = environment.iter().rev().find(|(name, _)| name.to_lowercase() == key.to_lowercase()) {
+        return Ok(Some(value.clone()));
+    }
+    let Some(path) = crate::user_data::path(home, backend, ".env").map_err(|e|e.to_string())? else { return Ok(None); };
+    let raw = match crate::runtime::queue::read_replaced_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    Ok(dotenv::file_settings(&raw, environment).remove(&key.to_lowercase()).flatten())
 }
 
 const ID_PUBLICATION: &str = "# hangar-server-id-publication=";
@@ -162,15 +185,7 @@ impl Service {
         Ok(service)
     }
     pub fn value(&self, key: &str) -> String {
-        self.environment
-            .get(key)
-            .cloned()
-            .or_else(|| {
-                crate::user_data::env_value(&self.home, self.backend.as_deref(), key)
-                    .ok()
-                    .flatten()
-            })
-            .unwrap_or_default()
+        config_value_with_environment(&self.home, self.backend.as_deref(), key, &self.environment).ok().flatten().unwrap_or_default()
     }
 
     pub fn identity(&self) -> String {

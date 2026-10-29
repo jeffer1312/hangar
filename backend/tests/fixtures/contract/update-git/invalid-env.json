@@ -1,0 +1,27 @@
+{
+  "source_commit": "52cd396bad65ddaa44f729119df6e4e861ec0aa6",
+  "command": "python backend/tests/fixtures/contract/update-git/generate-invalid-env.py --reference <checkout-Python> --output backend/tests/fixtures/contract/update-git/invalid-env.json",
+  "cases": [
+    {
+      "key": "CP_SERVER_ID",
+      "bytes": [
+        255
+      ],
+      "python_value_escaped": "\\udcff"
+    },
+    {
+      "key": "cp_server_id",
+      "bytes": [
+        255
+      ],
+      "python_value_escaped": "\\udcff"
+    },
+    {
+      "key": "Cp_Server_Id",
+      "bytes": [
+        255
+      ],
+      "python_value_escaped": "\\udcff"
+    }
+  ]
+}

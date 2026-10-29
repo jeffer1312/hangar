@@ -1,0 +1,249 @@
+{
+  "source_commit": "52cd396bad65ddaa44f729119df6e4e861ec0aa6",
+  "command": "python backend/tests/fixtures/contract/update-git/generate-dotenv-read.py --reference <checkout-Python> --output backend/tests/fixtures/contract/update-git/dotenv-read.json",
+  "cases": [
+    {
+      "name": "file-wins-interpolation",
+      "raw": "CHANNEL=file\nCP_SERVER_ID=${CHANNEL}\n",
+      "environment": {
+        "CHANNEL": "environment",
+        "CP_SERVER_ID": "final-environment"
+      },
+      "parsed": {
+        "CHANNEL": "file",
+        "CP_SERVER_ID": "file"
+      },
+      "server_id": "final-environment"
+    },
+    {
+      "name": "env-interpolation",
+      "raw": "CP_SERVER_ID=${CHANNEL}\n",
+      "environment": {
+        "CHANNEL": "environment"
+      },
+      "parsed": {
+        "CP_SERVER_ID": "environment"
+      },
+      "server_id": "environment"
+    },
+    {
+      "name": "forward",
+      "raw": "CP_SERVER_ID=${CHANNEL}\nCHANNEL=later\n",
+      "environment": {},
+      "parsed": {
+        "CP_SERVER_ID": "",
+        "CHANNEL": "later"
+      },
+      "server_id": ""
+    },
+    {
+      "name": "defaults",
+      "raw": "EMPTY=\nUNSET\nA=${MISSING:-fallback}\nB=${EMPTY:-fallback}\nC=${UNSET:-fallback}\nCP_SERVER_ID=${MISSING:-fixture}\n",
+      "environment": {},
+      "parsed": {
+        "EMPTY": "",
+        "UNSET": null,
+        "A": "fallback",
+        "B": "",
+        "C": "",
+        "CP_SERVER_ID": "fixture"
+      },
+      "server_id": "fixture"
+    },
+    {
+      "name": "nested-default",
+      "raw": "A=${MISSING:-${OTHER:-fallback}}\nCP_SERVER_ID=fixture\n",
+      "environment": {},
+      "parsed": {
+        "A": "${OTHER:-fallback}",
+        "CP_SERVER_ID": "fixture"
+      },
+      "server_id": "fixture"
+    },
+    {
+      "name": "escapes",
+      "raw": "A=\"a\\nb\\tc\\r\\v\\f\\a\\b\\\\\\'\\\"\\q\"\nB='a\\nb\\\\c\\'d'\nCP_SERVER_ID=fixture\n",
+      "environment": {},
+      "parsed": {
+        "A": "a\nb\tc\r\u000b\f\u0007\b\\'\"\\q",
+        "B": "a\\nb\\c'd",
+        "CP_SERVER_ID": "fixture"
+      },
+      "server_id": "fixture"
+    },
+    {
+      "name": "quoted-interpolation",
+      "raw": "CHANNEL=fixture\nCP_SERVER_ID='${CHANNEL}'\n",
+      "environment": {},
+      "parsed": {
+        "CHANNEL": "fixture",
+        "CP_SERVER_ID": "fixture"
+      },
+      "server_id": "fixture"
+    },
+    {
+      "name": "multiline",
+      "raw": "A=\"line1\nline2\"\nCP_SERVER_ID=fixture\n",
+      "environment": {},
+      "parsed": {
+        "A": "line1\nline2",
+        "CP_SERVER_ID": "fixture"
+      },
+      "server_id": "fixture"
+    },
+    {
+      "name": "invalid-lines",
+      "raw": "bad value\nBROKEN=\"unfinished\nCP_SERVER_ID=fixture\n",
+      "environment": {},
+      "parsed": {
+        "CP_SERVER_ID": "fixture"
+      },
+      "server_id": "fixture"
+    },
+    {
+      "name": "export-comment",
+      "raw": "export 'CP_SERVER_ID' = fixture # comment\nA=abc#literal\n",
+      "environment": {},
+      "parsed": {
+        "CP_SERVER_ID": "fixture",
+        "A": "abc#literal"
+      },
+      "server_id": "fixture"
+    },
+    {
+      "name": "case-insensitive",
+      "raw": "cp_server_id=fixture\n",
+      "environment": {},
+      "parsed": {
+        "cp_server_id": "fixture"
+      },
+      "server_id": "fixture"
+    },
+    {
+      "name": "duplicate",
+      "raw": "CP_SERVER_ID=first\nCP_SERVER_ID=second\n",
+      "environment": {},
+      "parsed": {
+        "CP_SERVER_ID": "second"
+      },
+      "server_id": "second"
+    },
+    {
+      "name": "unset-duplicate",
+      "raw": "A=first\nA\nCP_SERVER_ID=${A:-fallback}\n",
+      "environment": {},
+      "parsed": {
+        "A": null,
+        "CP_SERVER_ID": ""
+      },
+      "server_id": ""
+    },
+    {
+      "name": "unicode-whitespace",
+      "raw": " CP_SERVER_ID = fixture # tail\n",
+      "environment": {},
+      "parsed": {
+        "CP_SERVER_ID": "fixture"
+      },
+      "server_id": "fixture"
+    },
+    {
+      "name": "bom",
+      "raw": "﻿CP_SERVER_ID=fixture\n",
+      "environment": {},
+      "parsed": {
+        "﻿CP_SERVER_ID": "fixture"
+      },
+      "server_id": ""
+    },
+    {
+      "name": "bare-dollar",
+      "raw": "CP_SERVER_ID=$CHANNEL\n",
+      "environment": {
+        "CHANNEL": "value"
+      },
+      "parsed": {
+        "CP_SERVER_ID": "$CHANNEL"
+      },
+      "server_id": "$CHANNEL"
+    },
+    {
+      "name": "bare-target",
+      "raw": "CP_SERVER_ID\n",
+      "environment": {},
+      "parsed": {
+        "CP_SERVER_ID": null
+      },
+      "server_id": ""
+    },
+    {
+      "name": "case-collision",
+      "raw": "CP_SERVER_ID=first\ncp_server_id=second\nCP_SERVER_ID=third\n",
+      "environment": {},
+      "parsed": {
+        "CP_SERVER_ID": "third",
+        "cp_server_id": "second"
+      },
+      "server_id": "second"
+    },
+    {
+      "name": "crlf",
+      "raw": "A=\"first\r\nsecond\"\r\nCP_SERVER_ID=fixture\r\n",
+      "environment": {},
+      "parsed": {
+        "A": "first\r\nsecond",
+        "CP_SERVER_ID": "fixture"
+      },
+      "server_id": "fixture"
+    },
+    {
+      "name": "quoted-trailing-invalid",
+      "raw": "A=\"first\nCP_SERVER_ID=ignored\nlast\" invalid\nCP_SERVER_ID=fixture\n",
+      "environment": {},
+      "parsed": {
+        "CP_SERVER_ID": "fixture"
+      },
+      "server_id": "fixture"
+    },
+    {
+      "name": "control-1c",
+      "raw": "CP_SERVER_ID\u001c=\u001cfixture\u001c# tail\nA=value\u001c\n",
+      "environment": {},
+      "parsed": {
+        "CP_SERVER_ID": "fixture",
+        "A": "value"
+      },
+      "server_id": "fixture"
+    },
+    {
+      "name": "control-1d",
+      "raw": "CP_SERVER_ID\u001d=\u001dfixture\u001d# tail\nA=value\u001d\n",
+      "environment": {},
+      "parsed": {
+        "CP_SERVER_ID": "fixture",
+        "A": "value"
+      },
+      "server_id": "fixture"
+    },
+    {
+      "name": "control-1e",
+      "raw": "CP_SERVER_ID\u001e=\u001efixture\u001e# tail\nA=value\u001e\n",
+      "environment": {},
+      "parsed": {
+        "CP_SERVER_ID": "fixture",
+        "A": "value"
+      },
+      "server_id": "fixture"
+    },
+    {
+      "name": "control-1f",
+      "raw": "CP_SERVER_ID\u001f=\u001ffixture\u001f# tail\nA=value\u001f\n",
+      "environment": {},
+      "parsed": {
+        "CP_SERVER_ID": "fixture",
+        "A": "value"
+      },
+      "server_id": "fixture"
+    }
+  ]
+}

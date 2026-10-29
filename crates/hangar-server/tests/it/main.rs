@@ -289,3 +289,4 @@ mod worktree_routes;
 mod codex_setup;
 
 mod harness_setup;
+mod dotenv_config;
