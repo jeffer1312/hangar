@@ -76,3 +76,33 @@ pub fn integer(value: &Value) -> Option<Value> {
     ))
     .ok()
 }
+
+/// Normalização lexical do pathlib, sem expandir o usuário nem resolver `..`.
+pub fn path_text(value:&str,windows:bool)->String {
+    if !windows {
+        let root=if value.starts_with("//")&&!value.starts_with("///"){"//"}else if value.starts_with('/') {"/"}else{""};
+        let tail=value.split('/').filter(|part|!part.is_empty()&&*part!=".").collect::<Vec<_>>().join("/");
+        let result=format!("{root}{tail}");return if result.is_empty(){".".into()}else{result};
+    }
+    let normalized=value.replace('/',"\\");
+    let (drive,mut root,tail)=if normalized.starts_with("\\\\") {
+        let start=if normalized.get(..8).is_some_and(|s|s.eq_ignore_ascii_case("\\\\?\\UNC\\")){8}else{2};
+        match normalized[start..].find('\\').map(|i|start+i).and_then(|first|normalized[first+1..].find('\\').map(|i|first+1+i)) {
+            Some(end)=>(&normalized[..end],"\\",&normalized[end+1..]),
+            None=>(normalized.as_str(),"",""),
+        }
+    }else if normalized.starts_with('\\') {("","\\",&normalized[1..])}
+    else if normalized.chars().nth(1)==Some(':') {
+        let end=normalized.chars().next().unwrap().len_utf8()+1;
+        if normalized[end..].starts_with('\\'){(&normalized[..end],"\\",&normalized[end+1..])}else{(&normalized[..end],"",&normalized[end..])}
+    }else{("","",normalized.as_str())};
+    if root.is_empty()&&drive.starts_with('\\')&&!drive.ends_with('\\') {
+        let parts=drive.split('\\').collect::<Vec<_>>();
+        if parts.len()==6 || parts.len()==4&&!"?.".contains(parts[2]) {root="\\";}
+    }
+    let parts=tail.split('\\').filter(|part|!part.is_empty()&&*part!=".").collect::<Vec<_>>();
+    let relative_drive=drive.is_empty()&&root.is_empty()&&parts.first().is_some_and(|part|part.chars().nth(1)==Some(':'));
+    let result=format!("{drive}{root}{}{}",if relative_drive{".\\"}else{""},parts.join("\\"));
+    if result.is_empty(){".".into()}else{result}
+}
+pub fn path(value:&str)->std::path::PathBuf { path_text(value,cfg!(windows)).into() }

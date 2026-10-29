@@ -43,3 +43,19 @@ fn value_coercion_matches_python_http_models() {
     }
     assert!(differences.is_empty(), "casos divergentes: {differences:?}");
 }
+
+#[test]
+fn login_guests_path_coercion_matches_python() {
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/path-coercion.json")).unwrap();
+    for row in fixture["rows"].as_array().unwrap(){for (windows,key) in [(false,"posix"),(true,"windows")]{
+        assert_eq!(hangar_server::value_coercion::path_text(row["input"].as_str().unwrap(),windows),row[key].as_str().unwrap(),"{key}: {:?}",row["input"]);
+    }}
+}
+
+proptest::proptest! {
+    #[test]
+    fn login_guests_path_normalization_is_idempotent(value in ".*", windows in proptest::bool::ANY) {
+        let once=hangar_server::value_coercion::path_text(&value,windows);
+        proptest::prop_assert_eq!(hangar_server::value_coercion::path_text(&once,windows),once);
+    }
+}
