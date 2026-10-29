@@ -195,4 +195,15 @@ describe('início da queda', () => {
       definirArmazem(null);
     }
   });
+
+  it('registro de versão antiga, sem início: a queda conta da última falha, não da reabertura', () => {
+    vi.useFakeTimers({ now: 100_000 });
+    const dados = new Map([['hangar_servidores_desligados', JSON.stringify({ pc: { failures: 2, retryAt: 95_000 + 5_000 } })]]);
+    definirArmazem({ getItem: (k: string) => dados.get(k) ?? null, setItem: (k: string, v: string) => { dados.set(k, v); }, removeItem: (k: string) => { dados.delete(k); } });
+    try {
+      expect(outageSince('pc')).toBe(95_000);
+    } finally {
+      definirArmazem(null);
+    }
+  });
 });

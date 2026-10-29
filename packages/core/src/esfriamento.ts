@@ -125,7 +125,9 @@ function carregar(): void {
       for (const [id, value] of Object.entries(saved)) {
         if (!value || !Number.isInteger(value.failures) || value.failures < 1 ||
           !Number.isFinite(value.retryAt)) continue;
-        const since = Number.isFinite(value.since) ? value.since : undefined;
+        // Gravado sem início por versão anterior: a queda começou no máximo na última falha.
+        const since = Number.isFinite(value.since) ? value.since
+          : value.retryAt - RETRY_DELAYS_MS[Math.min(value.failures, RETRY_DELAYS_MS.length) - 1];
         if ((estados.get(id)?.retryAt ?? 0) <= value.retryAt) {
           estados.set(id, { failures: value.failures, retryAt: value.retryAt, since });
         }
