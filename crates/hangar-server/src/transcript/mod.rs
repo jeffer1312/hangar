@@ -10,6 +10,7 @@ mod peer;
 pub(crate) mod py;
 pub mod pyjson;
 pub(crate) mod json_tree;
+mod json_writer;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

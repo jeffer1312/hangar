@@ -27,40 +27,8 @@ pub fn dumps_unicode(v: &Value, sort_keys: bool) -> String {
 /// `[]` vazios compactos.
 pub fn dumps_indent(v: &Value, indent: usize, ascii: bool) -> String {
     let mut out = String::new();
-    write_indented(&mut out, v, indent, 0, ascii);
+    super::json_writer::write(&mut out, v, ascii, Some(indent), None);
     out
-}
-
-fn write_indented(out: &mut String, v: &Value, indent: usize, level: usize, ascii: bool) {
-    let open = |out: &mut String, first: bool| {
-        out.push_str(if first { "\n" } else { ",\n" });
-        out.push_str(&" ".repeat(indent * (level + 1)));
-    };
-    match v {
-        Value::Array(items) if !items.is_empty() => {
-            out.push('[');
-            for (i, x) in items.iter().enumerate() {
-                open(out, i == 0);
-                write_indented(out, x, indent, level + 1, ascii);
-            }
-            out.push('\n');
-            out.push_str(&" ".repeat(indent * level));
-            out.push(']');
-        }
-        Value::Object(m) if !m.is_empty() => {
-            out.push('{');
-            for (i, (k, x)) in m.iter().enumerate() {
-                open(out, i == 0);
-                write_str(out, k, ascii);
-                out.push_str(": ");
-                write_indented(out, x, indent, level + 1, ascii);
-            }
-            out.push('\n');
-            out.push_str(&" ".repeat(indent * level));
-            out.push('}');
-        }
-        other => write_value(out, other, false, ascii),
-    }
 }
 
 /// `json.loads` que aceita surrogate solto como o Python. O valor guarda o surrogate como marcador;
@@ -121,42 +89,20 @@ fn hex4(b: &[u8], at: usize) -> Option<u32> {
 }
 
 fn write_value(out: &mut String, v: &Value, sort_keys: bool, ascii: bool) {
-    match v {
-        Value::Null => out.push_str("null"),
-        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Value::Number(n) => out.push_str(&number_repr(n)),
-        Value::String(s) => write_str(out, s, ascii),
-        Value::Array(items) => {
-            out.push('[');
-            for (i, x) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                write_value(out, x, sort_keys, ascii);
-            }
-            out.push(']');
-        }
-        Value::Object(m) => {
-            let mut pairs: Vec<_> = m.iter().collect();
-            if sort_keys {
-                // Ordem de ponto de código do Python, com o surrogate marcado no lugar dele.
-                pairs.sort_by(|a, b| a.0.chars().map(py::py_code).cmp(b.0.chars().map(py::py_code)));
-            }
-            out.push('{');
-            for (i, (k, x)) in pairs.into_iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                write_str(out, k, ascii);
-                out.push_str(": ");
-                write_value(out, x, sort_keys, ascii);
-            }
-            out.push('}');
-        }
-    }
+    let compare = |left: &str, right: &str| {
+        left.chars().map(py::py_code).cmp(right.chars().map(py::py_code))
+    };
+    super::json_writer::write(out, v, ascii, None, if sort_keys { Some(&compare) } else { None });
 }
 
-fn write_str(out: &mut String, s: &str, ascii: bool) {
+/// O codec do cofre usa marcadores próprios e fornece a ordem dos pontos de código.
+pub(crate) fn dumps_ordered(v: &Value, compare: &dyn Fn(&str, &str) -> std::cmp::Ordering) -> String {
+    let mut out = String::new();
+    super::json_writer::write(&mut out, v, true, None, Some(compare));
+    out
+}
+
+pub(super) fn write_str(out: &mut String, s: &str, ascii: bool) {
     out.push('"');
     for c in s.chars() {
         match c {

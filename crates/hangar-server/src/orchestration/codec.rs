@@ -49,30 +49,13 @@ pub fn dumps(value: &Value, sort_keys: bool) -> String {
         }
         out
     }
-    fn sorted(value: &Value) -> Value {
-        match value {
-            Value::Object(map) => {
-                let mut pairs: Vec<_> = map.iter().collect();
-                pairs.sort_by_cached_key(|(key, _)| codepoints(key));
-                Value::Object(
-                    pairs
-                        .into_iter()
-                        .map(|(key, value)| (key.clone(), sorted(value)))
-                        .collect(),
-                )
-            }
-            Value::Array(values) => Value::Array(values.iter().map(sorted).collect()),
-            _ => value.clone(),
-        }
-    }
-    let mut raw = crate::transcript::pyjson::dumps(
-        &if sort_keys {
-            sorted(value)
-        } else {
-            value.clone()
-        },
-        false,
-    );
+    let mut raw = if sort_keys {
+        crate::transcript::pyjson::dumps_ordered(value, &|left, right| {
+            codepoints(left).cmp(&codepoints(right))
+        })
+    } else {
+        crate::transcript::pyjson::dumps(value, false)
+    };
     for token in ["NaN", "Infinity", "-Infinity"] {
         raw = raw.replace(
             &crate::transcript::pyjson::dumps(&json!(format!("{}{token}", *MARK)), false),
@@ -103,10 +86,12 @@ pub fn dumps(value: &Value, sort_keys: bool) -> String {
 }
 pub fn response(status: axum::http::StatusCode, value: Value) -> axum::response::Response {
     use axum::response::IntoResponse;
+    let body = dumps(&value, false);
+    discard(value);
     (
         status,
         [(axum::http::header::CONTENT_TYPE, "application/json")],
-        dumps(&value, false),
+        body,
     )
         .into_response()
 }
