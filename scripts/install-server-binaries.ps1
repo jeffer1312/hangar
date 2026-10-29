@@ -73,6 +73,11 @@ function Install-ServerBinaries {
             & node $publisher publish $platform $dest $manifestFile $stage | Out-Host
             if ($LASTEXITCODE -ne 0) { $failed = $true }
         }
+        if ($installed.Count) {
+            $published = (& node $publisher installed $platform $dest $manifestFile $stage ($installed -join ', ') | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) { $failed = $true; $published = '' }
+            $installed = @(if ($published) { $published -split ', ' })
+        }
     } finally { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
     if ($kept.Count) { Write-Warning "release $branchTag $missing; mantive os binários instalados ($($kept -join ', '))"; $failed = $true }
     if ($installed.Count) { Write-Warning "release $branchTag $missing; instalei os da main ($($installed -join ', '))"; $failed = $true }

@@ -10,8 +10,8 @@ with tempfile.TemporaryDirectory(prefix='hangar-auth-reference-') as tmp:
  library='hangar_auth.dll' if a.platform.startswith('windows') else 'libhangar_auth.dylib' if a.platform.startswith('macos') else 'libhangar_auth.so'
  ext='.exe' if a.platform.startswith('windows') else ''
  rows=[];original_install=r._install
- for name in ['new','upgrade','same','hold-new','hold-upgrade','auth-hash-failure','server-hash-failure','auth-download-failure','server-download-failure','cano-download-failure','server-publish-failure','metadata-publish-failure','auth-existing-corrupt','branch-keeps','missing-auth','invalid-auth-sha','branch-missing-auth','metadata-repair']:
-  dest=Path(tmp)/name;dest.mkdir();old=name not in ['new','hold-new','missing-auth','invalid-auth-sha','branch-missing-auth'];branch=name in ['branch-keeps','branch-missing-auth']
+ for name in ['new','upgrade','same','hold-new','hold-upgrade','auth-hash-failure','server-hash-failure','auth-download-failure','server-download-failure','cano-download-failure','server-publish-failure','metadata-publish-failure','auth-existing-corrupt','branch-keeps','missing-auth','invalid-auth-sha','branch-missing-auth','metadata-repair','branch-server-download-failure','branch-server-publish-failure','branch-metadata-publish-failure']:
+  dest=Path(tmp)/name;dest.mkdir();old=name not in ['new','hold-new','missing-auth','invalid-auth-sha','branch-missing-auth','branch-server-download-failure','branch-server-publish-failure','branch-metadata-publish-failure'];branch=name.startswith('branch-')
   content={n:('new-'+n).encode() for n in r.NAMES}
   def metadata(server,auth):return json.dumps(dict(abi=1,store_version=1,server_sha256=sha(server),library_sha256=sha(auth),library=f'auth/{sha(auth)}/{library}'),sort_keys=True).encode()
   if old:
@@ -24,16 +24,16 @@ with tempfile.TemporaryDirectory(prefix='hangar-auth-reference-') as tmp:
   def get(url,deadline):
    urls.append(url)
    if url.endswith('server-latest.json'):
-    if name=='branch-keeps' and '/server-beta/' in url:raise urllib.error.HTTPError(url,404,'missing',{},None)
+    if name in ['branch-keeps','branch-server-download-failure','branch-server-publish-failure','branch-metadata-publish-failure'] and '/server-beta/' in url:raise urllib.error.HTTPError(url,404,'missing',{},None)
     doc=json.loads(json.dumps(manifest))
     if name=='branch-missing-auth' and '/server-beta/' in url:del doc['files'][a.platform+'/hangar-auth']
     return json.dumps(doc).encode()
    binary=url.rsplit('/',1)[-1]
-   if name==binary.replace('hangar-','')+'-download-failure':raise OSError('fixture-download-failed')
+   if name.removeprefix('branch-')==binary.replace('hangar-','')+'-download-failure':raise OSError('fixture-download-failed')
    return b'wrong' if name==binary.replace('hangar-','')+'-hash-failure' else content[binary]
   r._get=get;r.release_tag=lambda:'server-beta' if branch else 'server-latest';failed=[]
   def install(data,target):
-   if not failed and ((name=='server-publish-failure' and target.name=='hangar-server'+ext) or (name=='metadata-publish-failure' and target.name=='hangar-server.auth.json')):
+   if not failed and ((name.removeprefix('branch-')=='server-publish-failure' and target.name=='hangar-server'+ext) or (name.removeprefix('branch-')=='metadata-publish-failure' and target.name=='hangar-server.auth.json')):
     failed.append(True);raise OSError('fixture-publication-failed')
    return original_install(data,target)
   r._install=install

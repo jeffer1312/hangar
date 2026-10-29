@@ -1,5 +1,5 @@
 {
-  "source_commit": "657d90839a78c36e54bbce3cde8ac78d5be17f3d",
+  "source_commit": "9d1679227d6c420e4b49754093b674e9f739b1bd",
   "platform": "windows-x86_64",
   "command": "python backend/tests/fixtures/contract/update-git/generate-auth-release.py --reference <checkout-Python> --platform windows-x86_64 --output <fixture>",
   "cases": [
@@ -663,6 +663,90 @@
         "hangar-cano.exe": "new-hangar-cano",
         "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
         "hangar-server.exe": "new-hangar-server"
+      }
+    },
+    {
+      "name": "branch-server-download-failure",
+      "initial": {},
+      "result": [
+        "release server-beta ausente; da main, hangar-server: o download falhou (fixture-download-failed)",
+        "release server-beta ausente; instalei os da main (hangar-cano)"
+      ],
+      "urls": [
+        "https://release.invalid/server-beta/server-latest.json",
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "hangar-cano.exe": "new-hangar-cano"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "hangar-cano.exe": "new-hangar-cano"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "hangar-cano.exe": "new-hangar-cano"
+      }
+    },
+    {
+      "name": "branch-server-publish-failure",
+      "initial": {},
+      "result": [
+        "hangar-server: não consegui gravar em <DEST> (fixture-publication-failed)",
+        "release server-beta ausente; instalei os da main (hangar-auth, hangar-cano)"
+      ],
+      "urls": [
+        "https://release.invalid/server-beta/server-latest.json",
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano"
+      }
+    },
+    {
+      "name": "branch-metadata-publish-failure",
+      "initial": {},
+      "result": [
+        "hangar-auth-pair: não consegui gravar em <DEST> (fixture-publication-failed)",
+        "release server-beta ausente; instalei os da main (hangar-auth, hangar-cano)"
+      ],
+      "urls": [
+        "https://release.invalid/server-beta/server-latest.json",
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano"
       }
     }
   ]

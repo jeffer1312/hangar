@@ -26,7 +26,7 @@ function installFile(data, target, platform, io = fs) {
   const temp = path.join(path.dirname(target), `.${path.basename(target)}.${crypto.randomBytes(8).toString('hex')}.tmp`);
   try {
     io.writeFileSync(temp, data); io.chmodSync(temp, 0o755);
-    if (platform.startsWith('windows') && exists(io, target)) {
+    if (platform.startsWith('windows') && path.extname(target) !== '.json' && exists(io, target)) {
       let old;
       for (let n = 0; n < 100; n++) { const candidate = `${target}.old${n ? `-${n}` : ''}`; if (!exists(io, candidate)) { old = candidate; break; } }
       if (!old) throw new Error(`sem nome livre para ${path.basename(target)}.old`);
@@ -108,6 +108,13 @@ if (require.main === module) {
   try {
     const manifest = JSON.parse(fs.readFileSync(manifestPath)); const prepared = plan(manifest, platform, dest);
     if (mode === 'check') process.exit(0);
+    if (mode === 'installed') {
+      const names = (name || '').split(', ').filter(Boolean).filter(name => {
+        const target = name === 'hangar-auth' ? prepared.library : path.join(dest, `${name}${platform.startsWith('windows') ? '.exe' : ''}`);
+        try { return digest(fs.readFileSync(target)) === manifest.files[`${platform}/${name}`].sha256.toLowerCase(); } catch { return false; }
+      });
+      process.stdout.write(names.join(', ')); process.exit(0);
+    }
     if (mode === 'target') { process.stdout.write(name === 'hangar-auth' ? prepared.library : path.join(dest, `${name}${platform.startsWith('windows') ? '.exe' : ''}`)); process.exit(0); }
     if (mode !== 'publish') throw new Error('operação inválida');
     const items = [];

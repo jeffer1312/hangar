@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const {plan,publishPair,digest,installFile,validatePair} = require('./server-binaries-publish.cjs');
-const fixture = require('../backend/tests/fixtures/contract/update-git/' + (process.platform==='win32' ? 'auth-release-windows.json' : 'auth-release.json'));
+const fixture = require('../backend/tests/fixtures/contract/update-git/' + ((process.platform==='win32'||process.argv.includes('--windows-contract')) ? 'auth-release-windows.json' : 'auth-release.json'));
 const platform=fixture.platform, ext=platform.startsWith('windows')?'.exe':'';
 const root = fs.mkdtempSync(path.join(os.tmpdir(),'hangar-bootstrap-pair-'));
 const snapshot = dir => Object.fromEntries(fs.readdirSync(dir,{recursive:true}).filter(name=>fs.statSync(path.join(dir,name)).isFile()).map(name=>[name.split(path.sep).join('/'),fs.readFileSync(path.join(dir,name),'utf8')]));

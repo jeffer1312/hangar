@@ -66,6 +66,9 @@ run_bootstrap() {
   if [ "$pair_failed" = 0 ] && [ "$server_kept" = 0 ]; then
     node "$publisher" publish "$platform" "$dest" "$manifest" "$scratch" || failed=1
   fi
+  if [ -n "$installed" ]; then
+    installed=$(node "$publisher" installed "$platform" "$dest" "$manifest" "$scratch" "$installed") || { installed=''; failed=1; }
+  fi
   rm -rf -- "$scratch"
   if [ -n "$kept" ]; then printf 'release %s %s; mantive os binários instalados (%s)\n' "$branch_tag" "$missing" "$kept"; failed=1; fi
   if [ -n "$installed" ]; then printf 'release %s %s; instalei os da main (%s)\n' "$branch_tag" "$missing" "$installed"; failed=1; fi
