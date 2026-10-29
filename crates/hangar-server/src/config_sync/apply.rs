@@ -17,6 +17,7 @@ pub struct Apply {
     pub report: serde_json::Map<String, Value>,
     pub programs: BTreeMap<String, String>,
     pub accounts: crate::accounts::AccountService,
+    pub runtime_config: Result<super::runtime::RuntimeConfig, String>,
 }
 impl Apply {
     pub fn new(
@@ -37,8 +38,10 @@ impl Apply {
                 .into(),
             ),
         );
+        let runtime_config=super::runtime::RuntimeConfig::new(accounts.env.clone());
         Self {
             accounts,
+            runtime_config,
             context,
             backups,
             bundle,
@@ -543,11 +546,15 @@ impl Apply {
         Ok(())
     }
     fn preferences(&mut self) -> Result<(), Error> {
+        use super::runtime_values::{ValueGuard,Values};
+        use crate::orchestration::codec;
         let item = "hangar_prefs";
-        let incoming = export::uncanon(&self.bundle.items[item]["prefs"], &self.context.roots);
+        let incoming = ValueGuard(export::uncanon(&self.bundle.items[item]["prefs"], &self.context.roots));
         let path = self.context.preferences.clone();
-        let mut current = export::read_json(&path).unwrap_or_else(|_| json!({}));
-        let pending: BTreeMap<_, _> = incoming
+        let mut runtime=self.runtime_config.clone().map_err(|message|Error::new("config_sync_runtime_invalid",message,json!({})))?;
+        runtime.path=path.clone();
+        let current=Values(runtime.read());
+        let pending: Vec<_> = incoming
             .as_object()
             .into_iter()
             .flatten()
@@ -556,32 +563,29 @@ impl Apply {
                     && !["sync", "term_origins", "scan_roots"].contains(&k.as_str())
                     && current.get(*k) != Some(*v)
             })
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(k, _)| k.clone())
             .collect();
+        let mut pending=pending;
+        pending.sort();
         if !pending.is_empty() && path.exists() {
             std::fs::copy(
                 &path,
                 files::backup_target(&path, &self.context.roots, &self.backups)?,
             )?;
         }
-        for (key, value) in pending {
-            match super::preferences::coerce(&key, &value) {
+        for key in pending {
+            let changes=Values([(key.clone(),codec::clone_value(&incoming[&key]))].into_iter().collect());
+            match runtime.apply_checked(&changes,&Default::default()) {
                 Ok(value) => {
-                    current[&key] = value;
-                    files::write_file(
-                        &path,
-                        &Blob {
-                            data: serde_json::to_vec_pretty(&current).unwrap(),
-                            mode: 0o600,
-                        },
-                    )?;
+                    codec::discard(Value::Object(value));
                     self.changed(item, key);
                 }
-                Err(error) => self.warn(
+                Err(error) if error.is_validation() => self.warn(
                     item,
                     "config_sync_pref_rejected",
-                    json!({"key":key,"error":error.chars().take(200).collect::<String>()}),
+                    json!({"key":key,"error":error.message.chars().take(200).collect::<String>()}),
                 ),
+                Err(error)=>return Err(Error::new("config_sync_runtime_failed",error.message,json!({}))),
             }
         }
         Ok(())
