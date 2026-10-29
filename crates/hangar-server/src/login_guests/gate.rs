@@ -156,6 +156,14 @@ fn deny(headers: &axum::http::HeaderMap) -> Response {
     crate::routes::cors(headers, response.headers_mut());
     response
 }
+fn login_session_path(path:&str)->Option<SessionPath> {
+    let tail=path.strip_prefix("/api/sessions/")?;
+    let (name,tail)=tail.split_once('/').unwrap_or((tail,""));
+    if name=="events" {return None;}
+    let session=name.strip_prefix("term-").filter(|_|tail=="term").unwrap_or(name);
+    Some(SessionPath {name:name.into(),session:session.into(),rest:if tail.is_empty(){vec![]}else{tail.split('/').map(str::to_owned).collect()}})
+}
+
 pub async fn guard(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -207,7 +215,7 @@ pub async fn guard(
         path: path.clone(),
     };
     let mut sessions = HashMap::new();
-    if let Some(session) = SessionPath::parse(request.uri().path()) {
+    if let Some(session) = login_session_path(&path) {
         sessions.insert(session.session.clone(), Kind::Share);
         request.extensions_mut().insert(session);
     }

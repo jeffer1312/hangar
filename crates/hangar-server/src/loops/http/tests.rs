@@ -62,7 +62,7 @@ async fn routes_match_the_python() {
         let (status, resp) = handle(&fake, &name, op, &body).await;
         let label = c["label"].as_str().unwrap();
         assert_eq!(status.as_u16() as u64, c["status"].as_u64().unwrap(), "{label}: {resp}");
-        // O 422 do Rust tem o formato do `unprocessable_body`, não o do pydantic.
+        // Esta captura histórica só conserva o status; os erros integrais têm corpus próprio.
         if status != StatusCode::UNPROCESSABLE_ENTITY { assert_eq!(resp, c["response"], "{label}"); }
         assert_eq!(Value::Array(fake.pushed.lock().unwrap().clone()), c["pushed"], "{label}");
         assert_eq!(json!(*fake.queued.lock().unwrap()), c["queued"], "{label}");
@@ -158,4 +158,39 @@ async fn guest_loop_checkcmd_preserves_original_file_normalization() {
         let mut disk=Value::Object(fake.store.get("cc").unwrap());disk["goal_entry_id"]=case["disk"]["goal_entry_id"].clone();
         assert_eq!(disk,case["disk"]);
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn guest_loop_io_preserves_previous_record_and_effects() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture:Value=serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/loop-io.json")).unwrap();
+    let mut failures=Vec::new();
+    for case in fixture["rows"].as_array().unwrap() {
+        let dir=tempfile::tempdir().unwrap();
+        let fake=Fake {store:Store::new(dir.path()),rows:vec![row(json!({"name":"s","provider":"claude"}))],automations:true,branch:None,queued:Mutex::default(),pushed:Mutex::default()};
+        fake.store.set("s",case["initial"].as_object().unwrap()).unwrap();
+        let path=fake.store.loop_dir().join("s.json");
+        let before=std::fs::read(&path).unwrap();
+        std::fs::set_permissions(fake.store.loop_dir(),std::fs::Permissions::from_mode(0o555)).unwrap();
+        let method=Method::from_bytes(case["method"].as_str().unwrap().as_bytes()).unwrap();
+        let (_,operation)=op(&method,&format!("/api/sessions/s/{}",case["tail"].as_str().unwrap())).unwrap();
+        let body=if case["body"].is_null(){Vec::new()}else{serde_json::to_vec(&case["body"]).unwrap()};
+        let (status,response)=handle(&fake,"s",operation,&body).await;
+        std::fs::set_permissions(fake.store.loop_dir(),std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(status.as_u16(),500,"{case}: {response}");
+        assert_eq!(response["detail"]["code"],"loop_store_unwritable");
+        assert_eq!(std::fs::read(&path).unwrap(),before);
+        assert!(!path.with_extension("tmp").exists());
+        assert!(fake.pushed.lock().unwrap().is_empty());
+        let mut queued=fake.queued.lock().unwrap().get("s").cloned().unwrap_or_default();
+        for value in &mut queued {value.as_object_mut().unwrap().remove("id");}
+        assert_eq!(json!(queued),case["queued"]);
+        let mut headers=axum::http::HeaderMap::new();headers.insert("origin","https://fixture.invalid".parse().unwrap());
+        let mut http=http_response(status,response.clone());crate::http_cors::apply(&headers,&mut http);
+        let cors=http.headers().get("access-control-allow-origin").and_then(|v|v.to_str().ok());
+        println!("{} {}: status={}, body={}, cors={cors:?}, registro preservado",method,case["tail"],status,response);
+        if cors!=case["cors"].as_str(){failures.push(format!("{} {}: {cors:?}",method,case["tail"]));}
+    }
+    assert!(failures.is_empty(),"CORS de exceção externa: {failures:?}");
 }

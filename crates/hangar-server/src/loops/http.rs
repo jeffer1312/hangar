@@ -1,12 +1,10 @@
-//! Rotas do loop e do `then` do dono, com os corpos do Python: `PUT`/`DELETE /then`,
-//! `POST`/`GET`/`DELETE /loop`, `POST /loop/refine` e `POST /loop/resolve`. O convidado segue ao
-//! Python, como antes.
+//! Rotas nativas do loop e do `then`, com autorização da sessão e formulários originais.
 use super::store::{self, is_active, status, Loop, Store};
 use super::tick;
 use axum::body::to_bytes;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{Method, StatusCode};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use futures_util::future::BoxFuture;
 use hangar_api::session::SessionRow;
 use percent_encoding::percent_decode_str;
@@ -15,16 +13,35 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::routes::AppState;
-use crate::session_write::{detail_body, json_response};
+use crate::session_write::detail_body;
 
-const BODY_LIMIT: usize = 256 * 1024;
+const ROUTES: &[(&str,&str)] = &[
+    ("/api/sessions/{name}/then","PUT"),("/api/sessions/{name}/then","DELETE"),
+    ("/api/sessions/{name}/loop","POST"),("/api/sessions/{name}/loop","GET"),("/api/sessions/{name}/loop","DELETE"),
+    ("/api/sessions/{name}/loop/refine","POST"),("/api/sessions/{name}/loop/resolve","POST"),
+];
+pub fn owns_path(raw:&str)->bool {
+    let family=|tail:&str|tail=="loop" || tail.starts_with("loop/") || tail=="then" || tail.starts_with("then/");
+    let path=percent_decode_str(raw).decode_utf8_lossy();
+    if path.strip_prefix("/api/sessions/").and_then(|rest|rest.split_once('/')).is_some_and(|(_,tail)|family(tail)){return true;}
+    // Uma barra escapada no nome invalida a rota, mas o 404 dessa família continua no Rust.
+    let mut parts=raw.splitn(5,'/');
+    let Some("")=parts.next() else{return false;};
+    let (Some(api),Some(sessions),Some(_name),Some(tail))=(parts.next(),parts.next(),parts.next(),parts.next()) else{return false;};
+    percent_decode_str(api).decode_utf8_lossy()=="api" && percent_decode_str(sessions).decode_utf8_lossy()=="sessions" && family(&percent_decode_str(tail).decode_utf8_lossy())
+}
+
+fn schema_name(op:Op)->Option<&'static str> {
+    match op {Op::ThenSet=>Some("ThenLinkBody"),Op::Create=>Some("LoopCreate"),Op::Refine=>Some("LoopRefine"),Op::Resolve=>Some("LoopResolve"),_=>None}
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Op { ThenSet, ThenClear, Create, Get, Stop, Refine, Resolve }
 
 /// A rota pelo caminho (segmento do nome escapado) e o método.
 pub fn op(method: &Method, path: &str) -> Option<(String, Op)> {
-    let rest = path.strip_prefix("/api/sessions/")?;
+    let decoded=percent_decode_str(path).decode_utf8_lossy();
+    let rest = decoded.strip_prefix("/api/sessions/")?;
     let (seg, tail) = rest.split_once('/')?;
     if seg.is_empty() { return None; }
     let op = match (method.as_str(), tail) {
@@ -37,7 +54,7 @@ pub fn op(method: &Method, path: &str) -> Option<(String, Op)> {
         ("POST", "loop/resolve") => Op::Resolve,
         _ => return None,
     };
-    Some((percent_decode_str(seg).decode_utf8().ok()?.into_owned(), op))
+    Some((seg.to_owned(), op))
 }
 
 pub(crate) fn matches(method: &Method, path: &str) -> bool { op(method, path).is_some() }
@@ -326,27 +343,79 @@ impl Backend for Live {
     }
 }
 
-/// Só o dono; o resto segue ao Python.
-pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    if !owner { return crate::routes::pass(&st, req, &fwd).await; }
-    let headers = req.headers().clone();
-    let mut r = serve(&st, req).await;
-    crate::routes::cors(&headers, r.headers_mut());
-    r
+fn http_response(status:StatusCode, body:Value)->Response {
+    let external_error=status==StatusCode::INTERNAL_SERVER_ERROR && body.as_str()==Some("Internal Server Error");
+    if external_error || crate::orchestration::codec::contains_surrogate(&body) || crate::orchestration::codec::contains_nonfinite(&body) {
+        crate::orchestration::codec::discard(body);
+        let mut response=(StatusCode::INTERNAL_SERVER_ERROR,"Internal Server Error").into_response();
+        response.extensions_mut().insert(crate::http_cors::UnhandledServerError);
+        return response;
+    }
+    let persistence_error=status==StatusCode::INTERNAL_SERVER_ERROR && body["detail"]["code"]=="loop_store_unwritable";
+    let raw=crate::transcript::pyjson::dumps_compact_unicode(&body);
+    crate::orchestration::codec::discard(body);
+    let mut response=(status,[(axum::http::header::CONTENT_TYPE,"application/json")],raw).into_response();
+    // A falha de disco saía pelo middleware externo do Python, sem cabeçalhos CORS.
+    if persistence_error {response.extensions_mut().insert(crate::http_cors::UnhandledServerError);}
+    response
+}
+fn parsing_failed()->Response {
+    http_response(StatusCode::BAD_REQUEST,json!({"detail":"There was an error parsing the body"}))
 }
 
+/// O porteiro já delimitou o convidado; o handler mantém a autorização sem elevar sua identidade.
+pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    if let Some(response)=crate::http_cors::preflight(req.method(),req.headers()){return response;}
+    let headers=req.headers().clone();let method=req.method().clone();
+    let mut response=admit(&st,peer,req).await;
+    crate::http_cors::apply(&headers,&mut response);
+    crate::http_route_response::suppress_head(&method,&mut response);
+    response
+}
+async fn admit(st:&Arc<AppState>,peer:SocketAddr,mut req:Request)->Response {
+    if let Some(response)=crate::http_body_limit::precheck_with_limit(req.headers(),st.login_guests.body_limit){return response;}
+    let decoded=percent_decode_str(req.uri().path()).decode_utf8_lossy();
+    let decision=crate::http_contract::resolve(ROUTES,req.method().as_str(),&decoded);
+    let (_,https)=st.cfg.trusted.resolve(peer.ip(),req.headers());
+    if let Some(response)=crate::http_route_response::response(&decision,req.method(),req.uri(),req.headers(),https,&st.cfg.listen.to_string()){return response;}
+    let Some((name,operation))=op(req.method(),req.uri().path()) else{return http_response(StatusCode::NOT_FOUND,json!({"detail":"Not Found"}));};
+    // FastAPI lê a sintaxe JSON antes das dependências; o schema vem depois delas.
+    if schema_name(operation).is_some() && crate::http_body_input::is_json(req.headers()) {
+        let (parts,body)=req.into_parts();
+        let bytes=match to_bytes(body,st.login_guests.body_limit).await {Ok(bytes)=>bytes,Err(_)=>return parsing_failed()};
+        match crate::orchestration::body::parse(&bytes) {
+            Ok(value)=>crate::orchestration::codec::discard(value),
+            Err((status,body))=>return http_response(status,body),
+        }
+        req=Request::from_parts(parts,axum::body::Body::from(bytes));
+    }
+    let (_,caller)=match crate::routes::who(st,peer,&req).await {Ok(value)=>value,Err(error)=>return crate::auth::unavailable(error)};
+    match caller {
+        Some(caller) if caller.can(&name,req.method())=>{},
+        Some(_)=>return StatusCode::FORBIDDEN.into_response(),
+        None=>if let Err(response)=crate::routes::owner_gate(st,peer,&req).await{return response;},
+    }
+    serve(st,req).await
+}
 async fn serve(st: &Arc<AppState>, req: Request) -> Response {
-    let Some((name, op)) = op(req.method(), req.uri().path()) else {
-        return json_response(StatusCode::NOT_FOUND, json!({"detail": "Not Found"}));
+    let Some((name, operation)) = op(req.method(), req.uri().path()) else {
+        return http_response(StatusCode::NOT_FOUND, json!({"detail": "Not Found"}));
     };
-    // A trava vem antes do corpo, como a dependência `_transfer_guard` antes da validação.
-    let _pass = if op == Op::Get { None } else {
+    let _pass = if operation == Op::Get { None } else {
         match crate::plans::routes::enter(st, &name).await { Ok(p) => p, Err(r) => return r }
     };
-    let Ok(bytes) = to_bytes(req.into_body(), BODY_LIMIT).await else { return crate::plans::routes::unprocessable_body("corpo grande demais") };
-    let (status, body) = handle(&Live { st: st.clone() }, &name, op, &bytes).await;
-    json_response(status, body)
+    let schema=schema_name(operation);
+    let json_body=crate::http_body_input::is_json(req.headers());
+    let bytes=if schema.is_some() {
+        match to_bytes(req.into_body(),st.login_guests.body_limit).await {Ok(bytes)=>bytes,Err(_)=>return parsing_failed()}
+    } else {axum::body::Bytes::new()};
+    if let Some(schema)=schema && !json_body && !bytes.is_empty() {
+        let Ok(text)=std::str::from_utf8(&bytes) else{return http_response(StatusCode::INTERNAL_SERVER_ERROR,Value::String("Internal Server Error".into()));};
+        let error=crate::login_guests::schema::validate(schema,&Value::String(text.into())).unwrap_err();
+        return http_response(StatusCode::from_u16(error.status).unwrap(),error.body);
+    }
+    let (status, body) = handle(&Live { st: st.clone() }, &name, operation, &bytes).await;
+    http_response(status, body)
 }
 
 #[cfg(test)]

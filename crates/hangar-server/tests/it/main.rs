@@ -336,3 +336,4 @@ mod engine_auth_order;
 mod harness_health;
 mod engine_wrapper_executable;
 mod json_indented;
+mod guest_loops;

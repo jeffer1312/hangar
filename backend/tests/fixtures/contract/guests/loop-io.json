@@ -1,0 +1,122 @@
+{
+  "source_commit": "8f3ee2b5d3433d7efb61426923c226acdcd9f12d",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_loop_io.py",
+  "isolation": "Handlers originais por AST; fila/registro/avisos simulados; persist\u00eancia real em pasta Unix sem escrita, anterior preservado. Sem auth ou backend real.",
+  "rows": [
+    {
+      "method": "POST",
+      "tail": "loop",
+      "body": {
+        "goal": "novo"
+      },
+      "initial": {
+        "goal": "anterior",
+        "check_cmd": null,
+        "max_iters": 10,
+        "require_branch": true,
+        "status": "done",
+        "iter": 0,
+        "goal_entry_id": null,
+        "goal_delivered_ts": null,
+        "history": [],
+        "started_ts": 1000.0,
+        "ended_ts": null,
+        "ended_reason": null
+      },
+      "status": 500,
+      "response": "Internal Server Error",
+      "unchanged": true,
+      "queued": [
+        {
+          "text": "novo",
+          "delivered": false
+        }
+      ],
+      "pushed": [],
+      "temporary_exists": false,
+      "cors": null
+    },
+    {
+      "method": "DELETE",
+      "tail": "loop",
+      "body": null,
+      "initial": {
+        "goal": "anterior",
+        "check_cmd": null,
+        "max_iters": 10,
+        "require_branch": true,
+        "status": "running",
+        "iter": 0,
+        "goal_entry_id": null,
+        "goal_delivered_ts": null,
+        "history": [],
+        "started_ts": 1000.0,
+        "ended_ts": null,
+        "ended_reason": null
+      },
+      "status": 500,
+      "response": "Internal Server Error",
+      "unchanged": true,
+      "queued": [],
+      "pushed": [],
+      "temporary_exists": false,
+      "cors": null
+    },
+    {
+      "method": "POST",
+      "tail": "loop/resolve",
+      "body": {
+        "accept": true
+      },
+      "initial": {
+        "goal": "anterior",
+        "check_cmd": null,
+        "max_iters": 10,
+        "require_branch": true,
+        "status": "done_claimed",
+        "iter": 0,
+        "goal_entry_id": null,
+        "goal_delivered_ts": null,
+        "history": [],
+        "started_ts": 1000.0,
+        "ended_ts": null,
+        "ended_reason": null
+      },
+      "status": 500,
+      "response": "Internal Server Error",
+      "unchanged": true,
+      "queued": [],
+      "pushed": [],
+      "temporary_exists": false,
+      "cors": null
+    },
+    {
+      "method": "POST",
+      "tail": "loop/resolve",
+      "body": {
+        "accept": false
+      },
+      "initial": {
+        "goal": "anterior",
+        "check_cmd": null,
+        "max_iters": 10,
+        "require_branch": true,
+        "status": "done_claimed",
+        "iter": 0,
+        "goal_entry_id": null,
+        "goal_delivered_ts": null,
+        "history": [],
+        "started_ts": 1000.0,
+        "ended_ts": null,
+        "ended_reason": null
+      },
+      "status": 500,
+      "response": "Internal Server Error",
+      "unchanged": true,
+      "queued": [],
+      "pushed": [],
+      "temporary_exists": false,
+      "cors": null
+    }
+  ]
+}

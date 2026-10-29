@@ -1,0 +1,1279 @@
+{
+  "source_commit": "0800474ad605079aa1476b2a5f2e65e1c559f765",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_loop_auth_order.py",
+  "isolation": "Modelo LoopCreate e require_auth originais; depend\u00eancia de transfer\u00eancia simulada s\u00f3 para medir preced\u00eancia, sem afirmar contrato do mecanismo de transfer\u00eancia; reset_backoff entre casos exclui contador desta captura.",
+  "rows": [
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": "application/json",
+      "body_hex": "7b",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": "application/json",
+      "body_hex": "ff",
+      "status": 400,
+      "response": {
+        "detail": "There was an error parsing the body"
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": "application/json",
+      "body_hex": "",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": "application/json",
+      "body_hex": "6e756c6c",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": "application/json",
+      "body_hex": "5b5d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": "application/json",
+      "body_hex": "7b7d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "goal"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": "application/json",
+      "body_hex": "7b22676f616c223a2267227d",
+      "status": 200,
+      "response": {
+        "goal": "g",
+        "check_cmd": null,
+        "max_iters": 10,
+        "require_branch": true
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": "text/plain",
+      "body_hex": "7b",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{"
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": "text/plain",
+      "body_hex": "ff",
+      "status": 500,
+      "response": "Internal Server Error",
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": "text/plain",
+      "body_hex": "",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": "text/plain",
+      "body_hex": "6e756c6c",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "null"
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": "text/plain",
+      "body_hex": "5b5d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "[]"
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": "text/plain",
+      "body_hex": "7b7d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": "text/plain",
+      "body_hex": "7b22676f616c223a2267227d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{\"goal\":\"g\"}"
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": null,
+      "body_hex": "7b",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{"
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": null,
+      "body_hex": "ff",
+      "status": 500,
+      "response": "Internal Server Error",
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": null,
+      "body_hex": "",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": null,
+      "body_hex": "6e756c6c",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "null"
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": null,
+      "body_hex": "5b5d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "[]"
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": null,
+      "body_hex": "7b7d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": false,
+      "content_type": null,
+      "body_hex": "7b22676f616c223a2267227d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{\"goal\":\"g\"}"
+          }
+        ]
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": "application/json",
+      "body_hex": "7b",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": "application/json",
+      "body_hex": "ff",
+      "status": 400,
+      "response": {
+        "detail": "There was an error parsing the body"
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": "application/json",
+      "body_hex": "",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": "application/json",
+      "body_hex": "6e756c6c",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": "application/json",
+      "body_hex": "5b5d",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": "application/json",
+      "body_hex": "7b7d",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": "application/json",
+      "body_hex": "7b22676f616c223a2267227d",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": "text/plain",
+      "body_hex": "7b",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": "text/plain",
+      "body_hex": "ff",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": "text/plain",
+      "body_hex": "",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": "text/plain",
+      "body_hex": "6e756c6c",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": "text/plain",
+      "body_hex": "5b5d",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": "text/plain",
+      "body_hex": "7b7d",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": "text/plain",
+      "body_hex": "7b22676f616c223a2267227d",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": null,
+      "body_hex": "7b",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": null,
+      "body_hex": "ff",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": null,
+      "body_hex": "",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": null,
+      "body_hex": "6e756c6c",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": null,
+      "body_hex": "5b5d",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": null,
+      "body_hex": "7b7d",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "owner",
+      "busy": true,
+      "content_type": null,
+      "body_hex": "7b22676f616c223a2267227d",
+      "status": 409,
+      "response": {
+        "detail": "fixture_transfer_busy"
+      },
+      "transfer_calls": 1
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": "application/json",
+      "body_hex": "7b",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": "application/json",
+      "body_hex": "ff",
+      "status": 400,
+      "response": {
+        "detail": "There was an error parsing the body"
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": "application/json",
+      "body_hex": "",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": "application/json",
+      "body_hex": "6e756c6c",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": "application/json",
+      "body_hex": "5b5d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": "application/json",
+      "body_hex": "7b7d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": "application/json",
+      "body_hex": "7b22676f616c223a2267227d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": "text/plain",
+      "body_hex": "7b",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": "text/plain",
+      "body_hex": "ff",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": "text/plain",
+      "body_hex": "",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": "text/plain",
+      "body_hex": "6e756c6c",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": "text/plain",
+      "body_hex": "5b5d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": "text/plain",
+      "body_hex": "7b7d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": "text/plain",
+      "body_hex": "7b22676f616c223a2267227d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": null,
+      "body_hex": "7b",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": null,
+      "body_hex": "ff",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": null,
+      "body_hex": "",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": null,
+      "body_hex": "6e756c6c",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": null,
+      "body_hex": "5b5d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": null,
+      "body_hex": "7b7d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": false,
+      "content_type": null,
+      "body_hex": "7b22676f616c223a2267227d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": "application/json",
+      "body_hex": "7b",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": "application/json",
+      "body_hex": "ff",
+      "status": 400,
+      "response": {
+        "detail": "There was an error parsing the body"
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": "application/json",
+      "body_hex": "",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": "application/json",
+      "body_hex": "6e756c6c",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": "application/json",
+      "body_hex": "5b5d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": "application/json",
+      "body_hex": "7b7d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": "application/json",
+      "body_hex": "7b22676f616c223a2267227d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": "text/plain",
+      "body_hex": "7b",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": "text/plain",
+      "body_hex": "ff",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": "text/plain",
+      "body_hex": "",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": "text/plain",
+      "body_hex": "6e756c6c",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": "text/plain",
+      "body_hex": "5b5d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": "text/plain",
+      "body_hex": "7b7d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": "text/plain",
+      "body_hex": "7b22676f616c223a2267227d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": null,
+      "body_hex": "7b",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": null,
+      "body_hex": "ff",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": null,
+      "body_hex": "",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": null,
+      "body_hex": "6e756c6c",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": null,
+      "body_hex": "5b5d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": null,
+      "body_hex": "7b7d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    },
+    {
+      "token": "invalid",
+      "busy": true,
+      "content_type": null,
+      "body_hex": "7b22676f616c223a2267227d",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "transfer_calls": 0
+    }
+  ]
+}

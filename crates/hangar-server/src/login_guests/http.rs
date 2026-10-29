@@ -542,7 +542,7 @@ pub fn owns_path(raw:&str)->bool {
 }
 /// CORS precede autenticação e tamanho apenas nas responsabilidades desta migração.
 pub async fn public_contract(request:Request,next:axum::middleware::Next)->Response {
-    if !owns_path(request.uri().path()) { return next.run(request).await; }
+    if !owns_path(request.uri().path()) && !crate::loops::http::owns_path(request.uri().path()) { return next.run(request).await; }
     if let Some(response)=crate::http_cors::preflight(request.method(),request.headers()) { return response; }
     let method=request.method().clone();let headers=request.headers().clone();
     let mut response=next.run(request).await;

@@ -1,0 +1,90 @@
+{
+  "source_commit": "8f3ee2b5d3433d7efb61426923c226acdcd9f12d",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_loop_gate.py",
+  "isolation": "ASGITransport decodifica o caminho uma vez (TestClient decodifica duas); GuestUserGate/guest_users/loop_get originais; registro vazio e session_life=None para n\u00e3o consultar tmux/sess\u00f5es reais.",
+  "rows": [
+    {
+      "method": "GET",
+      "path": "/api/sessions/fixture/loop",
+      "status": 200,
+      "response": {
+        "loop": null,
+        "suggestions": []
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/sessions/other/loop",
+      "status": 403,
+      "response": {
+        "detail": {
+          "code": "erro_fora_do_convidado",
+          "params": {},
+          "msg": "fora do acesso do convidado"
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/sessions/fixture/then",
+      "status": 403,
+      "response": {
+        "detail": {
+          "code": "erro_fora_do_convidado",
+          "params": {},
+          "msg": "fora do acesso do convidado"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/config",
+      "status": 403,
+      "response": {
+        "detail": {
+          "code": "erro_fora_do_convidado",
+          "params": {},
+          "msg": "fora do acesso do convidado"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/%73essions/fixture/loop",
+      "status": 200,
+      "response": {
+        "loop": null,
+        "suggestions": []
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/sessions/%66ixture/loop",
+      "status": 200,
+      "response": {
+        "loop": null,
+        "suggestions": []
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/sessions/fixture%2Fother/loop",
+      "status": 404,
+      "response": {
+        "detail": "Not Found"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/sessions/%2566ixture/loop",
+      "status": 403,
+      "response": {
+        "detail": {
+          "code": "erro_fora_do_convidado",
+          "params": {},
+          "msg": "fora do acesso do convidado"
+        }
+      }
+    }
+  ]
+}

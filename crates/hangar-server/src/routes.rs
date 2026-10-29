@@ -655,11 +655,11 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/sessions/prewarm/{id}", axum::routing::delete(crate::prewarm::http::delete).fallback(pass_any))
         // Pedido de navegador do agente: só o dono; o Connect chega pela ponte (`forwarded`).
         .route("/api/sessions/{name}/nav", axum::routing::post(crate::nav_requests::open).delete(crate::nav_requests::confirm).fallback(pass_any))
-        // Loop e `then` do dono; o convidado segue ao Python.
-        .route("/api/sessions/{name}/then", axum::routing::put(crate::loops::http::route).delete(crate::loops::http::route).fallback(pass_any))
-        .route("/api/sessions/{name}/loop", get(crate::loops::http::route).post(crate::loops::http::route).delete(crate::loops::http::route).fallback(pass_any))
-        .route("/api/sessions/{name}/loop/refine", axum::routing::post(crate::loops::http::route).fallback(pass_any))
-        .route("/api/sessions/{name}/loop/resolve", axum::routing::post(crate::loops::http::route).fallback(pass_any))
+        // Loop e `then`: a guarda delimita a sessão e a política permite cada operação.
+        .route("/api/sessions/{name}/then", axum::routing::any(crate::loops::http::route))
+        .route("/api/sessions/{name}/loop", axum::routing::any(crate::loops::http::route))
+        .route("/api/sessions/{name}/loop/refine", axum::routing::any(crate::loops::http::route))
+        .route("/api/sessions/{name}/loop/resolve", axum::routing::any(crate::loops::http::route))
         // Bastão do dono: o Python prepara o dossiê e a sucessora Claude com terminal nasce aqui.
         .route("/api/sessions/{name}/bastao", axum::routing::post(crate::session_open::server::bastao).fallback(pass_any))
         // Retomar do Arquivo e o `/resume` ao vivo: a abertura e a reabertura do Rust, com a conversa que já existe.
@@ -980,6 +980,9 @@ pub(crate) async fn pass_any(
     }
     if crate::machine_peers::owns_http_path(&decoded_path){
         return crate::machine_peers::handle(State(st),ConnectInfo(peer),req).await;
+    }
+    if crate::loops::http::owns_path(req.uri().path()) {
+        return crate::loops::http::route(State(st),ConnectInfo(peer),req).await;
     }
     if crate::login_guests::owns_path(req.uri().path()) {
         return crate::login_guests::route(State(st),ConnectInfo(peer),req).await;
