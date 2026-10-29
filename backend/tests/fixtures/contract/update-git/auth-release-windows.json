@@ -1,0 +1,669 @@
+{
+  "source_commit": "657d90839a78c36e54bbce3cde8ac78d5be17f3d",
+  "platform": "windows-x86_64",
+  "command": "python backend/tests/fixtures/contract/update-git/generate-auth-release.py --reference <checkout-Python> --platform windows-x86_64 --output <fixture>",
+  "cases": [
+    {
+      "name": "new",
+      "initial": {},
+      "result": [],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server"
+      }
+    },
+    {
+      "name": "upgrade",
+      "initial": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "result": [],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server",
+        "hangar-server.exe.old": "old-hangar-server"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server",
+        "hangar-server.exe.old": "old-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server",
+        "hangar-server.exe.old": "old-hangar-server"
+      }
+    },
+    {
+      "name": "same",
+      "initial": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server"
+      },
+      "result": [],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json"
+      ],
+      "before_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server"
+      }
+    },
+    {
+      "name": "hold-new",
+      "initial": {},
+      "result": [],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {},
+      "publish_warnings": [],
+      "after_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.auth.json.prev": "",
+        "hangar-server.exe": "new-hangar-server",
+        "hangar-server.exe.prev": ""
+      },
+      "restore_warnings": [],
+      "after_restore": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano"
+      }
+    },
+    {
+      "name": "hold-upgrade",
+      "initial": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "result": [],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "publish_warnings": [],
+      "after_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-cano.exe.prev": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.auth.json.prev": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server",
+        "hangar-server.exe.old": "old-hangar-server",
+        "hangar-server.exe.prev": "old-hangar-server"
+      },
+      "restore_warnings": [],
+      "after_restore": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-cano.exe.old-1": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server",
+        "hangar-server.exe.old": "old-hangar-server",
+        "hangar-server.exe.old-1": "new-hangar-server"
+      }
+    },
+    {
+      "name": "auth-hash-failure",
+      "initial": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "result": [
+        "hangar-auth: o sha256 não confere com a release; o binário anterior ficou"
+      ],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      }
+    },
+    {
+      "name": "server-hash-failure",
+      "initial": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "result": [
+        "hangar-server: o sha256 não confere com a release; o binário anterior ficou"
+      ],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      }
+    },
+    {
+      "name": "auth-download-failure",
+      "initial": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "result": [
+        "hangar-auth: o download falhou (fixture-download-failed)"
+      ],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      }
+    },
+    {
+      "name": "server-download-failure",
+      "initial": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "result": [
+        "hangar-server: o download falhou (fixture-download-failed)"
+      ],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      }
+    },
+    {
+      "name": "cano-download-failure",
+      "initial": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "result": [
+        "hangar-cano: o download falhou (fixture-download-failed)"
+      ],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server",
+        "hangar-server.exe.old": "old-hangar-server"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server",
+        "hangar-server.exe.old": "old-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server",
+        "hangar-server.exe.old": "old-hangar-server"
+      }
+    },
+    {
+      "name": "server-publish-failure",
+      "initial": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "result": [
+        "hangar-server: não consegui gravar em <DEST> (fixture-publication-failed)"
+      ],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      }
+    },
+    {
+      "name": "metadata-publish-failure",
+      "initial": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "result": [
+        "hangar-auth-pair: não consegui gravar em <DEST> (fixture-publication-failed)"
+      ],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server",
+        "hangar-server.exe.old": "old-hangar-server",
+        "hangar-server.exe.old-1": "new-hangar-server"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server",
+        "hangar-server.exe.old": "old-hangar-server",
+        "hangar-server.exe.old-1": "new-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server",
+        "hangar-server.exe.old": "old-hangar-server",
+        "hangar-server.exe.old-1": "new-hangar-server"
+      }
+    },
+    {
+      "name": "auth-existing-corrupt",
+      "initial": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "corrupt",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "result": [
+        "hangar-auth: não consegui gravar em <DEST>/auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e (auth_library_hash_mismatch)"
+      ],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "corrupt",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "corrupt",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "corrupt",
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-cano.exe.old": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      }
+    },
+    {
+      "name": "branch-keeps",
+      "initial": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "result": [
+        "release server-beta ausente; mantive os binários instalados (hangar-auth, hangar-cano, hangar-server)"
+      ],
+      "urls": [
+        "https://release.invalid/server-beta/server-latest.json",
+        "https://release.invalid/server-latest/server-latest.json"
+      ],
+      "before_publish": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll": "old-hangar-auth",
+        "hangar-cano.exe": "old-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513/hangar_auth.dll\", \"library_sha256\": \"bf2e41bbca9ecaa12973e0908d36bb4855eeacb89859d0d0bd1a7cbb55348513\", \"server_sha256\": \"3dfd47ae3d879bebc3880b91496b6f6b4d00fe88b6ad7ee56f8f018f6f7adc6f\", \"store_version\": 1}",
+        "hangar-server.exe": "old-hangar-server"
+      }
+    },
+    {
+      "name": "missing-auth",
+      "initial": {},
+      "result": [
+        "hangar-auth: a release não traz build para windows-x86_64"
+      ],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json"
+      ],
+      "before_publish": {},
+      "publish_warnings": null,
+      "after_publish": {},
+      "restore_warnings": null,
+      "after_restore": {}
+    },
+    {
+      "name": "invalid-auth-sha",
+      "initial": {},
+      "result": [
+        "biblioteca de autenticação ausente ou inválida no manifesto"
+      ],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json"
+      ],
+      "before_publish": {},
+      "publish_warnings": null,
+      "after_publish": {},
+      "restore_warnings": null,
+      "after_restore": {}
+    },
+    {
+      "name": "branch-missing-auth",
+      "initial": {},
+      "result": [
+        "release server-beta sem build para windows-x86_64; instalei os da main (hangar-auth, hangar-cano, hangar-server)"
+      ],
+      "urls": [
+        "https://release.invalid/server-beta/server-latest.json",
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server"
+      }
+    },
+    {
+      "name": "metadata-repair",
+      "initial": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{}",
+        "hangar-server.exe": "new-hangar-server"
+      },
+      "result": [],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json"
+      ],
+      "before_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server"
+      },
+      "publish_warnings": null,
+      "after_publish": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth",
+        "hangar-cano.exe": "new-hangar-cano",
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server"
+      }
+    }
+  ]
+}

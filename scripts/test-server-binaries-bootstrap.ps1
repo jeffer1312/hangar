@@ -21,7 +21,7 @@ function global:Invoke-RestMethod {
     if ($TimeoutSec -ne 30) { throw 'Prazo incorreto do manifesto.' }
     [IO.File]::AppendAllText((Join-Path $global:ProofRoot 'calls'), "$Uri`n")
     $files = [ordered]@{}
-    foreach ($name in @('hangar-server','hangar-cano')) {
+    foreach ($name in @('hangar-auth','hangar-cano','hangar-server')) {
         $sha = [Security.Cryptography.SHA256]::Create()
         try { $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("new-$name"))).Replace('-','').ToLowerInvariant() } finally { $sha.Dispose() }
         $files["windows-x86_64/$name"] = [pscustomobject]@{name=$name;sha256=$hash}

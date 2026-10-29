@@ -1,5 +1,5 @@
 {
-  "source_commit": "52cd396bad65ddaa44f729119df6e4e861ec0aa6",
+  "source_commit": "657d90839a78c36e54bbce3cde8ac78d5be17f3d",
   "command": "python backend/tests/fixtures/contract/update-git/generate-bootstrap-review.py --reference <checkout-Python> --platform windows-x86_64 --output <fixture>",
   "cases": [
     {
@@ -9,14 +9,20 @@
       "urls": [
         "https://github.com/jeffer1312/hangar/releases/download/server-beta/server-latest.json",
         "https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json",
-        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server",
-        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano"
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-auth",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server"
       ],
       "files": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server",
         "hangar-cano.exe": "new-hangar-cano",
-        "hangar-server.exe": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth"
       },
-      "directories": [],
+      "directories": [
+        "auth",
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e"
+      ],
       "links": []
     },
     {
@@ -28,14 +34,20 @@
       "urls": [
         "https://github.com/jeffer1312/hangar/releases/download/server-beta/server-latest.json",
         "https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json",
-        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server",
-        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano"
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-auth",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server"
       ],
       "files": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server",
         "hangar-cano.exe": "new-hangar-cano",
-        "hangar-server.exe": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth"
       },
-      "directories": [],
+      "directories": [
+        "auth",
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e"
+      ],
       "links": []
     },
     {
@@ -45,14 +57,20 @@
       "urls": [
         "https://github.com/jeffer1312/hangar/releases/download/server-beta/server-latest.json",
         "https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json",
-        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server",
-        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano"
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-auth",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server"
       ],
       "files": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server",
         "hangar-cano.exe": "new-hangar-cano",
-        "hangar-server.exe": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth"
       },
-      "directories": [],
+      "directories": [
+        "auth",
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e"
+      ],
       "links": []
     },
     {
@@ -62,14 +80,20 @@
       "urls": [
         "https://github.com/jeffer1312/hangar/releases/download/server-beta/server-latest.json",
         "https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json",
-        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server",
-        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano"
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-auth",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server"
       ],
       "files": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server",
         "hangar-cano.exe": "new-hangar-cano",
-        "hangar-server.exe": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth"
       },
-      "directories": [],
+      "directories": [
+        "auth",
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e"
+      ],
       "links": []
     },
     {
@@ -79,14 +103,20 @@
       "urls": [
         "https://github.com/jeffer1312/hangar/releases/download/server-beta/server-latest.json",
         "https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json",
-        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server",
-        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano"
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-auth",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server"
       ],
       "files": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server",
         "hangar-cano.exe": "new-hangar-cano",
-        "hangar-server.exe": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth"
       },
-      "directories": [],
+      "directories": [
+        "auth",
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e"
+      ],
       "links": []
     },
     {
@@ -96,14 +126,20 @@
       "urls": [
         "https://github.com/jeffer1312/hangar/releases/download/server-beta/server-latest.json",
         "https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json",
-        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server",
-        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano"
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-auth",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server"
       ],
       "files": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server.exe": "new-hangar-server",
         "hangar-cano.exe": "new-hangar-cano",
-        "hangar-server.exe": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/hangar_auth.dll": "new-hangar-auth"
       },
-      "directories": [],
+      "directories": [
+        "auth",
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e"
+      ],
       "links": []
     }
   ]
