@@ -370,6 +370,14 @@ mod tests {
         assert!(get_checked(&parent, "late", 0).unwrap().is_some());
     }
 
+    /// O NTFS só avança a data de modificação no tique do relógio: duas escritas seguidas do mesmo tamanho saíam com o
+    /// mesmo carimbo. Na vida real a troca do arquivo não cai no mesmo tique da leitura anterior.
+    fn rewrite(path: &Path, contents: String) {
+        let before = path.metadata().unwrap().modified().unwrap();
+        std::fs::write(path, contents).unwrap();
+        std::fs::File::options().write(true).open(path).unwrap().set_modified(before + std::time::Duration::from_secs(1)).unwrap();
+    }
+
     #[test]
     fn replacing_the_parent_or_child_does_not_reuse_the_old_family() {
         let root = tempfile::tempdir().unwrap();
@@ -379,11 +387,11 @@ mod tests {
         assert!(get_checked(&parent, "mine", 0).unwrap().is_some());
         let mut meta: Value = serde_json::from_str(std::fs::read_to_string(&parent).unwrap().trim()).unwrap();
         meta["payload"]["id"] = json!("new-parent");
-        std::fs::write(&parent, format!("{meta}\n")).unwrap();
+        rewrite(&parent, format!("{meta}\n"));
         assert!(get_checked(&parent, "mine", 0).unwrap().is_none());
         assert!(get_checked(&parent, "new-family", 0).unwrap().is_some());
         meta["payload"]["timestamp"] = json!("2026-10-28T10:00:00Z");
-        std::fs::write(&parent, format!("{meta}\n")).unwrap();
+        rewrite(&parent, format!("{meta}\n"));
         assert!(get_checked(&parent, "new-family", 0).unwrap().is_none());
         let replacement = write(root.path(), "replacement", Some("new-parent"), &[]);
         let mut child_meta: Value = serde_json::from_str(std::fs::read_to_string(&replacement).unwrap().trim()).unwrap();
@@ -391,7 +399,7 @@ mod tests {
         std::fs::write(&replacement, format!("{child_meta}\n")).unwrap();
         meta["payload"]["id"] = json!("parent");
         meta["payload"]["timestamp"] = json!("2026-10-28T08:00:00Z");
-        std::fs::write(&parent, format!("{meta}\n")).unwrap();
+        rewrite(&parent, format!("{meta}\n"));
         std::fs::rename(replacement, &child).unwrap();
         assert!(get_checked(&parent, "mine", 0).unwrap().is_none());
     }

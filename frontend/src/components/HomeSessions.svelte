@@ -18,7 +18,9 @@
   let readyExpanded = $state(homeSessionsView.readyExpanded);
   let deleteError = $state('');
   const groups = $derived(groupHomeSessions(sessionsStore.rows, readyExpanded));
-  const machines = $derived(sessionsStore.byServer.filter((b) => b.error || !b.loaded));
+  // Máquina desligada só sai da lista enquanto outra responde; todas fora, o aviso é a única pista.
+  const allDown = $derived(sessionsStore.byServer.every((b) => b.error));
+  const machines = $derived(sessionsStore.byServer.filter((b) => b.error ? b.error !== 'offline' || allDown : !b.loaded));
   const manyServers = $derived(sessionsStore.byServer.length > 1);
 
   const LABEL: Record<HomeState, () => string> = {

@@ -424,8 +424,10 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
     </View>
   );
 
-  const machineErrors = byServer.filter((bucket) => bucket.error);
-  const machineStatus = home ? byServer.filter((bucket) => bucket.error || !bucket.loaded).map((bucket) => (
+  // Máquina desligada só sai da lista enquanto outra responde; todas fora, o aviso é a única pista.
+  const shown = (bucket: (typeof byServer)[number]) => bucket.error !== 'offline' || byServer.every((b) => b.error);
+  const machineErrors = byServer.filter((bucket) => bucket.error && shown(bucket));
+  const machineStatus = home ? byServer.filter((bucket) => bucket.error ? shown(bucket) : !bucket.loaded).map((bucket) => (
     <View key={bucket.server.id} style={styles.machineStatus}>
       {bucket.error ? (
         <Text style={styles.machineError} accessibilityRole="alert" selectable>
@@ -497,7 +499,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
           </SessionSectionCard>
           );
         }}
-        ListEmptyComponent={home && machineErrors.length ? null
+        ListEmptyComponent={home && (machineErrors.length || byServer.some((b) => !b.server.inviteEnded && !b.error && !b.loaded)) ? null
           : busca ? vazio(m.lista_vazia_filtro(), null, true) : vazio(m.lista_nenhuma_ativa(), null)}
         contentContainerStyle={styles.listContent}
         keyboardShouldPersistTaps="handled"

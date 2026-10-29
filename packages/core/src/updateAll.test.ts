@@ -178,6 +178,23 @@ describe('API e execução por máquina', () => {
     expect(result.failed.map((entry) => entry.id)).toEqual(['down']);
   });
 
+  it('máquina que não responde à identidade fica de fora sem esperar a busca nem os avisos; 404 e 503 seguem', async () => {
+    identity = (id) => id === 'off' ? Promise.reject(new TypeError('fixture-network'))
+      : id === 'old' ? json({}, 404) : id === 'busy' ? json({}, 503) : json({ identificador: id, lan_url: '' });
+    const result = await prepareUpdateAll(['on', 'off', 'old', 'busy'].map((id) => server(id)), options);
+    expect(result.run.map((entry) => entry.server.id)).toEqual(['on', 'old', 'busy']);
+    expect(result.failed.map((entry) => entry.id)).toEqual(['off']);
+    expect(calls.filter((path) => path.startsWith('off/'))).toEqual(['off/api/peers/identificador']);
+  });
+
+  it('identidade com corpo que não é JSON não tira a máquina da rodada', async () => {
+    identity = (id) => id === 'junk' ? new Response('{', { status: 200, headers: { 'Content-Type': 'application/json' } })
+      : json({ identificador: id, lan_url: '' });
+    const result = await prepareUpdateAll(['on', 'junk'].map((id) => server(id)), options);
+    expect(result.run.map((entry) => entry.server.id)).toEqual(['on', 'junk']);
+    expect(result.failed).toEqual([]);
+  });
+
   it('quem não leu os avisos fica fora da rodada; o aceite de cada máquina chega ao POST dela', async () => {
     const bodies: Record<string, unknown> = {};
     accept = (id, body) => { bodies[id] = body; return json({ ok: true, started: false }); };

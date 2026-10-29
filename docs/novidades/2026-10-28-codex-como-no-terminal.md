@@ -1,8 +1,9 @@
 ---
-titulo: O Codex mostra o que o terminal dele mostra
-tipo: melhoria
+titulo: Subagentes do Codex na conversa
+tipo: novo
 onde: todos
-experimente: Numa conversa Codex, peça para rodar um servidor (npm run dev) e abra Atividade.
+experimente: Numa conversa Codex, peça para ele dividir a tarefa entre subagentes e abra Atividade.
+animacao: codex-atividade
 ---
 
-Nas conversas Codex, o painel Atividade passa a mostrar os subagentes e os comandos que continuam rodando, com a saída ao vivo e um botão para encerrar cada comando. Hook que falhou e servidor MCP que não subiu viram um aviso na conversa, uma vez só, com a contagem quando se repete.
+Quando o Codex abre subagentes, cada um aparece na conversa no mesmo cartão das conversas Claude, com o tempo rodando e o fim, e o toque abre a conversa dele. A Atividade também mostra os comandos que continuam rodando, com a saída ao vivo e um botão para encerrar cada um. Hook que falhou e servidor MCP que não subiu viram um aviso na conversa, uma vez só, com a contagem quando se repete.
