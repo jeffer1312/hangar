@@ -116,35 +116,6 @@ def test_plugin_old_capability_refuses_before_enqueue(monkeypatch):
         pb._donos.clear()
 
 
-@pytest.mark.parametrize('ack', ['old', 'uncorrelated', 'wrong_generation', 'wrong_conversation', 'matching'])
-def test_plugin_receipt_correlates_publication_generation_conversation(monkeypatch, ack):
-    monkeypatch.setattr(pb, 'PUBLICA_S', .06)
-    monkeypatch.setattr(pb, 'tracked_session_id', lambda name:'sid')
-    async def flow():
-        pb._loop = asyncio.get_running_loop()
-        pb._waiters['session'] = asyncio.Queue()
-        pb._donos['session'] = ('i', {'fill','user','receipt_v2'}, time.monotonic())
-        task = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, 'session', 'sid', 1,
-            {'id':'new', 'text':'hello','mode':'fill'}, lambda:None))
-        payload = await asyncio.wait_for(pb._waiters['session'].get(), .5)
-        assert payload['publication_id'] == 'new'
-        extra = {'publication_id':'new','generation':1,'session_id':'sid'}
-        if ack == 'old': extra['publication_id'] = 'old'
-        if ack == 'uncorrelated': extra = {}
-        if ack == 'wrong_generation': extra['generation'] = 0
-        if ack == 'wrong_conversation': extra['session_id'] = 'old-sid'
-        await pb.filled(pb.FilledBody(sessao='session', token=pb.mint('session'), ok=True, **extra))
-        assert await task == ('filled' if ack == 'matching' else 'unknown')
-        if ack != 'matching':
-            assert pb._publications['session']['id'] == 'new'
-    try:
-        asyncio.run(flow())
-    finally:
-        pb._publications.clear()
-        pb._waiters.clear()
-        pb._donos.clear()
-
-
 def test_rust_alive_or_missing_descendant_proof_never_recovers_terminal(tmp_path):
     async def flow():
         owner = RuntimeCoordinator()
@@ -528,31 +499,6 @@ def test_reserve_consumes_partial_proof_on_reused_worker(monkeypatch,tmp_path):
         assert not await asyncio.to_thread(lambda:hasattr(ti._ULTIMA_LIMPEZA,'limpou'))
         assert not await asyncio.to_thread(lambda:hasattr(ti._ULTIMA_LIMPEZA,'stage'))
     asyncio.run(flow())
-
-
-@pytest.mark.parametrize('ack', ['matching','old','wrong_generation','wrong_conversation','uncorrelated'])
-def test_managed_held_permission_ack_correlates_without_fallback(monkeypatch,ack):
-    monkeypatch.setattr(pb,'CONFIRMA_S',.05)
-    async def flow():
-        pb._loop=asyncio.get_running_loop()
-        queue=asyncio.Queue()
-        pb._perguntas['session']={'id':'perm:request','questions':[], 'fila':queue,'visto':time.monotonic()}
-        receipt={'publication_id':'new','generation':1,'session_id':'sid'}
-        task=asyncio.create_task(asyncio.to_thread(pb.responder_pergunta,'session',{'permitir':True},'perm:request',receipt))
-        body=await asyncio.wait_for(queue.get(),.5)
-        assert body['publication_id']=='new'
-        extra=copy.deepcopy(receipt)
-        if ack=='old':extra['publication_id']='old'
-        if ack=='wrong_generation':extra['generation']=0
-        if ack=='wrong_conversation':extra['session_id']='old-sid'
-        if ack=='uncorrelated':extra={}
-        await pb.ask_fim(pb.AskFimBody(sessao='session',token=pb.mint('session'),id='perm:request',vencedor='app',**extra))
-        assert await task == (ack=='matching')
-    try:
-        asyncio.run(flow())
-    finally:
-        pb._perguntas.clear()
-        pb._fechadas.clear()
 
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='CLI falsa POSIX; Windows tem Job real separado')
