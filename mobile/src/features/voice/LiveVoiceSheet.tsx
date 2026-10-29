@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Platform, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { EnrichedMarkdownText } from 'react-native-enriched-markdown';
 import type { Credencial, LiveVoiceState, LiveVoiceSettings, LiveVoiceSettingsReply, ModelOption, Server, VoiceMemory } from '@hangar/core';
-import { liveVoiceSpeaker, liveVoiceStatus, liveVoiceThoughtTail } from '@hangar/core';
+import { liveVoiceBackstageKeys, liveVoiceClock, liveVoiceSpeaker, liveVoiceStatus, liveVoiceThoughtTail } from '@hangar/core';
 import { Sheet } from '../../ui/Sheet';
 import { Icon, type IconName } from '../../ui/Icon';
 import { superficie } from '../../theme/superficie';
@@ -165,6 +165,41 @@ function MenuField({ title, context, value, choices, disabled, onChange }: {
     </View>
   );
 }
+
+type BackstageLine = LiveVoiceState['backstage'][number];
+
+function backstageLabel(line: BackstageLine): string {
+  switch (line.kind) {
+    case 'you': return m.native_voice_backstage_you();
+    case 'voice': return m.native_voice_backstage_voice();
+    case 'heard': return m.native_voice_backstage_heard();
+    case 'answer': return m.native_voice_backstage_answer();
+    // O texto do resultado é só o nome da sessão.
+    case 'result': return line.text ? m.native_voice_backstage_result({ session: line.text }) : m.native_voice_backstage_answer_session();
+    default: return '';
+  }
+}
+
+const sameLine = (a: { line: BackstageLine }, b: { line: BackstageLine }) =>
+  a.line.kind === b.line.kind && a.line.text === b.line.text && a.line.at === b.line.at && a.line.live === b.line.live;
+
+// O estado chega várias vezes por segundo durante a fala: só a linha que mudou redesenha.
+const BackstageRow = memo(function BackstageRow({ line }: { line: BackstageLine }) {
+  const label = backstageLabel(line);
+  const body = line.kind === 'result' ? '' : line.text;
+  const who = line.kind === 'you' ? styles.whoYou : line.kind === 'voice' ? styles.whoVoice : line.kind === 'answer' ? styles.whoAnswer
+    : line.kind === 'result' ? styles.whoResult : styles.detail;
+  return (
+    <View style={styles.backstageLine}>
+      {label || line.at !== undefined ? <View style={styles.backstageHead}>
+        {label ? <Text style={[styles.backstageWho, who]}>{label}</Text> : null}
+        {line.at !== undefined ? <Text style={styles.backstageAt}>{liveVoiceClock(line.at)}</Text> : null}
+        {line.live ? <Text style={styles.backstageAt}>{m.native_voice_backstage_live()}</Text> : null}
+      </View> : null}
+      {body ? <Text selectable style={line.kind === 'heard' ? styles.detail : styles.text}>{body}</Text> : null}
+    </View>
+  );
+}, sameLine);
 
 function RoundAction({ title, label, icon, onPress, danger = false, selected = false, disabled = false, expanded }: {
   title: string; label: string; icon: IconName; onPress: () => void; danger?: boolean; selected?: boolean; disabled?: boolean; expanded?: boolean;
@@ -360,8 +395,8 @@ export function LiveVoiceSheet({ open, view, levels, servers, serverId, onSelect
         <View style={[styles.group, styles.meters]}>{windows.map(w => <Meter key={w.title} title={w.title} used={w.used} />)}</View>
       </Section> : null}
       {state?.backstage.length ? <Section title={m.live_voice_backstage()}>
-        <View style={[styles.group, styles.lines]}>
-          {state.backstage.slice(-6).map((line, i) => <Text key={i} selectable style={line.kind === 'heard' ? styles.text : styles.detail}>{line.text}</Text>)}
+        <View style={[styles.group, styles.backstage]}>
+          {liveVoiceBackstageKeys(state.backstage).map((key, i) => <BackstageRow key={key} line={state.backstage[i]} />)}
         </View>
       </Section> : null}
       {state?.followed.length ? <Section title={m.live_voice_followed()}>
@@ -526,6 +561,15 @@ const styles = StyleSheet.create((theme) => ({
   group: { paddingHorizontal: theme.base.space[3], borderRadius: theme.base.radius.md, backgroundColor: superficie(theme) },
   meters: { flexDirection: 'row', gap: theme.base.space[4], paddingVertical: theme.base.space[3] },
   lines: { gap: theme.base.space[1.5], paddingVertical: theme.base.space[3] },
+  backstage: { gap: theme.base.space[3], paddingVertical: theme.base.space[3] },
+  backstageLine: { gap: theme.base.space[0.5] },
+  backstageHead: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', columnGap: theme.base.space[2] },
+  backstageWho: { ...theme.type.label, fontWeight: theme.base.weight.bold },
+  backstageAt: { ...theme.type.meta, color: theme.tokens.text.muted, fontVariant: ['tabular-nums'] },
+  whoYou: { color: theme.tokens.accent.base },
+  whoVoice: { color: theme.tokens.status.success },
+  whoAnswer: { color: theme.tokens.text.primary },
+  whoResult: { color: theme.tokens.status.warning },
   memory: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingVertical: theme.base.space[2] },
   iconButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   action: { flexGrow: 1, minHeight: 44, paddingHorizontal: theme.base.space[3], paddingVertical: theme.base.space[2],
