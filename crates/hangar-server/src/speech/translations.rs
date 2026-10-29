@@ -403,6 +403,81 @@ mod tests {
         )));
     }
 
+    #[tokio::test]
+    async fn a_valid_empty_translation_preserves_and_caches_the_original() {
+        let server = fake(vec![content(
+            &serde_json::json!(["\u{1c} \u{85}"]).to_string(),
+        )])
+        .await;
+        let texts = vec!["Runs the tests for the file.".to_owned()];
+        let service = Service::default();
+        for _ in 0..2 {
+            assert_eq!(
+                service.translate(&server.config, &texts, "pt").await,
+                (texts.clone(), String::new())
+            );
+        }
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_translation_requests_do_not_lose_each_others_cache_entries() {
+        use std::sync::Arc;
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let server = fake_gated(
+            vec![
+                content("[\"Executa os testes.\"]"),
+                content("[\"Abre o navegador.\"]"),
+            ],
+            Some((entered.clone(), release.clone())),
+        )
+        .await;
+        let service = Arc::new(Service::default());
+        let first_text = vec!["Runs the tests for the file.".to_owned()];
+        let second_text = vec!["Opens the browser for the user.".to_owned()];
+        let first = tokio::spawn({
+            let service = service.clone();
+            let config = server.config.clone();
+            let texts = first_text.clone();
+            async move { service.translate(&config, &texts, "pt").await }
+        });
+        entered.notified().await;
+        let mut second = tokio::spawn({
+            let service = service.clone();
+            let config = server.config.clone();
+            let texts = second_text.clone();
+            async move { service.translate(&config, &texts, "pt").await }
+        });
+        let blocked = tokio::time::timeout(Duration::from_millis(100), &mut second)
+            .await
+            .is_err();
+        release.notify_one();
+        let first_result = first.await.unwrap();
+        let second_result = second.await.unwrap();
+        assert!(
+            blocked,
+            "a segunda solicitação deve esperar a publicação do cache da primeira"
+        );
+        assert_eq!(
+            first_result,
+            (vec!["Executa os testes.".to_owned()], String::new())
+        );
+        assert_eq!(
+            second_result,
+            (vec!["Abre o navegador.".to_owned()], String::new())
+        );
+        assert_eq!(
+            service.translate(&server.config, &first_text, "pt").await,
+            first_result
+        );
+        assert_eq!(
+            service.translate(&server.config, &second_text, "pt").await,
+            second_result
+        );
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
     proptest::proptest! {
         #[test]
         fn arbitrary_provider_batches_and_descriptions_do_not_panic(text in ".*",language in ".*") {

@@ -170,6 +170,7 @@ pub(super) mod testing {
         hits: Arc<AtomicUsize>,
         bodies: Arc<Mutex<Vec<Value>>>,
         headers: Arc<Mutex<Vec<axum::http::HeaderMap>>>,
+        first_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     }
 
     pub struct FakeServer {
@@ -188,6 +189,13 @@ pub(super) mod testing {
     }
 
     pub async fn fake(values: Vec<(u16, Value)>) -> FakeServer {
+        fake_gated(values, None).await
+    }
+
+    pub async fn fake_gated(
+        values: Vec<(u16, Value)>,
+        first_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+    ) -> FakeServer {
         async fn reply(State(state): State<Replies>, request: Request) -> Response {
             state
                 .headers
@@ -202,13 +210,19 @@ pub(super) mod testing {
                 .lock()
                 .unwrap()
                 .push(serde_json::from_slice(&bytes).unwrap());
-            state.hits.fetch_add(1, Ordering::SeqCst);
+            let index = state.hits.fetch_add(1, Ordering::SeqCst);
             let (status, value) = state
                 .values
                 .lock()
                 .unwrap()
                 .pop_front()
                 .unwrap_or_else(|| (200, json!({"choices":[{"message":{"content":"ok"}}]})));
+            if index == 0
+                && let Some((entered, release)) = &state.first_gate
+            {
+                entered.notify_one();
+                release.notified().await;
+            }
             (
                 axum::http::StatusCode::from_u16(status).unwrap(),
                 [("content-type", "application/json")],
@@ -223,6 +237,7 @@ pub(super) mod testing {
             hits: Arc::default(),
             bodies: Arc::default(),
             headers: Arc::default(),
+            first_gate,
         };
         let router = Router::new()
             .route("/v1/chat/completions", post(reply))
@@ -435,6 +450,50 @@ mod tests {
         assert_eq!(error.status, 502);
         assert!(!error.detail.contains("fixture-key"));
         assert!(error.detail.contains("[segredo removido]"));
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_http_error_body_keeps_the_upstream_status() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut received = Vec::new();
+            let mut chunk = [0; 4096];
+            loop {
+                let count = stream.read(&mut chunk).await.unwrap();
+                assert!(count > 0, "a requisição deve terminar antes da resposta");
+                received.extend_from_slice(&chunk[..count]);
+                if let Some(head) = received.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&received[..head]);
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|value| value.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if received.len() >= head + 4 + length {
+                        break;
+                    }
+                }
+            }
+            stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 100\r\nConnection: close\r\n\r\npartial").await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+        let config = SpeechConfig {
+            values: json!({"llm_base_url":format!("http://{address}/v1"),"llm_api_key":"fixture"}),
+            home: Default::default(),
+            cache_dir: Default::default(),
+        };
+        let error = chat(&config, "s", "p", 0.0, Duration::from_secs(2))
+            .await
+            .unwrap_err();
+        task.await.unwrap();
+        assert_eq!(error.status, 502);
+        assert_eq!(error.detail, "provedor 503: (sem corpo)");
     }
 
     proptest::proptest! {
