@@ -823,7 +823,7 @@ async fn sync_request(service: &Arc<hangar_server::login_guests::Service>, metho
     if let Some(cookie) = cookie { request = request.header("cookie", cookie); }
     let response = service.respond(true, "127.0.0.1".into(), false, request.body(axum::body::Body::from(raw.to_owned())).unwrap()).await;
     let status = response.status().as_u16();
-    let cookie = response.headers().get("set-cookie").map(|v| v.to_str().unwrap().to_owned());
+    let cookie = response.headers().get("set-cookie").map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned());
     let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     let value = serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8(bytes.to_vec()).unwrap()));
     (status, value, cookie)
@@ -908,6 +908,37 @@ async fn login_guests_stored_base64_preserves_permissive_decode() {
 }
 
 #[tokio::test]
+async fn login_guests_public_methods_preserve_routing_and_head() {
+    use hangar_server::login_guests::{Service,Settings};
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/methods.json")).unwrap();
+    let home=tempfile::tempdir().unwrap();
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+    let mut state=AppState::new(Config{listen:address,upstream:crate::refused_address(),internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
+    state.auth=hangar_server::auth::Auth::new("owner");state.share=None;
+    let config=home.path().join("config.json");
+    let service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:config.clone(),sync_enabled:true,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
+    service.store.create("Ana",home.path().to_str().unwrap(),false,true,"fixture".into(),"guest-token".into()).unwrap();state.login_guests=Arc::new(service);
+    let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
+    let client=reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();let mut differences=Vec::new();
+    for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
+        match std::fs::remove_file(&config){Ok(())=>{},Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},Err(e)=>panic!("{e}")}
+        let response=client.request(reqwest::Method::from_bytes(row["method"].as_str().unwrap().as_bytes()).unwrap(),format!("http://{address}{}",row["path"].as_str().unwrap()))
+            .bearer_auth(row["token"].as_str().unwrap()).header("content-type","application/json").body("{}").send().await.unwrap();
+        let status=response.status().as_u16();let headers=response.headers().clone();let raw=response.text().await.unwrap();
+        let body=serde_json::from_str::<Value>(&raw).unwrap_or(Value::String(raw));
+        let fields=[("allow","allow"),("content_type","content-type"),("content_length","content-length"),("location","location")];
+        let mut mismatched=status!=row["status"].as_u64().unwrap() as u16 || body!=row["response"];
+        for (key,header) in fields {
+            let value=headers.get(header).map(|v|v.to_str().unwrap().replace(&format!("http://{address}"),"⟦BASE⟧"));
+            mismatched |= value.as_deref()!=row[key].as_str();
+        }
+        if mismatched { differences.push(format!("{index}: {} {} {} ->{status}",row["method"],row["path"],row["token"])); }
+    }
+    task.abort();
+    assert!(differences.is_empty(),"{} divergências; primeiras: {:?}",differences.len(),&differences[..differences.len().min(30)]);
+}
+
+#[tokio::test]
 async fn login_guests_vault_shapes_preserve_each_operation() {
     use hangar_server::login_guests::{Service,Settings};
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/vault-shapes.json")).unwrap();
@@ -928,3 +959,24 @@ async fn login_guests_vault_shapes_preserve_each_operation() {
     assert!(differences.is_empty(),"cofre legado: {differences:?}");
 }
 
+#[tokio::test]
+async fn login_guests_cookie_escaping_matches_original_login_and_renewal() {
+    use hangar_server::login_guests::{Service,Settings};
+    use serde_json::json;
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/login-cookies.json")).unwrap();
+    let mut differences=Vec::new();
+    for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
+        let home=tempfile::tempdir().unwrap();
+        let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
+        service.now=||2000000000;service.entropy=|n|vec![b'x';n];let service=Arc::new(service);
+        let register=json!({"user":row["user"],"auth_hash":"fixture","salt":"fixture","bootstrap":"bootstrap"}).to_string();
+        assert_eq!(sync_request(&service,"POST","/api/sync/register",&register,None).await.0,200);
+        let login=json!({"user":row["user"],"auth_hash":"fixture"}).to_string();
+        let (status,body,cookie)=sync_request(&service,"POST","/api/sync/login",&login,None).await;
+        if status!=row["login"]["status"].as_u64().unwrap() as u16 || body!=row["login"]["response"] || cookie.as_deref()!=row["login"]["set_cookie"].as_str() { differences.push(format!("{index}/login: {status}")); }
+        let cookie=cookie.map(|v|v.split(';').next().unwrap().to_owned());
+        let (status,body,cookie)=sync_request(&service,"GET","/api/sync/vault","",cookie.as_deref()).await;
+        if status!=row["vault"]["status"].as_u64().unwrap() as u16 || body!=row["vault"]["response"] || cookie.as_deref()!=row["vault"]["set_cookie"].as_str() { differences.push(format!("{index}/vault: {status}")); }
+    }
+    assert!(differences.is_empty(),"cookies: {differences:?}");
+}

@@ -620,6 +620,7 @@ fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
     api.clone().merge(crate::mcp::router(state.clone(), api))
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::login_guests::gate::guard))
         .layer(axum::middleware::from_fn_with_state(state, crate::login_guests::body_limit))
+        .layer(axum::middleware::from_fn(crate::login_guests::public_contract))
 }
 
 fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
@@ -960,6 +961,9 @@ pub(crate) async fn pass_any(
     let decoded_path=percent_encoding::percent_decode_str(req.uri().path()).decode_utf8_lossy();
     if crate::machine_peers::owns_http_path(&decoded_path){
         return crate::machine_peers::handle(State(st),ConnectInfo(peer),req).await;
+    }
+    if crate::login_guests::owns_path(req.uri().path()) {
+        return crate::login_guests::route(State(st),ConnectInfo(peer),req).await;
     }
     if crate::dictation::http::matches(req.method(), req.uri().path()) {
         return crate::dictation::http::public(st, peer, req).await;

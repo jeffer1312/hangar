@@ -10,7 +10,7 @@ fn login_guests_http_contract_resolution_matches_python() {
     for row in fixture["rows"].as_array().unwrap().iter().filter(|r|r["token"]=="owner") {
         let expected=if row["matched"]==true { Decision::Matched }
             else if row["partial"]==true { Decision::MethodNotAllowed(row["allow"].as_str().unwrap().into()) }
-            else if row["status"]==307 { Decision::Redirect(row["location"].as_str().unwrap().strip_prefix("⟦BASE⟧").unwrap().split('?').next().unwrap().into()) }
+            else if row["status"]==307 { Decision::Redirect(row["redirect_path"].as_str().unwrap().into()) }
             else { Decision::NotFound };
         assert_eq!(resolve(&table,row["method"].as_str().unwrap(),row["decoded_path"].as_str().unwrap()),expected,"{} {}",row["method"],row["path"]);
     }

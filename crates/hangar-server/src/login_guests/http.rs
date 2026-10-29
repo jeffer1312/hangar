@@ -119,6 +119,11 @@ impl Service {
         let path = percent_encoding::percent_decode_str(parts.uri.path())
             .decode_utf8_lossy()
             .into_owned();
+        let decision=crate::http_contract::resolve(ROUTES,method.as_str(),&path);
+        if let Some(mut response)=crate::http_route_response::response(&decision,&method,&parts.uri,&headers,https,"localhost") {
+            crate::http_cors::apply(&headers,&mut response);
+            return response;
+        }
         if path.starts_with("/api/sync/") && let Some(error)=self.config_error.clone() {
             return reply(error,&headers);
         }
@@ -262,7 +267,7 @@ impl Service {
                 let u = body["user"].as_str().unwrap_or_default();
                 let g = self.sync.generation(u)?;
                 set_cookie =
-                    Some(self.cookie_header(&self.sync.cookie(u, Some(&g), now), https));
+                    Some(self.cookie_header(&self.sync.cookie(u, Some(&g), now), https)?);
             } else if authenticated {
                 set_cookie = Some(self.cookie_header(
                     &self.sync.cookie(
@@ -271,7 +276,7 @@ impl Service {
                         now,
                     ),
                     https,
-                ));
+                )?);
             } else if path == "logout" && method == Method::POST {
                 set_cookie = Some("cp_sync=\"\"; Max-Age=0; Path=/; SameSite=lax".into());
             }
@@ -337,27 +342,58 @@ impl Service {
         };
         Ok((value, None))
     }
-    fn cookie_header(&self, cookie: &str, https: bool) -> String {
-        format!(
+    fn cookie_header(&self, cookie: &str, https: bool) -> super::store::Result<String> {
+        let cookie=quote_cookie(cookie)?;
+        Ok(format!(
             "cp_sync={cookie}; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax{}",
             if https || self.sync.secure {
                 "; Secure"
             } else {
                 ""
             }
-        )
+        ))
     }
 }
 fn cookie(headers: &HeaderMap, key: &str) -> Option<String> {
-    headers
-        .get(header::COOKIE)?
-        .to_str()
-        .ok()?
-        .split(';')
-        .find_map(|v| {
-            let (k, v) = v.trim().split_once('=')?;
-            (k == key).then(|| v.trim_matches('"').to_owned())
-        })
+    let raw=headers.get(header::COOKIE)?.as_bytes().iter().map(|b|char::from(*b)).collect::<String>();
+    raw.split(';').filter_map(|part|{
+        let (name,value)=part.split_once('=')?;
+        (name.trim()==key).then(||unquote_cookie(value.trim()))
+    }).last()
+}
+fn quote_cookie(value: &str) -> super::store::Result<String> {
+    if value.chars().any(|c| c <= '\u{1f}' || c == '\u{7f}' || c > '\u{ff}') {
+        return Err(Failure { status:500, body:Value::String("Internal Server Error".into()) });
+    }
+    let legal=|c:char| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~:".contains(c);
+    if value.chars().all(legal) { return Ok(value.into()); }
+    let mut result=String::from("\"");
+    for c in value.chars() {
+        match c {
+            '"' | '\\' => { result.push('\\'); result.push(c); }
+            ',' | ';' | '\u{80}'..='\u{ff}' => result.push_str(&format!("\\{:03o}",c as u32)),
+            _ => result.push(c),
+        }
+    }
+    result.push('"'); Ok(result)
+}
+fn unquote_cookie(value: &str) -> String {
+    let Some(value)=value.strip_prefix('"').and_then(|v|v.strip_suffix('"')) else { return value.into() };
+    let mut chars=value.chars().peekable();let mut result=String::new();
+    while let Some(c)=chars.next() {
+        if c!='\\' { result.push(c); continue; }
+        let Some(next)=chars.next() else { result.push('\\'); break; };
+        let mut tail=chars.clone();
+        let octal=if ('0'..='3').contains(&next) {
+            match (tail.next(),tail.next()) {
+                (Some(a @ '0'..='7'),Some(b @ '0'..='7'))=>Some((next as u32-'0' as u32)*64+(a as u32-'0' as u32)*8+b as u32-'0' as u32),
+                _=>None,
+            }
+        } else {None};
+        if let Some(value)=octal { chars=tail;result.push(char::from_u32(value).unwrap()); }
+        else { result.push(next); }
+    }
+    result
 }
 fn serialization_failure(headers: &HeaderMap) -> Response {
     let mut response = (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
@@ -371,6 +407,7 @@ fn json_content_type(headers: &HeaderMap) -> bool {
     })
 }
 fn reply(f: Failure, headers: &HeaderMap) -> Response {
+    if f.status==500 && f.body.as_str()==Some("Internal Server Error") { return serialization_failure(headers); }
     let mut r = Json(f.body).into_response();
     if r.status().is_success() {
         *r.status_mut() = axum::http::StatusCode::from_u16(f.status)
@@ -380,15 +417,9 @@ fn reply(f: Failure, headers: &HeaderMap) -> Response {
     r
 }
 fn declared_too_large(headers: &HeaderMap, limit: usize) -> bool {
-    let Some(raw) = headers.get(header::CONTENT_LENGTH).and_then(|value| value.to_str().ok()) else { return false };
-    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) { return false; }
-    let digits = raw.trim_start_matches('0');
-    let limit = limit.to_string();
-    digits.len() > limit.len() || digits.len() == limit.len() && digits > limit.as_str()
+    crate::http_body_limit::precheck_with_limit(headers,limit).is_some()
 }
-fn too_large() -> Response {
-    (axum::http::StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response()
-}
+fn too_large() -> Response { crate::http_body_limit::rejected() }
 /// O tamanho declarado é recusado antes do porteiro; o fluxo só é consumido pela rota que o lê.
 pub async fn body_limit(State(st): State<Arc<AppState>>, request: Request, next: axum::middleware::Next) -> Response {
     if declared_too_large(request.headers(), st.login_guests.body_limit) { return too_large(); }
@@ -400,7 +431,7 @@ pub async fn route(
     request: Request,
 ) -> Response {
     let (forward, owner) = match crate::routes::gate(&st, peer, &request).await { Ok(value)=>value, Err(error)=>return crate::auth::unavailable(error) };
-    let path = request.uri().path();
+    let path = percent_encoding::percent_decode_str(request.uri().path()).decode_utf8_lossy();
     let admin = path == "/api/me" || path == "/api/guests" || path.starts_with("/api/guests/")
         || path == "/api/sync/setup" || path == "/api/sync/setup/disable";
     let admission = admin.then(|| crate::routes::owner_gate(&st, peer, &request));
@@ -436,4 +467,28 @@ impl IntoResponse for Json {
         )
             .into_response()
     }
+}
+
+const ROUTES:&[(&str,&str)]=&[
+    ("/api/sync/status","GET"),("/api/sync/register","POST"),
+    ("/api/sync/prelogin","GET"),("/api/sync/login","POST"),("/api/sync/logout","POST"),
+    ("/api/sync/vault","GET"),("/api/sync/vault","PUT"),
+    ("/api/sync/guests","GET"),("/api/sync/guests","POST"),("/api/sync/guests/{user}/delete","POST"),
+    ("/api/sync/setup","GET"),("/api/sync/setup","POST"),("/api/sync/setup/disable","POST"),
+    ("/api/guests","POST"),("/api/guests/{gid}","POST"),("/api/guests/{gid}/delete","POST"),
+    ("/api/me","GET"),
+];
+pub fn owns_path(raw:&str)->bool {
+    let path=percent_encoding::percent_decode_str(raw).decode_utf8_lossy();
+    ["/api/me","/api/guests","/api/sync"].iter().any(|root|path==*root || path.strip_prefix(*root).is_some_and(|tail|tail.starts_with('/')))
+}
+/// CORS precede autenticação e tamanho apenas nas responsabilidades desta migração.
+pub async fn public_contract(request:Request,next:axum::middleware::Next)->Response {
+    if !owns_path(request.uri().path()) { return next.run(request).await; }
+    if let Some(response)=crate::http_cors::preflight(request.method(),request.headers()) { return response; }
+    let method=request.method().clone();let headers=request.headers().clone();
+    let mut response=next.run(request).await;
+    crate::http_cors::apply(&headers,&mut response);
+    crate::http_route_response::suppress_head(&method,&mut response);
+    response
 }

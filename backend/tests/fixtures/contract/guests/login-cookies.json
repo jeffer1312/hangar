@@ -1,0 +1,357 @@
+{
+  "source_commit": "11b18b24757af13c03a5a453def89c7f8d0d8370",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_login_cookies.py",
+  "rows": [
+    {
+      "user": "ana",
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        },
+        "set_cookie": "cp_sync=ana.2002592000:78787878.817110fb2ba34ff3ab3cd5fe3a3514787ec0cf335176f073d9485b02ebc2ddc0; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      },
+      "vault": {
+        "status": 200,
+        "response": {
+          "enc_blob": null,
+          "rev": 0
+        },
+        "set_cookie": "cp_sync=ana.2002592000:78787878.817110fb2ba34ff3ab3cd5fe3a3514787ec0cf335176f073d9485b02ebc2ddc0; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      }
+    },
+    {
+      "user": "a.b",
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        },
+        "set_cookie": "cp_sync=a.b.2002592000:78787878.7a1c888930e4e35b4a7989753a52e8790006b8ebf3826cfccb50e3abaf90e692; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      },
+      "vault": {
+        "status": 200,
+        "response": {
+          "enc_blob": null,
+          "rev": 0
+        },
+        "set_cookie": "cp_sync=a.b.2002592000:78787878.7a1c888930e4e35b4a7989753a52e8790006b8ebf3826cfccb50e3abaf90e692; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      }
+    },
+    {
+      "user": "a b",
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        },
+        "set_cookie": "cp_sync=\"a b.2002592000:78787878.c502b874754979263092aad17a09424aca9f2cfcbe8b2a2f4e2068ad955b515e\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      },
+      "vault": {
+        "status": 200,
+        "response": {
+          "enc_blob": null,
+          "rev": 0
+        },
+        "set_cookie": "cp_sync=\"a b.2002592000:78787878.c502b874754979263092aad17a09424aca9f2cfcbe8b2a2f4e2068ad955b515e\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      }
+    },
+    {
+      "user": "a;b",
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        },
+        "set_cookie": "cp_sync=\"a\\073b.2002592000:78787878.4f64e875ba5b32be0304e9e61918fa0fb5cfd21df8716fbfa181368fe3ae8c5e\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      },
+      "vault": {
+        "status": 200,
+        "response": {
+          "enc_blob": null,
+          "rev": 0
+        },
+        "set_cookie": "cp_sync=\"a\\073b.2002592000:78787878.4f64e875ba5b32be0304e9e61918fa0fb5cfd21df8716fbfa181368fe3ae8c5e\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      }
+    },
+    {
+      "user": "a,b",
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        },
+        "set_cookie": "cp_sync=\"a\\054b.2002592000:78787878.ee623b87b6bd7451a80b19828dc8a206586bf99c6fb35a4a17227faad013f856\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      },
+      "vault": {
+        "status": 200,
+        "response": {
+          "enc_blob": null,
+          "rev": 0
+        },
+        "set_cookie": "cp_sync=\"a\\054b.2002592000:78787878.ee623b87b6bd7451a80b19828dc8a206586bf99c6fb35a4a17227faad013f856\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      }
+    },
+    {
+      "user": "a\"b",
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        },
+        "set_cookie": "cp_sync=\"a\\\"b.2002592000:78787878.b513eefeef1636c2db52e631c7d73506e23cd885cbd2878041344bd070746acd\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      },
+      "vault": {
+        "status": 200,
+        "response": {
+          "enc_blob": null,
+          "rev": 0
+        },
+        "set_cookie": "cp_sync=\"a\\\"b.2002592000:78787878.b513eefeef1636c2db52e631c7d73506e23cd885cbd2878041344bd070746acd\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      }
+    },
+    {
+      "user": "a\\b",
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        },
+        "set_cookie": "cp_sync=\"a\\\\b.2002592000:78787878.e0ee7c9db17830770f6eb04007caaa16c6d1905d09452e8d9c8110f449513e65\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      },
+      "vault": {
+        "status": 200,
+        "response": {
+          "enc_blob": null,
+          "rev": 0
+        },
+        "set_cookie": "cp_sync=\"a\\\\b.2002592000:78787878.e0ee7c9db17830770f6eb04007caaa16c6d1905d09452e8d9c8110f449513e65\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      }
+    },
+    {
+      "user": "a/b",
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        },
+        "set_cookie": "cp_sync=\"a/b.2002592000:78787878.62b11f4d1ee25b0664796c478d111664c0ae7659e3bd9b85c17f0dc2f04ad04b\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      },
+      "vault": {
+        "status": 200,
+        "response": {
+          "enc_blob": null,
+          "rev": 0
+        },
+        "set_cookie": "cp_sync=\"a/b.2002592000:78787878.62b11f4d1ee25b0664796c478d111664c0ae7659e3bd9b85c17f0dc2f04ad04b\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      }
+    },
+    {
+      "user": "a:b",
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        },
+        "set_cookie": "cp_sync=a:b.2002592000:78787878.aaef0d9712c5fba3d94c91890e087ad35fe1dfc6caee5faa66b4cb99459a3c32; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      },
+      "vault": {
+        "status": 200,
+        "response": {
+          "enc_blob": null,
+          "rev": 0
+        },
+        "set_cookie": "cp_sync=a:b.2002592000:78787878.aaef0d9712c5fba3d94c91890e087ad35fe1dfc6caee5faa66b4cb99459a3c32; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      }
+    },
+    {
+      "user": "\u00e9",
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        },
+        "set_cookie": "cp_sync=\"\\351.2002592000:78787878.2a2867ffb0a2b60c1bcb97ae8962bd099fb8e0c894e96b43c742bec2851702e3\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      },
+      "vault": {
+        "status": 200,
+        "response": {
+          "enc_blob": null,
+          "rev": 0
+        },
+        "set_cookie": "cp_sync=\"\\351.2002592000:78787878.2a2867ffb0a2b60c1bcb97ae8962bd099fb8e0c894e96b43c742bec2851702e3\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      }
+    },
+    {
+      "user": "\u0080",
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        },
+        "set_cookie": "cp_sync=\"\\200.2002592000:78787878.18a02e28e7c1c6b6e53c0062abd1f1bb9b11d807434f9fdb27dfc670c7466950\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      },
+      "vault": {
+        "status": 200,
+        "response": {
+          "enc_blob": null,
+          "rev": 0
+        },
+        "set_cookie": "cp_sync=\"\\200.2002592000:78787878.18a02e28e7c1c6b6e53c0062abd1f1bb9b11d807434f9fdb27dfc670c7466950\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      }
+    },
+    {
+      "user": "\u00ff",
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        },
+        "set_cookie": "cp_sync=\"\\377.2002592000:78787878.ec08f78a95304b83c78eb604a535bf468cd088ef364d61c52773fc681bde2e94\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      },
+      "vault": {
+        "status": 200,
+        "response": {
+          "enc_blob": null,
+          "rev": 0
+        },
+        "set_cookie": "cp_sync=\"\\377.2002592000:78787878.ec08f78a95304b83c78eb604a535bf468cd088ef364d61c52773fc681bde2e94\"; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      }
+    },
+    {
+      "user": "\u0100",
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error",
+        "set_cookie": null
+      },
+      "vault": {
+        "status": 401,
+        "response": {
+          "detail": {
+            "code": "erro_nao_autorizado",
+            "params": {},
+            "msg": "unauthorized"
+          }
+        },
+        "set_cookie": null
+      }
+    },
+    {
+      "user": "\ud83d\ude00",
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error",
+        "set_cookie": null
+      },
+      "vault": {
+        "status": 401,
+        "response": {
+          "detail": {
+            "code": "erro_nao_autorizado",
+            "params": {},
+            "msg": "unauthorized"
+          }
+        },
+        "set_cookie": null
+      }
+    },
+    {
+      "user": "a\nb",
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error",
+        "set_cookie": null
+      },
+      "vault": {
+        "status": 401,
+        "response": {
+          "detail": {
+            "code": "erro_nao_autorizado",
+            "params": {},
+            "msg": "unauthorized"
+          }
+        },
+        "set_cookie": null
+      }
+    },
+    {
+      "user": "a\rb",
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error",
+        "set_cookie": null
+      },
+      "vault": {
+        "status": 401,
+        "response": {
+          "detail": {
+            "code": "erro_nao_autorizado",
+            "params": {},
+            "msg": "unauthorized"
+          }
+        },
+        "set_cookie": null
+      }
+    },
+    {
+      "user": "a\tb",
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error",
+        "set_cookie": null
+      },
+      "vault": {
+        "status": 401,
+        "response": {
+          "detail": {
+            "code": "erro_nao_autorizado",
+            "params": {},
+            "msg": "unauthorized"
+          }
+        },
+        "set_cookie": null
+      }
+    },
+    {
+      "user": "a\u0000b",
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error",
+        "set_cookie": null
+      },
+      "vault": {
+        "status": 401,
+        "response": {
+          "detail": {
+            "code": "erro_nao_autorizado",
+            "params": {},
+            "msg": "unauthorized"
+          }
+        },
+        "set_cookie": null
+      }
+    },
+    {
+      "user": "",
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        },
+        "set_cookie": "cp_sync=.2002592000:78787878.c602dd4f0d36340c903d77e9731e368a9e99afa46ea7a1792a1fa7ef0cd8e594; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+      },
+      "vault": {
+        "status": 401,
+        "response": {
+          "detail": {
+            "code": "erro_nao_autorizado",
+            "params": {},
+            "msg": "unauthorized"
+          }
+        },
+        "set_cookie": null
+      }
+    }
+  ]
+}

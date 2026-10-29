@@ -31,12 +31,21 @@ with tempfile.TemporaryDirectory() as scratch:
     paths += ['/api/me/','/api/guests/','/api/guests/abc/','/api/guests//','/api/sync/setup/',
               '/api/sync/nope/','/api/guests/a%2Fb','/api/guests/%C3%A9','/api/guests/%FF',
               '/api/sync/guests/ana/delete/','/api/me/?x=1%202','/api/guests/abc//?x=%2F']
+    paths += ['/api/%67uests','/api%2Fguests','/api/%6De','/api/%73ync/status','/api/sync','/api/sync/',
+              '/api/me/foo','/api/guests/%C3%A9/','/api/guests/%FF/','/api/guests/a%3Fb/','/api/guests/%25foo/']
+    from fastapi import routing
+    original_url=routing.URL
+    def captured_url(*args,**kwargs):
+        if 'scope' in kwargs:scope_box['redirect_path']=kwargs['scope']['path']
+        return original_url(*args,**kwargs)
     rows=[]
     for path in paths:
         for method in ['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS']:
             for token in ['owner','bad','guest-token']:
                 (root/'runtime-config.json').unlink(missing_ok=True)
-                response=client.request(method,path,content='{}',headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'},follow_redirects=False)
+                scope_box['redirect_path']=None
+                with patch('fastapi.routing.URL',captured_url):
+                    response=client.request(method,path,content='{}',headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'},follow_redirects=False)
                 try:body=response.json()
                 except ValueError:body=response.text
                 from starlette.routing import Match
@@ -44,7 +53,7 @@ with tempfile.TemporaryDirectory() as scratch:
                 partial=any(route.matches(scope_box['scope'])[0]==Match.PARTIAL for route in app.routes)
                 location=response.headers.get('location')
                 rows.append({'path':path,'decoded_path':scope_box['scope']['path'],'method':method,'token':token,
-                             'matched':full,'partial':partial,'status':response.status_code,'response':body,
+                             'matched':full,'partial':partial,'redirect_path':scope_box['redirect_path'],'status':response.status_code,'response':body,
                              'allow':response.headers.get('allow'),'content_type':response.headers.get('content-type'),
                              'content_length':response.headers.get('content-length'),
                              'location':location.replace('http://testserver','⟦BASE⟧') if location else None})
