@@ -6,5 +6,6 @@ pub mod export;
 pub mod files;
 pub mod http;
 pub mod paths;
+pub mod plugin_publish;
 pub mod preferences;
 pub mod translate;
