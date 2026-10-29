@@ -139,10 +139,7 @@ impl LocalTerminalFacts {
             if !same_birth(born, metadata.agent_birth) { return Err(ServiceError("terminal_agent_changed")); }
             // Registro de outra conversa é troca de vida mesmo sem a prova da conversa.
             if native_record(&metadata, &conversation)?.is_none() && prove_conversation && !pulling {
-                match current_transcript(&procs, &metadata, &conversation, &transcript) {
-                    Err(error) if recent && error.0 == "terminal_conversation_unavailable" => {},
-                    other => other?,
-                }
+                current_transcript(&procs, &metadata, &conversation, &transcript, recent)?;
             }
             Ok(pane_pid)
         }).await.map_err(|_| ServiceError("terminal_agent_unavailable"))?
@@ -289,19 +286,22 @@ fn native_record(metadata: &TerminalMetadata, conversation: &str) -> Result<Opti
     let record = read_json(&metadata.config_dir.join("sessions").join(format!("{}.json", metadata.agent_pid)), "terminal_native_record_unavailable")?;
     if let Some(record) = &record && (record["pid"].as_u64() != Some(u64::from(metadata.agent_pid)) || record["sessionId"].as_str() != Some(conversation)) { return Err(ServiceError("terminal_native_record_changed")); } Ok(record)
 }
-fn current_transcript(procs: &dyn ProcessView, metadata: &TerminalMetadata, conversation: &str, transcript: &Path) -> Result<(), ServiceError> {
+/// `recent`: o `/pull` visto há pouco cobre a leitura que falta (nenhum arquivo aberto, leitura que falhou),
+/// nunca uma leitura ambígua ou de outra conversa.
+fn current_transcript(procs: &dyn ProcessView, metadata: &TerminalMetadata, conversation: &str, transcript: &Path, recent: bool) -> Result<(), ServiceError> {
     let unavailable = || ServiceError("terminal_conversation_unavailable");
-    let projects = metadata.config_dir.join("projects").canonicalize().map_err(|_| unavailable())?;
-    let expected = transcript.canonicalize().map_err(|_| unavailable())?;
-    let fds = procs.fds_checked(i64::from(metadata.agent_pid)).map_err(|_| unavailable())?;
+    let missing = || if recent { Ok(()) } else { Err(unavailable()) };
+    let Ok(projects) = metadata.config_dir.join("projects").canonicalize() else { return missing() };
+    let Ok(expected) = transcript.canonicalize() else { return missing() };
+    let Ok(fds) = procs.fds_checked(i64::from(metadata.agent_pid)) else { return missing() };
     let mut current = std::collections::BTreeSet::new();
     for path in fds.into_iter().filter(|path| path.extension().is_some_and(|extension| extension == "jsonl")) {
-        let path = path.canonicalize().map_err(|_| unavailable())?;
+        let Ok(path) = path.canonicalize() else { return missing() };
         if path.starts_with(&projects) { current.insert(path); }
     }
     // O argv conserva o SID de abertura depois do /clear; só arquivo aberto prova a conversa atual.
     let mut current = current.into_iter();
-    let path = current.next().ok_or_else(unavailable)?;
+    let Some(path) = current.next() else { return missing() };
     if current.next().is_some() { return Err(unavailable()); }
     if path != expected || path.file_stem().and_then(|stem| stem.to_str()) != Some(conversation) {
         return Err(ServiceError("terminal_conversation_changed"));
