@@ -523,7 +523,9 @@ impl Store {
     fn proof(&self, binding: &InteractionBinding, now: Option<Instant>) -> Result<bool, ServiceError> {
         let mut memory = self.memory.lock().map_err(|_| unavailable())?;
         let s = session(&mut memory, binding)?;
-        Ok(s.owner.as_ref().is_some_and(|owner| (s.waiter.is_some() || now.is_some_and(|now| now.saturating_duration_since(owner.seen) <= PULL_PROOF))
+        // Conversa nova informada pelo plugin desmente o `/pull` visto há pouco.
+        let recent = |owner: &Owner| s.reported.is_none() && now.is_some_and(|now| now.saturating_duration_since(owner.seen) <= PULL_PROOF);
+        Ok(s.owner.as_ref().is_some_and(|owner| (s.waiter.is_some() || recent(owner))
             && s.ended.is_none_or(|ended| ended < owner.seen)))
     }
     /// A conversa nova que o plugin informou depois de a do vínculo acabar, se houver.
@@ -753,6 +755,15 @@ mod tests {
         assert!(at(&store).reported, "conversa nova informada");
         store.record_state(&binding, "fim".into(), None, Instant::now() + Duration::from_millis(1)).unwrap();
         assert!(store.pull_status(&binding, Instant::now() + Duration::from_millis(2)).unwrap().ended);
+    }
+
+    #[test]
+    fn a_recent_pull_stops_proving_once_the_plugin_reports_another_conversation() {
+        let (store, binding) = setup();
+        drop(store.begin_pull(&binding, pull("i"), Instant::now()).unwrap());
+        let mut other = pull("i"); other.session_id = Some("sid-nova".into());
+        assert!(store.begin_pull(&binding, other, Instant::now()).is_err());
+        assert!(!store.conversation_proved(&binding, Instant::now()).unwrap(), "o plugin já pede com outra conversa");
     }
 
     #[test]

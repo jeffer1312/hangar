@@ -6040,6 +6040,7 @@
   "native_settings_diary_report_scope_this": "Only this one",
   "native_settings_diary_report_scope_this_long": "Only this machine ({server})",
   "native_settings_diary_report_scope_pick": "Choose",
+  "native_settings_diary_report_none_picked": "Check at least one machine to send.",
   "native_settings_diary_report_server_many": "Goes to the Hangar maintainer: one report per machine, all under the same code.",
   "native_settings_diary_report_machines_failed": "These machines didn't go through:",
   "native_settings_diary_report_machine_failed": "{server}: {reason}",

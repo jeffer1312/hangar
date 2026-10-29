@@ -269,7 +269,7 @@ fn facts(problems: Vec<DiaryEntry>, sessions: Vec<collect::SessionFact>, account
 
 fn input() -> ClientInput {
     ClientInput { text: Some("travou a fila".into()), client: "native 0.1.0.8380 linux-x86_64".into(),
-        failures: vec![ClientFailure { ts: 1_793_130_757.2, route: "POST /api/sessions/*/queue/*/steer".into(), status: 503, code: Some("runtime_unhealthy".into()) }], group: None }
+        failures: vec![ClientFailure { ts: 1_793_130_757.2, route: "POST /api/sessions/*/queue/*/steer".into(), status: 503, code: Some("runtime_unhealthy".into()) }], group: None, group_token: None }
 }
 
 fn report(body: &[u8]) -> (Value, String) {

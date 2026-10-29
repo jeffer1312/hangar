@@ -6040,6 +6040,7 @@
   "native_settings_diary_report_scope_this": "Só esta",
   "native_settings_diary_report_scope_this_long": "Só esta máquina ({server})",
   "native_settings_diary_report_scope_pick": "Escolher",
+  "native_settings_diary_report_none_picked": "Marque ao menos uma máquina para enviar.",
   "native_settings_diary_report_server_many": "Vai para quem mantém o Hangar: um relatório por máquina, todos com o mesmo código.",
   "native_settings_diary_report_machines_failed": "Estas máquinas não foram:",
   "native_settings_diary_report_machine_failed": "{server}: {reason}",

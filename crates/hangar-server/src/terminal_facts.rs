@@ -128,8 +128,7 @@ impl LocalTerminalFacts {
         // Sem o registro nativo, o `/pull` aberto do plugin desta vida prova a conversa (o Claude Code só o
         // aceita com o `session_id` dela), sem ler os arquivos abertos do processo. O `/pull` visto há pouco
         // só cobre a leitura que falta: outra conversa aberta no processo vence.
-        let pulling = prove_conversation && self.plugin_proves(target, None);
-        let recent = prove_conversation && !pulling && self.plugin_proves(target, Some(Instant::now()));
+        let (pulling, recent) = if prove_conversation { self.plugin_proves(target) } else { (false, false) };
         tokio::task::spawn_blocking(move || {
             let procs=SystemProcs::default();let children=procs.children(Duration::ZERO).map_err(|_|ServiceError("terminal_agent_unavailable"))?;
             if !crate::list::discover::descendants(pane_pid,&children).contains(&i64::from(metadata.agent_pid)) {return Err(ServiceError("terminal_agent_changed"));}
@@ -144,12 +143,14 @@ impl LocalTerminalFacts {
             Ok(pane_pid)
         }).await.map_err(|_| ServiceError("terminal_agent_unavailable"))?
     }
-    /// `recent` = vale também o `/pull` visto há pouco.
-    fn plugin_proves(&self, target: &TerminalTarget, recent: Option<Instant>) -> bool {
+    /// (`/pull` aberto, `/pull` visto há pouco) desta vida.
+    fn plugin_proves(&self, target: &TerminalTarget) -> (bool, bool) {
         // Plugin sem vínculo ou ilegível não prova nada: segue a leitura do processo.
+        let Some(store) = self.plugin.as_ref() else { return (false, false) };
+        if !self.plugin_facts(target).is_ok_and(|facts| plugin_current(&facts, target.metadata.cut(target.created))) { return (false, false); }
         let binding = Self::binding(target);
-        self.plugin.as_ref().is_some_and(|store| self.plugin_facts(target).is_ok_and(|facts| plugin_current(&facts, target.metadata.cut(target.created)))
-            && match recent { Some(now) => store.conversation_proved(&binding, now), None => store.conversation_pulling(&binding) }.unwrap_or(false))
+        if store.conversation_pulling(&binding).unwrap_or(false) { return (true, false); }
+        (false, store.conversation_proved(&binding, Instant::now()).unwrap_or(false))
     }
     /// Sem o registro nativo, o `/pull` aberto do plugin é a prova da conversa: quem o entrega ao plugin
     /// (`Fill`) fica sem ela até ele voltar.
@@ -296,7 +297,8 @@ fn current_transcript(procs: &dyn ProcessView, metadata: &TerminalMetadata, conv
     let Ok(fds) = procs.fds_checked(i64::from(metadata.agent_pid)) else { return missing() };
     let mut current = std::collections::BTreeSet::new();
     for path in fds.into_iter().filter(|path| path.extension().is_some_and(|extension| extension == "jsonl")) {
-        let Ok(path) = path.canonicalize() else { return missing() };
+        // Arquivo apagado ainda aberto não é conversa de ninguém.
+        let Ok(path) = path.canonicalize() else { continue };
         if path.starts_with(&projects) { current.insert(path); }
     }
     // O argv conserva o SID de abertura depois do /clear; só arquivo aberto prova a conversa atual.

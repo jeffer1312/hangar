@@ -6,8 +6,9 @@
   // O que o arquivo contém e o que NÃO contém está em backend/app/diag.py e em lib/diag.ts. O texto
   // aqui repete a parte que importa pra quem vai enviar: fica na máquina, e não guarda conversa.
   import { getDiagResumo, baixarDiag, type ResumoDiag, type LinhaDiag } from '@hangar/core';
-  import { fmtBytes, sendDiagReportAll, DIAG_REPORT_TEXT_MAX, type DiagReportAllResult, type DiagReportResult } from '@hangar/core';
-  import { findServer, getActiveId, listOwnServers, onServersChanged } from '../../lib/auth';
+  import { fmtBytes, sendDiagReportAll, resendDiagReportMissed, diagReportMachines, diagReportTargets, DIAG_REPORT_TEXT_MAX,
+    type DiagReportAllResult, type DiagReportResult, type DiagReportScope } from '@hangar/core';
+  import { findServer, getActiveId, listServers, onServersChanged } from '../../lib/auth';
   import { papelDo } from '../../lib/papel.svelte';
   import { copyText } from '../../lib/clipboard';
   import * as m from '../../paraglide/messages';
@@ -15,53 +16,50 @@
   // O relatório vai ao mesmo servidor que a prévia e o download acima leem: o ativo.
   const ativo = () => findServer(getActiveId() ?? '') ?? null;
   let servidor = $state(ativo());
-  let proprios = $state(listOwnServers());
-  $effect(() => onServersChanged(() => { servidor = ativo(); proprios = listOwnServers(); }));
+  let all = $state(listServers());
+  $effect(() => onServersChanged(() => { servidor = ativo(); all = listServers(); }));
   // Convidado não manda relatório da máquina de outra pessoa (o servidor recusa com 403).
   const podeReportar = $derived(!!servidor && !servidor.invite && papelDo(servidor) !== 'guest');
   // O erro costuma estar noutra máquina da pessoa (a VM, não o PC de onde ela envia): o padrão é mandar de todas.
-  const maquinas = $derived(proprios.filter((s) => papelDo(s) !== 'guest'));
+  const machines = $derived(diagReportMachines(all, servidor, (s) => papelDo(s) === 'guest'));
 
   let texto = $state('');
   let enviando = $state(false);
-  let escopo = $state<'todas' | 'esta' | 'escolher'>('todas');
-  let escolhidas = $state<Record<string, boolean>>({});
+  let scope = $state<DiagReportScope>('all');
+  let picked = $state<Record<string, boolean>>({});
   let resultado = $state<DiagReportAllResult | null>(null);
   let copiado = $state(false);
 
-  const alvos = $derived(maquinas.length < 2 || escopo === 'esta' ? (servidor ? [servidor] : [])
-    : escopo === 'todas' ? maquinas : maquinas.filter((s) => escolhidas[s.id] ?? s.id === servidor?.id));
+  const targets = $derived(diagReportTargets(machines, servidor, scope, picked));
+  const client = `pwa ${__HANGAR_VERSION__}`;
 
   async function reportar() {
-    if (!alvos.length || enviando) return;
+    if (!targets.length || enviando) return;
     enviando = true; resultado = null; copiado = false;
-    resultado = await sendDiagReportAll(alvos, { text: texto, client: `pwa ${__HANGAR_VERSION__}` });
+    resultado = await sendDiagReportAll(targets, { text: texto, client });
     enviando = false;
   }
 
   // Envio que já tem código e máquinas que não foram: reenvia só a elas, no mesmo código.
-  async function reenviarFalhas() {
+  async function resendMissed() {
     if (!resultado?.code || enviando) return;
-    const anterior = resultado;
-    const falhas = anterior.results.filter((r) => !r.result.ok).map((r) => r.server);
     enviando = true;
-    const novo = await sendDiagReportAll(falhas, { text: texto, client: `pwa ${__HANGAR_VERSION__}` }, anterior.code ?? undefined);
-    resultado = { code: anterior.code, results: [...anterior.results.filter((r) => r.result.ok), ...novo.results] };
+    resultado = await resendDiagReportMissed(resultado, { text: texto, client });
     enviando = false;
   }
 
-  function motivo(r: DiagReportResult): string {
+  function reason(r: DiagReportResult): string {
     return r.ok ? '' : r.kind === 'unsupported' ? m.config_diag_report_unsupported()
       : r.kind === 'rate_limited' ? m.config_diag_report_rate_limited()
       : r.kind === 'unreachable' ? m.config_diag_report_unreachable()
       : m.config_diag_report_failed({ code: r.code });
   }
-  const falhas = $derived(resultado?.results.filter((r) => !r.result.ok) ?? []);
-  const diarioFalhou = $derived(resultado?.results.some((r) => r.result.ok && r.result.diary === 'failed') ?? false);
-  const soSemSuporte = $derived(!!resultado && resultado.code === null && falhas.every((r) => !r.result.ok && r.result.kind === 'unsupported'));
-  const reenviaveis = $derived(falhas.some((r) => !r.result.ok && r.result.kind !== 'unsupported'));
+  const missed = $derived(resultado?.results.filter((r) => !r.result.ok) ?? []);
+  const diaryFailed = $derived(resultado?.results.some((r) => r.result.ok && r.result.diary === 'failed') ?? false);
+  const onlyUnsupported = $derived(!!resultado && resultado.code === null && missed.every((r) => !r.result.ok && r.result.kind === 'unsupported'));
+  const retryable = $derived(missed.some((r) => !r.result.ok && r.result.kind !== 'unsupported'));
   // Quantas máquinas o envio teve, não a escolha de agora: trocar a escolha depois não muda o texto do erro.
-  const varias = $derived((resultado?.results.length ?? 0) > 1);
+  const several = $derived((resultado?.results.length ?? 0) > 1);
 
   async function copiar(code: string) {
     if (!(await copyText(code))) return;
@@ -159,7 +157,7 @@
   {#if servidor && podeReportar}
     <section class="reportar" aria-labelledby="diag-report-tit">
       <strong id="diag-report-tit" class="preview-tit">{m.config_diag_report_title()}</strong>
-      <p class="rep-servidor">{maquinas.length > 1 ? m.config_diag_report_server_many() : m.config_diag_report_server({ server: servidor.label })}</p>
+      <p class="rep-servidor">{machines.length > 1 ? m.config_diag_report_server_many() : m.config_diag_report_server({ server: servidor.label })}</p>
       {#if resultado?.code}
         {@const code = resultado.code}
         <p class="rep-msg" role="status">{m.config_diag_report_sent()}</p>
@@ -169,24 +167,24 @@
             {copiado ? m.config_diag_report_copied() : m.config_diag_report_copy()}
           </button>
         </div>
-        {#if diarioFalhou}<p class="rep-msg aviso">{m.config_diag_report_diary_failed()}</p>{/if}
-        {#if reenviaveis}
-          <button class="btn primario" onclick={reenviarFalhas} disabled={enviando}>
+        {#if diaryFailed}<p class="rep-msg aviso">{m.config_diag_report_diary_failed()}</p>{/if}
+        {#if retryable}
+          <button class="btn primario" onclick={resendMissed} disabled={enviando}>
             {enviando ? m.config_diag_report_sending() : m.config_diag_report_retry()}
           </button>
         {/if}
       {:else}
-        {#if maquinas.length > 1}
+        {#if machines.length > 1}
           <fieldset class="rep-escopo" disabled={enviando}>
             <legend class="rep-label">{m.config_diag_report_scope_label()}</legend>
-            <label><input type="radio" bind:group={escopo} value="todas" /> {m.config_diag_report_scope_all({ count: maquinas.length })}</label>
-            <label><input type="radio" bind:group={escopo} value="esta" /> {m.config_diag_report_scope_this({ server: servidor.label })}</label>
-            <label><input type="radio" bind:group={escopo} value="escolher" /> {m.config_diag_report_scope_pick()}</label>
-            {#if escopo === 'escolher'}
+            <label><input type="radio" bind:group={scope} value="all" /> {m.config_diag_report_scope_all({ count: machines.length })}</label>
+            <label><input type="radio" bind:group={scope} value="this" /> {m.config_diag_report_scope_this({ server: servidor.label })}</label>
+            <label><input type="radio" bind:group={scope} value="pick" /> {m.config_diag_report_scope_pick()}</label>
+            {#if scope === 'pick'}
               <div class="rep-maquinas">
-                {#each maquinas as s (s.id)}
-                  <label><input type="checkbox" checked={escolhidas[s.id] ?? s.id === servidor.id}
-                                onchange={(e) => { escolhidas[s.id] = e.currentTarget.checked; }} /> {s.label}</label>
+                {#each machines as s (s.id)}
+                  <label><input type="checkbox" checked={picked[s.id] ?? s.id === servidor.id}
+                                onchange={(e) => { picked[s.id] = e.currentTarget.checked; }} /> {s.label}</label>
                 {/each}
               </div>
             {/if}
@@ -196,18 +194,18 @@
         <textarea id="diag-report-texto" bind:value={texto} maxlength={DIAG_REPORT_TEXT_MAX} rows="3"
                   disabled={enviando} placeholder={m.config_diag_report_text_placeholder()}></textarea>
         <p class="rep-aviso">{m.config_diag_report_notice()}</p>
-        <button class="btn primario" onclick={reportar} disabled={enviando || !alvos.length || soSemSuporte}>
+        <button class="btn primario" onclick={reportar} disabled={enviando || !targets.length || onlyUnsupported}>
           {enviando ? m.config_diag_report_sending()
-            : resultado && !soSemSuporte ? m.config_diag_report_retry()
+            : resultado && !onlyUnsupported ? m.config_diag_report_retry()
             : m.config_diag_report_send()}
         </button>
       {/if}
-      {#if falhas.length}
+      {#if missed.length}
         <div class="erro" role="alert">
-          {#if varias}<p>{m.config_diag_report_machines_failed()}</p>{/if}
+          {#if several}<p>{m.config_diag_report_machines_failed()}</p>{/if}
           <ul class="rep-falhas">
-            {#each falhas as f (f.server.id)}
-              <li>{varias ? m.config_diag_report_machine_failed({ server: f.server.label, reason: motivo(f.result) }) : motivo(f.result)}</li>
+            {#each missed as f (f.server.id)}
+              <li>{several ? m.config_diag_report_machine_failed({ server: f.server.label, reason: reason(f.result) }) : reason(f.result)}</li>
             {/each}
           </ul>
         </div>

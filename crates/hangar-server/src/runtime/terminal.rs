@@ -312,16 +312,19 @@ const COMPOSER_READ_EVERY:Duration=Duration::from_secs(5);
 /// Sem `/pull` aceito há mais que isso o plugin conta como fora: o `/pull` dura até 25 s e o seguinte sai em 50 ms.
 const PLUGIN_OFF_AFTER:Duration=Duration::from_secs(120);
 
-/// Estado do plugin depois deste tique e a borda que vai ao diário (`Some(true)` ligou, `Some(false)` caiu).
-/// `life`: idade desta vida no ator; antes do prazo, plugin que nunca pediu ainda está subindo.
+/// Estado do plugin depois deste tique e a borda que vai ao diário (`Some(true)` voltou, `Some(false)` caiu).
+/// A primeira leitura da vida não é borda; plugin que nunca pediu (desligado, não instalado) não cai.
+/// `life`: idade desta vida no ator; antes do prazo, quem ainda não pediu está subindo.
 fn plugin_edge(was:Option<bool>,status:Option<&crate::plugin::PullStatus>,life:Duration)->(Option<bool>,Option<bool>) {
     let Some(status)=status else { return (was,None) };
     let on=status.open || status.last_seen_s.is_some_and(|s|s<=PLUGIN_OFF_AFTER.as_secs());
     match (was,on) {
-        (Some(true),true)|(Some(false),false)=>(was,None),
-        (_,true)=>(Some(true),Some(true)),
-        (None,false) if life<PLUGIN_OFF_AFTER=>(None,None),
-        (_,false)=>(Some(false),Some(false)),
+        (Some(false),true)=>(Some(true),Some(true)),
+        (_,true)=>(Some(true),None),
+        (Some(true),false)=>(Some(false),Some(false)),
+        (None,false) if status.last_seen_s.is_none() || life<PLUGIN_OFF_AFTER=>(None,None),
+        (None,false)=>(Some(false),Some(false)),
+        (Some(false),false)=>(was,None),
     }
 }
 /// Quanto o aviso de `/clear` não aplicado fica na vista.
@@ -1841,8 +1844,9 @@ mod tests {
         let short = Duration::from_secs(10);
         let long = Duration::from_secs(300);
         assert_eq!(super::plugin_edge(None, Some(&never), short), (None, None), "vida recém-aberta: o plugin ainda está subindo");
-        assert_eq!(super::plugin_edge(None, Some(&never), long), (Some(false), Some(false)), "nunca pediu");
-        assert_eq!(super::plugin_edge(None, Some(&open), short), (Some(true), Some(true)));
+        assert_eq!(super::plugin_edge(None, Some(&never), long), (None, None), "nunca pediu: desligado ou não instalado, não caiu");
+        assert_eq!(super::plugin_edge(None, Some(&seen(500)), long), (Some(false), Some(false)), "pediu nesta vida e parou");
+        assert_eq!(super::plugin_edge(None, Some(&open), short), (Some(true), None), "a primeira leitura da vida não é volta");
         assert_eq!(super::plugin_edge(Some(true), Some(&seen(30)), long), (Some(true), None), "entre um /pull e o seguinte segue ligado");
         assert_eq!(super::plugin_edge(Some(true), Some(&seen(121)), long), (Some(false), Some(false)));
         assert_eq!(super::plugin_edge(Some(false), Some(&seen(500)), long), (Some(false), None), "uma linha por queda");

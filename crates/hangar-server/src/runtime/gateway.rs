@@ -869,11 +869,12 @@ impl RuntimeRegistry {
             "composer_busy"=>"terminal_input_composer_busy","composer_unreadable"=>"terminal_input_composer_unreadable",
             "capture_failed"|"capture_utf8"=>"terminal_input_capture_failed","clear_not_applied"=>"terminal_clear_not_applied",
             "no_safe_delivery"=>"terminal_input_no_safe_delivery",
+            "delivery_unproved"=>"terminal_input_delivery_unproved","delivery_composer_busy"=>"terminal_input_delivery_composer_busy",
             _=>"terminal_input_stalled",
         };
         let input=event.data["view"]["input_stalled"].as_str().filter(|code|!code.is_empty());
-        // Sem prova da conversa, a lista mostra a causa, não o erro que ela mesma causa na fila.
-        let explained=input==Some("no_safe_delivery") && event.data["error"].as_str().is_some_and(|error|crate::state::edges::explained(input,error));
+        // A lista mostra a causa, não o erro que ela mesma causa na fila.
+        let explained=event.data["error"].as_str().is_some_and(|error|crate::state::edges::explained(input,error));
         let problem=if event.data["error"].is_string() && !explained {Some("runtime_falhou")} else {input.map(stalled)};
         let mut map=self.terminal_problems.lock().unwrap_or_else(|e|e.into_inner());
         match problem {
@@ -1810,18 +1811,19 @@ impl RuntimeRegistry {
                     store.exec(generation,&format!("close-record:{key}:{generation}"),clock,Action::AdvanceLifecycle {generation,state:json!({"terminal_lifecycle":{"closed":true,"conversation":closed.binding.conversation},"view":{"alive":false,"conversation":closed.binding.conversation}})})?;
                     Ok(Some(store))
                 })();
-                match recorded {
+                // Fila de outro dono (ou ilegível) não é falha de disco: não se libera a entrada.
+                let store=match recorded {
                     Ok(None)=>return Err(failure("runtime_generation")),
-                    Ok(Some(store))=>{
-                        if let Some(target)=&runtime_target {super::lifecycle::delete_sidecar(target,&closed.binding.conversation)?;}
-                        drop(store);
-                    },
+                    Err(error) if error.kind()==std::io::ErrorKind::InvalidData=>return Err(failure("runtime_generation")),
+                    Ok(Some(store))=>Some(store),
                     Err(error)=>{
                         tracing::warn!(key,session=%name,kind=?error.kind(),"fechamento não gravado na fila; sessão liberada mesmo assim");
                         self.diag.report("rust.close_queue_io",&name,"queue_io","fechamento não gravado na fila; sessão liberada mesmo assim");
+                        None
                     },
-                }
-                drop(lease);
+                };
+                if let Some(target)=&runtime_target {super::lifecycle::delete_sidecar(target,&closed.binding.conversation)?;}
+                drop(store);drop(lease);
             }
         } else if let Some(store) = &self.interactions { store.forget(key).map_err(crate::interactions::runtime_error)?; }
         self.entries.lock().await.remove(key);

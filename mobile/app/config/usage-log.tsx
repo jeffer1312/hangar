@@ -6,8 +6,9 @@ import { Directory } from 'expo-file-system';
 import * as Clipboard from 'expo-clipboard';
 import { runtimeVersion } from 'expo-updates';
 import {
-  DIAG_REPORT_TEXT_MAX, getDiagFileForServer, getDiagSummaryForServer, sendDiagReportAll,
-  type DiagReportFailureKind, type LinhaDiag, type ResumoDiag, type Server,
+  DIAG_REPORT_TEXT_MAX, diagReportMachines, diagReportTargets, getDiagFileForServer, getDiagSummaryForServer,
+  resendDiagReportMissed, sendDiagReportAll,
+  type DiagReportAllResult, type DiagReportFailureKind, type DiagReportScope, type LinhaDiag, type ResumoDiag, type Server,
 } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { PageHeader, Pill } from '../../src/features/config/PageHeader';
@@ -17,7 +18,7 @@ import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { useSettingsColors } from '../../src/features/config/colors';
 import { useInputStyle } from '../../src/features/config/ServerConfigParts';
 import { Segmented } from '../../src/features/config/Segmented';
-import { ownServers, useServers } from '../../src/stores/servers';
+import { useServers } from '../../src/stores/servers';
 import { haptic } from '../../src/ui/haptics';
 import { toast } from '../../src/ui/Toast';
 import * as m from '../../src/paraglide/messages';
@@ -46,10 +47,7 @@ function context(line: LinhaDiag): string {
 }
 
 type Failure = { code: string; kind: DiagReportFailureKind };
-type Missed = { server: Server; failure: Failure };
-/** `total`: máquinas do envio, para o texto do erro não mudar com a escolha feita depois. */
-type Report = { state: 'sending' } | { state: 'done'; code: string | null; diary: 'sent' | 'failed'; missed: Missed[]; total: number };
-type Scope = 'all' | 'this' | 'pick';
+type Report = { state: 'sending' } | { state: 'done'; result: DiagReportAllResult };
 
 const CLIENT = `expo ${runtimeVersion ?? 'dev'} ${Platform.OS}`;
 
@@ -67,8 +65,8 @@ function ReportSection({ server }: { server: Server }) {
   const { theme } = useUnistyles();
   const input = useInputStyle();
   const all = useServers((s) => s.servers);
-  const machines = useMemo(() => ownServers(all), [all]);
-  const [scope, setScope] = useState<Scope>('all');
+  const machines = useMemo(() => diagReportMachines(all, server), [all, server]);
+  const [scope, setScope] = useState<DiagReportScope>('all');
   const [picked, setPicked] = useState<Record<string, boolean>>({});
   const [text, setText] = useState('');
   const [report, setReport] = useState<Report | null>(null);
@@ -82,27 +80,24 @@ function ReportSection({ server }: { server: Server }) {
   }, [server.id, server.baseUrl, server.token]);
 
   const many = machines.length > 1;
-  const targets = !many || scope === 'this' ? [server]
-    : scope === 'all' ? machines : machines.filter((s) => picked[s.id] ?? s.id === server.id);
+  const targets = diagReportTargets(machines, server, scope, picked);
 
   const send = async () => {
     if (report?.state === 'sending') return;
     // Envio com código e máquinas que não foram: o reenvio vai só a elas, no mesmo código.
-    const prev = report?.state === 'done' && report.code && report.missed.length ? report : null;
-    const to = prev ? prev.missed.map((x) => x.server) : targets;
-    if (!to.length) return;
+    const prev = report?.state === 'done' && report.result.code ? report.result : null;
+    if (!prev && !targets.length) return;
     const now = ++generation.current;
     setReport({ state: 'sending' });
     setCopied(false);
-    const result = await sendDiagReportAll(to, { text, client: CLIENT }, prev?.code ?? undefined);
+    const result = prev ? await resendDiagReportMissed(prev, { text, client: CLIENT }) : await sendDiagReportAll(targets, { text, client: CLIENT });
     if (now !== generation.current) return;
-    const missed = result.results.flatMap(({ server: s, result: r }) => r.ok ? [] : [{ server: s, failure: { code: r.code, kind: r.kind } }]);
-    const diary = prev?.diary === 'failed' || result.results.some(({ result: r }) => r.ok && r.diary === 'failed') ? 'failed' : 'sent';
+    const firstMiss = result.results.find(({ result: r }) => !r.ok)?.result;
     if (result.code) {
       haptic.success();
-      if (!missed.length) setText('');
-    } else if (missed[0]) toast.erro(failureText(missed[0].failure));
-    setReport({ state: 'done', code: result.code, diary, missed, total: prev ? prev.total : to.length });
+      if (!firstMiss) setText('');
+    } else if (firstMiss && !firstMiss.ok) toast.erro(failureText(firstMiss));
+    setReport({ state: 'done', result });
   };
 
   const copy = async (code: string) => {
@@ -116,17 +111,19 @@ function ReportSection({ server }: { server: Server }) {
   };
 
   const sending = report?.state === 'sending';
-  const sentCode = report?.state === 'done' ? report.code : null;
-  const diaryFailed = report?.state === 'done' && report.diary === 'failed';
-  const missed = report?.state === 'done' ? report.missed : [];
-  const unsupported = report?.state === 'done' && !report.code && missed.every((x) => x.failure.kind === 'unsupported');
-  const several = report?.state === 'done' && report.total > 1;
+  const done = report?.state === 'done' ? report.result : null;
+  const sentCode = done?.code ?? null;
+  const diaryFailed = !!done?.results.some(({ result: r }) => r.ok && r.diary === 'failed');
+  const missed = done?.results.flatMap(({ server: s, result: r }) => r.ok ? [] : [{ server: s, failure: { code: r.code, kind: r.kind } }]) ?? [];
+  const unsupported = !!done && !done.code && missed.every((x) => x.failure.kind === 'unsupported');
+  // Quantas máquinas o envio teve, não a escolha de agora: trocar a escolha depois não muda o texto do erro.
+  const several = (done?.results.length ?? 0) > 1;
   const retryMissed = !!sentCode && missed.some((x) => x.failure.kind !== 'unsupported');
   return (
     <SectionCard icon="LifeBuoy" title={m.native_settings_diary_report_title()}>
       {many ? (
         <SettingsRow icon="Server" title={m.native_settings_diary_report_scope_label()} description={m.native_settings_diary_report_server_many()}>
-          <Segmented<Scope>
+          <Segmented<DiagReportScope>
             options={[
               { v: 'all', label: m.native_settings_diary_report_scope_all({ count: machines.length }), aria: m.native_settings_diary_report_scope_all_long({ count: machines.length }) },
               { v: 'this', label: m.native_settings_diary_report_scope_this(), aria: m.native_settings_diary_report_scope_this_long({ server: server.label }) },

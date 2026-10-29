@@ -12,15 +12,22 @@ const BODY_MAX: usize = 250 * 1024;
 /// O que o worker falso recebeu e com que status responde ao relatório.
 struct Worker {
     status: Mutex<u16>,
-    erro: Mutex<&'static str>,
+    refusal: Mutex<&'static str>,
     reports: Mutex<Vec<(HeaderMap, Bytes)>>,
     diaries: Mutex<Vec<(HeaderMap, Bytes)>>,
 }
 
+const TOKEN: &str = "abc.abcdefghijklmnopqrstuvwxyz";
+
 async fn report(State(w): State<Arc<Worker>>, headers: HeaderMap, body: Bytes) -> (StatusCode, String) {
-    w.reports.lock().unwrap().push((headers, body));
     let status = *w.status.lock().unwrap();
-    let reply = if status == 201 { json!({"id": "diag/abcd2345", "code": "abcd2345", "upload": "u".repeat(32)}) } else { json!({"erro": *w.erro.lock().unwrap()}) };
+    // Como o worker: o primeiro recebe a assinatura do grupo, as outras máquinas, o grupo confirmado.
+    let reply = match (status, headers.get("x-hangar-group").and_then(|g| g.to_str().ok())) {
+        (201, Some(group)) => json!({"id": "diag/efgh2345", "code": "efgh2345", "upload": "u".repeat(32), "group": group}),
+        (201, None) => json!({"id": "diag/abcd2345", "code": "abcd2345", "upload": "u".repeat(32), "group_token": TOKEN}),
+        _ => json!({"erro": *w.refusal.lock().unwrap()}),
+    };
+    w.reports.lock().unwrap().push((headers, body));
     (StatusCode::from_u16(status).unwrap(), reply.to_string())
 }
 
@@ -45,7 +52,7 @@ impl Fixture {
     /// `base` troca o endereço do worker (porta fechada = worker fora do ar).
     async fn with_base(status: u16, base: Option<String>) -> Self {
         let home = tempfile::tempdir().unwrap();
-        let worker = Arc::new(Worker { status: Mutex::new(status), erro: Mutex::new("x"), reports: Mutex::default(), diaries: Mutex::default() });
+        let worker = Arc::new(Worker { status: Mutex::new(status), refusal: Mutex::new("x"), reports: Mutex::default(), diaries: Mutex::default() });
         let (worker_addr, worker_task) = serve(Router::new().route("/api/relatorio", post(report))
             .route("/api/relatorio/diario", put(diary)).with_state(worker.clone())).await;
         let (upstream, python) = serve(Router::new().fallback(|| async { "python" })).await;
@@ -156,27 +163,35 @@ async fn worker_429_becomes_rate_limited_and_other_status_refused() {
 #[tokio::test(flavor = "multi_thread")]
 async fn group_goes_to_the_worker_and_its_refusals_have_their_own_codes() {
     let f = Fixture::start(201).await;
+    let (status, lead) = f.post(true, &[], input()).await;
+    assert_eq!((status, &lead["group_token"], &lead["group"]), (201, &json!(TOKEN), &Value::Null), "o primeiro leva a assinatura");
     let mut grouped = input();
     grouped["group"] = json!("abcd2345");
-    assert_eq!(f.post(true, &[], grouped.clone()).await.0, 201);
-    assert_eq!(f.post(true, &[], input()).await.0, 201);
+    grouped["group_token"] = json!(TOKEN);
+    let (status, joined) = f.post(true, &[], grouped.clone()).await;
+    assert_eq!((status, &joined["group"], &joined["group_token"]), (201, &json!("abcd2345"), &Value::Null), "o grupo que o worker confirmou");
     {
         let reports = f.worker.reports.lock().unwrap();
-        assert_eq!(reports[0].0["x-hangar-group"], "abcd2345");
-        assert!(!reports[1].0.contains_key("x-hangar-group"), "sem grupo, sem cabeçalho");
+        assert!(!reports[0].0.contains_key("x-hangar-group"), "sem grupo, sem cabeçalho");
+        assert_eq!((&reports[1].0["x-hangar-group"], &reports[1].0["x-hangar-group-token"]), (&"abcd2345".parse::<axum::http::HeaderValue>().unwrap(), &TOKEN.parse::<axum::http::HeaderValue>().unwrap()));
     }
-    for bad in ["ABCD2345", "abcd234", "abcd2345/x"] {
+    let bad = [("ABCD2345", Some(TOKEN)), ("abcd234", Some(TOKEN)), ("abcd2345/x", Some(TOKEN)), ("abcd2345", None), ("abcd2345", Some("abc.x\ny"))];
+    for (group, token) in bad {
         let mut body = input();
-        body["group"] = json!(bad);
-        assert_eq!(code_of(&f.post(true, &[], body).await.1), &json!("diag_report_bad_request"), "{bad}");
+        body["group"] = json!(group);
+        if let Some(token) = token { body["group_token"] = json!(token); }
+        assert_eq!(code_of(&f.post(true, &[], body).await.1), &json!("diag_report_bad_request"), "{group} {token:?}");
     }
+    let mut stray = input();
+    stray["group_token"] = json!(TOKEN);
+    assert_eq!(code_of(&f.post(true, &[], stray).await.1), &json!("diag_report_bad_request"), "assinatura sem grupo");
     assert_eq!(f.worker.reports.lock().unwrap().len(), 2);
 
-    for (status, erro, code) in [(429, "grupo-cheio", "diag_report_group_full"), (400, "grupo", "diag_report_group_unknown")] {
+    for (status, refusal, code) in [(429, "grupo-cheio", "diag_report_group_full"), (400, "grupo", "diag_report_group_unknown")] {
         *f.worker.status.lock().unwrap() = status;
-        *f.worker.erro.lock().unwrap() = erro;
+        *f.worker.refusal.lock().unwrap() = refusal;
         let (got, body) = f.post(true, &[], grouped.clone()).await;
-        assert_eq!((got, code_of(&body)), (409, &json!(code)), "{erro}");
+        assert_eq!((got, code_of(&body)), (409, &json!(code)), "{refusal}");
     }
 }
 

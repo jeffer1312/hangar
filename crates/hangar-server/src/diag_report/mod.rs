@@ -23,6 +23,9 @@ pub struct ClientInput {
     /// Código do primeiro relatório do mesmo envio ("todas as minhas máquinas"); vai ao worker no cabeçalho.
     #[serde(default)]
     pub group: Option<String>,
+    /// A assinatura que o worker deu ao primeiro relatório; vai junto do `group`.
+    #[serde(default)]
+    pub group_token: Option<String>,
 }
 
 #[derive(serde::Deserialize)]

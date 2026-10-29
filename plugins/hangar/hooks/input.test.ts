@@ -161,8 +161,10 @@ for (const { code, back } of [
   // A sessão reabrindo no Hangar (vínculo trocando): a ponte volta em segundos, não fica 30 s sem provar a conversa.
   { code: "erro_interacao_desatualizada", back: true },
   { code: "plugin_identity_missing", back: true },
-  // Outra instância é dona da sessão: segue a espera longa.
+  // Outra instância é dona da sessão, ou o plugin é de outra conversa (um `claude -p` filho que herdou o ambiente):
+  // insistir não muda nada, segue a espera longa.
   { code: "plugin_instance_conflict", back: false },
+  { code: "plugin_conversation_mismatch", back: false },
 ]) test(`ponte do lançamento recusada com ${code}: ${back ? "tenta de novo em segundos" : "espera a outra instância"}`, {}, async ($, on) => {
   const relogio = mock.clock(on, { now: 1_000_000 });
   const env: Record<string, string> = { HANGAR_PLUGIN_URL: "http://127.0.0.1:1/api/plugin", HANGAR_PLUGIN_TOKEN: "k.t", CP_SESSION_NAME: "s" };

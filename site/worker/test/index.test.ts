@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
-import { DIARY_MAX_BYTES, handle, head, KV_DAILY_MAX, MAIL_REPORT_MAX, MAX_BYTES, TTL_SECONDS, UPLOAD_TTL_SECONDS, type Deps, type Kind } from "../src";
+import { DIARY_MAX_BYTES, GROUP_TTL_SECONDS, handle, head, KV_DAILY_MAX, MAIL_REPORT_MAX, MAX_BYTES, TTL_SECONDS, UPLOAD_TTL_SECONDS, type Deps, type Kind } from "../src";
 
 function report(over: Record<string, unknown> = {}) {
 	return { v: 1, app: "0.20.1.3456", commit: "abc123", os: "linux-x86_64", step: "instalar", code: "sem-systemd",
@@ -15,11 +15,12 @@ function post(body: string, headers: Record<string, string> = {}) {
 function deps(allow = true, mailFails = false, allowAll = true, today = 1) {
 	const mails: { subject: string; text: string }[] = [];
 	const pending: Promise<unknown>[] = [];
-	const calls = { all: 0, limits: [] as (Kind | "diario")[], writes: [] as number[] };
+	const calls = { all: 0, grouped: 0, limits: [] as (Kind | "diario" | "grupo")[], keys: [] as string[], writes: [] as number[] };
 	const d: Deps = {
 		reports: env.REPORTS,
-		allow: async (_ip, limit) => { calls.limits.push(limit); return allow; },
-		allowAll: async () => { calls.all++; return allowAll; },
+		allow: async (key, limit) => { calls.limits.push(limit); calls.keys.push(key); return allow; },
+		allowAll: async (grouped) => { if (grouped) calls.grouped++; else calls.all++; return allowAll; },
+		groupSecret: "segredo-de-teste",
 		countToday: async (writes) => { calls.writes.push(writes); return today; },
 		mail: async (subject, text) => { if (mailFails) throw new Error("sem rota de e-mail"); mails.push({ subject, text }); },
 		waitUntil: (work) => { pending.push(work); },
@@ -413,80 +414,93 @@ describe("PUT /api/relatorio/diario", () => {
 });
 
 describe("POST /api/relatorio with x-hangar-group (one report per machine)", () => {
-	async function first(d: Deps) { return (await handle(postDiag(JSON.stringify(diagnostic())), d)).json<DiagCreated>(); }
-	const member = (group: string) => postDiag(JSON.stringify(diagnostic()), { "x-hangar-group": group });
+	type Lead = DiagCreated & { group_token: string };
+	async function first(d: Deps) { return (await handle(postDiag(JSON.stringify(diagnostic())), d)).json<Lead>(); }
+	const member = (group: string, token: string) => postDiag(JSON.stringify(diagnostic()), { "x-hangar-group": group, "x-hangar-group-token": token });
 
-	it("skips the per-IP limit, records the group in each report and keeps the list", async () => {
+	it("skips the per-IP limit without reading KV, keys each machine under the first and records the group", async () => {
 		const lead = await first(deps().d);
-		const { d, calls } = deps(false);
-		const res = await handle(member(lead.code), d);
+		const { d, calls } = deps();
+		d.allow = async (key, limit) => { calls.limits.push(limit); calls.keys.push(key); return limit === "grupo"; };
+		const real = env.REPORTS;
+		d.reports = { put: (k: string, v: string, o: KVNamespacePutOptions) => real.put(k, v, o),
+			get: async () => { throw new Error("nenhuma leitura"); } } as unknown as KVNamespace;
+		const res = await handle(member(lead.code, lead.group_token), d);
 		expect(res.status).toBe(201);
-		const body = await res.json<DiagCreated>();
-		expect(calls.limits).toEqual([]);
-		expect(calls.all).toBe(1);
+		const body = await res.json<DiagCreated & { group?: string; group_token?: string }>();
+		expect(body.group).toBe(lead.code);
+		expect(body.group_token).toBeUndefined();
+		expect(calls.limits).toEqual(["grupo"]);
+		expect(calls.keys).toEqual([lead.code]);
+		expect([calls.all, calls.grouped]).toEqual([0, 1]);
 		expect(calls.writes).toEqual([3]);
 		expect(JSON.parse((await env.REPORTS.get(body.id))!).group).toBe(lead.code);
 		expect(JSON.parse((await env.REPORTS.get(lead.id))!).group).toBe(lead.code);
-		expect(JSON.parse((await env.REPORTS.get(`${lead.id}/group`))!)).toEqual([lead.code, body.code]);
-		const keys = await stored();
-		expect(keys.find((k) => k.name === `${lead.id}/group`)!.expiration).toBeGreaterThan(Math.floor(Date.now() / 1000) + TTL_SECONDS - 60);
+		const members = await env.REPORTS.list({ prefix: `${lead.id}/m/` });
+		expect(members.keys.map((k) => k.name)).toEqual([`${lead.id}/m/${body.code}`]);
+		expect(members.keys[0].expiration).toBeGreaterThan(Math.floor(Date.now() / 1000) + TTL_SECONDS - 60);
 	});
 
-	it("caps a group at 8 machines", async () => {
+	it("caps a group by its own limiter", async () => {
 		const lead = await first(deps().d);
-		for (let i = 0; i < 7; i++) expect((await handle(member(lead.code), deps().d)).status).toBe(201);
-		const res = await handle(member(lead.code), deps().d);
-		expect(res.status).toBe(429);
-		expect(await res.json()).toEqual({ erro: "grupo-cheio" });
-		expect(JSON.parse((await env.REPORTS.get(`${lead.id}/group`))!)).toHaveLength(8);
+		expect((await handle(member(lead.code, lead.group_token), deps().d)).status).toBe(201);
+		const { d } = deps();
+		d.allow = async (_key, limit) => limit !== "grupo";
+		const full = await handle(member(lead.code, lead.group_token), d);
+		expect(full.status).toBe(429);
+		expect(await full.json()).toEqual({ erro: "grupo-cheio" });
 	});
 
-	it("refuses an unknown or malformed group after charging the per-IP limit", async () => {
-		for (const group of ["abcdefgh", "NAO-VALE", ""]) {
+	it("refuses a forged, foreign or malformed group after charging the per-IP limit", async () => {
+		const lead = await first(deps().d);
+		const other = await first(deps().d);
+		for (const [group, token] of [["abcdefgh", lead.group_token], [lead.code, other.group_token], [lead.code, "x.y"],
+			[lead.code, ""], ["NAO-VALE", lead.group_token]]) {
 			const { d, calls } = deps();
-			const res = await handle(member(group), d);
+			const res = await handle(member(group, token), d);
 			expect(res.status).toBe(400);
 			expect(await res.json()).toEqual({ erro: "grupo" });
 			expect(calls.limits).toEqual(["diagnostico"]);
 			expect(calls.all).toBe(0);
 		}
-		expect(await stored()).toHaveLength(0);
 	});
 
-	it("refuses a member's code as a group: groups don't chain past the per-IP limit", async () => {
+	it("refuses an expired signature", async () => {
 		const lead = await first(deps().d);
-		const joined = await (await handle(member(lead.code), deps().d)).json<DiagCreated>();
-		const { d, calls } = deps();
-		const res = await handle(member(joined.code), d);
-		expect(res.status).toBe(400);
-		expect(await res.json()).toEqual({ erro: "grupo" });
-		expect(calls.limits).toEqual(["diagnostico"]);
+		const real = Date.now;
+		Date.now = () => real() + (GROUP_TTL_SECONDS + 5) * 1000;
+		try {
+			expect((await handle(member(lead.code, lead.group_token), deps().d)).status).toBe(400);
+		} finally { Date.now = real; }
 	});
 
-	it("a corrupt group record refuses the group instead of failing with 500", async () => {
-		await env.REPORTS.put("diag/abcdefgh/group", "{quebrado");
-		const { d, calls } = deps();
-		const res = await handle(member("abcdefgh"), d);
-		expect(res.status).toBe(400);
-		expect(await res.json()).toEqual({ erro: "grupo" });
-		expect(calls.limits).toEqual(["diagnostico"]);
-	});
-
-	it("still pays the per-IP limit for an unknown group", async () => {
-		const { d } = deps(false);
-		expect((await handle(member("abcdefgh"), d)).status).toBe(429);
-	});
-
-	it("still goes through the global limit", async () => {
+	it("a member gets no signature: groups don't chain past the per-IP limit", async () => {
 		const lead = await first(deps().d);
-		const res = await handle(member(lead.code), deps(true, false, false).d);
+		const joined = await (await handle(member(lead.code, lead.group_token), deps().d)).json<DiagCreated & { group_token?: string }>();
+		expect(joined.group_token).toBeUndefined();
+		const res = await handle(member(joined.code, lead.group_token), deps().d);
+		expect(res.status).toBe(400);
+	});
+
+	it("without the secret nothing groups and each machine pays the per-IP limit", async () => {
+		const { d } = deps();
+		d.groupSecret = undefined;
+		const lead = await (await handle(postDiag(JSON.stringify(diagnostic())), d)).json<DiagCreated & { group_token?: string }>();
+		expect(lead.group_token).toBeUndefined();
+		const res = await handle(member(lead.code, "abc.aaaaaaaaaaaaaaaaaaaaaaaaaa"), d);
+		expect(res.status).toBe(400);
+	});
+
+	it("still goes through the grouped global limit", async () => {
+		const lead = await first(deps().d);
+		const res = await handle(member(lead.code, lead.group_token), deps(true, false, false).d);
 		expect(res.status).toBe(429);
-		expect(await env.REPORTS.get(`${lead.id}/group`)).toBeNull();
+		expect((await env.REPORTS.list({ prefix: `${lead.id}/m/` })).keys).toHaveLength(0);
 	});
 
 	it("only groups diagnostics", async () => {
 		const lead = await first(deps().d);
-		const res = await handle(post(JSON.stringify(report()), { "x-hangar-group": lead.code }), deps().d);
+		const res = await handle(post(JSON.stringify(report()), { "x-hangar-group": lead.code, "x-hangar-group-token": lead.group_token }), deps().d);
 		expect(res.status).toBe(400);
 		expect(await res.json()).toEqual({ erro: "grupo" });
 	});

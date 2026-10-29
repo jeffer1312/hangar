@@ -23,8 +23,11 @@ export const DIARY_MAX_BYTES = 10 * 1024 * 1024;
 /** Prazo da senha de envio do diário: o servidor manda logo depois do relatório. */
 export const UPLOAD_TTL_SECONDS = 10 * 60;
 const DIAG_CODE = /^[a-z2-7]{8}$/;
-/** Máquinas de um mesmo envio ("todas as minhas máquinas"): o primeiro relatório e os que levam o código dele. */
-export const GROUP_MAX = 8;
+/** Máquinas de um mesmo envio ("todas as minhas máquinas"): o primeiro relatório e as que levam o código dele, até 7
+ *  por minuto pelo `GROUP_LIMITER`. A assinatura do grupo vale por este prazo: as máquinas vão uma por vez, cada uma
+ *  com até 150 s no servidor. */
+export const GROUP_TTL_SECONDS = 30 * 60;
+const GROUP_TOKEN = /^([0-9a-z]{1,10})\.([a-z2-7]{26})$/;
 const UPLOAD = /^[a-z2-7]{32}$/;
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
@@ -41,9 +44,13 @@ export interface Report {
 /** O que o handler usa do mundo: os testes trocam limite e e-mail sem tocar na conta. */
 export interface Deps {
 	reports: KVNamespace;
-	allow(ip: string, limit: Kind | "diario"): Promise<boolean>;
-	/** Teto de todos juntos: muitos IPs (ou um que troca) não esgotam as escritas do KV nem a caixa de e-mail. */
-	allowAll(): Promise<boolean>;
+	/** `grupo`: a chave é o código do grupo, não o IP. */
+	allow(key: string, limit: Kind | "diario" | "grupo"): Promise<boolean>;
+	/** Teto de todos juntos: muitos IPs (ou um que troca) não esgotam as escritas do KV nem a caixa de e-mail. As máquinas
+	 *  de um envio agrupado têm teto próprio (`grouped`): a instalação, que manda e-mail, não ganha a folga delas. */
+	allowAll(grouped?: boolean): Promise<boolean>;
+	/** Assina o código do primeiro relatório; sem ele o envio não agrupa e cada máquina paga o limite por IP. */
+	groupSecret?: string;
 	/** Soma as escritas no KV ao contador do dia e devolve o total; aproximado (por local da Cloudflare). */
 	countToday(writes: number): Promise<number>;
 	mail(subject: string, text: string): Promise<void>;
@@ -150,26 +157,29 @@ function record(report: Report, request: Request, group?: string): string {
 	return JSON.stringify({ ...report, ...(group ? { group } : {}), received: new Date().toISOString(), country: request.cf?.country ?? null });
 }
 
-interface Group { code: string; members: string[] }
-
-/** O grupo de um envio, só pelo código do primeiro relatório (o que grava `group` igual ao próprio código): um membro
- *  aceito como grupo abriria outro de 8 e encadearia envios sem limite por IP. A lista nasce no segundo relatório. */
-async function readGroup(deps: Deps, code: string): Promise<Group | null> {
-	if (!DIAG_CODE.test(code)) return null;
-	try {
-		const list = await deps.reports.get(`diag/${code}/group`);
-		if (list !== null) {
-			const members: unknown = JSON.parse(list);
-			return Array.isArray(members) ? { code, members: members.filter((m): m is string => typeof m === "string") } : null;
-		}
-		const lead = await deps.reports.get(`diag/${code}`);
-		if (lead === null) return null;
-		return (JSON.parse(lead) as { group?: unknown }).group === code ? { code, members: [code] } : null;
-	} catch (e: unknown) {
-		// Registro ilegível não abre grupo: o envio paga o limite por IP e volta 400, com o motivo no log.
-		logErr("grupo ilegível", `diag/${code}`, e);
-		return null;
+async function groupSignature(secret: string, code: string, issued: string): Promise<string> {
+	const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+	const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${code}.${issued}`)));
+	let bits = 0, value = 0, out = "";
+	for (const byte of mac) {
+		value = (value << 8) | byte; bits += 8;
+		while (bits >= 5 && out.length < 26) { out += ALPHABET[(value >>> (bits - 5)) & 31]; bits -= 5; }
 	}
+	return out;
+}
+
+/** A assinatura que o primeiro relatório recebe e as outras máquinas devolvem: o grupo se confere sem ler o KV, e só
+ *  quem não veio em grupo a recebe, então um membro não abre outro grupo. */
+async function groupToken(secret: string, code: string, now: number): Promise<string> {
+	const issued = Math.floor(now / 1000).toString(36);
+	return `${issued}.${await groupSignature(secret, code, issued)}`;
+}
+
+async function groupValid(secret: string | undefined, code: string, token: string, now: number): Promise<boolean> {
+	const parts = GROUP_TOKEN.exec(token);
+	if (!secret || !DIAG_CODE.test(code) || !parts) return false;
+	const age = Math.floor(now / 1000) - parseInt(parts[1], 36);
+	return age >= -60 && age <= GROUP_TTL_SECONDS && sameSecret(await groupSignature(secret, code, parts[1]), parts[2]);
 }
 
 async function handleReport(request: Request, deps: Deps): Promise<Response> {
@@ -186,19 +196,21 @@ async function handleReport(request: Request, deps: Deps): Promise<Response> {
 	// de qualquer escrita, e JSON quebrado também paga o limite.
 	const limit: Kind = (parsed as { kind?: unknown } | null | undefined)?.kind === "diagnostico" ? "diagnostico" : "instalacao";
 	const ip = request.headers.get("cf-connecting-ip") ?? "sem-ip";
-	// As outras máquinas da pessoa saem do mesmo IP logo depois da primeira: com o código dela, o teto é o do grupo.
+	// As outras máquinas da pessoa saem do mesmo IP logo depois da primeira: com o código e a assinatura dela, o teto é o
+	// do grupo. A conferência não lê nada: o limite continua antes de qualquer leitura ou escrita.
 	const groupCode = request.headers.get("x-hangar-group");
-	const group = groupCode !== null && limit === "diagnostico" ? await readGroup(deps, groupCode) : null;
+	const group = groupCode !== null && limit === "diagnostico"
+		&& await groupValid(deps.groupSecret, groupCode, request.headers.get("x-hangar-group-token") ?? "", Date.now()) ? groupCode : null;
 	if (!group && !(await deps.allow(ip, limit))) return json(429, { erro: "limite" });
 	if (groupCode !== null && !group) return json(400, { erro: "grupo" });
-	if (group && group.members.length >= GROUP_MAX) return json(429, { erro: "grupo-cheio" });
+	if (group && !(await deps.allow(group, "grupo"))) return json(429, { erro: "grupo-cheio" });
 	if (broken) return json(400, { erro: "json" });
 	const report = parseReport(parsed);
 	if (!report) return json(400, { erro: "campos" });
 	// Cada tipo só vem do seu app: o diagnóstico do servidor, a instalação do assistente nativo.
 	if (stamped !== (report.kind === "diagnostico" ? "server" : "native")) return json(403, { erro: "carimbo" });
 	// O teto de todos só conta relatório válido: lixo com o carimbo público não tira a vez de quem precisa.
-	if (!(await deps.allowAll())) return json(429, { erro: "limite" });
+	if (!(await deps.allowAll(group !== null))) return json(429, { erro: "limite" });
 	if (report.kind === "diagnostico") return storeDiagnostic(report, request, deps, group);
 	const id = `${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}`;
 	// Acima do teto diário só o e-mail sai.
@@ -220,7 +232,7 @@ async function handleReport(request: Request, deps: Deps): Promise<Response> {
 }
 
 /** Diagnóstico só responde com código que abre: sem gravar no KV é 503 e nenhum e-mail sai. */
-async function storeDiagnostic(report: Report, request: Request, deps: Deps, group: Group | null): Promise<Response> {
+async function storeDiagnostic(report: Report, request: Request, deps: Deps, group: string | null): Promise<Response> {
 	// shortcut: código de 40 bits sem conferir colisão; com milhões de relatórios em 90 dias, conferir antes de gravar.
 	const code = randomCode(8);
 	const id = `diag/${code}`;
@@ -232,21 +244,23 @@ async function storeDiagnostic(report: Report, request: Request, deps: Deps, gro
 	try {
 		// Senha primeiro: se o relatório falhar, sobra só ela, que vence em 10 min, e não um relatório órfão de 90 dias.
 		await deps.reports.put(`${id}/upload`, upload, { expirationTtl: UPLOAD_TTL_SECONDS });
-		// A lista antes do relatório, como a senha: se o relatório falhar, sobra só um código na lista que não abre
-		// nada, e não um relatório fora do envio que a máquina reenviaria em duplicata.
-		// shortcut: ler e regravar a lista perde um membro se duas máquinas chegarem juntas; o app manda uma por vez e
-		// cada relatório guarda o `group`.
-		if (group) await deps.reports.put(`diag/${group.code}/group`, JSON.stringify([...group.members, code]), { expirationTtl: TTL_SECONDS });
-		await deps.reports.put(id, record(report, request, group?.code ?? code), { expirationTtl: TTL_SECONDS });
+		// Cada máquina numa chave própria sob o primeiro (`diag/<primeiro>/m/<código>`, lidas por prefixo): nada é lido e
+		// regravado, então envios seguidos de outros locais da Cloudflare não perdem membros. Antes do relatório, como a
+		// senha: se ele falhar, sobra só uma marca que não abre nada.
+		if (group) await deps.reports.put(`diag/${group}/m/${code}`, "", { expirationTtl: TTL_SECONDS });
+		await deps.reports.put(id, record(report, request, group ?? code), { expirationTtl: TTL_SECONDS });
 	} catch (e: unknown) {
 		logErr("kv falhou", id, e);
 		return json(503, { erro: "armazenamento" });
 	}
+	// Sem o segredo o envio não agrupa: as outras máquinas vão avulsas, pagando o limite por IP.
+	const token = !group && deps.groupSecret ? await groupToken(deps.groupSecret, code, Date.now()) : undefined;
+	if (!group && !deps.groupSecret) console.error(JSON.stringify({ message: "grupo sem segredo", id }));
 	const text = [`relatório: ${code}`, `chave no KV: ${id}`, `sistema: ${report.os}`, `app: ${report.app} · ${report.commit}`, "",
 		head(report.report, MAIL_REPORT_MAX)].join("\n");
 	sendMail(deps, id, `[Hangar] diagnóstico ${code} · ${report.os}`, text);
 	console.log(JSON.stringify({ message: "relatorio", id, kind: report.kind }));
-	return json(201, { id, code, upload });
+	return json(201, { id, code, upload, ...(group ? { group } : {}), ...(token ? { group_token: token } : {}) });
 }
 
 function sameSecret(a: string, b: string): boolean {
@@ -290,16 +304,19 @@ async function handleDiary(request: Request, deps: Deps): Promise<Response> {
 	return json(201, { id: `${id}/diario.jsonl.gz` });
 }
 
-/** `REPORT_TO` é segredo (`wrangler secret put`), fora do `wrangler.jsonc` e por isso fora do `Env` gerado. */
+/** `REPORT_TO` e `GROUP_SECRET` são segredos (`wrangler secret put`), fora do `wrangler.jsonc` e por isso fora do `Env` gerado. */
 // shortcut: DIAG_LIMITER declarado aqui até `npm run types` regenerar o worker-configuration.d.ts.
-type Bindings = Env & { REPORT_TO?: string; DIAG_LIMITER: RateLimit; DIARY_LIMITER: RateLimit };
+type Bindings = Env & { REPORT_TO?: string; GROUP_SECRET?: string; DIAG_LIMITER: RateLimit; DIARY_LIMITER: RateLimit;
+	GROUP_LIMITER: RateLimit; GROUPS_LIMITER: RateLimit };
 
 export default {
 	async fetch(request, env: Bindings, ctx): Promise<Response> {
 		return handle(request, {
 			reports: env.REPORTS,
-			allow: async (ip, limit) => (await ({ diagnostico: env.DIAG_LIMITER, diario: env.DIARY_LIMITER, instalacao: env.LIMITER })[limit].limit({ key: ip })).success,
-			allowAll: async () => (await env.GLOBAL_LIMITER.limit({ key: "global" })).success,
+			allow: async (key, limit) => (await ({ diagnostico: env.DIAG_LIMITER, diario: env.DIARY_LIMITER, instalacao: env.LIMITER,
+				grupo: env.GROUP_LIMITER })[limit].limit({ key })).success,
+			allowAll: async (grouped) => (await (grouped ? env.GROUPS_LIMITER : env.GLOBAL_LIMITER).limit({ key: "global" })).success,
+			groupSecret: env.GROUP_SECRET,
 			countToday: async (writes) => {
 				// ponytail: contador no Cache API, por local e sem atomicidade; Durable Object se precisar exato.
 				const key = new Request(`https://hangar.dev.br/__contador/${new Date().toISOString().slice(0, 10)}`);

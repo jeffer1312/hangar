@@ -997,9 +997,10 @@ impl TerminalDriver {
         }
         false
     }
-    /// O campo tem o nosso texto inteiro ou o começo dele (a parte que a limpeza ainda não tirou).
+    /// O campo tem o nosso texto inteiro ou o começo dele (a parte que a limpeza ainda não tirou). Com texto
+    /// alheio antes do nosso, um resto que pareça nosso começo pode ser o dele: só o texto inteiro vale.
     fn ours(&self, now: &ComposerSnapshot, text: &str, before: &ComposerSnapshot) -> bool {
-        now.owned(text, before) || !now.content.is_empty() && (compact(text).starts_with(&compact(&now.content))
+        now.owned(text, before) || before.content.is_empty() && !now.content.is_empty() && (compact(text).starts_with(&compact(&now.content))
             || self.binding.windows && text.starts_with('-') && format!("x{}", compact(text)).starts_with(&compact(&now.content)))
     }
     fn failed(error: IoFailure, stage: DeliveryStage) -> DeliveryResult {
