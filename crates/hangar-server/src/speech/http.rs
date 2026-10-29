@@ -84,9 +84,28 @@ async fn public_inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Resp
     {
         return crate::session_write::too_large(req.headers());
     }
-    let (forward, caller) = who(&st, peer, &req);
+    let (forward, caller) = match who(&st, peer, &req).await {
+        Ok(value) => value,
+        Err(error) => return crate::auth::unavailable(error),
+    };
     let Some(caller) = caller else {
-        if !crate::auth::is_loopback(&forward.client_ip) && st.auth.blocked(&forward.client_ip) {
+        let attempt = crate::auth::AuthAttempt {
+            profile: crate::auth::Profile::RequireAuthHttp,
+            origin: forward.client_ip.clone(),
+            presented_token: crate::auth::presented_token(
+                req.headers(),
+                req.uri().query(),
+                req.method(),
+                forward.https,
+            ),
+            verified_guest: false,
+            login_guest: false,
+        };
+        let decision = match st.auth.evaluate(attempt).await {
+            Ok(value) => value,
+            Err(error) => return crate::auth::unavailable(error),
+        };
+        if decision.status == crate::auth::AuthDecision::BLOCKED.status {
             let mut response = detail(
                 StatusCode::TOO_MANY_REQUESTS,
                 "erro_muitas_tentativas",
@@ -98,7 +117,6 @@ async fn public_inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Resp
                 .insert(header::RETRY_AFTER, "30".parse().unwrap());
             return response;
         }
-        st.auth.record_fail(&forward.client_ip);
         return detail(
             StatusCode::UNAUTHORIZED,
             "erro_nao_autorizado",
@@ -607,18 +625,15 @@ async fn conversations(
 }
 
 fn summarize(events: &[ChatEvent]) -> String {
-    let mut messages = events
-        .iter()
-        .rev()
-        .filter_map(|event| {
-            let speaker = match event.kind {
-                ChatKind::UserMsg => "usuário",
-                ChatKind::AssistantMsg => "assistente",
-                _ => return None,
-            };
-            let text = crate::transcript::py::strip(event.text.as_deref()?);
-            (!text.is_empty()).then_some((speaker, text))
-        });
+    let mut messages = events.iter().rev().filter_map(|event| {
+        let speaker = match event.kind {
+            ChatKind::UserMsg => "usuário",
+            ChatKind::AssistantMsg => "assistente",
+            _ => return None,
+        };
+        let text = crate::transcript::py::strip(event.text.as_deref()?);
+        (!text.is_empty()).then_some((speaker, text))
+    });
     let Some((speaker, last)) = messages.next() else {
         return String::new();
     };
@@ -860,7 +875,12 @@ mod tests {
                 let events = super::super::history::read(&info, limit).unwrap();
                 let expected = case["events"].as_array().unwrap();
                 if expected.len() < limit {
-                    assert_eq!(events.len(), expected.len(), "eventos extras: {}", case["name"]);
+                    assert_eq!(
+                        events.len(),
+                        expected.len(),
+                        "eventos extras: {}",
+                        case["name"]
+                    );
                 }
                 let projection: Vec<_> = events
                     .iter()

@@ -239,7 +239,9 @@ impl Service {
             cache::prepare(&directory)?;
             maintenance.select(&directory, &key)?;
             let cached = cache::lookup(&directory, &key)?;
-            maintenance.run(&directory, std::time::Instant::now());
+            if cached {
+                maintenance.run(&directory, std::time::Instant::now());
+            }
             Ok::<_, SpeechError>((cached, guard))
         })
         .await
@@ -255,14 +257,19 @@ impl Service {
             };
             let directory = config.cache_dir.clone();
             let key = hash.clone();
-            tokio::task::spawn_blocking(move || cache::store(&directory, &key, audio))
-                .await
-                .map_err(|_| {
-                    SpeechError::new(
-                        500,
-                        "Não foi possível concluir a gravação do áudio em cache.",
-                    )
-                })??;
+            let maintenance = self.maintenance.clone();
+            tokio::task::spawn_blocking(move || {
+                cache::store(&directory, &key, audio)?;
+                maintenance.run(&directory, std::time::Instant::now());
+                Ok::<_, SpeechError>(())
+            })
+            .await
+            .map_err(|_| {
+                SpeechError::new(
+                    500,
+                    "Não foi possível concluir a gravação do áudio em cache.",
+                )
+            })??;
         }
         Ok(Synthesis {
             hash,

@@ -41,7 +41,7 @@ async fn response(
     if let Some(body) = body {
         request = request.json(&body);
     }
-    let mut response = request
+    let response = request
         .send()
         .await
         .map_err(|_| SpeechError::new(502, "Falha ao contatar a ElevenLabs."))?;
@@ -49,33 +49,12 @@ async fn response(
     if status.is_success() {
         return Ok(response);
     }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| SpeechError::new(502, "Falha ao ler a resposta da ElevenLabs."))?
-    {
-        if bytes.len().saturating_add(chunk.len()) > 16 * 1024 {
-            bytes.extend_from_slice(&chunk[..16 * 1024 - bytes.len()]);
-            break;
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    let detail: String = String::from_utf8_lossy(&bytes)
-        .replace(key, "[segredo removido]")
-        .chars()
-        .take(300)
-        .collect();
+    // O corpo pode ecoar a credencial codificada; somente o status é diagnóstico público.
     Err(SpeechError::new(
         502,
         format!(
-            "ElevenLabs {}: {}",
-            status.as_u16(),
-            if detail.is_empty() {
-                "(sem corpo)"
-            } else {
-                &detail
-            }
+            "ElevenLabs {}: o provedor recusou a solicitação.",
+            status.as_u16()
         ),
     ))
 }

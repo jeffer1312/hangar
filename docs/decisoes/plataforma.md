@@ -3625,8 +3625,12 @@ do arquivo recebe o áudio completo (200). Isso impede juntar faixas de represen
 no mesmo segundo. As duas respostas antigas por data permanecem nas capturas, e a diferença é
 conferida explicitamente nos testes, junto com a alteração de bytes dentro do mesmo segundo.
 
-O hash continua usando a codificação JSON Python, incluindo espaços e floats; áudios já em
-cache não geram novo gasto por causa da migração. O contexto da sugestão conserva a janela
+O hash continua usando a codificação JSON Python, incluindo espaços e floats; áudios remotos já
+em cache não geram novo gasto por causa da migração. A síntese local inclui o SHA-256 do argv
+normalizado na identidade: trocar o comando troca o áudio. O cache local antigo não comprova
+qual comando o produziu e não é reutilizado pela nova síntese; suas URLs continuam legíveis até
+a retenção vencer. Nenhum argumento ou credencial é persistido nessa identidade.
+O contexto da sugestão conserva a janela
 inteira que o consumidor original lia, os hooks e a fila dos provedores, e os snapshots e a
 fronteira das conversas transferidas. Overrides de transferência substituem somente suas
 linhas; uma máquina sem transferência não perde as sessões nativas da sugestão. O resumo
@@ -3641,6 +3645,11 @@ atômica que tolera leitores no Windows. Cancelamento e prazo do motor local con
 binários, sem shell. O comando configurado mantém suas variáveis de provedor, removendo somente
 a autoridade privada do Hangar. Não existe teto arbitrário de bytes que recuse um WAV válido dentro do limite de
 texto. Áudio vazio/inválido, JSON externo inválido e falha de disco têm erro visível.
+Há no máximo dois motores locais simultâneos; a espera por vaga termina em 30 s com 503, e a
+vaga acompanha a limpeza da árvore. A manutenção por pasta roda no máximo uma vez por hora
+enquanto há uso, repetindo após um minuto em caso de erro. Só remove arquivos regulares com
+nome de hash e extensão MP3/WAV. A seleção protege o último uso mesmo quando o mtime de um
+arquivo somente leitura não pode ser renovado; arquivos alheios e links ficam intactos.
 
 O cliente de texto reaproveita conexões, recusa UTF-8 inválido em resposta de sucesso e
 redirecionamento de credenciais, sem usar assinatura como reserva. Cache e pausa de pensamento
@@ -3649,6 +3658,14 @@ trocar de chave não deixa uma falha antiga bloqueando a tradução nova. O praz
 o item em curso; cancelá-lo conserva o original sem contaminar pausa ou cache. Tradução de
 descrições conserva lotes, resultado parcial e cache persistente; só limite HTTP real provoca repetição.
 Cache ilegível ou corrompido conserva o arquivo e expõe a causa, sem apagar entradas anteriores.
+Erros públicos dos provedores de texto e áudio levam somente status e categoria fixa: o corpo
+externo pode ecoar credenciais codificadas e nunca entra no diagnóstico público. O cache de
+descrições distingue endpoint, modelo e esforço; entradas antigas sem essa identidade ficam
+preservadas no arquivo, mas não são reutilizadas automaticamente. Palavras comuns aos dois
+idiomas não provam idioma, e textos mistos passam pela tradução. O orçamento total é de 60 s,
+incluindo espera pelo mutex, disco, chamadas e backoff; conserva lotes concluídos e responde
+com resultado parcial e causa. Se uma gravação atômica já começou ao vencer o prazo, a exclusão
+acompanha sua conclusão sem atrasar a resposta nem permitir uma gravação concorrente.
 As mensagens corrigidas levam acentos, mantendo os códigos usados pelos clientes.
 
 **Limite de medição.** Uma prova HTTP com provedor controlado mede a borda e o cache do Hangar;

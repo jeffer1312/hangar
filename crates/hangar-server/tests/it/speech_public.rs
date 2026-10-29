@@ -236,17 +236,30 @@ async fn speech_public_matches_the_frozen_python_http_contract() {
         let status = response.status().as_u16();
         let mut headers = response.headers().clone();
         let mut bytes = response.bytes().await.unwrap();
-        if matches!(case["name"].as_str(), Some("mp3-if-range-date" | "wav-if-range-date")) {
+        if matches!(
+            case["name"].as_str(),
+            Some("mp3-if-range-date" | "wav-if-range-date")
+        ) {
             // D-019: conserva a captura Python e declara a recusa do validador sem precisão.
             assert_eq!(case["status"], 206);
             assert_eq!(status, 200);
-            let expected = if case["name"] == "wav-if-range-date" { "RIFFfixture-wave" } else { "ID3fixture-audio" };
+            let expected = if case["name"] == "wav-if-range-date" {
+                "RIFFfixture-wave"
+            } else {
+                "ID3fixture-audio"
+            };
             assert_eq!(bytes.as_ref(), expected.as_bytes());
             assert!(!headers.contains_key("content-range"));
             assert_eq!(headers["content-length"], "16");
-            assert_eq!(headers["etag"].to_str().unwrap(), case["response_headers"]["etag"].as_str().unwrap());
+            assert_eq!(
+                headers["etag"].to_str().unwrap(),
+                case["response_headers"]["etag"].as_str().unwrap()
+            );
             for name in ["last-modified", "accept-ranges", "content-type"] {
-                assert_eq!(headers[name].to_str().unwrap(), case["response_headers"][name].as_str().unwrap());
+                assert_eq!(
+                    headers[name].to_str().unwrap(),
+                    case["response_headers"][name].as_str().unwrap()
+                );
             }
             continue;
         }
@@ -313,17 +326,40 @@ async fn speech_if_range_never_combines_versions_changed_in_the_same_second() {
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let hash = "27656ffd5a01dc640a8f9d96a8684be7372800bdd618fa2311b4b85478052613";
     let url = format!("{}/api/tts/audio/{hash}", server.base);
-    let first = client.get(&url).bearer_auth("fixture-owner").send().await.unwrap();
-    let validators = [first.headers()["last-modified"].clone(), first.headers()["etag"].clone()];
-    let path = server._root.path().join("home/.claude/.hangar-tts").join(format!("{hash}.mp3"));
+    let first = client
+        .get(&url)
+        .bearer_auth("fixture-owner")
+        .send()
+        .await
+        .unwrap();
+    let validators = [
+        first.headers()["last-modified"].clone(),
+        first.headers()["etag"].clone(),
+    ];
+    let path = server
+        ._root
+        .path()
+        .join("home/.claude/.hangar-tts")
+        .join(format!("{hash}.mp3"));
     let replacement = b"ID3updated-audio";
     std::fs::write(&path, replacement).unwrap();
-    std::fs::File::options().write(true).open(&path).unwrap().set_times(
-        std::fs::FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(1_700_000_000) + Duration::from_millis(500)),
-    ).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(
+            UNIX_EPOCH + Duration::from_secs(1_700_000_000) + Duration::from_millis(500),
+        ))
+        .unwrap();
     for validator in validators {
-        let response = client.get(&url).bearer_auth("fixture-owner")
-            .header("range", "bytes=1-4").header("if-range", validator).send().await.unwrap();
+        let response = client
+            .get(&url)
+            .bearer_auth("fixture-owner")
+            .header("range", "bytes=1-4")
+            .header("if-range", validator)
+            .send()
+            .await
+            .unwrap();
         assert_eq!(response.status(), 200);
         assert!(!response.headers().contains_key("content-range"));
         assert_eq!(response.bytes().await.unwrap().as_ref(), replacement);
@@ -334,16 +370,33 @@ async fn speech_if_range_never_combines_versions_changed_in_the_same_second() {
 async fn speech_accepts_json_media_type_with_optional_parameter_spacing() {
     let server = Server::start().await;
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-    for content_type in ["application/json ; charset=utf-8", "application/vendor+json\t; charset=utf-8", "APPLICATION/JSON ; charset=UTF-8"] {
-        let response = client.post(format!("{}/api/tts", server.base))
-            .bearer_auth("fixture-owner").header("content-type", content_type)
-            .body(r#"{"text":"oi","provider":"other"}"#).send().await.unwrap();
+    for content_type in [
+        "application/json ; charset=utf-8",
+        "application/vendor+json\t; charset=utf-8",
+        "APPLICATION/JSON ; charset=UTF-8",
+    ] {
+        let response = client
+            .post(format!("{}/api/tts", server.base))
+            .bearer_auth("fixture-owner")
+            .header("content-type", content_type)
+            .body(r#"{"text":"oi","provider":"other"}"#)
+            .send()
+            .await
+            .unwrap();
         assert_eq!(response.status(), 400, "{content_type}");
-        assert_eq!(response.json::<Value>().await.unwrap(), json!({"detail":"Provedor desconhecido: other"}));
+        assert_eq!(
+            response.json::<Value>().await.unwrap(),
+            json!({"detail":"Provedor desconhecido: other"})
+        );
     }
-    let response = client.post(format!("{}/api/tts", server.base))
-        .bearer_auth("fixture-owner").header("content-type", "text/plain")
-        .body(r#"{"text":"oi","provider":"other"}"#).send().await.unwrap();
+    let response = client
+        .post(format!("{}/api/tts", server.base))
+        .bearer_auth("fixture-owner")
+        .header("content-type", "text/plain")
+        .body(r#"{"text":"oi","provider":"other"}"#)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(response.status(), 422);
 }
 
@@ -366,6 +419,39 @@ async fn speech_authentication_precedes_a_malformed_body() {
         response.json::<Value>().await.unwrap()["detail"]["code"],
         "erro_nao_autorizado"
     );
+}
+
+#[tokio::test]
+async fn speech_and_voice_share_the_failure_budget_without_forwarding() {
+    let server = Server::start().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for index in 0..8 {
+        let request = match index % 3 {
+            0 => client.post(format!("{}/api/tts", server.base)).body("{"),
+            1 => client.get(format!("{}/api/voice/settings", server.base)),
+            _ => client.get(format!("{}/api/voice?token=wrong", server.base)),
+        };
+        let response = request
+            .header("x-forwarded-for", "192.0.2.17")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 401, "tentativa {index}");
+    }
+    for path in [
+        "/api/tts/voices",
+        "/api/voice/settings",
+        "/api/voice?token=fixture-owner",
+    ] {
+        let response = client
+            .get(format!("{}{path}", server.base))
+            .bearer_auth("fixture-owner")
+            .header("x-forwarded-for", "192.0.2.17")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 429, "{path}");
+    }
 }
 
 #[tokio::test]

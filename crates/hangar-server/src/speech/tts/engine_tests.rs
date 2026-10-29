@@ -843,6 +843,29 @@ async fn elevenlabs_receives_the_effective_voice_normalization_and_adjustments()
 }
 
 #[tokio::test]
+async fn a_failed_synthesis_does_not_prune_preexisting_audio() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(dir.path());
+    cache::prepare(&c.cache_dir).unwrap();
+    let old = c.cache_dir.join(format!("{}.wav", "1".repeat(64)));
+    std::fs::write(&old, b"RIFFexisting").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_modified(SystemTime::now() - Duration::from_secs(31 * 86400)),
+        )
+        .unwrap();
+    let result = Service::default()
+        .synthesize(&c, "oi", "", "elevenlabs", "")
+        .await;
+    assert_eq!(result.unwrap_err().status, 503);
+    assert_eq!(std::fs::read(old).unwrap(), b"RIFFexisting");
+}
+
+#[tokio::test]
 async fn malformed_remote_audio_catalog_and_balance_fail_visibly_without_fallback() {
     use axum::response::IntoResponse;
     let dir = tempfile::tempdir().unwrap();
@@ -871,7 +894,7 @@ async fn malformed_remote_audio_catalog_and_balance_fail_visibly_without_fallbac
         Box::pin(async {
             (
                 axum::http::StatusCode::TOO_MANY_REQUESTS,
-                "fixture-secret private",
+                r#"fixture-secret f\u0069xture-secret Zml4dHVyZS1zZWNyZXQ= private"#,
             )
                 .into_response()
         })
@@ -881,6 +904,10 @@ async fn malformed_remote_audio_catalog_and_balance_fail_visibly_without_fallbac
     assert_eq!(error.status, 502);
     assert!(error.detail.contains("429"));
     assert!(!error.detail.contains("fixture-secret"));
+    assert_eq!(
+        error.detail,
+        "ElevenLabs 429: o provedor recusou a solicitação."
+    );
 }
 
 #[tokio::test]
