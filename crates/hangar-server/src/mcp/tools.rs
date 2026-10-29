@@ -75,7 +75,10 @@ fn image(path: &Path) -> Option<ContentBlock> {
 }
 
 fn args<T: DeserializeOwned>(tool: &str, raw: JsonObject) -> Result<T, String> {
-    serde_json::from_value(Value::Object(raw)).map_err(|e| format!("argumentos inválidos para {tool}: {e}"))
+    serde_json::from_value(Value::Object(raw)).map_err(|e| match super::expected_fields(tool) {
+        Some(fields) => format!("argumentos inválidos para {tool}: {e}. Campos: {fields}"),
+        None => format!("argumentos inválidos para {tool}: {e}"),
+    })
 }
 
 /// A frase do erro de uma rota: `detail.msg` do `erro()`, o `detail` texto, ou o status.
@@ -664,6 +667,13 @@ impl Tools {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wrong_argument_lists_every_field_of_the_tool() {
+        let raw = json!({"to": "s", "message": "oi"}).as_object().unwrap().clone();
+        assert_eq!(args::<Send>("send", raw).err().as_deref(),
+            Some("argumentos inválidos para send: missing field `alvo`. Campos: alvo (string), texto (string), tmux (boolean, opcional)"));
+    }
 
     fn child(linked_by: Option<&str>, peers: &[&str]) -> Sidecar {
         Sidecar { peers: peers.iter().map(|p| (*p).to_owned()).collect(), linked_by: linked_by.map(str::to_owned), ..Sidecar::default() }
