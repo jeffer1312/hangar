@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi } from './apiEnv';
 import {
-  forgetVoiceMemory, isLiveVoiceState, listVoiceMemory, liveVoiceBarLevel, liveVoiceRms, liveVoiceStatus,
+  forgetVoiceMemory, isLiveVoiceState, listVoiceMemory, liveVoiceBackstageKeys, liveVoiceBarLevel, liveVoiceRms, liveVoiceStatus,
   loadLiveVoiceSettings, parseLiveVoiceMessage, saveLiveVoiceSettings,
   type LiveVoiceSettings, type LiveVoiceState,
 } from './liveVoice';
@@ -171,5 +171,12 @@ describe('protocolo público e níveis puros', () => {
     expect(liveVoiceRms({ totalAudioEnergy: 0, totalSamplesDuration: 1 }, { totalAudioEnergy: 0, totalSamplesDuration: 0 })).toBe(0);
     expect(liveVoiceRms({ totalAudioEnergy: 0.2, totalSamplesDuration: 1 }, previous)).toBeNull();
     expect(liveVoiceRms({})).toBeNull();
+  });
+
+  it('chave dos bastidores não muda quando a janela desliza nem quando a parcial fecha', () => {
+    const lines = [{ kind: 'you' as const, at: 1 }, { kind: 'voice' as const, at: 2 }, { kind: 'heard' as const, at: 2 }, { kind: 'heard' as const, at: 2 }];
+    expect(liveVoiceBackstageKeys(lines)).toEqual(['you-1', 'voice-2', 'heard-2', 'heard-2-1']);
+    expect(liveVoiceBackstageKeys(lines.slice(1))).toEqual(['voice-2', 'heard-2', 'heard-2-1']);
+    expect(liveVoiceBackstageKeys([{ kind: null, text: 'servidor antigo' }])).toEqual(['i0']);
   });
 });

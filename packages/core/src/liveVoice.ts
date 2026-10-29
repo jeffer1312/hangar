@@ -255,6 +255,17 @@ export function liveVoiceClock(at: number): string {
   const d = new Date(at);
   return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, '0')).join(':');
 }
+/** Chave por tipo e hora de início: a linha mais velha que sai não troca a chave das outras. */
+export function liveVoiceBackstageKeys(lines: readonly { kind: string | null; at?: number }[]): string[] {
+  const seen = new Map<string, number>();
+  return lines.map((line, i) => {
+    if (line.at === undefined) return `i${i}`;
+    const base = `${line.kind ?? '?'}-${line.at}`;
+    const n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    return n ? `${base}-${n}` : base;
+  });
+}
 export function liveVoiceThoughtTail(thought: string, lines = 3): string[] {
   return thought.split('\n').map(line => line.trim().replace(/^\*+|\*+$/g, '').trim()).filter(Boolean).slice(-lines);
 }

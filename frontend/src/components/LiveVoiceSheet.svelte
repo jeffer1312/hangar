@@ -3,7 +3,7 @@
   import BottomSheet from './BottomSheet.svelte';
   import { liveVoiceStore, listVoiceMemory, forgetVoiceMemory, type LiveVoiceSettings, type VoiceMemory } from '../lib/liveVoiceStore.svelte';
   import { renderMarkdown } from '../lib/markdown';
-  import { listarCredenciais, liveVoiceClock, modelOptionsForServer, type Credencial, type ModelOption } from '@hangar/core';
+  import { listarCredenciais, liveVoiceBackstageKeys, liveVoiceClock, modelOptionsForServer, type Credencial, type ModelOption } from '@hangar/core';
   import * as m from '../paraglide/messages';
   import { thoughtTail, type VoiceStatus } from '../lib/liveVoiceStatus';
   import type { LiveVoiceState } from '../lib/liveVoice';
@@ -44,6 +44,7 @@
   const entry = $derived(liveVoiceStore.settingsOf(target));
   const reply = $derived(entry?.reply ?? null);
   const vs = $derived(liveVoiceStore.state);
+  const backstageKeys = $derived(vs ? liveVoiceBackstageKeys(vs.backstage) : []);
   const STATUS: Record<VoiceStatus, () => string> = {
     connecting: m.codex_voice_connecting, voice: m.live_voice_status_voice, muted: m.codex_voice_muted,
     you: m.live_voice_status_you, thinking: m.live_voice_status_thinking, searching: m.live_voice_status_searching,
@@ -266,7 +267,7 @@
           <section class="lv-block">
             <h3 class="lv-label">{m.live_voice_backstage()}</h3>
             <ul class="lv-backstage">
-              {#each vs.backstage as line, i (i)}
+              {#each vs.backstage as line, i (backstageKeys[i])}
                 {@const label = backstageLabel(line)}
                 <li class="lv-bs lv-bs-{line.kind}">
                   {#if label || line.at !== undefined}

@@ -80,6 +80,17 @@ impl LiveSpeech {
         let live = std::mem::take(self);
         (if text.trim().is_empty() { live.text } else { text.to_owned() }, live.at.unwrap_or(now))
     }
+    /// A voz caiu ou recomeçou: a final desta fala não vem mais.
+    fn close(&mut self) -> Option<(String, i64)> {
+        let live = std::mem::take(self);
+        live.at.filter(|_| !live.text.trim().is_empty()).map(|at| (live.text, at))
+    }
+}
+
+/// Fecha as falas em curso dos dois lados como linhas finais dos bastidores.
+async fn close_live(events: &async_channel::Sender<VoiceEvent>, you: &mut LiveSpeech, voice: &mut LiveSpeech) {
+    if let Some((text, at)) = you.close() { let _ = events.send(VoiceEvent::Backstage(Backstage::You(text), at)).await; }
+    if let Some((text, at)) = voice.close() { let _ = events.send(VoiceEvent::Backstage(Backstage::Voice(text), at)).await; }
 }
 
 /// O que entra no organizador vira linha dos bastidores: a fala repassada ou o resultado de uma sessão.
@@ -549,6 +560,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                     let mut items = vec![json!({"role": "developer", "text": context})];
                     items.extend(new_prefs.iter().map(|text| json!({"role": "developer", "text": text})));
                     // A voz nova não sabe nada do que foi falado, e a fala que ela não repassou nunca chegou ao organizador.
+                    close_live(events, &mut live_you, &mut live_voice).await;
                     let recap = transcript.recap();
                     log(format!("handoff recap lines={} unforwarded={}", recap.lines, recap.organizer.is_some()));
                     if let Some(text) = recap.voice { items.push(json!({"role": "developer", "text": text})); }
@@ -1016,7 +1028,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             organizer::treat_as_repeat(prev, &input, now.saturating_duration_since(*at), running, did)
                         });
                         // Silêncio da transcrição dele até a voz repassar: o quanto o fim de fala do Realtime demorou.
-                        log(format!("handoff repeat={repeat} after_user_ms={}", last_user_delta.map_or(-1, |at| at.elapsed().as_millis() as i64)));
+                        log(format!("handoff repeat={repeat} after_user_ms={}", last_user_delta.map_or_else(|| "none".to_owned(), |at| at.elapsed().as_millis().to_string())));
                         if repeat {
                             // No mesmo turno da original não há o que marcar; noutro, nada que age sai dele se a original agiu.
                             if let Some(turn) = params["turnId"].as_str() && delegated.as_ref().is_none_or(|(d, _)| d != turn) {
@@ -1266,7 +1278,10 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             log(format!("organizer context used={used} window={window:?}"));
                             let _ = events.send(VoiceEvent::OrganizerContext { used, window }).await;
                         },
-                        "thread/realtime/error" | "thread/realtime/closed" if restarting || detached => log("realtime ended while switching device"),
+                        "thread/realtime/error" | "thread/realtime/closed" if restarting || detached => {
+                            close_live(events, &mut live_you, &mut live_voice).await;
+                            log("realtime ended while switching device");
+                        }
                         // Fim que não pedimos: caiu só a perna de áudio (o celular dorme antes de o WebSocket perceber). A thread
                         // do organizador espera a próxima oferta; quem encerra a chamada é o stop explícito ou o prazo do hub.
                         "thread/realtime/error" | "thread/realtime/closed" => {
@@ -1274,6 +1289,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             // Só um código curto vai ao diário; o texto livre pode trazer conteúdo.
                             let reason = params["reason"].as_str().filter(|r| r.len() <= 40 && r.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))).unwrap_or("?");
                             log(format!("realtime audio lost method={method} reason={reason}: waiting for a device"));
+                            close_live(events, &mut live_you, &mut live_voice).await;
                             detached = true;
                             out.away = true;
                             audio_lost = Some(Instant::now() + audio_grace);
@@ -1428,6 +1444,15 @@ mod tests {
         assert_eq!(live.done("", 31_000), (String::new(), 31_000), "a próxima fala começa do zero");
         live.delta("sim", 40_000);
         assert_eq!(live.done(" ", 41_000), ("sim".to_owned(), 40_000), "final vazia fica com o que chegou");
+    }
+
+    #[test]
+    fn speech_cut_by_a_lost_voice_closes_and_the_next_starts_fresh() {
+        let mut live = LiveSpeech::default();
+        assert_eq!(live.close(), None, "nada falado, nada a fechar");
+        live.delta("manda pra", 1_000);
+        assert_eq!(live.close(), Some(("manda pra".to_owned(), 1_000)), "a parcial vira linha com o que chegou");
+        assert_eq!(live.delta("oi", 9_000), ("oi".to_owned(), 9_000), "a fala seguinte não emenda nem herda a hora");
     }
 
     fn options(tools: Value) -> CallOptions {

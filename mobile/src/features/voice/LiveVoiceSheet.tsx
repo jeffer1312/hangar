@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Platform, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { EnrichedMarkdownText } from 'react-native-enriched-markdown';
 import type { Credencial, LiveVoiceState, LiveVoiceSettings, LiveVoiceSettingsReply, ModelOption, Server, VoiceMemory } from '@hangar/core';
-import { liveVoiceClock, liveVoiceSpeaker, liveVoiceStatus, liveVoiceThoughtTail } from '@hangar/core';
+import { liveVoiceBackstageKeys, liveVoiceClock, liveVoiceSpeaker, liveVoiceStatus, liveVoiceThoughtTail } from '@hangar/core';
 import { Sheet } from '../../ui/Sheet';
 import { Icon, type IconName } from '../../ui/Icon';
 import { superficie } from '../../theme/superficie';
@@ -180,7 +180,11 @@ function backstageLabel(line: BackstageLine): string {
   }
 }
 
-function BackstageRow({ line }: { line: BackstageLine }) {
+const sameLine = (a: { line: BackstageLine }, b: { line: BackstageLine }) =>
+  a.line.kind === b.line.kind && a.line.text === b.line.text && a.line.at === b.line.at && a.line.live === b.line.live;
+
+// O estado chega a cada ~150 ms durante a fala: só a linha que mudou redesenha.
+const BackstageRow = memo(function BackstageRow({ line }: { line: BackstageLine }) {
   const label = backstageLabel(line);
   const body = line.kind === 'result' ? '' : line.text;
   const who = line.kind === 'you' ? styles.whoYou : line.kind === 'voice' ? styles.whoVoice : line.kind === 'answer' ? styles.whoAnswer
@@ -195,7 +199,7 @@ function BackstageRow({ line }: { line: BackstageLine }) {
       {body ? <Text selectable style={line.kind === 'heard' ? styles.detail : styles.text}>{body}</Text> : null}
     </View>
   );
-}
+}, sameLine);
 
 function RoundAction({ title, label, icon, onPress, danger = false, selected = false, disabled = false, expanded }: {
   title: string; label: string; icon: IconName; onPress: () => void; danger?: boolean; selected?: boolean; disabled?: boolean; expanded?: boolean;
@@ -392,7 +396,7 @@ export function LiveVoiceSheet({ open, view, levels, servers, serverId, onSelect
       </Section> : null}
       {state?.backstage.length ? <Section title={m.live_voice_backstage()}>
         <View style={[styles.group, styles.backstage]}>
-          {state.backstage.map((line, i) => <BackstageRow key={`${line.at ?? ''}-${i}`} line={line} />)}
+          {liveVoiceBackstageKeys(state.backstage).map((key, i) => <BackstageRow key={key} line={state.backstage[i]} />)}
         </View>
       </Section> : null}
       {state?.followed.length ? <Section title={m.live_voice_followed()}>
