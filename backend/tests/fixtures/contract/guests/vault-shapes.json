@@ -1,0 +1,3552 @@
+{
+  "source_commit": "38a5c84fea8e4038aac17654449e82c4baef38c2",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_vault_shapes.py",
+  "cookie": "ana.2002592000.da56a37dbbb3608ad2e19b624bdef952beb983110a7f539e64673b2ce875c95f",
+  "rows": [
+    {
+      "initial": null,
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": false
+          },
+          "disk": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "dW5yZWdpc3RlcmVkLS0tLQ==",
+            "iterations": 600000
+          },
+          "disk": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": null
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 409,
+          "response": {
+            "detail": {
+              "enc_blob": null,
+              "rev": 0
+            }
+          },
+          "disk": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 200,
+          "response": {
+            "ok": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "fixture",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": null
+        }
+      ]
+    },
+    {
+      "initial": {},
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "dW5yZWdpc3RlcmVkLS0tLQ==",
+            "iterations": 600000
+          },
+          "disk": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": {}
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 409,
+          "response": {
+            "detail": {
+              "enc_blob": null,
+              "rev": 0
+            }
+          },
+          "disk": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {}
+        }
+      ]
+    },
+    {
+      "initial": [],
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": []
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": []
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "dW5yZWdpc3RlcmVkLS0tLQ==",
+            "iterations": 600000
+          },
+          "disk": []
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": []
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 409,
+          "response": {
+            "detail": {
+              "enc_blob": null,
+              "rev": 0
+            }
+          },
+          "disk": []
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": []
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": []
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": []
+        }
+      ]
+    },
+    {
+      "initial": false,
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": false
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": false
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "dW5yZWdpc3RlcmVkLS0tLQ==",
+            "iterations": 600000
+          },
+          "disk": false
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": false
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 409,
+          "response": {
+            "detail": {
+              "enc_blob": null,
+              "rev": 0
+            }
+          },
+          "disk": false
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": false
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": false
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": false
+        }
+      ]
+    },
+    {
+      "initial": 0,
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": 0
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": 0
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "dW5yZWdpc3RlcmVkLS0tLQ==",
+            "iterations": 600000
+          },
+          "disk": 0
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": 0
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 409,
+          "response": {
+            "detail": {
+              "enc_blob": null,
+              "rev": 0
+            }
+          },
+          "disk": 0
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": 0
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": 0
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": 0
+        }
+      ]
+    },
+    {
+      "initial": 0.0,
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": 0.0
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": 0.0
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "dW5yZWdpc3RlcmVkLS0tLQ==",
+            "iterations": 600000
+          },
+          "disk": 0.0
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": 0.0
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 409,
+          "response": {
+            "detail": {
+              "enc_blob": null,
+              "rev": 0
+            }
+          },
+          "disk": 0.0
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": 0.0
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": 0.0
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": 0.0
+        }
+      ]
+    },
+    {
+      "initial": "",
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": ""
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": ""
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "dW5yZWdpc3RlcmVkLS0tLQ==",
+            "iterations": 600000
+          },
+          "disk": ""
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": ""
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 409,
+          "response": {
+            "detail": {
+              "enc_blob": null,
+              "rev": 0
+            }
+          },
+          "disk": ""
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": ""
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": ""
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": ""
+        }
+      ]
+    },
+    {
+      "initial": true,
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": true
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": true
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": true
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": true
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": true
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": true
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": true
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": true
+        }
+      ]
+    },
+    {
+      "initial": 1,
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": 1
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": 1
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": 1
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": 1
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": 1
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": 1
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": 1
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": 1
+        }
+      ]
+    },
+    {
+      "initial": "x",
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": "x"
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": "x"
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": "x"
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": "x"
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": "x"
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": "x"
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": "x"
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": "x"
+        }
+      ]
+    },
+    {
+      "initial": [
+        {}
+      ],
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": [
+            {}
+          ]
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": [
+            {}
+          ]
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": [
+            {}
+          ]
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": [
+            {}
+          ]
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": [
+            {}
+          ]
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": [
+            {}
+          ]
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": [
+            {}
+          ]
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": [
+            {}
+          ]
+        }
+      ]
+    },
+    {
+      "initial": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true,
+            "user": "ana"
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "mMPReJps9gN0eDEHH4ivYg==",
+            "iterations": 600000
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 200,
+          "response": {
+            "rev": 1
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 1
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 200,
+          "response": {
+            "ok": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        }
+      ]
+    },
+    {
+      "initial": {
+        "user": 17,
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": {
+            "user": 17,
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": 17,
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "mMPReJps9gN0eDEHH4ivYg==",
+            "iterations": 600000
+          },
+          "disk": {
+            "user": 17,
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {
+            "user": 17,
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {
+            "user": 17,
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": {
+            "user": 17,
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {
+            "user": 17,
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {
+            "user": 17,
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0
+          }
+        }
+      ]
+    },
+    {
+      "initial": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "mMPReJps9gN0eDEHH4ivYg==",
+            "iterations": 600000
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 200,
+          "response": {
+            "rev": 1
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "enc_blob": null,
+            "rev": 1
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "enc_blob": null,
+            "rev": 0
+          }
+        }
+      ]
+    },
+    {
+      "initial": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": null,
+        "enc_blob": null,
+        "rev": 0
+      },
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": null,
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": null,
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "mMPReJps9gN0eDEHH4ivYg==",
+            "iterations": 600000
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": null,
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": null,
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 200,
+          "response": {
+            "rev": 1
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": null,
+            "enc_blob": null,
+            "rev": 1
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": null,
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": null,
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": null,
+            "enc_blob": null,
+            "rev": 0
+          }
+        }
+      ]
+    },
+    {
+      "initial": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": 17,
+        "enc_blob": null,
+        "rev": 0
+      },
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": 17,
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": 17,
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "mMPReJps9gN0eDEHH4ivYg==",
+            "iterations": 600000
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": 17,
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": 17,
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 200,
+          "response": {
+            "rev": 1
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": 17,
+            "enc_blob": null,
+            "rev": 1
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": 17,
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": 17,
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": 17,
+            "enc_blob": null,
+            "rev": 0
+          }
+        }
+      ]
+    },
+    {
+      "initial": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "\u00e9",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "\u00e9",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "\u00e9",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "mMPReJps9gN0eDEHH4ivYg==",
+            "iterations": 600000
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "\u00e9",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "\u00e9",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 200,
+          "response": {
+            "rev": 1
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "\u00e9",
+            "enc_blob": null,
+            "rev": 1
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "\u00e9",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "\u00e9",
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "\u00e9",
+            "enc_blob": null,
+            "rev": 0
+          }
+        }
+      ]
+    },
+    {
+      "initial": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": [],
+        "enc_blob": null,
+        "rev": 0
+      },
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": [],
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": [],
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "mMPReJps9gN0eDEHH4ivYg==",
+            "iterations": 600000
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": [],
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": [],
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 200,
+          "response": {
+            "rev": 1
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": [],
+            "enc_blob": null,
+            "rev": 1
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": [],
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": [],
+            "enc_blob": null,
+            "rev": 0
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": [],
+            "enc_blob": null,
+            "rev": 0
+          }
+        }
+      ]
+    },
+    {
+      "initial": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+        "enc_blob": null,
+        "rev": 0,
+        "guests": []
+      },
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true,
+            "user": "ana"
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "mMPReJps9gN0eDEHH4ivYg==",
+            "iterations": 600000
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": []
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 200,
+          "response": {
+            "rev": 1
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 1,
+            "guests": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 200,
+          "response": {
+            "ok": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": []
+          }
+        }
+      ]
+    },
+    {
+      "initial": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+        "enc_blob": null,
+        "rev": 0,
+        "guests": [
+          "x"
+        ]
+      },
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": [
+              "x"
+            ]
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true,
+            "user": "ana"
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": [
+              "x"
+            ]
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": [
+              "x"
+            ]
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": [
+              "x"
+            ]
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 200,
+          "response": {
+            "rev": 1
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 1,
+            "guests": [
+              "x"
+            ]
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": [
+              "x"
+            ]
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 200,
+          "response": {
+            "ok": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": [
+              "x"
+            ]
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": [
+              "x"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "initial": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+        "enc_blob": null,
+        "rev": 0,
+        "guests": "x"
+      },
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": "x"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true,
+            "user": "ana"
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": "x"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": "x"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": "x"
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 200,
+          "response": {
+            "rev": 1
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 1,
+            "guests": "x"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": "x"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 200,
+          "response": {
+            "ok": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": "x"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 500,
+          "response": "Internal Server Error",
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": "x"
+          }
+        }
+      ]
+    },
+    {
+      "initial": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+        "enc_blob": null,
+        "rev": 0,
+        "guests": {
+          "unknown": null
+        }
+      },
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": null
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true,
+            "user": "ana"
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": null
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "mMPReJps9gN0eDEHH4ivYg==",
+            "iterations": 600000
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": null
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": null
+            }
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 200,
+          "response": {
+            "rev": 1
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 1,
+            "guests": {
+              "unknown": null
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": null
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 200,
+          "response": {
+            "ok": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": null
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": null
+            }
+          }
+        }
+      ]
+    },
+    {
+      "initial": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+        "enc_blob": null,
+        "rev": 0,
+        "guests": {
+          "unknown": {}
+        }
+      },
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": {}
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true,
+            "user": "ana"
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": {}
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "mMPReJps9gN0eDEHH4ivYg==",
+            "iterations": 600000
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": {}
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": {}
+            }
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 200,
+          "response": {
+            "rev": 1
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 1,
+            "guests": {
+              "unknown": {}
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": {}
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 200,
+          "response": {
+            "ok": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": {}
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": {}
+            }
+          }
+        }
+      ]
+    },
+    {
+      "initial": {
+        "user": "ana",
+        "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+        "enc_blob": null,
+        "rev": 0,
+        "guests": {
+          "unknown": 0
+        }
+      },
+      "cases": [
+        {
+          "method": "GET",
+          "path": "/api/sync/status",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": 0
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enabled": true,
+            "registered": true,
+            "user": "ana"
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": 0
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/prelogin?user=unknown",
+          "body": null,
+          "status": 200,
+          "response": {
+            "salt": "mMPReJps9gN0eDEHH4ivYg==",
+            "iterations": 600000
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": 0
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/vault",
+          "body": null,
+          "status": 200,
+          "response": {
+            "enc_blob": null,
+            "rev": 0
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": 0
+            }
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/sync/vault",
+          "body": {
+            "enc_blob": null,
+            "base_rev": 0
+          },
+          "status": 200,
+          "response": {
+            "rev": 1
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 1,
+            "guests": {
+              "unknown": 0
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/register",
+          "body": {
+            "bootstrap": "bootstrap",
+            "user": "ana",
+            "salt": "fixture",
+            "auth_hash": "fixture"
+          },
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_ja_registrado",
+              "params": {},
+              "msg": "already registered"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": 0
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "ana",
+            "auth_hash": "fixture"
+          },
+          "status": 200,
+          "response": {
+            "ok": true
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": 0
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/sync/login",
+          "body": {
+            "user": "unknown",
+            "auth_hash": "fixture"
+          },
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "disk": {
+            "user": "ana",
+            "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+            "auth_verifier": "V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=",
+            "enc_blob": null,
+            "rev": 0,
+            "guests": {
+              "unknown": 0
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

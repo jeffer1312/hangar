@@ -6,6 +6,7 @@ use super::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use ring::{hmac, pbkdf2};
 use serde_json::{Value, json};
+use crate::orchestration::truthy;
 use std::{collections::HashMap, num::NonZeroU32, path::PathBuf, sync::Mutex};
 use subtle::ConstantTimeEq;
 
@@ -47,7 +48,7 @@ impl Sync {
         let unreadable = || Failure::code(500, "sync_vault_unreadable", "cofre ilegível");
         match crate::runtime::queue::read_replaced(&self.path) {
             Ok(bytes) => std::str::from_utf8(&bytes).ok().and_then(crate::orchestration::codec::loads)
-                .map(Some).ok_or_else(unreadable),
+                .map(|value| if value.is_null() { None } else { Some(value) }).ok_or_else(unreadable),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(_) => Err(unreadable()),
         }
@@ -117,17 +118,15 @@ impl Sync {
     }
     pub fn authenticate(&self, cookie: &str, now: u64) -> Result<(String, Option<String>)> {
         let (user, generation) = self.verify(cookie, now).ok_or_else(unauthorized)?;
-        if user.is_empty() {
-            return Err(unauthorized());
+        if let Some(vault) = self.load()?.filter(truthy) {
+            let acc = account(&vault, &user)?.ok_or_else(unauthorized)?;
+            let invalid = match generation.as_deref() {
+                Some(generation) => generation_of(acc)? != generation,
+                None => vault["user"] != user,
+            };
+            if invalid { return Err(unauthorized()); }
         }
-        if let Some(vault) = self.load()? {
-            let acc = account(&vault, &user).ok_or_else(unauthorized)?;
-            if generation.as_deref().map_or(vault["user"] != user, |g| {
-                generation_of(acc).as_deref() != Some(g)
-            }) {
-                return Err(unauthorized());
-            }
-        }
+        if user.is_empty() { return Err(unauthorized()); }
         Ok((user, generation))
     }
     pub fn handle(
@@ -155,11 +154,12 @@ impl Sync {
             ("POST", "login") => self.login(body, now, ip),
             ("POST", "logout") => Ok(json!({"ok":true})),
             ("GET", "vault") => {
-                let Some(vault) = self.load()? else {
+                let Some(vault) = self.load()?.filter(truthy) else {
                     return Ok(json!({"enc_blob":null,"rev":0}));
                 };
-                let acc = account(&vault, user.unwrap_or_default()).ok_or_else(unauthorized)?;
-                Ok(json!({"enc_blob":acc["enc_blob"],"rev":acc.get("rev").unwrap_or(&json!(0))}))
+                let acc = account(&vault, user.unwrap_or_default())?.ok_or_else(unauthorized)?;
+                let acc = acc.as_object().ok_or_else(unreadable)?;
+                Ok(json!({"enc_blob":acc.get("enc_blob"),"rev":acc.get("rev").unwrap_or(&json!(0))}))
             }
             ("PUT", "vault") => self.put_vault(body, user.unwrap_or_default()),
             ("GET", "guests") => {
@@ -200,8 +200,9 @@ impl Sync {
     }
     pub(super) fn owner(&self, user: Option<&str>) -> Result<Value> {
         let vault = self
-            .load()?
+            .load()?.filter(truthy)
             .ok_or_else(|| Failure::code(403, "erro_so_dono", "só o dono"))?;
+        if !vault.is_object() { return Err(unreadable()); }
         if vault["user"].as_str() != user {
             return Err(Failure::code(403, "erro_so_dono", "só o dono"));
         }
@@ -209,6 +210,7 @@ impl Sync {
     }
     fn setup_status(&self) -> Result<Value> {
         let vault = self.load()?;
+        if vault.is_none() && self.path.exists() { return Err(unreadable()); }
         if let Some(v) = &vault {
             if !v.is_object()
                 || ["user", "salt", "verifier_salt", "auth_verifier"]
@@ -319,15 +321,14 @@ impl Sync {
     }
     fn prelogin(&self, user: &str) -> Result<Value> {
         let vault = self.load()?;
-        let salt = if let Some(acc) = vault.as_ref().and_then(|v| account(v, user)) {
-            acc["salt"].clone()
-        } else if let Some(vault) = vault {
+        let acc = match &vault { Some(vault) => account(vault, user)?, None => None };
+        let salt = if let Some(acc) = acc.filter(|v| truthy(v)) {
+            acc.as_object().and_then(|v| v.get("salt")).ok_or_else(unreadable)?.clone()
+        } else if let Some(vault) = vault.filter(truthy) {
             let key = stored_base64(&vault["verifier_salt"])?;
             let key = hmac::Key::new(hmac::HMAC_SHA256, &key);
             json!(STANDARD.encode(&hmac::sign(&key, user.as_bytes()).as_ref()[..16]))
-        } else {
-            json!(STANDARD.encode(b"unregistered----"))
-        };
+        } else { json!(STANDARD.encode(b"unregistered----")) };
         Ok(json!({"salt":salt,"iterations":600000}))
     }
     fn login(&self, b: &Value, now: f64, ip: &str) -> Result<Value> {
@@ -353,13 +354,11 @@ impl Sync {
             }
         }
         let vault = self.load()?;
-        let valid = if let Some(acc) = vault.as_ref().and_then(|v| account(v, &user)) {
+        let acc = match &vault { Some(vault) => account(vault, &user)?, None => None };
+        let valid = if let Some(acc) = acc.filter(|v| truthy(v)) {
             let salt = stored_base64(&acc["verifier_salt"])?;
-            bool::from(
-                verifier(&auth, &salt)
-                    .as_bytes()
-                    .ct_eq(acc["auth_verifier"].as_str().unwrap_or_default().as_bytes()),
-            )
+            let expected = acc.get("auth_verifier").and_then(Value::as_str).filter(|s| s.is_ascii()).ok_or_else(unreadable)?;
+            bool::from(verifier(&auth, &salt).as_bytes().ct_eq(expected.as_bytes()))
         } else {
             let _ = verifier(&auth, &[0; 16]);
             false
@@ -375,27 +374,25 @@ impl Sync {
         }
         Ok(json!({"ok":true}))
     }
-    pub fn generation(&self, user: &str) -> Option<String> {
-        self.load()
-            .ok()
-            .flatten()
-            .as_ref()
-            .and_then(|v| account(v, user))
-            .and_then(generation_of)
+    pub fn generation(&self, user: &str) -> Result<String> {
+        let vault = self.load()?.ok_or_else(unreadable)?;
+        generation_of(account(&vault, user)?.ok_or_else(unreadable)?)
     }
     fn put_vault(&self, b: &Value, user: &str) -> Result<Value> {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(mut vault) = self.load()? else {
+        let Some(mut vault) = self.load()?.filter(truthy) else {
             return Err(Failure {
                 status: 409,
                 body: json!({"detail":{"enc_blob":null,"rev":0}}),
             });
         };
-        let acc = account_mut(&mut vault, user).ok_or_else(unauthorized)?;
-        if b["base_rev"] != acc["rev"] {
+        let acc = account_mut(&mut vault, user)?.ok_or_else(unauthorized)?;
+        let acc = acc.as_object_mut().ok_or_else(unreadable)?;
+        let revision = acc.get("rev").ok_or_else(unreadable)?.clone();
+        if b["base_rev"] != revision {
             return Err(Failure {
                 status: 409,
-                body: json!({"detail":{"enc_blob":acc["enc_blob"],"rev":acc["rev"]}}),
+                body: json!({"detail":{"enc_blob":acc.get("enc_blob").ok_or_else(unreadable)?,"rev":revision}}),
             });
         }
         if b.get("enc_blob").is_none() {
@@ -407,9 +404,9 @@ impl Sync {
                 None,
             ));
         }
-        acc["enc_blob"] = b["enc_blob"].clone();
-        let next = increment_revision(&acc["rev"])?;
-        acc["rev"] = next.clone();
+        acc.insert("enc_blob".into(), b["enc_blob"].clone());
+        let next = increment_revision(&revision)?;
+        acc.insert("rev".into(), next.clone());
         self.save(&vault)?;
         Ok(json!({"rev":next}))
     }
@@ -458,19 +455,20 @@ impl Sync {
         Ok(json!({"ok":true}))
     }
 }
-fn account<'a>(v: &'a Value, user: &str) -> Option<&'a Value> {
-    if v["user"] == user {
-        Some(v)
-    } else {
-        v.get("guests")?.get(user)
-    }
+fn unreadable() -> Failure { Failure::code(500, "sync_vault_unreadable", "cofre ilegível") }
+fn account<'a>(v: &'a Value, user: &str) -> Result<Option<&'a Value>> {
+    if !truthy(v) { return Ok(None); }
+    let root = v.as_object().ok_or_else(unreadable)?;
+    if root.get("user").and_then(Value::as_str) == Some(user) { return Ok(Some(v)); }
+    let Some(guests) = root.get("guests").filter(|v| truthy(v)) else { return Ok(None); };
+    Ok(guests.as_object().ok_or_else(unreadable)?.get(user).filter(|v| !v.is_null()))
 }
-fn account_mut<'a>(v: &'a mut Value, user: &str) -> Option<&'a mut Value> {
-    if v["user"] == user {
-        Some(v)
-    } else {
-        v.get_mut("guests")?.get_mut(user)
-    }
+fn account_mut<'a>(v: &'a mut Value, user: &str) -> Result<Option<&'a mut Value>> {
+    if !truthy(v) { return Ok(None); }
+    if !v.is_object() { return Err(unreadable()); }
+    if v.get("user").and_then(Value::as_str) == Some(user) { return Ok(Some(v)); }
+    let Some(guests) = v.get_mut("guests").filter(|v| truthy(v)) else { return Ok(None); };
+    Ok(guests.as_object_mut().ok_or_else(unreadable)?.get_mut(user).filter(|v| !v.is_null()))
 }
 // O leitor histórico ignora lixo ASCII e encerra no primeiro padding completo.
 fn stored_base64(value: &Value) -> Result<Vec<u8>> {
@@ -505,9 +503,9 @@ fn stored_base64(value: &Value) -> Result<Vec<u8>> {
     }
     if position == 0 { Ok(output) } else { Err(invalid()) }
 }
-fn generation_of(v: &Value) -> Option<String> {
-    let salt = stored_base64(&v["verifier_salt"]).ok()?;
-    Some(salt.iter().take(4).map(|b| format!("{b:02x}")).collect())
+fn generation_of(v: &Value) -> Result<String> {
+    let salt = stored_base64(&v["verifier_salt"])?;
+    Ok(salt.iter().take(4).map(|b| format!("{b:02x}")).collect())
 }
 fn sign(secret: &[u8], bytes: &[u8]) -> String {
     hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, secret), bytes)

@@ -260,9 +260,9 @@ impl Service {
             let mut set_cookie = None;
             if path == "login" && method == Method::POST {
                 let u = body["user"].as_str().unwrap_or_default();
-                let g = self.sync.generation(u);
+                let g = self.sync.generation(u)?;
                 set_cookie =
-                    Some(self.cookie_header(&self.sync.cookie(u, g.as_deref(), now), https));
+                    Some(self.cookie_header(&self.sync.cookie(u, Some(&g), now), https));
             } else if authenticated {
                 set_cookie = Some(self.cookie_header(
                     &self.sync.cookie(

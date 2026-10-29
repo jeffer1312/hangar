@@ -906,3 +906,25 @@ async fn login_guests_stored_base64_preserves_permissive_decode() {
     }
     assert!(differences.is_empty(),"base64 persistido: {differences:?}");
 }
+
+#[tokio::test]
+async fn login_guests_vault_shapes_preserve_each_operation() {
+    use hangar_server::login_guests::{Service,Settings};
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/vault-shapes.json")).unwrap();
+    let mut differences=Vec::new();
+    for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
+        let home=tempfile::tempdir().unwrap();let vault=home.path().join("vault.json");
+        let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:vault.clone(),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
+        service.now=||2000000000;service.entropy=|n|vec![b'x';n];let service=Arc::new(service);
+        for (case_index,case) in row["cases"].as_array().unwrap().iter().enumerate() {
+            std::fs::write(&vault,row["initial"].to_string()).unwrap();
+            let cookie=format!("cp_sync={}",fixture["cookie"].as_str().unwrap());
+            let (status,body,_)=sync_request(&service,case["method"].as_str().unwrap(),case["path"].as_str().unwrap(),&case["body"].to_string(),Some(&cookie)).await;
+            let body_matches=if case["status"]==500 {body["detail"]["code"]=="sync_vault_unreadable"}else{body==case["response"]};
+            let disk:Value=serde_json::from_slice(&std::fs::read(&vault).unwrap()).unwrap();
+            if status!=case["status"].as_u64().unwrap() as u16 || !body_matches || disk!=case["disk"] {differences.push(format!("{index}/{case_index}: {status}"));}
+        }
+    }
+    assert!(differences.is_empty(),"cofre legado: {differences:?}");
+}
+
