@@ -304,3 +304,4 @@ mod http_cors;
 mod http_body_limit;
 mod http_route_response;
 mod boot_version;
+mod http_peers;

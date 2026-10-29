@@ -948,6 +948,10 @@ pub(crate) async fn pass_any(
     if crate::speech::http::matches(req.method(), req.uri().path()) {
         return crate::speech::http::public(st, peer, req).await;
     }
+    let decoded_path=percent_encoding::percent_decode_str(req.uri().path()).decode_utf8_lossy();
+    if crate::machine_peers::owns_http_path(&decoded_path){
+        return crate::machine_peers::handle(State(st),ConnectInfo(peer),req).await;
+    }
     if crate::dictation::http::matches(req.method(), req.uri().path()) {
         return crate::dictation::http::public(st, peer, req).await;
     }

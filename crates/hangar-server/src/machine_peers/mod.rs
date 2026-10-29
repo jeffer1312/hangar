@@ -318,6 +318,17 @@ pub fn origin_allowed(
         .any(|s| authority(s).as_deref() == Some(target.as_str()))
 }
 
+pub const HTTP_ROUTES:&[(&str,&str)]=&[
+    ("/api/peers","GET"),("/api/peers","POST"),
+    ("/api/peers/app-list","GET"),("/api/peers/app-list","PUT"),
+    ("/api/peers/{id}/enabled","PUT"),("/api/peers/{id}/token","GET"),("/api/peers/{id}","DELETE"),
+    ("/api/peers/check","GET"),("/api/peers/ping","GET"),("/api/peers/descobrir","GET"),
+    ("/api/peers/identificador","GET"),("/api/peers/prova","GET"),("/api/peers/identificador","PUT"),
+    ("/api/peers/anunciar","POST"),("/api/alcance","GET"),("/api/alcance/pareamento","GET"),
+];
+pub fn owns_http_path(path:&str)->bool{
+    ["/api/peers","/api/alcance"].iter().any(|prefix|path==*prefix||path.strip_prefix(prefix).is_some_and(|rest|rest.starts_with('/')))
+}
 pub async fn handle(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -325,8 +336,10 @@ pub async fn handle(
 ) -> Response {
     if let Some(response)=crate::http_cors::preflight(request.method(),request.headers()){return response;}
     let headers=request.headers().clone();
+    let method=request.method().clone();
     let mut response=if let Some(response)=crate::http_body_limit::precheck(request.headers()){response}else{handle_inner(State(st),ConnectInfo(peer),request).await};
     crate::http_cors::apply(&headers,&mut response);
+    crate::http_route_response::suppress_head(&method,&mut response);
     response
 }
 
@@ -335,8 +348,11 @@ async fn handle_inner(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
 ) -> Response {
-    let path = request.uri().path().to_owned();
+    let path = percent_encoding::percent_decode_str(request.uri().path()).decode_utf8_lossy().into_owned();
     let method = request.method().clone();
+    let decision=crate::http_contract::resolve(HTTP_ROUTES,method.as_str(),&path);
+    let (_,https)=st.cfg.trusted.resolve(peer.ip(),request.headers());
+    if let Some(response)=crate::http_route_response::response(&decision,&method,request.uri(),request.headers(),https,&st.cfg.listen.to_string()){return response;}
     let public =
         method == Method::GET && matches!(path.as_str(), "/api/peers/ping" | "/api/peers/prova");
     if !public && let Err(response) = owner_gate(&st, peer, &request).await {
@@ -473,9 +489,7 @@ pub async fn dispatch(
                     let rest = path
                         .strip_prefix("/api/peers/")
                         .ok_or_else(|| Error::missing("rota desconhecida"))?;
-                    let decoded = percent_encoding::percent_decode_str(rest)
-                        .decode_utf8()
-                        .map_err(|_| Error::invalid("identificador inválido"))?;
+                    let decoded = rest;
                     if let Some(id) = decoded
                         .strip_suffix("/enabled")
                         .filter(|_| method == Method::PUT)
