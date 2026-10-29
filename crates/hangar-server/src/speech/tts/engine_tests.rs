@@ -302,6 +302,27 @@ async fn an_old_empty_mp3_never_hides_a_new_wav_and_disk_failures_are_explicit()
     );
 }
 
+#[tokio::test]
+async fn a_read_only_cached_audio_survives_a_failed_retention_touch_without_a_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(dir.path());
+    let hash = hash_value("oi", "", "local", &json!({}), "");
+    std::fs::create_dir_all(&c.cache_dir).unwrap();
+    let path = c.cache_dir.join(format!("{hash}.mp3"));
+    std::fs::write(&path, b"ID3audio").unwrap();
+    let writable = std::fs::metadata(&path).unwrap().permissions();
+    let mut read_only = writable.clone();
+    read_only.set_readonly(true);
+    std::fs::set_permissions(&path, read_only).unwrap();
+    assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
+    let result = Service::default().synthesize(&c, "oi", "", "local", "").await;
+    std::fs::set_permissions(&path, writable).unwrap();
+    let result = result.unwrap();
+    assert!(result.cached);
+    assert_eq!(result.hash, hash);
+    assert_eq!(std::fs::read(&path).unwrap(), b"ID3audio");
+}
+
 #[test]
 fn retention_removes_only_old_regular_files_and_never_directories() {
     let dir = tempfile::tempdir().unwrap();

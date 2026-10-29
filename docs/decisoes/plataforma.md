@@ -3616,8 +3616,8 @@ sem uma chamada adicional ao Python. Mudar configuração vale no pedido seguint
 
 **Equivalência.** Referências congeladas em `crates/hangar-server/tests/fixtures/speech/`,
 capturadas dos helpers e handlers Python antes da remoção: 724 casos de preparo, 60 hashes,
-417 comandos locais, 36 de cliente de texto, 84 HTTP, 10 de histórico Pi/omp/Kimi, quatro de
-janela nativa e 11 de histórico transferido. Os programas de captura estão preservados nas
+417 comandos locais, 36 de cliente de texto, 84 HTTP, 12 de ranges de áudio, 10 de histórico
+Pi/omp/Kimi, quatro de janela nativa e 11 de histórico transferido. Os programas de captura estão preservados nas
 próprias referências. Os testes Rust comparam as saídas e exercitam HTTP com o upstream Python
 indisponível. HEAD de áudio continua 405, e tipo MIME, Range e validadores conservam o contrato
 de arquivo anterior.
