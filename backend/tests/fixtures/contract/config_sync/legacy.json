@@ -1,0 +1,556 @@
+{
+  "source_commit": "24e8133fb6998a64cabeefb3ea232afa505c1874",
+  "command": "cd backend && uv run python tests/fixtures/contract/config_sync/generate_legacy.py",
+  "cases": [
+    {
+      "runtime": {},
+      "entry": null,
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "",
+        "jev_aux_api_key": "",
+        "jev_aux_modelo": "",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {},
+      "entry": null,
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "",
+        "jev_aux_api_key": "",
+        "jev_aux_modelo": "",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {},
+      "entry": {
+        "command": "fixture",
+        "env": {}
+      },
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "",
+        "jev_aux_api_key": "",
+        "jev_aux_modelo": "",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {},
+      "entry": {
+        "command": "fixture",
+        "env": {}
+      },
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "",
+        "jev_aux_api_key": "",
+        "jev_aux_modelo": "",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {},
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://example.test/v1/chat/completions?api-version=2",
+          "LLM_MODEL": "modelo"
+        }
+      },
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1?api-version=2",
+        "jev_aux_api_key": "",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {},
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://example.test/v1/chat/completions?api-version=2",
+          "LLM_MODEL": "modelo"
+        }
+      },
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1?api-version=2",
+        "jev_aux_api_key": "",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {},
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://example.test/v1",
+          "LLM_MODEL": "modelo",
+          "LLM_PROXY_KEY": "fixture",
+          "LLM_EFFORT": "high"
+        }
+      },
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": "high"
+      }
+    },
+    {
+      "runtime": {},
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://example.test/v1",
+          "LLM_MODEL": "modelo",
+          "LLM_PROXY_KEY": "fixture",
+          "LLM_EFFORT": "high"
+        }
+      },
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": "high"
+      }
+    },
+    {
+      "runtime": {},
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://different.test/v1",
+          "LLM_MODEL": "outro",
+          "LLM_PROXY_KEY": "fixture",
+          "LLM_EFFORT": "low"
+        }
+      },
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "https://different.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "outro",
+        "jev_aux_esforco": "low"
+      }
+    },
+    {
+      "runtime": {},
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://different.test/v1",
+          "LLM_MODEL": "outro",
+          "LLM_PROXY_KEY": "fixture",
+          "LLM_EFFORT": "low"
+        }
+      },
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "https://different.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "outro",
+        "jev_aux_esforco": "low"
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1/chat/completions?api-version=2",
+        "jev_texto_modelo": "modelo"
+      },
+      "entry": null,
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1?api-version=2",
+        "jev_aux_api_key": "",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1/chat/completions?api-version=2",
+        "jev_texto_modelo": "modelo"
+      },
+      "entry": null,
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1?api-version=2",
+        "jev_aux_api_key": "",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1/chat/completions?api-version=2",
+        "jev_texto_modelo": "modelo"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {}
+      },
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1?api-version=2",
+        "jev_aux_api_key": "",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1/chat/completions?api-version=2",
+        "jev_texto_modelo": "modelo"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {}
+      },
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1?api-version=2",
+        "jev_aux_api_key": "",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1/chat/completions?api-version=2",
+        "jev_texto_modelo": "modelo"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://example.test/v1/chat/completions?api-version=2",
+          "LLM_MODEL": "modelo"
+        }
+      },
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1?api-version=2",
+        "jev_aux_api_key": "",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1/chat/completions?api-version=2",
+        "jev_texto_modelo": "modelo"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://example.test/v1/chat/completions?api-version=2",
+          "LLM_MODEL": "modelo"
+        }
+      },
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1?api-version=2",
+        "jev_aux_api_key": "",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1/chat/completions?api-version=2",
+        "jev_texto_modelo": "modelo"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://example.test/v1",
+          "LLM_MODEL": "modelo",
+          "LLM_PROXY_KEY": "fixture",
+          "LLM_EFFORT": "high"
+        }
+      },
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": "high"
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1/chat/completions?api-version=2",
+        "jev_texto_modelo": "modelo"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://example.test/v1",
+          "LLM_MODEL": "modelo",
+          "LLM_PROXY_KEY": "fixture",
+          "LLM_EFFORT": "high"
+        }
+      },
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": "high"
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1/chat/completions?api-version=2",
+        "jev_texto_modelo": "modelo"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://different.test/v1",
+          "LLM_MODEL": "outro",
+          "LLM_PROXY_KEY": "fixture",
+          "LLM_EFFORT": "low"
+        }
+      },
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "https://different.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "outro",
+        "jev_aux_esforco": "low"
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1/chat/completions?api-version=2",
+        "jev_texto_modelo": "modelo"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://different.test/v1",
+          "LLM_MODEL": "outro",
+          "LLM_PROXY_KEY": "fixture",
+          "LLM_EFFORT": "low"
+        }
+      },
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "https://different.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "outro",
+        "jev_aux_esforco": "low"
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1",
+        "jev_texto_modelo": "modelo",
+        "jev_texto_api_key": "fixture"
+      },
+      "entry": null,
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1",
+        "jev_texto_modelo": "modelo",
+        "jev_texto_api_key": "fixture"
+      },
+      "entry": null,
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1",
+        "jev_texto_modelo": "modelo",
+        "jev_texto_api_key": "fixture"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {}
+      },
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1",
+        "jev_texto_modelo": "modelo",
+        "jev_texto_api_key": "fixture"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {}
+      },
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1",
+        "jev_texto_modelo": "modelo",
+        "jev_texto_api_key": "fixture"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://example.test/v1/chat/completions?api-version=2",
+          "LLM_MODEL": "modelo"
+        }
+      },
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1",
+        "jev_texto_modelo": "modelo",
+        "jev_texto_api_key": "fixture"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://example.test/v1/chat/completions?api-version=2",
+          "LLM_MODEL": "modelo"
+        }
+      },
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": ""
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1",
+        "jev_texto_modelo": "modelo",
+        "jev_texto_api_key": "fixture"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://example.test/v1",
+          "LLM_MODEL": "modelo",
+          "LLM_PROXY_KEY": "fixture",
+          "LLM_EFFORT": "high"
+        }
+      },
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": "high"
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1",
+        "jev_texto_modelo": "modelo",
+        "jev_texto_api_key": "fixture"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://example.test/v1",
+          "LLM_MODEL": "modelo",
+          "LLM_PROXY_KEY": "fixture",
+          "LLM_EFFORT": "high"
+        }
+      },
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "https://example.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "modelo",
+        "jev_aux_esforco": "high"
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1",
+        "jev_texto_modelo": "modelo",
+        "jev_texto_api_key": "fixture"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://different.test/v1",
+          "LLM_MODEL": "outro",
+          "LLM_PROXY_KEY": "fixture",
+          "LLM_EFFORT": "low"
+        }
+      },
+      "parked": false,
+      "effective": {
+        "jev_aux_base_url": "https://different.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "outro",
+        "jev_aux_esforco": "low"
+      }
+    },
+    {
+      "runtime": {
+        "jev_texto_base_url": "https://example.test/v1",
+        "jev_texto_modelo": "modelo",
+        "jev_texto_api_key": "fixture"
+      },
+      "entry": {
+        "command": "fixture",
+        "env": {
+          "LLM_PROXY_URL": "https://different.test/v1",
+          "LLM_MODEL": "outro",
+          "LLM_PROXY_KEY": "fixture",
+          "LLM_EFFORT": "low"
+        }
+      },
+      "parked": true,
+      "effective": {
+        "jev_aux_base_url": "https://different.test/v1",
+        "jev_aux_api_key": "fixture",
+        "jev_aux_modelo": "outro",
+        "jev_aux_esforco": "low"
+      }
+    }
+  ]
+}

@@ -1,0 +1,261 @@
+{
+  "source_commit": "b9c32bd6fdd1e8dcaad1979f7f100313d9b5fb2e",
+  "command": "cd backend && uv run python tests/fixtures/contract/config_sync/generate_jev_sync.py",
+  "cases": [
+    {
+      "name": "empty",
+      "files": {
+        ".claude/runtime-config.json": "{}"
+      },
+      "steps": [
+        {
+          "body": {
+            "jev_aux_modelo": "novo"
+          },
+          "result": {
+            "ok": {
+              "jev_aux_modelo": "novo"
+            }
+          },
+          "files": {
+            ".claude/runtime-config.json": "{\n  \"jev_aux_modelo\": \"novo\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "active",
+      "files": {
+        ".claude/runtime-config.json": "{}",
+        ".claude.json": "{\"other\": \"preservar\", \"mcpServers\": {\"hangar-computer-control\": {\"command\": \"fixture\", \"env\": {\"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\", \"LLM_MODEL\": \"antigo\", \"LLM_PROXY_KEY\": \"fixture-old\", \"KEEP\": \"preservar\"}}}}"
+      },
+      "steps": [
+        {
+          "body": {
+            "jev_aux_modelo": "novo"
+          },
+          "result": {
+            "ok": {
+              "jev_aux_base_url": "https://old.test/v1",
+              "jev_aux_api_key": "fixture-old",
+              "jev_aux_modelo": "novo"
+            }
+          },
+          "files": {
+            ".claude/runtime-config.json": "{\n  \"jev_aux_base_url\": \"https://old.test/v1\",\n  \"jev_aux_api_key\": \"fixture-old\",\n  \"jev_aux_modelo\": \"novo\"\n}",
+            ".claude.json": "{\n  \"other\": \"preservar\",\n  \"mcpServers\": {\n    \"hangar-computer-control\": {\n      \"command\": \"fixture\",\n      \"env\": {\n        \"KEEP\": \"preservar\",\n        \"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\",\n        \"LLM_MODEL\": \"novo\",\n        \"LLM_PROXY_KEY\": \"fixture-old\"\n      }\n    }\n  }\n}",
+            ".hangar/computer-use-llm-antigo.json": "{\n  \"⟦HOME⟧/.claude.json\": {\n    \"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\",\n    \"LLM_MODEL\": \"antigo\",\n    \"LLM_PROXY_KEY\": \"fixture-old\"\n  }\n}"
+          }
+        },
+        {
+          "body": {
+            "jev_aux_modelo": "seguinte"
+          },
+          "result": {
+            "ok": {
+              "jev_aux_base_url": "https://old.test/v1",
+              "jev_aux_api_key": "fixture-old",
+              "jev_aux_modelo": "seguinte"
+            }
+          },
+          "files": {
+            ".claude/runtime-config.json": "{\n  \"jev_aux_base_url\": \"https://old.test/v1\",\n  \"jev_aux_api_key\": \"fixture-old\",\n  \"jev_aux_modelo\": \"seguinte\"\n}",
+            ".claude.json": "{\n  \"other\": \"preservar\",\n  \"mcpServers\": {\n    \"hangar-computer-control\": {\n      \"command\": \"fixture\",\n      \"env\": {\n        \"KEEP\": \"preservar\",\n        \"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\",\n        \"LLM_MODEL\": \"seguinte\",\n        \"LLM_PROXY_KEY\": \"fixture-old\"\n      }\n    }\n  }\n}",
+            ".hangar/computer-use-llm-antigo.json": "{\n  \"⟦HOME⟧/.claude.json\": {\n    \"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\",\n    \"LLM_MODEL\": \"antigo\",\n    \"LLM_PROXY_KEY\": \"fixture-old\"\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "parked",
+      "files": {
+        ".claude/runtime-config.json": "{}",
+        ".hangar/computer-control.json": "{\"command\": \"fixture\", \"env\": {\"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\", \"LLM_MODEL\": \"antigo\", \"LLM_PROXY_KEY\": \"fixture-old\", \"KEEP\": \"preservar\"}}"
+      },
+      "steps": [
+        {
+          "body": {
+            "jev_aux_api_key": "fixture-new"
+          },
+          "result": {
+            "ok": {
+              "jev_aux_base_url": "https://old.test/v1",
+              "jev_aux_api_key": "fixture-new",
+              "jev_aux_modelo": "antigo"
+            }
+          },
+          "files": {
+            ".claude/runtime-config.json": "{\n  \"jev_aux_base_url\": \"https://old.test/v1\",\n  \"jev_aux_api_key\": \"fixture-new\",\n  \"jev_aux_modelo\": \"antigo\"\n}",
+            ".hangar/computer-control.json": "{\n  \"command\": \"fixture\",\n  \"env\": {\n    \"KEEP\": \"preservar\",\n    \"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\",\n    \"LLM_MODEL\": \"antigo\",\n    \"LLM_PROXY_KEY\": \"fixture-new\"\n  }\n}",
+            ".hangar/computer-use-llm-antigo.json": "{\n  \"⟦HOME⟧/.hangar/computer-control.json\": {\n    \"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\",\n    \"LLM_MODEL\": \"antigo\",\n    \"LLM_PROXY_KEY\": \"fixture-old\"\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "both",
+      "files": {
+        ".claude/runtime-config.json": "{}",
+        ".claude.json": "{\"other\": \"preservar\", \"mcpServers\": {\"hangar-computer-control\": {\"command\": \"fixture\", \"env\": {\"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\", \"LLM_MODEL\": \"antigo\", \"LLM_PROXY_KEY\": \"fixture-old\", \"KEEP\": \"preservar\"}}}}",
+        ".hangar/computer-control.json": "{\"command\": \"fixture\", \"env\": {\"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\", \"LLM_MODEL\": \"antigo\", \"LLM_PROXY_KEY\": \"fixture-old\", \"KEEP\": \"preservar\"}}"
+      },
+      "steps": [
+        {
+          "body": {
+            "jev_api_key": "sk-or-fixture"
+          },
+          "result": {
+            "ok": {
+              "jev_api_key": "sk-or-fixture"
+            }
+          },
+          "files": {
+            ".claude/runtime-config.json": "{\n  \"jev_api_key\": \"sk-or-fixture\"\n}",
+            ".claude.json": "{\n  \"other\": \"preservar\",\n  \"mcpServers\": {\n    \"hangar-computer-control\": {\n      \"command\": \"fixture\",\n      \"env\": {\n        \"KEEP\": \"preservar\",\n        \"TYPESAFE_API_KEY\": \"sk-or-fixture\",\n        \"JEV_ENDPOINT\": \"https://openrouter.ai/api/alpha/decisions\",\n        \"JEV_MODEL\": \"~typesafe/jev-latest\",\n        \"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\",\n        \"LLM_MODEL\": \"antigo\",\n        \"LLM_PROXY_KEY\": \"fixture-old\"\n      }\n    }\n  }\n}",
+            ".hangar/computer-control.json": "{\n  \"command\": \"fixture\",\n  \"env\": {\n    \"KEEP\": \"preservar\",\n    \"TYPESAFE_API_KEY\": \"sk-or-fixture\",\n    \"JEV_ENDPOINT\": \"https://openrouter.ai/api/alpha/decisions\",\n    \"JEV_MODEL\": \"~typesafe/jev-latest\",\n    \"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\",\n    \"LLM_MODEL\": \"antigo\",\n    \"LLM_PROXY_KEY\": \"fixture-old\"\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "browser",
+      "files": {
+        ".claude/runtime-config.json": "{\"jev_texto_base_url\": \"https://browser.test/v1\", \"jev_texto_modelo\": \"browser\", \"jev_texto_api_key\": \"fixture-browser\"}"
+      },
+      "steps": [
+        {
+          "body": {
+            "jev_aux_esforco": "high"
+          },
+          "result": {
+            "ok": {
+              "jev_texto_base_url": "https://browser.test/v1",
+              "jev_texto_modelo": "browser",
+              "jev_texto_api_key": "fixture-browser",
+              "jev_aux_base_url": "https://browser.test/v1",
+              "jev_aux_api_key": "fixture-browser",
+              "jev_aux_modelo": "browser",
+              "jev_aux_esforco": "high"
+            }
+          },
+          "files": {
+            ".claude/runtime-config.json": "{\n  \"jev_texto_base_url\": \"https://browser.test/v1\",\n  \"jev_texto_modelo\": \"browser\",\n  \"jev_texto_api_key\": \"fixture-browser\",\n  \"jev_aux_base_url\": \"https://browser.test/v1\",\n  \"jev_aux_api_key\": \"fixture-browser\",\n  \"jev_aux_modelo\": \"browser\",\n  \"jev_aux_esforco\": \"high\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "remove",
+      "files": {
+        ".claude/runtime-config.json": "{}",
+        ".claude.json": "{\"other\": \"preservar\", \"mcpServers\": {\"hangar-computer-control\": {\"command\": \"fixture\", \"env\": {\"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\", \"LLM_MODEL\": \"antigo\", \"LLM_PROXY_KEY\": \"fixture-old\", \"KEEP\": \"preservar\"}}}}"
+      },
+      "steps": [
+        {
+          "body": {
+            "jev_aux_modelo": null
+          },
+          "result": {
+            "ok": {
+              "jev_aux_base_url": "https://old.test/v1",
+              "jev_aux_api_key": "fixture-old"
+            }
+          },
+          "files": {
+            ".claude/runtime-config.json": "{\n  \"jev_aux_base_url\": \"https://old.test/v1\",\n  \"jev_aux_api_key\": \"fixture-old\"\n}",
+            ".claude.json": "{\n  \"other\": \"preservar\",\n  \"mcpServers\": {\n    \"hangar-computer-control\": {\n      \"command\": \"fixture\",\n      \"env\": {\n        \"KEEP\": \"preservar\",\n        \"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\",\n        \"LLM_PROXY_KEY\": \"fixture-old\"\n      }\n    }\n  }\n}",
+            ".hangar/computer-use-llm-antigo.json": "{\n  \"⟦HOME⟧/.claude.json\": {\n    \"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\",\n    \"LLM_MODEL\": \"antigo\",\n    \"LLM_PROXY_KEY\": \"fixture-old\"\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "invalid_active",
+      "files": {
+        ".claude/runtime-config.json": "{}",
+        ".claude.json": "{bad"
+      },
+      "steps": [
+        {
+          "body": {
+            "jev_aux_modelo": "novo"
+          },
+          "result": {
+            "error": "jev_aux: não consegui ler o modelo antigo do Computer Use (não consegui ler ⟦HOME⟧/.claude.json: JSON ou encoding inválido); tente de novo",
+            "kind": "ValueError"
+          },
+          "files": {
+            ".claude/runtime-config.json": "{}",
+            ".claude.json": "{bad"
+          }
+        }
+      ]
+    },
+    {
+      "name": "invalid_parked",
+      "files": {
+        ".claude/runtime-config.json": "{}",
+        ".hangar/computer-control.json": "[]"
+      },
+      "steps": [
+        {
+          "body": {
+            "jev_aux_modelo": "novo"
+          },
+          "result": {
+            "error": "jev_aux: não consegui ler o modelo antigo do Computer Use (⟦HOME⟧/.hangar/computer-control.json não é um objeto JSON); tente de novo",
+            "kind": "ValueError"
+          },
+          "files": {
+            ".claude/runtime-config.json": "{}",
+            ".hangar/computer-control.json": "[]"
+          }
+        }
+      ]
+    },
+    {
+      "name": "bad_env",
+      "files": {
+        ".claude/runtime-config.json": "{\"jev_aux_modelo\": \"existente\"}",
+        ".claude.json": "{\"other\": \"preservar\", \"mcpServers\": {\"hangar-computer-control\": {\"command\": \"fixture\", \"env\": [1]}}}"
+      },
+      "steps": [
+        {
+          "body": {
+            "jev_aux_modelo": "novo"
+          },
+          "result": {
+            "error": "jev: salvo, mas o Computer Use não recebeu a configuração: env em ⟦HOME⟧/.claude.json não é um objeto JSON",
+            "kind": "ValueError"
+          },
+          "files": {
+            ".claude/runtime-config.json": "{\n  \"jev_aux_modelo\": \"novo\"\n}",
+            ".claude.json": "{\"other\": \"preservar\", \"mcpServers\": {\"hangar-computer-control\": {\"command\": \"fixture\", \"env\": [1]}}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "invalid_choice",
+      "files": {
+        ".claude/runtime-config.json": "{}",
+        ".claude.json": "{\"other\": \"preservar\", \"mcpServers\": {\"hangar-computer-control\": {\"command\": \"fixture\", \"env\": {\"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\", \"LLM_MODEL\": \"antigo\", \"LLM_PROXY_KEY\": \"fixture-old\", \"KEEP\": \"preservar\"}}}}"
+      },
+      "steps": [
+        {
+          "body": {
+            "jev_aux_esforco": "inválido"
+          },
+          "result": {
+            "error": "jev_aux_esforco: use vazio, low, medium ou high",
+            "kind": "ValueError"
+          },
+          "files": {
+            ".claude/runtime-config.json": "{}",
+            ".claude.json": "{\"other\": \"preservar\", \"mcpServers\": {\"hangar-computer-control\": {\"command\": \"fixture\", \"env\": {\"LLM_PROXY_URL\": \"https://old.test/v1/chat/completions\", \"LLM_MODEL\": \"antigo\", \"LLM_PROXY_KEY\": \"fixture-old\", \"KEEP\": \"preservar\"}}}}"
+          }
+        }
+      ]
+    }
+  ]
+}

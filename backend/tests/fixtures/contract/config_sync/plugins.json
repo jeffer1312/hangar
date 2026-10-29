@@ -1,0 +1,427 @@
+{
+  "source_commit": "6a9ef541209b612da065542ae5dd14987532fe51",
+  "command": "cd backend && uv run python tests/fixtures/contract/config_sync/generate_plugins.py",
+  "injections": [
+    "CLI capturado sem processo",
+    "pós-aplicação isolada"
+  ],
+  "cases": [
+    {
+      "mode": "success",
+      "data": {
+        "enabledPlugins": {
+          "active@repo": true,
+          "disabled@repo": false
+        },
+        "extraKnownMarketplaces": {},
+        "sources": {
+          "repo": {
+            "source": "github",
+            "repo": "group/project"
+          }
+        }
+      },
+      "known": {},
+      "installed": {},
+      "calls": [
+        [
+          "/fixture/claude",
+          "plugin",
+          "marketplace",
+          "add",
+          "group/project"
+        ],
+        [
+          "/fixture/claude",
+          "plugin",
+          "install",
+          "active@repo"
+        ]
+      ],
+      "progress": [
+        {
+          "phase": "apply",
+          "item": "claude_plugins",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        },
+        {
+          "phase": "install",
+          "item": "claude_plugins",
+          "entry": "marketplace:repo"
+        },
+        {
+          "phase": "install",
+          "item": "claude_plugins",
+          "entry": "plugin:active@repo"
+        }
+      ],
+      "report": {
+        "items": {
+          "claude_plugins": {
+            "status": "applied",
+            "changed": [
+              "plugin:active@repo",
+              "plugin:disabled@repo",
+              "marketplace:repo",
+              "plugin:active@repo"
+            ],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "settings": {
+        "enabledPlugins": {
+          "active@repo": true,
+          "disabled@repo": false
+        }
+      }
+    },
+    {
+      "mode": "failed",
+      "data": {
+        "enabledPlugins": {
+          "active@repo": true,
+          "disabled@repo": false
+        },
+        "extraKnownMarketplaces": {},
+        "sources": {
+          "repo": {
+            "source": "github",
+            "repo": "group/project"
+          }
+        }
+      },
+      "known": {},
+      "installed": {},
+      "calls": [
+        [
+          "/fixture/claude",
+          "plugin",
+          "marketplace",
+          "add",
+          "group/project"
+        ],
+        [
+          "/fixture/claude",
+          "plugin",
+          "install",
+          "active@repo"
+        ]
+      ],
+      "progress": [
+        {
+          "phase": "apply",
+          "item": "claude_plugins",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        },
+        {
+          "phase": "install",
+          "item": "claude_plugins",
+          "entry": "marketplace:repo"
+        },
+        {
+          "phase": "install",
+          "item": "claude_plugins",
+          "entry": "plugin:active@repo"
+        }
+      ],
+      "report": {
+        "items": {
+          "claude_plugins": {
+            "status": "applied",
+            "changed": [
+              "plugin:active@repo",
+              "plugin:disabled@repo"
+            ],
+            "warnings": [
+              {
+                "code": "config_sync_marketplace_failed",
+                "params": {
+                  "marketplace": "repo",
+                  "detail": "fatal: repo not found"
+                }
+              },
+              {
+                "code": "config_sync_plugin_failed",
+                "params": {
+                  "plugin": "active@repo",
+                  "detail": "fatal: repo not found"
+                }
+              }
+            ]
+          }
+        },
+        "backup": ""
+      },
+      "settings": {
+        "enabledPlugins": {
+          "active@repo": true,
+          "disabled@repo": false
+        }
+      }
+    },
+    {
+      "mode": "installed",
+      "data": {
+        "enabledPlugins": {
+          "active@repo": true,
+          "disabled@repo": false
+        },
+        "extraKnownMarketplaces": {},
+        "sources": {
+          "repo": {
+            "source": "github",
+            "repo": "group/project"
+          }
+        }
+      },
+      "known": {
+        "repo": {}
+      },
+      "installed": {
+        "active@repo": [
+          {}
+        ]
+      },
+      "calls": [],
+      "progress": [
+        {
+          "phase": "apply",
+          "item": "claude_plugins",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        }
+      ],
+      "report": {
+        "items": {
+          "claude_plugins": {
+            "status": "applied",
+            "changed": [
+              "plugin:active@repo",
+              "plugin:disabled@repo"
+            ],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "settings": {
+        "enabledPlugins": {
+          "active@repo": true,
+          "disabled@repo": false
+        }
+      }
+    },
+    {
+      "mode": "sources",
+      "data": {
+        "enabledPlugins": {
+          "active@repo": true,
+          "disabled@repo": false
+        },
+        "extraKnownMarketplaces": {},
+        "sources": {
+          "git": {
+            "source": "git",
+            "url": "https://example.invalid/repo.git"
+          },
+          "url": {
+            "source": "url",
+            "url": "https://example.invalid/catalog.json"
+          },
+          "github": {
+            "source": "github",
+            "repo": "group/project"
+          },
+          "directory": {
+            "source": "directory",
+            "path": "⟦HOME⟧/market"
+          },
+          "file": {
+            "source": "file",
+            "path": "⟦HOME⟧/market.json"
+          },
+          "unknown": {
+            "source": "unknown",
+            "url": "ignored"
+          },
+          "empty": {
+            "source": "empty",
+            "url": ""
+          }
+        }
+      },
+      "known": {},
+      "installed": {},
+      "calls": [
+        [
+          "/fixture/claude",
+          "plugin",
+          "marketplace",
+          "add",
+          "⟦HOME⟧/market"
+        ],
+        [
+          "/fixture/claude",
+          "plugin",
+          "marketplace",
+          "add",
+          "⟦HOME⟧/market.json"
+        ],
+        [
+          "/fixture/claude",
+          "plugin",
+          "marketplace",
+          "add",
+          "https://example.invalid/repo.git"
+        ],
+        [
+          "/fixture/claude",
+          "plugin",
+          "marketplace",
+          "add",
+          "group/project"
+        ],
+        [
+          "/fixture/claude",
+          "plugin",
+          "marketplace",
+          "add",
+          "https://example.invalid/catalog.json"
+        ],
+        [
+          "/fixture/claude",
+          "plugin",
+          "install",
+          "active@repo"
+        ]
+      ],
+      "progress": [
+        {
+          "phase": "apply",
+          "item": "claude_plugins",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        },
+        {
+          "phase": "install",
+          "item": "claude_plugins",
+          "entry": "marketplace:directory"
+        },
+        {
+          "phase": "install",
+          "item": "claude_plugins",
+          "entry": "marketplace:file"
+        },
+        {
+          "phase": "install",
+          "item": "claude_plugins",
+          "entry": "marketplace:git"
+        },
+        {
+          "phase": "install",
+          "item": "claude_plugins",
+          "entry": "marketplace:github"
+        },
+        {
+          "phase": "install",
+          "item": "claude_plugins",
+          "entry": "marketplace:url"
+        },
+        {
+          "phase": "install",
+          "item": "claude_plugins",
+          "entry": "plugin:active@repo"
+        }
+      ],
+      "report": {
+        "items": {
+          "claude_plugins": {
+            "status": "applied",
+            "changed": [
+              "plugin:active@repo",
+              "plugin:disabled@repo",
+              "marketplace:directory",
+              "marketplace:file",
+              "marketplace:git",
+              "marketplace:github",
+              "marketplace:url",
+              "plugin:active@repo"
+            ],
+            "warnings": [
+              {
+                "code": "config_sync_marketplace_unknown",
+                "params": {
+                  "marketplace": "empty"
+                }
+              },
+              {
+                "code": "config_sync_marketplace_unknown",
+                "params": {
+                  "marketplace": "unknown"
+                }
+              }
+            ]
+          }
+        },
+        "backup": ""
+      },
+      "settings": {
+        "enabledPlugins": {
+          "active@repo": true,
+          "disabled@repo": false
+        }
+      }
+    }
+  ],
+  "hashes": [
+    {
+      "value": 1.0,
+      "serialized": "1.0",
+      "hash": "d0ff5974b6aa52cf562bea5921840c032a860a91a3512f7fe8f768f6bbe005f6"
+    },
+    {
+      "value": -0.0,
+      "serialized": "-0.0",
+      "hash": "c26617c7ccbcaa6631b45d851b8cf56e21d2ca624bdb1193afdbd4b560702cec"
+    },
+    {
+      "value": 1e-07,
+      "serialized": "1e-07",
+      "hash": "e485fac25775a7da830698e7daac582737fc8b43ba4b351467a16cf8ed83122a"
+    },
+    {
+      "value": 1e+20,
+      "serialized": "1e+20",
+      "hash": "7c18c9fbdcc8281573e9db9e04f04c3790b10696f3706f0f03fa87427d33e28b"
+    },
+    {
+      "value": 1e+21,
+      "serialized": "1e+21",
+      "hash": "241c4643fa70b1dcde1205b71be4e3bebb17e9f880c8e1a33d0ead6c27271d3c"
+    },
+    {
+      "value": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+      "serialized": "100000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "hash": "14f47806be396c56e03ab474c26695f00351565ad5f5d12f3ad7ed0900f165a4"
+    },
+    {
+      "value": {
+        "é": 1e-06,
+        "a": [
+          1.0,
+          1e+16
+        ]
+      },
+      "serialized": "{\"a\": [1.0, 1e+16], \"é\": 1e-06}",
+      "hash": "54dd4406353ee550886d14198b8bcb226761309259476d7b7e4ffff2c17608be"
+    }
+  ]
+}

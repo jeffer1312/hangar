@@ -1,0 +1,242 @@
+{
+  "source_commit": "6a9ef541209b612da065542ae5dd14987532fe51",
+  "command": "cd backend && uv run python tests/fixtures/contract/config_sync/generate_codex.py",
+  "injections": [
+    "escritor TOML capturado",
+    "pós-aplicação isolada",
+    "relógio e UUID fixos"
+  ],
+  "cases": [
+    {
+      "mode": "merge",
+      "roots": {
+        "hangar": "/tmp/tmp25_p62qs/target/hangar",
+        "claude": "⟦HOME⟧/.claude",
+        "codex": "⟦HOME⟧/.codex",
+        "home": "⟦HOME⟧"
+      },
+      "current": "model = \"antigo\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:9999/mcp/\"\n",
+      "incoming": {
+        "model": "novo",
+        "mcp_servers": {
+          "docs": {
+            "url": "https://example.invalid/mcp"
+          }
+        }
+      },
+      "programs": {
+        "node": "/fixture/node",
+        "codex": "/fixture/codex"
+      },
+      "calls": [
+        {
+          "method": "config/batchWrite",
+          "params": {
+            "edits": [
+              {
+                "keyPath": "\"model\"",
+                "value": "novo",
+                "mergeStrategy": "replace"
+              },
+              {
+                "keyPath": "\"mcp_servers\"",
+                "value": {
+                  "hangar": {
+                    "url": "http://127.0.0.1:9999/mcp/"
+                  },
+                  "docs": {
+                    "url": "https://example.invalid/mcp"
+                  }
+                },
+                "mergeStrategy": "replace"
+              }
+            ],
+            "reloadUserConfig": false
+          }
+        }
+      ],
+      "report": {
+        "items": {
+          "codex": {
+            "status": "applied",
+            "changed": [
+              "config:model",
+              "config:mcp_servers"
+            ],
+            "warnings": []
+          }
+        },
+        "backup": "⟦HOME⟧/.hangar/config-sync/backups/20000101-000000-012345"
+      },
+      "final": "model = \"nativo\"\n"
+    },
+    {
+      "mode": "same",
+      "roots": {
+        "hangar": "/tmp/tmp3wl2xdf0/target/hangar",
+        "claude": "⟦HOME⟧/.claude",
+        "codex": "⟦HOME⟧/.codex",
+        "home": "⟦HOME⟧"
+      },
+      "current": "model = \"novo\"\n",
+      "incoming": {
+        "model": "novo"
+      },
+      "programs": {
+        "node": "/fixture/node",
+        "codex": "/fixture/codex"
+      },
+      "calls": [],
+      "report": {
+        "items": {
+          "codex": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "final": "model = \"novo\"\n"
+    },
+    {
+      "mode": "missing",
+      "roots": {
+        "hangar": "/tmp/tmpflr72bmc/target/hangar",
+        "claude": "⟦HOME⟧/.claude",
+        "codex": "⟦HOME⟧/.codex",
+        "home": "⟦HOME⟧"
+      },
+      "current": "model = \"antigo\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:9999/mcp/\"\n",
+      "incoming": {
+        "model": "novo",
+        "mcp_servers": {
+          "docs": {
+            "url": "https://example.invalid/mcp"
+          }
+        }
+      },
+      "programs": {
+        "node": "/fixture/node"
+      },
+      "calls": [],
+      "report": {
+        "items": {
+          "codex": {
+            "status": "same",
+            "changed": [],
+            "warnings": [
+              {
+                "code": "config_sync_missing_program",
+                "params": {
+                  "program": "codex",
+                  "where": "config.toml"
+                }
+              }
+            ]
+          }
+        },
+        "backup": ""
+      },
+      "final": "model = \"antigo\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:9999/mcp/\"\n"
+    },
+    {
+      "mode": "programs",
+      "roots": {
+        "hangar": "/tmp/tmphwm_9kuw/target/hangar",
+        "claude": "⟦HOME⟧/.claude",
+        "codex": "⟦HOME⟧/.codex",
+        "home": "⟦HOME⟧"
+      },
+      "current": "model = \"antigo\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:9999/mcp/\"\n",
+      "incoming": {
+        "mcp_servers": {
+          "docs": {
+            "command": "⟦HOME⟧/.local/share/fnm/v24/bin/node"
+          }
+        }
+      },
+      "programs": {
+        "node": "/fixture/node",
+        "codex": "/fixture/codex"
+      },
+      "calls": [
+        {
+          "method": "config/batchWrite",
+          "params": {
+            "edits": [
+              {
+                "keyPath": "\"mcp_servers\"",
+                "value": {
+                  "hangar": {
+                    "url": "http://127.0.0.1:9999/mcp/"
+                  },
+                  "docs": {
+                    "command": "/fixture/node"
+                  }
+                },
+                "mergeStrategy": "replace"
+              }
+            ],
+            "reloadUserConfig": false
+          }
+        }
+      ],
+      "report": {
+        "items": {
+          "codex": {
+            "status": "applied",
+            "changed": [
+              "config:mcp_servers"
+            ],
+            "warnings": []
+          }
+        },
+        "backup": "⟦HOME⟧/.hangar/config-sync/backups/20000101-000000-012345"
+      },
+      "final": "model = \"nativo\"\n"
+    },
+    {
+      "mode": "invalid",
+      "roots": {
+        "hangar": "/tmp/tmpt7wamp7b/target/hangar",
+        "claude": "⟦HOME⟧/.claude",
+        "codex": "⟦HOME⟧/.codex",
+        "home": "⟦HOME⟧"
+      },
+      "current": "model = [",
+      "incoming": {
+        "model": "novo",
+        "mcp_servers": {
+          "docs": {
+            "url": "https://example.invalid/mcp"
+          }
+        }
+      },
+      "programs": {
+        "node": "/fixture/node",
+        "codex": "/fixture/codex"
+      },
+      "calls": [],
+      "report": {
+        "items": {
+          "codex": {
+            "status": "failed",
+            "changed": [],
+            "warnings": [
+              {
+                "code": "config_sync_item_failed",
+                "params": {
+                  "item": "codex",
+                  "error": "Invalid value (at end of document)"
+                }
+              }
+            ]
+          }
+        },
+        "backup": ""
+      },
+      "final": "model = ["
+    }
+  ]
+}
