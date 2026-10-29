@@ -730,9 +730,9 @@
                aviso novo do harness não sumir calado. -->
           {#if ev.orq}
             <OrqTimelineEvent {ev} dayTs={orqDays.get(ev.id)} />
-          {:else if ev.text === 'hook_prompt'}
+          {:else if ev.text === 'hook_prompt' || ev.text === 'hook_failed'}
             <div class="notice notice-hook">
-              <p>{m.notice_hook_prompt()}</p>
+              <p>{ev.text === 'hook_failed' ? m.notice_hook_failed() : m.notice_hook_prompt()}</p>
               {#if ev.hook_error}<p class="notice-hook-texto">{ev.hook_error}</p>{/if}
             </div>
           {:else if ev.text === 'skill_loaded' && ev.skill}

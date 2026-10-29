@@ -2,6 +2,6 @@
 //! comparada com o Codex instalado: quem confere o Codex novo é o workflow semanal `codex-schema`.
 #[macro_export]
 #[doc(hidden)]
-macro_rules! checked_version { () => { "0.162.1" } }
+macro_rules! checked_version { () => { "0.165.0" } }
 
 pub const CHECKED:&str = checked_version!();

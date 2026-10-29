@@ -3748,6 +3748,12 @@ export function setCodexMode(name: string, mode: 'default' | 'plan', server?: Se
   });
 }
 
+export function terminateCodexCommand(name: string, processId: string, server?: Server | null): Promise<{ ok: boolean }> {
+  return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/codex/terminate`, {
+    method: 'POST', body: JSON.stringify({ process_id: processId }),
+  });
+}
+
 export function implementCodexPlan(name: string, server?: Server | null): Promise<void> {
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/codex/plan/implement`, {
     method: 'POST',

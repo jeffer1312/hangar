@@ -272,14 +272,15 @@ impl Hangar {
         let key = call.id.clone();
         let input = |field: &str| call.tool_input.as_ref().and_then(|i| i.get(field)).and_then(Value::as_str)
             .map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned);
-        let name = input("subagent_type").unwrap_or_else(|| conversation::tool_display_name("Agent"));
+        let name = input("subagent_type").or_else(|| input("agent_type")).unwrap_or_else(|| conversation::tool_display_name("Agent"));
         let description = request.1.clone();
         let model = self.agent_card_model(tool.call, input("model"));
         let failed = tool.result.is_some_and(|i| self.chat.events[i].is_error == Some(true)) || self.agent_failed(tool.call);
-        let run = self.conversation.activity.agents.iter().find(|agent| agent.call == tool.call);
-        let running = !failed && run.is_some_and(|agent| agent.running);
+        let run = self.effective_agent(tool.call);
+        let state_note = (!failed).then(|| self.codex_agent_state_note(tool.call)).flatten();
+        let running = !failed && run.as_ref().is_some_and(|agent| agent.running);
         let now = chrono::Utc::now().timestamp_millis() as f64 / 1000.;
-        let duration = run.filter(|agent| !failed || !agent.running).and_then(|agent| agent.elapsed(now));
+        let duration = run.as_ref().filter(|agent| state_note.is_none() && (!failed || !agent.running)).and_then(|agent| agent.elapsed(now));
         let timer = duration.and_then(|elapsed| {
             let clock = div().flex_shrink_0().h(px(16.)).flex().items_center().gap(px(4.)).text_size(px(11.)).text_color(theme::muted())
                 .child(chrome::small_icon(IconName::Clock, 12., theme::muted()));
@@ -291,7 +292,11 @@ impl Hangar {
                 let label = if failed { tr("agent_failed_after") } else { tr("agent_finished_in") };
                 Some(clock.child(label.replace("{time}", &chrome::format_elapsed(elapsed))).into_any_element())
             }
-        });
+        }).or_else(|| state_note.map(|note| div().flex_shrink_0().text_size(px(11.)).text_color(theme::muted()).child(note).into_any_element())
+            .or_else(|| run.as_ref().filter(|_| !failed).map(|_| {
+            div().flex_shrink_0().text_size(px(11.)).text_color(theme::muted())
+                .child(if running { tr("tool_running") } else { super::activity::web("atividade_sub_concluido") }).into_any_element()
+        })));
         let tint = if failed { theme::warning() } else { theme::muted() };
         let label = format!("{}: {name} · {description}", super::activity::web("tool_abrir_agente"));
         let card = Button::new(SharedString::from(format!("agent-card-{key}")))

@@ -1,17 +1,29 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Animated, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { formatElapsed, type AgentRun, type ChatEvent } from '@hangar/core';
+import { formatElapsed, type AgentRun, type ChatEvent, type CodexCommand } from '@hangar/core';
 import { WorkingMark } from '../ui/WorkingMark';
 import { Icon } from '../ui/Icon';
 import { superficie } from '../theme/superficie';
 import * as m from '../paraglide/messages';
 import { workingLabel } from './liveWork';
 import { agentIdentities, agentModel, matchAgentSubagent } from '../features/activity/agentModel';
-import { useAgentSubagents } from '../features/activity/useAgentSubagents';
+import { useAgentSubagents, type AgentSubagents } from '../features/activity/useAgentSubagents';
 
 // Bloco "trabalhando" do fim da conversa (porte do fim do MessageList.svelte): linha de spinner com
 // o verbo do terminal e os segundos, o raciocínio chegando e os subagentes que ainda rodam.
+
+export function CodexCommandsChip({ commands, onPress }: { commands: CodexCommand[]; onPress: () => void }) {
+  const { theme } = useUnistyles();
+  if (!commands.length) return null;
+  const background = commands.filter(command => command.background).length;
+  const label = background ? m.codex_terminals_count({ n: background }) : m.codex_commands_count({ n: commands.length });
+  return <Pressable onPress={onPress} style={[styles.linha, { minHeight: 44 }]} accessibilityRole="button" accessibilityLabel={label}>
+    <Icon name="Terminal" size={16} color={theme.tokens.accent.base} />
+    <Text style={[styles.verbo, { color: theme.tokens.text.secondary }]}>{label}</Text>
+    <Icon name="ChevronRight" size={16} color={theme.tokens.text.muted} />
+  </Pressable>;
+}
 
 // Relógio só de quem mostra segundos: o tique re-renderiza a linha, não a lista.
 function useAgora(): number {
@@ -75,7 +87,7 @@ export function PensamentoVivo({ texto }: { texto: string }) {
 
 /** Subagentes ainda rodando, grudados no fim até acabarem de verdade: um Agent em background
  *  devolve resultado na hora e o cartão dele subia com a conversa, com a sessão parecendo parada. */
-export const AgentesRodando = memo(function AgentesRodando({ agentes, inicio, onAbrir, serverId, sessionName, events = EMPTY_EVENTS, eventsRevision }: {
+export const AgentesRodando = memo(function AgentesRodando({ agentes, inicio, onAbrir, serverId, sessionName, events = EMPTY_EVENTS, eventsRevision, subagentSnapshot }: {
   agentes: AgentRun[];
   inicio: (id: string) => number | null;
   onAbrir?: () => void;
@@ -83,10 +95,14 @@ export const AgentesRodando = memo(function AgentesRodando({ agentes, inicio, on
   sessionName?: string;
   events?: ChatEvent[];
   eventsRevision?: number;
+  subagentSnapshot?: AgentSubagents;
 }) {
   const { theme } = useUnistyles();
   const agora = useAgora();
-  const { subs, error, retry } = useAgentSubagents(serverId, sessionName, agentes.length > 0);
+  const conversation = events.find(event => event.kind !== 'notice' && !event.id.startsWith('queued-'))?.id;
+  const localSubagents = useAgentSubagents(serverId, sessionName, subagentSnapshot === undefined && agentes.length > 0, conversation,
+    agentes.some(agent => !!agent.agentPath));
+  const { subs, error, retry } = subagentSnapshot ?? localSubagents;
   const ids = useMemo(() => agentIdentities(events), [events, eventsRevision]);
   return (
     // Sem região viva: o rótulo de cada agente leva o relógio, e o leitor de tela anunciaria a cada segundo.
