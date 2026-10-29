@@ -6,16 +6,57 @@ import type { SessionInfo, AggSession } from './types';
 import type { Server } from './servers';
 import { serverColor } from './servers';
 import { machineLabel, tagHex, type TagsEvent } from './tags';
+import { isOwnMachine } from './machineImport';
 
 export type KeyringState = 'unlocked' | 'locked' | 'absent';
 
 // `tags`: último evento `tags` do servidor; ausente = versão antiga, valem o nome e a cor locais.
 // `tagsRaw`: o `data` cru dele, para a reconexão que repete o mesmo evento não refazer as linhas.
-export interface Slot { sessions: SessionInfo[] | null; error: string | null; keyring?: KeyringState | null; tags?: TagsEvent | null; tagsRaw?: string }
+// `offlineSince`: primeira falha da queda atual; vale até a próxima lista boa (`error: null`).
+export interface Slot { sessions: SessionInfo[] | null; error: string | null; keyring?: KeyringState | null; tags?: TagsEvent | null; tagsRaw?: string; offlineSince?: number }
 
-/** Slot novo com o `patch` por cima do anterior: o que ele não cita (etiquetas, chaveiro) segue igual. */
+/** Slot novo com o `patch` por cima do anterior: o que ele não cita (etiquetas, chaveiro) segue igual.
+ *  `patch.offlineSince` é o início gravado da queda (`startOutage`) e vence o que o slot tem em memória. */
 export function patchSlot(slots: ReadonlyMap<string, Slot>, id: string, patch: Partial<Slot>): Slot {
-  return { sessions: null, error: null, ...slots.get(id), ...patch };
+  const prev = slots.get(id);
+  const { offlineSince: _, ...next } = { sessions: null, error: null, ...prev, ...patch };
+  if (!next.error) return next;
+  // Tentativas frustradas regravam o slot, às vezes alternando offline e erro HTTP; a queda
+  // continua contando da primeira até uma lista boa.
+  const since = patch.offlineSince ?? ((prev?.error && prev.offlineSince) || (next.error === 'offline' ? Date.now() : undefined));
+  return since ? { ...next, offlineSince: since } : next;
+}
+
+// A máquina pode só estar desligada: o aviso vermelho cobre as primeiras tentativas, não a queda inteira.
+export const OFFLINE_NOTICE_MS = 30_000;
+
+type Notice = { error: string | null; offlineSince?: number };
+
+/** Até quando o aviso da máquina fica na tela: 0 sem aviso; erro que não é queda não expira. */
+function noticeUntil(b: Notice): number {
+  if (!b.error) return 0;
+  if (b.error !== 'offline') return Infinity;
+  return b.offlineSince ? b.offlineSince + OFFLINE_NOTICE_MS : 0;
+}
+
+export function machineNoticeVisible(b: Notice, now: number): boolean {
+  return noticeUntil(b) > now;
+}
+
+/** Toda máquina própria ligada fora do ar: lista vazia não é "nenhuma sessão ativa". */
+export function machinesAllDown(buckets: readonly { server: Pick<Server, 'invite' | 'ephemeral' | 'removed' | 'disabled'>; error: string | null }[]): boolean {
+  const own = buckets.filter((b) => isOwnMachine(b.server) && !b.server.disabled);
+  return own.length > 0 && own.every((b) => b.error === 'offline');
+}
+
+/** Próximo instante em que um aviso some, para um único timer redesenhar a tela; null = nenhum. */
+export function nextNoticeEnd(buckets: readonly Notice[], now: number): number | null {
+  let next: number | null = null;
+  for (const b of buckets) {
+    const until = noticeUntil(b);
+    if (until > now && Number.isFinite(until) && (next === null || until < next)) next = until;
+  }
+  return next;
 }
 
 export interface ServerBucket {
@@ -27,6 +68,7 @@ export interface ServerBucket {
   error: string | null;     // 'offline' quando o stream caiu ou veio frame malformado
   loaded: boolean;          // já recebeu ao menos uma lista boa (pode coexistir com error = stale)
   keyringLocked?: boolean;  // evento `keyring` da lista: o chaveiro `login` da máquina está trancado
+  offlineSince?: number;    // primeira falha da queda atual (ver `machineNoticeVisible`)
 }
 
 export interface Aggregate {
@@ -64,6 +106,7 @@ export function aggregateSessions(
       error: slot?.error ?? null,
       loaded: slot?.sessions != null,
       keyringLocked: slot?.keyring === 'locked' && slot.error !== 'offline',
+      offlineSince: slot?.offlineSince,
     };
     if (slot?.sessions && slot.error !== 'offline') {
       const tags = slot.tags ?? null;

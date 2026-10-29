@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { tick } from 'svelte';
 import { createClassComponent } from 'svelte/legacy';
+import { OFFLINE_NOTICE_MS } from '@hangar/core';
 import HomeSessions from './HomeSessions.svelte';
 import { overwriteGetLocale } from '../paraglide/runtime';
 
@@ -53,7 +54,7 @@ it('vazio quando as máquinas responderam sem sessão aberta', async () => {
 it('erro por máquina aparece junto das sessões das outras; máquina desligada só sai da lista', async () => {
   Object.assign(store, { loading: false, rows: [row('s1', 'working')], byServer: [
     { server: server('a'), sessions: [], error: null, loaded: true },
-    { server: server('b'), sessions: [], error: 'offline', loaded: false },
+    { server: server('b'), sessions: [], error: 'offline', loaded: false, offlineSince: Date.now() - OFFLINE_NOTICE_MS },
     { server: server('c'), sessions: [], error: '401', loaded: false },
   ] });
   const text = await mount();
@@ -62,10 +63,11 @@ it('erro por máquina aparece junto das sessões das outras; máquina desligada 
   expect(text).toContain('Trabalhando');
 });
 
-it('todas as máquinas desligadas: o aviso volta, em vez de "nenhuma sessão"', async () => {
+it('todas as máquinas desligadas depois da janela: texto neutro, nunca "nenhuma sessão"', async () => {
   Object.assign(store, { loading: false, rows: [], byServer: [{ server: server('b'), sessions: [], error: 'offline', loaded: false }] });
   const text = await mount();
-  expect(text).toContain('b offline');
+  expect(text).not.toContain('b offline');
+  expect(text).toContain('Suas máquinas estão fora do ar');
   expect(text).not.toContain('Nenhuma sessão ativa');
 });
 
@@ -77,6 +79,30 @@ it('uma desligada, outra no ar sem sessão: a lista diz que está vazia', async 
   const text = await mount();
   expect(text).toContain('Nenhuma sessão ativa');
   expect(text).not.toContain('b offline');
+});
+
+it('máquina offline aparece só no começo da queda e some sozinha depois', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+  try {
+    Object.assign(store, { loading: false, rows: [], byServer: [
+      { server: server('b'), sessions: [], error: 'offline', loaded: false, offlineSince: Date.now() },
+    ] });
+    expect(await mount()).toContain('b offline');
+    vi.advanceTimersByTime(OFFLINE_NOTICE_MS - 1); await tick();
+    expect(target.textContent).toContain('b offline');
+    // O timer pode disparar um pouco antes do fim da janela: o aviso não pode ficar preso.
+    vi.setSystemTime(Date.now() - 1);
+    vi.advanceTimersByTime(1); await tick();
+    expect(target.textContent).not.toContain('b offline');
+    // Sem lista nem aviso: não volta a dizer "carregando" para a máquina desligada.
+    expect(target.textContent).not.toContain('Carregando');
+    // Todas as máquinas fora: lista vazia não diz "nenhuma sessão ativa".
+    expect(target.textContent).toContain('Suas máquinas estão fora do ar');
+    expect(target.textContent).not.toContain('Nenhuma sessão ativa');
+    expect(target.querySelector('[role="alert"]')).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it('rótulos de servidor ficam acima das linhas em cada estado, sem badge repetido', async () => {

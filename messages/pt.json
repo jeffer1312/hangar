@@ -7770,6 +7770,7 @@
   "home_sessions_working": "Trabalhando",
   "home_sessions_ready": "Prontas",
   "home_sessions_more_ready": "mais {n} prontas",
+  "home_machines_offline": "Suas máquinas estão fora do ar",
   "home_new_conversation": "Nova conversa…",
   "home_open_app": "Ao abrir o app",
   "home_open_app_sessions": "Lista de sessões",

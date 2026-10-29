@@ -753,6 +753,7 @@ test('list_error sem lista na tela mantém o aviso de bloqueio do servidor', asy
 describe('recusas e recuperação da lista', () => {
   const outageKey = 'hangar_servidores_desligados';
   const repliesKey = 'hangar_servidores_responderam';
+  const startKey = 'hangar_quedas';
   const second = { id: 'srv2', label: 'srv2', baseUrl: 'http://localhost:8766', token: 'tok2' };
 
   beforeEach(() => {
@@ -779,6 +780,36 @@ describe('recusas e recuperação da lista', () => {
     const calls = fetchMock.mock.calls.length;
     await advance(1_800_000);
     expect(fetchMock).toHaveBeenCalledTimes(calls);
+    rel();
+  });
+
+  test('queda gravada antes de reabrir o app mantém o início dela, sem nova janela de aviso', async () => {
+    const first = useServers.getState().servers[0];
+    useServers.setState({ servers: [first, second] });
+    const since = Date.now() - 3_600_000;
+    prefs.set(outageKey, JSON.stringify({ srv2: { failures: 6, retryAt: Date.now() + 600_000 } }));
+    prefs.set(startKey, JSON.stringify({ srv2: since }));
+    const rel = useSessions.getState().retain();
+    await settle();
+    const bucket = useSessions.getState().byServer.find((b) => b.server.id === 'srv2')!;
+    expect(bucket.error).toBe('offline');
+    expect(bucket.offlineSince).toBe(since);
+    rel();
+  });
+
+  test('o ativo, sem prazo, conta a queda do início gravado; só a lista boa a encerra', async () => {
+    const since = Date.now() - 3_600_000;
+    prefs.set(startKey, JSON.stringify({ srv1: since }));
+    fetchMock.mockRejectedValue(new TypeError('offline'));
+    const rel = useSessions.getState().retain();
+    await settle();
+    const bucket = () => useSessions.getState().byServer.find((b) => b.server.id === 'srv1')!;
+    expect(bucket().error).toBe('offline');
+    expect(bucket().offlineSince).toBe(since);
+    created.at(-1)!.trigger('ping', '');
+    expect(JSON.parse(prefs.getString(startKey)!).srv1).toBe(since);
+    created.at(-1)!.trigger('sessions', '[]');
+    expect(prefs.getString(startKey)).toBeUndefined();
     rel();
   });
 

@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { stateColors } from '@hangar/core';
+  import { machineNoticeVisible, machinesAllDown, stateColors } from '@hangar/core';
   import SessionCard from './SessionCard.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
   import KeyringNotice from './KeyringNotice.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
+  import { noticeClock } from '../lib/noticeClock.svelte';
   import { createSessionListModel } from '../lib/sessionListModel.svelte';
   import { groupHomeSessions, homeSessionsView, type HomeState } from '../lib/homeSessions';
   import * as m from '../paraglide/messages';
@@ -18,9 +19,8 @@
   let readyExpanded = $state(homeSessionsView.readyExpanded);
   let deleteError = $state('');
   const groups = $derived(groupHomeSessions(sessionsStore.rows, readyExpanded));
-  // Máquina desligada só sai da lista enquanto outra responde; todas fora, o aviso é a única pista.
-  const allDown = $derived(sessionsStore.byServer.every((b) => b.error));
-  const machines = $derived(sessionsStore.byServer.filter((b) => b.error ? b.error !== 'offline' || allDown : !b.loaded));
+  const noticeNow = noticeClock(() => sessionsStore.byServer);
+  const machines = $derived(sessionsStore.byServer.filter((b) => machineNoticeVisible(b, noticeNow.now) || (!b.error && !b.loaded)));
   const manyServers = $derived(sessionsStore.byServer.length > 1);
 
   const LABEL: Record<HomeState, () => string> = {
@@ -55,7 +55,7 @@
     {#if sessionsStore.loading || machines.some((b) => !b.loaded && !b.error)}
       <p class="empty" role="status">{m.lista_carregando()}</p>
     {:else if machines.length === 0}
-      <p class="empty">{m.lista_nenhuma_ativa()}</p>
+      <p class="empty">{machinesAllDown(sessionsStore.byServer) ? m.home_machines_offline() : m.lista_nenhuma_ativa()}</p>
     {/if}
   {:else}
     {#each groups as g (g.state)}

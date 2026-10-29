@@ -28,11 +28,12 @@ import * as m from '../paraglide/messages';
   import { abrirConfig } from '../lib/configNav';
   import { quotaFeed } from '../lib/quotaFeed.svelte';
   import { faixaDeCota } from '../lib/cota';
-  import { createSession, canPair, type DropResult } from '@hangar/core';
+  import { createSession, canPair, machineNoticeVisible, machinesAllDown, type DropResult } from '@hangar/core';
   import { listAllServers, getActiveId, selectServer, removeServer, renameServer, updateServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import type { AggSession, Provider, SessionOpeningExtras, WorktreeChoice } from '@hangar/core';
   import type { RemovalSnapshot } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
+  import { noticeClock } from '../lib/noticeClock.svelte';
   import { createSessionListModel, pairCodigo, pairResto } from '../lib/sessionListModel.svelte';
   import { countAwaiting, fmtWhen, initials } from '@hangar/core';
   import ConversationList from '../components/ConversationList.svelte';
@@ -61,17 +62,21 @@ import * as m from '../paraglide/messages';
   // servidor, refcount compartilhado com Sidebar/Board. As listas vêm do store como $derived.
   const sessions = $derived(sessionsStore.rows);
   const loading = $derived(sessionsStore.loading);
-  // Sessões em cache não são prova de conexão: a falha continua visível no resumo.
+  // Sessões em cache não são prova de conexão: a falha continua visível no resumo (a queda, só no
+  // começo: máquina desligada não fica avisando para sempre).
+  const noticeNow = noticeClock(() => sessionsStore.byServer);
   const serverErrors = $derived(
     sessionsStore.byServer
-      .filter((b) => b.error && !b.server.inviteEnded)
+      .filter((b) => machineNoticeVisible(b, noticeNow.now) && !b.server.inviteEnded)
       .map((b) => ({ label: b.server.label, error: b.error! })),
   );
   // Convite encerrado não é servidor offline: tem aviso próprio.
   const endedInvites = $derived(sessionsStore.byServer.filter((b) => b.server.inviteEnded).map((b) => b.server.label));
   // Só quando TODOS os servidores próprios estão fora: um fora e outro vazio é lista vazia com aviso.
   const ownBuckets = $derived(sessionsStore.byServer.filter((b) => !b.server.invite));
-  const listError = $derived(sessions.length === 0 && ownBuckets.length > 0 && ownBuckets.every((b) => b.error));
+  // Todas fora do ar: o aviso vermelho fica na faixa só no começo; depois, texto neutro.
+  const allDown = $derived(sessions.length === 0 && machinesAllDown(sessionsStore.byServer));
+  const listError = $derived(!allDown && sessions.length === 0 && ownBuckets.length > 0 && ownBuckets.every((b) => b.error));
   // Mensagem de AÇÃO (excluir/renomear), separada do `listError` acima: aquele substitui a lista inteira
   // (estado de "não consegui carregar"), e uma falha de exclusão não pode apagar a lista da tela.
   // Mesma forma do flash() da Sidebar, pra as duas views falharem igual.
@@ -122,8 +127,8 @@ import * as m from '../paraglide/messages';
   // agregada; o servidor-alvo de uma sessão é o dela, escolhido ao abrir/criar. Vem do store (derived).
   // A entrada temporária de par externo não é máquina desta pessoa: fica fora da conta e do menu.
   const servers = $derived(sessionsStore.servers.filter((x) => !x.ephemeral));
-  // Só `error`, SEM o portão `!loaded` do `serverErrors` acima: aquele existe pra o BANNER não
-  // gritar num piscar, mas aqui a pergunta é outra — "dá pra criar sessão nessa máquina agora?" —, e
+  // Só `error`, SEM a janela de tempo do `serverErrors` acima: aquela existe pra o BANNER não ficar
+  // avisando a queda inteira, mas aqui a pergunta é outra — "dá pra criar sessão nessa máquina agora?" —, e
   // quem respondeu há 5 minutos e calou não dá. Piscar não gera vaivém do chip: o erro só é marcado
   // depois de 25s de silêncio (watchdog) ou 10s sem o primeiro quadro.
   const servidoresOffline = $derived(
@@ -567,6 +572,12 @@ import * as m from '../paraglide/messages';
           <button class="retry-btn" onclick={() => abrirConfig('maquinas', null)}>{m.lista_erro_ver_servidores()}</button>
         </div>
       </div>
+    {:else if allDown}
+      {#if serverErrors.length === 0}
+        <div class="empty-state">
+          <p class="empty-sub">{m.home_machines_offline()}</p>
+        </div>
+      {/if}
     {:else if sessions.length === 0}
       <div class="empty-state">
         <p class="empty-title">{m.lista_nenhuma_ativa()}</p>

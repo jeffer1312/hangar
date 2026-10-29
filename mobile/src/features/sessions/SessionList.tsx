@@ -11,6 +11,8 @@ import {
   formataErro,
   groupBadges,
   groupGlobal,
+  machineNoticeVisible,
+  machinesAllDown,
   renameSession,
   setPairAccess,
   resumeSession,
@@ -35,6 +37,7 @@ import { pickKey } from '../pair/groupPairs';
 import { useIdentities } from '../pair/identities';
 import { ConversationList } from './ConversationList';
 import { KeyringNotice } from './KeyringNotice';
+import { useNoticeClock } from './useNoticeClock';
 import { RenameSheet } from './RenameSheet';
 import { WorktreeSheet } from '../worktrees/WorktreeSheet';
 import * as m from '../../paraglide/messages';
@@ -82,6 +85,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
   }, []);
   const activeId = useServers((s) => s.activeId);
   const byServer = useSessions((s) => s.byServer);
+  const noticeNow = useNoticeClock(byServer);
   // Grupo entre máquinas na lista: só então se lê o identificador de cada máquina, como a PWA.
   const crossMachine = useMemo(() => rows.some((r) => r.pair_owner || r.pair_peers?.some((p) => p.includes('::'))), [rows]);
   const { identities } = useIdentities(crossMachine ? servers : NO_SERVERS);
@@ -424,10 +428,8 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
     </View>
   );
 
-  // Máquina desligada só sai da lista enquanto outra responde; todas fora, o aviso é a única pista.
-  const shown = (bucket: (typeof byServer)[number]) => bucket.error !== 'offline' || byServer.every((b) => b.error);
-  const machineErrors = byServer.filter((bucket) => bucket.error && shown(bucket));
-  const machineStatus = home ? byServer.filter((bucket) => bucket.error ? shown(bucket) : !bucket.loaded).map((bucket) => (
+  const machineErrors = byServer.filter((bucket) => machineNoticeVisible(bucket, noticeNow));
+  const machineStatus = home ? byServer.filter((bucket) => machineNoticeVisible(bucket, noticeNow) || (!bucket.error && !bucket.loaded)).map((bucket) => (
     <View key={bucket.server.id} style={styles.machineStatus}>
       {bucket.error ? (
         <Text style={styles.machineError} accessibilityRole="alert" selectable>
@@ -500,7 +502,8 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
           );
         }}
         ListEmptyComponent={home && (machineErrors.length || byServer.some((b) => !b.server.inviteEnded && !b.error && !b.loaded)) ? null
-          : busca ? vazio(m.lista_vazia_filtro(), null, true) : vazio(m.lista_nenhuma_ativa(), null)}
+          : busca ? vazio(m.lista_vazia_filtro(), null, true)
+          : machinesAllDown(byServer) ? vazio(null, m.home_machines_offline()) : vazio(m.lista_nenhuma_ativa(), null)}
         contentContainerStyle={styles.listContent}
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}

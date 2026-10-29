@@ -684,6 +684,22 @@ As sondas que produziram isso ficam em `~/.hangar/diag/` (da máquina, fora do r
 `sonda-iphone.py` amostra rede + estado do app a cada 2 s, e um coletor do `idevicesyslog` guarda o
 lado de dentro do iPhone.
 
+Em 29/10/2026 o usuário apontou que a lista inicial do Expo e do PWA mostrava, sem nunca sumir,
+uma linha vermelha "<máquina> offline" por máquina fora do ar, e a máquina pode só estar
+desligada. Cada nova tentativa regravava o slot com `error: 'offline'`, e o aviso vivia enquanto
+durasse a queda. Agora o slot guarda a primeira falha da queda (`offlineSince`, em `patchSlot`),
+e o aviso de queda só aparece por `OFFLINE_NOTICE_MS` (30 s, as primeiras tentativas) a partir
+dela (`machineNoticeVisible`, `packages/core/src/sessions.ts`); um timer só por janela redesenha
+a tela no fim. O início é gravado em registro próprio (`hangar_quedas`, `startOutage`/`endOutage`
+em `esfriamento.ts`), senão cada recarga do PWA ou reabertura do Expo mostrava a linha de novo por
+30 s. Ele não pode morar no registro do prazo de tentativas: o servidor ativo nunca ganha prazo,
+"buscar agora" e a abertura do app apagam o prazo de quem respondeu nas últimas 24 h, e qualquer
+resposta (ping, erro HTTP, `list_error`) o apaga também; com o início ali, a janela reabria em
+cada um desses casos. Alternar entre offline e erro HTTP não reabre a janela: só uma lista boa encerra
+a queda. Erro HTTP e os demais erros continuam à vista. Com todas as máquinas próprias fora e
+nenhuma sessão, a lista vazia diz que elas estão fora do ar (texto neutro), não "Nenhuma sessão
+ativa". A escala de esperas não mudou.
+
 ## Compartilhado por sessão, não por conexão
 
 (`app/difusor.py`, `stats.Accumulator.
