@@ -1,5 +1,5 @@
 //! Espelhos de credencial: preservam configuração pessoal e isolam falhas por destino.
-use std::{collections::{BTreeMap,HashSet},fs,io::Write,path::{Path,PathBuf},sync::{LazyLock,Mutex}};
+use std::{collections::{BTreeMap,HashSet},fs,io::Write,path::Path,sync::{LazyLock,Mutex}};
 use serde_json::{Value,json};
 use crate::accounts::environment::AccountEnvironment;
 use super::probe::truthy;

@@ -337,3 +337,5 @@ mod harness_health;
 mod engine_wrapper_executable;
 mod json_indented;
 mod guest_loops;
+
+mod codex_trust;
