@@ -49,20 +49,31 @@ pub fn dumps(value: &Value, sort_keys: bool) -> String {
         }
         out
     }
-    let mut raw = if sort_keys {
+    let raw = if sort_keys {
         crate::transcript::pyjson::dumps_ordered(value, &|left, right| {
             codepoints(left).cmp(&codepoints(right))
         })
     } else {
         crate::transcript::pyjson::dumps(value, false)
     };
+    restore_markers(raw, true)
+}
+
+/// Escrita UTF-8 do Python: não finitos permanecem números, surrogate isolado recusa o arquivo.
+pub fn dumps_indented_utf8(value: &Value, indent: usize) -> Result<String, &'static str> {
+    if contains_surrogate(value) { return Err("surrogate Unicode isolado"); }
+    Ok(restore_markers(crate::transcript::pyjson::dumps_indent(value, indent, false), false))
+}
+
+fn restore_markers(mut raw: String, ascii: bool) -> String {
+    let quote = |value: &Value| if ascii { crate::transcript::pyjson::dumps(value, false) } else { crate::transcript::pyjson::dumps_unicode(value, false) };
     for token in ["NaN", "Infinity", "-Infinity"] {
         raw = raw.replace(
-            &crate::transcript::pyjson::dumps(&json!(format!("{}{token}", *MARK)), false),
+            &quote(&json!(format!("{}{token}", *MARK))),
             token,
         );
     }
-    let quoted = crate::transcript::pyjson::dumps(&json!(format!("{}surrogate:", *MARK)), false);
+    let quoted = quote(&json!(format!("{}surrogate:", *MARK)));
     let prefix = &quoted[1..quoted.len() - 1];
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw.as_str();
@@ -174,4 +185,20 @@ pub fn truncate_string(text: &str, count: usize) -> &str {
         }
     }
     &text[..end]
+}
+
+pub fn string_length(text: &str) -> usize {
+    let prefix = format!("{}surrogate:", *MARK);
+    let mut rest = text;
+    let mut count = 0;
+    while !rest.is_empty() {
+        let length = if let Some(tail) = rest.strip_prefix(&prefix)
+            && tail.len() >= 5 && tail.as_bytes()[4] == b';'
+            && tail.as_bytes()[..4].iter().all(u8::is_ascii_hexdigit) {
+            prefix.len() + 5
+        } else { rest.chars().next().unwrap().len_utf8() };
+        rest = &rest[length..];
+        count += 1;
+    }
+    count
 }
