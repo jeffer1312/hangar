@@ -235,12 +235,13 @@ pub fn parse(bytes: &[u8]) -> Result<Value, (axum::http::StatusCode, Value)> {
     if bytes.is_empty() {
         return Ok(Value::Null);
     }
-    let text = std::str::from_utf8(bytes).map_err(|_| {
+    let decoded = super::body_encoding::decode(bytes).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
             json!({"detail":"There was an error parsing the body"}),
         )
     })?;
+    let text = decoded.text.as_ref();
     if let Some(value) = super::codec::loads(text) { return Ok(value); }
     serde_json::from_str(text).map_err(|e|{
         let raw=e.to_string();let eof=e.is_eof();
@@ -254,11 +255,13 @@ pub fn parse(bytes: &[u8]) -> Result<Value, (axum::http::StatusCode, Value)> {
                 position = text[..offset].chars().count();
             }
             if text.as_bytes().get(byte) == Some(&b'}') { "Illegal trailing comma before end of object" } else { "Illegal trailing comma before end of array" }
-        } else if raw.starts_with("trailing characters"){"Extra data"}
+        } else if raw.starts_with("invalid escape") { "Invalid \\escape" }
+            else if raw.starts_with("trailing characters"){"Extra data"}
             else if raw.starts_with("key must be a string")||(eof&&matches!(last,Some('{'))){"Expecting property name enclosed in double quotes"}
             else if raw.starts_with("expected `:`"){"Expecting ':' delimiter"}
             else if raw.starts_with("expected `,`")||(eof&&!matches!(last,Some('['|':'|','))){"Expecting ',' delimiter"}
             else {"Expecting value"};
+        let position = decoded.position(position).saturating_sub(usize::from(raw.starts_with("invalid escape")));
         (StatusCode::UNPROCESSABLE_ENTITY,json!({"detail":[{"type":"json_invalid","loc":["body",position],"msg":"JSON decode error","input":{},"ctx":{"error":message}}]}))
     })
 }

@@ -1,5 +1,6 @@
 //! Orquestração: contratos, histórico e linha do tempo lidos no próprio servidor.
-pub(crate) mod body;
+pub mod body;
+mod body_encoding;
 mod common;
 pub mod codec;
 pub mod markdown;

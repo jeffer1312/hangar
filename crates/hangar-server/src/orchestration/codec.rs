@@ -17,6 +17,9 @@ static MARK: LazyLock<String> = LazyLock::new(|| {
 pub fn loads(text: &str) -> Option<Value> {
     crate::orq_conductor::load(text, &MARK)
 }
+pub(super) fn surrogate_marker(code: u32) -> String {
+    format!("{}surrogate:{code:04x};", *MARK)
+}
 pub fn infinite(value: &Value) -> bool {
     value
         .as_str()
