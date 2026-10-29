@@ -400,3 +400,4 @@ pub mod http_cors;
 
 pub mod http_body_limit;
 pub mod http_route_response;
+pub mod boot_version;

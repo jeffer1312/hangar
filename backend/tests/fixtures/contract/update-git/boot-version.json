@@ -1,0 +1,469 @@
+{
+  "source_commit": "6632c3f02f8da6468dfd96684c2dcc368c8dabed",
+  "command": "python generate-boot-version.py <checkout-Python> <fixture>",
+  "cases": [
+    {
+      "name": "package",
+      "manifest": {
+        "version": "0.1.2.3",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "channel": "latest"
+      },
+      "replies": [],
+      "version_file": null,
+      "calls": [],
+      "describe": "0.1.2.3-gaaaaaaaaaaaa",
+      "readable": "0.1.2.3"
+    },
+    {
+      "name": "short-commit",
+      "manifest": {
+        "version": "custom",
+        "commit": "abc",
+        "channel": "beta"
+      },
+      "replies": [],
+      "version_file": null,
+      "calls": [],
+      "describe": "custom-gabc",
+      "readable": "custom"
+    },
+    {
+      "name": "checkout",
+      "manifest": null,
+      "replies": [
+        [
+          0,
+          "dist-latest-2-gabc-dirty\n"
+        ],
+        [
+          0,
+          "42\n"
+        ],
+        [
+          0,
+          "1.2.3\n"
+        ]
+      ],
+      "version_file": null,
+      "calls": [
+        {
+          "args": [
+            "git",
+            "describe",
+            "--tags",
+            "--match",
+            "dist-latest",
+            "--long",
+            "--always",
+            "--dirty"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "rev-list",
+            "--count",
+            "HEAD"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "show",
+            "HEAD:VERSION"
+          ],
+          "timeout": 5
+        }
+      ],
+      "describe": "dist-latest-2-gabc-dirty",
+      "readable": "1.2.3.42"
+    },
+    {
+      "name": "nonzero-stdout",
+      "manifest": null,
+      "replies": [
+        [
+          1,
+          "visible\n"
+        ],
+        [
+          1,
+          "42\n"
+        ],
+        [
+          1,
+          "1.2.3\n"
+        ]
+      ],
+      "version_file": null,
+      "calls": [
+        {
+          "args": [
+            "git",
+            "describe",
+            "--tags",
+            "--match",
+            "dist-latest",
+            "--long",
+            "--always",
+            "--dirty"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "rev-list",
+            "--count",
+            "HEAD"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "show",
+            "HEAD:VERSION"
+          ],
+          "timeout": 5
+        }
+      ],
+      "describe": "visible",
+      "readable": "1.2.3.42"
+    },
+    {
+      "name": "fallback-version",
+      "manifest": null,
+      "replies": [
+        [
+          0,
+          "abc\n"
+        ],
+        [
+          0,
+          "7\n"
+        ],
+        [
+          1,
+          ""
+        ]
+      ],
+      "version_file": "2.0.0\n",
+      "calls": [
+        {
+          "args": [
+            "git",
+            "describe",
+            "--tags",
+            "--match",
+            "dist-latest",
+            "--long",
+            "--always",
+            "--dirty"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "rev-list",
+            "--count",
+            "HEAD"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "show",
+            "HEAD:VERSION"
+          ],
+          "timeout": 5
+        }
+      ],
+      "describe": "abc",
+      "readable": "2.0.0.7"
+    },
+    {
+      "name": "unicode-count",
+      "manifest": null,
+      "replies": [
+        [
+          0,
+          "abc\n"
+        ],
+        [
+          0,
+          "١٢\n"
+        ],
+        [
+          0,
+          "1.2.3\n"
+        ]
+      ],
+      "version_file": null,
+      "calls": [
+        {
+          "args": [
+            "git",
+            "describe",
+            "--tags",
+            "--match",
+            "dist-latest",
+            "--long",
+            "--always",
+            "--dirty"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "rev-list",
+            "--count",
+            "HEAD"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "show",
+            "HEAD:VERSION"
+          ],
+          "timeout": 5
+        }
+      ],
+      "describe": "abc",
+      "readable": "1.2.3.١٢"
+    },
+    {
+      "name": "control-strip",
+      "manifest": null,
+      "replies": [
+        [
+          0,
+          "\u001cabc\u001f"
+        ],
+        [
+          0,
+          "\u001e7\u001f"
+        ],
+        [
+          0,
+          "\u001c1.2.3\u001f"
+        ]
+      ],
+      "version_file": null,
+      "calls": [
+        {
+          "args": [
+            "git",
+            "describe",
+            "--tags",
+            "--match",
+            "dist-latest",
+            "--long",
+            "--always",
+            "--dirty"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "rev-list",
+            "--count",
+            "HEAD"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "show",
+            "HEAD:VERSION"
+          ],
+          "timeout": 5
+        }
+      ],
+      "describe": "abc",
+      "readable": "1.2.3.7"
+    },
+    {
+      "name": "git-empty",
+      "manifest": null,
+      "replies": [
+        [
+          1,
+          ""
+        ],
+        [
+          1,
+          ""
+        ]
+      ],
+      "version_file": null,
+      "calls": [
+        {
+          "args": [
+            "git",
+            "describe",
+            "--tags",
+            "--match",
+            "dist-latest",
+            "--long",
+            "--always",
+            "--dirty"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "rev-list",
+            "--count",
+            "HEAD"
+          ],
+          "timeout": 5
+        }
+      ],
+      "describe": "indisponivel",
+      "readable": null
+    },
+    {
+      "name": "git-exception",
+      "manifest": null,
+      "replies": [
+        "error",
+        "error"
+      ],
+      "version_file": null,
+      "calls": [
+        {
+          "args": [
+            "git",
+            "describe",
+            "--tags",
+            "--match",
+            "dist-latest",
+            "--long",
+            "--always",
+            "--dirty"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "rev-list",
+            "--count",
+            "HEAD"
+          ],
+          "timeout": 5
+        }
+      ],
+      "describe": "indisponivel",
+      "readable": null
+    },
+    {
+      "name": "bad-manifest",
+      "manifest": [],
+      "replies": [
+        [
+          0,
+          "abc\n"
+        ],
+        [
+          0,
+          "bad"
+        ]
+      ],
+      "version_file": null,
+      "calls": [
+        {
+          "args": [
+            "git",
+            "describe",
+            "--tags",
+            "--match",
+            "dist-latest",
+            "--long",
+            "--always",
+            "--dirty"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "rev-list",
+            "--count",
+            "HEAD"
+          ],
+          "timeout": 5
+        }
+      ],
+      "describe": "abc",
+      "readable": null
+    },
+    {
+      "name": "incomplete-manifest",
+      "manifest": {
+        "version": "x"
+      },
+      "replies": [
+        [
+          0,
+          "abc\n"
+        ],
+        [
+          0,
+          "0\n"
+        ],
+        [
+          1,
+          ""
+        ]
+      ],
+      "version_file": null,
+      "calls": [
+        {
+          "args": [
+            "git",
+            "describe",
+            "--tags",
+            "--match",
+            "dist-latest",
+            "--long",
+            "--always",
+            "--dirty"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "rev-list",
+            "--count",
+            "HEAD"
+          ],
+          "timeout": 5
+        },
+        {
+          "args": [
+            "git",
+            "show",
+            "HEAD:VERSION"
+          ],
+          "timeout": 5
+        }
+      ],
+      "describe": "abc",
+      "readable": null
+    }
+  ]
+}
