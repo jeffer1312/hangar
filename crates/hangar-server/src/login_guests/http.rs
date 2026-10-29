@@ -13,6 +13,8 @@ use axum::{
 use serde_json::{Value, json};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
+static PROCESS_SECRET:std::sync::LazyLock<Vec<u8>>=std::sync::LazyLock::new(||store::token().into_bytes());
+
 pub struct Settings {
     pub guests: PathBuf,
     pub vault: PathBuf,
@@ -28,16 +30,23 @@ impl Settings {
     fn defaults(home: &std::path::Path, claude: &std::path::Path) -> Self {
         Self { guests:claude.join("guests.json"), vault:home.join(".hangar/sync-vault.json"),
             runtime_config:claude.join("runtime-config.json"), sync_enabled:false,
-            bootstrap:String::new(), secret:store::token().into_bytes(), secure:false,
+            bootstrap:String::new(), secret:Vec::new(), secure:false,
             rate_max:10.into(), rate_window:300.into() }
     }
     pub fn from_config(home: &std::path::Path, claude: &std::path::Path, backend: Option<&std::path::Path>) -> super::store::Result<Self> {
-        let read = |key| crate::machine_peers::config_value(home,backend,key).map_err(|_| config_invalid());
+        let snapshot=crate::machine_peers::dotenv::SettingsSnapshot::capture(home,backend,
+            crate::machine_peers::dotenv::SettingsEnvironment::capture()).map_err(|_|config_invalid())?;
+        let mut settings=Self::from_snapshot(home,claude,&snapshot)?;
+        if settings.secret.is_empty() { settings.secret=PROCESS_SECRET.clone(); }
+        Ok(settings)
+    }
+    pub fn from_snapshot(home:&std::path::Path,claude:&std::path::Path,snapshot:&crate::machine_peers::dotenv::SettingsSnapshot)->super::store::Result<Self> {
+        let read=|key|snapshot.value(key).map_err(|_|config_invalid());
         let mut settings=Self::defaults(home,claude);
         if let Some(value)=read("CP_SYNC")? {
             settings.sync_enabled=validation::boolean(&json!({"sync":value}),"sync",false).map_err(|_|config_invalid())?;
         }
-        if let Some(value)=read("CP_SYNC_DATA")? { settings.vault=PathBuf::from(value); }
+        if let Some(value)=read("CP_SYNC_DATA")? { settings.vault=crate::value_coercion::path(&value); }
         if let Some(value)=read("CP_SYNC_BOOTSTRAP")? { settings.bootstrap=value; }
         if let Some(value)=read("CP_SYNC_SESSION_SECRET")?.filter(|v|!v.is_empty()) { settings.secret=value.into_bytes(); }
         if let Some(value)=read("CP_LAN_BIND_IP")? {
@@ -59,6 +68,7 @@ pub struct Service {
     pub store: Arc<Store>,
     pub body_limit: usize,
     config_error: Option<Failure>,
+    pub(crate) needs_initialization: bool,
     pub rate_now: fn() -> f64,
     pub(crate) lives: std::sync::OnceLock<Arc<crate::share::life::Lives>>,
     pub(super) sync: Sync,
@@ -68,9 +78,26 @@ pub struct Service {
     pub token: fn() -> String,
 }
 impl Service {
-    pub fn from_env() -> Self {
-        let env=crate::accounts::environment::AccountEnvironment::capture();
-        Self::from_config(&env.home,&env.claude_base,crate::session_open::cli::backend_dir().as_deref())
+    pub async fn from_state(state: &AppState) -> Self {
+        let home=&state.accounts.env.home;let claude=&state.accounts.env.claude_base;
+        let settings=state.settings_snapshot().map_err(|_|config_invalid())
+            .and_then(|snapshot|Settings::from_snapshot(home,claude,&snapshot));
+        let mut settings=match settings {
+            Ok(settings)=>settings,
+            Err(error)=>{let mut service=Self::new(Settings::defaults(home,claude));service.config_error=Some(error);return service;}
+        };
+        if settings.secret.is_empty() {
+            settings.secret=match state.auth.sync_session_key().await {
+                Ok(Some(secret))=>secret,
+                Ok(None)=>PROCESS_SECRET.clone(),
+                Err(_)=>{let mut service=Self::new(settings);service.config_error=Some(Failure::code(503,"sync_session_context_unavailable","contexto de autenticação da sincronização indisponível"));return service;}
+            };
+        }
+        Self::new(settings)
+    }
+    pub fn uninitialized(home:&std::path::Path,claude:&std::path::Path)->Self {
+        let mut service=Self::new(Settings::defaults(home,claude));
+        service.config_error=Some(config_invalid());service.needs_initialization=true;service
     }
     pub fn from_config(home: &std::path::Path, claude: &std::path::Path, backend: Option<&std::path::Path>) -> Self {
         match Settings::from_config(home,claude,backend) {
@@ -89,6 +116,7 @@ impl Service {
             store: Store::shared(settings.guests),
             body_limit: 100 * 1024 * 1024,
             config_error: None,
+            needs_initialization:false,
             rate_now: || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64()),
             lives: std::sync::OnceLock::new(),
             sync,
@@ -191,7 +219,7 @@ impl Service {
                 &headers,
             ),
         };
-        crate::routes::cors(&headers, response.headers_mut());
+        crate::http_cors::apply(&headers, &mut response);
         response
     }
     fn dispatch(
@@ -395,9 +423,9 @@ fn unquote_cookie(value: &str) -> String {
     }
     result
 }
-fn serialization_failure(headers: &HeaderMap) -> Response {
+fn serialization_failure(_headers: &HeaderMap) -> Response {
     let mut response = (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
-    crate::routes::cors(headers, response.headers_mut());
+    response.extensions_mut().insert(crate::http_cors::UnhandledServerError);
     response
 }
 fn json_content_type(headers: &HeaderMap) -> bool {
@@ -408,12 +436,17 @@ fn json_content_type(headers: &HeaderMap) -> bool {
 }
 fn reply(f: Failure, headers: &HeaderMap) -> Response {
     if f.status==500 && f.body.as_str()==Some("Internal Server Error") { return serialization_failure(headers); }
+    let unhandled = f.body["detail"]["code"].as_str().is_some_and(|code| code.starts_with("sync_") || code=="guests_worker_failed");
     let mut r = Json(f.body).into_response();
     if r.status().is_success() {
         *r.status_mut() = axum::http::StatusCode::from_u16(f.status)
             .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
     }
-    crate::routes::cors(headers, r.headers_mut());
+    if f.status==500 && matches!(r.status().as_u16(),500) {
+        // Erros de I/O do cofre eram exceções externas ao CORSMiddleware.
+        if unhandled { r.extensions_mut().insert(crate::http_cors::UnhandledServerError); }
+    }
+    crate::http_cors::apply(headers, &mut r);
     r
 }
 fn declared_too_large(headers: &HeaderMap, limit: usize) -> bool {

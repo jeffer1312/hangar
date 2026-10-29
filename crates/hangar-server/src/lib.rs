@@ -146,10 +146,13 @@ pub async fn serve_until_with_state(
 /// `guest`: porta do convidado (`HANGAR_SERVER_GUEST_LISTEN`), ligada sem segurar a principal.
 pub async fn serve_until_with_guest(
     listener: tokio::net::TcpListener,
-    state: routes::AppState,
+    mut state: routes::AppState,
     guest: Option<std::net::SocketAddr>,
     stop: impl std::future::Future<Output = ()>,
 ) -> std::io::Result<()> {
+    if state.login_guests.needs_initialization {
+        state.login_guests=std::sync::Arc::new(login_guests::Service::from_state(&state).await);
+    }
     // Lida na subida: no Windows o executável é aberto pela junction, que a troca de versão move.
     let _ = update::running_package();
     let cfg = state.cfg.clone();

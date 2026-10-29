@@ -1,0 +1,46 @@
+{
+  "source_commit": "2054a6c3d1dfcea17447df2f8bea19859c5aeaa4",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_origin_snapshot.py",
+  "rows": [
+    {
+      "phase": "before",
+      "origin": "https://public.example:8443",
+      "accepted": true
+    },
+    {
+      "phase": "before",
+      "origin": "https://extra.example",
+      "accepted": true
+    },
+    {
+      "phase": "before",
+      "origin": "https://changed.example",
+      "accepted": false
+    },
+    {
+      "phase": "before",
+      "origin": "https://new-extra.example",
+      "accepted": false
+    },
+    {
+      "phase": "after",
+      "origin": "https://public.example:8443",
+      "accepted": true
+    },
+    {
+      "phase": "after",
+      "origin": "https://extra.example",
+      "accepted": true
+    },
+    {
+      "phase": "after",
+      "origin": "https://changed.example",
+      "accepted": false
+    },
+    {
+      "phase": "after",
+      "origin": "https://new-extra.example",
+      "accepted": false
+    }
+  ]
+}

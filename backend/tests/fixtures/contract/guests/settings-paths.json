@@ -1,0 +1,55 @@
+{
+  "source_commit": "2054a6c3d1dfcea17447df2f8bea19859c5aeaa4",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_settings_paths.py",
+  "platform": "linux",
+  "rows": [
+    {
+      "input": "",
+      "path": ".",
+      "status": 500,
+      "response": "Internal Server Error"
+    },
+    {
+      "input": ".",
+      "path": ".",
+      "status": 500,
+      "response": "Internal Server Error"
+    },
+    {
+      "input": "./vault.json",
+      "path": "vault.json",
+      "status": 200,
+      "response": {
+        "enabled": true,
+        "registered": false
+      }
+    },
+    {
+      "input": "folder//vault.json",
+      "path": "folder/vault.json",
+      "status": 200,
+      "response": {
+        "enabled": true,
+        "registered": false
+      }
+    },
+    {
+      "input": "folder/../vault.json",
+      "path": "folder/../vault.json",
+      "status": 200,
+      "response": {
+        "enabled": true,
+        "registered": false
+      }
+    },
+    {
+      "input": "~/.hangar/vault.json",
+      "path": "~/.hangar/vault.json",
+      "status": 200,
+      "response": {
+        "enabled": true,
+        "registered": false
+      }
+    }
+  ]
+}

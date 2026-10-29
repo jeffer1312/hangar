@@ -517,6 +517,7 @@ async fn login_guests_terminal_origin_matches_python_without_owner_restriction()
     let service=Service::new(Settings{guests:claude.join("guests.json"),vault:home.join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()});
     service.store.create("Ana",home.to_str().unwrap(),true,true,"fixture".into(),"guest-token".into()).unwrap();state.share = None;
     state.login_guests=Arc::new(service);
+    state.settings_snapshot().unwrap();
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
     let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
     let cases:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/terminal.json")).unwrap();
@@ -529,6 +530,18 @@ async fn login_guests_terminal_origin_matches_python_without_owner_restriction()
             Ok((mut socket,response))=>{assert_eq!(response.status(),101);assert_eq!(row["accepted"],true,"GUE-038 origem {index}");let _=socket.close(None).await;},
             Err(Error::Http(response))=>{assert_eq!(row["accepted"],false,"GUE-038 origem {index}: {}",response.status());assert_eq!(response.status(),403);},
             Err(error)=>panic!("GUE-038 transporte {index}: {error}"),
+        }
+    }
+    let snapshot:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/origin-snapshot.json")).unwrap();
+    for row in snapshot["rows"].as_array().unwrap() {
+        if row["phase"]=="after" {std::fs::write(home.join(".hangar/config/.env"),"CP_PUBLIC_URL=https://changed.example\nCP_TERM_ORIGINS=https://new-extra.example\n").unwrap();}
+        let mut request=format!("ws://{address}/api/sessions/s0/term?token=guest-token").into_client_request().unwrap();
+        request.headers_mut().insert("host","fixture".parse().unwrap());
+        request.headers_mut().insert("origin",row["origin"].as_str().unwrap().parse().unwrap());
+        match tokio_tungstenite::connect_async(request).await {
+            Ok((mut socket,_))=>{assert_eq!(row["accepted"],true,"GUE-038 snapshot {row}");let _=socket.close(None).await;},
+            Err(Error::Http(response))=>{assert_eq!(row["accepted"],false,"GUE-038 snapshot {row}");assert_eq!(response.status(),403);},
+            Err(error)=>panic!("GUE-038 snapshot: {error}"),
         }
     }
     task.abort();
@@ -979,4 +992,153 @@ async fn login_guests_cookie_escaping_matches_original_login_and_renewal() {
         if status!=row["vault"]["status"].as_u64().unwrap() as u16 || body!=row["vault"]["response"] || cookie.as_deref()!=row["vault"]["set_cookie"].as_str() { differences.push(format!("{index}/vault: {status}")); }
     }
     assert!(differences.is_empty(),"cookies: {differences:?}");
+}
+
+#[tokio::test]
+async fn login_guests_public_preflight_precedes_guest_gate_and_body_cap() {
+    use tower_service::Service;
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/cors.json")).unwrap();
+    let mut state=AppState::new(crate::fake::config(crate::refused_address(),""));state.share=None;
+    let state=Arc::new(state);
+    let mut count=0;
+    for case in fixture["cases"].as_array().unwrap() {
+        if case["method"]!="OPTIONS" || case["headers"].get("origin").is_none() || case["headers"].get("access-control-request-method").is_none(){continue;}
+        let mut request=axum::http::Request::builder().method("OPTIONS").uri("/api/%67uests")
+            .header("authorization","Bearer invalid").header("content-length",104857601u64);
+        for (key,value) in case["headers"].as_object().unwrap(){request=request.header(key,value.as_str().unwrap());}
+        let mut request=request.body(axum::body::Body::empty()).unwrap();
+        request.extensions_mut().insert(axum::extract::ConnectInfo("127.0.0.1:1234".parse::<std::net::SocketAddr>().unwrap()));
+        let response=hangar_server::routes::router(state.clone()).call(request).await.unwrap();
+        assert_eq!(response.status().as_u16(),case["expected"]["status"].as_u64().unwrap() as u16);
+        for (key,value) in case["expected"]["headers"].as_object().unwrap(){assert_eq!(response.headers().get(key).and_then(|v|v.to_str().ok()),value.as_str(),"{key}");}
+        let body=axum::body::to_bytes(response.into_body(),1024).await.unwrap();
+        assert_eq!(std::str::from_utf8(&body).unwrap(),case["expected"]["body"].as_str().unwrap());count+=1;
+    }
+    assert!(count>0,"a captura precisa conter preflight");
+}
+
+#[tokio::test]
+async fn cookie_context_child_helper() {
+    let Ok(mode)=std::env::var("HANGAR_GUEST_COOKIE_PROBE") else{return;};
+    let root=std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    let state=AppState::new(crate::fake::config(crate::refused_address(),""));
+    let mut service=hangar_server::login_guests::Service::from_state(&state).await;
+    service.now=||2000000000;service.entropy=|n|vec![b'x';n];let service=Arc::new(service);
+    let result=if mode=="issue" {
+        let _=std::fs::remove_file(root.join("vault.json"));
+        let registered=sync_request(&service,"POST","/api/sync/register",r#"{"user":"ana","salt":"fixture","auth_hash":"fixture","bootstrap":"bootstrap"}"#,None).await;
+        assert_eq!(registered.0,200);
+        let response=sync_request(&service,"POST","/api/sync/login",r#"{"user":"ana","auth_hash":"fixture"}"#,None).await;
+        if let Some(cookie)=&response.2 {std::fs::write(root.join("cookie.txt"),cookie.split(';').next().unwrap()).unwrap();}
+        response
+    }else{
+        let cookie=std::fs::read_to_string(root.join("cookie.txt")).unwrap();
+        sync_request(&service,"GET","/api/sync/vault","",Some(&cookie)).await
+    };
+    std::fs::write(root.join("result.json"),serde_json::json!({"status":result.0,"body":result.1}).to_string()).unwrap();
+}
+
+#[tokio::test]
+async fn login_guests_cookie_survives_child_relaunch_and_follows_parent_context() {
+    use serde_json::json;
+    let root=tempfile::tempdir().unwrap();std::fs::create_dir(root.path().join("claude")).unwrap();
+    fn context(root:&std::path::Path,file:&str,epoch:&str,key:&str)->Value {
+        let mut config=json!({"abi":hangar_auth::AUTH_ABI,"store_version":hangar_auth::AUTH_STORE,"mode":"create","state_path":root.join(file),"parent_epoch":epoch.repeat(16),"expected_token":"owner-fake","receipt_key":key.repeat(32)});
+        hangar_auth::SharedLimiter::open(serde_json::from_value(config.clone()).unwrap()).unwrap();
+        config["mode"]=json!("attach");config
+    }
+    async fn child(root:&std::path::Path,config:Option<&Value>,mode:&str,secret:Option<&str>)->Value {
+        let mut command=tokio::process::Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact","login_guests::cookie_context_child_helper","--nocapture"])
+            .env_clear().env("HOME",root).env("USERPROFILE",root).env("CLAUDE_CONFIG_DIR",root.join("claude"))
+            .env("CP_AUTH_TOKEN","owner-fake").env("CP_SYNC","true").env("CP_SYNC_BOOTSTRAP","bootstrap")
+            .env("CP_SYNC_DATA",root.join("vault.json")).env("CP_LAN_BIND_IP","127.0.0.1")
+            .env("HANGAR_GUEST_COOKIE_PROBE",mode).kill_on_drop(true);
+        if let Some(config)=config{command.env("HANGAR_AUTH_CONTEXT",config.to_string());}
+        if let Some(secret)=secret{command.env("CP_SYNC_SESSION_SECRET",secret);}
+        let output=tokio::time::timeout(std::time::Duration::from_secs(20),command.output()).await.expect("prazo do processo isolado").unwrap();
+        assert!(output.status.success(),"processo de prova: {}",String::from_utf8_lossy(&output.stdout));
+        serde_json::from_slice(&std::fs::read(root.join("result.json")).unwrap()).unwrap()
+    }
+    let first=context(root.path(),"first.json","01","ab");
+    assert_eq!(child(root.path(),Some(&first),"issue",None).await["status"],200);
+    assert_eq!(child(root.path(),Some(&first),"read",None).await["status"],200,"GUE-068: relançamento do filho conserva o login");
+    let next=context(root.path(),"next.json","02","ab");
+    assert_eq!(child(root.path(),Some(&next),"read",None).await["status"],401,"nova época revoga");
+    let changed=context(root.path(),"changed.json","01","cd");
+    assert_eq!(child(root.path(),Some(&changed),"read",None).await["status"],401,"nova chave revoga");
+    std::fs::write(root.path().join("first.json"),b"invalid").unwrap();
+    assert_eq!(child(root.path(),Some(&first),"read",None).await["status"],503,"contexto quebrado recusa sem segredo de reserva");
+    assert_eq!(child(root.path(),Some(&next),"issue",Some("explicit-fixture")).await["status"],200);
+    assert_eq!(child(root.path(),Some(&changed),"read",Some("explicit-fixture")).await["status"],200,"segredo explícito vence o contexto");
+    assert_eq!(child(root.path(),None,"issue",None).await["status"],200);
+    assert_eq!(child(root.path(),None,"read",None).await["status"],401,"sem contexto o segredo é por processo");
+}
+
+#[tokio::test]
+async fn login_guests_unhandled_failures_preserve_cors_boundary() {
+    use hangar_server::login_guests::{Service,Settings};
+    use hangar_server::orchestration::codec;
+    let fixture=codec::loads(include_str!("../../../../backend/tests/fixtures/contract/guests/failure-cors.json")).unwrap();
+    let home=tempfile::tempdir().unwrap();let vault=home.path().join("vault.json");
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+    let mut state=AppState::new(Config{listen:address,upstream:crate::refused_address(),internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
+    state.auth=hangar_server::auth::Auth::new("owner");state.share=None;
+    let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:vault.clone(),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
+    service.now=||2000000000;state.login_guests=Arc::new(service);
+    let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
+    let client=reqwest::Client::new();let mut differences=Vec::new();
+    for row in fixture["rows"].as_array().unwrap() {
+        if let Some(disk)=row["disk"].as_str(){std::fs::write(&vault,disk).unwrap();}else{let _=std::fs::remove_file(&vault);}
+        let response=client.request(reqwest::Method::from_bytes(row["method"].as_str().unwrap().as_bytes()).unwrap(),format!("http://{address}{}",row["path"].as_str().unwrap()))
+            .bearer_auth("owner").header("origin","https://fixture.invalid").header("cookie",fixture["cookie"].as_str().unwrap()).header("content-type","application/json")
+            .body(codec::dumps(&row["body"],false)).send().await.unwrap();
+        let status=response.status().as_u16();let cors:serde_json::Map<String,Value>=response.headers().iter().filter(|(k,_)|k.as_str().starts_with("access-control-") || k.as_str()=="vary").map(|(k,v)|(k.to_string(),Value::String(v.to_str().unwrap().into()))).collect();
+        let text=response.text().await.unwrap();let body=serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text));
+        let body_matches=if row["name"]=="read" {body["detail"]["code"]=="sync_vault_unreadable"}else{body==row["response"]};
+        if status!=row["status"].as_u64().unwrap() as u16 || Value::Object(cors)!=row["cors"] || !body_matches {differences.push(format!("{}: {status} {body}",row["name"]));}
+    }
+    task.abort();assert!(differences.is_empty(),"fronteira CORS: {differences:?}");
+}
+#[tokio::test]
+async fn login_guests_vault_guest_shapes_preserve_list_write_delete() {
+    use hangar_server::login_guests::{Service,Settings};
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/vault-guest-shapes.json")).unwrap();
+    let mut differences=Vec::new();
+    for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
+        let home=tempfile::tempdir().unwrap();let vault=home.path().join("vault.json");
+        let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:vault.clone(),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
+        service.now=||2000000000;service.entropy=|n|vec![b'x';n];let service=Arc::new(service);
+        for (case_index,case) in row["cases"].as_array().unwrap().iter().enumerate() {
+            std::fs::write(&vault,row["initial"].to_string()).unwrap();
+            let cookie=format!("cp_sync={}",fixture["cookie"].as_str().unwrap());
+            let (status,body,_)=sync_request(&service,case["method"].as_str().unwrap(),case["path"].as_str().unwrap(),&case["body"].to_string(),Some(&cookie)).await;
+            let body_matches=if case["status"]==500 {body["detail"]["code"]=="sync_vault_unreadable"}else{body==case["response"]};
+            let disk:Value=serde_json::from_slice(&std::fs::read(&vault).unwrap()).unwrap();
+            if status!=case["status"].as_u64().unwrap() as u16 || !body_matches || disk!=case["disk"] {differences.push(format!("{index}/{case_index}: {status}"));}
+        }
+    }
+    assert!(differences.is_empty(),"cofre legado: {differences:?}");
+}
+
+
+#[cfg(unix)]
+#[tokio::test]
+async fn login_guests_settings_paths_preserve_http_status() {
+    use hangar_server::login_guests::{Service,Settings};
+    use hangar_server::machine_peers::dotenv::{SettingsEnvironment,SettingsSnapshot};
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/settings-paths.json")).unwrap();
+    for row in fixture["rows"].as_array().unwrap() {
+        let home=tempfile::tempdir().unwrap();let backend=home.path().join("backend");std::fs::create_dir(&backend).unwrap();
+        let snapshot=SettingsSnapshot::capture(home.path(),Some(&backend),SettingsEnvironment::from_pairs([
+            ("CP_SYNC","1"),("CP_SYNC_DATA",row["input"].as_str().unwrap()),("CP_SYNC_SESSION_SECRET","fixture")])).unwrap();
+        let mut settings=Settings::from_snapshot(home.path(),home.path(),&snapshot).unwrap();
+        assert_eq!(settings.vault.to_str().unwrap(),row["path"].as_str().unwrap());
+        // A pasta temporária representa o cwd isolado usado na captura Python.
+        settings.vault=home.path().join(settings.vault);
+        let service=Arc::new(Service::new(settings));
+        let (status,body,_)=sync_request(&service,"GET","/api/sync/status","",None).await;
+        assert_eq!(status,row["status"].as_u64().unwrap() as u16);
+        if status==500 {assert_eq!(body["detail"]["code"],"sync_vault_unreadable");}else{assert_eq!(body,row["response"]);}
+    }
 }

@@ -164,30 +164,26 @@ impl Sync {
             ("PUT", "vault") => self.put_vault(body, user.unwrap_or_default()),
             ("GET", "guests") => {
                 let vault = self.owner(user)?;
-                Ok(Value::Array(
-                    vault["guests"]
-                        .as_object()
-                        .into_iter()
-                        .flatten()
-                        .map(|(u, a)| json!({"user":u,"admin_blob":a["admin_blob"]}))
-                        .collect(),
-                ))
+                let Some(guests)=vault.get("guests").filter(|value|truthy(value)) else {return Ok(json!([]));};
+                let guests=guests.as_object().ok_or_else(unreadable)?;
+                let rows=guests.iter().map(|(user,account)| {
+                    let account=account.as_object().ok_or_else(unreadable)?;
+                    Ok(json!({"user":user,"admin_blob":account.get("admin_blob")}))
+                }).collect::<Result<Vec<_>>>()?;
+                Ok(Value::Array(rows))
             }
             ("POST", "guests") => self.put_guest(body, user, entropy),
             ("POST", p) if p.starts_with("guests/") && p.ends_with("/delete") => {
                 let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
                 let mut vault = self.owner(user)?;
                 let target = &p[7..p.len() - 7];
-                if vault["guests"]
-                    .as_object_mut()
-                    .and_then(|g| g.remove(target))
-                    .is_none()
-                {
-                    return Err(Failure::code(
-                        404,
-                        "erro_convidado_inexistente",
-                        "convidado não existe",
-                    ));
+                let guests=vault.get_mut("guests").filter(|value|truthy(value));
+                let removed=match guests {
+                    Some(guests)=>guests.as_object_mut().ok_or_else(unreadable)?.remove(target),
+                    None=>None,
+                };
+                if removed.as_ref().is_none_or(Value::is_null) {
+                    return Err(Failure::code(404,"erro_convidado_inexistente","convidado não existe"));
                 }
                 self.save(&vault)?;
                 Ok(json!({"ok":true}))
@@ -442,13 +438,15 @@ impl Sync {
         if vault.get("guests").is_none() {
             vault["guests"] = json!({});
         }
-        let rev = vault["guests"][name]["rev"]
-            .as_u64()
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or_else(|| {
-                Failure::code(500, "sync_revision_overflow", "revisão fora do intervalo")
-            })?;
+        let guests=vault.get("guests").and_then(Value::as_object).ok_or_else(unreadable)?;
+        let old=guests.get(name).filter(|value|truthy(value));
+        let rev=if let Some(old)=old {
+            let previous=old.as_object().and_then(|value|value.get("rev")).ok_or_else(unreadable)?;
+            if let Some(value)=previous.as_bool(){json!(u8::from(value)+1)}
+            else if previous.is_number() && previous.to_string().contains(['.','e','E']) {
+                serde_json::Number::from_f64(previous.as_f64().ok_or_else(unreadable)?+1.0).map(Value::Number).ok_or_else(unreadable)?
+            } else {increment_revision(previous).map_err(|_|unreadable())?}
+        }else{json!(1)};
         let salt = entropy(16);
         vault["guests"][name] = json!({"salt":b["salt"],"verifier_salt":STANDARD.encode(&salt),"auth_verifier":verifier(b["auth_hash"].as_str().unwrap_or_default(),&salt),"enc_blob":b["enc_blob"],"admin_blob":b["admin_blob"],"rev":rev});
         self.save(&vault)?;

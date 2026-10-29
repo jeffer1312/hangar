@@ -1,0 +1,77 @@
+{
+  "source_commit": "97e0bfae20e78558d3ea8b8c056cb422ae38c333",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_failure_cors.py",
+  "cookie": "cp_sync=ana.2002592000.da56a37dbbb3608ad2e19b624bdef952beb983110a7f539e64673b2ce875c95f",
+  "rows": [
+    {
+      "name": "validation",
+      "method": "POST",
+      "path": "/api/sync/setup",
+      "body": {
+        "user": "\ud800"
+      },
+      "disk": null,
+      "status": 500,
+      "response": "Internal Server Error",
+      "cors": {}
+    },
+    {
+      "name": "serialization",
+      "method": "GET",
+      "path": "/api/sync/vault",
+      "body": null,
+      "disk": "{\"user\": \"ana\", \"salt\": \"eHh4eHh4eHh4eHh4eHh4eA==\", \"verifier_salt\": \"eHh4eHh4eHh4eHh4eHh4eA==\", \"auth_verifier\": \"V9i8ZrA/e95XRmqXQHRW5J4UmkSz5TG6ifi0a9sqan8=\", \"enc_blob\": {\"text\": \"\\ud800\"}, \"rev\": 0}",
+      "status": 500,
+      "response": "Internal Server Error",
+      "cors": {}
+    },
+    {
+      "name": "read",
+      "method": "GET",
+      "path": "/api/sync/status",
+      "body": null,
+      "disk": "invalid",
+      "status": 500,
+      "response": "Internal Server Error",
+      "cors": {}
+    },
+    {
+      "name": "success",
+      "method": "GET",
+      "path": "/api/sync/status",
+      "body": null,
+      "disk": null,
+      "status": 200,
+      "response": {
+        "enabled": true,
+        "registered": false
+      },
+      "cors": {
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      }
+    },
+    {
+      "name": "handled",
+      "method": "POST",
+      "path": "/api/sync/login",
+      "body": {
+        "user": "ana",
+        "auth_hash": "bad"
+      },
+      "disk": null,
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "cors": {
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      }
+    }
+  ]
+}
