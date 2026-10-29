@@ -16,10 +16,10 @@ pub struct Sync {
     pub bootstrap: String,
     pub enabled: bool,
     pub secure: bool,
-    pub rate_max: usize,
-    pub rate_window: u64,
+    pub rate_max: num_bigint::BigInt,
+    pub rate_window: num_bigint::BigInt,
     lock: Mutex<()>,
-    fails: Mutex<HashMap<String, Vec<u64>>>,
+    fails: Mutex<HashMap<String, Vec<f64>>>,
 }
 impl Sync {
     pub fn new(path: PathBuf, config_path: PathBuf, secret: Vec<u8>) -> Self {
@@ -30,8 +30,8 @@ impl Sync {
             bootstrap: String::new(),
             enabled: false,
             secure: false,
-            rate_max: 10,
-            rate_window: 300,
+            rate_max: 10.into(),
+            rate_window: 300.into(),
             lock: Mutex::new(()),
             fails: Mutex::new(HashMap::new()),
         }
@@ -131,7 +131,7 @@ impl Sync {
         path: &str,
         body: &Value,
         user: Option<&str>,
-        now: u64,
+        now: f64,
         ip: &str,
         entropy: fn(usize) -> Vec<u8>,
     ) -> Result<Value> {
@@ -327,14 +327,21 @@ impl Sync {
         };
         Ok(json!({"salt":salt,"iterations":600000}))
     }
-    fn login(&self, b: &Value, now: u64, ip: &str) -> Result<Value> {
+    fn login(&self, b: &Value, now: f64, ip: &str) -> Result<Value> {
         let user = v::text(b, "user", 0, usize::MAX)?;
         let auth = v::text(b, "auth_hash", 0, usize::MAX)?;
         {
             let mut all = self.fails.lock().unwrap_or_else(|e| e.into_inner());
             let hits = all.entry(ip.into()).or_default();
-            hits.retain(|t| now.saturating_sub(*t) < self.rate_window);
-            if hits.len() >= self.rate_max {
+            hits.retain(|t| {
+                let elapsed=now-*t;
+                if elapsed==f64::NEG_INFINITY { return true; }
+                if !elapsed.is_finite() { return false; }
+                // Para limite inteiro, x < limite equivale a floor(x) < limite, sem estreitar o limite.
+                format!("{:.0}",elapsed.floor()).parse::<num_bigint::BigInt>()
+                    .is_ok_and(|elapsed|elapsed < self.rate_window)
+            });
+            if num_bigint::BigInt::from(hits.len()) >= self.rate_max {
                 return Err(Failure::code(
                     429,
                     "erro_muitas_tentativas",

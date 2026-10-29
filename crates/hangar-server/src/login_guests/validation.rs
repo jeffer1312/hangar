@@ -58,18 +58,8 @@ pub fn boolean(body: &Value, key: &str, default: bool) -> Result<bool> {
     let Some(v) = body.get(key) else {
         return Ok(default);
     };
-    if let Some(b) = v.as_bool() {
-        return Ok(b);
-    }
-    if v == 0 || v == 1 {
-        return Ok(v == 1);
-    }
-    if let Some(s) = v.as_str() {
-        match s.to_ascii_lowercase().as_str() {
-            "0" | "off" | "f" | "false" | "n" | "no" => return Ok(false),
-            "1" | "on" | "t" | "true" | "y" | "yes" => return Ok(true),
-            _ => {}
-        }
+    if let Some(value)=crate::value_coercion::boolean(v) {
+        return Ok(value);
     }
     Err(invalid(
         key,

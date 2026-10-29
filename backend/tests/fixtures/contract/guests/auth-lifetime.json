@@ -1,0 +1,11 @@
+{
+  "source_commit": "99b88a7a66250770e60d85667518a7ef1a22a4a2",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_auth_lifetime.py",
+  "ffi": "isolada; executa Context/activate/child_env originais sem biblioteca nem servidor",
+  "same_context": true,
+  "upstream_updated": true,
+  "same_key_between_children": true,
+  "same_epoch_between_children": true,
+  "new_context_changes_key": true,
+  "new_context_changes_epoch": true
+}

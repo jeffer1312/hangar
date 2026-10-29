@@ -56,9 +56,16 @@ As capturas adicionais executam o Python isolado pelo comando registrado em cada
 | `cookies.json` | 26 cookies e contextos de origem, com expiração, geração, renovação e CSRF |
 | `rate.json` | Dez sequências do limitador, com relógio fracionário, retrocesso e limites extremos |
 | `request-body.json` | 38 corpos e tipos de conteúdo; inclui UTF-16/32, surrogates, parser e falha posterior da resposta |
-| `settings.json` | 23 coerções reais de opções no dotenv, incluindo inteiros grandes e entradas inválidas |
+| `loop-validation.json` | 80 modelos de loop pela borda FastAPI, antes da implementação dos consumidores |
+| `loop-unicode.json` | Seis entradas Unicode; resposta HTTP, fila, sidecar e escrita direta são comparados separadamente |
+| `auth-lifetime.json` | Duração real do Context enviado aos filhos; FFI isolada, sem gravar chaves |
+| `settings.json` | 30 opções no dotenv, incluindo inteiros grandes, entradas inválidas e binds do cookie |
 
 Diferenças deliberadas autorizadas para esta migração:
+
+- Configuração inválida do sync passa a recusar somente essa área com `503 sync_config_invalid`;
+  antes impedia o processo Python de iniciar. O erro não expõe o valor, não escolhe padrão
+  silencioso e não desliga o cadastro local de convidados.
 
 - Falhas de leitura do cofre que retornavam `500 Internal Server Error` passam a retornar
   `500` com `detail.code=sync_vault_unreadable`, sem conteúdo do arquivo. Os testes conservam a

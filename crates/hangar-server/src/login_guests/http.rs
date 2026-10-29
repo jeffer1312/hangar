@@ -21,41 +21,45 @@ pub struct Settings {
     pub bootstrap: String,
     pub secret: Vec<u8>,
     pub secure: bool,
-    pub rate_max: usize,
-    pub rate_window: u64,
+    pub rate_max: num_bigint::BigInt,
+    pub rate_window: num_bigint::BigInt,
 }
 impl Settings {
-    pub fn from_env() -> Self {
-        let env = crate::accounts::environment::AccountEnvironment::capture();
-        Self {
-            guests: env.claude_base.join("guests.json"),
-            vault: std::env::var_os("CP_SYNC_DATA")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| env.home.join(".hangar/sync-vault.json")),
-            runtime_config: env.claude_base.join("runtime-config.json"),
-            sync_enabled: std::env::var("CP_SYNC")
-                .is_ok_and(|v| ["1", "true", "yes", "on"].contains(&v.to_lowercase().as_str())),
-            bootstrap: std::env::var("CP_SYNC_BOOTSTRAP").unwrap_or_default(),
-            secret: std::env::var("CP_SYNC_SESSION_SECRET")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .map(String::into_bytes)
-                .unwrap_or_else(|| store::token().into_bytes()),
-            secure: std::env::var("CP_LAN_BIND_IP").is_ok_and(|v| !crate::auth::is_loopback(&v)),
-            rate_max: std::env::var("CP_SYNC_RATE_MAX")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(10),
-            rate_window: std::env::var("CP_SYNC_RATE_WINDOW")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(300),
+    fn defaults(home: &std::path::Path, claude: &std::path::Path) -> Self {
+        Self { guests:claude.join("guests.json"), vault:home.join(".hangar/sync-vault.json"),
+            runtime_config:claude.join("runtime-config.json"), sync_enabled:false,
+            bootstrap:String::new(), secret:store::token().into_bytes(), secure:false,
+            rate_max:10.into(), rate_window:300.into() }
+    }
+    pub fn from_config(home: &std::path::Path, claude: &std::path::Path, backend: Option<&std::path::Path>) -> super::store::Result<Self> {
+        let read = |key| crate::machine_peers::config_value(home,backend,key).map_err(|_| config_invalid());
+        let mut settings=Self::defaults(home,claude);
+        if let Some(value)=read("CP_SYNC")? {
+            settings.sync_enabled=validation::boolean(&json!({"sync":value}),"sync",false).map_err(|_|config_invalid())?;
         }
+        if let Some(value)=read("CP_SYNC_DATA")? { settings.vault=PathBuf::from(value); }
+        if let Some(value)=read("CP_SYNC_BOOTSTRAP")? { settings.bootstrap=value; }
+        if let Some(value)=read("CP_SYNC_SESSION_SECRET")?.filter(|v|!v.is_empty()) { settings.secret=value.into_bytes(); }
+        if let Some(value)=read("CP_LAN_BIND_IP")? {
+            settings.secure=!["127.0.0.1","localhost","::1","0.0.0.0","auto"].contains(&value.as_str());
+        }
+        for (key,target) in [("CP_SYNC_RATE_MAX",&mut settings.rate_max),("CP_SYNC_RATE_WINDOW",&mut settings.rate_window)] {
+            if let Some(value)=read(key)? {
+                *target=crate::value_coercion::integer(&Value::String(value)).and_then(|v|v.to_string().parse().ok()).ok_or_else(config_invalid)?;
+            }
+        }
+        Ok(settings)
     }
 }
+fn config_invalid() -> Failure {
+    Failure::code(503,"sync_config_invalid","configuração de sincronização inválida")
+}
+
 pub struct Service {
     pub store: Arc<Store>,
     pub body_limit: usize,
+    config_error: Option<Failure>,
+    pub rate_now: fn() -> f64,
     pub(crate) lives: std::sync::OnceLock<Arc<crate::share::life::Lives>>,
     pub(super) sync: Sync,
     pub now: fn() -> u64,
@@ -64,6 +68,16 @@ pub struct Service {
     pub token: fn() -> String,
 }
 impl Service {
+    pub fn from_env() -> Self {
+        let env=crate::accounts::environment::AccountEnvironment::capture();
+        Self::from_config(&env.home,&env.claude_base,crate::session_open::cli::backend_dir().as_deref())
+    }
+    pub fn from_config(home: &std::path::Path, claude: &std::path::Path, backend: Option<&std::path::Path>) -> Self {
+        match Settings::from_config(home,claude,backend) {
+            Ok(settings)=>Self::new(settings),
+            Err(error)=>{ let mut service=Self::new(Settings::defaults(home,claude)); service.config_error=Some(error); service }
+        }
+    }
     pub fn new(settings: Settings) -> Self {
         let mut sync = Sync::new(settings.vault, settings.runtime_config, settings.secret);
         sync.bootstrap = settings.bootstrap;
@@ -74,6 +88,8 @@ impl Service {
         Self {
             store: Store::shared(settings.guests),
             body_limit: 100 * 1024 * 1024,
+            config_error: None,
+            rate_now: || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64()),
             lives: std::sync::OnceLock::new(),
             sync,
             now: || {
@@ -103,6 +119,9 @@ impl Service {
         let path = percent_encoding::percent_decode_str(parts.uri.path())
             .decode_utf8_lossy()
             .into_owned();
+        if path.starts_with("/api/sync/") && let Some(error)=self.config_error.clone() {
+            return reply(error,&headers);
+        }
         let query = parts.uri.query().map(str::to_owned);
         let expects_body = match (method.as_str(), path.as_str()) {
             ("POST", "/api/guests" | "/api/sync/setup" | "/api/sync/register" | "/api/sync/login" | "/api/sync/guests") => true,
@@ -229,7 +248,7 @@ impl Service {
                 path,
                 body,
                 user.as_deref(),
-                now,
+                (self.rate_now)(),
                 ip,
                 self.entropy,
             )?;
@@ -365,7 +384,7 @@ pub async fn route(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
 ) -> Response {
-    let (forward, owner) = crate::routes::gate(&st, peer, &request);
+    let (forward, owner) = match crate::routes::gate(&st, peer, &request).await { Ok(value)=>value, Err(error)=>return crate::auth::unavailable(error) };
     let response = st
         .login_guests
         .respond(owner, forward.client_ip, forward.https, request)

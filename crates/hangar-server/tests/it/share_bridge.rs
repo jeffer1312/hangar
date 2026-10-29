@@ -46,7 +46,7 @@ async fn server(dir: &Path, with_share: bool) -> Srv {
     let mut state = AppState::new(fake::config(upstream, ""));
     state.login_guests = Arc::new(hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings {
         guests: dir.join("guests.json"), vault: dir.join("vault.json"), runtime_config: dir.join("runtime-config.json"),
-        sync_enabled: false, bootstrap: String::new(), secret: b"fixture".to_vec(), secure: false, rate_max: 10, rate_window: 300,
+        sync_enabled: false, bootstrap: String::new(), secret: b"fixture".to_vec(), secure: false, rate_max: 10.into(), rate_window: 300.into(),
     }));
     let probe = Arc::new(Probe::default());
     let share = Arc::new(ShareState {

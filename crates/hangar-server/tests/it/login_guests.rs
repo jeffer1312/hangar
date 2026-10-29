@@ -69,8 +69,8 @@ async fn login_guests_python_http_contract_and_disk_effects() {
         bootstrap: "bootstrap".into(),
         secret: b"fixture-secret".to_vec(),
         secure: false,
-        rate_max: 10,
-        rate_window: 300,
+        rate_max: 10.into(),
+        rate_window: 300.into(),
     };
     let mut service = Service::new(settings);
     service.now = || 2000000000;
@@ -170,7 +170,7 @@ async fn login_guests_public_gate_denies_owner_routes_before_upstream() {
         trusted:TrustedHosts::parse("127.0.0.1") });
     let service = Service::new(Settings { guests:home.path().join("guests.json"), vault:home.path().join("vault.json"),
         runtime_config:home.path().join("runtime-config.json"), sync_enabled:false, bootstrap:String::new(),
-        secret:b"fixture".to_vec(), secure:false, rate_max:10, rate_window:300 });
+        secret:b"fixture".to_vec(), secure:false, rate_max:10.into(), rate_window:300.into() });
     service.store.create("Ana", home.path().to_str().unwrap(), false, true, "ana".into(), "guest".into()).unwrap();
     state.share = None;
     state.login_guests = Arc::new(service);
@@ -190,7 +190,7 @@ async fn login_guests_public_gate_denies_owner_routes_before_upstream() {
 async fn login_guests_body_limit_precedes_authentication() {
     use hangar_server::login_guests::{Service,Settings};
     let home=tempfile::tempdir().unwrap();
-    let service=Arc::new(Service::new(Settings {guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10,rate_window:300}));
+    let service=Arc::new(Service::new(Settings {guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()}));
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/limits.json")).unwrap();
     let expected=&fixture["rows"][0];
     let request=axum::http::Request::post("/api/guests").header("content-length",104857601u64).body(axum::body::Body::empty()).unwrap();
@@ -226,7 +226,7 @@ async fn login_guests_list_visibility_uses_python_matrix_without_forwarding() {
     let mut state=AppState::new(crate::fake::config(upstream,""));
     state.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::with_program(&program,Duration::from_secs(5)),capture_program:program.into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs:parse_dirs(&json!({"home":home,"claude":claude,"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string())},FactsClient::new(upstream,crate::fake::SECRET.into())));
     state.share = None;
-    state.login_guests=Arc::new(Service::new(Settings{guests:claude.join("guests.json"),vault:root.path().join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10,rate_window:300}));
+    state.login_guests=Arc::new(Service::new(Settings{guests:claude.join("guests.json"),vault:root.path().join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()}));
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
     let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
     for (index,row) in fixture["list_matrix"].as_array().unwrap().iter().enumerate() {
@@ -251,7 +251,7 @@ async fn login_guests_invalid_forms_match_all_python_errors() {
     let registered=http["rows"].as_array().unwrap().iter().find(|r|r["name"]=="registrar").unwrap();
     std::fs::write(home.path().join("vault.json"),registered["vault"].to_string()).unwrap();
     let cookie=http["rows"].as_array().unwrap().iter().find(|r|r["name"]=="cofre_vazio").unwrap()["cookie"].as_str().unwrap();
-    let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10,rate_window:300});
+    let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
     service.now=||2000000000;let service=Arc::new(service);
     let cases:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/validation.json")).unwrap();
     for row in cases["rows"].as_array().unwrap().iter().filter(|r|r["status"]==422) {
@@ -275,7 +275,7 @@ async fn login_guests_filesystem_uses_only_guest_root() {
     std::fs::File::open(root.join("project")).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH+std::time::Duration::from_secs(2000000000))).unwrap();
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
     let mut state=AppState::new(Config{listen:address,upstream:crate::refused_address(),internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
-    let service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10,rate_window:300});
+    let service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
     service.store.create("Ana",root.to_str().unwrap(),false,true,"fixture".into(),"guest".into()).unwrap();state.share = None;
     state.login_guests=Arc::new(service);
     let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
@@ -297,7 +297,7 @@ async fn login_guests_vault_revisions_keep_python_integer_range() {
     use hangar_server::login_guests::{Service,Settings};
     let home=tempfile::tempdir().unwrap();
     let cases:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/revision.json")).unwrap();
-    let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10,rate_window:300});
+    let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
     service.now=||2000000000;let service=Arc::new(service);
     for (index,row) in cases["rows"].as_array().unwrap().iter().enumerate() {
         std::fs::write(home.path().join("vault.json"),row["initial"].to_string()).unwrap();
@@ -318,7 +318,7 @@ async fn login_guests_storage_normalizes_legacy_documents_before_writing() {
     let cases:Value=serde_json::from_str(&include_str!("../../../../backend/tests/fixtures/contract/guests/storage.json").replace("⟦ROOT⟧",home.path().to_str().unwrap())).unwrap();
     for (index,row) in cases["rows"].as_array().unwrap().iter().enumerate() {
         std::fs::write(home.path().join("guests.json"),row["initial"].to_string()).unwrap();
-        let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10,rate_window:300});
+        let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()});
         service.id=||"ab".repeat(8);service.token=||"new-token".into();let service=Arc::new(service);
         let request=axum::http::Request::builder().method("POST").uri("/api/guests").body(axum::body::Body::from(row["body"].to_string())).unwrap();
         let response=service.respond(true,"127.0.0.1".into(),false,request).await;
@@ -346,7 +346,7 @@ async fn login_guests_sse_filters_and_ends_when_token_is_revoked() {
     let mut state=AppState::new(crate::fake::config(upstream,""));
     state.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::with_program(&program,Duration::from_secs(5)),capture_program:program.into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs:parse_dirs(&json!({"home":home,"claude":claude,"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string())},FactsClient::new(upstream,crate::fake::SECRET.into())));
     state.share = None;
-    state.login_guests=Arc::new(Service::new(Settings{guests:claude.join("guests.json"),vault:root.path().join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10,rate_window:300}));
+    state.login_guests=Arc::new(Service::new(Settings{guests:claude.join("guests.json"),vault:root.path().join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()}));
     let service=state.login_guests.clone();
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
     let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
@@ -385,7 +385,7 @@ mod arbitrary_inputs {
         fn login_guests_external_payloads_and_sidecars_do_not_panic(value in document(), raw in proptest::collection::vec(any::<u8>(),0..256)) {
             use hangar_server::login_guests::{Service,Settings};
             let home=tempfile::tempdir().unwrap();
-            let service=Arc::new(Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10,rate_window:300}));
+            let service=Arc::new(Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()}));
             let rt=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async {
                 for (path,bytes) in [("/api/guests",value.to_string().into_bytes()),("/api/sync/setup",value.to_string().into_bytes()),("/api/sync/login",raw)] {
@@ -412,7 +412,7 @@ async fn login_guests_setup_preserves_vault_and_changes_enabled_state() {
         for (key,file) in [("vault","vault.json"),("config","config.json")] {
             if let Some(raw)=row["initial"][key].as_str(){std::fs::write(home.path().join(file),raw).unwrap();}
         }
-        let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10,rate_window:300});
+        let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
         service.entropy=|n|vec![b'x';n];service.now=||2000000000;let service=Arc::new(service);
         let request=axum::http::Request::builder().method(row["method"].as_str().unwrap()).uri(row["path"].as_str().unwrap()).body(axum::body::Body::from(row["body"].to_string())).unwrap();
         let response=service.respond(row["owner"].as_bool().unwrap(),"127.0.0.1".into(),false,request).await;
@@ -467,7 +467,7 @@ async fn login_guests_rejects_structural_identity_types_without_overwriting() {
     let cases:Value=serde_json::from_str(&include_str!("../../../../backend/tests/fixtures/contract/guests/identity-types.json").replace("⟦ROOT⟧",home.path().to_str().unwrap())).unwrap();
     for row in cases["rows"].as_array().unwrap() {
         let path=home.path().join("guests.json");std::fs::write(&path,row["initial"].to_string()).unwrap();
-        let service=Arc::new(Service::new(Settings{guests:path.clone(),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10,rate_window:300}));
+        let service=Arc::new(Service::new(Settings{guests:path.clone(),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()}));
         for (owner,route,method,body,status) in [(false,"/api/me","GET",Value::Null,401),(true,"/api/guests","POST",serde_json::json!({"root":home.path(),"name":"Nova"}),500)] {
             let request=axum::http::Request::builder().method(method).uri(route).header("authorization","Bearer guest-token").body(axum::body::Body::from(body.to_string())).unwrap();
             let response=service.respond(owner,"127.0.0.1".into(),false,request).await;
@@ -484,7 +484,7 @@ async fn login_guests_public_credentials_match_python_precedence() {
     let home=tempfile::tempdir().unwrap();
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
     let mut state=AppState::new(Config{listen:address,upstream:crate::refused_address(),internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
-    let service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10,rate_window:300});
+    let service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()});
     service.store.create("Ana",home.path().to_str().unwrap(),false,true,"fixture".into(),"guest-token".into()).unwrap();state.share = None;
     state.login_guests=Arc::new(service);
     let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
@@ -514,7 +514,7 @@ async fn login_guests_terminal_origin_matches_python_without_owner_restriction()
     state.accounts=AccountService::new(AccountEnvironment::from_map([("HOME".into(),home.to_string_lossy().into_owned()),("USERPROFILE".into(),home.to_string_lossy().into_owned())].into()));
     state.term=Arc::new(Terms::new(TermConfig{program:program.clone().into_os_string(),..TermConfig::default()}));
     state.list=Arc::new(ListBridge::new(ListEnv{mux:Mux::with_program(&program,Duration::from_secs(5)),capture_program:program.into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs:parse_dirs(&json!({"home":home,"claude":claude,"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string())},FactsClient::new(upstream,crate::fake::SECRET.into())));
-    let service=Service::new(Settings{guests:claude.join("guests.json"),vault:home.join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10,rate_window:300});
+    let service=Service::new(Settings{guests:claude.join("guests.json"),vault:home.join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()});
     service.store.create("Ana",home.to_str().unwrap(),true,true,"fixture".into(),"guest-token".into()).unwrap();state.share = None;
     state.login_guests=Arc::new(service);
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
@@ -553,7 +553,7 @@ async fn login_guests_terminal_closes_after_login_revocation() {
     state.accounts=AccountService::new(AccountEnvironment::from_map([("HOME".into(),home.to_string_lossy().into_owned()),("USERPROFILE".into(),home.to_string_lossy().into_owned())].into()));
     state.term=Arc::new(Terms::new(TermConfig{program:program.clone().into_os_string(),..TermConfig::default()}));
     state.list=Arc::new(ListBridge::new(ListEnv{mux:Mux::with_program(&program,Duration::from_secs(5)),capture_program:program.into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs:parse_dirs(&json!({"home":home,"claude":claude,"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string())},FactsClient::new(upstream,crate::fake::SECRET.into())));
-    let service=Service::new(Settings{guests:claude.join("guests.json"),vault:home.join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10,rate_window:300});
+    let service=Service::new(Settings{guests:claude.join("guests.json"),vault:home.join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()});
     service.store.create("Ana",home.to_str().unwrap(),true,true,"fixture".into(),"guest-token".into()).unwrap();state.share = None;
     state.login_guests=Arc::new(service);
     let service=state.login_guests.clone();let terms=state.term.clone();
@@ -591,7 +591,7 @@ async fn login_guests_owner_list_preserves_legacy_truthiness() {
     let mut state=AppState::new(crate::fake::config(upstream,""));
     state.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::with_program(&program,Duration::from_secs(5)),capture_program:program.into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs:parse_dirs(&json!({"home":home,"claude":claude,"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string())},FactsClient::new(upstream,crate::fake::SECRET.into())));
     state.share = None;
-    state.login_guests=Arc::new(Service::new(Settings{guests:claude.join("guests.json"),vault:root.path().join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10,rate_window:300}));
+    state.login_guests=Arc::new(Service::new(Settings{guests:claude.join("guests.json"),vault:root.path().join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()}));
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
     let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
         let disk=row["before"].to_string().replace("⟦ROOT⟧",root.path().to_str().unwrap());
@@ -615,7 +615,7 @@ async fn login_guests_routes_without_body_ignore_malformed_json() {
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/ignored-body.json")).unwrap();
     for row in fixture["rows"].as_array().unwrap() {
         let root=tempfile::tempdir().unwrap();
-        let service=Arc::new(Service::new(Settings{guests:root.path().join("guests.json"),vault:root.path().join("vault.json"),runtime_config:root.path().join("runtime-config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10,rate_window:300}));
+        let service=Arc::new(Service::new(Settings{guests:root.path().join("guests.json"),vault:root.path().join("vault.json"),runtime_config:root.path().join("runtime-config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()}));
         let request=axum::http::Request::builder().method(row["method"].as_str().unwrap()).uri(row["path"].as_str().unwrap())
             .header("content-type","application/json").body(axum::body::Body::from(row["raw"].as_str().unwrap().to_owned())).unwrap();
         let response=service.respond(row["token"]=="owner","127.0.0.1".into(),false,request).await;
@@ -632,7 +632,7 @@ async fn login_guests_base64_rules_preserve_each_python_model() {
     let blobs:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/blobs.json")).unwrap();
     for row in fixture["rows"].as_array().unwrap().iter().chain(blobs["rows"].as_array().unwrap()) {
         let root=tempfile::tempdir().unwrap();
-        let mut service=Service::new(Settings{guests:root.path().join("guests.json"),vault:root.path().join("vault.json"),runtime_config:root.path().join("runtime-config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10,rate_window:300});
+        let mut service=Service::new(Settings{guests:root.path().join("guests.json"),vault:root.path().join("vault.json"),runtime_config:root.path().join("runtime-config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
         service.entropy=|n|vec![b'x';n];service.now=||2000000000;
         let service=Arc::new(service);
         let request=axum::http::Request::post(row["path"].as_str().unwrap()).header("content-type","application/json").body(axum::body::Body::from(row["body"].to_string())).unwrap();
@@ -653,7 +653,7 @@ async fn login_guests_public_body_limits_preserve_consumption_and_priority() {
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/limit-routes.json")).unwrap();
     for row in fixture["rows"].as_array().unwrap() {
         let root=tempfile::tempdir().unwrap();
-        let mut service=Service::new(Settings{guests:root.path().join("guests.json"),vault:root.path().join("vault.json"),runtime_config:root.path().join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10,rate_window:300});
+        let mut service=Service::new(Settings{guests:root.path().join("guests.json"),vault:root.path().join("vault.json"),runtime_config:root.path().join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
         service.body_limit=row["limit"].as_u64().unwrap() as usize;
         service.store.create("Ana",root.path().to_str().unwrap(),false,true,"ana".into(),"guest-token".into()).unwrap();
         let mut state=AppState::new(crate::fake::config(crate::refused_address(),""));state.share=None;state.login_guests=Arc::new(service);
@@ -683,7 +683,7 @@ async fn login_guests_sync_cookies_preserve_expiration_and_origin() {
             guests: home.path().join("guests.json"), vault: home.path().join("vault.json"),
             runtime_config: home.path().join("config.json"), sync_enabled: true,
             bootstrap: String::new(), secret: b"fixture-secret".to_vec(), secure: false,
-            rate_max: 10, rate_window: 300,
+            rate_max: 10.into(), rate_window: 300.into(),
         });
         service.now = if row["now"] == 0 { || 0 } else { || 2000000000 };
         let mut request = axum::http::Request::builder()
@@ -706,5 +706,78 @@ fn login_guests_shortcut_placeholder_matches_python() {
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/placeholder.json")).unwrap();
     for row in fixture["rows"].as_array().unwrap() {
         assert_eq!(hangar_server::shortcuts::has_placeholder(row["text"].as_str().unwrap()).as_deref(), row["result"].as_str(), "marcador {:?}",row["text"]);
+    }
+}
+
+#[test]
+fn login_guests_sync_settings_preserve_dotenv_coercion() {
+    use hangar_server::login_guests::Settings;
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/settings.json")).unwrap();
+    for row in fixture["rows"].as_array().unwrap() {
+        let home=tempfile::tempdir().unwrap();
+        let backend=home.path().join("backend");std::fs::create_dir(&backend).unwrap();
+        std::fs::write(backend.join(".env"),format!("CP_{}={}\n",row["field"].as_str().unwrap().to_uppercase(),row["input"])).unwrap();
+        let result=Settings::from_config(home.path(),&home.path().join("claude"),Some(&backend));
+        assert_eq!(result.is_ok(),row["accepted"].as_bool().unwrap(),"configuração {row}");
+        if let Ok(settings)=result {
+            let value=match row["field"].as_str().unwrap() {
+                "sync"=>serde_json::json!(settings.sync_enabled),
+                "lan_bind_ip"=>{ assert_eq!(settings.secure,row["secure"].as_bool().unwrap()); row["value"].clone() },
+                "sync_rate_max"=>serde_json::from_str::<Value>(&settings.rate_max.to_string()).unwrap(),
+                "sync_rate_window"=>serde_json::from_str::<Value>(&settings.rate_window.to_string()).unwrap(),
+                _=>unreachable!(),
+            };
+            assert_eq!(value,row["value"],"coerção {row}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn login_guests_sync_rate_preserves_fractional_clock_and_signed_limits() {
+    use hangar_server::login_guests::{Service,Settings};
+    use std::sync::atomic::{AtomicU64,Ordering};
+    static CLOCK:AtomicU64=AtomicU64::new(0);
+    fn epoch()->f64 { f64::from_bits(CLOCK.load(Ordering::SeqCst)) }
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/rate.json")).unwrap();
+    let mut mismatches=Vec::new();
+    for row in fixture["rows"].as_array().unwrap() {
+        let home=tempfile::tempdir().unwrap();
+        let mut service=Service::new(Settings { guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),
+            runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,
+            rate_max:row["maximum"].to_string().parse().unwrap(),rate_window:row["window"].to_string().parse().unwrap() });
+        service.now=||epoch() as u64;service.rate_now=epoch;let service=Arc::new(service);
+        for step in row["steps"].as_array().unwrap() {
+            CLOCK.store(step["now"].as_f64().unwrap().to_bits(),Ordering::SeqCst);
+            let request=axum::http::Request::builder().method("POST").uri("/api/sync/login")
+                .header("content-type","application/json").body(axum::body::Body::from(r#"{"user":"unknown","auth_hash":"wrong"}"#)).unwrap();
+            let response=service.respond(false,step["ip"].as_str().unwrap().into(),false,request).await;
+            let expected=if step["limited"]==true {429}else{401};
+            if response.status().as_u16()!=expected {mismatches.push(format!("{} @{}: {} != {}",row["name"],step["now"],response.status(),expected));}
+        }
+        assert!(!home.path().join("vault.json").exists());
+    }
+    assert!(mismatches.is_empty(),"GUE-052: {mismatches:?}");
+}
+
+#[tokio::test]
+async fn login_guests_sync_invalid_config_does_not_disable_local_guests() {
+    use hangar_server::login_guests::Service;
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/settings.json")).unwrap();
+    for row in fixture["rows"].as_array().unwrap().iter().filter(|r|r["accepted"]==false) {
+        let home=tempfile::tempdir().unwrap();
+        let backend=home.path().join("backend");std::fs::create_dir(&backend).unwrap();
+        std::fs::write(backend.join(".env"),format!("CP_{}={}\n",row["field"].as_str().unwrap().to_uppercase(),row["input"])).unwrap();
+        let service=Arc::new(Service::from_config(home.path(),&home.path().join("claude"),Some(&backend)));
+        for (path,status) in [("/api/sync/status",503),("/api/sync/setup",503),("/api/me",200)] {
+            let request=axum::http::Request::builder().uri(path).body(axum::body::Body::empty()).unwrap();
+            let response=service.respond(true,"127.0.0.1".into(),false,request).await;
+            assert_eq!(response.status().as_u16(),status,"D03 {path}");
+            if status==503 {
+                let body=axum::body::to_bytes(response.into_body(),4096).await.unwrap();
+                assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(),serde_json::json!({"detail":{"code":"sync_config_invalid","params":{},"msg":"configuração de sincronização inválida"}}));
+            }
+        }
+        assert!(!home.path().join("claude/guests.json").exists());
+        assert!(!home.path().join(".hangar/sync-vault.json").exists());
     }
 }

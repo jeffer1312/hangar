@@ -405,3 +405,5 @@ pub mod migration_branch;
 pub mod login_guests;
 
 pub mod shortcuts;
+
+pub mod value_coercion;

@@ -2,6 +2,7 @@
 use super::store::{Failure, Result};
 use base64::Engine;
 use serde_json::{Value, json};
+use crate::value_coercion::integer;
 
 #[derive(Clone, Copy)]
 enum Kind {
@@ -150,60 +151,7 @@ pub(super) fn base64_bytes(text: &str) -> std::result::Result<Vec<u8>, String> {
     engine.decode(text).map_err(|_| "Incorrect padding".into())
 }
 
-fn integer(value: &Value) -> Option<Value> {
-    if let Some(b) = value.as_bool() {
-        return Some(json!(u8::from(b)));
-    }
-    let raw = match value {
-        Value::String(s) => {
-            let s = s.trim();
-            let bytes = s.as_bytes();
-            if bytes.iter().enumerate().any(|(i, b)| {
-                *b == b'_'
-                    && (i == 0
-                        || i + 1 == bytes.len()
-                        || !bytes[i - 1].is_ascii_digit()
-                        || !bytes[i + 1].is_ascii_digit())
-            }) {
-                return None;
-            }
-            s.replace('_', "")
-        }
-        Value::Number(n) => {
-            let raw = n.to_string();
-            if raw.contains(['e', 'E']) {
-                let f = n.as_f64()?;
-                if !f.is_finite() || f.fract() != 0.0 {
-                    return None;
-                }
-                format!("{f:.0}")
-            } else {
-                raw
-            }
-        }
-        _ => return None,
-    };
-    let raw = raw.strip_prefix('+').unwrap_or(&raw);
-    let (negative, raw) = raw.strip_prefix('-').map_or((false, raw), |v| (true, v));
-    let raw = if let Some((whole, fraction)) = raw.split_once('.') {
-        if fraction.is_empty() || !fraction.bytes().all(|b| b == b'0') {
-            return None;
-        }
-        whole
-    } else {
-        raw
-    };
-    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let digits = raw.trim_start_matches('0');
-    let digits = if digits.is_empty() { "0" } else { digits };
-    serde_json::from_str(&format!(
-        "{}{digits}",
-        if negative && digits != "0" { "-" } else { "" }
-    ))
-    .ok()
-}
+
 fn collect(name: &str, body: &Value, loc: Vec<Value>, errors: &mut Vec<Value>) -> Value {
     let (fields, extras) = schema(name);
     let Some(object) = body.as_object() else {

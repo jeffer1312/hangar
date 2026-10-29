@@ -174,7 +174,7 @@ pub async fn guard(
     if let Some(response) = crate::share::gate::preflight(&request) {
         return response;
     }
-    let (forward, owner) = crate::routes::gate(&st, peer, &request);
+    let (forward, owner) = match crate::routes::gate(&st, peer, &request).await { Ok(value)=>value, Err(error)=>return crate::auth::unavailable(error) };
     if owner {
         return next.run(request).await;
     }
