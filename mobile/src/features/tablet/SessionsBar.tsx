@@ -2,13 +2,14 @@ import { useEffect, useMemo } from 'react';
 import { ActivityIndicator, FlatList, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useKeyboardState } from 'react-native-keyboard-controller';
-import { rotuloEstado, type AggSession } from '@hangar/core';
+import { machineNoticeVisible, rotuloEstado, type AggSession } from '@hangar/core';
 import { useTabletPrefs, type SessionsBarPlacement } from '../../stores/tabletPrefs';
 import { useSessions } from '../../stores/sessions';
 import { useServers } from '../../stores/servers';
 import { useIdentities } from '../pair/identities';
 import { SessionRow } from '../sessions/SessionRow';
 import { SessionAvatar } from '../sessions/SessionAvatar';
+import { useNoticeClock } from '../sessions/useNoticeClock';
 import { Glass } from '../../ui/Glass';
 import { Icon } from '../../ui/Icon';
 import { StateDot } from '../../ui/StateDot';
@@ -26,6 +27,7 @@ export function SessionsBar({ placement, selected, onPick, onNew }: Props) {
   const rows = useSessions(s => s.rows);
   const loading = useSessions(s => s.loading);
   const byServer = useSessions(s => s.byServer);
+  const noticeNow = useNoticeClock(byServer);
   const servers = useServers(s => s.servers);
   const crossMachine = rows.some(s => s.pair_owner || s.pair_peers?.some(p => p.includes('::')));
   const identityServers = useMemo(() => crossMachine ? servers : [], [crossMachine, servers]);
@@ -76,7 +78,7 @@ export function SessionsBar({ placement, selected, onPick, onNew }: Props) {
         ListEmptyComponent={<View style={styles.emptyState}>
           {loading ? <ActivityIndicator accessibilityLabel={m.lista_carregando()} /> :
             <Text style={[styles.empty, { color: theme.tokens.text.muted }]}>{m.tablet_sessions_empty()}</Text>}
-          {byServer.filter(b => b.error).map(b => <Text key={b.server.id} accessibilityRole="alert"
+          {byServer.filter(b => machineNoticeVisible(b, noticeNow)).map(b =><Text key={b.server.id} accessibilityRole="alert"
             style={[styles.empty, { color: theme.tokens.status.error }]}>
             {b.error === 'offline' ? m.lista_servidor_offline({ label: b.server.label }) : `${b.server.label}: ${b.error}`}
           </Text>)}

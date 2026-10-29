@@ -11,6 +11,7 @@ import {
   formataErro,
   groupBadges,
   groupGlobal,
+  machineNoticeVisible,
   renameSession,
   setPairAccess,
   resumeSession,
@@ -35,6 +36,7 @@ import { pickKey } from '../pair/groupPairs';
 import { useIdentities } from '../pair/identities';
 import { ConversationList } from './ConversationList';
 import { KeyringNotice } from './KeyringNotice';
+import { useNoticeClock } from './useNoticeClock';
 import { RenameSheet } from './RenameSheet';
 import { WorktreeSheet } from '../worktrees/WorktreeSheet';
 import * as m from '../../paraglide/messages';
@@ -82,6 +84,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
   }, []);
   const activeId = useServers((s) => s.activeId);
   const byServer = useSessions((s) => s.byServer);
+  const noticeNow = useNoticeClock(byServer);
   // Grupo entre máquinas na lista: só então se lê o identificador de cada máquina, como a PWA.
   const crossMachine = useMemo(() => rows.some((r) => r.pair_owner || r.pair_peers?.some((p) => p.includes('::'))), [rows]);
   const { identities } = useIdentities(crossMachine ? servers : NO_SERVERS);
@@ -424,8 +427,8 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
     </View>
   );
 
-  const machineErrors = byServer.filter((bucket) => bucket.error);
-  const machineStatus = home ? byServer.filter((bucket) => bucket.error || !bucket.loaded).map((bucket) => (
+  const machineErrors = byServer.filter((bucket) => machineNoticeVisible(bucket, noticeNow));
+  const machineStatus = home ? byServer.filter((bucket) => machineNoticeVisible(bucket, noticeNow) || (!bucket.error && !bucket.loaded)).map((bucket) => (
     <View key={bucket.server.id} style={styles.machineStatus}>
       {bucket.error ? (
         <Text style={styles.machineError} accessibilityRole="alert" selectable>

@@ -11,11 +11,42 @@ export type KeyringState = 'unlocked' | 'locked' | 'absent';
 
 // `tags`: último evento `tags` do servidor; ausente = versão antiga, valem o nome e a cor locais.
 // `tagsRaw`: o `data` cru dele, para a reconexão que repete o mesmo evento não refazer as linhas.
-export interface Slot { sessions: SessionInfo[] | null; error: string | null; keyring?: KeyringState | null; tags?: TagsEvent | null; tagsRaw?: string }
+// `offlineSince`: primeira falha da queda atual; só existe com `error === 'offline'`.
+export interface Slot { sessions: SessionInfo[] | null; error: string | null; keyring?: KeyringState | null; tags?: TagsEvent | null; tagsRaw?: string; offlineSince?: number }
 
 /** Slot novo com o `patch` por cima do anterior: o que ele não cita (etiquetas, chaveiro) segue igual. */
 export function patchSlot(slots: ReadonlyMap<string, Slot>, id: string, patch: Partial<Slot>): Slot {
-  return { sessions: null, error: null, ...slots.get(id), ...patch };
+  const prev = slots.get(id);
+  const { offlineSince: _, ...next } = { sessions: null, error: null, ...prev, ...patch };
+  if (next.error !== 'offline') return next;
+  // Cada nova tentativa frustrada regrava o slot; a queda continua contando da primeira.
+  return { ...next, offlineSince: (prev?.error === 'offline' && prev.offlineSince) || Date.now() };
+}
+
+// A máquina pode só estar desligada: o aviso vermelho cobre as primeiras tentativas, não a queda inteira.
+export const OFFLINE_NOTICE_MS = 30_000;
+
+type Notice = { error: string | null; offlineSince?: number };
+
+/** Até quando o aviso da máquina fica na tela: 0 sem aviso; erro que não é queda não expira. */
+function noticeUntil(b: Notice): number {
+  if (!b.error) return 0;
+  if (b.error !== 'offline') return Infinity;
+  return b.offlineSince ? b.offlineSince + OFFLINE_NOTICE_MS : 0;
+}
+
+export function machineNoticeVisible(b: Notice, now: number): boolean {
+  return noticeUntil(b) > now;
+}
+
+/** Próximo instante em que um aviso some, para um único timer redesenhar a tela; null = nenhum. */
+export function nextNoticeEnd(buckets: readonly Notice[], now: number): number | null {
+  let next: number | null = null;
+  for (const b of buckets) {
+    const until = noticeUntil(b);
+    if (until > now && Number.isFinite(until) && (next === null || until < next)) next = until;
+  }
+  return next;
 }
 
 export interface ServerBucket {
@@ -27,6 +58,7 @@ export interface ServerBucket {
   error: string | null;     // 'offline' quando o stream caiu ou veio frame malformado
   loaded: boolean;          // já recebeu ao menos uma lista boa (pode coexistir com error = stale)
   keyringLocked?: boolean;  // evento `keyring` da lista: o chaveiro `login` da máquina está trancado
+  offlineSince?: number;    // primeira falha da queda atual (ver `machineNoticeVisible`)
 }
 
 export interface Aggregate {
@@ -64,6 +96,7 @@ export function aggregateSessions(
       error: slot?.error ?? null,
       loaded: slot?.sessions != null,
       keyringLocked: slot?.keyring === 'locked' && slot.error !== 'offline',
+      offlineSince: slot?.offlineSince,
     };
     if (slot?.sessions && slot.error !== 'offline') {
       const tags = slot.tags ?? null;

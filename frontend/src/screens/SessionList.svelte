@@ -28,11 +28,12 @@ import * as m from '../paraglide/messages';
   import { abrirConfig } from '../lib/configNav';
   import { quotaFeed } from '../lib/quotaFeed.svelte';
   import { faixaDeCota } from '../lib/cota';
-  import { createSession, canPair, type DropResult } from '@hangar/core';
+  import { createSession, canPair, machineNoticeVisible, type DropResult } from '@hangar/core';
   import { listAllServers, getActiveId, selectServer, removeServer, renameServer, updateServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import type { AggSession, Provider, SessionOpeningExtras, WorktreeChoice } from '@hangar/core';
   import type { RemovalSnapshot } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
+  import { noticeClock } from '../lib/noticeClock.svelte';
   import { createSessionListModel, pairCodigo, pairResto } from '../lib/sessionListModel.svelte';
   import { countAwaiting, fmtWhen, initials } from '@hangar/core';
   import ConversationList from '../components/ConversationList.svelte';
@@ -61,10 +62,12 @@ import * as m from '../paraglide/messages';
   // servidor, refcount compartilhado com Sidebar/Board. As listas vêm do store como $derived.
   const sessions = $derived(sessionsStore.rows);
   const loading = $derived(sessionsStore.loading);
-  // Sessões em cache não são prova de conexão: a falha continua visível no resumo.
+  // Sessões em cache não são prova de conexão: a falha continua visível no resumo (a queda, só no
+  // começo: máquina desligada não fica avisando para sempre).
+  const noticeNow = noticeClock(() => sessionsStore.byServer);
   const serverErrors = $derived(
     sessionsStore.byServer
-      .filter((b) => b.error && !b.server.inviteEnded)
+      .filter((b) => machineNoticeVisible(b, noticeNow.now) && !b.server.inviteEnded)
       .map((b) => ({ label: b.server.label, error: b.error! })),
   );
   // Convite encerrado não é servidor offline: tem aviso próprio.

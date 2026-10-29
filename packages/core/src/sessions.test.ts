@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Slot } from './sessions';
 import type { Server } from './servers';
 import type { SessionInfo } from './types';
-import { aggregateSessions, epocasDeRecriacao, sweepHidden } from './sessions';
+import { aggregateSessions, epocasDeRecriacao, machineNoticeVisible, nextNoticeEnd, OFFLINE_NOTICE_MS, patchSlot, sweepHidden } from './sessions';
 
 const srv = (id: string): Server => ({ id, label: `srv-${id}`, baseUrl: `http://${id}`, token: 't' });
 const sess = (name: string, extra: Partial<SessionInfo> = {}): SessionInfo =>
@@ -179,5 +179,48 @@ describe('sweepHidden', () => {
   it('servidor sem lista (offline/ainda sem slot): não dá pra saber, marca fica', () => {
     expect(sweepHidden(marca, slots({ a: { sessions: null, error: 'offline' } })).size).toBe(1);
     expect(sweepHidden(marca, new Map()).size).toBe(1);
+  });
+});
+
+describe('aviso de máquina fora do ar', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('a queda conta da primeira falha: novas tentativas não reabrem a janela, e a resposta a encerra', () => {
+    vi.useFakeTimers({ now: 1_000 });
+    const m = new Map<string, Slot>();
+    m.set('a', patchSlot(m, 'a', { error: 'offline' }));
+    expect(m.get('a')!.offlineSince).toBe(1_000);
+    vi.setSystemTime(20_000);
+    m.set('a', patchSlot(m, 'a', { error: 'offline', keyring: undefined }));
+    expect(m.get('a')!.offlineSince).toBe(1_000);
+    m.set('a', patchSlot(m, 'a', { sessions: [], error: null }));
+    expect(m.get('a')!.offlineSince).toBeUndefined();
+    vi.setSystemTime(90_000);
+    m.set('a', patchSlot(m, 'a', { error: 'offline' }));
+    expect(m.get('a')!.offlineSince).toBe(90_000);
+    expect(aggregateSessions([srv('a')], m).byServer[0].offlineSince).toBe(90_000);
+  });
+
+  it('offline só aparece dentro da janela; outro erro fica; sem erro não há aviso', () => {
+    const since = 5_000;
+    const off = { error: 'offline', offlineSince: since };
+    expect(machineNoticeVisible(off, since)).toBe(true);
+    expect(machineNoticeVisible(off, since + OFFLINE_NOTICE_MS - 1)).toBe(true);
+    expect(machineNoticeVisible(off, since + OFFLINE_NOTICE_MS)).toBe(false);
+    expect(machineNoticeVisible({ error: 'offline' }, since)).toBe(false);
+    expect(machineNoticeVisible({ error: 'list-unavailable' }, Number.MAX_SAFE_INTEGER)).toBe(true);
+    expect(machineNoticeVisible({ error: null }, since)).toBe(false);
+  });
+
+  it('próximo fim de aviso é o mais cedo ainda por vir', () => {
+    const b = [
+      { error: 'offline', offlineSince: 10_000 },
+      { error: 'offline', offlineSince: 1_000 },
+      { error: 'list-unavailable' },
+      { error: null },
+    ];
+    expect(nextNoticeEnd(b, 0)).toBe(1_000 + OFFLINE_NOTICE_MS);
+    expect(nextNoticeEnd(b, 1_000 + OFFLINE_NOTICE_MS)).toBe(10_000 + OFFLINE_NOTICE_MS);
+    expect(nextNoticeEnd(b, 10_000 + OFFLINE_NOTICE_MS)).toBeNull();
   });
 });

@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { stateColors } from '@hangar/core';
+  import { machineNoticeVisible, stateColors } from '@hangar/core';
   import SessionCard from './SessionCard.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
   import KeyringNotice from './KeyringNotice.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
+  import { noticeClock } from '../lib/noticeClock.svelte';
   import { createSessionListModel } from '../lib/sessionListModel.svelte';
   import { groupHomeSessions, homeSessionsView, type HomeState } from '../lib/homeSessions';
   import * as m from '../paraglide/messages';
@@ -18,7 +19,8 @@
   let readyExpanded = $state(homeSessionsView.readyExpanded);
   let deleteError = $state('');
   const groups = $derived(groupHomeSessions(sessionsStore.rows, readyExpanded));
-  const machines = $derived(sessionsStore.byServer.filter((b) => b.error || !b.loaded));
+  const noticeNow = noticeClock(() => sessionsStore.byServer);
+  const machines = $derived(sessionsStore.byServer.filter((b) => machineNoticeVisible(b, noticeNow.now) || (!b.error && !b.loaded)));
   const manyServers = $derived(sessionsStore.byServer.length > 1);
 
   const LABEL: Record<HomeState, () => string> = {

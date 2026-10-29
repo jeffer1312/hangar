@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { tick } from 'svelte';
 import { createClassComponent } from 'svelte/legacy';
+import { OFFLINE_NOTICE_MS } from '@hangar/core';
 import HomeSessions from './HomeSessions.svelte';
 import { overwriteGetLocale } from '../paraglide/runtime';
 
@@ -53,11 +54,30 @@ it('vazio quando as máquinas responderam sem sessão aberta', async () => {
 it('erro por máquina aparece junto das sessões das outras', async () => {
   Object.assign(store, { loading: false, rows: [row('s1', 'working')], byServer: [
     { server: server('a'), sessions: [], error: null, loaded: true },
-    { server: server('b'), sessions: [], error: 'offline', loaded: false },
+    { server: server('b'), sessions: [], error: 'offline', loaded: false, offlineSince: Date.now() },
   ] });
   const text = await mount();
   expect(text).toContain('b offline');
   expect(text).toContain('Trabalhando');
+});
+
+it('máquina offline aparece só no começo da queda e some sozinha depois', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+  try {
+    Object.assign(store, { loading: false, rows: [], byServer: [
+      { server: server('b'), sessions: [], error: 'offline', loaded: false, offlineSince: Date.now() },
+    ] });
+    expect(await mount()).toContain('b offline');
+    vi.advanceTimersByTime(OFFLINE_NOTICE_MS - 1); await tick();
+    expect(target.textContent).toContain('b offline');
+    vi.advanceTimersByTime(1); await tick();
+    expect(target.textContent).not.toContain('b offline');
+    // Sem lista nem aviso: não volta a dizer "carregando" para a máquina desligada.
+    expect(target.textContent).not.toContain('Carregando');
+    expect(target.textContent).toContain('Nenhuma sessão ativa');
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it('rótulos de servidor ficam acima das linhas em cada estado, sem badge repetido', async () => {

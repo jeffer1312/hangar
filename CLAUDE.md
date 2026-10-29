@@ -496,6 +496,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   abre ou volta a ficar visível: a queda dele é a suspensão do aparelho, não a máquina.
   Falha com o app em segundo plano não conta (nem marca nem grava prazo): tenta a cada 30 s
   fixos e reconecta todos na volta.
+  O aviso vermelho "offline" no topo da lista só aparece nos 30 s após a primeira falha da queda
+  (`OFFLINE_NOTICE_MS`) e some enquanto a máquina continua fora; resposta encerra a queda.
 - **Rede local antes do Tailscale: `baseUrl` é identidade, a rota é `baseOf(s)`.** Toda URL de
   chamada a um servidor sai por `baseOf` (ou `getBaseUrl` do `ApiEnv`); `s.baseUrl` cru ignora a
   rede local calado. O token só vai ao endereço local depois da prova HMAC (`/api/peers/prova`),

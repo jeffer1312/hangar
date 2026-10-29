@@ -2,7 +2,7 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AggSession, GroupBy, Server, SessionInfo } from '@hangar/core';
+import { OFFLINE_NOTICE_MS, type AggSession, type GroupBy, type Server, type SessionInfo } from '@hangar/core';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -610,6 +610,25 @@ describe('SessionList', () => {
     await act(async () => useSessions.setState({ byServer: [{ server, sessions: [], loaded: true, error: 'list-unavailable' }] }));
     expect(container.textContent).toContain('fixture-server: list-unavailable');
     expect(container.textContent).not.toContain('lista_nenhuma_ativa');
+  });
+
+  it('home mostra a máquina offline só no começo da queda e some sozinha depois', async () => {
+    await mount({ variant: 'home' });
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      const offline = { server, sessions: [], loaded: false, error: 'offline', offlineSince: Date.now() };
+      await act(async () => useSessions.setState({ rows: [], loading: false, byServer: [offline] }));
+      expect(container.textContent).toContain('fixture-server:offline');
+      await act(async () => vi.advanceTimersByTime(OFFLINE_NOTICE_MS - 1));
+      expect(container.textContent).toContain('fixture-server:offline');
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(container.textContent).not.toContain('fixture-server:offline');
+      // Sem lista nem aviso: não volta a dizer "carregando" para a máquina desligada.
+      expect(container.textContent).not.toContain('fixture-server: lista_carregando');
+      expect(container.textContent).toContain('lista_nenhuma_ativa');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('Nova conversa usa sua ação própria sem confundir fechamento para navegação', async () => {
