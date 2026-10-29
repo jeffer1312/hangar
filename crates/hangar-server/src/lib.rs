@@ -5,6 +5,8 @@ pub mod auth;
 pub mod remote_browser;
 pub mod config;
 pub mod config_sync;
+pub mod command_capture;
+pub mod cli_probe;
 pub mod commands;
 pub mod orq_conductor;
 pub mod orq_storage;

@@ -1,0 +1,702 @@
+{
+  "source_commit": "b9c32bd6fdd1e8dcaad1979f7f100313d9b5fb2e",
+  "command": "cd backend && uv run python tests/fixtures/contract/config_sync/generate_cli_probe.py",
+  "cases": [
+    {
+      "name": "modern",
+      "stdout": "2.1.287 (Claude Code)\n",
+      "stderr": "",
+      "present": true,
+      "failure": false,
+      "supported": false,
+      "version": [
+        2,
+        1,
+        287
+      ],
+      "mods": true,
+      "help": false,
+      "health": "2.1.287 (Claude Code)",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "modern",
+      "stdout": "2.1.287 (Claude Code)\n",
+      "stderr": "",
+      "present": true,
+      "failure": false,
+      "supported": true,
+      "version": [
+        2,
+        1,
+        287
+      ],
+      "mods": true,
+      "help": true,
+      "health": "2.1.287 (Claude Code)",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "old",
+      "stdout": "2.1.286\n",
+      "stderr": "",
+      "present": true,
+      "failure": false,
+      "supported": false,
+      "version": [
+        2,
+        1,
+        286
+      ],
+      "mods": false,
+      "help": false,
+      "health": "2.1.286",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "old",
+      "stdout": "2.1.286\n",
+      "stderr": "",
+      "present": true,
+      "failure": false,
+      "supported": true,
+      "version": [
+        2,
+        1,
+        286
+      ],
+      "mods": false,
+      "help": true,
+      "health": "2.1.286",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "leading",
+      "stdout": "  3.0.0\nsegunda",
+      "stderr": "",
+      "present": true,
+      "failure": false,
+      "supported": false,
+      "version": [
+        3,
+        0,
+        0
+      ],
+      "mods": true,
+      "help": false,
+      "health": "3.0.0",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "leading",
+      "stdout": "  3.0.0\nsegunda",
+      "stderr": "",
+      "present": true,
+      "failure": false,
+      "supported": true,
+      "version": [
+        3,
+        0,
+        0
+      ],
+      "mods": true,
+      "help": true,
+      "health": "3.0.0",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "prefix",
+      "stdout": "v2.1.287\n",
+      "stderr": "",
+      "present": true,
+      "failure": false,
+      "supported": false,
+      "version": null,
+      "mods": false,
+      "help": false,
+      "health": "v2.1.287",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "prefix",
+      "stdout": "v2.1.287\n",
+      "stderr": "",
+      "present": true,
+      "failure": false,
+      "supported": true,
+      "version": null,
+      "mods": false,
+      "help": true,
+      "health": "v2.1.287",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "stderr",
+      "stdout": "",
+      "stderr": "2.2.0\nsegunda",
+      "present": true,
+      "failure": false,
+      "supported": false,
+      "version": null,
+      "mods": false,
+      "help": false,
+      "health": "2.2.0",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "stderr",
+      "stdout": "",
+      "stderr": "2.2.0\nsegunda",
+      "present": true,
+      "failure": false,
+      "supported": true,
+      "version": null,
+      "mods": false,
+      "help": true,
+      "health": "2.2.0",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "empty",
+      "stdout": "",
+      "stderr": "",
+      "present": true,
+      "failure": false,
+      "supported": false,
+      "version": null,
+      "mods": false,
+      "help": false,
+      "health": "",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "empty",
+      "stdout": "",
+      "stderr": "",
+      "present": true,
+      "failure": false,
+      "supported": true,
+      "version": null,
+      "mods": false,
+      "help": true,
+      "health": "",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "huge",
+      "stdout": "999999999999999999999999.0.0",
+      "stderr": "",
+      "present": true,
+      "failure": false,
+      "supported": false,
+      "version": [
+        999999999999999999999999,
+        0,
+        0
+      ],
+      "mods": true,
+      "help": false,
+      "health": "999999999999999999999999.0.0",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "huge",
+      "stdout": "999999999999999999999999.0.0",
+      "stderr": "",
+      "present": true,
+      "failure": false,
+      "supported": true,
+      "version": [
+        999999999999999999999999,
+        0,
+        0
+      ],
+      "mods": true,
+      "help": true,
+      "health": "999999999999999999999999.0.0",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "unicode",
+      "stdout": "٢.١.٢٨٧",
+      "stderr": "",
+      "present": true,
+      "failure": false,
+      "supported": false,
+      "version": [
+        2,
+        1,
+        287
+      ],
+      "mods": true,
+      "help": false,
+      "health": "٢.١.٢٨٧",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "unicode",
+      "stdout": "٢.١.٢٨٧",
+      "stderr": "",
+      "present": true,
+      "failure": false,
+      "supported": true,
+      "version": [
+        2,
+        1,
+        287
+      ],
+      "mods": true,
+      "help": true,
+      "health": "٢.١.٢٨٧",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "absent",
+      "stdout": "",
+      "stderr": "",
+      "present": false,
+      "failure": false,
+      "supported": false,
+      "version": null,
+      "mods": false,
+      "help": false,
+      "health": null,
+      "calls": []
+    },
+    {
+      "name": "absent",
+      "stdout": "",
+      "stderr": "",
+      "present": false,
+      "failure": false,
+      "supported": true,
+      "version": null,
+      "mods": false,
+      "help": false,
+      "health": null,
+      "calls": []
+    },
+    {
+      "name": "failure",
+      "stdout": "",
+      "stderr": "",
+      "present": true,
+      "failure": true,
+      "supported": false,
+      "version": null,
+      "mods": false,
+      "help": false,
+      "health": "",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    },
+    {
+      "name": "failure",
+      "stdout": "",
+      "stderr": "",
+      "present": true,
+      "failure": true,
+      "supported": true,
+      "version": null,
+      "mods": false,
+      "help": false,
+      "health": "",
+      "calls": [
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--help"
+          ],
+          "timeout": 10
+        },
+        {
+          "args": [
+            "/fixture/claude",
+            "--version"
+          ],
+          "timeout": 8
+        }
+      ]
+    }
+  ]
+}
