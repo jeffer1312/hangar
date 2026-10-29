@@ -54,5 +54,18 @@ try {
     if(competing!=='denied')assert.equal(fs.statSync(prepared.library).ino,inode);
     assert.equal(fs.readdirSync(path.dirname(prepared.library)).some(n=>n.endsWith('.tmp')),false);count++;
   }
+  if(process.platform!=='win32') {
+    const mode=require('../backend/tests/fixtures/contract/update-git/backup-mode.json');
+    const dest=path.join(root,'previous-mode');fs.mkdirSync(dest);
+    const files=Object.fromEntries(['hangar-auth','hangar-cano','hangar-server'].map(n=>[`${platform}/${n}`,{name:n,sha256:digest(Buffer.from(`new-${n}`))}]));
+    const prepared=plan({files},platform,dest);
+    fs.writeFileSync(prepared.server,'old');fs.chmodSync(prepared.server,mode.source_mode);
+    fs.writeFileSync(prepared.metadataPath,'{}');
+    const oldMask=process.umask(mode.umask);
+    try {
+      assert.deepEqual(publishPair([{name:'hangar-auth',target:prepared.library,data:Buffer.from('new-hangar-auth')},{name:'hangar-server',target:prepared.server,data:Buffer.from('new-hangar-server')},{name:'hangar-auth-pair',target:prepared.metadataPath,data:prepared.metadata}],{platform,dest,preservePrevious:true}),[]);
+      assert.equal(fs.statSync(prepared.server+'.prev').mode&0o777,mode.previous_mode);count++;
+    }finally{process.umask(oldMask);}
+  }
   console.log(`${count} casos de publicação conferidos`);
 }finally{fs.rmSync(root,{recursive:true,force:true});}

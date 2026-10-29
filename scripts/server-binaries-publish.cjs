@@ -53,7 +53,7 @@ function keepPrevious(io, target, name) {
     catch (e) { return `${name}: não consegui guardar a ausência do par anterior (${e.message})`; }
   }
   const temp = `${prev}.${crypto.randomBytes(8).toString('hex')}.tmp`;
-  try { io.copyFileSync(target, temp); io.renameSync(temp, prev); return null; }
+  try { io.writeFileSync(temp, io.readFileSync(target)); io.renameSync(temp, prev); return null; }
   catch (e) { try { io.unlinkSync(prev); } catch {} return `${name}: sem cópia do binário anterior; se a atualização voltar, o Rust não volta junto (${e.message})`; }
   finally { try { io.unlinkSync(temp); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
 }
