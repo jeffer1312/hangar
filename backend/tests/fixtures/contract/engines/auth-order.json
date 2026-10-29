@@ -1,0 +1,3270 @@
+{
+  "source_commit": "ea421257cfc0d090612dd65442d9441f3c4dbb62",
+  "command": "cd backend && uv run --with httpx python tests/fixtures/contract/engines/generate_auth_order.py",
+  "cases": [
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "empty",
+      "hex": "",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "empty",
+      "hex": "",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "empty",
+      "hex": "",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "empty",
+      "hex": "",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "space",
+      "hex": "20",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "space",
+      "hex": "20",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "space",
+      "hex": "20",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "space",
+      "hex": "20",
+      "content_type": "application/problem+json",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "application/problem+json",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "application/json",
+      "status": 400,
+      "headers": {
+        "content-length": "48",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":\"There was an error parsing the body\"}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "application/problem+json",
+      "status": 400,
+      "headers": {
+        "content-length": "48",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":\"There was an error parsing the body\"}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/engines/modelos",
+      "handler": "engine_modelos",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "empty",
+      "hex": "",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "empty",
+      "hex": "",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "empty",
+      "hex": "",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "empty",
+      "hex": "",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "space",
+      "hex": "20",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "space",
+      "hex": "20",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "space",
+      "hex": "20",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "space",
+      "hex": "20",
+      "content_type": "application/problem+json",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "application/problem+json",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "application/json",
+      "status": 400,
+      "headers": {
+        "content-length": "48",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":\"There was an error parsing the body\"}",
+      "auth_calls": 0
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "application/problem+json",
+      "status": 400,
+      "headers": {
+        "content-length": "48",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":\"There was an error parsing the body\"}",
+      "auth_calls": 0
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/cliproxy/management-key",
+      "handler": "engine_cliproxy_management_key",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "empty",
+      "hex": "",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "empty",
+      "hex": "",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "empty",
+      "hex": "",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "empty",
+      "hex": "",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "space",
+      "hex": "20",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "space",
+      "hex": "20",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "space",
+      "hex": "20",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "space",
+      "hex": "20",
+      "content_type": "application/problem+json",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "application/problem+json",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "application/json",
+      "status": 400,
+      "headers": {
+        "content-length": "48",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":\"There was an error parsing the body\"}",
+      "auth_calls": 0
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "application/problem+json",
+      "status": 400,
+      "headers": {
+        "content-length": "48",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":\"There was an error parsing the body\"}",
+      "auth_calls": 0
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/credenciais/apelido",
+      "handler": "definir_apelido",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "empty",
+      "hex": "",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "empty",
+      "hex": "",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "empty",
+      "hex": "",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "empty",
+      "hex": "",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "space",
+      "hex": "20",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "space",
+      "hex": "20",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "space",
+      "hex": "20",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "space",
+      "hex": "20",
+      "content_type": "application/problem+json",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "application/problem+json",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "application/json",
+      "status": 400,
+      "headers": {
+        "content-length": "48",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":\"There was an error parsing the body\"}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "application/problem+json",
+      "status": 400,
+      "headers": {
+        "content-length": "48",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":\"There was an error parsing the body\"}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/credenciais/sincronizar",
+      "handler": "sincronizar_nos_agentes",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "empty",
+      "hex": "",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "empty",
+      "hex": "",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "empty",
+      "hex": "",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "empty",
+      "hex": "",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "space",
+      "hex": "20",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "space",
+      "hex": "20",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "space",
+      "hex": "20",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "space",
+      "hex": "20",
+      "content_type": "application/problem+json",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "application/problem+json",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "application/json",
+      "status": 400,
+      "headers": {
+        "content-length": "48",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":\"There was an error parsing the body\"}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "application/problem+json",
+      "status": 400,
+      "headers": {
+        "content-length": "48",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":\"There was an error parsing the body\"}",
+      "auth_calls": 0
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/fixture/engine/model",
+      "handler": "engine_model_set",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "empty",
+      "hex": "",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "empty",
+      "hex": "",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "empty",
+      "hex": "",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "empty",
+      "hex": "",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "space",
+      "hex": "20",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "space",
+      "hex": "20",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "space",
+      "hex": "20",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "space",
+      "hex": "20",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "broken",
+      "hex": "7b",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "utf8",
+      "hex": "ff",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "null",
+      "hex": "6e756c6c",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "array",
+      "hex": "5b5d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "field",
+      "hex": "7b226964223a66616c73657d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": null,
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "text/plain",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    },
+    {
+      "method": "PUT",
+      "path": "/api/engines/fixture",
+      "handler": "put_engine",
+      "name": "object",
+      "hex": "7b7d",
+      "content_type": "application/problem+json",
+      "status": 401,
+      "headers": {
+        "content-length": "74",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": "{\"detail\":{\"code\":\"erro_nao_autorizado\",\"params\":{},\"msg\":\"unauthorized\"}}",
+      "auth_calls": 1
+    }
+  ]
+}

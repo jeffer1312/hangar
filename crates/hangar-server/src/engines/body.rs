@@ -102,21 +102,6 @@ fn detail(errors: Vec<Value>) -> Value {
     object.insert("detail".into(), Value::Array(errors));
     Value::Object(object)
 }
-fn json_content_type(headers: &HeaderMap) -> bool {
-    headers
-        .get("content-type")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            let mime = value
-                .split(';')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_ascii_lowercase();
-            mime.strip_prefix("application/")
-                .is_some_and(|subtype| subtype == "json" || subtype.ends_with("+json"))
-        })
-}
 fn issue(kind: &str, location: Vec<Value>, input: &Value, length: Option<usize>) -> Value {
     let message = match kind {
         "missing" => "Field required".to_owned(),
@@ -179,7 +164,7 @@ fn text_error(field: Field, value: &Value, location: Vec<Value>) -> Option<Value
 pub fn typed(schema: Schema, bytes: &[u8], headers: &HeaderMap) -> Result<Value, Response> {
     let value = if bytes.is_empty() {
         Value::Null
-    } else if json_content_type(headers) {
+    } else if crate::http_body_input::is_json(headers) {
         body::parse(bytes).map_err(|(status, error)| json_error(status, error))?
     } else {
         Value::String(

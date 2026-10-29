@@ -69,8 +69,11 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
     };
     if path == "/api/providers" && method == Method::GET {
         return match super::providers::read(&st.accounts).await {
-            Ok(snapshot) => json_response(StatusCode::OK,snapshot.response()),
-            Err(error) => body::json_error(StatusCode::from_u16(error.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),error.body()),
+            Ok(snapshot) => json_response(StatusCode::OK, snapshot.response()),
+            Err(error) => body::json_error(
+                StatusCode::from_u16(error.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                error.body(),
+            ),
         };
     }
     if path == "/api/credenciais/apelido" && method == Method::PUT {
@@ -358,6 +361,38 @@ const ROUTES: &[(&str, &str)] = &[
     ("/api/sessions/{name}/engine/model", "POST"),
 ];
 
+async fn syntax_before_auth(request: Request, path: &str) -> Result<Request, Response> {
+    let typed = match *request.method() {
+        Method::POST => {
+            path == "/api/engines/modelos"
+                || path == "/api/credenciais/sincronizar"
+                || (path.starts_with("/api/sessions/") && path.ends_with("/engine/model"))
+        }
+        Method::PUT => matches!(
+            path,
+            "/api/engines/cliproxy/management-key" | "/api/credenciais/apelido"
+        ),
+        _ => false,
+    };
+    if !typed || !crate::http_body_input::is_json(request.headers()) {
+        return Ok(request);
+    }
+    let (parts, input) = request.into_parts();
+    let bytes = crate::http_body_limit::read(input).await.map_err(|error| {
+        if crate::http_body_limit::is_limit(&error) {
+            crate::http_body_limit::rejected()
+        } else {
+            body::internal_error()
+        }
+    })?;
+    if !bytes.is_empty() {
+        let value = crate::orchestration::body::parse(&bytes)
+            .map_err(|(status, error)| body::json_error(status, error))?;
+        crate::orchestration::codec::discard(value);
+    }
+    Ok(Request::from_parts(parts, axum::body::Body::from(bytes)))
+}
+
 /// CORS e tamanho antecedem autenticação; resolução de método não executa dependências do handler.
 pub async fn cors_layer(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<AppState>>,
@@ -399,7 +434,10 @@ pub async fn cors_layer(
     ) {
         response
     } else {
-        next.run(request).await
+        match syntax_before_auth(request, &path).await {
+            Ok(request) => next.run(request).await,
+            Err(response) => response,
+        }
     };
     crate::http_route_response::suppress_head(&method, &mut response);
     crate::http_cors::apply(&headers, &mut response);
