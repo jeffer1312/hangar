@@ -47,7 +47,17 @@ impl Service {
         let mut translated = Vec::with_capacity(texts.len());
         for text in texts {
             translated.push(if Instant::now() < deadline {
-                self.one(config, text).await
+                // O prazo do lote também cancela o item em curso, sem culpar o provedor.
+                match tokio::time::timeout_at(deadline, self.one(config, text)).await {
+                    Ok(output) => output,
+                    Err(_) => {
+                        tracing::warn!(
+                            code = "speech_thought_batch_timeout",
+                            "O prazo do lote de tradução terminou; o texto original foi preservado."
+                        );
+                        text.clone()
+                    }
+                }
             } else {
                 text.clone()
             });
@@ -242,5 +252,73 @@ mod tests {
             vec!["novo"]
         );
         assert_eq!(service.cache.lock().unwrap().values.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_batch_deadline_cancels_an_inflight_item_without_pausing_the_provider() {
+        use std::sync::Arc;
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let server = fake_gated(
+            vec![content("resposta tardia")],
+            Some((entered.clone(), release.clone())),
+        )
+        .await;
+        let service = Arc::new(Service::default());
+        let profile = text_client::profile(&server.config);
+        let key = text_client::digest(&format!("{profile}\0cached"));
+        service
+            .cache
+            .lock()
+            .unwrap()
+            .values
+            .insert(key, "já traduzido".into());
+        let texts = vec![
+            "cached".to_owned(),
+            "  pending  ".to_owned(),
+            " untouched ".to_owned(),
+        ];
+        let mut task = tokio::spawn({
+            let service = service.clone();
+            let config = server.config.clone();
+            let texts = texts.clone();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            async move { service.translate_before(&config, &texts, deadline).await }
+        });
+        entered.notified().await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(3)).await;
+        let completed = tokio::time::timeout(Duration::from_secs(1), &mut task).await;
+        tokio::time::resume();
+        release.notify_one();
+        let in_time = completed.is_ok();
+        let result = match completed {
+            Ok(result) => result.unwrap(),
+            Err(_) => task.await.unwrap(),
+        };
+        assert!(
+            in_time,
+            "o lote deve terminar mesmo com o provedor ainda segurando a resposta"
+        );
+        assert_eq!(
+            result,
+            vec![
+                "já traduzido".to_owned(),
+                texts[1].clone(),
+                texts[2].clone()
+            ]
+        );
+        assert_eq!(service.slots.available_permits(), 2);
+        let cache = service.cache.lock().unwrap();
+        assert_eq!(
+            cache.values.len(),
+            1,
+            "somente a tradução concluída continua em cache"
+        );
+        assert!(
+            cache.paused.is_empty(),
+            "o fim do prazo do lote não é uma falha do provedor"
+        );
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
