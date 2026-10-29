@@ -2702,7 +2702,8 @@ fn local_facts(home: &std::path::Path, runtime: &tokio::runtime::Runtime) -> fac
 /// permissão de execução; o resultado vale 60 s.
 #[cfg(unix)]
 #[test]
-fn installed_clis_come_from_the_login_shell_path() {
+fn provider_discovery_installed_clis_come_from_the_login_shell_path() {
+    let runtime=test_runtime();
     use std::os::unix::fs::PermissionsExt;
     let home = tempfile::tempdir().unwrap();
     let (bin, login) = (home.path().join("bin"), home.path().join("login-bin"));
@@ -2718,14 +2719,14 @@ fn installed_clis_come_from_the_login_shell_path() {
     crate::write_test_executable(&shell, format!("#!/bin/sh\necho x >> {}\necho {}\n", home.path().join("calls").display(), login.display()));
     let env: std::collections::BTreeMap<String, String> = [("HOME", home.path()), ("PATH", &bin), ("SHELL", &shell)]
         .map(|(k, v)| (k.to_owned(), v.to_string_lossy().into_owned())).into_iter().collect();
-    assert_eq!(facts::installed_providers(&env), vec![AgentProvider::Pi], "PATH do login, e o `codex` sem permissão não conta");
-    assert_eq!(facts::installed_providers(&env), vec![AgentProvider::Pi]);
+    assert_eq!(facts::installed_providers(&crate::accounts::environment::AccountEnvironment::from_map(env.clone()),runtime.handle()).unwrap(), vec![AgentProvider::Pi], "PATH do login, e o `codex` sem permissão não conta");
+    assert_eq!(facts::installed_providers(&crate::accounts::environment::AccountEnvironment::from_map(env.clone()),runtime.handle()).unwrap(), vec![AgentProvider::Pi]);
     assert_eq!(std::fs::read_to_string(home.path().join("calls")).unwrap().lines().count(), 1, "a segunda leitura sai do cache");
     let broken = home.path().join("broken-shell");
     exec(broken.clone(), 0o755);
     std::fs::write(&broken, "#!/bin/sh\nexit 1\n").unwrap();
     let env: std::collections::BTreeMap<String, String> = env.into_iter().map(|(k, v)| if k == "SHELL" { (k, broken.to_string_lossy().into_owned()) } else { (k, v) }).collect();
-    assert_eq!(facts::installed_providers(&env), vec![AgentProvider::Kimi], "shell de login quebrado cai no PATH do processo");
+    assert_eq!(facts::installed_providers(&crate::accounts::environment::AccountEnvironment::from_map(env.clone()),runtime.handle()).unwrap(), vec![AgentProvider::Kimi], "shell de login quebrado cai no PATH do processo");
 }
 
 fn test_runtime() -> tokio::runtime::Runtime {

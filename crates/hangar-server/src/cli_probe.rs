@@ -158,7 +158,7 @@ pub fn parse_version(raw: &str) -> Option<Vec<BigInt>> {
         .collect()
 }
 
-fn environment_key(env: &AccountEnvironment) -> [u8; 32] {
+pub(crate) fn environment_key(env: &AccountEnvironment) -> [u8; 32] {
     let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
     // O cache distingue todo o contexto sem conservar outra cópia das credenciais.
     for (key, value) in &env.base {

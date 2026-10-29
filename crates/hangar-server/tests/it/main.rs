@@ -7,6 +7,7 @@
 mod common;
 mod remote_browser;
 mod cli_probe;
+mod provider_discovery;
 mod json_body;
 mod json_numbers;
 mod groups_text;

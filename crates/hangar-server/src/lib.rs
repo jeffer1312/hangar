@@ -394,3 +394,4 @@ pub mod harness_setup;
 
 pub mod cliproxy_config;
 pub mod value_coercion;
+pub mod provider_discovery;
