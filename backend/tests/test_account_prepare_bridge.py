@@ -189,7 +189,8 @@ def test_http_codex_catalog_reads_native_identity_with_real_preparation_status(t
     system.mkdir(parents=True)
     (system / "fixture.md").write_text("Configuração compartilhada de referência", encoding="utf-8")
     upstream = PythonReference(root)
-    rust = RustCatalog(upstream)
+    # A preparação é real; a identidade nativa tem resposta controlada, sem depender da partida do CLI.
+    rust = RustCatalog(upstream, native_fixture=True)
     try:
         response = rust.request("GET", "/api/codex-contas")
         assert response.status_code == expected["status"] == 200

@@ -4225,7 +4225,8 @@ pub(crate) mod tests {
             else {panic!("a escrita não chegou ao ator do Rust")};
         let _pass=pass;
         let command=RuntimeCommand {operation_id:id.into(),kind:OperationKind::Input,payload:json!({"text":text,"pre_transcript":false})};
-        tokio::time::timeout(Duration::from_millis(500),target.handle.command(command)).await.unwrap_or_else(|_|Err(failure("fixture_no_ack")))
+        // A confirmação inclui fsync; o ensaio não mede a velocidade do disco do runner.
+        tokio::time::timeout(Duration::from_secs(5),target.handle.command(command)).await.unwrap_or_else(|_|Err(failure("fixture_no_ack")))
     }
 
     /// Subida com o cano vivo da chave que recusa a primeira conexão: a sessão nasce com ator, saudável e sem
