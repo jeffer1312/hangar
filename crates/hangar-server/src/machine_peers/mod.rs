@@ -300,7 +300,7 @@ pub async fn handle(
     let method = request.method().clone();
     let public =
         method == Method::GET && matches!(path.as_str(), "/api/peers/ping" | "/api/peers/prova");
-    if !public && let Err(response) = owner_gate(&st, peer, &request) {
+    if !public && let Err(response) = owner_gate(&st, peer, &request).await {
         return response;
     }
     if path == "/api/peers/ping" && method == Method::GET {

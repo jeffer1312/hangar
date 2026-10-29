@@ -87,7 +87,7 @@ pub async fn handle(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
-    if let Err(response) = owner_gate(&st, peer, &req) {
+    if let Err(response) = owner_gate(&st, peer, &req).await {
         return response;
     }
     let headers = req.headers().clone();

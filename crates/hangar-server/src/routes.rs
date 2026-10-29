@@ -826,19 +826,30 @@ pub(crate) fn gate(st: &AppState, peer: SocketAddr, req: &Request)
 }
 
 /// Porta exclusiva do dono: conta a recusa aqui, pois ela não passa pelo Python.
-pub(crate) fn owner_gate(st: &AppState, peer: SocketAddr, req: &Request) -> Result<Forward, Response> {
-    let (forward, owner) = gate(st, peer, req);
+pub(crate) fn owner_gate(st: &AppState, peer: SocketAddr, req: &Request)
+    -> impl std::future::Future<Output = Result<Forward, Response>> + Send + use<> {
+    let admission = gate(st, peer, req);
+    let (_, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
+    let token = auth::presented_token(req.headers(), req.uri().query(), req.method(), https);
+    let auth = st.auth.clone();
+    async move {
+    let (forward, owner) = admission.await.map_err(crate::auth::unavailable)?;
     if owner { return Ok(forward); }
-    let blocked = !auth::is_loopback(&forward.client_ip) && st.auth.blocked(&forward.client_ip);
+    let decision = auth.evaluate(crate::auth::AuthAttempt {
+        profile: crate::auth::Profile::RequireAuthHttp, origin: forward.client_ip.clone(),
+        presented_token: token, verified_guest: false, login_guest: false,
+    }).await.map_err(crate::auth::unavailable)?;
+    if decision.status == 0 { return Ok(forward); }
+    let blocked = decision.status == crate::auth::AuthDecision::BLOCKED.status;
     let (status, code, msg) = if blocked {
         (StatusCode::TOO_MANY_REQUESTS, "erro_muitas_tentativas", "muitas tentativas — aguarde")
     } else {
-        st.auth.record_fail(&forward.client_ip);
         (StatusCode::UNAUTHORIZED, "erro_nao_autorizado", "unauthorized")
     };
     let mut response = crate::session_write::json_response(status, serde_json::json!({"detail":{"code":code,"params":{},"msg":msg}}));
     if blocked { response.headers_mut().insert(header::RETRY_AFTER, axum::http::HeaderValue::from_static("30")); }
     Err(response)
+    }
 }
 
 /// Quem pede. Na 8766 só o convidado que o porteiro pôs (nunca `is_owner`, nem `X-Forwarded-For`);
