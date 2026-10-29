@@ -520,8 +520,9 @@ export type DiagReportScope = 'all' | 'this' | 'pick';
 /** As máquinas que a escolha manda; marcada sem escolha explícita só a da tela. A da tela só vai quando está
  *  entre as elegíveis (desligada, par ou removida não recebe relatório). */
 export function diagReportTargets(machines: Server[], current: Server | null, scope: DiagReportScope, picked: Record<string, boolean>): Server[] {
-  if (scope === 'this') return machines.filter((s) => s.id === current?.id);
+  // Com uma máquina a escolha nem aparece: vale ela, mesmo com "Só esta" guardado de antes.
   if (machines.length < 2) return machines;
+  if (scope === 'this') return machines.filter((s) => s.id === current?.id);
   return scope === 'all' ? machines : machines.filter((s) => picked[s.id] ?? s.id === current?.id);
 }
 
@@ -542,6 +543,19 @@ export async function sendDiagReportAll(servers: Server[], input: { text?: strin
     results.push({ server, result });
   }
   return { code, group, results };
+}
+
+/** O que o botão do relatório faz agora: `send` (envio novo pela escolha de agora), `resend` (só às que falharam
+ *  e podem ir, no mesmo envio) ou `none` (nada a mandar, ou as que faltam não entrariam no código do envio). */
+export function diagReportNext(previous: DiagReportAllResult | null, targets: Server[]): 'send' | 'resend' | 'none' {
+  if (!targets.length) return 'none';
+  if (!previous) return 'send';
+  const sent = new Set(previous.results.map((r) => r.server.id));
+  // A escolha mudou depois do envio: repetir mandaria só às antigas.
+  if (targets.length !== sent.size || targets.some((t) => !sent.has(t.id))) return 'send';
+  const missed = previous.results.filter((r) => !r.result.ok);
+  if (missed.some((r) => diagReportRetryable(r.result))) return previous.code !== null && previous.group === null ? 'none' : 'resend';
+  return missed.some((r) => !r.result.ok && r.result.kind === 'expired') ? 'send' : 'none';
 }
 
 /** Reenvia só às máquinas que falharam num envio, no mesmo código, e junta ao resultado dele. */

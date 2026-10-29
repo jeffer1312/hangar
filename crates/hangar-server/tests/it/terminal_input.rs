@@ -135,8 +135,9 @@ async fn terminal_input_facts_lost_after_write_clean_own_text_and_defer() {
 }
 /// Campo como o do Claude: o Ctrl+U tira só a linha do cursor (no fim) e, numa linha vazia, só a quebra.
 /// `lost`: a colagem não chega ao campo (só o texto da pessoa entra).
-struct LineIo { composer: Mutex<String>, buffer: Mutex<Vec<u8>>, writes: Mutex<Vec<String>>, foreign: Mutex<String>, lost: Mutex<bool> }
-impl LineIo { fn new(start: &str) -> Self { Self { composer: Mutex::new(start.into()), buffer: Mutex::new(vec![]), writes: Mutex::new(vec![]), foreign: Mutex::new(String::new()), lost: Mutex::new(false) } } }
+/// `fail_paste`: o `paste-buffer` sai com erro (pode ter escrito).
+struct LineIo { composer: Mutex<String>, buffer: Mutex<Vec<u8>>, writes: Mutex<Vec<String>>, foreign: Mutex<String>, lost: Mutex<bool>, fail_paste: Mutex<bool> }
+impl LineIo { fn new(start: &str) -> Self { Self { composer: Mutex::new(start.into()), buffer: Mutex::new(vec![]), writes: Mutex::new(vec![]), foreign: Mutex::new(String::new()), lost: Mutex::new(false), fail_paste: Mutex::new(false) } } }
 impl TerminalIo for LineIo {
  fn command<'a>(&'a self, r: CommandRequest) -> IoFuture<'a, CommandOutput> { Box::pin(async move {
   let out = |s: String| Ok(CommandOutput { success: true, stdout: s.into_bytes() });
@@ -150,6 +151,7 @@ impl TerminalIo for LineIo {
    // A pessoa digitando ao mesmo tempo: o texto dela entra antes do nosso.
    c.insert_str(0, &self.foreign.lock().unwrap());
    if !*self.lost.lock().unwrap() { c.push_str(&String::from_utf8(self.buffer.lock().unwrap().clone()).unwrap()); }
+   if *self.fail_paste.lock().unwrap() { return Ok(CommandOutput { success: false, stdout: vec![] }); }
    return out(String::new());
   }
   if has("send-keys") {
@@ -218,6 +220,39 @@ async fn terminal_input_cleanup_never_takes_the_persons_prefix_of_our_text_as_ou
  assert_ne!(r.disposition, Disposition::Accepted);
  assert!(!io.writes.lock().unwrap().iter().any(|w| w == "C-u"), "{:?}", io.writes.lock().unwrap());
  assert_eq!(*io.composer.lock().unwrap(), "linha um");
+}
+#[tokio::test]
+async fn terminal_input_cleanup_budget_grows_with_the_lines_of_our_text() {
+ // Orçamento configurado de 3 Ctrl+U, texto de 12 linhas: sai tudo.
+ let text = (1..=12).map(|n| format!("linha {n}")).collect::<Vec<_>>().join("\n");
+ let io = Arc::new(LineIo::new(""));
+ let s = Arc::new(DroppingFacts { inner: Services::new(), io: io.clone(), allowed: 0, seen: Mutex::new(0) });
+ let r = TerminalDriver::new(binding(), s, io.clone(), instant_limits()).prompt(&text, "id").await;
+ assert_eq!((r.disposition, r.cleanup), (Disposition::Deferred, Cleanup::Proved), "{r:?}");
+ assert_eq!(*io.composer.lock().unwrap(), "");
+}
+#[tokio::test]
+async fn terminal_input_half_write_never_takes_a_few_typed_letters_as_ours() {
+ // A colagem falhou sem nada nosso no campo, e a pessoa digitou "li": é o começo do nosso texto, mas curto demais.
+ let io = Arc::new(LineIo::new(""));
+ *io.foreign.lock().unwrap() = "li".into();
+ *io.lost.lock().unwrap() = true;
+ *io.fail_paste.lock().unwrap() = true;
+ let s = Arc::new(Services::new());
+ let r = TerminalDriver::new(binding(), s, io.clone(), instant_limits()).prompt("linha um\nlinha dois", "id").await;
+ assert_eq!(r.disposition, Disposition::Unknown, "{r:?}");
+ assert!(!io.writes.lock().unwrap().iter().any(|w| w == "C-u"), "{:?}", io.writes.lock().unwrap());
+ assert_eq!(*io.composer.lock().unwrap(), "li");
+}
+#[tokio::test]
+async fn terminal_input_windows_dash_placeholder_left_behind_is_cleaned() {
+ // O `x` que o Windows pôs antes do `-` não saiu: o campo tem `x-foo`, que é nosso, e a limpeza o tira.
+ let mut b=binding();b.windows=true;b.pane="=test:0.0".into();
+ let s=Arc::new(Services::new());s.facts.lock().unwrap().binding=b.clone();
+ let io=Arc::new(FakeIo::new(vec![screen(""),screen("x-foo"),screen("x-foo"),screen("")]));
+ let r=TerminalDriver::new(b,s,io.clone(),instant_limits()).prompt("-foo","id").await;
+ assert_eq!((r.disposition,r.cleanup),(Disposition::Deferred,Cleanup::Proved),"{r:?}");
+ assert_eq!(keys(&io),["x-foo","Home","DC","C-u"]);
 }
 #[tokio::test]
 async fn terminal_input_socket_partial_never_falls_back() {

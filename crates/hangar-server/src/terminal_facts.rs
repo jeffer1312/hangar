@@ -287,8 +287,8 @@ fn native_record(metadata: &TerminalMetadata, conversation: &str) -> Result<Opti
     let record = read_json(&metadata.config_dir.join("sessions").join(format!("{}.json", metadata.agent_pid)), "terminal_native_record_unavailable")?;
     if let Some(record) = &record && (record["pid"].as_u64() != Some(u64::from(metadata.agent_pid)) || record["sessionId"].as_str() != Some(conversation)) { return Err(ServiceError("terminal_native_record_changed")); } Ok(record)
 }
-/// `recent`: o `/pull` visto há pouco cobre a leitura que falta (nenhum arquivo aberto, leitura que falhou),
-/// nunca uma leitura ambígua ou de outra conversa.
+/// `recent`: o `/pull` visto há pouco cobre só a leitura que falta (nenhum transcript aberto, ou os arquivos
+/// do processo e as pastas que não se leem); nunca um transcript aberto ilegível, outro aberto ou mais de um.
 fn current_transcript(procs: &dyn ProcessView, metadata: &TerminalMetadata, conversation: &str, transcript: &Path, recent: bool) -> Result<(), ServiceError> {
     let unavailable = || ServiceError("terminal_conversation_unavailable");
     let missing = || if recent { Ok(()) } else { Err(unavailable()) };

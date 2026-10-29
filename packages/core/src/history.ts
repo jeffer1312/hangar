@@ -16,6 +16,21 @@ export function waitsInQueue(e: ChatEvent, provider?: string | null, headless = 
     && (!filaDoProcesso || !e.queued_delivered);
 }
 
+/** A entrega incerta segura a escrita do terminal. */
+export const writeHeld = (problem?: string | null): boolean =>
+  problem === 'terminal_input_delivery_unproved' || problem === 'terminal_input_delivery_composer_busy';
+
+/** Entrega da fila que saiu sem prova e segura a fila (aviso "sem prova"). */
+export function holdsQueue(e: ChatEvent, problem?: string | null): boolean {
+  return writeHeld(problem) && e.id.startsWith('queued-') && e.queued_delivered === true
+    && !e.queued_consumed && !e.desistiu;
+}
+
+/** Descartar não tira o texto do campo do terminal: com texto lá, a pessoa apaga ou envia antes. */
+export function discardsHeld(e: ChatEvent, problem?: string | null): boolean {
+  return holdsQueue(e, problem) && problem !== 'terminal_input_delivery_composer_busy';
+}
+
 export function queuedMessages(events: ChatEvent[], provider?: string | null, headless = false): ChatEvent[] {
   return events.filter(e => waitsInQueue(e, provider, headless));
 }

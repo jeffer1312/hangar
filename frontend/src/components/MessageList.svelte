@@ -5,7 +5,7 @@
   import { toolLook } from '../lib/toolLook.svelte';
   import { tick } from 'svelte';
   import type { Snippet } from 'svelte';
-  import { planDisplayText, parseContextoUso, dayStarts, waitsInQueue } from '@hangar/core';
+  import { planDisplayText, parseContextoUso, dayStarts, waitsInQueue, holdsQueue, discardsHeld } from '@hangar/core';
   import OrqTimelineEvent from './OrqTimelineEvent.svelte';
   import ContextCard from './ContextCard.svelte';
   import SessionPlanPreview from './SessionPlanPreview.svelte';
@@ -683,12 +683,11 @@
                   <pre>{ev.hook_error}</pre>
                 </div>
               {/if}
-            {:else if (stateEvent?.problema === 'terminal_input_delivery_unproved' || stateEvent?.problema === 'terminal_input_delivery_composer_busy') && ev.queued_delivered && ev.id.startsWith('queued-')}
+            {:else if holdsQueue(ev, stateEvent?.problema)}
               <!-- Entregue sem prova: segura a fila até a pessoa descartar ou o prazo do servidor vencer. -->
               <div class="queued-perdida">
                 <p role="status">{m.msg_entrega_sem_prova()}</p>
-                <!-- Descartar não tira o texto do campo do terminal: com texto lá, a pessoa apaga ou envia antes. -->
-                {#if onDescartarFila && stateEvent?.problema !== 'terminal_input_delivery_composer_busy'}
+                {#if onDescartarFila && discardsHeld(ev, stateEvent?.problema)}
                   <button type="button" class="queued-descartar" onclick={() => onDescartarFila(ev.id.slice('queued-'.length))}>{m.msg_descartar_perdida()}</button>
                 {/if}
               </div>

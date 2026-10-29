@@ -47,6 +47,8 @@ const FOCUS_STEP_POLL:Duration=Duration::from_millis(20);
 /// foram. É da linha, como a série do `Stall`: a linha seguinte começa do zero.
 struct Away {row:String,since:tokio::time::Instant,next:tokio::time::Instant,tries:u32}
 fn error(code:&str)->RuntimeError {RuntimeError::new(code,"operação terminal conservada no diário")}
+pub const GIVE_UP_COMPOSER_BUSY:&str="terminal_give_up_composer_busy";
+pub const GIVE_UP_COMPOSER_UNREAD:&str="terminal_give_up_composer_unread";
 /// O Claude só põe o bypass no Shift+Tab de quem nasceu com ele.
 /// argv ilegível é erro com código, nunca "sem bypass" (que reabriria a sessão à toa).
 fn bypass_in_cycle(agent:u32)->Result<bool,RuntimeError> {
@@ -595,9 +597,15 @@ impl Executor {
                     let _=response.send(result);},
                 Some(Message::Queue {id,action,response})=>{
                     let retry_batch=matches!(&action,Action::Append {delivered:false,..}|Action::Edit {..}|Action::Cancel {..}|Action::Remove {..});
+                    // Leitura que falha não vale como campo vazio nem reaproveita a trava antiga: recusa com o motivo.
+                    let field=if matches!(&action,Action::GiveUp {..}) {self.read_composer().await} else {Some(true)};
                     let result=match action {
                         Action::Finish {id,status,result}=>self.native_receipt(&id,status,result).await,
                         Action::ClaimBatch {..}|Action::Claim {..}|Action::SetDelivered {value:false,..}|Action::BumpAttempts {..}|Action::Reconcile {..}|Action::ReplaceRows {..}|Action::Prepare {..}|Action::BeginDispatch {..}|Action::MarkWriting {..}|Action::BindDispatch {..}|Action::BindDispatchIfPrepared {..}|Action::Recover|Action::Confirm {..}|Action::ConfirmOccurrence {..}|Action::ConfirmLegacy {..}|Action::SetRuntimeState {..}|Action::LateRpcResolution {..}=>Err(error("terminal_queue_action")),
+                        // Desistir com o nosso texto no campo deixaria a pessoa com ele preso: vale para
+                        // qualquer cliente, inclusive o que não esconde o Descartar.
+                        Action::GiveUp {..} if field==Some(false)=>Err(RuntimeError::new(GIVE_UP_COMPOSER_BUSY,"há texto no campo do terminal")),
+                        Action::GiveUp {..} if field.is_none()=>Err(RuntimeError::new(GIVE_UP_COMPOSER_UNREAD,"o campo do terminal não foi lido")),
                         action@Action::GiveUp {..}=>{
                             let result=self.queue.exec(self.target.generation,&id,sample(),action).await.map_err(|_|error("queue_io"));
                             if result.as_ref().is_ok_and(|given|*given==json!(true)) {self.release_uncertain().await;}
@@ -1595,35 +1603,26 @@ impl Executor {
         let state=match self.queue.snapshot().await {Ok(state)=>state, Err(_)=>{skip(&self.target.key,"give_up_queue_io","prazo da entrega incerta: fila ilegível, tenta no próximo tique"); return}};
         let owner=state.runtime_state["terminal_write_barrier"]["operation_id"].as_str().map(str::to_owned);
         let Some(entry)=owner.as_deref().and_then(|id|state.operations.get(id)).and_then(|op|op.entry_id.clone()) else {self.uncertain_since=None; self.composer_read_at=None; self.hold_composer(false).await; return};
-        // Lido só pelo pane, sem os fatos da conversa: com eles fora, o campo ocupado ainda aparece na vista.
-        let services=self.services("maintenance","maintenance","");
-        let driver=TerminalDriver::new(self.target.binding.clone(),services.clone(),self.options.io.clone(),self.options.limits.clone());
         let now=tokio::time::Instant::now();
         // Uma captura do pane a cada poucos segundos basta para o aviso; o tique é mais curto.
         let read_due=self.composer_read_at.is_none_or(|at|now.duration_since(at)>=COMPOSER_READ_EVERY);
         if read_due {
             self.composer_read_at=Some(now);
-            // Leitura que falhou não afirma texto no campo: a tela não pede para apagar o que pode não existir.
-            let busy=driver.composer_empty().await==Some(false);
-            self.hold_composer(busy).await;
+            self.read_composer().await;
         }
         let since=match &self.uncertain_since {Some((seen,at)) if *seen==entry=>*at, _=>{self.uncertain_since=Some((entry,now)); return}};
         if now.duration_since(since)<self.options.give_up_after {return;}
-        match services.facts(&self.target.binding).await {
+        match self.services("maintenance","maintenance","").facts(&self.target.binding).await {
             Ok(facts) if facts.binding==self.target.binding && facts.idle=>{},
             Ok(_)=>return,
             Err(_)=>{skip(&self.target.key,"give_up_facts","prazo da entrega incerta: fatos indisponíveis, sem saber se o Claude parou"); return},
         }
-        // Última chance da prova antes de desistir.
+        // Texto ainda no composer é a própria entrega parada: desistir deixaria o dono com ele preso no prompt. O
+        // campo é lido antes da prova (com ele ocupado, nada de transcript a cada tique) e de novo logo antes de
+        // desistir, porque a pessoa pode ter digitado durante a prova.
+        if !self.composer_free().await {return;}
         if self.confirm_rows().await.is_err() {skip(&self.target.key,"give_up_receipt","prazo da entrega incerta: transcript ilegível, tenta no próximo tique"); return;}
-        // Texto ainda no composer é a própria entrega parada: desistir deixaria o dono com ele preso no prompt. Lido
-        // logo antes de desistir, porque a pessoa pode ter digitado durante as esperas acima.
-        let empty=driver.composer_empty().await;
-        if empty!=Some(true) {
-            self.hold_composer(empty==Some(false)).await;
-            skip(&self.target.key,"give_up_composer_busy","prazo da entrega incerta: o composer tem texto; a desistência fica com o Descartar");
-            return;
-        }
+        if !self.composer_free().await {return;}
         let id=format!("give_up:{entry}:{}",self.sequence.fetch_add(1,Ordering::Relaxed));
         let given=self.queue.exec(self.target.generation,&id,sample(),Action::GiveUp {entry_id:entry.clone()}).await;
         self.uncertain_since=None;
@@ -1635,6 +1634,16 @@ impl Executor {
             waited_s=now.duration_since(since).as_secs(),"entrega incerta sem prova no prazo: desistida, sem reenviar; a fila segue");
         self.release_uncertain().await;
         if let Err(failure)=self.publish().await {tracing::warn!(key=%self.target.key,code=%failure.code,"vista da desistência não publicou");}
+    }
+    /// O campo vazio libera a desistência; com texto, a trava sobe; ilegível, nada muda e ela espera.
+    async fn composer_free(&mut self)->bool {
+        let (code,reason)=match self.read_composer().await {
+            Some(true)=>return true,
+            Some(false)=>("give_up_composer_busy","prazo da entrega incerta: o composer tem texto; a desistência fica com o Descartar"),
+            None=>("give_up_composer_unread","prazo da entrega incerta: o composer não foi lido; tenta no próximo tique"),
+        };
+        if crate::warn_limit::allow(Some(&self.target.key),code) {tracing::warn!(key=%self.target.key,code=%code,"{reason}");}
+        false
     }
     /// Entrega aceita sem prova (eco diferente, prompt barrado por hook) passado o prazo, com o Claude
     /// parado: vira desistida, que o Descartar tira. Nada é reenviado; a prova que chegar depois ainda a
@@ -1680,6 +1689,14 @@ impl Executor {
             }
             None=>{}
         }
+    }
+    /// `Some(vazio)` atualiza a trava do campo; leitura que falhou (`None`) não diz nada dele e a deixa como
+    /// estava. Lido só pelo pane, sem os fatos da conversa: com eles fora, o campo ocupado ainda aparece.
+    async fn read_composer(&mut self)->Option<bool> {
+        let services=self.services("maintenance","maintenance","");
+        let empty=TerminalDriver::new(self.target.binding.clone(),services,self.options.io.clone(),self.options.limits.clone()).composer_empty().await;
+        if let Some(empty)=empty {self.hold_composer(!empty).await;}
+        empty
     }
     async fn hold_composer(&mut self,held:bool) {
         if self.composer_held==held {return;}
