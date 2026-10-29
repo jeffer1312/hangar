@@ -96,7 +96,8 @@ fn schema(name: &str) -> (Vec<Field>, bool) {
     }
 }
 fn issue(loc: Vec<Value>, kind: &str, message: &str, input: &Value, ctx: Option<Value>) -> Value {
-    let mut value = json!({"type":kind,"loc":loc,"msg":message,"input":input});
+    let mut value = json!({"type":kind,"loc":loc,"msg":message});
+    value["input"]=crate::orchestration::codec::clone_value(input);
     if let Some(ctx) = ctx {
         value["ctx"] = ctx;
     }
@@ -111,11 +112,9 @@ fn error(loc: Vec<Value>, message: &str, input: &Value) -> Value {
         Some(json!({"error":{}})),
     )
 }
-fn push_failure(errors: &mut Vec<Value>, failure: Failure, loc: &[Value]) {
-    for mut e in failure.body["detail"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
+fn push_failure(errors: &mut Vec<Value>, mut failure: Failure, loc: &[Value]) {
+    let detail=std::mem::take(&mut failure.body["detail"]);
+    for mut e in match detail {Value::Array(values)=>values,_=>Vec::new()}
     {
         let mut at = loc.to_vec();
         at.extend(e["loc"].as_array().unwrap().iter().skip(2).cloned());
@@ -258,7 +257,11 @@ fn collect(name: &str, body: &Value, loc: Vec<Value>, errors: &mut Vec<Value>) -
                 Kind::Integer => match integer(value) {
                     Some(v) => v,
                     None => {
-                        let (kind, msg) = if value.is_string() {
+                        let size_error=value.as_str().is_some_and(|text|text.trim().replace('_', "").len()>4300)
+                            || value.is_number() && value.as_f64().is_some_and(|number|number.is_finite() && number.fract()==0.0 && (number<=i64::MIN as f64 || number>=-(i64::MIN as f64)));
+                        let (kind, msg) = if size_error {
+                            ("int_parsing_size","Unable to parse input string as an integer, exceeded maximum size")
+                        } else if value.is_string() {
                             (
                                 "int_parsing",
                                 "Input should be a valid integer, unable to parse string as an integer",
@@ -275,7 +278,7 @@ fn collect(name: &str, body: &Value, loc: Vec<Value>, errors: &mut Vec<Value>) -
                         continue;
                     }
                 },
-                Kind::Dictionary if value.is_object() || value.is_null() => value.clone(),
+                Kind::Dictionary if value.is_object() || value.is_null() => crate::orchestration::codec::clone_value(value),
                 Kind::Dictionary => {
                     errors.push(issue(
                         at,

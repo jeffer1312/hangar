@@ -9,30 +9,31 @@ pub fn invalid(
     input: Value,
     ctx: Option<Value>,
 ) -> Failure {
-    let mut error = json!({"type":kind,"loc":["body",field],"msg":message,"input":input});
+    let mut error = json!({"type":kind,"loc":["body",field],"msg":message});
+    error["input"]=input;
     if let Some(ctx) = ctx {
         error["ctx"] = ctx;
     }
     Failure {
         status: 422,
-        body: json!({"detail":[error]}),
+        body: super::object([("detail",Value::Array(vec![error]))]),
     }
 }
 pub fn text(body: &Value, key: &str, min: usize, max: usize) -> Result<String> {
     let value = body
         .get(key)
-        .ok_or_else(|| invalid(key, "missing", "Field required", body.clone(), None))?;
+        .ok_or_else(|| invalid(key, "missing", "Field required", crate::orchestration::codec::clone_value(body), None))?;
     let s = value.as_str().ok_or_else(|| {
         invalid(
             key,
             "string_type",
             "Input should be a valid string",
-            value.clone(),
+            crate::orchestration::codec::clone_value(value),
             None,
         )
     })?;
     if crate::orchestration::codec::contains_surrogate(value) {
-        return Err(invalid(key, "string_unicode", "Input should be a valid string, unable to parse raw data as a unicode string", value.clone(), None));
+        return Err(invalid(key, "string_unicode", "Input should be a valid string, unable to parse raw data as a unicode string", crate::orchestration::codec::clone_value(value), None));
     }
     if s.chars().count() < min {
         return Err(invalid(
@@ -42,7 +43,7 @@ pub fn text(body: &Value, key: &str, min: usize, max: usize) -> Result<String> {
                 "String should have at least {min} character{}",
                 if min == 1 { "" } else { "s" }
             ),
-            value.clone(),
+            crate::orchestration::codec::clone_value(value),
             Some(json!({"min_length":min})),
         ));
     }
@@ -51,7 +52,7 @@ pub fn text(body: &Value, key: &str, min: usize, max: usize) -> Result<String> {
             key,
             "string_too_long",
             &format!("String should have at most {max} characters"),
-            value.clone(),
+            crate::orchestration::codec::clone_value(value),
             Some(json!({"max_length":max})),
         ));
     }
@@ -64,19 +65,20 @@ pub fn boolean(body: &Value, key: &str, default: bool) -> Result<bool> {
     if let Some(value)=crate::value_coercion::boolean(v) {
         return Ok(value);
     }
+    let parseable=v.is_string() || crate::value_coercion::integer(v).is_some_and(|value|value.as_i64().is_some());
     Err(invalid(
         key,
-        if v.is_string() || v.is_number() {
+        if parseable {
             "bool_parsing"
         } else {
             "bool_type"
         },
-        if v.is_string() || v.is_number() {
+        if parseable {
             "Input should be a valid boolean, unable to interpret input"
         } else {
             "Input should be a valid boolean"
         },
-        v.clone(),
+        crate::orchestration::codec::clone_value(v),
         None,
     ))
 }
@@ -104,7 +106,7 @@ pub fn forbid_extra(body: &Value, keys: &[&str]) -> Result<()> {
                     k,
                     "extra_forbidden",
                     "Extra inputs are not permitted",
-                    v.clone(),
+                    crate::orchestration::codec::clone_value(v),
                     None,
                 ));
             }

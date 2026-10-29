@@ -1142,3 +1142,72 @@ async fn login_guests_settings_paths_preserve_http_status() {
         if status==500 {assert_eq!(body["detail"]["code"],"sync_vault_unreadable");}else{assert_eq!(body,row["response"]);}
     }
 }
+#[tokio::test]
+async fn login_guests_scalar_errors_match_public_http_models() {
+    use hangar_server::login_guests::{Service,Settings};
+    let home=tempfile::tempdir().unwrap();
+    let http:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/http.json")).unwrap();
+    let registered=http["rows"].as_array().unwrap().iter().find(|r|r["name"]=="registrar").unwrap();
+    std::fs::write(home.path().join("vault.json"),registered["vault"].to_string()).unwrap();
+    let cookie=http["rows"].as_array().unwrap().iter().find(|r|r["name"]=="cofre_vazio").unwrap()["cookie"].as_str().unwrap();
+    let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
+    service.now=||2000000000;let service=Arc::new(service);
+    let cases:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/scalar-models.json")).unwrap();
+    let mut differences=Vec::new();
+    for (index,row) in cases["rows"].as_array().unwrap().iter().enumerate().filter(|(_,r)|r["status"]!=200) {
+        let (method,path)=if row["kind"]=="integer" {("PUT","/api/sync/vault")}else{("POST","/api/guests/fixture")};
+        let request=axum::http::Request::builder().method(method).uri(path)
+            .header("content-type","application/json").header("cookie",format!("cp_sync={cookie}")).body(axum::body::Body::from(row["raw_body"].as_str().unwrap().to_owned())).unwrap();
+        let response=service.respond(true,"127.0.0.1".into(),false,request).await;
+        let status=response.status().as_u16();
+        let body=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
+        let actual:Value=serde_json::from_slice(&body).unwrap_or_else(|_|Value::String(String::from_utf8(body.to_vec()).unwrap()));
+        if status!=row["status"].as_u64().unwrap() as u16 || actual!=row["response"] { differences.push(format!("{index}: {status}, erros {:?}",actual["detail"].as_array().map(|items|items.iter().map(|item|item["type"].as_str()).collect::<Vec<_>>()))); }
+
+    }
+    assert!(differences.is_empty(),"erros escalares: {differences:?}");
+}
+
+
+#[tokio::test]
+async fn deep_routes_child_helper() {
+    let Ok(index)=std::env::var("HANGAR_GUEST_DEEP_CASE") else{return};
+    use hangar_server::login_guests::{Service,Settings};
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/deep-routes.json")).unwrap();
+    let row=&fixture["rows"][index.parse::<usize>().unwrap()];
+    let home=tempfile::tempdir().unwrap();let vault=home.path().join("vault.json");
+    let (open,close)=if row["shape"]=="array" {("[","]")}else{("{\"x\":","}")};let depth=row["depth"].as_u64().unwrap() as usize;
+    let nested=format!("{}0{}",open.repeat(depth),close.repeat(depth));
+    let operation=row["operation"].as_str().unwrap();
+    let mut disk=fixture["vault"].to_string();
+    if operation=="vault" {disk=disk.replace("\"enc_blob\":null",&format!("\"enc_blob\":{{\"nested\":{nested}}}"));}
+    std::fs::write(&vault,&disk).unwrap();
+    let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:vault.clone(),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
+    service.now=||2000000000;let service=Arc::new(service);
+    let raw=if operation=="login" {format!("{{\"user\":\"fixture\",\"auth_hash\":\"fixture\",\"extra\":{nested}}}")}else{String::new()};
+    let request=axum::http::Request::builder().method(if operation=="login" {"POST"}else{"GET"}).uri(format!("/api/sync/{operation}"))
+        .header("content-type","application/json").header("cookie",format!("cp_sync={}",fixture["cookie"].as_str().unwrap())).body(axum::body::Body::from(raw)).unwrap();
+    let response=service.respond(true,"127.0.0.1".into(),false,request).await;
+    assert_eq!(response.status().as_u16(),200,"D30 conserva resposta válida sem limite de pilha");
+    let raw=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
+    let expected=if operation=="vault" {row["before_encoder"].as_str().unwrap()}else{row["raw_response"].as_str().unwrap()};
+    assert_eq!(raw.as_ref(),expected.as_bytes());assert_eq!(std::fs::read_to_string(vault).unwrap(),disk);
+}
+
+#[tokio::test]
+async fn login_guests_deep_routes_preserve_ignored_extras_and_valid_vaults() {
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/deep-routes.json")).unwrap();
+    let mut failures=Vec::new();
+    for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate(){
+        let home=tempfile::tempdir().unwrap();
+        let mut command=tokio::process::Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact","login_guests::deep_routes_child_helper","--nocapture"]).env_clear()
+            .env("HOME",home.path()).env("USERPROFILE",home.path()).env("CLAUDE_CONFIG_DIR",home.path())
+            .env("HANGAR_GUEST_DEEP_CASE",index.to_string()).kill_on_drop(true);
+        #[cfg(unix)]
+        unsafe { command.pre_exec(|| {let limit=libc::rlimit{rlim_cur:0,rlim_max:0};if libc::setrlimit(libc::RLIMIT_CORE,&limit)==0{Ok(())}else{Err(std::io::Error::last_os_error())}}); }
+        let result=tokio::time::timeout(std::time::Duration::from_secs(20),command.output()).await;
+        if !matches!(&result,Ok(Ok(output)) if output.status.success()) {failures.push(format!("{} {} {}",row["operation"],row["shape"],row["depth"]));}
+    }
+    assert!(failures.is_empty(),"rotas profundas: {failures:?}");
+}

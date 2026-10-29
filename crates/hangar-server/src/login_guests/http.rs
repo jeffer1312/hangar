@@ -185,6 +185,7 @@ impl Service {
                 );
             }
         };
+        let body=super::Tree(body);
         let service = self.clone();
         let result = tokio::task::spawn_blocking(move || {
             service.dispatch(
@@ -278,9 +279,9 @@ impl Service {
                 _ => None,
             };
             let normalized = model
-                .map(|model| super::schema::validate(model, body))
+                .map(|model| super::schema::validate(model, body).map(super::Tree))
                 .transpose()?;
-            let body = normalized.as_ref().unwrap_or(body);
+            let body = normalized.as_deref().unwrap_or(body);
             let value = self.sync.handle(
                 method.as_str(),
                 path,
@@ -346,9 +347,9 @@ impl Service {
             None
         };
         let normalized = model
-            .map(|model| super::schema::validate(model, body))
+            .map(|model| super::schema::validate(model, body).map(super::Tree))
             .transpose()?;
-        let body = normalized.as_ref().unwrap_or(body);
+        let body = normalized.as_deref().unwrap_or(body);
         let value = if method == Method::POST && path == "/api/guests" {
             let (root, sees, owner) = validation::guest_settings(body)?;
             let name = validation::text(body, "name", 1, 100)?;
@@ -492,13 +493,12 @@ struct Json(Value);
 impl IntoResponse for Json {
     fn into_response(self) -> Response {
         if crate::orchestration::codec::contains_surrogate(&self.0) || crate::orchestration::codec::contains_nonfinite(&self.0) {
+            crate::orchestration::codec::discard(self.0);
             return serialization_failure(&HeaderMap::new());
         }
-        (
-            [(header::CONTENT_TYPE, "application/json")],
-            self.0.to_string(),
-        )
-            .into_response()
+        let raw=crate::transcript::pyjson::dumps_compact_unicode(&self.0);
+        crate::orchestration::codec::discard(self.0);
+        ([(header::CONTENT_TYPE, "application/json")],raw).into_response()
     }
 }
 

@@ -44,11 +44,11 @@ impl Sync {
             .and_then(|v| v["sync"].as_bool())
             .unwrap_or(self.enabled)
     }
-    fn load(&self) -> Result<Option<Value>> {
+    fn load(&self) -> Result<Option<super::Tree>> {
         let unreadable = || Failure::code(500, "sync_vault_unreadable", "cofre ilegível");
         match crate::runtime::queue::read_replaced(&self.path) {
             Ok(bytes) => std::str::from_utf8(&bytes).ok().and_then(crate::orchestration::codec::loads)
-                .map(|value| if value.is_null() { None } else { Some(value) }).ok_or_else(unreadable),
+                .map(|value| if value.is_null() { None } else { Some(super::Tree(value)) }).ok_or_else(unreadable),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(_) => Err(unreadable()),
         }
@@ -118,7 +118,7 @@ impl Sync {
     }
     pub fn authenticate(&self, cookie: &str, now: u64) -> Result<(String, Option<String>)> {
         let (user, generation) = self.verify(cookie, now).ok_or_else(unauthorized)?;
-        if let Some(vault) = self.load()?.filter(truthy) {
+        if let Some(vault) = self.load()?.filter(|value|truthy(value)) {
             let acc = account(&vault, &user)?.ok_or_else(unauthorized)?;
             let invalid = match generation.as_deref() {
                 Some(generation) => generation_of(acc)? != generation,
@@ -154,12 +154,12 @@ impl Sync {
             ("POST", "login") => self.login(body, now, ip),
             ("POST", "logout") => Ok(json!({"ok":true})),
             ("GET", "vault") => {
-                let Some(vault) = self.load()?.filter(truthy) else {
+                let Some(vault) = self.load()?.filter(|value|truthy(value)) else {
                     return Ok(json!({"enc_blob":null,"rev":0}));
                 };
                 let acc = account(&vault, user.unwrap_or_default())?.ok_or_else(unauthorized)?;
                 let acc = acc.as_object().ok_or_else(unreadable)?;
-                Ok(json!({"enc_blob":acc.get("enc_blob"),"rev":acc.get("rev").unwrap_or(&json!(0))}))
+                Ok(super::object([("enc_blob",acc.get("enc_blob").map(crate::orchestration::codec::clone_value).unwrap_or(Value::Null)),("rev",acc.get("rev").map(crate::orchestration::codec::clone_value).unwrap_or(json!(0)))]))
             }
             ("PUT", "vault") => self.put_vault(body, user.unwrap_or_default()),
             ("GET", "guests") => {
@@ -168,7 +168,7 @@ impl Sync {
                 let guests=guests.as_object().ok_or_else(unreadable)?;
                 let rows=guests.iter().map(|(user,account)| {
                     let account=account.as_object().ok_or_else(unreadable)?;
-                    Ok(json!({"user":user,"admin_blob":account.get("admin_blob")}))
+                    Ok(super::object([("user",json!(user)),("admin_blob",account.get("admin_blob").map(crate::orchestration::codec::clone_value).unwrap_or(Value::Null))]))
                 }).collect::<Result<Vec<_>>>()?;
                 Ok(Value::Array(rows))
             }
@@ -179,10 +179,10 @@ impl Sync {
                 let target = &p[7..p.len() - 7];
                 let guests=vault.get_mut("guests").filter(|value|truthy(value));
                 let removed=match guests {
-                    Some(guests)=>guests.as_object_mut().ok_or_else(unreadable)?.remove(target),
+                    Some(guests)=>guests.as_object_mut().ok_or_else(unreadable)?.remove(target).map(super::Tree),
                     None=>None,
                 };
-                if removed.as_ref().is_none_or(Value::is_null) {
+                if removed.as_ref().is_none_or(|value|value.is_null()) {
                     return Err(Failure::code(404,"erro_convidado_inexistente","convidado não existe"));
                 }
                 self.save(&vault)?;
@@ -194,9 +194,9 @@ impl Sync {
             }),
         }
     }
-    pub(super) fn owner(&self, user: Option<&str>) -> Result<Value> {
+    pub(super) fn owner(&self, user: Option<&str>) -> Result<super::Tree> {
         let vault = self
-            .load()?.filter(truthy)
+            .load()?.filter(|value|truthy(value))
             .ok_or_else(|| Failure::code(403, "erro_so_dono", "só o dono"))?;
         if !vault.is_object() { return Err(unreadable()); }
         if vault["user"].as_str() != user {
@@ -320,7 +320,7 @@ impl Sync {
         let acc = match &vault { Some(vault) => account(vault, user)?, None => None };
         let salt = if let Some(acc) = acc.filter(|v| truthy(v)) {
             acc.as_object().and_then(|v| v.get("salt")).ok_or_else(unreadable)?.clone()
-        } else if let Some(vault) = vault.filter(truthy) {
+        } else if let Some(vault) = vault.filter(|value|truthy(value)) {
             let key = stored_base64(&vault["verifier_salt"])?;
             let key = hmac::Key::new(hmac::HMAC_SHA256, &key);
             json!(STANDARD.encode(&hmac::sign(&key, user.as_bytes()).as_ref()[..16]))
@@ -376,7 +376,7 @@ impl Sync {
     }
     fn put_vault(&self, b: &Value, user: &str) -> Result<Value> {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(mut vault) = self.load()?.filter(truthy) else {
+        let Some(mut vault) = self.load()?.filter(|value|truthy(value)) else {
             return Err(Failure {
                 status: 409,
                 body: json!({"detail":{"enc_blob":null,"rev":0}}),
@@ -388,7 +388,7 @@ impl Sync {
         if b["base_rev"] != revision {
             return Err(Failure {
                 status: 409,
-                body: json!({"detail":{"enc_blob":acc.get("enc_blob").ok_or_else(unreadable)?,"rev":revision}}),
+                body: super::object([("detail",super::object([("enc_blob",crate::orchestration::codec::clone_value(acc.get("enc_blob").ok_or_else(unreadable)?)),("rev",revision)]))]),
             });
         }
         if b.get("enc_blob").is_none() {
@@ -400,7 +400,7 @@ impl Sync {
                 None,
             ));
         }
-        acc.insert("enc_blob".into(), b["enc_blob"].clone());
+        if let Some(old)=acc.insert("enc_blob".into(),crate::orchestration::codec::clone_value(&b["enc_blob"])) {crate::orchestration::codec::discard(old);}
         let next = increment_revision(&revision)?;
         acc.insert("rev".into(), next.clone());
         self.save(&vault)?;
