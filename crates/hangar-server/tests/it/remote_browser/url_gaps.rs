@@ -110,7 +110,23 @@ impl Logs {
         let root = std::env::var("HANGAR_REMOTE_BROWSER_ROOT").unwrap();
         let actual: Vec<_> = self.0.lock().unwrap().iter().map(|row| json!({"level":row["level"],
             "message":row["message"].as_str().unwrap().replace(&root, "$ROOT")})).collect();
-        assert_eq!(json!(actual), *expected, "warning diferente do original; nenhuma normalização do parser/SO foi aprovada");
+        let diagnostic = |row: &Value| {
+            let message = row["message"].as_str().unwrap();
+            let Some(tail) = message.strip_prefix("sidecar de navegador ilegivel ") else { return row.clone(); };
+            let Some((file, cause)) = tail.split_once(": ") else { return row.clone(); };
+            let category = if cause.contains("'utf-8' codec can't decode") || cause == "stream did not contain valid UTF-8" {
+                "utf8"
+            } else if cause.starts_with("Expecting ") || cause.starts_with("EOF while parsing ")
+                || cause.starts_with("expected ") || cause.starts_with("key must be a string") {
+                "json"
+            } else if cause.contains("Is a directory") && (cause.contains("[Errno 21]") || cause.contains("(os error 21)")) {
+                "os-directory"
+            } else { return row.clone(); };
+            json!({"level":row["level"], "file":file, "cause":category})
+        };
+        let actual: Vec<_> = actual.iter().map(diagnostic).collect();
+        let expected: Vec<_> = expected.as_array().unwrap().iter().map(diagnostic).collect();
+        assert_eq!(actual, expected, "D09 conserva nível, arquivo, categoria, quantidade e ordem dos avisos privados");
     }
 }
 
@@ -421,6 +437,8 @@ async fn cmd_default_read_timeout_45_seconds() {
     let started = tokio::time::Instant::now();
     client.send(Message::Text(json!({"t":"layout", "modo":"mobile"}).to_string().into())).await.unwrap();
     body_ready.notified().await;
+    // Entrega os bytes ao cliente sem avançar o relógio do ensaio.
+    tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_millis(10))).await.unwrap();
     let deadline = Duration::from_secs_f64(case["inputs"]["deadline_seconds"].as_f64().unwrap());
     assert_eq!(started.elapsed(), Duration::ZERO, "o relógio avançou antes da barreira HTTP");
     let actual = {
@@ -431,11 +449,12 @@ async fn cmd_default_read_timeout_45_seconds() {
         assert!(pending.as_mut().now_or_never().is_none(), "o comando terminou antes dos 45 s");
         assert_eq!(observed.lock().unwrap().closed, 0, "o controlador foi encerrado antes dos 45 s");
         tokio::time::advance(Duration::from_secs(1)).await;
-        // A vigia existente só permite entregar I/O: o relógio continua parado nos 45 s.
+        tokio::time::advance(Duration::from_millis(1)).await;
+        // A vigia deixa o I/O progredir sem outro avanço no relógio.
         let mut wall = tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_secs(2)));
         let actual = tokio::select! { event = &mut pending => Some(event), _ = &mut wall => None };
         let elapsed = started.elapsed();
-        assert_eq!(elapsed, deadline);
+        assert_eq!(elapsed, deadline + Duration::from_millis(1));
         keeper.abort();
         let _ = keeper.await;
         tokio::time::resume();

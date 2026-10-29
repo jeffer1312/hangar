@@ -304,9 +304,12 @@ fn key_message(k: &Keystroke) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use gpui::{Entity, TestAppContext, prelude::*};
+    use super::{RemoteBrowser, Status, Keystroke, Modifiers, fraction, key_message};
+    use crate::{api::Api, ws};
+    use gpui::{Entity, TestAppContext, MouseButton, prelude::*};
     use gpui_kit::{Bounds, point, px, size};
+    use serde_json::{Value, json};
+    use std::{sync::Arc, time::{Duration, Instant}};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     enum PeerAction { Text(Value), Close }
@@ -329,7 +332,7 @@ mod tests {
 
     impl RemoteServer {
         fn new() -> Self {
-            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
             listener.set_nonblocking(true).unwrap();
             let address = listener.local_addr().unwrap();
@@ -423,9 +426,10 @@ mod tests {
         }
     }
 
-    fn received<T>(cx: &mut TestAppContext, channel: &async_channel::Receiver<T>) -> T {
+    fn received<T>(server: &RemoteServer, cx: &mut TestAppContext, channel: &async_channel::Receiver<T>) -> T {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
+            server.runtime.block_on(async { tokio::time::sleep(Duration::from_millis(1)).await });
             cx.run_until_parked();
             if let Ok(value) = channel.try_recv() { return value; }
             assert!(Instant::now() < deadline, "o socket de ensaio precisa progredir");
@@ -433,9 +437,10 @@ mod tests {
         }
     }
 
-    fn until(cx: &mut TestAppContext, browser: &Entity<RemoteBrowser>, predicate: impl Fn(&RemoteBrowser) -> bool) {
+    fn until(server: &RemoteServer, cx: &mut TestAppContext, browser: &Entity<RemoteBrowser>, predicate: impl Fn(&RemoteBrowser) -> bool) {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
+            server.runtime.block_on(async { tokio::time::sleep(Duration::from_millis(1)).await });
             cx.run_until_parked();
             if browser.read_with(cx, |browser, _| predicate(browser)) { return; }
             assert!(Instant::now() < deadline, "o consumidor precisa aplicar o evento");
@@ -460,25 +465,25 @@ mod tests {
             browser.scale.set(2.);
             browser.set_shown(true, cx);
         });
-        let first = received(cx, &server.peers);
+        let first = received(&server, cx, &server.peers);
         assert_eq!((first.width.as_deref(), first.quality.as_deref()), (Some("1400"), Some("80")));
-        assert_eq!(received(cx, &first.input), json!({"t": "layout", "w": 2000, "h": 600}));
+        assert_eq!(received(&server, cx, &first.input), json!({"t": "layout", "w": 2000, "h": 600}));
         publish(&first, json!({"t": "q", "d": chromium()["frame"]["data"], "lento": true}));
         publish(&first, json!({"t": "url", "url": "http://example.test/first"}));
-        until(cx, &browser, |b| b.frame.is_some() && b.url.as_deref() == Some("http://example.test/first"));
+        until(&server, cx, &browser, |b| b.frame.is_some() && b.url.as_deref() == Some("http://example.test/first"));
         let old = browser.read_with(cx, |b, _| Arc::downgrade(b.frame.as_ref().unwrap()));
         let seq = browser.read_with(cx, |b, _| b.seq);
         browser.update(cx, |browser, cx| browser.set_shown(false, cx));
-        received(cx, &first.closed);
+        received(&server, cx, &first.closed);
         assert!(browser.read_with(cx, |b, _| b.socket.is_none() && b.frame.is_none() && b.url.is_none() && matches!(b.status, Status::Idle) && b.seq > seq));
         assert!(old.upgrade().is_none(), "o quadro retirado não fica retido pelo consumidor");
         browser.update(cx, |browser, cx| browser.set_shown(true, cx));
-        let second = received(cx, &server.peers);
-        assert_eq!(received(cx, &second.input), json!({"t": "layout", "w": 2000, "h": 600}));
+        let second = received(&server, cx, &server.peers);
+        assert_eq!(received(&server, cx, &second.input), json!({"t": "layout", "w": 2000, "h": 600}));
         publish(&second, json!({"t": "url", "url": "http://example.test/second"}));
-        until(cx, &browser, |b| b.url.as_deref() == Some("http://example.test/second"));
+        until(&server, cx, &browser, |b| b.url.as_deref() == Some("http://example.test/second"));
         browser.update(cx, |browser, cx| browser.set_shown(false, cx));
-        received(cx, &second.closed);
+        received(&server, cx, &second.closed);
     }
 
     #[gpui::test]
@@ -486,32 +491,32 @@ mod tests {
         let server = RemoteServer::new();
         let browser = server.browser(cx);
         browser.update(cx, |browser, cx| browser.set_shown(true, cx));
-        let peer = received(cx, &server.peers);
+        let peer = received(&server, cx, &server.peers);
         assert_eq!((peer.width.as_deref(), peer.quality.as_deref()), (Some("1400"), Some("80")));
-        until(cx, &browser, |b| matches!(b.status, Status::Live));
+        until(&server, cx, &browser, |b| matches!(b.status, Status::Live));
         for data in ["not-base64%", "bm90LWFuLWltYWdl"] { publish(&peer, json!({"t": "q", "d": data})); }
         publish(&peer, json!({"t": "url", "url": "http://example.test/invalid-drained"}));
-        until(cx, &browser, |b| b.url.as_deref() == Some("http://example.test/invalid-drained"));
+        until(&server, cx, &browser, |b| b.url.as_deref() == Some("http://example.test/invalid-drained"));
         assert!(browser.read_with(cx, |b, _| b.frame.is_none()));
         publish(&peer, json!({"t": "q", "d": chromium()["frame"]["data"], "lento": true}));
-        until(cx, &browser, |b| b.frame.is_some());
+        until(&server, cx, &browser, |b| b.frame.is_some());
         let old = browser.read_with(cx, |b, _| {
             assert_eq!((b.frame.as_ref().unwrap().size(0).width.0, b.frame.as_ref().unwrap().size(0).height.0), (390, 293));
             assert!(b.slow);
             Arc::downgrade(b.frame.as_ref().unwrap())
         });
         publish(&peer, json!({"t": "q", "d": chromium()["screenshot"]["data"]}));
-        until(cx, &browser, |b| b.frame.as_ref().is_some_and(|image| image.size(0).width.0 == 800));
+        until(&server, cx, &browser, |b| b.frame.as_ref().is_some_and(|image| image.size(0).width.0 == 800));
         assert!(old.upgrade().is_none());
         assert!(!browser.read_with(cx, |b, _| b.slow));
         publish(&peer, json!({"t": "layout", "resposta": "erro: tamanho recusado"}));
-        until(cx, &browser, |b| b.notice.as_deref() == Some("erro: tamanho recusado"));
+        until(&server, cx, &browser, |b| b.notice.as_deref() == Some("erro: tamanho recusado"));
         publish(&peer, json!({"t": "layout", "resposta": "layout: 800x600"}));
-        until(cx, &browser, |b| b.notice.is_none());
+        until(&server, cx, &browser, |b| b.notice.is_none());
         publish(&peer, json!({"t": "erro", "m": "erro: a página de ensaio encerrou"}));
-        until(cx, &browser, |b| b.notice.as_deref() == Some("erro: a página de ensaio encerrou"));
+        until(&server, cx, &browser, |b| b.notice.as_deref() == Some("erro: a página de ensaio encerrou"));
         peer.actions.try_send(PeerAction::Close).ok().unwrap();
-        until(cx, &browser, |b| matches!(&b.status, Status::Down(reason) if reason == "erro: a página de ensaio encerrou"));
+        until(&server, cx, &browser, |b| matches!(&b.status, Status::Down(reason) if reason == "erro: a página de ensaio encerrou"));
         assert!(browser.read_with(cx, |b, _| b.socket.is_none() && b.notice.is_none()));
         browser.update(cx, |browser, cx| browser.set_shown(false, cx));
     }
@@ -521,29 +526,29 @@ mod tests {
         let server = RemoteServer::new();
         let browser = server.browser(cx);
         browser.update(cx, |browser, cx| browser.set_shown(true, cx));
-        let peer = received(cx, &server.peers);
+        let peer = received(&server, cx, &server.peers);
         publish(&peer, json!({"t": "q", "d": chromium()["screenshot"]["data"]}));
-        until(cx, &browser, |b| b.frame.is_some() && matches!(b.status, Status::Live));
+        until(&server, cx, &browser, |b| b.frame.is_some() && matches!(b.status, Status::Live));
         browser.update(cx, |browser, _| {
             browser.bounds.set(Bounds { origin: point(px(10.), px(20.)), size: size(px(1000.), px(600.)) });
             browser.mouse("press", MouseButton::Left, point(px(510.), px(320.)), &Modifiers::default());
             browser.mouse("release", MouseButton::Left, point(px(-100.), px(900.)), &Modifiers { control: true, shift: true, ..Default::default() });
             browser.mouse("press", MouseButton::Left, point(px(50.), px(320.)), &Modifiers::default());
         });
-        assert_eq!(received(cx, &peer.input), json!({"t": "m", "acao": "press", "b": "left", "x": 0.5, "y": 0.5, "mod": 0}));
-        assert_eq!(received(cx, &peer.input), json!({"t": "m", "acao": "release", "b": "left", "x": 0.0, "y": 1.0, "mod": 10}));
+        assert_eq!(received(&server, cx, &peer.input), json!({"t": "m", "acao": "press", "b": "left", "x": 0.5, "y": 0.5, "mod": 0}));
+        assert_eq!(received(&server, cx, &peer.input), json!({"t": "m", "acao": "release", "b": "left", "x": 0.0, "y": 1.0, "mod": 10}));
         for (stroke, expected) in [
             (stroke("c", Some("ação 🎯"), false), json!({"t": "txt", "s": "ação 🎯"})),
             (stroke("enter", Some("\n"), false), json!({"t": "k", "key": "Enter", "mod": 0})),
             (stroke("a", Some("a"), true), json!({"t": "k", "key": "a", "mod": 2, "code": 65})),
         ] {
             browser.update(cx, |browser, _| { assert!(browser.send(key_message(&stroke).unwrap())); });
-            assert_eq!(received(cx, &peer.input), expected);
+            assert_eq!(received(&server, cx, &peer.input), expected);
         }
         assert!(key_message(&stroke("'", None, false)).is_none());
         assert!(peer.input.is_empty(), "a faixa vazia não envia outro press");
         browser.update(cx, |browser, cx| browser.set_shown(false, cx));
-        received(cx, &peer.closed);
+        received(&server, cx, &peer.closed);
     }
 
     #[gpui::test]
@@ -554,9 +559,9 @@ mod tests {
             browser.bounds.set(Bounds { origin: point(px(0.), px(0.)), size: size(px(400.), px(300.)) });
             browser.set_shown(true, cx);
         });
-        let peer = received(cx, &server.peers);
+        let peer = received(&server, cx, &server.peers);
         assert_eq!((peer.width.as_deref(), peer.quality.as_deref()), (Some("400"), Some("80")));
-        assert_eq!(received(cx, &peer.input), json!({"t": "layout", "w": 400, "h": 300}));
+        assert_eq!(received(&server, cx, &peer.input), json!({"t": "layout", "w": 400, "h": 300}));
         for (w, h) in [(49., 300.), (400., 49.), (415., 315.)] {
             browser.update(cx, |browser, cx| {
                 browser.bounds.set(Bounds { origin: point(px(0.), px(0.)), size: size(px(w), px(h)) });
@@ -576,10 +581,10 @@ mod tests {
         assert!(peer.input.is_empty(), "o resize aguarda o intervalo");
         std::thread::sleep(Duration::from_millis(510));
         cx.executor().advance_clock(Duration::from_millis(500));
-        assert_eq!(received(cx, &peer.input), json!({"t": "layout", "w": 800, "h": 600}));
+        assert_eq!(received(&server, cx, &peer.input), json!({"t": "layout", "w": 800, "h": 600}));
         assert!(peer.input.is_empty());
         browser.update(cx, |browser, cx| browser.set_shown(false, cx));
-        received(cx, &peer.closed);
+        received(&server, cx, &peer.closed);
     }
 
     #[test]
