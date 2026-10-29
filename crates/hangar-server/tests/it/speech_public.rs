@@ -236,6 +236,17 @@ async fn speech_public_matches_the_frozen_python_http_contract() {
         let status = response.status().as_u16();
         let mut headers = response.headers().clone();
         let mut bytes = response.bytes().await.unwrap();
+        if matches!(case["name"].as_str(), Some("mp3-if-range-date" | "wav-if-range-date")) {
+            // D-019: conserva a captura Python e declara a recusa do validador sem precisão.
+            assert_eq!(case["status"], 206);
+            assert_eq!(status, 200);
+            let expected = if case["name"] == "wav-if-range-date" { "RIFFfixture-wave" } else { "ID3fixture-audio" };
+            assert_eq!(bytes.as_ref(), expected.as_bytes());
+            assert!(!headers.contains_key("content-range"));
+            assert_eq!(headers["content-length"], "16");
+            assert_eq!(headers["etag"].to_str().unwrap(), case["response_headers"]["etag"].as_str().unwrap());
+            continue;
+        }
         if case["response_headers"]["content-type"]
             .as_str()
             .is_some_and(|v| v.contains("<boundary>"))
@@ -291,6 +302,29 @@ async fn speech_public_matches_the_frozen_python_http_contract() {
         differences.is_empty(),
         "diferenças do contrato HTTP Python: {differences:#?}"
     );
+}
+
+#[tokio::test]
+async fn speech_if_range_never_combines_versions_changed_in_the_same_second() {
+    let server = Server::start().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let hash = "27656ffd5a01dc640a8f9d96a8684be7372800bdd618fa2311b4b85478052613";
+    let url = format!("{}/api/tts/audio/{hash}", server.base);
+    let first = client.get(&url).bearer_auth("fixture-owner").send().await.unwrap();
+    let validators = [first.headers()["last-modified"].clone(), first.headers()["etag"].clone()];
+    let path = server._root.path().join("home/.claude/.hangar-tts").join(format!("{hash}.mp3"));
+    let replacement = b"ID3updated-audio";
+    std::fs::write(&path, replacement).unwrap();
+    std::fs::File::options().write(true).open(&path).unwrap().set_times(
+        std::fs::FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(1_700_000_000) + Duration::from_millis(500)),
+    ).unwrap();
+    for validator in validators {
+        let response = client.get(&url).bearer_auth("fixture-owner")
+            .header("range", "bytes=1-4").header("if-range", validator).send().await.unwrap();
+        assert_eq!(response.status(), 200);
+        assert!(!response.headers().contains_key("content-range"));
+        assert_eq!(response.bytes().await.unwrap().as_ref(), replacement);
+    }
 }
 
 #[tokio::test]

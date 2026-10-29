@@ -3620,13 +3620,18 @@ capturadas dos helpers e handlers Python antes da remoção: 724 casos de prepar
 Pi/omp/Kimi, quatro de janela nativa e 11 de histórico transferido. Os programas de captura estão preservados nas
 próprias referências. Os testes Rust comparam as saídas e exercitam HTTP com o upstream Python
 indisponível. HEAD de áudio continua 405, e tipo MIME, Range e validadores conservam o contrato
-de arquivo anterior.
+de arquivo anterior, com uma correção: `If-Range` aceita o ETag forte; uma data sem a precisão
+do arquivo recebe o áudio completo (200). Isso impede juntar faixas de representações alteradas
+no mesmo segundo. As duas respostas antigas por data permanecem nas capturas, e a diferença é
+conferida explicitamente nos testes, junto com a alteração de bytes dentro do mesmo segundo.
 
 O hash continua usando a codificação JSON Python, incluindo espaços e floats; áudios já em
 cache não geram novo gasto por causa da migração. O contexto da sugestão conserva a janela
 inteira que o consumidor original lia, os hooks e a fila dos provedores, e os snapshots e a
 fronteira das conversas transferidas. Overrides de transferência substituem somente suas
-linhas; uma máquina sem transferência não perde as sessões nativas da sugestão.
+linhas; uma máquina sem transferência não perde as sessões nativas da sugestão. O resumo
+percorre a janela a partir do fim e guarda no máximo os 3.000 caracteres de contexto anterior,
+conservando a mesma saída sem materializar o texto de todos os eventos.
 
 **Correções do caminho.** Pedidos simultâneos de síntese do mesmo hash compartilham uma
 produção. O temporário é exclusivo e a troca atômica tolera leitores no Windows. Cancelamento

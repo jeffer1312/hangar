@@ -33,7 +33,7 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
 - Voz ao vivo — roda no `hangar-server` (`crates/hangar-server/src/voice/`), **disponível em todo
   servidor com Codex instalado e ao menos uma conta Codex**, sem interruptor; o microfone só abre
   quando a pessoa liga a chamada. Uma chamada por
-  servidor, só do dono (`/api/voice`; pelo Connect, a ponte `voicesock.py`); o áudio fica no
+  servidor, só do dono (`/api/voice`); o áudio fica no
   aparelho. Clientes: nativo (`desktop-native/src/voice/`) e PWA no celular
   (`lib/liveVoice.ts`). Contrato: "Regras vigentes" de
   [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md).

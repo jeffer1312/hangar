@@ -376,7 +376,8 @@ async fn audio(path: &Path, headers: &HeaderMap) -> Response {
     // FileResponse não implementa o 304 da StaticFiles.
     request_headers.remove(header::IF_NONE_MATCH);
     if let Some(value) = request_headers.remove(header::IF_RANGE) {
-        if value != etag.as_str() && value != last.as_str() {
+        // A data perde a precisão do arquivo e não comprova que a representação é a mesma.
+        if value != etag.as_str() {
             request_headers.remove(header::RANGE);
         }
     }
@@ -605,8 +606,9 @@ async fn conversations(
 }
 
 fn summarize(events: &[ChatEvent]) -> String {
-    let messages: Vec<_> = events
+    let mut messages = events
         .iter()
+        .rev()
         .filter_map(|event| {
             let speaker = match event.kind {
                 ChatKind::UserMsg => "usuário",
@@ -615,20 +617,29 @@ fn summarize(events: &[ChatEvent]) -> String {
             };
             let text = crate::transcript::py::strip(event.text.as_deref()?);
             (!text.is_empty()).then_some((speaker, text))
-        })
-        .collect();
-    let Some(((speaker, last), previous)) = messages.split_last() else {
+        });
+    let Some((speaker, last)) = messages.next() else {
         return String::new();
     };
-    let earlier = previous
-        .iter()
-        .map(|(speaker, text)| format!("{speaker}: {}", text.chars().take(500).collect::<String>()))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let earlier: String = earlier
-        .chars()
-        .skip(earlier.chars().count().saturating_sub(3000))
-        .collect();
+    let mut earlier = std::collections::VecDeque::with_capacity(3000);
+    let mut first = true;
+    for (speaker, text) in messages {
+        if earlier.len() == 3000 {
+            break;
+        }
+        if !first {
+            earlier.push_front('\n');
+        }
+        first = false;
+        let line = format!("{speaker}: {}", text.chars().take(500).collect::<String>());
+        for character in line.chars().rev() {
+            if earlier.len() == 3000 {
+                break;
+            }
+            earlier.push_front(character);
+        }
+    }
+    let earlier: String = earlier.into_iter().collect();
     let last = format!(
         "ÚLTIMA MENSAGEM ({speaker}): {}",
         last.chars().take(2000).collect::<String>()
