@@ -1,0 +1,773 @@
+{
+  "source_commit": "fd1ae6bbdf8096598132bed74a188d01c63fba1e",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_admin_rate.py",
+  "profile": "require_auth original sem contexto compartilhado; paridade do contador compartilhado é conferida separadamente",
+  "rows": [
+    {
+      "name": "get",
+      "steps": [
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "owner",
+          "status": 429,
+          "response": {
+            "detail": {
+              "code": "erro_muitas_tentativas",
+              "params": {},
+              "msg": "muitas tentativas — aguarde"
+            }
+          },
+          "retry_after": "30"
+        }
+      ]
+    },
+    {
+      "name": "malformed",
+      "steps": [
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{",
+          "token": "bad",
+          "status": 422,
+          "response": {
+            "detail": [
+              {
+                "type": "json_invalid",
+                "loc": [
+                  "body",
+                  1
+                ],
+                "msg": "JSON decode error",
+                "input": {},
+                "ctx": {
+                  "error": "Expecting property name enclosed in double quotes"
+                }
+              }
+            ]
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{",
+          "token": "bad",
+          "status": 422,
+          "response": {
+            "detail": [
+              {
+                "type": "json_invalid",
+                "loc": [
+                  "body",
+                  1
+                ],
+                "msg": "JSON decode error",
+                "input": {},
+                "ctx": {
+                  "error": "Expecting property name enclosed in double quotes"
+                }
+              }
+            ]
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{",
+          "token": "bad",
+          "status": 422,
+          "response": {
+            "detail": [
+              {
+                "type": "json_invalid",
+                "loc": [
+                  "body",
+                  1
+                ],
+                "msg": "JSON decode error",
+                "input": {},
+                "ctx": {
+                  "error": "Expecting property name enclosed in double quotes"
+                }
+              }
+            ]
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{",
+          "token": "bad",
+          "status": 422,
+          "response": {
+            "detail": [
+              {
+                "type": "json_invalid",
+                "loc": [
+                  "body",
+                  1
+                ],
+                "msg": "JSON decode error",
+                "input": {},
+                "ctx": {
+                  "error": "Expecting property name enclosed in double quotes"
+                }
+              }
+            ]
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{",
+          "token": "bad",
+          "status": 422,
+          "response": {
+            "detail": [
+              {
+                "type": "json_invalid",
+                "loc": [
+                  "body",
+                  1
+                ],
+                "msg": "JSON decode error",
+                "input": {},
+                "ctx": {
+                  "error": "Expecting property name enclosed in double quotes"
+                }
+              }
+            ]
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{",
+          "token": "bad",
+          "status": 422,
+          "response": {
+            "detail": [
+              {
+                "type": "json_invalid",
+                "loc": [
+                  "body",
+                  1
+                ],
+                "msg": "JSON decode error",
+                "input": {},
+                "ctx": {
+                  "error": "Expecting property name enclosed in double quotes"
+                }
+              }
+            ]
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{",
+          "token": "bad",
+          "status": 422,
+          "response": {
+            "detail": [
+              {
+                "type": "json_invalid",
+                "loc": [
+                  "body",
+                  1
+                ],
+                "msg": "JSON decode error",
+                "input": {},
+                "ctx": {
+                  "error": "Expecting property name enclosed in double quotes"
+                }
+              }
+            ]
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{",
+          "token": "bad",
+          "status": 422,
+          "response": {
+            "detail": [
+              {
+                "type": "json_invalid",
+                "loc": [
+                  "body",
+                  1
+                ],
+                "msg": "JSON decode error",
+                "input": {},
+                "ctx": {
+                  "error": "Expecting property name enclosed in double quotes"
+                }
+              }
+            ]
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "owner",
+          "status": 200,
+          "response": {
+            "role": "owner",
+            "name": null
+          },
+          "retry_after": null
+        }
+      ]
+    },
+    {
+      "name": "invalid_model",
+      "steps": [
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "owner",
+          "status": 429,
+          "response": {
+            "detail": {
+              "code": "erro_muitas_tentativas",
+              "params": {},
+              "msg": "muitas tentativas — aguarde"
+            }
+          },
+          "retry_after": "30"
+        }
+      ]
+    },
+    {
+      "name": "shared_admin",
+      "steps": [
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/sync/setup",
+          "raw": null,
+          "token": "bad",
+          "status": 401,
+          "response": {
+            "detail": {
+              "code": "erro_nao_autorizado",
+              "params": {},
+              "msg": "unauthorized"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "owner",
+          "status": 429,
+          "response": {
+            "detail": {
+              "code": "erro_muitas_tentativas",
+              "params": {},
+              "msg": "muitas tentativas — aguarde"
+            }
+          },
+          "retry_after": "30"
+        }
+      ]
+    },
+    {
+      "name": "guest_forbidden",
+      "steps": [
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "guest-token",
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_fora_do_convidado",
+              "params": {},
+              "msg": "fora do acesso do convidado"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "guest-token",
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_fora_do_convidado",
+              "params": {},
+              "msg": "fora do acesso do convidado"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "guest-token",
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_fora_do_convidado",
+              "params": {},
+              "msg": "fora do acesso do convidado"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "guest-token",
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_fora_do_convidado",
+              "params": {},
+              "msg": "fora do acesso do convidado"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "guest-token",
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_fora_do_convidado",
+              "params": {},
+              "msg": "fora do acesso do convidado"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "guest-token",
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_fora_do_convidado",
+              "params": {},
+              "msg": "fora do acesso do convidado"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "guest-token",
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_fora_do_convidado",
+              "params": {},
+              "msg": "fora do acesso do convidado"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/guests",
+          "raw": "{}",
+          "token": "guest-token",
+          "status": 403,
+          "response": {
+            "detail": {
+              "code": "erro_fora_do_convidado",
+              "params": {},
+              "msg": "fora do acesso do convidado"
+            }
+          },
+          "retry_after": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/me",
+          "raw": null,
+          "token": "owner",
+          "status": 200,
+          "response": {
+            "role": "owner",
+            "name": null
+          },
+          "retry_after": null
+        }
+      ]
+    }
+  ]
+}

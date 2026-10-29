@@ -31,6 +31,9 @@ pub fn text(body: &Value, key: &str, min: usize, max: usize) -> Result<String> {
             None,
         )
     })?;
+    if crate::orchestration::codec::contains_surrogate(value) {
+        return Err(invalid(key, "string_unicode", "Input should be a valid string, unable to parse raw data as a unicode string", value.clone(), None));
+    }
     if s.chars().count() < min {
         return Err(invalid(
             key,

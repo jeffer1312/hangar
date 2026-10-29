@@ -64,13 +64,16 @@ pub fn read(path: &Path) -> io::Result<Option<Value>> {
 }
 /// O nome único e a permissão fechada existem antes de publicar o arquivo.
 pub fn write(path: &Path, value: &Value) -> io::Result<()> {
+    write_bytes(path, &serde_json::to_vec_pretty(value)?)
+}
+pub(super) fn write_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write;
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::other("arquivo sem pasta"))?;
     std::fs::create_dir_all(parent)?;
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
-    file.write_all(&serde_json::to_vec_pretty(value)?)?;
+    file.write_all(bytes)?;
     let mut attempts = 0;
     loop {
         match file.persist(path) {

@@ -44,11 +44,16 @@ impl Sync {
             .unwrap_or(self.enabled)
     }
     fn load(&self) -> Result<Option<Value>> {
-        store::read(&self.path)
-            .map_err(|_| Failure::code(500, "sync_vault_unreadable", "cofre ilegível"))
+        let unreadable = || Failure::code(500, "sync_vault_unreadable", "cofre ilegível");
+        match crate::runtime::queue::read_replaced(&self.path) {
+            Ok(bytes) => std::str::from_utf8(&bytes).ok().and_then(crate::orchestration::codec::loads)
+                .map(Some).ok_or_else(unreadable),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(unreadable()),
+        }
     }
     fn save(&self, value: &Value) -> Result<()> {
-        store::write(&self.path, value).map_err(|_| {
+        store::write_bytes(&self.path, crate::orchestration::codec::dumps(value, false).as_bytes()).map_err(|_| {
             Failure::code(
                 500,
                 "sync_vault_write_failed",
@@ -317,9 +322,7 @@ impl Sync {
         let salt = if let Some(acc) = vault.as_ref().and_then(|v| account(v, user)) {
             acc["salt"].clone()
         } else if let Some(vault) = vault {
-            let key = STANDARD
-                .decode(vault["verifier_salt"].as_str().unwrap_or_default())
-                .map_err(|_| Failure::code(500, "sync_vault_unreadable", "cofre ilegível"))?;
+            let key = stored_base64(&vault["verifier_salt"])?;
             let key = hmac::Key::new(hmac::HMAC_SHA256, &key);
             json!(STANDARD.encode(&hmac::sign(&key, user.as_bytes()).as_ref()[..16]))
         } else {
@@ -351,9 +354,7 @@ impl Sync {
         }
         let vault = self.load()?;
         let valid = if let Some(acc) = vault.as_ref().and_then(|v| account(v, &user)) {
-            let salt = STANDARD
-                .decode(acc["verifier_salt"].as_str().unwrap_or_default())
-                .map_err(|_| Failure::code(500, "sync_vault_unreadable", "cofre ilegível"))?;
+            let salt = stored_base64(&acc["verifier_salt"])?;
             bool::from(
                 verifier(&auth, &salt)
                     .as_bytes()
@@ -471,8 +472,41 @@ fn account_mut<'a>(v: &'a mut Value, user: &str) -> Option<&'a mut Value> {
         v.get_mut("guests")?.get_mut(user)
     }
 }
+// O leitor histórico ignora lixo ASCII e encerra no primeiro padding completo.
+fn stored_base64(value: &Value) -> Result<Vec<u8>> {
+    let invalid = || Failure::code(500, "sync_vault_unreadable", "cofre ilegível");
+    let text = value.as_str().filter(|s| s.is_ascii()).ok_or_else(invalid)?;
+    let mut output = Vec::new();
+    let mut position = 0;
+    let mut remainder = 0u8;
+    let mut padding = 0;
+    for byte in text.bytes() {
+        if byte == b'=' {
+            padding += 1;
+            if position >= 2 && position + padding >= 4 { return Ok(output); }
+            continue;
+        }
+        let digit = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => continue,
+        };
+        padding = 0;
+        match position {
+            0 => remainder = digit,
+            1 => { output.push((remainder << 2) | (digit >> 4)); remainder = digit & 15; }
+            2 => { output.push((remainder << 4) | (digit >> 2)); remainder = digit & 3; }
+            _ => { output.push((remainder << 6) | digit); remainder = 0; }
+        }
+        position = (position + 1) % 4;
+    }
+    if position == 0 { Ok(output) } else { Err(invalid()) }
+}
 fn generation_of(v: &Value) -> Option<String> {
-    let salt = STANDARD.decode(v["verifier_salt"].as_str()?).ok()?;
+    let salt = stored_base64(&v["verifier_salt"]).ok()?;
     Some(salt.iter().take(4).map(|b| format!("{b:02x}")).collect())
 }
 fn sign(secret: &[u8], bytes: &[u8]) -> String {

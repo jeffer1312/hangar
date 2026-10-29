@@ -256,7 +256,7 @@ async fn login_guests_invalid_forms_match_all_python_errors() {
     let cases:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/validation.json")).unwrap();
     for row in cases["rows"].as_array().unwrap().iter().filter(|r|r["status"]==422) {
         let request=axum::http::Request::builder().method(row["method"].as_str().unwrap()).uri(row["path"].as_str().unwrap())
-            .header("cookie",format!("cp_sync={cookie}")).body(axum::body::Body::from(row["body"].to_string())).unwrap();
+            .header("content-type","application/json").header("cookie",format!("cp_sync={cookie}")).body(axum::body::Body::from(row["body"].to_string())).unwrap();
         let response=service.respond(true,"127.0.0.1".into(),false,request).await;
         assert_eq!(response.status().as_u16(),422,"GUE-081 {} {}",row["model"],row["index"]);
         let body=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
@@ -302,7 +302,7 @@ async fn login_guests_vault_revisions_keep_python_integer_range() {
     for (index,row) in cases["rows"].as_array().unwrap().iter().enumerate() {
         std::fs::write(home.path().join("vault.json"),row["initial"].to_string()).unwrap();
         let request=axum::http::Request::builder().method("PUT").uri("/api/sync/vault")
-            .header("cookie",format!("cp_sync={}",cases["cookie"].as_str().unwrap())).body(axum::body::Body::from(row["body"].to_string())).unwrap();
+            .header("content-type","application/json").header("cookie",format!("cp_sync={}",cases["cookie"].as_str().unwrap())).body(axum::body::Body::from(row["body"].to_string())).unwrap();
         let response=service.respond(false,"127.0.0.1".into(),false,request).await;
         assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"GUE-044/081 revisão {index}");
         let body=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
@@ -320,7 +320,7 @@ async fn login_guests_storage_normalizes_legacy_documents_before_writing() {
         std::fs::write(home.path().join("guests.json"),row["initial"].to_string()).unwrap();
         let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()});
         service.id=||"ab".repeat(8);service.token=||"new-token".into();let service=Arc::new(service);
-        let request=axum::http::Request::builder().method("POST").uri("/api/guests").body(axum::body::Body::from(row["body"].to_string())).unwrap();
+        let request=axum::http::Request::builder().method("POST").uri("/api/guests").header("content-type","application/json").body(axum::body::Body::from(row["body"].to_string())).unwrap();
         let response=service.respond(true,"127.0.0.1".into(),false,request).await;
         assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"GUE-012/013 arquivo {index}");
         let body=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
@@ -389,7 +389,7 @@ mod arbitrary_inputs {
             let rt=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async {
                 for (path,bytes) in [("/api/guests",value.to_string().into_bytes()),("/api/sync/setup",value.to_string().into_bytes()),("/api/sync/login",raw)] {
-                    let request=axum::http::Request::builder().method("POST").uri(path).body(axum::body::Body::from(bytes)).unwrap();
+                    let request=axum::http::Request::builder().method("POST").uri(path).header("content-type","application/json").body(axum::body::Body::from(bytes)).unwrap();
                     let response=service.respond(true,"127.0.0.1".into(),false,request).await;
                     let body=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
                     let body:Value=serde_json::from_slice(&body).unwrap();
@@ -414,7 +414,7 @@ async fn login_guests_setup_preserves_vault_and_changes_enabled_state() {
         }
         let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
         service.entropy=|n|vec![b'x';n];service.now=||2000000000;let service=Arc::new(service);
-        let request=axum::http::Request::builder().method(row["method"].as_str().unwrap()).uri(row["path"].as_str().unwrap()).body(axum::body::Body::from(row["body"].to_string())).unwrap();
+        let request=axum::http::Request::builder().method(row["method"].as_str().unwrap()).uri(row["path"].as_str().unwrap()).header("content-type","application/json").body(axum::body::Body::from(row["body"].to_string())).unwrap();
         let response=service.respond(row["owner"].as_bool().unwrap(),"127.0.0.1".into(),false,request).await;
         assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"GUE-053/054/057/058 {}",row["name"]);
         assert_eq!(response.headers().get("set-cookie").map(|v|v.to_str().unwrap()),row["set_cookie"].as_str(),"GUE-057 cookie");
@@ -469,7 +469,7 @@ async fn login_guests_rejects_structural_identity_types_without_overwriting() {
         let path=home.path().join("guests.json");std::fs::write(&path,row["initial"].to_string()).unwrap();
         let service=Arc::new(Service::new(Settings{guests:path.clone(),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()}));
         for (owner,route,method,body,status) in [(false,"/api/me","GET",Value::Null,401),(true,"/api/guests","POST",serde_json::json!({"root":home.path(),"name":"Nova"}),500)] {
-            let request=axum::http::Request::builder().method(method).uri(route).header("authorization","Bearer guest-token").body(axum::body::Body::from(body.to_string())).unwrap();
+            let request=axum::http::Request::builder().method(method).uri(route).header("authorization","Bearer guest-token").header("content-type","application/json").body(axum::body::Body::from(body.to_string())).unwrap();
             let response=service.respond(owner,"127.0.0.1".into(),false,request).await;
             // D03/GUE-067: só os quatro campos estruturais deixam de aceitar tipos arbitrários.
             assert_eq!(response.status().as_u16(),status,"GUE-067 {} {} {route}",row["field"],row["value"]);
@@ -780,4 +780,129 @@ async fn login_guests_sync_invalid_config_does_not_disable_local_guests() {
         assert!(!home.path().join("claude/guests.json").exists());
         assert!(!home.path().join(".hangar/sync-vault.json").exists());
     }
+}
+
+#[test]
+fn login_guests_surrogate_detection_matches_python_values() {
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/request-body.json")).unwrap();
+    for row in fixture["rows"].as_array().unwrap().iter().filter(|r|r["parser"]["accepted"]==true) {
+        let hex=row["raw_hex"].as_str().unwrap();
+        let bytes:Vec<u8>=(0..hex.len()).step_by(2).map(|i|u8::from_str_radix(&hex[i..i+2],16).unwrap()).collect();
+        let value=hangar_server::orchestration::body::parse(&bytes).unwrap();
+        assert_eq!(hangar_server::orchestration::codec::contains_surrogate(&value),row["parser"]["contains_surrogate"].as_bool().unwrap(),"bytes {hex}");
+    }
+}
+
+#[tokio::test]
+async fn login_guests_body_encoding_preserves_fastapi_response() {
+    use hangar_server::login_guests::{Service,Settings};
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/request-body.json")).unwrap();
+    let mut differences=Vec::new();
+    for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
+        let home=tempfile::tempdir().unwrap();
+        let service=Arc::new(Service::new(Settings { guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),
+            runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,
+            rate_max:10.into(),rate_window:300.into() }));
+        let hex=row["raw_hex"].as_str().unwrap();
+        let bytes:Vec<u8>=(0..hex.len()).step_by(2).map(|i|u8::from_str_radix(&hex[i..i+2],16).unwrap()).collect();
+        let mut request=axum::http::Request::builder().method("POST").uri("/api/sync/setup");
+        if let Some(content_type)=row["content_type"].as_str() { request=request.header("content-type",content_type); }
+        let response=service.respond(true,"127.0.0.1".into(),false,request.body(axum::body::Body::from(bytes)).unwrap()).await;
+        let status=response.status().as_u16();let bytes=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
+        let actual:Value=serde_json::from_slice(&bytes).unwrap_or_else(|_|Value::String(String::from_utf8(bytes.to_vec()).unwrap()));
+        if status!=row["status"].as_u64().unwrap() as u16 || actual!=row["response"] {
+            differences.push(format!("caso {index}: status {status}; corpo diferente={}",actual!=row["response"]));
+        }
+        assert!(!home.path().join("vault.json").exists());
+    }
+    assert!(differences.is_empty(),"GUE-040/054: {differences:?}");
+}
+
+async fn sync_request(service: &Arc<hangar_server::login_guests::Service>, method: &str, path: &str, raw: &str, cookie: Option<&str>) -> (u16, Value, Option<String>) {
+    let mut request = axum::http::Request::builder().method(method).uri(path).header("content-type", "application/json");
+    if let Some(cookie) = cookie { request = request.header("cookie", cookie); }
+    let response = service.respond(true, "127.0.0.1".into(), false, request.body(axum::body::Body::from(raw.to_owned())).unwrap()).await;
+    let status = response.status().as_u16();
+    let cookie = response.headers().get("set-cookie").map(|v| v.to_str().unwrap().to_owned());
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let value = serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8(bytes.to_vec()).unwrap()));
+    (status, value, cookie)
+}
+
+#[tokio::test]
+async fn login_guests_vault_unicode_preserves_write_and_serialization_effects() {
+    use hangar_server::{login_guests::{Service, Settings}, orchestration::codec};
+    let fixture = codec::loads(include_str!("../../../../backend/tests/fixtures/contract/guests/vault-unicode.json")).unwrap();
+    let mut differences = Vec::new();
+    for (index, row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
+        let home = tempfile::tempdir().unwrap();
+        let mut service = Service::new(Settings { guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),
+            runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"fixture-bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,
+            rate_max:10.into(),rate_window:300.into() });
+        service.now = || 2000000000;
+        let service = Arc::new(service);
+        assert_eq!(sync_request(&service,"POST","/api/sync/register",r#"{"bootstrap":"fixture-bootstrap","user":"ana","salt":"fixture","auth_hash":"fixture"}"#,None).await.0,200);
+        let login = sync_request(&service,"POST","/api/sync/login",r#"{"user":"ana","auth_hash":"fixture"}"#,None).await;
+        assert_eq!(login.0,200);
+        let cookie = login.2.unwrap();
+        for (name, method, raw) in [("put","PUT",row["raw_body"].as_str().unwrap()),("get","GET",""),("stale","PUT",r#"{"enc_blob":null,"base_rev":0}"#)] {
+            let (status, response, _) = sync_request(&service,method,"/api/sync/vault",raw,Some(&cookie)).await;
+            if status != row[name]["status"].as_u64().unwrap() as u16 || response != row[name]["response"] { differences.push(format!("{index}/{name}")); }
+        }
+        let raw_disk = std::fs::read_to_string(home.path().join("vault.json")).unwrap();
+        assert!(!codec::contains_surrogate(&Value::String(raw_disk.clone())), "marcador privado não pode persistir");
+        let disk = codec::loads(&raw_disk).unwrap();
+        if disk["enc_blob"] != row["disk_blob"] || disk["rev"] != row["disk_rev"] { differences.push(format!("{index}/disk")); }
+    }
+    assert!(differences.is_empty(),"cofre e serialização: {differences:?}");
+}
+
+#[tokio::test]
+async fn login_guests_admin_counter_preserves_parser_priority_and_shared_bucket() {
+    use hangar_server::login_guests::{Service,Settings};
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/admin-rate.json")).unwrap();
+    let mut differences=Vec::new();
+    for row in fixture["rows"].as_array().unwrap() {
+        let home=tempfile::tempdir().unwrap();
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+        let mut state=AppState::new(Config{listen:address,upstream:crate::refused_address(),internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
+        state.auth=hangar_server::auth::Auth::new("owner");state.share=None;
+        let service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
+        service.store.create("Ana",home.path().to_str().unwrap(),false,true,"fixture".into(),"guest-token".into()).unwrap();
+        state.login_guests=Arc::new(service);
+        let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
+        let client=reqwest::Client::new();
+        for (index,step) in row["steps"].as_array().unwrap().iter().enumerate() {
+            let mut request=client.request(reqwest::Method::from_bytes(step["method"].as_str().unwrap().as_bytes()).unwrap(),format!("http://{address}{}",step["path"].as_str().unwrap()))
+                .bearer_auth(step["token"].as_str().unwrap()).header("x-forwarded-for","198.51.100.7");
+            if let Some(raw)=step["raw"].as_str(){ request=request.header("content-type","application/json").body(raw.to_owned()); }
+            let response=request.send().await.unwrap();let status=response.status().as_u16();let retry=response.headers().get("retry-after").map(|v|v.to_str().unwrap().to_owned());
+            let body:Value=response.json().await.unwrap();
+            if status!=step["status"].as_u64().unwrap() as u16 || body!=step["response"] || retry.as_deref()!=step["retry_after"].as_str(){ differences.push(format!("{}/{index}: {status}",row["name"])); }
+        }
+        task.abort();
+    }
+    assert!(differences.is_empty(),"contador HTTP: {differences:?}");
+}
+
+#[tokio::test]
+async fn login_guests_stored_base64_preserves_permissive_decode() {
+    use hangar_server::login_guests::{Service,Settings};
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/stored-base64.json")).unwrap();
+    let mut differences=Vec::new();
+    for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
+        let home=tempfile::tempdir().unwrap();
+        let vault=home.path().join("vault.json");let original=row["vault"].to_string();std::fs::write(&vault,&original).unwrap();
+        let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:vault.clone(),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
+        service.now=||2000000000;let service=Arc::new(service);
+        for (name,method,path,raw) in [("prelogin","GET","/api/sync/prelogin?user=unknown",""),("login","POST","/api/sync/login",r#"{"user":"ana","auth_hash":"fixture-auth"}"#)] {
+            let (status,body,cookie)=sync_request(&service,method,path,raw,None).await;
+            let expected_status=row[name]["status"].as_u64().unwrap() as u16;
+            // D03 conserva status/arquivo e substitui somente o texto opaco do erro interno.
+            let body_matches=if expected_status==500 { body["detail"]["code"]=="sync_vault_unreadable" } else { body==row[name]["response"] };
+            if status!=expected_status || !body_matches || name=="login" && cookie.as_deref()!=row["set_cookie"].as_str() { differences.push(format!("{index}/{name}: {status}")); }
+        }
+        assert_eq!(std::fs::read_to_string(vault).unwrap(),original,"arquivo preservado {index}");
+    }
+    assert!(differences.is_empty(),"base64 persistido: {differences:?}");
 }

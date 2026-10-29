@@ -131,7 +131,12 @@ impl Service {
         };
         let parsed = if expects_body {
             match to_bytes(body, self.body_limit).await {
-                Ok(bytes) => crate::orchestration::body::parse(&bytes),
+                Ok(bytes) if bytes.is_empty() => Ok(Value::Null),
+                Ok(bytes) if json_content_type(&parts.headers) => crate::orchestration::body::parse(&bytes),
+                Ok(bytes) => match std::str::from_utf8(&bytes) {
+                    Ok(text) => Ok(Value::String(text.into())),
+                    Err(_) => return serialization_failure(&headers),
+                },
                 Err(_) => Err((axum::http::StatusCode::BAD_REQUEST, json!({"detail":"There was an error parsing the body"}))),
             }
         } else { Ok(Value::Null) };
@@ -163,8 +168,8 @@ impl Service {
         .await;
         let mut response = match result {
             Ok(Ok((value, cookie))) => {
-                let mut r = Json(value).into_response();
-                if let Some(cookie) = cookie {
+                let mut r = Json(crate::orchestration::codec::normalize_response(value)).into_response();
+                if r.status().is_success() && let Some(cookie) = cookie {
                     if let Ok(cookie) = HeaderValue::from_str(&cookie) {
                         r.headers_mut().insert(header::SET_COOKIE, cookie);
                     }
@@ -354,13 +359,23 @@ fn cookie(headers: &HeaderMap, key: &str) -> Option<String> {
             (k == key).then(|| v.trim_matches('"').to_owned())
         })
 }
+fn serialization_failure(headers: &HeaderMap) -> Response {
+    let mut response = (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
+    crate::routes::cors(headers, response.headers_mut());
+    response
+}
+fn json_content_type(headers: &HeaderMap) -> bool {
+    headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|raw| {
+        let media = raw.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
+        media.strip_prefix("application/").is_some_and(|kind| kind == "json" || kind.ends_with("+json"))
+    })
+}
 fn reply(f: Failure, headers: &HeaderMap) -> Response {
-    let mut r = (
-        axum::http::StatusCode::from_u16(f.status)
-            .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
-        Json(f.body),
-    )
-        .into_response();
+    let mut r = Json(f.body).into_response();
+    if r.status().is_success() {
+        *r.status_mut() = axum::http::StatusCode::from_u16(f.status)
+            .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    }
     crate::routes::cors(headers, r.headers_mut());
     r
 }
@@ -385,19 +400,36 @@ pub async fn route(
     request: Request,
 ) -> Response {
     let (forward, owner) = match crate::routes::gate(&st, peer, &request).await { Ok(value)=>value, Err(error)=>return crate::auth::unavailable(error) };
+    let path = request.uri().path();
+    let admin = path == "/api/me" || path == "/api/guests" || path.starts_with("/api/guests/")
+        || path == "/api/sync/setup" || path == "/api/sync/setup/disable";
+    let admission = admin.then(|| crate::routes::owner_gate(&st, peer, &request));
     let response = st
         .login_guests
         .respond(owner, forward.client_ip, forward.https, request)
         .await;
+    if response.status() == axum::http::StatusCode::UNAUTHORIZED
+        && let Some(admission) = admission
+        && let Err(mut failure) = admission.await
+    {
+        for (name, value) in response.headers() {
+            if name.as_str().starts_with("access-control-") { failure.headers_mut().insert(name.clone(), value.clone()); }
+        }
+        return failure;
+    }
     if response.status().is_success() {
         st.list.invalidate();
     }
     response
 }
 
+
 struct Json(Value);
 impl IntoResponse for Json {
     fn into_response(self) -> Response {
+        if crate::orchestration::codec::contains_surrogate(&self.0) || crate::orchestration::codec::contains_nonfinite(&self.0) {
+            return serialization_failure(&HeaderMap::new());
+        }
         (
             [(header::CONTENT_TYPE, "application/json")],
             self.0.to_string(),

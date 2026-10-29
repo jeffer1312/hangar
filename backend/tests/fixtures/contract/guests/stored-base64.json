@@ -1,0 +1,591 @@
+{
+  "source_commit": "fd1ae6bbdf8096598132bed74a188d01c63fba1e",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_stored_base64.py",
+  "rows": [
+    {
+      "salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "77YdO10oTac9B3PdLYVxpctT/yEkfayxzj1ExBB/yH4=",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": true,
+        "bytes_hex": "78787878787878787878787878787878"
+      },
+      "prelogin": {
+        "status": 200,
+        "response": {
+          "salt": "mMPReJps9gN0eDEHH4ivYg==",
+          "iterations": 600000
+        }
+      },
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        }
+      },
+      "set_cookie": "cp_sync=ana.2002592000:78787878.817110fb2ba34ff3ab3cd5fe3a3514787ec0cf335176f073d9485b02ebc2ddc0; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax",
+      "file_unchanged": true
+    },
+    {
+      "salt": "eHh4eHh4eHh4eHh4eHh4eB==",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eB==",
+        "auth_verifier": "77YdO10oTac9B3PdLYVxpctT/yEkfayxzj1ExBB/yH4=",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": true,
+        "bytes_hex": "78787878787878787878787878787878"
+      },
+      "prelogin": {
+        "status": 200,
+        "response": {
+          "salt": "mMPReJps9gN0eDEHH4ivYg==",
+          "iterations": 600000
+        }
+      },
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        }
+      },
+      "set_cookie": "cp_sync=ana.2002592000:78787878.817110fb2ba34ff3ab3cd5fe3a3514787ec0cf335176f073d9485b02ebc2ddc0; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax",
+      "file_unchanged": true
+    },
+    {
+      "salt": "eHh4eHh4eHh4eHh4eHh4eA===",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA===",
+        "auth_verifier": "77YdO10oTac9B3PdLYVxpctT/yEkfayxzj1ExBB/yH4=",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": true,
+        "bytes_hex": "78787878787878787878787878787878"
+      },
+      "prelogin": {
+        "status": 200,
+        "response": {
+          "salt": "mMPReJps9gN0eDEHH4ivYg==",
+          "iterations": 600000
+        }
+      },
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        }
+      },
+      "set_cookie": "cp_sync=ana.2002592000:78787878.817110fb2ba34ff3ab3cd5fe3a3514787ec0cf335176f073d9485b02ebc2ddc0; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax",
+      "file_unchanged": true
+    },
+    {
+      "salt": "eHh4eHh4eHh4eHh4eHh4eA",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA",
+        "auth_verifier": "invalid",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "Error"
+      },
+      "prelogin": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "set_cookie": null,
+      "file_unchanged": true
+    },
+    {
+      "salt": "eHh4eHh4eHh4eHh4eHh4eA== \n",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA== \n",
+        "auth_verifier": "77YdO10oTac9B3PdLYVxpctT/yEkfayxzj1ExBB/yH4=",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": true,
+        "bytes_hex": "78787878787878787878787878787878"
+      },
+      "prelogin": {
+        "status": 200,
+        "response": {
+          "salt": "mMPReJps9gN0eDEHH4ivYg==",
+          "iterations": 600000
+        }
+      },
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        }
+      },
+      "set_cookie": "cp_sync=ana.2002592000:78787878.817110fb2ba34ff3ab3cd5fe3a3514787ec0cf335176f073d9485b02ebc2ddc0; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax",
+      "file_unchanged": true
+    },
+    {
+      "salt": "!eHh4eHh4eHh4eHh4eHh4eA==",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "!eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "77YdO10oTac9B3PdLYVxpctT/yEkfayxzj1ExBB/yH4=",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": true,
+        "bytes_hex": "78787878787878787878787878787878"
+      },
+      "prelogin": {
+        "status": 200,
+        "response": {
+          "salt": "mMPReJps9gN0eDEHH4ivYg==",
+          "iterations": 600000
+        }
+      },
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        }
+      },
+      "set_cookie": "cp_sync=ana.2002592000:78787878.817110fb2ba34ff3ab3cd5fe3a3514787ec0cf335176f073d9485b02ebc2ddc0; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax",
+      "file_unchanged": true
+    },
+    {
+      "salt": "=eHh4eHh4eHh4eHh4eHh4eA==",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "=eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "77YdO10oTac9B3PdLYVxpctT/yEkfayxzj1ExBB/yH4=",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": true,
+        "bytes_hex": "78787878787878787878787878787878"
+      },
+      "prelogin": {
+        "status": 200,
+        "response": {
+          "salt": "mMPReJps9gN0eDEHH4ivYg==",
+          "iterations": 600000
+        }
+      },
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        }
+      },
+      "set_cookie": "cp_sync=ana.2002592000:78787878.817110fb2ba34ff3ab3cd5fe3a3514787ec0cf335176f073d9485b02ebc2ddc0; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax",
+      "file_unchanged": true
+    },
+    {
+      "salt": "eHh4eHh4eHh4eHh4eHh4eA==AAAA",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "eHh4eHh4eHh4eHh4eHh4eA==AAAA",
+        "auth_verifier": "77YdO10oTac9B3PdLYVxpctT/yEkfayxzj1ExBB/yH4=",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": true,
+        "bytes_hex": "78787878787878787878787878787878"
+      },
+      "prelogin": {
+        "status": 200,
+        "response": {
+          "salt": "mMPReJps9gN0eDEHH4ivYg==",
+          "iterations": 600000
+        }
+      },
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        }
+      },
+      "set_cookie": "cp_sync=ana.2002592000:78787878.817110fb2ba34ff3ab3cd5fe3a3514787ec0cf335176f073d9485b02ebc2ddc0; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax",
+      "file_unchanged": true
+    },
+    {
+      "salt": "eH=h4eHh4eHh4eHh4eHh4eA==",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "eH=h4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "77YdO10oTac9B3PdLYVxpctT/yEkfayxzj1ExBB/yH4=",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": true,
+        "bytes_hex": "78787878787878787878787878787878"
+      },
+      "prelogin": {
+        "status": 200,
+        "response": {
+          "salt": "mMPReJps9gN0eDEHH4ivYg==",
+          "iterations": 600000
+        }
+      },
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        }
+      },
+      "set_cookie": "cp_sync=ana.2002592000:78787878.817110fb2ba34ff3ab3cd5fe3a3514787ec0cf335176f073d9485b02ebc2ddc0; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax",
+      "file_unchanged": true
+    },
+    {
+      "salt": "",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "",
+        "auth_verifier": "iVrIfyK21LThpw/Igiix224cX79MDzr2YRVrYCXtWuM=",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": true,
+        "bytes_hex": ""
+      },
+      "prelogin": {
+        "status": 200,
+        "response": {
+          "salt": "pSn5flOilD3EFKLac+27EQ==",
+          "iterations": 600000
+        }
+      },
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        }
+      },
+      "set_cookie": "cp_sync=ana.2002592000:.15f13a95d88bb99c25bc652c6563bb1287929233114a8813822a722668a311a0; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax",
+      "file_unchanged": true
+    },
+    {
+      "salt": "====",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "====",
+        "auth_verifier": "iVrIfyK21LThpw/Igiix224cX79MDzr2YRVrYCXtWuM=",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": true,
+        "bytes_hex": ""
+      },
+      "prelogin": {
+        "status": 200,
+        "response": {
+          "salt": "pSn5flOilD3EFKLac+27EQ==",
+          "iterations": 600000
+        }
+      },
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        }
+      },
+      "set_cookie": "cp_sync=ana.2002592000:.15f13a95d88bb99c25bc652c6563bb1287929233114a8813822a722668a311a0; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax",
+      "file_unchanged": true
+    },
+    {
+      "salt": "A",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "A",
+        "auth_verifier": "invalid",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "Error"
+      },
+      "prelogin": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "set_cookie": null,
+      "file_unchanged": true
+    },
+    {
+      "salt": "AA",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "AA",
+        "auth_verifier": "invalid",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "Error"
+      },
+      "prelogin": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "set_cookie": null,
+      "file_unchanged": true
+    },
+    {
+      "salt": "AAA",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "AAA",
+        "auth_verifier": "invalid",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "Error"
+      },
+      "prelogin": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "set_cookie": null,
+      "file_unchanged": true
+    },
+    {
+      "salt": "AAAA",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "AAAA",
+        "auth_verifier": "1y+CmSLEbwK/ecA5nBiTjp9Xvajm3uMW1j7OtT7QIf4=",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": true,
+        "bytes_hex": "000000"
+      },
+      "prelogin": {
+        "status": 200,
+        "response": {
+          "salt": "pSn5flOilD3EFKLac+27EQ==",
+          "iterations": 600000
+        }
+      },
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        }
+      },
+      "set_cookie": "cp_sync=ana.2002592000:000000.c90051417efada53a9b2012b67df490bcc8c0fc33aeb3fa02ab2756599e89c29; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax",
+      "file_unchanged": true
+    },
+    {
+      "salt": "AA==junk",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "AA==junk",
+        "auth_verifier": "JDhcceTucjksX6RZDtdh09YmYHCIFNDrEQjEl+24XKk=",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": true,
+        "bytes_hex": "00"
+      },
+      "prelogin": {
+        "status": 200,
+        "response": {
+          "salt": "pSn5flOilD3EFKLac+27EQ==",
+          "iterations": 600000
+        }
+      },
+      "login": {
+        "status": 200,
+        "response": {
+          "ok": true
+        }
+      },
+      "set_cookie": "cp_sync=ana.2002592000:00.d72b7533f2e5212cfce02b97bc33d16758731eee0e4c5d6966723468591a3ec6; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax",
+      "file_unchanged": true
+    },
+    {
+      "salt": "\u00e9eHh4eHh4eHh4eHh4eHh4eA==",
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": "\u00e9eHh4eHh4eHh4eHh4eHh4eA==",
+        "auth_verifier": "invalid",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "ValueError"
+      },
+      "prelogin": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "set_cookie": null,
+      "file_unchanged": true
+    },
+    {
+      "salt": null,
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": null,
+        "auth_verifier": "invalid",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "TypeError"
+      },
+      "prelogin": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "set_cookie": null,
+      "file_unchanged": true
+    },
+    {
+      "salt": 17,
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": 17,
+        "auth_verifier": "invalid",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "TypeError"
+      },
+      "prelogin": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "set_cookie": null,
+      "file_unchanged": true
+    },
+    {
+      "salt": [],
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": [],
+        "auth_verifier": "invalid",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "TypeError"
+      },
+      "prelogin": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "set_cookie": null,
+      "file_unchanged": true
+    },
+    {
+      "salt": {},
+      "vault": {
+        "user": "ana",
+        "salt": "fixture-salt",
+        "verifier_salt": {},
+        "auth_verifier": "invalid",
+        "enc_blob": null,
+        "rev": 0
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "TypeError"
+      },
+      "prelogin": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "login": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "set_cookie": null,
+      "file_unchanged": true
+    }
+  ]
+}
