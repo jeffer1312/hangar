@@ -370,6 +370,219 @@ async fn answer(bytes: &[u8], requests: &async_channel::Sender<Request>) -> Stri
 mod tests {
     use super::*;
 
+    async fn component_request(text: &str) -> (TcpStream, async_channel::Receiver<Request>, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (requests, ui) = async_channel::unbounded();
+        let task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            serve(stream, "component-proof".into(), requests).await;
+        });
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client.write_all(text.as_bytes()).await.unwrap();
+        (client, ui, task)
+    }
+
+    async fn response_head(client: &mut TcpStream) -> String {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let mut bytes = Vec::new();
+            while !bytes.ends_with(b"\r\n\r\n") {
+                assert!(bytes.len() < HEAD_MAX);
+                bytes.push(client.read_u8().await.unwrap());
+            }
+            String::from_utf8(bytes).unwrap()
+        }).await.expect("o servidor precisa concluir o handshake")
+    }
+
+    #[tokio::test]
+    async fn cdp_http_route_enforces_access_before_watch_and_unwatches_the_same_viewer() {
+        let upgrade = "Upgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n";
+        for (request, status) in [
+            (format!("GET /cdp?chave=s%3A%3Anative HTTP/1.1\r\n{upgrade}\r\n"), 401),
+            (format!("GET /cdp?chave=s%3A%3Anative&token=component-proof HTTP/1.1\r\n{upgrade}\r\n"), 401),
+            (format!("GET /cdp HTTP/1.1\r\nAuthorization: Bearer component-proof\r\n{upgrade}\r\n"), 400),
+            ("GET /cdp?chave=a HTTP/1.1\r\nAuthorization: Bearer component-proof\r\n\r\n".into(), 400),
+            (format!("POST /cdp?chave=a HTTP/1.1\r\nAuthorization: Bearer component-proof\r\n{upgrade}\r\n"), 404),
+        ] {
+            let (mut client, ui, task) = component_request(&request).await;
+            assert!(response_head(&mut client).await.starts_with(&format!("HTTP/1.1 {status} ")));
+            tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap();
+            assert!(ui.is_empty(), "recusa de acesso não pode registrar espectador");
+        }
+        let request = format!("GET /cdp?chave=s%3A%3Anative HTTP/1.1\r\nAuthorization: Bearer component-proof\r\n{upgrade}\r\n");
+        let (mut client, ui, task) = component_request(&request).await;
+        let Request::Watch { key, viewer, reply } = tokio::time::timeout(Duration::from_secs(2), ui.recv()).await.unwrap().unwrap()
+            else { panic!("esperava registro do espectador") };
+        assert_eq!(key, "s::native");
+        let id = viewer.id;
+        reply.send(Ok(())).unwrap();
+        let head = response_head(&mut client).await;
+        assert!(head.starts_with("HTTP/1.1 101 "));
+        assert!(head.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="));
+        client.write_all(&[0x88, 0x82, 0, 0, 0, 0, 3, 232]).await.unwrap();
+        let mut close = [0; 4];
+        tokio::time::timeout(Duration::from_secs(2), client.read_exact(&mut close)).await.unwrap().unwrap();
+        assert_eq!(close, [0x88, 2, 3, 232]);
+        let Request::Unwatch { key, id: ended } = tokio::time::timeout(Duration::from_secs(2), ui.recv()).await.unwrap().unwrap()
+            else { panic!("esperava retirada do espectador") };
+        assert_eq!((key.as_str(), ended), ("s::native", id));
+        tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn cdp_watch_refusal_and_missing_reply_never_upgrade() {
+        let request = "GET /cdp?chave=native HTTP/1.1\r\nAuthorization: Bearer component-proof\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+        for refuse in [true, false] {
+            let (mut client, ui, task) = component_request(request).await;
+            let Request::Watch { reply, .. } = tokio::time::timeout(Duration::from_secs(2), ui.recv()).await.unwrap().unwrap()
+                else { panic!("esperava registro do espectador") };
+            if refuse { reply.send(Err("erro: navegador ausente".into())).unwrap(); } else { drop(reply); }
+            let mut response = String::new();
+            tokio::time::timeout(Duration::from_secs(2), client.read_to_string(&mut response)).await.unwrap().unwrap();
+            let (status, message) = if refuse { (404, "erro: navegador ausente") } else { (500, "erro: o app nao respondeu") };
+            assert!(response.starts_with(&format!("HTTP/1.1 {status} ")));
+            assert!(response.ends_with(message));
+            assert!(!response.contains("101 Switching Protocols"));
+            tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn cdp_pending_watch_has_a_ten_second_deadline() {
+        let request = "GET /cdp?chave=native HTTP/1.1\r\nAuthorization: Bearer component-proof\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+        let since = std::time::Instant::now();
+        let (mut client, ui, task) = component_request(request).await;
+        let Request::Watch { reply, .. } = tokio::time::timeout(Duration::from_secs(2), ui.recv()).await.unwrap().unwrap()
+            else { panic!("esperava registro do espectador") };
+        let mut response = String::new();
+        tokio::time::timeout(Duration::from_secs(12), client.read_to_string(&mut response)).await.unwrap().unwrap();
+        assert!(since.elapsed() >= Duration::from_secs(10));
+        assert!(response.starts_with("HTTP/1.1 500 "));
+        assert!(response.ends_with("erro: o app nao respondeu"));
+        assert!(reply.send(Ok(())).is_err(), "a espera expirada foi descartada");
+        tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_sidecars_are_proved_in_a_separate_home() {
+        let root = std::env::temp_dir().join(format!("hangar-native-sidecars-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir(&root).unwrap();
+        let identity = new_token().unwrap();
+        std::fs::write(root.join("proof-owner"), &identity).unwrap();
+        struct OwnedRoot { path: PathBuf, identity: String }
+        impl Drop for OwnedRoot {
+            fn drop(&mut self) {
+                if std::fs::read_to_string(self.path.join("proof-owner")).ok().as_deref() == Some(self.identity.as_str()) {
+                    let _ = std::fs::remove_dir_all(&self.path);
+                }
+            }
+        }
+        let owned = OwnedRoot { path: root.clone(), identity };
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "browser::server::tests::isolated_native_sidecar_proof", "--ignored", "--test-threads=1"])
+            .env_clear().env("HOME", &root).env("HANGAR_NATIVE_SIDECAR_PROOF", &root)
+            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() { break status; }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("subprocesso de sidecars excedeu o prazo");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(status.success(), "subprocesso de sidecars falhou");
+        assert!(std::fs::read_to_string(root.join("completed")).ok().as_deref() == Some(owned.identity.as_str()), "o filtro precisa executar o caso filho");
+        drop(owned);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "executado somente pelo pai, com HOME exclusivo definido antes do processo"]
+    fn isolated_native_sidecar_proof() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = PathBuf::from(std::env::var_os("HANGAR_NATIVE_SIDECAR_PROOF").expect("subprocesso exclusivo"));
+        assert_eq!(std::env::home_dir().as_deref(), Some(root.as_path()));
+        assert!(root.join("proof-owner").is_file());
+        let dir = nav_dir().unwrap();
+        write_json("stale", &json!({"pid": u64::from(std::process::id()) + 1, "chave": "old"})).unwrap();
+        write_json("live", &json!({"pid": std::process::id(), "chave": "live"})).unwrap();
+        write_json("legacy", &json!({"chave": "electron", "url": "http://legacy/"})).unwrap();
+        write_json("_reserved", &json!({"pid": 0})).unwrap();
+        std::fs::write(dir.join("bad.json"), "{").unwrap();
+        let occupied = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        write_json("_srv", &json!({"porta": occupied.local_addr().unwrap().port()})).unwrap();
+        let runtime = Runtime::new().unwrap();
+        let (requests, ui) = async_channel::unbounded();
+        let port = start(&runtime, requests).unwrap();
+        assert_ne!(port, occupied.local_addr().unwrap().port());
+        assert!(!dir.join("stale.json").exists());
+        for name in ["live.json", "legacy.json", "_reserved.json", "bad.json"] { assert!(dir.join(name).is_file()); }
+        let server: Value = serde_json::from_slice(&std::fs::read(dir.join("_srv.json")).unwrap()).unwrap();
+        assert_eq!(server["porta"], port);
+        assert_eq!(server["pid"], std::process::id());
+        let token = server["token"].as_str().unwrap();
+        assert!(!token.is_empty());
+        runtime.block_on(async {
+            let ui = tokio::spawn(async move {
+                let Request::Command { key, verb, reply, .. } = ui.recv().await.unwrap() else { panic!("esperava comando") };
+                assert_eq!((key.as_str(), verb.as_str()), ("proof::native", "url"));
+                reply.send(Reply::Text("http://example.test/ready".into())).ok().unwrap();
+            });
+            let mut socket = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            let body = r#"{"chave":"proof::native","verbo":"url","args":[]}"#;
+            let request = format!("POST /cmd HTTP/1.1\r\nAuthorization: Bearer {token}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+            socket.write_all(request.as_bytes()).await.unwrap();
+            let mut response = String::new();
+            tokio::time::timeout(Duration::from_secs(2), socket.read_to_string(&mut response)).await.unwrap().unwrap();
+            assert!(response.starts_with("HTTP/1.1 200 ") && response.ends_with("http://example.test/ready"));
+            ui.await.unwrap();
+        });
+        let key = "http://127.0.0.1:18865::proof-native";
+        write_sidecar(key, "http://example.test/one?raw=1&token=sensitive-query-value#anchor", "Primeira");
+        let path = dir.join(format!("{}.json", sidecar_name(key)));
+        let read = || serde_json::from_slice::<Value>(&std::fs::read(&path).unwrap()).unwrap();
+        let first = read();
+        assert_eq!(first["url"], "http://example.test/one?raw=1#anchor");
+        assert_eq!(first["abas"][0]["url"], first["url"]);
+        assert_eq!(first["targetId"], Value::Null);
+        assert_eq!(first["abas"][0]["targetId"], Value::Null);
+        assert_eq!(first["ativa"], 1);
+        assert_eq!(first["pid"], std::process::id());
+        assert_eq!(first["chave"], key);
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("sensitive-query-value"));
+        let reading = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        std::thread::scope(|scope| {
+            let running = reading.clone();
+            let path = &path;
+            let reader = scope.spawn(move || {
+                let mut count = 0;
+                while running.load(std::sync::atomic::Ordering::Relaxed) || count == 0 {
+                    let value: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+                    assert!(matches!(value["url"].as_str(), Some("http://example.test/one?raw=1#anchor" | "http://example.test/two")));
+                    assert_eq!(value["abas"][0]["url"], value["url"]);
+                    count += 1;
+                }
+            });
+            for _ in 0..32 { write_sidecar(key, "http://example.test/two?token=sensitive-query-value", "Segunda"); }
+            reading.store(false, std::sync::atomic::Ordering::Relaxed);
+            reader.join().unwrap();
+        });
+        assert_eq!(read()["url"], "http://example.test/two");
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        for path in [path.clone(), dir.join("_srv.json")] {
+            assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        remove_sidecar(key);
+        assert!(!path.exists());
+        assert!(dir.join("live.json").is_file());
+        assert!(!std::fs::read_dir(&dir).unwrap().flatten().any(|e| e.path().extension().is_some_and(|ext| ext == "tmp")));
+        runtime.shutdown_timeout(Duration::from_secs(2));
+        std::fs::write(root.join("completed"), std::fs::read(root.join("proof-owner")).unwrap()).unwrap();
+    }
+
     #[test]
     fn head_is_parsed_and_checked_in_electron_order() {
         let head = parse_head("POST /cmd HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer abc\r\nContent-Length: 12").unwrap();

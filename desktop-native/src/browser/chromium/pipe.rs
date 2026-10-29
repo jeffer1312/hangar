@@ -541,6 +541,24 @@ pub struct Viewport {
 }
 
 impl Session {
+    #[cfg(test)]
+    pub(crate) fn contract_peer(id: &str) -> (Rc<Self>, std::io::PipeReader) {
+        let (wire, reader) = tests::wire();
+        let browser = Rc::new(Browser {
+            wire, scale: 1, handlers: RefCell::default(), watchers: RefCell::default(),
+            initial: RefCell::default(), owned: RefCell::default(), crashed: RefCell::default(),
+            ready: RefCell::default(), _drain: RefCell::default(),
+        });
+        (Rc::new(Self { browser, id: id.into(), viewport: Viewport::default() }), reader)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contract_event(&self, method: &str, params: Value) {
+        let (events, received) = async_channel::unbounded();
+        route(json!({"method": method, "sessionId": self.id, "params": params}), &self.browser.wire, &events);
+        while let Ok(message) = received.try_recv() { self.browser.dispatch(message); }
+    }
+
     /// Liga uma sessão CDP ao alvo, sem travar a interface.
     pub fn attach_async(browser: &Rc<Browser>, target: &str) -> impl Future<Output = Result<Session, String>> + use<> {
         let (call, browser) = (browser.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true})), browser.clone());

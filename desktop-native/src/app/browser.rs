@@ -36,6 +36,315 @@ pub(super) enum PanelEvent {
     Element { key: String, element: crate::context_refs::Element, png: Option<Vec<u8>> },
 }
 
+#[cfg(all(test, not(target_os = "macos")))]
+mod remote_viewer_tests {
+    use super::*;
+    use crate::{browser::{relay, server::Request}, ws::{TextEvent, TextSocket}};
+    use gpui::{TestAppContext, prelude::*};
+    use serde_json::json;
+    use std::time::Duration;
+    use tokio::io::AsyncReadExt;
+
+    struct ViewerServer {
+        runtime: tokio::runtime::Runtime,
+        api: crate::api::Api,
+        requests: async_channel::Receiver<Request>,
+        stop: Option<tokio::sync::oneshot::Sender<()>>,
+        task: Option<tokio::task::JoinHandle<()>>,
+    }
+
+    impl ViewerServer {
+        fn new() -> Self {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let listener = { let _entered = runtime.enter(); tokio::net::TcpListener::from_std(listener).unwrap() };
+            let api = { let _entered = runtime.enter(); crate::api::Api::new(&format!("http://{address}"), "viewer-proof").unwrap() };
+            let (sent, requests) = async_channel::unbounded();
+            let (stop, mut stopped) = tokio::sync::oneshot::channel();
+            let task = runtime.spawn(async move {
+                let mut sockets = tokio::task::JoinSet::new();
+                loop {
+                    tokio::select! {
+                        _ = &mut stopped => break,
+                        accepted = listener.accept() => {
+                            let (mut stream, _) = accepted.unwrap();
+                            let sent = sent.clone();
+                            sockets.spawn(async move {
+                                let head = tokio::time::timeout(Duration::from_secs(2), async {
+                                    let mut bytes = Vec::new();
+                                    while !bytes.ends_with(b"\r\n\r\n") {
+                                        assert!(bytes.len() < 16 * 1024);
+                                        bytes.push(stream.read_u8().await.unwrap());
+                                    }
+                                    String::from_utf8(bytes).unwrap()
+                                }).await.unwrap();
+                                let ws_key = head.lines().filter_map(|line| line.split_once(':'))
+                                    .find_map(|(name, value)| name.eq_ignore_ascii_case("sec-websocket-key").then(|| value.trim().to_owned())).unwrap();
+                                relay::serve(stream, &ws_key, "proof::native".into(), sent).await;
+                            });
+                        }
+                        Some(result) = sockets.join_next() => result.unwrap(),
+                    }
+                }
+                sockets.abort_all();
+                while let Some(result) = sockets.join_next().await {
+                    if let Err(error) = result { assert!(error.is_cancelled()); }
+                }
+            });
+            Self { runtime, api, requests, stop: Some(stop), task: Some(task) }
+        }
+
+        fn socket(&self) -> TextSocket { TextSocket::open(self.runtime.handle(), &self.api, "/cdp?chave=proof%3A%3Anative", "viewer-proof".into()) }
+
+        fn receive<T>(&self, channel: &async_channel::Receiver<T>) -> T {
+            self.runtime.block_on(async { tokio::time::timeout(Duration::from_secs(2), channel.recv()).await.unwrap().ok().unwrap() })
+        }
+    }
+
+    impl Drop for ViewerServer {
+        fn drop(&mut self) {
+            if let Some(stop) = self.stop.take() { let _ = stop.send(()); }
+            if let Some(task) = self.task.take() {
+                self.runtime.block_on(async { tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap(); });
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn registered_viewers_replace_on_the_wire_and_late_unwatch_preserves_the_new_channel(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.skip_drawing();
+        let (panel, cx) = cx.add_window_view(|window, cx| BrowserPanel::new("proof::native".into(), window, cx));
+        let server = ViewerServer::new();
+        let first = server.socket();
+        let first_events = first.events();
+        let Request::Watch { viewer, reply, .. } = server.receive(&server.requests) else { panic!("esperava espectador") };
+        let first_id = viewer.id;
+        // A prontidão do motor pertence ao ensaio externo; aqui começa a posse do espectador já registrado.
+        panel.read_with(cx, |panel, _| panel.take_viewer(viewer));
+        reply.send(Ok(())).unwrap();
+        assert!(matches!(server.receive(&first_events), Ok(TextEvent::Connected)));
+        let second = server.socket();
+        let second_events = second.events();
+        let Request::Watch { viewer, reply, .. } = server.receive(&server.requests) else { panic!("esperava novo espectador") };
+        let second_id = viewer.id;
+        assert_ne!(first_id, second_id);
+        panel.read_with(cx, |panel, _| panel.take_viewer(viewer));
+        reply.send(Ok(())).unwrap();
+        assert!(matches!(server.receive(&second_events), Ok(TextEvent::Connected)));
+        let Ok(TextEvent::Text(detached)) = server.receive(&first_events) else { panic!("esperava motivo da substituição") };
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&detached).unwrap(), json!({"method": "Inspector.detached", "params": {"reason": "replaced_by_another_viewer"}}));
+        assert!(matches!(server.receive(&first_events), Ok(TextEvent::Closed)));
+        let Request::Unwatch { id, .. } = server.receive(&server.requests) else { panic!("esperava saída do antigo") };
+        assert_eq!(id, first_id);
+        let chromium: serde_json::Value = serde_json::from_str(include_str!("../../../backend/tests/fixtures/contract/remote-browser/chromium.json")).unwrap();
+        panel.read_with(cx, |panel, _| {
+            panel.unwatch(id);
+            assert_eq!(panel.viewer.borrow().as_ref().unwrap().id, second_id);
+            #[cfg(target_os = "linux")]
+            assert!(panel.frames.lock().unwrap().is_some());
+            assert_eq!(panel.viewer.borrow().as_ref().unwrap().deliver("Page.screencastFrame", &chromium["frame"]), None);
+        });
+        let Ok(TextEvent::Text(frame)) = server.receive(&second_events) else { panic!("esperava quadro após saída tardia") };
+        let frame: serde_json::Value = serde_json::from_str(&frame).unwrap();
+        assert!(frame == json!({"method": "Page.screencastFrame", "params": chromium["frame"]}), "o quadro congelado continua no novo espectador");
+        panel.read_with(cx, |panel, _| panel.end_viewer());
+        let Ok(TextEvent::Text(detached)) = server.receive(&second_events) else { panic!("esperava encerramento") };
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&detached).unwrap(), json!({"method": "Inspector.detached", "params": {"reason": "target_closed"}}));
+        assert!(matches!(server.receive(&second_events), Ok(TextEvent::Closed)));
+        let Request::Unwatch { id, .. } = server.receive(&server.requests) else { panic!("esperava saída do atual") };
+        assert_eq!(id, second_id);
+        panel.read_with(cx, |panel, _| {
+            panel.unwatch(id);
+            assert!(panel.viewer.borrow().is_none());
+            #[cfg(target_os = "linux")]
+            assert!(panel.frames.lock().unwrap().is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn producer_refuses_watch_while_the_engine_is_starting(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.skip_drawing();
+        let (panel, cx) = cx.add_window_view(|window, cx| BrowserPanel::new("proof::native".into(), window, cx));
+        let (events, received) = async_channel::bounded(4);
+        let (reply, mut response) = futures::channel::oneshot::channel();
+        panel.update(cx, |panel, cx| panel.watch(relay::Viewer { id: 1, events }, reply, cx));
+        assert_eq!(response.try_recv().unwrap(), Some(Err("erro: o navegador da sessao proof::native ainda esta iniciando, tente de novo em instantes".into())));
+        assert!(received.is_closed());
+        assert!(panel.read_with(cx, |panel, _| panel.viewer.borrow().is_none()));
+    }
+
+    #[cfg(target_os = "linux")]
+    struct CdpPipeProbe {
+        messages: std::sync::mpsc::Receiver<serde_json::Value>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        reader: Option<std::thread::JoinHandle<Result<(), String>>>,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl CdpPipeProbe {
+        fn new(mut pipe: std::io::PipeReader) -> Self {
+            use std::{io::Read, os::fd::AsRawFd, sync::{Arc, atomic::{AtomicBool, Ordering}}};
+            // O leitor precisa terminar com prazo mesmo se uma asserção falhar antes de soltar os escritores.
+            let flags = unsafe { libc::fcntl(pipe.as_raw_fd(), libc::F_GETFL) };
+            assert!(flags >= 0);
+            assert_eq!(unsafe { libc::fcntl(pipe.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) }, 0);
+            let (sent, messages) = std::sync::mpsc::channel();
+            let stop = Arc::new(AtomicBool::new(false));
+            let stopped = stop.clone();
+            let reader = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let mut pending = Vec::new();
+                let mut chunk = [0; 4096];
+                loop {
+                    if stopped.load(Ordering::Relaxed) { return Err("leitor interrompido antes do EOF".into()); }
+                    if std::time::Instant::now() >= deadline { return Err("pipe não chegou ao EOF no prazo".into()); }
+                    match pipe.read(&mut chunk) {
+                        Ok(0) => return if pending.is_empty() { Ok(()) } else { Err("JSON parcial antes do EOF".into()) },
+                        Ok(n) => {
+                            pending.extend_from_slice(&chunk[..n]);
+                            while let Some(end) = pending.iter().position(|byte| *byte == 0) {
+                                let value = serde_json::from_slice(&pending[..end]).map_err(|_| "JSON inválido no pipe")?;
+                                pending.drain(..=end);
+                                sent.send(value).map_err(|_| "observador do pipe encerrado")?;
+                            }
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(2)),
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(_) => return Err("falha ao ler pipe próprio".into()),
+                    }
+                }
+            });
+            Self { messages, stop, reader: Some(reader) }
+        }
+
+        fn next(&self) -> serde_json::Value {
+            self.messages.recv_timeout(Duration::from_secs(2)).expect("o produtor precisa escrever no pipe CDP")
+        }
+
+        fn finish(mut self) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(6);
+            while !self.reader.as_ref().unwrap().is_finished() {
+                assert!(std::time::Instant::now() < deadline, "leitor CDP precisa terminar");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            self.reader.take().unwrap().join().expect("thread do pipe falhou").expect("todos os escritores precisam ser soltos e produzir EOF");
+            assert!(matches!(self.messages.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected)), "nenhum comando CDP extra fica escondido após o EOF");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for CdpPipeProbe {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(reader) = self.reader.take() {
+                if reader.join().is_err() && !std::thread::panicking() { panic!("thread do pipe falhou ao encerrar"); }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn producer_acks_the_displaced_frame_in_its_four_slot_queue_and_drops_cdp_at_shutdown(cx: &mut TestAppContext) {
+        use crate::browser::cdp::Cdp;
+        cx.update(gpui_kit::init);
+        cx.skip_drawing();
+        let (panel, cx) = cx.add_window_view(|window, cx| BrowserPanel::new("proof::native".into(), window, cx));
+        let (owner, owner_pipe) = Cdp::contract_peer("proof-owner-cdp");
+        let owner_gone = Rc::downgrade(&owner);
+        let owner_wire = CdpPipeProbe::new(owner_pipe);
+        let (session, pipe) = Cdp::contract_peer("proof-viewer-cdp");
+        let gone = Rc::downgrade(&session);
+        let wire = CdpPipeProbe::new(pipe);
+        panel.update(cx, |panel, _| {
+            panel.cdp = Some(owner);
+            *panel.relay.borrow_mut() = Some(session.clone());
+            panel.listen_relay(&session);
+        });
+        let (events, frames) = async_channel::bounded(4);
+        let (reply, mut response) = futures::channel::oneshot::channel();
+        panel.update(cx, |panel, cx| panel.watch(relay::Viewer { id: 701, events }, reply, cx));
+        assert_eq!(response.try_recv().unwrap(), Some(Ok(())));
+        let chromium: serde_json::Value = serde_json::from_str(include_str!("../../../backend/tests/fixtures/contract/remote-browser/chromium.json")).unwrap();
+        for id in [41, 42, 43, 44, 45] {
+            let mut frame = chromium["frame"].clone();
+            frame["sessionId"] = id.into();
+            session.contract_event("Page.screencastFrame", frame);
+        }
+        assert_eq!(wire.next(), json!({"id": 1, "sessionId": "proof-viewer-cdp", "method": "Page.screencastFrameAck", "params": {"sessionId": 41}}));
+        for expected in [42, 43, 44, 45] {
+            let relay::ViewerEvent::Cdp { text, frame } = frames.try_recv().unwrap() else { panic!("esperava quadro na fila do produtor") };
+            assert_eq!(frame, Some(expected));
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["method"], "Page.screencastFrame");
+            assert_eq!(value["params"]["sessionId"], expected);
+            assert!(value["params"]["data"] == chromium["frame"]["data"]);
+            assert_eq!(value["params"]["metadata"], chromium["frame"]["metadata"]);
+        }
+        assert!(frames.is_empty());
+        drop(session);
+        panel.update(cx, |panel, _| panel.drop_engine());
+        assert!(gone.upgrade().is_none(), "o teste já soltou sua referência; o produtor deve soltar o CDP do espectador");
+        assert!(owner_gone.upgrade().is_none(), "o produtor também deve soltar seu CDP principal");
+        assert!(matches!(frames.try_recv(), Ok(relay::ViewerEvent::Detached("target_closed"))));
+        assert!(frames.is_closed());
+        assert_eq!(wire.next(), json!({"id": 2, "method": "Target.detachFromTarget", "params": {"sessionId": "proof-viewer-cdp"}}));
+        assert_eq!(wire.next(), json!({"id": 3, "method": "Browser.close", "params": {}}));
+        assert_eq!(owner_wire.next(), json!({"id": 1, "method": "Target.detachFromTarget", "params": {"sessionId": "proof-owner-cdp"}}));
+        assert_eq!(owner_wire.next(), json!({"id": 2, "method": "Browser.close", "params": {}}));
+        wire.finish();
+        owner_wire.finish();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn late_unwatch_keeps_the_live_cdp_and_current_unwatch_detaches_its_last_reference(cx: &mut TestAppContext) {
+        use crate::browser::cdp::Cdp;
+        cx.update(gpui_kit::init);
+        cx.skip_drawing();
+        let (panel, cx) = cx.add_window_view(|window, cx| BrowserPanel::new("proof::native".into(), window, cx));
+        let (owner, owner_pipe) = Cdp::contract_peer("proof-owner-cdp");
+        let owner_wire = CdpPipeProbe::new(owner_pipe);
+        let (session, pipe) = Cdp::contract_peer("proof-viewer-cdp");
+        let gone = Rc::downgrade(&session);
+        let wire = CdpPipeProbe::new(pipe);
+        panel.update(cx, |panel, _| {
+            panel.cdp = Some(owner);
+            *panel.relay.borrow_mut() = Some(session.clone());
+            panel.listen_relay(&session);
+        });
+        let (old_events, old_frames) = async_channel::bounded(4);
+        let (reply, mut response) = futures::channel::oneshot::channel();
+        panel.update(cx, |panel, cx| panel.watch(relay::Viewer { id: 801, events: old_events }, reply, cx));
+        assert_eq!(response.try_recv().unwrap(), Some(Ok(())));
+        let (new_events, new_frames) = async_channel::bounded(4);
+        let (reply, mut response) = futures::channel::oneshot::channel();
+        panel.update(cx, |panel, cx| panel.watch(relay::Viewer { id: 802, events: new_events }, reply, cx));
+        assert_eq!(response.try_recv().unwrap(), Some(Ok(())));
+        assert!(matches!(old_frames.try_recv(), Ok(relay::ViewerEvent::Detached("replaced_by_another_viewer"))));
+        assert!(old_frames.is_closed());
+        drop(session);
+        panel.read_with(cx, |panel, _| panel.unwatch(801));
+        let chromium: serde_json::Value = serde_json::from_str(include_str!("../../../backend/tests/fixtures/contract/remote-browser/chromium.json")).unwrap();
+        gone.upgrade().expect("saída antiga não pode soltar o novo CDP").contract_event("Page.screencastFrame", chromium["frame"].clone());
+        let relay::ViewerEvent::Cdp { text, .. } = new_frames.try_recv().unwrap() else { panic!("esperava quadro depois do Unwatch antigo") };
+        assert!(serde_json::from_str::<serde_json::Value>(&text).unwrap() == json!({"method": "Page.screencastFrame", "params": chromium["frame"]}));
+        panel.read_with(cx, |panel, _| panel.unwatch(802));
+        assert!(gone.upgrade().is_none(), "último Unwatch deve soltar a última referência do CDP do espectador");
+        assert!(new_frames.is_closed());
+        assert_eq!(wire.next(), json!({"id": 1, "method": "Target.detachFromTarget", "params": {"sessionId": "proof-viewer-cdp"}}));
+        assert_eq!(wire.next(), json!({"id": 2, "method": "Browser.close", "params": {}}));
+        wire.finish();
+        panel.update(cx, |panel, _| panel.drop_engine());
+        assert_eq!(owner_wire.next(), json!({"id": 1, "method": "Target.detachFromTarget", "params": {"sessionId": "proof-owner-cdp"}}));
+        assert_eq!(owner_wire.next(), json!({"id": 2, "method": "Browser.close", "params": {}}));
+        owner_wire.finish();
+    }
+}
+
 impl EventEmitter<PanelEvent> for BrowserPanel {}
 
 #[cfg(target_os = "linux")]
