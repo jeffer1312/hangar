@@ -142,43 +142,6 @@ def test_unknown_composer_allows_control_and_proven_new_conversation_without_ret
     asyncio.run(flow())
 
 
-def test_lost_fill_ack_retains_publication_across_generation_and_stale_ack_cannot_confirm_new_conversation(monkeypatch):
-    import time
-    from app import plugin_bridge as pb
-    name = 'publication-barrier-test'
-    conversation = {'sid': 'A'}
-    monkeypatch.setattr(pb, 'tracked_session_id', lambda name: conversation['sid'])
-    monkeypatch.setattr(pb, 'PUBLICA_S', .02)
-    async def flow():
-        pb._loop = asyncio.get_running_loop()
-        queue = pb._waiters[name] = asyncio.Queue()
-        pb._donos[name] = ('test', {'fill', 'receipt_v2'}, time.monotonic())
-        first = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, name, 'A', 1,
-            {'id': 'pub-A', 'text': 'A', 'mode': 'fill'}, lambda: None))
-        published = await asyncio.wait_for(queue.get(), .2)
-        assert published['text'] == 'A'
-        assert await first == 'unknown'
-        assert pb._publications[name]['id'] == 'pub-A'
-        assert await asyncio.to_thread(pb.publish_terminal, name, 'A', 2,
-            {'id': 'pub-B', 'text': 'B', 'mode': 'fill'}, lambda: None) == 'unknown'
-        assert queue.empty()
-        conversation['sid'] = 'B'
-        second = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, name, 'B', 3,
-            {'id': 'pub-C', 'text': 'C', 'mode': 'fill'}, lambda: None))
-        assert (await asyncio.wait_for(queue.get(), .2))['publication_id'] == 'pub-C'
-        body = dict(sessao=name, token='test', ok=True)
-        pb._terminal_ack(pb.FilledBody(**body, publication_id='pub-A', generation=1, session_id='A'), 'fill')
-        assert pb._publications[name]['result'] == 'unknown'
-        pb._terminal_ack(pb.FilledBody(**body, publication_id='pub-C', generation=3, session_id='B'), 'fill')
-        assert await second == 'filled'
-    try:
-        asyncio.run(flow())
-    finally:
-        pb._publications.pop(name, None)
-        pb._waiters.pop(name, None)
-        pb._donos.pop(name, None)
-
-
 def _uncertain_terminal_inputs(tmp_path, texts):
     store = open_store(tmp_path)
     transcript = tmp_path / 'sid.jsonl'
@@ -259,38 +222,6 @@ def test_confirmed_uncertain_input_releases_drain_and_next_submit(tmp_path, monk
     asyncio.run(flow())
 
 
-@pytest.mark.parametrize('ok', [True, False])
-def test_late_matching_fill_ack_drops_retained_publication_without_touching_queue(monkeypatch, ok):
-    import time
-    from app import plugin_bridge as pb
-    name = 'publication-late-ack-test'
-    monkeypatch.setattr(pb, 'tracked_session_id', lambda name: 'A')
-    monkeypatch.setattr(pb, 'PUBLICA_S', .02)
-    async def flow():
-        pb._loop = asyncio.get_running_loop()
-        queue = pb._waiters[name] = asyncio.Queue()
-        pb._donos[name] = ('test', {'fill', 'receipt_v2'}, time.monotonic())
-        first = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, name, 'A', 1,
-            {'id': 'pub-A', 'text': 'A', 'mode': 'fill'}, lambda: None))
-        await asyncio.wait_for(queue.get(), .2)
-        assert await first == 'unknown'
-        body = dict(sessao=name, token='test', ok=ok)
-        assert pb._terminal_ack(pb.FilledBody(**body, publication_id='pub-A', generation=1, session_id='A'), 'fill')
-        # O plugin respondeu: a publicação não está mais em voo; a submissão segue a cargo da fila.
-        assert name not in pb._publications
-        second = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, name, 'A', 1,
-            {'id': 'pub-B', 'text': 'B', 'mode': 'fill'}, lambda: None))
-        assert (await asyncio.wait_for(queue.get(), .2))['publication_id'] == 'pub-B'
-        pb._terminal_ack(pb.FilledBody(**body, publication_id='pub-B', generation=1, session_id='A'), 'fill')
-        assert await second == ('filled' if ok else 'unknown')
-    try:
-        asyncio.run(flow())
-    finally:
-        pb._publications.pop(name, None)
-        pb._waiters.pop(name, None)
-        pb._donos.pop(name, None)
-
-
 def test_awaiting_identity_record_retires_when_binding_returns_with_other_key(tmp_path, monkeypatch):
     from app import runtime_coordinator as rc, runtime_terminal as terminal, pqueue
     from app.adapters.claude_headless import sessions as claude_sessions
@@ -341,39 +272,6 @@ def test_clear_with_arguments_passes_terminal_write_barrier_like_rust(tmp_path, 
         assert (result.get('payload') or {}).get('code') != 'terminal_write_barrier'
         assert effects == ['A-publication', 'typed']
     asyncio.run(flow())
-
-
-def test_new_plugin_instance_drops_returned_publication_but_same_instance_keeps_it(monkeypatch):
-    import time
-    from app import plugin_bridge as pb
-    name = 'publication-new-instance-test'
-    monkeypatch.setattr(pb, 'tracked_session_id', lambda name: 'A')
-    monkeypatch.setattr(pb, 'PUBLICA_S', .02)
-    monkeypatch.setattr(pb, 'ESPERA_S', .01)
-    monkeypatch.setattr(pb, '_confere', lambda *a: None)
-    monkeypatch.setattr(pb, '_conversation_mismatch', lambda *a: None)
-    def pull(instance):
-        return pb.pull(pb.PullBody(sessao=name, token='t', instance=instance,
-            modos=['fill', 'receipt_v2'], session_id='A'))
-    async def flow():
-        pb._loop = asyncio.get_running_loop()
-        queue = pb._waiters[name] = asyncio.Queue()
-        pb._donos[name] = ('old', {'fill', 'receipt_v2'}, time.monotonic())
-        first = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, name, 'A', 1,
-            {'id': 'pub-A', 'text': 'A', 'mode': 'fill'}, lambda: None))
-        await asyncio.wait_for(queue.get(), .2)
-        assert await first == 'unknown'
-        await pull('old')
-        assert pb._publications[name]['id'] == 'pub-A'
-        pb._donos[name] = ('old', {'fill', 'receipt_v2'}, time.monotonic() - pb.ESPERA_S - 11)
-        await pull('new')
-        assert name not in pb._publications
-    try:
-        asyncio.run(flow())
-    finally:
-        pb._publications.pop(name, None)
-        pb._waiters.pop(name, None)
-        pb._donos.pop(name, None)
 
 
 @pytest.mark.parametrize('request_id,control,modes,expected', [

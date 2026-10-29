@@ -732,9 +732,9 @@ transcript. Prova ponta a ponta: `enviar` de `hangar-2` pra `cx-pergunta` entreg
 (`crates/hangar-server/src/mcp/`, SDK `rmcp` 3.5.0); `mcp_server.py` saiu. Mesmas tools,
 nomes, parâmetros e identidade; cada tool chama a rota pública que o CLI chama, por dentro do
 processo. A sessão MCP fecha após 30 min parada, como no Python: o padrão do `rmcp` (5 min) não
-conta a tool em curso como atividade e o `browser_goal` (até 300 s) perdia a resposta. No modo
-`python` do Supervisor, `/mcp` e `/mcp/` respondem 503 `mcp_needs_rust_server`, sem reserva
-Python; antes da rota própria caíam no estático e voltavam 405.
+conta a tool em curso como atividade e o `browser_goal` (até 300 s) perdia a resposta. O stub
+Python que respondia 503 `mcp_needs_rust_server` no modo `python` saiu em 29/10/2026: o Rust
+atende todo método de `/mcp`, e a reserva Python não é mantida.
 
 ## Arquivo citado na conversa é editável, com a citação como consentimento
 

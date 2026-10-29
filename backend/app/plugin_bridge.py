@@ -19,7 +19,6 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 import re
 import secrets
 import shutil
@@ -28,12 +27,10 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app import atomico, install_root, state_facts
-from app.auth import require_loopback
-from app.live_rate import live_rate
 
 _log = logging.getLogger("hangar.plugin_bridge")
 
@@ -67,15 +64,6 @@ def stop_waits() -> None:
             loop.call_soon_threadsafe(_release_waits)
         except RuntimeError:
             pass        # loop já fechado: não há espera viva
-
-
-def _after_stop(queue: asyncio.Queue):
-    """O que chegou junto com a parada ainda é entregue; senão, a espera responde vazio."""
-    while not queue.empty():
-        item = queue.get_nowait()
-        if item is not _STOP:
-            return item
-    return _STOP
 
 
 def _release_waits() -> None:
@@ -140,22 +128,6 @@ def publish_terminal(name, conversation, generation, publication, validate):
                     del _publications[name]
                 else:
                     pending["returned"] = True
-
-
-def _terminal_ack(body, mode):
-    with _lock:
-        pending = _publications.get(body.sessao)
-        if pending is None:
-            return body.publication_id is not None
-        if (body.publication_id == pending["id"] and body.generation == pending["generation"]
-                and body.session_id == pending["conversation"]
-                and mode == ("fill" if pending["mode"] == "focus" else pending["mode"])):
-            pending["result"] = ("filled" if mode == "fill" else "accepted") if body.ok else "unknown"
-            pending["event"].set()
-            # Aviso tardio só tira a publicação de voo; a entrada segue incerta na fila até o transcript.
-            if pending.get("returned"):
-                del _publications[body.sessao]
-        return True
 
 
 def declared_modes(name: str) -> set[str]:
@@ -356,53 +328,6 @@ def _publish_for_machine(home: Path | None = None) -> None:
 publish_address = _publish_for_machine
 
 
-def _socket_do_tmux() -> str | None:
-    """Socket do servidor tmux do Hangar, ou None quando não dá para saber (aí não se compara)."""
-    # No psmux `#{socket_path}` nunca é igual ao caminho do `TMUX` (medido): a comparação lá
-    # recusaria toda sessão.
-    if os.name == "nt":
-        return None
-    from app import tmux
-    cp = tmux._run(["tmux", "list-sessions", "-F", "#{socket_path}"])
-    if cp.returncode != 0:
-        return None
-    caminho = next(iter((cp.stdout or "").splitlines()), "").strip()
-    return caminho if caminho and "#{" not in caminho else None
-
-
-def _sessao_do_tmux(tmux_env: str) -> str | None:
-    """`TMUX` é `socket,pid,id` no tmux: o id é o da sessão (`$N`), que dá o nome dela."""
-    partes = (tmux_env or "").split(",")
-    if len(partes) < 3 or not partes[2].strip():
-        return None
-    from app import tmux
-    cp = tmux._run(["tmux", "list-sessions", "-F", "#{session_id} #{session_name}"])
-    if cp.returncode != 0:
-        return None
-    alvo = "$" + partes[2].strip().lstrip("$")
-    for linha in (cp.stdout or "").splitlines():
-        sid, _, nome = linha.partition(" ")
-        if sid == alvo:
-            return nome
-    return None
-
-
-_PSMUX_PID = re.compile(r"psmux-(\d+)\b")
-
-
-def _sessao_do_psmux(pid: str) -> str | None:
-    """No psmux cada sessão tem servidor próprio, e o pid no `TMUX` é o dele (sobrevive ao rename)."""
-    from app import tmux
-    cp = tmux._run(["tmux", "list-sessions", "-F", "#{pid} #{session_name}"])
-    if cp.returncode != 0:
-        return None
-    for linha in (cp.stdout or "").splitlines():
-        spid, _, nome = linha.strip().partition(" ")
-        if spid == pid:
-            return nome
-    return None
-
-
 def esquecer(name: str) -> None:
     with _lock:
         _waiters.pop(name, None)
@@ -419,8 +344,6 @@ def esquecer(name: str) -> None:
     _eventos.pop(name, None)
     _band_wakers.pop(name, None)
     _toast_wakers.pop(name, None)
-    for chave in [c for c in list(_recusas) if c[0] == name]:
-        _recusas.pop(chave, None)
     state_facts.notify(name)
 
 
@@ -756,48 +679,6 @@ def app_presente() -> bool:
         return _apps_abertos > 0
 
 
-def terminal_preso(name: str) -> bool:
-    """Há cliente tmux preso nesta sessão (terminal de verdade ou o painel do app)?
-
-    Na dúvida é SIM: errar para o sim só devolve o diálogo ao terminal, que é o de sempre; errar
-    para o não esconderia o pedido de permissão de quem está olhando o terminal."""
-    from app import tmux
-    try:
-        cp = tmux._run(["tmux", "list-clients", "-t", f"={name}", "-F", "#{client_control_mode}\t#{client_tty}"])
-    except Exception:
-        return True
-    if cp.returncode != 0:
-        return True
-    raw = cp.stdout
-    if isinstance(raw, bytes):
-        try:
-            raw = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            return True
-    if not isinstance(raw, str):
-        return True
-    for line in raw.splitlines():
-        fields = line.split("\t")
-        if len(fields) != 2 or fields[0] != "1":
-            return True
-    return False
-
-
-# Modos em que o `ask` do `tool.check` não vira diálogo: o classificador (auto) aprova ou recusa,
-# e o dontAsk recusa. Segurar ali trocaria essa decisão por uma aprovação manual no app.
-_MODOS_SEM_DIALOGO = frozenset({"auto", "dontAsk"})
-
-
-async def modo_sem_dialogo(name: str) -> bool:
-    """O modo de permissão que o rodapé da sessão mostra decide o `ask` sem perguntar a ninguém?"""
-    from app import permission_mode, state
-    try:
-        pane = await state.shared_capture(name, 1.0)
-    except Exception:
-        return False
-    return permission_mode.parse_permission_mode(pane) in _MODOS_SEM_DIALOGO
-
-
 # Última batida do long-poll de entrada, por sessão: é o pulso que diz que o plugin está vivo.
 _batidas: dict[str, float] = {}
 # Um por sessão, criado por quem espera (o monitor de estado). Aviso do plugin acorda o monitor na
@@ -967,247 +848,6 @@ def _tracked_transcript(name: str) -> Path | None:
     cwd = SessionRegistry._agent_pane(panes, _proc_children_map())["cwd"] if panes else ""
     jsonl, tracked = registry.resolve_tracked(name, cwd)
     return Path(jsonl) if jsonl and tracked else None
-
-
-def _conversation_mismatch(name: str, session_id: str | None) -> str | None:
-    """None quando quem chama é a conversa que o Hangar acompanha; senão o motivo da recusa.
-
-    Pane, ambiente herdado e pid do psmux valem para QUALQUER `claude` aberto na sessão (split, janela
-    nova); só a conversa separa o dono de um segundo processo. Plugin velho não manda o id e cai na tecla."""
-    if not session_id:
-        return "uuid-ausente"
-    atual = tracked_session_id(name)
-    if atual is None:
-        return "uuid-desconhecido"
-    return None if atual == session_id else "uuid-diferente"
-
-
-# Última recusa logada por (sessão, instância): o plugin recusado volta a cada 30 s e o log só registra
-# a mudança. Por instância porque os pulls aceitos do dono não podem apagar a marca do recusado.
-_recusas: dict[tuple[str, str], str] = {}
-
-
-class PullBody(BaseModel):
-    sessao: str
-    token: str
-    instance: str = ""
-    modos: list[str] = []
-    # Último estado que o plugin viu: o `idle` da largada sai antes de existir ponte.
-    estado: str | None = None
-    # `$.session.id()` do plugin: a conversa que ele atende.
-    session_id: str | None = None
-
-
-class MeasuredContext(BaseModel):
-    used: int = Field(gt=0, strict=True)
-    window: int = Field(gt=0, strict=True)
-
-
-class StateBody(BaseModel):
-    sessao: str
-    token: str
-    estado: str
-    cwd: str | None = None
-    model: str | None = None
-    motivo: str | None = None
-    tool: str | None = None
-    origin: str | None = None
-    session_id: str | None = None
-    context: MeasuredContext | None = None
-
-
-class WhoamiBody(BaseModel):
-    chave: str
-    pane: str | None = None
-    nome: str | None = None
-    tmux: str | None = None
-    session_id: str | None = None
-
-
-@plugin_router.post("/whoami", dependencies=[Depends(require_loopback)])
-async def whoami(body: WhoamiBody):
-    """Sessão aberta fora do Hangar descobre nome e token. Só da própria máquina; no psmux resolve o
-    pid do servidor da sessão (depois o nome); no tmux, pane único, o id da sessão e o nome sem pane."""
-    if not secrets.compare_digest(machine_key(), body.chave):
-        raise HTTPException(403, detail="chave do plugin invalida")
-    nome, origem = await _whoami(body)
-    if nome:
-        recusa = await asyncio.to_thread(_conversation_mismatch, nome, body.session_id)
-        if recusa:
-            _log.info("plugin whoami recusado pane=%s sessao=%s uuid=%s origem=%s",
-                      body.pane, nome, body.session_id, recusa)
-            return {"sessao": None}
-    _log.info("plugin whoami pane=%s sessao=%s origem=%s", body.pane, nome, origem)
-    if not nome:
-        return {"sessao": None}
-    return {"sessao": nome, "token": mint(nome, await asyncio.to_thread(_terminal_key, nome)), "origem": origem}
-
-
-def _terminal_key(name: str) -> str | None:
-    """A chave com que o servidor Rust abre a sessão com terminal (`resolve_binding`): ela vai no
-    token, e a ponte do Rust acha a sessão por ela. Sem vínculo provado, o token só do nome."""
-    from app import runtime_terminal
-    try:
-        binding = runtime_terminal.resolve_binding(name)
-    except Exception as e:
-        _log.info("plugin whoami sem chave sessao=%s: %r", name, e)
-        return None
-    return binding.key if binding else None
-
-
-async def _whoami(body: WhoamiBody) -> tuple[str | None, str]:
-    # O interruptor desliga o caminho inteiro: sessão nenhuma descobre a ponte com ele desligado.
-    if not await asyncio.to_thread(ligado):
-        return None, "desligado"
-    from app import quem_chama
-    psmux = _PSMUX_PID.search((body.tmux or "").split(",")[0])
-    if psmux:
-        # Pane fica de fora: no psmux todo pane é `%1`, e com uma sessão só ele casaria com a errada.
-        nome = await asyncio.to_thread(_sessao_do_psmux, psmux.group(1))
-        if nome:
-            return nome, "psmux-pid"
-        # O plugin sempre manda pane, então o `CP_SESSION_NAME` do wrapper só é ouvido aqui.
-        try:
-            return await asyncio.to_thread(quem_chama.resolver, {quem_chama.CAB_NOME: body.nome or ""})
-        except quem_chama.SessaoDesconhecida:
-            return None, "psmux-pid"
-    if body.tmux:
-        meu = await asyncio.to_thread(_socket_do_tmux)
-        if meu and body.tmux.split(",")[0] != meu:
-            # Outro servidor tmux: o mesmo pane id lá é outra sessão, não uma do Hangar.
-            return None, "outro-socket"
-    if body.pane:
-        try:
-            return await asyncio.to_thread(quem_chama.resolver, {quem_chama.CAB_PANE: body.pane})
-        except quem_chama.SessaoDesconhecida:
-            return await asyncio.to_thread(_sessao_do_tmux, body.tmux or ""), "tmux"
-    try:
-        return await asyncio.to_thread(quem_chama.resolver, {quem_chama.CAB_NOME: body.nome or ""})
-    except quem_chama.SessaoDesconhecida:
-        return None, "nome"
-
-
-async def _disconnected(request) -> None:
-    """Termina quando o cliente da espera cai: o corpo já foi lido, o que vier é a desconexão."""
-    while (await request.receive())["type"] != "http.disconnect":
-        pass
-
-
-def _undelivered(name: str, item) -> None:
-    """Publicação que chegou junto com a queda do cliente: o plugin nunca a recebeu."""
-    if not isinstance(item, dict) or item.get("publication_id") is None:
-        if item is not _STOP:
-            _log.warning("plugin: entrega perdida com a queda da espera sessao=%s", name)
-        return
-    with _lock:
-        pending = _publications.get(name)
-        if pending is not None and pending["id"] == item["publication_id"]:
-            pending["result"] = "not_written"
-            pending["event"].set()
-
-
-@plugin_router.post("/pull")
-async def pull(body: PullBody, request: Request = None):
-    """Long-poll do plugin. Sempre 200: com o texto, ou `{"text": null}` quando a janela fecha vazia.
-
-    Sem `Depends(require_auth)`: quem chama é o pane, que não tem o bearer do
-    app. O token por sessão é a credencial daqui.
-    """
-    _entra(body)
-    recusa = await asyncio.to_thread(_conversation_mismatch, body.sessao, body.session_id)
-    chave = (body.sessao, body.instance)
-    if not recusa:
-        _recusas.pop(chave, None)
-    elif _recusas.get(chave) != recusa:
-        _recusas[chave] = recusa
-        _log.info("plugin pull recusado sessao=%s instance=%s uuid=%s origem=%s",
-                  body.sessao, body.instance, body.session_id, recusa)
-    if recusa:
-        # 409 como o de dono: o plugin larga a ponte e tenta de novo depois — após um `/clear` os
-        # dois ids voltam a bater e o dono se recupera sozinho.
-        raise HTTPException(409, detail=f"conversa nao e a que o Hangar acompanha ({recusa})")
-    agora = time.monotonic()
-    with _lock:
-        dono = _donos.get(body.sessao)
-        if dono and dono[0] != body.instance and agora - dono[2] < ESPERA_S + 10:
-            raise HTTPException(409, detail="outra instância do plugin já atende esta sessão")
-        retida = _publications.get(body.sessao)
-        if (not dono or dono[0] != body.instance) and retida and retida.get("returned"):
-            # Instância nova: a que podia escrever a publicação incerta não atende mais, e a trava
-            # da fila continua segurando a entrada até o transcript.
-            del _publications[body.sessao]
-        _donos[body.sessao] = (body.instance, set(body.modos) or {"fill"}, agora)
-        # Só semeia: com entrada do `/state`, quem manda é ela.
-        if body.estado and body.sessao not in _estados:
-            _estados[body.sessao] = (agora, body.estado, None)
-    global _loop
-    fila: asyncio.Queue = asyncio.Queue()
-    with _lock:
-        _loop = asyncio.get_running_loop()
-        _waiters[body.sessao] = fila
-        _batidas[body.sessao] = time.monotonic()
-    state_facts.notify(body.sessao)
-    # `faixa`: o backend tem a faixa dos mods desta sessão? Reiniciado, não tem, e o plugin reenvia.
-    gone = False
-    try:
-        if _stopping:
-            entrega = _STOP
-        else:
-            # A espera chega pelo hangar-server: se ele morre, a conexão cai e a espera tem que sair,
-            # senão o próximo publica nela e a confirmação nunca vem.
-            proximo = asyncio.ensure_future(fila.get())
-            queda = asyncio.ensure_future(_disconnected(request)) if request is not None else None
-            try:
-                feitos, _ = await asyncio.wait({proximo, *([queda] if queda else [])}, timeout=ESPERA_S,
-                                               return_when=asyncio.FIRST_COMPLETED)
-            finally:
-                for tarefa in (proximo, queda):
-                    if tarefa is not None and not tarefa.done():
-                        tarefa.cancel()
-            gone = queda is not None and queda in feitos
-            entrega = proximo.result() if proximo in feitos else _STOP
-        if entrega is _STOP:
-            entrega = _after_stop(fila)
-        if gone:
-            _undelivered(body.sessao, entrega)
-            while not fila.empty():
-                _undelivered(body.sessao, fila.get_nowait())
-            entrega = _STOP
-    finally:
-        with _lock:
-            # Só renova o próprio dono: um `esquecer` ou outra instância no meio não é desfeito.
-            dono = _donos.get(body.sessao)
-            if dono and dono[0] == body.instance:
-                _donos[body.sessao] = (dono[0], dono[1], time.monotonic())
-            _batidas[body.sessao] = time.monotonic()
-            if _waiters.get(body.sessao) is fila:
-                del _waiters[body.sessao]
-        state_facts.notify(body.sessao)
-    if entrega is _STOP:
-        return {"text": None, "faixa": body.sessao in _bands}
-    return {**entrega, "faixa": body.sessao in _bands}
-
-
-class SuggestBody(BaseModel):
-    sessao: str
-    token: str
-    texto: str
-    mostrada: bool
-
-
-@plugin_router.post("/suggest")
-async def suggest(body: SuggestBody):
-    """A frase que a TUI propõe depois do turno (Tab aceita, no terminal).
-
-    Medição antes de virar recurso: só registra, para responder se ela é regerada
-    todo turno e o que acontece quando é descartada."""
-    _entra(body)
-    with _lock:
-        # `mostrada=False` é proposta que a TUI não pôs na caixa (diálogo aberto, headless): mostrar
-        # no app o que nem o terminal mostrou seria inventar estado.
-        _sugestoes[body.sessao] = body.texto if body.mostrada else ""
-    state_facts.notify(body.sessao)
-    return {"ok": True}
 
 
 # O plugin já corta árvore acima de 256 KB; a folga cobre sessão e token no mesmo corpo.
@@ -1389,201 +1029,3 @@ def responder_pergunta(name: str, corpo: dict, id: str | None = None, receipt: d
                 p.pop("aviso", None)
                 p.pop("resposta", None)
     return pegou
-
-
-class AskBody(BaseModel):
-    sessao: str
-    token: str
-    id: str
-    questions: list | None = None
-    # Pedido de permissão: sem perguntas, só a ferramenta que pede.
-    tool: str | None = None
-    # Quanto o hook aceita esperar; sem isto vale a janela do long-poll.
-    janela_ms: int | None = None
-    # O que a ferramenta quer rodar (o comando do Bash, o arquivo do Edit), para o card do app.
-    resumo: str | None = None
-
-
-@plugin_router.post("/ask")
-async def ask(body: AskBody):
-    """Long-poll do hook do AskUserQuestion: 200 com a resposta do app, ou vazio na janela."""
-    _entra(body)
-    global _loop
-    # Permissão só fica com o plugin enquanto há alguém no app E ninguém no terminal: segurar
-    # esconde o diálogo do terminal. Reavaliado a cada poll do hook, então prender um terminal no
-    # meio da espera devolve o diálogo a ele em poucos segundos. Em modo sem diálogo, nunca segura.
-    if body.id.startswith("perm:") and (
-            not app_presente() or await modo_sem_dialogo(body.sessao)
-            or await asyncio.to_thread(terminal_preso, body.sessao)):
-        with _lock:
-            p = _perguntas.get(body.sessao)
-            if p is not None and p["id"] == body.id:
-                del _perguntas[body.sessao]
-        _acordar(body.sessao)
-        state_facts.notify(body.sessao)
-        return {"soltar": True}
-    fila: asyncio.Queue = asyncio.Queue()
-    with _lock:
-        _loop = asyncio.get_running_loop()
-        p = _perguntas.get(body.sessao)
-        if p is None or p["id"] != body.id:
-            p = _perguntas[body.sessao] = {"id": body.id, "questions": body.questions or [],
-                                           "tool": body.tool, "resumo": body.resumo}
-        p["visto"] = time.monotonic()
-        if p.get("interrompida") and p["visto"] - p["interrompida"] > HOOK_VIVO_S:
-            p.pop("interrompida")
-        guardada = p.pop("resposta", None)
-        if guardada is None:
-            p["fila"] = fila
-    _acordar(body.sessao)
-    # Cada poll do hook renova o `visto`: pergunta nova sai na hora, a renovação no máximo a cada 25 s.
-    state_facts.notify(body.sessao, state_facts.REFRESH)
-    if guardada is not None:
-        return guardada
-    espera = min(ESPERA_S, body.janela_ms / 1000) if body.janela_ms else ESPERA_S
-    try:
-        resposta = _STOP if _stopping else await asyncio.wait_for(fila.get(), timeout=espera)
-        if resposta is _STOP:
-            resposta = _after_stop(fila)
-        return {"answers": None} if resposta is _STOP else resposta
-    except asyncio.TimeoutError:
-        return {"answers": None}
-    finally:
-        with _lock:
-            p = _perguntas.get(body.sessao)
-            if p is not None and p.get("fila") is fila:
-                p.pop("fila", None)
-                p["visto"] = time.monotonic()
-
-
-class AskFimBody(BaseModel):
-    sessao: str
-    token: str
-    id: str
-    vencedor: str
-    publication_id: str | None = None
-    generation: int | None = None
-    session_id: str | None = None
-
-
-@plugin_router.post("/ask-fim")
-async def ask_fim(body: AskFimBody):
-    """A pergunta fechou. `vencedor=app` é a prova de que a resposta do app valeu."""
-    _entra(body)
-    with _lock:
-        p = _perguntas.get(body.sessao)
-        if p is None or p["id"] != body.id:
-            return {"ok": True}
-        if p.get("publication") is not None and p["publication"] != {
-                "publication_id":body.publication_id, "generation":body.generation, "session_id":body.session_id}:
-            return {"ok": True}
-        del _perguntas[body.sessao]
-        _fechadas[body.sessao] = (body.id, body.vencedor)
-        fila, aviso = p.get("fila"), p.get("aviso")
-    if fila is not None:
-        fila.put_nowait({"answers": None})
-    if aviso is not None and body.vencedor == "app":
-        aviso.set()
-    _acordar(body.sessao)
-    state_facts.notify(body.sessao)
-    _log.info("plugin pergunta sessao=%s fechou por %s", body.sessao, body.vencedor)
-    return {"ok": True}
-
-
-class FilledBody(BaseModel):
-    sessao: str
-    token: str
-    ok: bool
-    publication_id: str | None = None
-    generation: int | None = None
-    session_id: str | None = None
-
-
-@plugin_router.post("/filled")
-async def filled(body: FilledBody):
-    """O plugin avisa que o rascunho entrou (ou não) no composer.
-
-    É o que libera o Enter: sem esse aviso o Hangar não aperta tecla nenhuma."""
-    _entra(body)
-    if _terminal_ack(body, "fill"):
-        return {"ok": True}
-    with _lock:
-        aviso = _confirmacoes.get(body.sessao)
-        _preenchido[body.sessao] = body.ok
-    if aviso is not None:
-        aviso.set()
-    return {"ok": True}
-
-
-class SubmittedBody(BaseModel):
-    sessao: str
-    token: str
-    ok: bool
-    publication_id: str | None = None
-    generation: int | None = None
-    session_id: str | None = None
-
-
-@plugin_router.post("/submitted", dependencies=[Depends(require_loopback)])
-async def submitted(body: SubmittedBody):
-    """O plugin avisa se o `$.prompt.submit` do modo `user` foi aceito."""
-    _entra(body)
-    if _terminal_ack(body, "user"):
-        return {"ok": True}
-    with _lock:
-        aviso = _confirmacoes.get(body.sessao)
-        _preenchido[body.sessao] = body.ok
-    if aviso is not None:
-        aviso.set()
-    return {"ok": True}
-
-
-@plugin_router.post("/state")
-async def state(body: StateBody, request: Request):
-    """Estado por EVENTO, sem `capture-pane`.
-
-    Hoje só registra: quem manda no rótulo continua sendo o monitor de
-    `state.py`, que atende os outros provedores também. Ligar as duas fontes é
-    passo separado, e ele não pode nascer junto com a troca do caminho de entrada.
-    """
-    _entra(body)
-    with _lock:
-        _estados[body.sessao] = (time.monotonic(), body.estado, body.motivo)
-        if body.estado == "working":
-            # Turno novo aposenta a sugestão do anterior — é o que substitui o evento de descarte
-            # que o engine não dá.
-            _sugestoes.pop(body.sessao, None)
-    _acordar(body.sessao)
-    state_facts.notify(body.sessao, state_facts.FORCE)
-    _log.debug("plugin estado sessao=%s estado=%s motivo=%s", body.sessao, body.estado, body.motivo)
-    # A medida é auxiliar: recusá-la ou falhar ao gravá-la não pode perder a transição de estado.
-    if body.context is not None:
-        from app import claude_context
-        from app.registry import SessionRegistry
-        transcript = await asyncio.to_thread(_tracked_transcript, body.sessao)
-        if transcript is None or transcript.stem != body.session_id:
-            _log.info("medida de contexto recusada: outra conversa sessao=%s", body.sessao)
-            raise HTTPException(409, "a medida de contexto pertence a outra conversa")
-        try:
-            await asyncio.to_thread(claude_context.publish, transcript, body.context.model_dump())
-        except OSError:
-            _log.exception("falha ao publicar medida de contexto sessao=%s", body.sessao)
-        else:
-            SessionRegistry._context_cache.pop(body.sessao, None)
-    return {"ok": True}
-
-
-class RateBody(BaseModel):
-    sessao: str
-    token: str
-    tokens: int = Field(gt=0, le=1_000_000)
-    seconds: float = Field(gt=0, le=3600, allow_inf_nan=False)
-    session_id: str
-
-
-@plugin_router.post("/rate")
-async def rate(body: RateBody):
-    """Velocidade de uma resposta, medida pelo `turn.step` do plugin no próprio processo."""
-    _entra(body)
-    live_rate(body.sessao).close(body.tokens, body.seconds, body.session_id)
-    return {"ok": True}

@@ -8231,10 +8231,3 @@ async def tts_audio(h: str):
     # (ver tts.extensao_de) — servir isso como audio/mpeg quebra o <audio> no WebKit.
     media_type = "audio/wav" if caminho.suffix == ".wav" else "audio/mpeg"
     return FileResponse(caminho, media_type=media_type)
-
-
-# O MCP `hangar` é do Rust; sem ele, o código próprio. Antes do estático em "/", que responderia 405.
-@app.api_route("/mcp", methods=["GET", "POST", "DELETE"], dependencies=[Depends(require_auth)])
-@app.api_route("/mcp/", methods=["GET", "POST", "DELETE"], dependencies=[Depends(require_auth)])
-async def mcp_needs_rust():
-    raise HTTPException(503, detail=erro("mcp_needs_rust_server", "o MCP do Hangar precisa do servidor Rust"))
