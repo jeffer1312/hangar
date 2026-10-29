@@ -133,6 +133,92 @@ async fn terminal_input_facts_lost_after_write_clean_own_text_and_defer() {
   assert!(io.writes().iter().all(|w|w.args.last().is_none_or(|a|a!="\r")),"sem fatos o Enter não sai");
  }
 }
+/// Campo como o do Claude: o Ctrl+U tira só a linha do cursor (no fim) e, numa linha vazia, só a quebra.
+/// `lost`: a colagem não chega ao campo (só o texto da pessoa entra).
+struct LineIo { composer: Mutex<String>, buffer: Mutex<Vec<u8>>, writes: Mutex<Vec<String>>, foreign: Mutex<String>, lost: Mutex<bool> }
+impl LineIo { fn new(start: &str) -> Self { Self { composer: Mutex::new(start.into()), buffer: Mutex::new(vec![]), writes: Mutex::new(vec![]), foreign: Mutex::new(String::new()), lost: Mutex::new(false) } } }
+impl TerminalIo for LineIo {
+ fn command<'a>(&'a self, r: CommandRequest) -> IoFuture<'a, CommandOutput> { Box::pin(async move {
+  let out = |s: String| Ok(CommandOutput { success: true, stdout: s.into_bytes() });
+  let has = |a: &str| r.args.iter().any(|x| x == a);
+  if has("display-message") { return out("test\t%7\t17\n".into()); }
+  if has("capture-pane") { return out(screen(&self.composer.lock().unwrap())); }
+  if has("load-buffer") { *self.buffer.lock().unwrap() = r.stdin.clone(); return out(String::new()); }
+  let mut c = self.composer.lock().unwrap();
+  if has("paste-buffer") {
+   self.writes.lock().unwrap().push("paste".into());
+   // A pessoa digitando ao mesmo tempo: o texto dela entra antes do nosso.
+   c.insert_str(0, &self.foreign.lock().unwrap());
+   if !*self.lost.lock().unwrap() { c.push_str(&String::from_utf8(self.buffer.lock().unwrap().clone()).unwrap()); }
+   return out(String::new());
+  }
+  if has("send-keys") {
+   let key = r.args.last().unwrap().clone();
+   self.writes.lock().unwrap().push(key.clone());
+   match key.as_str() {
+    "C-u" => if c.ends_with('\n') { c.pop(); } else { let cut = c.rfind('\n').map_or(0, |n| n + 1); c.truncate(cut); },
+    "\r" => c.clear(),
+    _ if has("-l") => c.push_str(&key),
+    _ => {}
+   }
+  }
+  out(String::new())
+ }) }
+ fn socket<'a>(&'a self, _: &'a NativeMessage, _: Vec<u8>) -> IoFuture<'a, WriteOutcome> { Box::pin(async { Ok(WriteOutcome::NotWritten) }) }
+}
+/// Fatos que somem na `allowed`-ésima consulta depois de o texto entrar no campo.
+struct DroppingFacts { inner: Services, io: Arc<LineIo>, allowed: usize, seen: Mutex<usize> }
+impl TerminalServices for DroppingFacts {
+ fn facts<'a>(&'a self, b: &'a TerminalBinding) -> ServiceFuture<'a, InputFacts> { Box::pin(async move {
+  if !self.io.writes.lock().unwrap().is_empty() {
+   let mut seen = self.seen.lock().unwrap(); *seen += 1;
+   if *seen > self.allowed { return Err(ServiceError("terminal_conversation_unavailable")); }
+  }
+  self.inner.facts(b).await
+ }) }
+ fn publish<'a>(&'a self, b: &'a TerminalBinding, r: PluginRequest) -> ServiceFuture<'a, PluginReply> { self.inner.publish(b, r) }
+ fn permission_guard<'a>(&'a self, b: &'a TerminalBinding) -> ServiceFuture<'a, ()> { self.inner.permission_guard(b) }
+ fn life_check<'a>(&'a self, _: &'a TerminalBinding) -> ServiceFuture<'a, ()> { Box::pin(async { Ok(()) }) }
+}
+#[tokio::test]
+async fn terminal_input_multiline_text_leaves_the_field_whole_when_facts_drop_before_enter() {
+ let text = "[de: filha] linha um\nlinha dois\nlinha tres";
+ // Os fatos caem em cada ponto entre o texto entrar e o Enter, inclusive na conferência da própria tecla.
+ for allowed in 0..6 {
+  let io = Arc::new(LineIo::new(""));
+  let s = Arc::new(DroppingFacts { inner: Services::new(), io: io.clone(), allowed, seen: Mutex::new(0) });
+  let limits = InputLimits { cleanup_attempts: 20, ..instant_limits() };
+  let r = TerminalDriver::new(binding(), s, io.clone(), limits).prompt(text, "id").await;
+  let writes = io.writes.lock().unwrap().clone();
+  // Enter já enviado: a dúvida depois dele continua incerta (pode ter chegado), e o campo não fica com texto.
+  if writes.iter().any(|w| w == "\r") { assert_eq!(*io.composer.lock().unwrap(), "", "allowed={allowed}"); continue; }
+  assert_eq!((r.disposition, r.cleanup), (Disposition::Deferred, Cleanup::Proved), "allowed={allowed}: {r:?} {writes:?}");
+  assert_eq!(*io.composer.lock().unwrap(), "", "allowed={allowed}: o campo fica vazio");
+ }
+}
+#[tokio::test]
+async fn terminal_input_cleanup_stops_at_text_that_is_not_ours() {
+ // A pessoa digitou junto com o nosso texto: o campo já não é só nosso, e nada é apagado.
+ let io = Arc::new(LineIo::new(""));
+ *io.foreign.lock().unwrap() = "texto da pessoa\n".into();
+ let s = Arc::new(DroppingFacts { inner: Services::new(), io: io.clone(), allowed: 0, seen: Mutex::new(0) });
+ let r = TerminalDriver::new(binding(), s, io.clone(), instant_limits()).prompt("linha um\nlinha dois", "id").await;
+ assert_ne!(r.disposition, Disposition::Accepted);
+ assert!(!io.writes.lock().unwrap().iter().any(|w| w == "C-u" || w == "\r"), "{:?}", io.writes.lock().unwrap());
+ assert_eq!(*io.composer.lock().unwrap(), "texto da pessoa\nlinha um\nlinha dois", "nunca apaga o que não é nosso");
+}
+#[tokio::test]
+async fn terminal_input_cleanup_never_takes_the_persons_prefix_of_our_text_as_ours() {
+ // O nosso texto não chegou ao campo, e o que a pessoa digitou é igual ao começo dele: não é nosso, fica.
+ let io = Arc::new(LineIo::new(""));
+ *io.foreign.lock().unwrap() = "linha um".into();
+ *io.lost.lock().unwrap() = true;
+ let s = Arc::new(DroppingFacts { inner: Services::new(), io: io.clone(), allowed: 0, seen: Mutex::new(0) });
+ let r = TerminalDriver::new(binding(), s, io.clone(), InputLimits { cleanup_attempts: 20, ..instant_limits() }).prompt("linha um\nlinha dois", "id").await;
+ assert_ne!(r.disposition, Disposition::Accepted);
+ assert!(!io.writes.lock().unwrap().iter().any(|w| w == "C-u"), "{:?}", io.writes.lock().unwrap());
+ assert_eq!(*io.composer.lock().unwrap(), "linha um");
+}
 #[tokio::test]
 async fn terminal_input_socket_partial_never_falls_back() {
  let io=Arc::new(FakeIo::new(vec![screen("")]));let s=Arc::new(Services::new());s.facts.lock().unwrap().native=Some(NativeMessage {socket:"/private/socket".into(),origin:"uds:/inbox".into(),sender:"peer".into(),mode:"bypass".into(),message_id:Some("uuid-message".into())});*io.socket.lock().unwrap()=WriteOutcome::Unknown;

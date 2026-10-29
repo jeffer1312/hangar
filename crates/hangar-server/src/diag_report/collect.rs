@@ -22,6 +22,8 @@ pub(crate) const SERVER_LOG_MAX_LINES: usize = 1500;
 /// Teto do diário inteiro compactado (C2b).
 pub(crate) const DIARY_GZ_MAX: usize = 10 << 20;
 pub(crate) const PROBE_WAIT: Duration = Duration::from_secs(5);
+/// Leitura do alvo do terminal de uma sessão: lock do registro e um arquivo.
+const TARGET_WAIT: Duration = Duration::from_secs(2);
 
 /// Subidas e quedas do backend e do `hangar-server`, conferidas no diário real.
 const RESTARTS: [&str; 6] = ["backend.inicio", "backend.encerrando", "hangar_server.de_pe", "hangar_server.caiu",
@@ -74,10 +76,10 @@ pub(crate) struct DiaryEntry {
 }
 
 impl DiaryEntry {
-    /// `hh:mm:ss evento nível código sessão motivo`; campo vazio vira `-`.
+    /// `MM-DD hh:mm:ss evento nível código sessão motivo`; campo vazio vira `-`.
     pub(crate) fn compact(&self) -> String {
         let dash = |v: &str| if v.is_empty() { "-".to_owned() } else { v.to_owned() };
-        let line = format!("{} {} {} {} {} {}", self.at.format("%H:%M:%S"), dash(&self.event), dash(&self.level),
+        let line = format!("{} {} {} {} {} {}", self.at.format("%m-%d %H:%M:%S"), dash(&self.event), dash(&self.level),
             dash(&self.code), dash(&self.session), self.reason);
         line.trim_end().to_owned()
     }
@@ -178,7 +180,7 @@ pub(crate) fn reduce_server_line(line: &str, since: DateTime<Utc>, s: &Scrubber)
         let value = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(value);
         if LOG_FIELDS.contains(key) { fields.entry(key).or_insert_with(|| tidy(value, VALUE_MAX)); }
     }
-    let mut out = format!("{} {} {}", at.with_timezone(&Local).format("%H:%M:%S"), &c[2], tidy(message, MESSAGE_MAX));
+    let mut out = format!("{} {} {}", at.with_timezone(&Local).format("%m-%d %H:%M:%S"), &c[2], tidy(message, MESSAGE_MAX));
     for key in LOG_FIELDS {
         if let Some(value) = fields.get(key) { out += &format!(" {key}={value}"); }
     }
@@ -308,6 +310,10 @@ pub(crate) struct RuntimeFact {
     pub alive: Option<bool>,
     pub generation: Option<u64>,
     pub waiting: Option<usize>,
+    /// Claude com terminal: o plugin pedindo (`/pull`), que prova a conversa quando falta o registro nativo.
+    pub plugin: Option<crate::plugin::PullStatus>,
+    /// Claude com terminal: o `sessions/<pid>.json` do agente existe.
+    pub native_record: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -344,6 +350,11 @@ impl SessionFact {
             if let Some(e) = &r.error { out += &format!(" erro={e}"); }
             if let Some(s) = &r.input_stalled { out += &format!(" entrada_parada={s}"); }
             out += &format!(" fila={}", r.waiting.map_or("?".to_owned(), |n| n.to_string()));
+            if let Some(native) = r.native_record { out += &format!(" registro_nativo={}", if native { "sim" } else { "não" }); }
+            if let Some(p) = &r.plugin {
+                out += &format!(" plugin: pull_aberto={} ultimo_pull={} conversa_nova={} fim={}", p.open,
+                    p.last_seen_s.map_or("nunca".to_owned(), |s| format!("{s}s")), p.reported, p.ended);
+            }
         }
         out
     }
@@ -360,7 +371,7 @@ pub(crate) fn session_fact(row: &hangar_api::session::SessionRow, s: &Scrubber) 
 pub(crate) fn runtime_fact(snapshot: &Value, waiting: Option<usize>, s: &Scrubber) -> RuntimeFact {
     let text = |v: &Value| v.as_str().filter(|t| !t.is_empty()).map(|t| clean(s, t, VALUE_MAX));
     RuntimeFact { error: text(&snapshot["error"]), input_stalled: text(&snapshot["view"]["input_stalled"]),
-        alive: snapshot["view"]["alive"].as_bool(), generation: snapshot["generation"].as_u64(), waiting }
+        alive: snapshot["view"]["alive"].as_bool(), generation: snapshot["generation"].as_u64(), waiting, plugin: None, native_record: None }
 }
 
 /// Mensagens esperando no estado da fila; `None` se o arquivo não se leu.
@@ -397,9 +408,37 @@ pub(crate) async fn sessions(st: &crate::routes::AppState, s: &Scrubber) -> Sess
             files.into_iter().map(|(key, (name, path, created))| (key, name, count_waiting(&path, created))).collect::<Vec<_>>()
         })).await;
         let counted = match counted { Ok(Ok(counted)) => counted, _ => Vec::new() };
-        counted.into_iter().map(|(key, name, waiting)| {
-            (clean(s, &name, VALUE_MAX), runtime_fact(snapshots.get(&key).unwrap_or(&Value::Null), waiting, s))
-        }).collect::<Vec<_>>()
+        let mut out = Vec::new();
+        // Cada alvo com prazo próprio: o registro preso (fila no meio de uma troca) não leva junto os fatos já
+        // lidos. Estourou uma vez, as seguintes esperariam o mesmo lock: ficam sem a linha do plugin.
+        let mut stuck = false;
+        for (key, name, waiting) in counted {
+            let mut fact = runtime_fact(snapshots.get(&key).unwrap_or(&Value::Null), waiting, s);
+            let read = async {
+                let target = registry.terminal_target(&name).await?;
+                let record = match &target {
+                    Some(target) => tokio::fs::try_exists(target.metadata.config_dir.join("sessions").join(format!("{}.json", target.metadata.agent_pid))).await.ok(),
+                    None => None,
+                };
+                Ok::<_, crate::runtime::protocol::RuntimeError>((target, record))
+            };
+            match if stuck { None } else { tokio::time::timeout(TARGET_WAIT, read).await.ok() } {
+                Some(Ok((Some(target), record))) => {
+                    fact.native_record = record;
+                    fact.plugin = registry.plugin().ok().and_then(|plugin| plugin
+                        .pull_status(&crate::terminal_facts::LocalTerminalFacts::binding(&target), std::time::Instant::now()).ok());
+                }
+                Some(Ok((None, _))) => {}
+                // O relatório sem a linha do plugin é o que diz "não consegui ler"; o motivo fica no log.
+                Some(Err(error)) => tracing::warn!(session = %name, code = %error.code, "relatório: alvo do terminal ilegível"),
+                None => {
+                    if !stuck { tracing::warn!(session = %name, "relatório: alvo do terminal sem resposta no prazo; as demais ficam sem a linha do plugin"); }
+                    stuck = true;
+                }
+            }
+            out.push((clean(s, &name, VALUE_MAX), fact));
+        }
+        out
     };
     let ((list_error, mut facts), runtime) = tokio::join!(list, runtime);
     for (name, fact) in runtime {

@@ -683,11 +683,12 @@
                   <pre>{ev.hook_error}</pre>
                 </div>
               {/if}
-            {:else if stateEvent?.problema === 'terminal_input_delivery_unproved' && ev.queued_delivered && ev.id.startsWith('queued-')}
+            {:else if (stateEvent?.problema === 'terminal_input_delivery_unproved' || stateEvent?.problema === 'terminal_input_delivery_composer_busy') && ev.queued_delivered && ev.id.startsWith('queued-')}
               <!-- Entregue sem prova: segura a fila até a pessoa descartar ou o prazo do servidor vencer. -->
               <div class="queued-perdida">
                 <p role="status">{m.msg_entrega_sem_prova()}</p>
-                {#if onDescartarFila}
+                <!-- Descartar não tira o texto do campo do terminal: com texto lá, a pessoa apaga ou envia antes. -->
+                {#if onDescartarFila && stateEvent?.problema !== 'terminal_input_delivery_composer_busy'}
                   <button type="button" class="queued-descartar" onclick={() => onDescartarFila(ev.id.slice('queued-'.length))}>{m.msg_descartar_perdida()}</button>
                 {/if}
               </div>

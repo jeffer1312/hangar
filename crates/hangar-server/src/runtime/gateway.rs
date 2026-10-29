@@ -869,11 +869,12 @@ impl RuntimeRegistry {
             "composer_busy"=>"terminal_input_composer_busy","composer_unreadable"=>"terminal_input_composer_unreadable",
             "capture_failed"|"capture_utf8"=>"terminal_input_capture_failed","clear_not_applied"=>"terminal_clear_not_applied",
             "no_safe_delivery"=>"terminal_input_no_safe_delivery",
+            "delivery_unproved"=>"terminal_input_delivery_unproved","delivery_composer_busy"=>"terminal_input_delivery_composer_busy",
             _=>"terminal_input_stalled",
         };
         let input=event.data["view"]["input_stalled"].as_str().filter(|code|!code.is_empty());
-        // Sem prova da conversa, a lista mostra a causa, não o erro que ela mesma causa na fila.
-        let explained=input==Some("no_safe_delivery") && event.data["error"].as_str().is_some_and(|error|crate::state::edges::explained(input,error));
+        // A lista mostra a causa, não o erro que ela mesma causa na fila.
+        let explained=event.data["error"].as_str().is_some_and(|error|crate::state::edges::explained(input,error));
         let problem=if event.data["error"].is_string() && !explained {Some("runtime_falhou")} else {input.map(stalled)};
         let mut map=self.terminal_problems.lock().unwrap_or_else(|e|e.into_inner());
         match problem {
@@ -1800,11 +1801,33 @@ impl RuntimeRegistry {
             *self.barrier(key).await.closed.lock().map_err(|_|failure("lifecycle_closed_record"))?=Some(closed.clone());
             if kill && !park {
                 let lease=wait_lease(&closed.lease_path).await?;
-                let mut store=Store::open(&closed.state_path,&closed.projection,QueueState::new(key,generation,&closed.name,vec![])).map_err(|_|failure("queue_io"))?;
-                if store.state().owner_key!=key || store.state().generation!=generation {return Err(failure("runtime_generation"));}
-                let clock=ClockSample {monotonic_s:0.0,epoch_s:SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64())};
-                store.exec(generation,&format!("close-clear:{key}:{generation}"),clock,Action::Clear).map_err(|_|failure("queue_io"))?;
-                store.exec(generation,&format!("close-record:{key}:{generation}"),clock,Action::AdvanceLifecycle {generation,state:json!({"terminal_lifecycle":{"closed":true,"conversation":closed.binding.conversation},"view":{"alive":false,"conversation":closed.binding.conversation}})}).map_err(|_|failure("queue_io"))?;
+                // Ator parado e processo morto: falha ao gravar o fechamento na fila não prende a sessão
+                // em `runtime_stopping`; vai ao log e ao diário, e a entrada sai.
+                let recorded:std::io::Result<Option<Store>>=(|| {
+                    let mut store=Store::open(&closed.state_path,&closed.projection,QueueState::new(key,generation,&closed.name,vec![]))?;
+                    if store.state().owner_key!=key || store.state().generation!=generation {return Ok(None);}
+                    let clock=ClockSample {monotonic_s:0.0,epoch_s:SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64())};
+                    store.exec(generation,&format!("close-clear:{key}:{generation}"),clock,Action::Clear)?;
+                    store.exec(generation,&format!("close-record:{key}:{generation}"),clock,Action::AdvanceLifecycle {generation,state:json!({"terminal_lifecycle":{"closed":true,"conversation":closed.binding.conversation},"view":{"alive":false,"conversation":closed.binding.conversation}})})?;
+                    Ok(Some(store))
+                })();
+                // Recusa da própria fila (outro dono, outra geração) não é falha de disco: não se libera a entrada.
+                // Arquivo ilegível é falha como as outras: segurar a sessão não o conserta.
+                let refused=|error:&std::io::Error| error.get_ref().is_some_and(|inner|inner.is::<super::queue::QueueRefusal>());
+                let store=match recorded {
+                    Ok(None)=>return Err(failure("runtime_generation")),
+                    Err(error) if refused(&error)=>{
+                        tracing::warn!(key,session=%name,refusal=%error,"fechamento recusado pela fila");
+                        self.diag.report("rust.close_queue_refused",&name,"runtime_generation","fila de outro dono recusou o fechamento");
+                        return Err(failure("runtime_generation"));
+                    },
+                    Ok(Some(store))=>Some(store),
+                    Err(error)=>{
+                        tracing::warn!(key,session=%name,kind=?error.kind(),"fechamento não gravado na fila; sessão liberada mesmo assim");
+                        self.diag.report("rust.close_queue_io",&name,"queue_io","fechamento não gravado na fila; sessão liberada mesmo assim");
+                        None
+                    },
+                };
                 if let Some(target)=&runtime_target {super::lifecycle::delete_sidecar(target,&closed.binding.conversation)?;}
                 drop(store);drop(lease);
             }
@@ -1974,7 +1997,7 @@ impl RuntimeRegistry {
         // encerra a antiga com `session.end`). Sem ele, vale o registro nativo do processo.
         let binding=crate::terminal_facts::LocalTerminalFacts::binding(&target);
         let (reported,proved)=match &self.plugin {
-            Some(plugin)=>match (plugin.reported_conversation(&binding),plugin.conversation_proved(&binding)) {
+            Some(plugin)=>match (plugin.reported_conversation(&binding),plugin.conversation_pulling(&binding)) {
                 (Ok(reported),proved)=>(reported,proved.unwrap_or(false)),
                 (Err(error),_)=>{
                     if crate::warn_limit::allow(Some(key),error.0) {tracing::warn!(key,session=name,code=error.0,"troca de conversa: sinal do plugin ilegível; vale o registro nativo");}

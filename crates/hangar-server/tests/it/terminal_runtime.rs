@@ -439,13 +439,23 @@ async fn unknown_fill_blocks_second_input_after_detach_restart_and_same_sid_gene
     let store=Store::open(&f.target.state_path,&f.target.projection_dir,queue::State::new("key",2,"session",vec![])).unwrap();
     let options=TerminalOptions {io:f.io.clone(),limits:InputLimits::default(),tick:Duration::from_millis(15),stall_notice:Duration::from_secs(30),status:Some(f.status.clone()),..TerminalOptions::default()};
     let h=TerminalActor::spawn(f.target.clone(),QueueActor::start(store,lease),f.policy.clone(),options,broadcast::channel(128).0,Arc::new(AtomicU64::new(0)));
-    assert_eq!(h.snapshot().await.unwrap()["view"]["input_stalled"], "delivery_unproved");
+    // O "A" parado no campo pode já ter sido lido pelo primeiro tique: a trava aparece com uma das duas frases.
+    let blocked=|code:Option<&str>|matches!(code,Some("delivery_unproved"|"delivery_composer_busy"));
+    assert!(blocked(h.snapshot().await.unwrap()["view"]["input_stalled"].as_str()));
     let late=f.status.subscribe();
-    assert_eq!(late.borrow().input_stalled.as_deref(), Some("delivery_unproved"), "a reabertura publica o bloqueio antes de atender o monitor");
+    assert!(blocked(late.borrow().input_stalled.as_deref()), "a reabertura publica o bloqueio antes de atender o monitor");
     assert_eq!(h.drain().await.unwrap()["drained"],0);
     assert_eq!(h.command(f.command("C","C")).await.unwrap().disposition,hangar_server::runtime::protocol::Disposition::Deferred);
-    assert_eq!(f.io.calls.lock().unwrap().len(),effects);
-    assert_eq!(*f.io.text.lock().unwrap(),"A");h.stop().await.unwrap();
+    let writes=|calls:&[CommandRequest]|calls.iter().filter(|c|c.args[0]!="capture-pane" && c.args[0]!="display-message").count();
+    let calls=f.io.calls.lock().unwrap().clone();
+    assert_eq!(writes(&calls),writes(&calls[..effects]),"nada digitado com a trava");
+    assert_eq!(*f.io.text.lock().unwrap(),"A");
+    // Texto no campo com a trava: frase própria, para a pessoa saber que é ela quem destrava.
+    let stalled=|code:&str|f.status.subscribe().borrow().input_stalled.as_deref()==Some(code);
+    f.wait_for("campo ocupado na vista",||stalled("delivery_composer_busy")).await;
+    f.io.text.lock().unwrap().clear();
+    f.wait_for("campo vazio volta à trava comum",||stalled("delivery_unproved")).await;
+    h.stop().await.unwrap();
 }
 
 #[tokio::test]

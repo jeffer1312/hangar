@@ -126,8 +126,9 @@ impl LocalTerminalFacts {
         let pane_pid=fields[0].parse::<i64>().ok().filter(|pid|*pid>0).ok_or(ServiceError("terminal_pane_unavailable"))?;
         let (metadata, conversation, transcript) = (target.metadata.clone(), binding.conversation.clone(), target.transcript.clone());
         // Sem o registro nativo, o `/pull` aberto do plugin desta vida prova a conversa (o Claude Code só o
-        // aceita com o `session_id` dela), sem ler os arquivos abertos do processo.
-        let plugin_proof = prove_conversation && self.plugin_proves(target);
+        // aceita com o `session_id` dela), sem ler os arquivos abertos do processo. O `/pull` visto há pouco
+        // só cobre a leitura que falta: outra conversa aberta no processo vence.
+        let (pulling, recent) = if prove_conversation { self.plugin_proves(target) } else { (false, false) };
         tokio::task::spawn_blocking(move || {
             let procs=SystemProcs::default();let children=procs.children(Duration::ZERO).map_err(|_|ServiceError("terminal_agent_unavailable"))?;
             if !crate::list::discover::descendants(pane_pid,&children).contains(&i64::from(metadata.agent_pid)) {return Err(ServiceError("terminal_agent_changed"));}
@@ -136,16 +137,20 @@ impl LocalTerminalFacts {
             if procs.argv_checked(i64::from(metadata.agent_pid)).map_err(|_|ServiceError("terminal_agent_unavailable"))?.is_empty() {return Err(ServiceError("terminal_agent_unavailable"));}
             if !same_birth(born, metadata.agent_birth) { return Err(ServiceError("terminal_agent_changed")); }
             // Registro de outra conversa é troca de vida mesmo sem a prova da conversa.
-            if native_record(&metadata, &conversation)?.is_none() && prove_conversation && !plugin_proof {
-                current_transcript(&procs, &metadata, &conversation, &transcript)?;
+            if native_record(&metadata, &conversation)?.is_none() && prove_conversation && !pulling {
+                current_transcript(&procs, &metadata, &conversation, &transcript, recent)?;
             }
             Ok(pane_pid)
         }).await.map_err(|_| ServiceError("terminal_agent_unavailable"))?
     }
-    fn plugin_proves(&self, target: &TerminalTarget) -> bool {
+    /// (`/pull` aberto, `/pull` visto há pouco) desta vida.
+    fn plugin_proves(&self, target: &TerminalTarget) -> (bool, bool) {
         // Plugin sem vínculo ou ilegível não prova nada: segue a leitura do processo.
-        self.plugin.as_ref().is_some_and(|store| self.plugin_facts(target).is_ok_and(|facts| plugin_current(&facts, target.metadata.cut(target.created)))
-            && store.conversation_proved(&Self::binding(target)).unwrap_or(false))
+        let Some(store) = self.plugin.as_ref() else { return (false, false) };
+        if !self.plugin_facts(target).is_ok_and(|facts| plugin_current(&facts, target.metadata.cut(target.created))) { return (false, false); }
+        let binding = Self::binding(target);
+        if store.conversation_pulling(&binding).unwrap_or(false) { return (true, false); }
+        (false, store.conversation_proved(&binding, Instant::now()).unwrap_or(false))
     }
     /// Sem o registro nativo, o `/pull` aberto do plugin é a prova da conversa: quem o entrega ao plugin
     /// (`Fill`) fica sem ela até ele voltar.
@@ -282,23 +287,39 @@ fn native_record(metadata: &TerminalMetadata, conversation: &str) -> Result<Opti
     let record = read_json(&metadata.config_dir.join("sessions").join(format!("{}.json", metadata.agent_pid)), "terminal_native_record_unavailable")?;
     if let Some(record) = &record && (record["pid"].as_u64() != Some(u64::from(metadata.agent_pid)) || record["sessionId"].as_str() != Some(conversation)) { return Err(ServiceError("terminal_native_record_changed")); } Ok(record)
 }
-fn current_transcript(procs: &dyn ProcessView, metadata: &TerminalMetadata, conversation: &str, transcript: &Path) -> Result<(), ServiceError> {
+/// `recent`: o `/pull` visto há pouco cobre a leitura que falta (nenhum arquivo aberto, leitura que falhou),
+/// nunca uma leitura ambígua ou de outra conversa.
+fn current_transcript(procs: &dyn ProcessView, metadata: &TerminalMetadata, conversation: &str, transcript: &Path, recent: bool) -> Result<(), ServiceError> {
     let unavailable = || ServiceError("terminal_conversation_unavailable");
-    let projects = metadata.config_dir.join("projects").canonicalize().map_err(|_| unavailable())?;
-    let expected = transcript.canonicalize().map_err(|_| unavailable())?;
-    let fds = procs.fds_checked(i64::from(metadata.agent_pid)).map_err(|_| unavailable())?;
+    let missing = || if recent { Ok(()) } else { Err(unavailable()) };
+    let Ok(projects) = metadata.config_dir.join("projects").canonicalize() else { return missing() };
+    let Ok(expected) = transcript.canonicalize() else { return missing() };
+    let Ok(fds) = procs.fds_checked(i64::from(metadata.agent_pid)) else { return missing() };
     let mut current = std::collections::BTreeSet::new();
+    let mut unreadable = false;
     for path in fds.into_iter().filter(|path| path.extension().is_some_and(|extension| extension == "jsonl")) {
-        let path = path.canonicalize().map_err(|_| unavailable())?;
+        // Arquivo apagado ainda aberto não é conversa de ninguém. Outra falha não encerra a leitura: um transcript
+        // de outra conversa adiante ainda decide, e sem ele a leitura fica ambígua, sem prova nem com o `/pull`.
+        let path = match path.canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                if crate::warn_limit::allow(Some(conversation), "terminal_transcript_fd_unreadable") {
+                    tracing::warn!(conversation, kind = ?error.kind(), "arquivo aberto do agente ilegível; conversa sem prova");
+                }
+                unreadable = true;
+                continue;
+            }
+        };
         if path.starts_with(&projects) { current.insert(path); }
     }
     // O argv conserva o SID de abertura depois do /clear; só arquivo aberto prova a conversa atual.
-    let mut current = current.into_iter();
-    let path = current.next().ok_or_else(unavailable)?;
-    if current.next().is_some() { return Err(unavailable()); }
-    if path != expected || path.file_stem().and_then(|stem| stem.to_str()) != Some(conversation) {
+    if current.len() > 1 { return Err(unavailable()); }
+    if let Some(path) = current.first() && (path != &expected || path.file_stem().and_then(|stem| stem.to_str()) != Some(conversation)) {
         return Err(ServiceError("terminal_conversation_changed"));
     }
+    if unreadable { return Err(unavailable()); }
+    if current.is_empty() { return missing(); }
     Ok(())
 }
 fn native_state(status: &str) -> Option<&'static str> { match status { "idle" | "shell" => Some("idle"), "busy" => Some("working"), "waiting" => Some("awaiting_input"), _ => None } }
@@ -478,6 +499,23 @@ mod tests {
         plugin.record_state(&binding,"idle".into(),None,Instant::now()).unwrap();
         assert_eq!(local.check(&target,&target.binding).await.unwrap_err().0,"terminal_conversation_unavailable");
         drop(poll);
+    }
+    /// Sem o registro nativo, em qualquer SO: o plugin vivo prova a conversa também entre um `/pull` e o seguinte,
+    /// senão a entrada pisca em erro a cada troca de `/pull` (no Windows nada mais prova).
+    #[tokio::test]
+    async fn plugin_between_pulls_still_proves_the_conversation_without_the_native_record() {
+        use crate::plugin::Pull;
+        let dir=tempfile::tempdir().unwrap();let target=target(dir.path());let binding=LocalTerminalFacts::binding(&target);
+        std::fs::create_dir_all(target.transcript.parent().unwrap()).unwrap();std::fs::write(&target.transcript,"").unwrap();
+        let plugin=Arc::new(Store::new(Arc::new(crate::interactions::InteractionStore::default())));plugin.interactions().bind(&binding).unwrap();plugin.bind(&binding).unwrap();
+        let local=LocalTerminalFacts::new(frame(),Some(plugin.clone()),None);
+        let now=SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();let mut stamp=(now*1000.0) as u64;let mut instance=String::new();while stamp>0 {instance.insert(0,char::from_digit((stamp%36) as u32,36).unwrap());stamp/=36;}
+        let poll=plugin.begin_pull(&binding,Pull {instance,modos:vec!["fill".into()],estado:Some("idle".into()),session_id:Some("sid".into())},Instant::now()).unwrap();
+        assert!(local.check(&target,&target.binding).await.is_ok(),"/pull aberto");
+        drop(poll);
+        assert!(local.check(&target,&target.binding).await.is_ok(),"entre um /pull e o seguinte");
+        plugin.record_state(&binding,"fim".into(),Some("clear".into()),Instant::now()).unwrap();
+        assert!(local.check(&target,&target.binding).await.is_err(),"session.end depois do último /pull");
     }
     /// Pane que troca de tela a cada Enter enviado, como o formulário do TUI.
     struct FormIo { screens: Vec<String>, at: Mutex<usize>, keys: Mutex<Vec<String>> }

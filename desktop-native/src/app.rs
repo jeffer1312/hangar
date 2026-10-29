@@ -3362,7 +3362,7 @@ impl Hangar {
             Action::Select(_) | Action::SelectText(..) | Action::Submit => Some(select_snapshot(&self.chat.state)),
             Action::Implement => self.codex_plan().map(|(_, plan)| plan),
             Action::Discard(id) => self.chat.events.iter().any(|e| e.id == format!("queued-{id}")
-                && (e.desistiu == Some(true) || holds_queue(e, self.chat.state.problema.as_deref()))).then(|| id.clone()),
+                && (e.desistiu == Some(true) || discardable(e, self.chat.state.problema.as_deref()))).then(|| id.clone()),
             Action::Cancel | Action::Steer => Some(String::new()),
             // O instantâneo é o id: a entrada ainda tem de estar no painel.
             Action::QueueCancel(id) | Action::QueueEdit(id, _) | Action::QueueSteer(id) | Action::QueueReorder(id, _) =>
@@ -5207,7 +5207,7 @@ impl Hangar {
             if event.desistiu == Some(true) { discard = event.id.strip_prefix("queued-").map(str::to_owned); }
             else if holds_queue(event, self.chat.state.problema.as_deref()) {
                 notes.push(tr("delivery_unproved"));
-                discard = event.id.strip_prefix("queued-").map(str::to_owned);
+                if discardable(event, self.chat.state.problema.as_deref()) { discard = event.id.strip_prefix("queued-").map(str::to_owned); }
             }
             else if let Some(note) = stuck_note(event, self.chat.state.problema.as_deref()) { notes.push(tr(note)); }
             else if event.queued() && event.queued_consumed != Some(true) { notes.push(tr(if event.queued_delivered == Some(true) { "delivering" } else { "queued" })); }
@@ -6520,7 +6520,14 @@ fn prepare_detail(full: String) -> Prepared {
 
 /// A bolha entregue sem prova que segura a fila: o servidor aceita descartá-la (desiste e tira).
 fn holds_queue(event: &ChatEvent, problem: Option<&str>) -> bool {
-    problem == Some("terminal_input_delivery_unproved") && event.queued() && event.queued_delivered == Some(true) && event.desistiu != Some(true)
+    matches!(problem, Some("terminal_input_delivery_unproved" | "terminal_input_delivery_composer_busy"))
+        && event.queued() && event.queued_consumed != Some(true) && event.queued_delivered == Some(true) && event.desistiu != Some(true)
+}
+
+/// Descartar tira a entrada, não o texto do campo do terminal: com texto lá, um Enter depois o mandaria como
+/// mensagem nova. A pessoa apaga ou envia no terminal, e o Descartar volta.
+fn discardable(event: &ChatEvent, problem: Option<&str>) -> bool {
+    holds_queue(event, problem) && problem != Some("terminal_input_delivery_composer_busy")
 }
 
 /// Mensagem sem entrega com o processo vivo e surdo: só a pessoa reabre, pelo painel "Na fila", onde ela espera.
@@ -6530,7 +6537,7 @@ const STALLED: &str = "headless_delivery_stalled";
 fn stuck_note(event: &ChatEvent, problem: Option<&str>) -> Option<&'static str> {
     if !event.queued() || event.queued_delivered == Some(true) || event.desistiu == Some(true) { return None; }
     match problem {
-        Some("terminal_input_delivery_unproved") => Some("queue_held"),
+        Some("terminal_input_delivery_unproved" | "terminal_input_delivery_composer_busy") => Some("queue_held"),
         Some("terminal_input_no_safe_delivery") => Some("no_safe_delivery"),
         _ => None,
     }

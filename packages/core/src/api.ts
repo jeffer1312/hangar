@@ -1,5 +1,6 @@
 import { apiEnv, type EventSourceLike } from './apiEnv';
 import type { Server } from './servers';
+import { isOwnMachine } from './machineImport';
 import { baseOf, decidirRota, rotaDecidida, UNCONFIRMED_BASE } from './rota';
 import type { CodexAccount, CodexIntegracaoEstado, CodexLoginAttempt, CodexResetOutcome, Credencial } from './credenciais';
 import * as m from './paraglide/messages';
@@ -449,16 +450,22 @@ export { recentFailures, type RecentFailure };
 export const DIAG_REPORT_TEXT_MAX = 2000;
 
 /** O que a tela diz da falha; só `unsupported` não deixa tentar de novo. */
-export type DiagReportFailureKind = 'unsupported' | 'rate_limited' | 'unreachable' | 'failed';
+/** `expired`: a assinatura do envio venceu; repetir nele não adianta, só um envio novo. */
+export type DiagReportFailureKind = 'unsupported' | 'expired' | 'rate_limited' | 'unreachable' | 'failed';
+
+/** A máquina que falhou e que repetir no mesmo envio pode resolver. */
+export const diagReportRetryable = (r: DiagReportResult): boolean => !r.ok && r.kind !== 'unsupported' && r.kind !== 'expired';
 
 export type DiagReportResult =
-  | { ok: true; code: string; diary: 'sent' | 'failed' }
+  /** `groupToken`: a assinatura que o primeiro relatório recebe para as outras máquinas entrarem no código dele. */
+  | { ok: true; code: string; diary: 'sent' | 'failed'; groupToken?: string }
   /** `code`: o do servidor (C1), `unsupported` (servidor sem a rota), `network` (sem resposta)
    *  ou `unexpected` (resposta sem código). `status` 0 = sem resposta. */
   | { ok: false; code: string; status: number; kind: DiagReportFailureKind };
 
 function diagReportFailure(code: string, status: number): DiagReportResult {
   const kind: DiagReportFailureKind = code === 'unsupported' ? 'unsupported'
+    : code === 'diag_report_group_unknown' ? 'expired'
     : code === 'diag_report_rate_limited' ? 'rate_limited'
     : code === 'diag_report_unreachable' || code === 'network' ? 'unreachable'
     : 'failed';
@@ -471,20 +478,83 @@ export function recentFailuresFor(server: Server): RecentFailure[] {
 }
 
 /** Relatório de diagnóstico ao servidor da tela. Não lança: toda saída vira um `DiagReportResult`. */
-export async function sendDiagReport(server: Server, { text, client }: { text?: string; client: string }): Promise<DiagReportResult> {
-  const body = { ...(text?.trim() ? { text } : {}), client, failures: recentFailuresFor(server) };
+export interface DiagReportGroup { code: string; token: string }
+
+export async function sendDiagReport(server: Server, { text, client, group }: { text?: string; client: string; group?: DiagReportGroup }): Promise<DiagReportResult> {
+  const body = { ...(text?.trim() ? { text } : {}), client, failures: recentFailuresFor(server),
+    ...(group ? { group: group.code, group_token: group.token } : {}) };
   try {
     // Pior caso do servidor: montagem (até 50 s), worker (20 s) e diário inteiro (60 s).
-    const res = await apiFetchForServer<{ code?: unknown; diary?: unknown }>(server, '/api/diag/report',
+    const res = await apiFetchForServer<{ code?: unknown; diary?: unknown; group?: unknown; group_token?: unknown }>(server, '/api/diag/report',
       { method: 'POST', body: JSON.stringify(body) }, 150_000);
     if (typeof res?.code !== 'string') return diagReportFailure('unexpected', 201);
-    return { ok: true, code: res.code, diary: res.diary === 'sent' ? 'sent' : 'failed' };
+    // Servidor antigo ignora o grupo e manda avulso: o relatório não entrou no código do envio.
+    if (group && res.group !== group.code) return diagReportFailure('unsupported', 201);
+    return { ok: true, code: res.code, diary: res.diary === 'sent' ? 'sent' : 'failed',
+      ...(typeof res.group_token === 'string' ? { groupToken: res.group_token } : {}) };
   } catch (e) {
     const { status, code } = (e ?? {}) as { status?: unknown; code?: unknown };
     if (typeof status !== 'number') return diagReportFailure('network', 0);
     if (status === 404) return diagReportFailure('unsupported', status);
     return diagReportFailure(typeof code === 'string' ? code : 'unexpected', status);
   }
+}
+
+export interface DiagReportAllResult {
+  /** O código do envio: o da primeira máquina que deu certo; `null` se nenhuma deu. */
+  code: string | null;
+  /** O código e a assinatura do envio, para reenviar depois às que falharam. */
+  group: DiagReportGroup | null;
+  results: { server: Server; result: DiagReportResult }[];
+}
+
+/** Máquinas de "todas as minhas máquinas": as próprias e ligadas, a da tela primeiro (vira o código do envio).
+ *  `guest`: quem chama sabe se o papel na máquina é de convidado. */
+export function diagReportMachines(servers: Server[], current: Server | null, guest: (s: Server) => boolean = () => false): Server[] {
+  const own = servers.filter((s) => isOwnMachine(s) && !s.disabled && !guest(s));
+  return [...own.filter((s) => s.id === current?.id), ...own.filter((s) => s.id !== current?.id)];
+}
+
+export type DiagReportScope = 'all' | 'this' | 'pick';
+
+/** As máquinas que a escolha manda; marcada sem escolha explícita só a da tela. A da tela só vai quando está
+ *  entre as elegíveis (desligada, par ou removida não recebe relatório). */
+export function diagReportTargets(machines: Server[], current: Server | null, scope: DiagReportScope, picked: Record<string, boolean>): Server[] {
+  if (scope === 'this') return machines.filter((s) => s.id === current?.id);
+  if (machines.length < 2) return machines;
+  return scope === 'all' ? machines : machines.filter((s) => picked[s.id] ?? s.id === current?.id);
+}
+
+/** Um relatório por máquina, uma por vez: a primeira que dá certo vira o código do envio, e as seguintes levam o
+ *  código e a assinatura dela. Sem assinatura (worker ou servidor antigo) as outras não iriam juntas: ficam de fora
+ *  como sem suporte em vez de virar relatórios avulsos que a tela não mostra. */
+export async function sendDiagReportAll(servers: Server[], input: { text?: string; client: string }, previous?: DiagReportGroup): Promise<DiagReportAllResult> {
+  let code: string | null = previous?.code ?? null;
+  let group: DiagReportGroup | null = previous ?? null;
+  const results: DiagReportAllResult['results'] = [];
+  for (const server of servers) {
+    const result = code !== null && group === null ? diagReportFailure('unsupported', 0)
+      : await sendDiagReport(server, { ...input, ...(group ? { group } : {}) });
+    if (result.ok && code === null) {
+      code = result.code;
+      group = result.groupToken ? { code, token: result.groupToken } : null;
+    }
+    results.push({ server, result });
+  }
+  return { code, group, results };
+}
+
+/** Reenvia só às máquinas que falharam num envio, no mesmo código, e junta ao resultado dele. */
+export async function resendDiagReportMissed(previous: DiagReportAllResult, input: { text?: string; client: string }): Promise<DiagReportAllResult> {
+  // Envio com código e sem assinatura: as que faltam iriam avulsas, fora do código que a tela mostra.
+  if (previous.code !== null && previous.group === null) {
+    return { ...previous, results: previous.results.map((r) => diagReportRetryable(r.result) ? { server: r.server, result: diagReportFailure('unsupported', 0) } : r) };
+  }
+  const missed = previous.results.filter((r) => diagReportRetryable(r.result)).map((r) => r.server);
+  const again = await sendDiagReportAll(missed, input, previous.group ?? undefined);
+  const resent = new Set(missed.map((s) => s.id));
+  return { code: previous.code ?? again.code, group: previous.group ?? again.group,
+    results: [...previous.results.filter((r) => !resent.has(r.server.id)), ...again.results] };
 }
 
 export function getSessions(server?: Server | null, init?: RequestInit): Promise<SessionInfo[]> {

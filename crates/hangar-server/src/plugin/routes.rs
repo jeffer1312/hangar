@@ -213,11 +213,21 @@ async fn whoami(State(st): State<Arc<RouteState>>, ConnectInfo(peer): ConnectInf
         Err(error) => fail(error),
     }
 }
+/// O `/pull` é o que prova a conversa sem o registro nativo: recusa dele vai ao log, uma vez por sessão e código,
+/// para o relatório dizer se o plugin tentou e foi recusado ou se parou de tentar.
+/// `session` só depois de autenticado: o nome que chega sem token aceito não ocupa vaga do limitador.
+fn pull_refused(session: Option<&str>, error: ServiceError) -> Response {
+    if crate::warn_limit::allow(session, &format!("plugin_pull:{}", error.0)) {
+        tracing::warn!(session, code = error.0, "plugin: /pull recusado");
+    }
+    fail(error)
+}
 async fn pull(State(st): State<Arc<RouteState>>, Json(body): Json<Envelope<Pull>>) -> Response {
-    let identity = match admit(&st, &body).await { Ok(identity) => identity, Err(error) => return fail(error) };
-    let present = match st.sources.band_present(&identity).await { Ok(present) => present, Err(error) => return fail(error) };
+    let identity = match admit(&st, &body).await { Ok(identity) => identity, Err(error) => return pull_refused(None, error) };
+    let session = body.sessao.clone();
+    let present = match st.sources.band_present(&identity).await { Ok(present) => present, Err(error) => return pull_refused(Some(&session), error) };
     let instance = body.body.instance.clone();
-    let poll = match st.store.begin_pull(&identity.binding, body.body, Instant::now()) { Ok(poll) => poll, Err(error) => return fail(error) };
+    let poll = match st.store.begin_pull(&identity.binding, body.body, Instant::now()) { Ok(poll) => poll, Err(error) => return pull_refused(Some(&session), error) };
     // Sem o espelho (servidor reiniciado), o plugin só reenvia o `/ui` ao ler `faixa:false`: não espera o long-poll.
     let poll = if present { poll } else { poll.cap(MIRROR_MISSING_POLL) };
     // A conversa conferida acima tem esta vida desde o nascimento da instância.

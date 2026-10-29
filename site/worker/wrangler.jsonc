@@ -12,11 +12,15 @@
   "kv_namespaces": [{ "binding": "REPORTS", "id": "ba95d97d75a1454293131ea8b097518c" }],
   // O binding só aceita períodos de 10 ou 60 s: 3 envios por minuto por IP e 2 por minuto no total (chave fixa), para um
   // IP só ou vários não esgotarem as escritas diárias do KV e a caixa de e-mail. O diagnóstico tem o seu, 1 por minuto
-  // por IP, e o global vale para os dois; o envio do diário inteiro usa o LIMITER.
+  // por IP, e o global vale para os dois. As outras máquinas de um envio agrupado (assinado com o segredo GROUP_SECRET)
+  // não pagam o por IP: 7 por minuto por grupo e 10 por minuto no total delas. O diário inteiro tem o seu, por IP.
   "ratelimits": [
     { "name": "LIMITER", "namespace_id": "1001", "simple": { "limit": 3, "period": 60 } },
     { "name": "GLOBAL_LIMITER", "namespace_id": "1002", "simple": { "limit": 2, "period": 60 } },
-    { "name": "DIAG_LIMITER", "namespace_id": "1003", "simple": { "limit": 1, "period": 60 } }
+    { "name": "DIAG_LIMITER", "namespace_id": "1003", "simple": { "limit": 1, "period": 60 } },
+    { "name": "DIARY_LIMITER", "namespace_id": "1004", "simple": { "limit": 10, "period": 60 } },
+    { "name": "GROUP_LIMITER", "namespace_id": "1005", "simple": { "limit": 7, "period": 60 } },
+    { "name": "GROUPS_LIMITER", "namespace_id": "1006", "simple": { "limit": 10, "period": 60 } }
   ],
   // Destinatário no segredo REPORT_TO: o repositório é público.
   "send_email": [{ "name": "MAILER" }],

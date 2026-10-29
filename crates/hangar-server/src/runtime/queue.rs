@@ -379,7 +379,7 @@ impl Store {
     pub fn open(state_path: &Path, projection_dir: &Path, initial: State) -> io::Result<Self> {
         if let Some(parent) = state_path.parent() { std::fs::create_dir_all(parent)?; }
         std::fs::create_dir_all(projection_dir)?;
-        let state = match std::fs::read(state_path) {
+        let state = match read_replaced(state_path) {
             Ok(bytes) => {
                 let (state, migrated) = State::load(&bytes)?;
                 if state.owner_key != initial.owner_key { return Err(invalid("estado da fila incompatível")); }

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi } from './apiEnv';
 import { _resetDiagForTests, recentFailures, recordFailure } from './diag';
 import { _limparEsfriamentoParaTestes } from './esfriamento';
-import { getConfigForServer, recentFailuresFor, rotaGenerica, sendDiagReport, steerQueuedMessage } from './api';
+import { diagReportMachines, diagReportTargets, getConfigForServer, recentFailuresFor, resendDiagReportMissed, rotaGenerica, sendDiagReport, sendDiagReportAll, steerQueuedMessage } from './api';
 import type { Server } from './servers';
 
 const serverA: Server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
@@ -134,5 +134,110 @@ describe('sendDiagReport', () => {
   it('sem resposta vira network', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'));
     expect(await sendDiagReport(serverA, { client: 'pwa 1.0' })).toEqual({ ok: false, code: 'network', status: 0, kind: 'unreachable' });
+  });
+});
+
+describe('sendDiagReportAll', () => {
+  const serverC: Server = { id: 'c', label: 'Servidor C', baseUrl: 'https://c.test', token: 'token-c' };
+  const TOKEN = 'abc.abcdefghijklmnopqrstuvwxyz';
+  const lead = (code: string) => new Response(JSON.stringify({ code, diary: 'sent', group_token: TOKEN }), { status: 201 });
+  const ok = (code: string, group: string) => new Response(JSON.stringify({ code, diary: 'sent', group }), { status: 201 });
+  const bodies = (fetchMock: { mock: { calls: unknown[][] } }) =>
+    fetchMock.mock.calls.map(([url, init]) => [String(url), JSON.parse(String((init as RequestInit).body))] as const);
+
+  it('uma máquina por vez: as seguintes levam o código e a assinatura da primeira', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(lead('aaaa2222')).mockResolvedValueOnce(ok('bbbb3333', 'aaaa2222')).mockResolvedValueOnce(ok('cccc4444', 'aaaa2222'));
+    const res = await sendDiagReportAll([serverA, serverB, serverC], { text: 'na VM', client: 'pwa 1.0' });
+    expect(res.code).toBe('aaaa2222');
+    expect(res.group).toEqual({ code: 'aaaa2222', token: TOKEN });
+    expect(res.results.map((r) => [r.server.id, r.result.ok])).toEqual([['a', true], ['b', true], ['c', true]]);
+    const sent = bodies(fetchMock);
+    expect(sent.map(([url]) => url)).toEqual(['https://a.test/api/diag/report', 'https://b.test/api/diag/report', 'https://c.test/api/diag/report']);
+    expect(sent[0][1]).not.toHaveProperty('group');
+    expect([sent[1][1].group, sent[1][1].group_token]).toEqual(['aaaa2222', TOKEN]);
+    expect(sent[2][1].group).toBe('aaaa2222');
+    expect(sent[1][1].text).toBe('na VM');
+  });
+
+  it('a primeira que falha não vira grupo: o código é o da primeira que deu certo', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValueOnce(lead('bbbb3333')).mockResolvedValueOnce(ok('cccc4444', 'bbbb3333'));
+    const res = await sendDiagReportAll([serverA, serverB, serverC], { client: 'pwa 1.0' });
+    expect(res.code).toBe('bbbb3333');
+    expect(res.results[0].result).toEqual({ ok: false, code: 'network', status: 0, kind: 'unreachable' });
+    const sent = bodies(fetchMock);
+    expect(sent[1][1]).not.toHaveProperty('group');
+    expect(sent[2][1].group).toBe('bbbb3333');
+  });
+
+  it('servidor antigo que manda avulso, sem confirmar o grupo, é sem suporte', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(lead('aaaa2222'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'bbbb3333', diary: 'sent' }), { status: 201 }));
+    const res = await sendDiagReportAll([serverA, serverB], { client: 'pwa 1.0' });
+    expect(res.results[1].result).toMatchObject({ ok: false, kind: 'unsupported' });
+  });
+
+  it('sem assinatura do primeiro as outras não vão avulsas', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({ code: 'aaaa2222', diary: 'sent' }), { status: 201 }));
+    const res = await sendDiagReportAll([serverA, serverB], { client: 'pwa 1.0' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(res.code).toBe('aaaa2222');
+    expect(res.results[1].result).toMatchObject({ ok: false, kind: 'unsupported' });
+  });
+
+  it('reenvio só das que falharam, no código e na assinatura do envio anterior', async () => {
+    const before = { code: 'aaaa2222', group: { code: 'aaaa2222', token: TOKEN }, results: [
+      { server: serverA, result: { ok: true as const, code: 'aaaa2222', diary: 'sent' as const } },
+      { server: serverB, result: { ok: false as const, code: 'x', status: 9, kind: 'unsupported' as const } },
+      { server: serverC, result: { ok: false as const, code: 'network', status: 0, kind: 'unreachable' as const } }] };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(ok('cccc4444', 'aaaa2222'));
+    const res = await resendDiagReportMissed(before, { client: 'pwa 1.0' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect([bodies(fetchMock)[0][0], bodies(fetchMock)[0][1].group_token]).toEqual(['https://c.test/api/diag/report', TOKEN]);
+    expect(res.code).toBe('aaaa2222');
+    expect(res.results.map((r) => [r.server.id, r.result.ok])).toEqual([['a', true], ['b', false], ['c', true]]);
+  });
+
+  it('as máquinas do envio: próprias e ligadas, a da tela primeiro, sem convite, par, removida nem convidado', () => {
+    const list: Server[] = [serverA, serverB, serverC, { ...serverA, id: 'off', disabled: true }, { ...serverA, id: 'inv', invite: true },
+      { ...serverA, id: 'par', ephemeral: true }, { ...serverA, id: 'rm', removed: true }];
+    expect(diagReportMachines(list, serverC, (s) => s.id === 'b').map((s) => s.id)).toEqual(['c', 'a']);
+    const machines = diagReportMachines(list, serverB);
+    expect(diagReportTargets(machines, serverB, 'all', {}).map((s) => s.id)).toEqual(['b', 'a', 'c']);
+    expect(diagReportTargets(machines, serverB, 'this', {}).map((s) => s.id)).toEqual(['b']);
+    expect(diagReportTargets(machines, serverB, 'pick', { c: true }).map((s) => s.id)).toEqual(['b', 'c']);
+    expect(diagReportTargets(machines, serverB, 'pick', { b: false }).map((s) => s.id)).toEqual([]);
+    const off = { ...serverA, id: 'off', disabled: true };
+    expect(diagReportTargets(diagReportMachines([off, serverB], off), off, 'all', {}).map((s) => s.id)).toEqual(['b']);
+    expect(diagReportTargets(diagReportMachines([off, serverB], off), off, 'this', {})).toEqual([]);
+  });
+
+  it('reenvio sem a assinatura do envio anterior não manda avulso: as que faltam ficam sem suporte', async () => {
+    const before = { code: 'aaaa2222', group: null, results: [
+      { server: serverA, result: { ok: true as const, code: 'aaaa2222', diary: 'sent' as const } },
+      { server: serverC, result: { ok: false as const, code: 'network', status: 0, kind: 'unreachable' as const } }] };
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    const res = await resendDiagReportMissed(before, { client: 'pwa 1.0' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.results[1].result).toMatchObject({ ok: false, kind: 'unsupported' });
+  });
+
+  it('reenvio sem código ainda: só as que falharam e podem dar certo, e a primeira vira o código', async () => {
+    const before = { code: null, group: null, results: [
+      { server: serverA, result: { ok: false as const, code: 'x', status: 404, kind: 'unsupported' as const } },
+      { server: serverC, result: { ok: false as const, code: 'network', status: 0, kind: 'unreachable' as const } }] };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(lead('cccc4444'));
+    const res = await resendDiagReportMissed(before, { client: 'pwa 1.0' });
+    expect(bodies(fetchMock).map(([url]) => url)).toEqual(['https://c.test/api/diag/report']);
+    expect(res.code).toBe('cccc4444');
+    expect(res.results.map((r) => [r.server.id, r.result.ok])).toEqual([['a', false], ['c', true]]);
+  });
+
+  it('nenhuma deu certo: sem código, com o motivo de cada uma', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(erro(429, 'diag_report_rate_limited')).mockResolvedValueOnce(erro(502, 'diag_report_unreachable'));
+    const res = await sendDiagReportAll([serverA, serverB], { client: 'pwa 1.0' });
+    expect(res.code).toBeNull();
+    expect(res.results.map((r) => r.result.ok ? null : r.result.kind)).toEqual(['rate_limited', 'unreachable']);
   });
 });
