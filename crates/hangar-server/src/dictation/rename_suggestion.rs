@@ -275,7 +275,10 @@ async fn generate(st: &AppState, row: &SessionRow) -> Result<Option<String>, &'s
     let context = context::for_row(st, row, &request)?;
     let configured = if context.provider == "claude" { &config.dictation_claude_model } else { &config.dictation_codex_model };
     let account = if context.provider != "claude" && configured.is_empty() {
-        super::catalog::codex_configuration(&context.home)?.get("model").and_then(toml::Value::as_str).map(str::to_owned)
+        let config = super::catalog::codex_configuration(&context.home)?;
+        let profile = config.get("profile").and_then(toml::Value::as_str)
+            .and_then(|p| config.get("profiles")?.get(p)?.get("model")?.as_str());
+        profile.or_else(|| config.get("model")?.as_str()).map(str::to_owned)
     } else {
         None
     };
