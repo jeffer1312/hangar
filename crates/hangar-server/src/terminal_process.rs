@@ -140,6 +140,14 @@ mod windows {
     impl CommandTree {
         pub(crate) fn configure(command:&mut Command)->io::Result<Self> {
             command.creation_flags(0x00000004 | 0x08000000);
+            Self::create()
+        }
+        pub(crate) fn configure_std(command: &mut std::process::Command) -> io::Result<Self> {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x00000004 | 0x08000000);
+            Self::create()
+        }
+        fn create() -> io::Result<Self> {
             let handle=unsafe {CreateJobObjectW(std::ptr::null_mut(),std::ptr::null())};
             if handle.is_null(){return Err(io::Error::last_os_error());}
             let job=Resource(handle);let mut limits=Extended::default();limits.basic.flags=0x2000;
@@ -147,14 +155,21 @@ mod windows {
             Ok(Self {job,process:std::ptr::null_mut(),assigned:false})
         }
         pub(crate) fn attach(&mut self,child:&Child)->io::Result<()> {
-            self.process=child.raw_handle().ok_or_else(||io::Error::other("auxiliar sem handle"))? as Handle;
+            self.attach_handle(child.raw_handle().ok_or_else(||io::Error::other("auxiliar sem handle"))? as Handle, child.id())
+        }
+        pub(crate) fn attach_std(&mut self, child: &std::process::Child) -> io::Result<()> {
+            use std::os::windows::io::AsRawHandle;
+            self.attach_handle(child.as_raw_handle(), Some(child.id()))
+        }
+        fn attach_handle(&mut self, handle: Handle, pid: Option<u32>) -> io::Result<()> {
+            self.process=handle;
             check(unsafe {AssignProcessToJobObject(self.job.0,self.process)})?;self.assigned=true;
             let snapshot=unsafe {CreateToolhelp32Snapshot(0x4,0)};
             if snapshot as usize==usize::MAX {return Err(io::Error::last_os_error());}
             let snapshot=Resource(snapshot);let mut entry=ThreadEntry {size:std::mem::size_of::<ThreadEntry>() as u32,..ThreadEntry::default()};
             check(unsafe {Thread32First(snapshot.0,&mut entry)})?;let mut resumed=false;
             loop {
-                if Some(entry.owner)==child.id() {
+                if Some(entry.owner)==pid {
                     let thread=unsafe {OpenThread(0x2,0,entry.id)};
                     if thread.is_null(){return Err(io::Error::last_os_error());}
                     let thread=Resource(thread);

@@ -20,6 +20,7 @@ pub mod http;
 pub mod install;
 pub mod migrate;
 pub mod periodic;
+pub mod process;
 pub mod restart;
 pub mod state;
 pub mod steps;
