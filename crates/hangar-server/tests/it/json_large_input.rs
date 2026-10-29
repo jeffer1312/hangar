@@ -67,6 +67,44 @@ fn json_deep_input_child() {
     }
 }
 
+#[test]
+fn json_deep_typed_http_error_never_aborts() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "json_large_input::json_deep_typed_http_child", "--ignored"])
+        .output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[tokio::test]
+#[ignore = "erro HTTP profundo executado em subprocesso"]
+async fn json_deep_typed_http_child() {
+    use hangar_server::{accounts::{AccountService, environment::AccountEnvironment},
+        auth::TrustedHosts, config::Config, routes::AppState};
+    let home = tempfile::tempdir().unwrap();
+    let mut state = AppState::new(Config {
+        listen: "127.0.0.1:0".parse().unwrap(), upstream: crate::refused_address(),
+        internal_secret: "fixture-internal".into(), auth_token: "fixture-owner".into(),
+        log_path: None, trusted: TrustedHosts::parse("127.0.0.1"),
+    });
+    state.accounts = AccountService::new(AccountEnvironment::from_pairs([
+        ("HOME", home.path().to_str().unwrap()), ("USERPROFILE", home.path().to_str().unwrap()),
+    ]));
+    let nested = format!("{}0{}", "[".repeat(10000), "]".repeat(10000));
+    let input = format!("{{\"mtime\":0,\"extra\":{nested}}}");
+    let request = axum::http::Request::builder().method("POST")
+        .uri("/api/sessions/fixture/orq/comecar").header("content-type", "application/json")
+        .body(axum::body::Body::from(input)).unwrap();
+    let response = hangar_server::orchestration::serve(&std::sync::Arc::new(state), request).await;
+    assert_eq!(response.status().as_u16(), 422);
+    let bytes = axum::body::to_bytes(response.into_body(), 100000).await.unwrap();
+    let error = codec::loads(std::str::from_utf8(&bytes).unwrap()).unwrap();
+    let kind = error["detail"][0]["type"].as_str().unwrap().to_owned();
+    let returned = codec::dumps(&error["detail"][0]["input"], false);
+    codec::discard(error);
+    assert_eq!(kind, "extra_forbidden");
+    assert_eq!(returned, nested);
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
     #[test]

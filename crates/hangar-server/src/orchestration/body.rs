@@ -82,7 +82,9 @@ fn error(kind: &str, loc: &[Value], input: &Value) -> Value {
         "list_type" => "Input should be a valid list",
         _ => unreachable!("erro de validação conhecido"),
     };
-    json!({"type":kind,"loc":loc,"msg":message,"input":input})
+    let mut result = json!({"type":kind,"loc":loc,"msg":message});
+    result["input"] = super::codec::clone_value(input);
+    result
 }
 fn boolean(value: &Value) -> Result<bool, &'static str> {
     if let Some(value) = value.as_bool() {
@@ -141,9 +143,10 @@ fn model(value: &Value, schema: &[Field], loc: &[Value], errors: &mut Vec<Value>
             loc,
             value,
         ));
-        return value.clone();
+        return super::codec::clone_value(value);
     };
-    let mut output = input.clone();
+    let mut output: serde_json::Map<String, Value> = input.iter()
+        .map(|(key, value)| (key.clone(), super::codec::clone_value(value))).collect();
     for (name, kind, required) in schema {
         let mut at = loc.to_vec();
         at.push(json!(name));
@@ -167,7 +170,9 @@ fn model(value: &Value, schema: &[Field], loc: &[Value], errors: &mut Vec<Value>
                 } else {
                     match boolean(v) {
                         Ok(b) => {
-                            output.insert((*name).into(), json!(b));
+                            if let Some(previous) = output.insert((*name).into(), json!(b)) {
+                                super::codec::discard(previous);
+                            }
                             None
                         }
                         Err(e) => Some(e),
@@ -177,7 +182,9 @@ fn model(value: &Value, schema: &[Field], loc: &[Value], errors: &mut Vec<Value>
             Kind::Number => match number(v) {
                 Ok(n) => {
                     if n.is_finite() {
-                        output.insert((*name).into(), json!(n));
+                        if let Some(previous) = output.insert((*name).into(), json!(n)) {
+                            super::codec::discard(previous);
+                        }
                     }
                     None
                 }
@@ -197,11 +204,13 @@ fn model(value: &Value, schema: &[Field], loc: &[Value], errors: &mut Vec<Value>
                                 if !item.is_string() {
                                     errors.push(error("string_type", &at, item));
                                 }
-                                item.clone()
+                                super::codec::clone_value(item)
                             }
                         })
                         .collect();
-                    output.insert((*name).into(), Value::Array(converted));
+                    if let Some(previous) = output.insert((*name).into(), Value::Array(converted)) {
+                        super::codec::discard(previous);
+                    }
                     None
                 } else {
                     Some("list_type")
@@ -227,7 +236,8 @@ pub fn validate(name: &str, value: &Value) -> Result<Value, Value> {
     if errors.is_empty() {
         Ok(output)
     } else {
-        Err(json!({"detail":errors}))
+        super::codec::discard(output);
+        Err(Value::Object(std::iter::once(("detail".into(), Value::Array(errors))).collect()))
     }
 }
 fn diagnostic_check(text: &str) -> Result<(), serde_json::Error> {
@@ -260,8 +270,8 @@ pub fn parse(bytes: &[u8]) -> Result<Value, (axum::http::StatusCode, Value)> {
     })?;
     let text = decoded.text.as_ref();
     if let Some(value) = super::codec::loads(text) { return Ok(value); }
-    let normalized = super::body_numbers::for_limit(text);
-    let text = if let Some((first, normalized)) = &normalized {
+    let normalized = super::body_numbers::for_diagnostic(text);
+    if let Some((Some(first), normalized)) = &normalized {
         let reached = match diagnostic_check(normalized) {
             Ok(_) => true,
             Err(error) => {
@@ -272,8 +282,8 @@ pub fn parse(bytes: &[u8]) -> Result<Value, (axum::http::StatusCode, Value)> {
         if reached {
             return Err((StatusCode::BAD_REQUEST, json!({"detail":"There was an error parsing the body"})));
         }
-        normalized.as_str()
-    } else { text };
+    }
+    let text = normalized.as_ref().map(|(_, text)| text.as_str()).unwrap_or(text);
     diagnostic_parse(text).map_err(|e|{
         let raw=e.to_string();let eof=e.is_eof();
         let previous:usize=text.split_inclusive('\n').take(e.line().saturating_sub(1)).map(str::len).sum();

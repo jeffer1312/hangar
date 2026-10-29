@@ -32,3 +32,22 @@ fn json_bytes_match_python_encoding_and_positions() {
         }
     }
 }
+
+#[test]
+fn json_special_scalars_preserve_later_python_diagnostics() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../backend/tests/fixtures/contract/config_sync/json-diagnostic-special.json"
+    )).unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let raw = case["raw"].as_str().unwrap();
+        let actual = body::parse(raw.as_bytes());
+        if let Some(expected) = case["value_json"].as_str() {
+            assert_eq!(actual.unwrap(), codec::loads(expected).unwrap(), "{raw}");
+        } else {
+            let (status, error) = actual.expect_err("entrada recusada pelo Python");
+            assert_eq!(status.as_u16(), 422, "{raw}");
+            assert_eq!(error["detail"][0]["loc"][1], case["position"], "{raw}");
+            assert_eq!(error["detail"][0]["ctx"]["error"], case["message"], "{raw}");
+        }
+    }
+}

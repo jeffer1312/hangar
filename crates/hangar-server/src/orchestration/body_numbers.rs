@@ -1,7 +1,7 @@
 //! A recusa do inteiro ocorre quando o leitor chega nele, depois de qualquer erro anterior.
 use std::sync::LazyLock;
 
-pub(super) fn for_limit(text: &str) -> Option<(usize, String)> {
+pub(super) fn for_diagnostic(text: &str) -> Option<(Option<usize>, String)> {
     static NUMBER: LazyLock<regex::Regex> = LazyLock::new(|| {
         regex::Regex::new(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?").unwrap()
     });
@@ -17,7 +17,7 @@ pub(super) fn for_limit(text: &str) -> Option<(usize, String)> {
                 if bytes.get(at + 1) == Some(&b'u') && at + 6 <= bytes.len()
                     && let Some(code) = text.get(at + 2..at + 6).and_then(|digits| u32::from_str_radix(digits, 16).ok())
                     && (0xd800..=0xdfff).contains(&code) {
-                    edits.push((at + 2, 4, true));
+                    edits.push((at + 2, 4, b"fffd".as_slice()));
                     at += 6;
                 } else {
                     at += 1;
@@ -28,25 +28,23 @@ pub(super) fn for_limit(text: &str) -> Option<(usize, String)> {
         }
         if bytes[at] == b'"' { quoted = true; at += 1; continue; }
         if let Some(token) = ["-Infinity", "Infinity", "NaN"].into_iter().find(|token| text[at..].starts_with(token)) {
-            edits.push((at, token.len(), false));
+            // Um número substituto se fundiria com o anterior em entradas como 1NaN.
+            edits.push((at, token.len(), b"[]".as_slice()));
             at += token.len();
         } else if matches!(bytes[at], b'-' | b'0'..=b'9') && let Some(token) = NUMBER.find(&text[at..]) {
             let raw = token.as_str();
             if !raw.contains(['.', 'e', 'E']) && raw.trim_start_matches('-').len() > 4300 {
                 first.get_or_insert(at);
-                edits.push((at, raw.len(), false));
+                edits.push((at, raw.len(), b"0".as_slice()));
             }
             at += raw.len();
         } else { at += text[at..].chars().next()?.len_utf8(); }
     }
-    let first = first?;
+    if edits.is_empty() { return None; }
     let mut normalized = bytes.to_vec();
-    for (start, length, surrogate) in edits {
-        if surrogate { normalized[start..start + length].copy_from_slice(b"fffd"); }
-        else {
-            normalized[start] = b'0';
-            normalized[start + 1..start + length].fill(b' ');
-        }
+    for (start, length, replacement) in edits {
+        normalized[start..start + length].fill(b' ');
+        normalized[start..start + replacement.len()].copy_from_slice(replacement);
     }
     // Só trechos ASCII foram substituídos por ASCII de mesmo tamanho.
     Some((first, String::from_utf8(normalized).ok()?))

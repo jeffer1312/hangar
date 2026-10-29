@@ -90,7 +90,9 @@ fn invalid() -> Response {
 fn body<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Response> {
     let value = super::body::parse(bytes)
         .map_err(|(status, value)| super::codec::response(status, value))?;
-    let value = super::body::validate(std::any::type_name::<T>(), &value)
+    let validated = super::body::validate(std::any::type_name::<T>(), &value);
+    super::codec::discard(value);
+    let value = validated
         .map_err(|v| super::codec::response(StatusCode::UNPROCESSABLE_ENTITY, v))?;
     serde_json::from_value(value).map_err(|_| invalid())
 }
