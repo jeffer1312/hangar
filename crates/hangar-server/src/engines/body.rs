@@ -275,6 +275,9 @@ pub fn typed(schema: Schema, bytes: &[u8], headers: &HeaderMap) -> Result<Value,
 
 /// Request.json() não usa o modelo tipado nem a seleção por Content-Type.
 pub fn raw(bytes: &[u8]) -> Result<Value, Response> {
+    if bytes.is_empty() {
+        return Err(internal_error());
+    }
     body::parse(bytes).map_err(|(_, error)| {
         codec::discard(error);
         internal_error()
