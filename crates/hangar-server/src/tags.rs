@@ -129,8 +129,18 @@ fn known_accounts(accounts: &AccountService) -> Result<Vec<(String, Value)>, &'s
     if let Some(&(_, code)) = problems.first() { return Err(code); }
     Ok(listed.into_iter().map(|l| {
         let name = config.aliases.get(&l.id).cloned().unwrap_or(l.natural);
-        (l.id, name)
+        (row_id(l.id), name)
     }).collect())
+}
+
+/// O id como a `conta` da linha da lista o escreve: pasta que ainda não existe sob um link (HOME por
+/// link sem `~/.claude`) sai resolvida pelo link, e o cliente casa a linha e a etiqueta pelo texto.
+fn row_id(id: String) -> String {
+    match id.split_once(':') {
+        Some((kind @ ("claude" | "codex"), path)) =>
+            format!("{kind}:{}", crate::list::links::resolve_lenient(std::path::Path::new(path)).to_string_lossy()),
+        _ => id,
+    }
 }
 
 /// O evento `tags` da lista do dono.
@@ -364,10 +374,13 @@ mod tests {
         std::fs::write(path, text).unwrap();
     }
 
+    // Real e sem o `\\?\` do canonicalize do Windows, como os ids saem.
+    fn real_home(tmp: &tempfile::TempDir) -> PathBuf { crate::list::links::resolve_lenient(tmp.path()) }
+
     fn account(home: &Path, name: &str) -> PathBuf {
         let dir = home.join(name);
         write(&dir.join(crate::accounts::storage::CLAUDE_MARKER), "");
-        dir.canonicalize().unwrap()
+        crate::list::links::resolve_lenient(&dir)
     }
 
     /// Pane com `CLAUDE_CONFIG_DIR` (ou sem ele): é o que decide a `conta` da linha.
@@ -398,7 +411,7 @@ mod tests {
     #[test]
     fn names_are_cut_at_the_at_sign_and_untagged_accounts_get_the_card() {
         let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().canonicalize().unwrap();
+        let home = real_home(&tmp);
         let mail = account(&home, ".claude-mail");
         account(&home, ".claude-200-2");
         write(&home.join(".claude/.hangar-apelidos.json"), &json!({format!("claude:{}", mail.display()): "ana@example.com"}).to_string());
@@ -417,7 +430,7 @@ mod tests {
     #[tokio::test]
     async fn without_the_watcher_the_signature_still_sees_a_new_account() {
         let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().canonicalize().unwrap();
+        let home = real_home(&tmp);
         let feed = Feed::default();
         feed.bind(service(&home), String::new());
         *lock(&feed.watch) = None;
@@ -435,7 +448,7 @@ mod tests {
     #[tokio::test]
     async fn a_new_account_folder_wakes_the_feed_without_a_tick() {
         let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().canonicalize().unwrap();
+        let home = real_home(&tmp);
         let feed = Feed::default();
         feed.bind(service(&home), String::new());
         assert!(lock(&feed.watch).is_some(), "vigia não subiu");
