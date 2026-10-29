@@ -178,7 +178,15 @@ async fn speech_public_group_suggestion_keeps_native_sessions_with_and_without_t
 }
 
 fn fixture() -> Value {
-    serde_json::from_str(include_str!("../fixtures/speech/http_contract.json")).unwrap()
+    let mut fixture: Value =
+        serde_json::from_str(include_str!("../fixtures/speech/http_contract.json")).unwrap();
+    let ranges: Value =
+        serde_json::from_str(include_str!("../fixtures/speech/http_audio_ranges.json")).unwrap();
+    fixture["cases"]
+        .as_array_mut()
+        .unwrap()
+        .extend(ranges["cases"].as_array().unwrap().iter().cloned());
+    fixture
 }
 
 /// D-011: somente estas mensagens mudam a grafia; os contratos Python ficam intactos.
@@ -206,6 +214,7 @@ async fn speech_public_matches_the_frozen_python_http_contract() {
     let server = Server::start().await;
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let mut differences = Vec::new();
+    let mut boundaries = std::collections::HashSet::new();
     for case in fixture()["cases"].as_array().unwrap() {
         server.configure(&case["config"]);
         let mut request = client.request(
@@ -225,8 +234,39 @@ async fn speech_public_matches_the_frozen_python_http_contract() {
         }
         let response = request.send().await.unwrap();
         let status = response.status().as_u16();
-        let headers = response.headers().clone();
-        let bytes = response.bytes().await.unwrap();
+        let mut headers = response.headers().clone();
+        let mut bytes = response.bytes().await.unwrap();
+        if case["response_headers"]["content-type"]
+            .as_str()
+            .is_some_and(|v| v.contains("<boundary>"))
+        {
+            let content_type = headers
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned();
+            let boundary = content_type
+                .strip_prefix("multipart/byteranges; boundary=")
+                .unwrap();
+            assert!(
+                boundary.len() == 26 && boundary.bytes().all(|b| b.is_ascii_hexdigit()),
+                "fronteira inválida: {boundary}"
+            );
+            assert!(
+                boundaries.insert(boundary.to_owned()),
+                "a fronteira foi reaproveitada"
+            );
+            bytes =
+                bytes::Bytes::from(String::from_utf8_lossy(&bytes).replace(boundary, "<boundary>"));
+            headers.insert(
+                "content-type",
+                content_type
+                    .replace(boundary, "<boundary>")
+                    .parse()
+                    .unwrap(),
+            );
+        }
         let body = serde_json::from_slice::<Value>(&bytes).ok();
         let expected_body = case.get("response").map(accented_messages);
         let body_matches = if let Some(expected) = expected_body.as_ref() {
@@ -250,6 +290,27 @@ async fn speech_public_matches_the_frozen_python_http_contract() {
     assert!(
         differences.is_empty(),
         "diferenças do contrato HTTP Python: {differences:#?}"
+    );
+}
+
+#[tokio::test]
+async fn speech_authentication_precedes_a_malformed_body() {
+    // D-017: quem não se autenticou não faz o servidor interpretar seu JSON.
+    let server = Server::start().await;
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("{}/api/tts", server.base))
+        .header("content-type", "application/json")
+        .body("{")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 401);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["detail"]["code"],
+        "erro_nao_autorizado"
     );
 }
 

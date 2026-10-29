@@ -7,7 +7,6 @@ use axum::{
     http::{HeaderMap, Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use futures_util::StreamExt;
 use hangar_api::chat::{ChatEvent, ChatKind};
 use md5::{Digest, Md5};
 use serde_json::{Value, json};
@@ -385,38 +384,17 @@ async fn audio(path: &Path, headers: &HeaderMap) -> Response {
     } else {
         "audio/mpeg"
     };
+    if let Some(ranges) = request_headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|value| crate::workspace_routes::ranges(value, metadata.len()).ok())
+        .filter(|ranges| ranges.len() > 1)
+    {
+        return multipart_audio(file, metadata.len(), media, &last, &etag, ranges);
+    }
     let mut response =
         crate::workspace_routes::serve_open_file(file, path, &request_headers, false, Some(media))
             .await;
-    if let Some(boundary) = response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|value| value.strip_prefix("multipart/byteranges; boundary="))
-        .map(str::to_owned)
-        && let Some(ranges) = request_headers
-            .get(header::RANGE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|value| crate::workspace_routes::ranges(value, metadata.len()).ok())
-    {
-        let length = ranges.iter().map(|(start,end)| format!("--{boundary}\r\nContent-Type: {media}\r\nContent-Range: bytes {start}-{}/{}\r\n\r\n",i128::from(*end)-1,metadata.len()).len() as u64 + end - start + 2).sum::<u64>()
-            + format!("--{boundary}--").len() as u64;
-        let mut remaining = length;
-        let stream = std::mem::replace(response.body_mut(), Body::empty())
-            .into_data_stream()
-            .map(move |chunk| {
-                chunk.map(|mut chunk| {
-                    let size = remaining.min(chunk.len() as u64) as usize;
-                    chunk.truncate(size);
-                    remaining -= size as u64;
-                    chunk
-                })
-            });
-        *response.body_mut() = Body::from_stream(stream);
-        response
-            .headers_mut()
-            .insert(header::CONTENT_LENGTH, length.to_string().parse().unwrap());
-    }
     if response.headers().contains_key(header::ETAG) {
         response
             .headers_mut()
@@ -426,6 +404,93 @@ async fn audio(path: &Path, headers: &HeaderMap) -> Response {
         response.headers_mut().remove(name);
     }
     response.headers_mut().remove("x-content-type-options");
+    response
+}
+
+/// A fronteira aleatória impede que bytes do próprio áudio virem separadores de um intervalo.
+fn multipart_audio(
+    file: tokio::fs::File,
+    size: u64,
+    media: &str,
+    last: &str,
+    etag: &str,
+    ranges: Vec<(u64, u64)>,
+) -> Response {
+    use ring::rand::SecureRandom;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    enum Piece {
+        Literal(bytes::Bytes),
+        Data { offset: u64, left: u64 },
+    }
+    let mut random = [0u8; 13];
+    if ring::rand::SystemRandom::new().fill(&mut random).is_err() {
+        return failure(SpeechError::new(
+            500,
+            "Não foi possível preparar os intervalos do áudio.",
+        ));
+    }
+    let boundary = random
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let mut pieces = std::collections::VecDeque::new();
+    let mut length = 0u64;
+    for (start, end) in ranges {
+        let prefix = format!(
+            "--{boundary}\r\nContent-Type: {media}\r\nContent-Range: bytes {start}-{}/{}\r\n\r\n",
+            i128::from(end) - 1,
+            size
+        );
+        length += prefix.len() as u64 + end - start + 2;
+        pieces.push_back(Piece::Literal(prefix.into()));
+        if end > start {
+            pieces.push_back(Piece::Data {
+                offset: start,
+                left: end - start,
+            });
+        }
+        pieces.push_back(Piece::Literal(bytes::Bytes::from_static(b"\r\n")));
+    }
+    let suffix = format!("--{boundary}--");
+    length += suffix.len() as u64;
+    pieces.push_back(Piece::Literal(suffix.into()));
+    let stream =
+        futures_util::stream::try_unfold((file, pieces), |(mut file, mut pieces)| async move {
+            match pieces.pop_front() {
+                None => Ok::<_, std::io::Error>(None),
+                Some(Piece::Literal(bytes)) => Ok(Some((bytes, (file, pieces)))),
+                Some(Piece::Data { offset, left }) => {
+                    file.seek(std::io::SeekFrom::Start(offset)).await?;
+                    let mut bytes = vec![0; (left.min(64 * 1024)) as usize];
+                    let count = file.read(&mut bytes).await?;
+                    if count == 0 {
+                        return Err(std::io::ErrorKind::UnexpectedEof.into());
+                    }
+                    bytes.truncate(count);
+                    if left > count as u64 {
+                        pieces.push_front(Piece::Data {
+                            offset: offset + count as u64,
+                            left: left - count as u64,
+                        });
+                    }
+                    Ok(Some((bytes.into(), (file, pieces))))
+                }
+            }
+        });
+    let mut response = Response::new(Body::from_stream(stream));
+    *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+    for (name, value) in [
+        (
+            header::CONTENT_TYPE,
+            format!("multipart/byteranges; boundary={boundary}"),
+        ),
+        (header::CONTENT_LENGTH, length.to_string()),
+        (header::ACCEPT_RANGES, "bytes".to_owned()),
+        (header::ETAG, etag.to_owned()),
+        (header::LAST_MODIFIED, last.to_owned()),
+    ] {
+        response.headers_mut().insert(name, value.parse().unwrap());
+    }
     response
 }
 
