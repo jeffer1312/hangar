@@ -170,7 +170,8 @@ impl AppState {
             Err(e) => { tracing::error!("{e}"); None }
         };
         if let Some(share) = &share { list.set_shares(share.clone()); }
-        let hangar_dir = std::path::PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap_or_default()).join(".hangar");
+        // O mesmo `~` do app nativo e do Python (USERPROFILE no Windows), que gravam `~/.hangar/nav`.
+        let hangar_dir = std::env::home_dir().unwrap_or_default().join(".hangar");
         let device_install = {
             let env = crate::accounts::environment::AccountEnvironment::capture();
             Arc::new(crate::device_install::job::DeviceInstall::new(

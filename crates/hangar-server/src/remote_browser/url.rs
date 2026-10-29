@@ -1,7 +1,9 @@
 //! URL publicada pelo desktop; a consulta não depende da sessão nem da vida do processo.
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
+
+use super::value::MARKER;
 
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{Method, StatusCode};
@@ -12,14 +14,6 @@ use super::access::{self, AccessError};
 use crate::routes::AppState;
 use crate::session_write::{detail_body, json_response};
 use crate::share::caller::{Caller, caller};
-
-// A identidade própria separa escapes inválidos de caracteres Unicode reais.
-static JSON_MARKER: LazyLock<String> = LazyLock::new(|| {
-    use ring::rand::SecureRandom;
-    let mut bytes = [0u8; 16];
-    ring::rand::SystemRandom::new().fill(&mut bytes).expect("aleatoriedade do sistema");
-    format!("browser:{}:",bytes.iter().map(|b|format!("{b:02x}")).collect::<String>())
-});
 
 pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let response = if crate::routes::on_guest_port(&req) {
@@ -90,7 +84,7 @@ async fn read(dir: &Path, name: &str) -> Result<Value,()> {
             },
         };
         // O codec mantém inteiros largos, floats Python e surrogates, inclusive em campos ignorados.
-        let Some(sidecar) = crate::orq_conductor::load(&text,JSON_MARKER.as_str()) else {
+        let Some(sidecar) = super::value::decode(&text) else {
             tracing::warn!(code="browser_sidecar_unreadable",path=%path.display(),"sidecar de navegador ilegivel: JSON inválido");
             continue;
         };
@@ -98,7 +92,7 @@ async fn read(dir: &Path, name: &str) -> Result<Value,()> {
         let key = match map.get("chave") {
             None => "",
             Some(Value::String(key)) => {
-                if ["NaN","Infinity","-Infinity"].iter().any(|token| key == &format!("{}{token}",JSON_MARKER.as_str())) {
+                if ["NaN","Infinity","-Infinity"].iter().any(|token| key == &format!("{}{token}",MARKER.as_str())) {
                     return Err(());
                 }
                 key
@@ -114,13 +108,13 @@ async fn read(dir: &Path, name: &str) -> Result<Value,()> {
 
 fn http_value(value: Value) -> Result<Value,()> {
     match value {
-        Value::String(text) if text.contains(JSON_MARKER.as_str()) => Err(()),
+        Value::String(text) if text.contains(MARKER.as_str()) => Err(()),
         Value::Number(number) => serde_json::from_str(&crate::transcript::pyjson::dumps(&Value::Number(number),false)).map_err(|_|()),
         Value::Array(items) => items.into_iter().map(http_value).collect::<Result<Vec<_>,_>>().map(Value::Array),
         Value::Object(map) => {
             let mut output = serde_json::Map::new();
             for (key,value) in map {
-                if key.contains(JSON_MARKER.as_str()) { return Err(()); }
+                if key.contains(MARKER.as_str()) { return Err(()); }
                 output.insert(key,http_value(value)?);
             }
             Ok(Value::Object(output))

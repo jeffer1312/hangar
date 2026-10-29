@@ -53,7 +53,7 @@ async def _unavailable(ws: WebSocket) -> None:
     await ws.close(code=1013, reason=UNAVAILABLE)
 
 
-async def nav_ws(ws: WebSocket, name: str, existe=None) -> None:
+async def nav_ws(ws: WebSocket, name: str) -> None:
     if not await _autorizado(ws):
         return
     from websockets.asyncio.client import connect

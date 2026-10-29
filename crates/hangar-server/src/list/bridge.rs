@@ -476,6 +476,12 @@ impl ListBridge {
         Ok(rows.iter().find(|row| row.name == name).cloned().map(|row| (row, pids.get(name).copied())))
     }
 
+    /// Como `discovered_session`, por uma rodada feita agora, sem descartar o retrato da lista.
+    pub async fn fresh_session(&self, name: &str) -> Result<Option<(SessionRow, Option<u32>)>, ListError> {
+        let (rows, pids, _, _) = self.discovery(Some(wall_now())).await?;
+        Ok(rows.iter().find(|row| row.name == name).cloned().map(|row| (row, pids.get(name).copied())))
+    }
+
     async fn discovery(&self, newer_than: Option<f64>)
         -> Result<(Arc<Vec<SessionRow>>, Arc<HashMap<String, u32>>, Arc<Vec<Pane>>, Arc<ChildrenMap>), ListError> {
         let mut slot = self.discovery.lock().await;
