@@ -29,7 +29,7 @@ use serde_json::{Value, json};
 use std::{
     net::SocketAddr,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::sync::Mutex;
 
@@ -99,7 +99,7 @@ pub(super) async fn send(output: &Output, value: Value) -> Result<(), Failure> {
     output
         .lock()
         .await
-        .send(Message::Text(value.to_string().into()))
+        .send(Message::Text(super::value::encode(&value).into()))
         .await
         .map_err(|_| Failure::plain("WebSocket fechou"))
 }
@@ -272,7 +272,7 @@ async fn run(
     let (writer, mut reader) = socket.split();
     let output = Arc::new(Mutex::new(writer));
     let view = Arc::new(Mutex::new(View {
-        size: (1280, 800),
+        size: (json!(1280), json!(800)),
         width,
         quality,
     }));
@@ -342,6 +342,9 @@ async fn run(
         // O Close recebido já enfileira a resposta, mesmo quando outro envio é recusado.
         let _ = writer.close().await;
     }).await;
+    // A devolução pode esperar o controlador depois que o socket do espectador já terminou.
+    drop(reader);
+    drop(output);
     // A devolução sobrevive ao cancelamento da conexão que impôs o tamanho.
     let restoring = restoring.unwrap_or_else(|| restore(&st, &name, owner));
     if restoring.await.is_err() {
@@ -380,7 +383,7 @@ async fn read(
         if raw.chars().count() > 65536 {
             continue;
         }
-        let Ok(message) = serde_json::from_str::<Value>(&raw) else {
+        let Some(message) = super::value::decode(&raw) else {
             continue;
         };
         if !message.is_object() {
@@ -400,16 +403,17 @@ async fn read(
             match result {
                 Ok(Some(change)) => {
                     if let Some(dimensions) = change.dimensions {
-                        view.lock().await.size = dimensions;
+                        view.lock().await.size = (json!(dimensions.0), json!(dimensions.1));
                     }
                     send(output, change.event).await?;
                 }
                 Ok(None) => {}
+                Err(error) if error.repr.starts_with("OverflowError(") => return Err(error),
                 Err(error) => send(output, json!({"t":"erro","m":error.message})).await?,
             }
         } else {
-            let size = view.lock().await.size;
-            input::apply(cdp, &message, size.0, size.1)?;
+            let size = view.lock().await.size.clone();
+            input::apply(cdp, &message, &size.0, &size.1)?;
         }
     }
     Ok(())

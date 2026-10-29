@@ -4,11 +4,11 @@ use super::{
     input,
     ws::{Failure, Output, send},
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 pub(super) struct View {
-    pub size: (i64, i64),
+    pub size: (Value, Value),
     pub width: i64,
     pub quality: i64,
 }
@@ -51,10 +51,10 @@ pub(super) async fn run(
                 );
                 let mut view = view.lock().await;
                 if input::truth(&p["metadata"]["deviceWidth"]) {
-                    view.size.0 = input::integer(&p["metadata"]["deviceWidth"])?;
+                    view.size.0 = super::value::integer(&p["metadata"]["deviceWidth"])?;
                 }
                 if input::truth(&p["metadata"]["deviceHeight"]) {
-                    view.size.1 = input::integer(&p["metadata"]["deviceHeight"])?;
+                    view.size.1 = super::value::integer(&p["metadata"]["deviceHeight"])?;
                 }
                 let now = tokio::time::Instant::now();
                 if last.is_some_and(|last| {
@@ -63,7 +63,7 @@ pub(super) async fn run(
                     continue;
                 }
                 last = Some(now);
-                let size = view.size;
+                let size = view.size.clone();
                 drop(view);
                 send(output, json!({"t":"q","d":p["data"],"w":size.0,"h":size.1})).await?;
             }
@@ -97,7 +97,7 @@ async fn screenshot(cdp: &Cdp, output: &Output, view: &Arc<Mutex<View>>) -> Resu
     {
         Ok(result) => {
             if input::truth(&result["result"]["data"]) {
-                let size = view.lock().await.size;
+                let size = view.lock().await.size.clone();
                 send(output,json!({"t":"q","d":result["result"]["data"],"w":size.0,"h":size.1,"lento":true})).await?;
             }
         }

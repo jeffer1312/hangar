@@ -128,7 +128,7 @@ impl Cdp {
                 tokio::select! {
                     outgoing = receive.recv() => match outgoing {
                         Some(Out::Command(value)) => {
-                            if socket.send(Message::Text(value.to_string().into())).await.is_err() {
+                            if socket.send(Message::Text(super::value::encode(&value).into())).await.is_err() {
                                 break;
                             }
                         }
@@ -143,7 +143,7 @@ impl Cdp {
                     incoming = socket.next() => {
                         match incoming {
                             Some(Ok(Message::Text(raw))) => {
-                                let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+                                let Some(value) = super::value::decode(&raw) else {
                                     break;
                                 };
                                 if let Some(id) = value.get("id").filter(|v| !v.is_null()) {
@@ -168,6 +168,22 @@ impl Cdp {
                             }
                             Some(Ok(Message::Close(_))) => {
                                 let _ = socket.flush().await;
+                                break;
+                            }
+                            Some(Err(tokio_tungstenite::tungstenite::Error::Capacity(
+                                tokio_tungstenite::tungstenite::error::CapacityError::MessageTooLong { size, max_size }
+                            ))) => {
+                                drop(PumpEnd(waiters.clone()));
+                                let _ = socket.close(Some(CloseFrame {
+                                    code: CloseCode::Size,
+                                    reason: format!("frame with {size} bytes exceeds limit of {max_size} bytes").into(),
+                                })).await;
+                                // O Stream termina no erro; drenar o transporte evita perder o Close num reset TCP.
+                                let _ = tokio::time::timeout(Duration::from_secs(10), async {
+                                    use tokio::io::AsyncReadExt;
+                                    let mut discarded = [0; 8192];
+                                    while socket.get_mut().read(&mut discarded).await.is_ok_and(|count| count > 0) {}
+                                }).await;
                                 break;
                             }
                             None | Some(Err(_)) => break,
