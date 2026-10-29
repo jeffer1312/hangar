@@ -421,6 +421,10 @@ describe('LiveVoiceSheet', () => {
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
     for (const label of [m.native_voice_backstage_you(), m.native_voice_backstage_voice(), m.native_voice_backstage_heard(),
       m.native_voice_backstage_answer(), m.native_voice_backstage_live()]) expect(text).toContain(label);
+    view.state = { ...view.state!, backstage: view.state!.backstage.map(line => ({ ...line, live: false })) };
+    await render();
+    expect(container.textContent).toContain('live-fixture');
+    expect(container.textContent, 'a final fecha o "falando…"').not.toContain(m.native_voice_backstage_live());
   });
 
   it('conserva os textos de ação e bastidores sem exigir categoria reconhecida', async () => {
