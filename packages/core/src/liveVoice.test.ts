@@ -177,6 +177,6 @@ describe('protocolo público e níveis puros', () => {
     const lines = [{ kind: 'you' as const, at: 1 }, { kind: 'voice' as const, at: 2 }, { kind: 'heard' as const, at: 2 }, { kind: 'heard' as const, at: 2 }];
     expect(liveVoiceBackstageKeys(lines)).toEqual(['you-1', 'voice-2', 'heard-2', 'heard-2-1']);
     expect(liveVoiceBackstageKeys(lines.slice(1))).toEqual(['voice-2', 'heard-2', 'heard-2-1']);
-    expect(liveVoiceBackstageKeys([{ kind: null, text: 'servidor antigo' }])).toEqual(['i0']);
+    expect(liveVoiceBackstageKeys([{ kind: null }]), 'servidor antigo, sem hora').toEqual(['i0']);
   });
 });
