@@ -1,3 +1,5 @@
+mod environment;
+pub use environment::SettingsEnvironment;
 mod read;
 pub use read::{file_settings, resolve, settings};
 // Edição de atribuições sem reformatar comentários, espaços ou valores multilinha alheios.

@@ -140,3 +140,31 @@ fn invalid_environment_value_is_rejected_for_every_key_case() {
         );
     }
 }
+
+#[test]
+fn settings_environment_preserves_original_case_collision_order() {
+    for (pairs, expected) in [
+        (vec![("CP_SERVER_ID", "upper"), ("cp_server_id", "lower")], "lower"),
+        (vec![("cp_server_id", "lower"), ("CP_SERVER_ID", "upper")], "upper"),
+    ] {
+        let environment = hangar_server::machine_peers::dotenv::SettingsEnvironment::from_pairs(pairs);
+        let values = environment.settings("CP_PUBLIC_URL=${CP_SERVER_ID}\n");
+        assert_eq!(values["cp_server_id"].as_deref(), Some(expected));
+        assert_eq!(values["cp_public_url"].as_deref(), Some("upper"));
+    }
+}
+
+#[test]
+fn account_environment_preserves_order_with_current_values_and_new_keys() {
+    use hangar_server::{accounts::environment::AccountEnvironment,machine_peers::dotenv::SettingsEnvironment};
+    let mut environment=AccountEnvironment::from_pairs([("cp_server_id","lower"),("CP_SERVER_ID","upper"),("REMOVE","old"),("HANGAR_AUTH_CONTEXT","private")]);
+    environment.base.insert("cp_server_id".into(),"changed".into());
+    environment.base.remove("REMOVE");
+    environment.base.insert("NEW".into(),"added".into());
+    environment.base.insert("HANGAR_AUTH_CONTEXT".into(),"private-again".into());
+    let pairs=environment.ordered_pairs();
+    assert_eq!(pairs,vec![("cp_server_id".into(),"changed".into()),("CP_SERVER_ID".into(),"upper".into()),("NEW".into(),"added".into())]);
+    assert_eq!(SettingsEnvironment::from_pairs(pairs).value("","CP_SERVER_ID").unwrap().as_deref(),Some("upper"));
+    let from_map=AccountEnvironment::from_map(std::collections::BTreeMap::from([("Z".into(),"z".into()),("A".into(),"a".into())]));
+    assert_eq!(from_map.ordered_pairs(),vec![("A".into(),"a".into()),("Z".into(),"z".into())]);
+}

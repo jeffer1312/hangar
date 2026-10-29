@@ -21,6 +21,7 @@ pub struct AccountEnvironment {
     pub codex_default: PathBuf,
     pub claude_fixed: String,
     pub base: BTreeMap<String, String>,
+    original_order: Vec<String>,
     #[doc(hidden)]
     pub secondary_barrier: Option<SecondaryBarrier>,
     #[doc(hidden)]
@@ -29,10 +30,17 @@ pub struct AccountEnvironment {
 
 impl AccountEnvironment {
     pub fn capture() -> Self {
-        Self::from_map(std::env::vars().collect())
+        Self::from_pairs(std::env::vars())
     }
-    pub fn from_map(mut base: BTreeMap<String, String>) -> Self {
-        base.remove("HANGAR_AUTH_CONTEXT");
+    pub fn from_map(base: BTreeMap<String, String>) -> Self { Self::from_pairs(base) }
+    pub fn from_pairs<K:Into<String>,V:Into<String>>(pairs:impl IntoIterator<Item=(K,V)>)->Self {
+        let mut base=BTreeMap::new();let mut original_order=Vec::new();
+        for (name,value) in pairs {
+            let name=name.into();
+            if name=="HANGAR_AUTH_CONTEXT"{continue;}
+            if !base.contains_key(&name){original_order.push(name.clone());}
+            base.insert(name,value.into());
+        }
         let home = PathBuf::from(
             base.get(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
                 .or_else(|| base.get("HOME"))
@@ -54,9 +62,17 @@ impl AccountEnvironment {
                 .unwrap_or_default(),
             home,
             base,
+            original_order,
             secondary_barrier: None,
             terminal_fixture: None,
         }
+    }
+
+    /// Valores atuais, na ordem capturada; inclusões posteriores seguem a ordem do mapa.
+    pub fn ordered_pairs(&self)->Vec<(String,String)> {
+        self.original_order.iter().filter_map(|name|self.base.get(name).map(|value|(name.clone(),value.clone())))
+            .chain(self.base.iter().filter(|(name,_)| !self.original_order.contains(name)).map(|(name,value)|(name.clone(),value.clone())))
+            .filter(|(name,_)|name!="HANGAR_AUTH_CONTEXT").collect()
     }
 
     /// Raízes do omp resolvidas só pelo home e pelo ambiente capturados, sem criar nada.

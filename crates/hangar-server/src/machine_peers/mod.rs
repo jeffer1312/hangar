@@ -26,16 +26,21 @@ pub fn config_value(
     backend: Option<&Path>,
     key: &str,
 ) -> Result<Option<String>, String> {
-    let mut environment = std::collections::BTreeMap::new();
-    for (name, value) in std::env::vars_os() {
-        let Ok(name) = name.into_string() else { continue; };
-        match value.into_string() {
-            Ok(value) => { environment.insert(name, value); }
-            Err(_) if name.to_lowercase() == key.to_lowercase() => return Err(format!("configuração {key} inválida: valor fora de UTF-8")),
-            Err(_) => {}
-        }
-    }
-    config_value_with_environment(home, backend, key, &environment)
+    config_value_with_settings_environment(home,backend,key,&dotenv::SettingsEnvironment::capture())
+}
+
+/// Consulta usando a ordem original do ambiente congelado pelo serviço.
+pub fn config_value_with_settings_environment(
+    home:&Path,backend:Option<&Path>,key:&str,environment:&dotenv::SettingsEnvironment,
+)->Result<Option<String>,String>{
+    if let Some(value)=environment.value("",key)? {return Ok(Some(value));}
+    let Some(path)=crate::user_data::path(home,backend,".env").map_err(|e|e.to_string())? else{return Ok(None);};
+    let raw=match crate::runtime::queue::read_replaced_to_string(&path){
+        Ok(raw)=>raw,
+        Err(error) if error.kind()==std::io::ErrorKind::NotFound=>return Ok(None),
+        Err(error)=>return Err(error.to_string()),
+    };
+    environment.value(&raw,key)
 }
 
 /// Consulta com o ambiente congelado do chamador, sem ler variáveis globais durante a resolução.
