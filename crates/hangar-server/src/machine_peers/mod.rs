@@ -385,17 +385,19 @@ async fn handle_inner(
             Err(error) if crate::http_body_limit::is_limit(&error)=>return crate::http_body_limit::rejected(),
             Err(_)=>None,
         };
-        match bytes.and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-            .filter(Value::is_object)
-        {
-            Some(v) => v,
-            None => {
-                return Error {
-                    status: 422,
-                    code: "erro_corpo_invalido",
-                    msg: "corpo inválido".into(),
-                }
-                .response();
+        let value=match bytes{
+            Some(bytes)=>match crate::orchestration::body::parse(&bytes){
+                Ok(value)=>Some(value),
+                Err((StatusCode::BAD_REQUEST,body))=>return json_response(StatusCode::BAD_REQUEST,body),
+                Err(_)=>None,
+            },
+            None=>None,
+        };
+        match value{
+            Some(value) if value.is_object()=>value,
+            value=>{
+                if let Some(value)=value{crate::orchestration::codec::discard(value);}
+                return Error{status:422,code:"erro_corpo_invalido",msg:"corpo inválido".into()}.response();
             }
         }
     } else {
@@ -419,6 +421,9 @@ async fn handle_inner(
         Err(e) => e.response(),
     }
 }
+struct RequestValue(Value);
+impl std::ops::Deref for RequestValue{type Target=Value;fn deref(&self)->&Value{&self.0}}
+impl Drop for RequestValue{fn drop(&mut self){crate::orchestration::codec::discard(std::mem::take(&mut self.0));}}
 pub async fn dispatch(
     service: Service,
     method: &Method,
@@ -426,6 +431,7 @@ pub async fn dispatch(
     query: &std::collections::HashMap<String, String>,
     body: Value,
 ) -> Result<Value, Error> {
+    let body=RequestValue(body);
     let q = |key: &str| query.get(key).map(String::as_str).unwrap_or("");
     match (method.as_str(), path) {
         ("GET", "/api/peers/prova") => service.proof(q("desafio")),

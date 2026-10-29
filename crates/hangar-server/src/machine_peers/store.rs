@@ -53,16 +53,16 @@ impl Store {
         list(&self.tolerant())
     }
     pub fn put(&self, body: &Value) -> Result<Value, Error> {
-        let id = truthy_field(body, "id");
+        let id = body.get("id").filter(|v|truthy(v)).unwrap_or(&Value::Null);
         valid_id(&id)?;
         let id = id.as_str().unwrap();
-        let base = truthy_field(body, "base_url");
-        let token = truthy_field(body, "token");
-        let (Some(base), Some(token)) = (base.as_str(), token.as_str()) else {
+        let base = body.get("base_url").filter(|v|truthy(v)).unwrap_or(&Value::Null);
+        let token = body.get("token").filter(|v|truthy(v)).unwrap_or(&Value::Null);
+        let (Some(base), Some(token)) = (text(base), text(token)) else {
             return Err(Error::invalid("endereço e token precisam ser texto"));
         };
         let web = body.get("web_url").filter(|v| !v.is_null());
-        if web.is_some_and(|v| !v.is_string()) {
+        if web.is_some_and(|v| text(v).is_none()) {
             return Err(Error::invalid("web_url precisa ser texto"));
         }
         let (base, token) = (base.trim(), token.trim());
@@ -70,6 +70,9 @@ impl Store {
             return Err(Error::invalid(
                 "endereço precisa ser http(s):// e o token não pode ficar vazio",
             ));
+        }
+        if ["base_url","token","web_url"].iter().any(|key|body.get(key).is_some_and(crate::orchestration::codec::contains_surrogate)){
+            return Err(Error::invalid("texto contém Unicode inválido"));
         }
         self.change(|data| {
             let mut entry = data
@@ -204,6 +207,7 @@ fn unknown(id: &str) -> Error {
 fn is_peer(v: &Value) -> bool {
     v.is_object() && (v.get("base_url").is_some() || v.get("app").is_none())
 }
+fn text(value:&Value)->Option<&str>{value.as_str().filter(|_|!crate::orchestration::codec::contains_nonfinite(value))}
 pub fn truthy(v: &Value) -> bool {
     match v {
         Value::Null => false,
