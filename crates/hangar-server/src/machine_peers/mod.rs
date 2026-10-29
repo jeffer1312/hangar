@@ -140,6 +140,7 @@ pub struct Service {
     pub initial_id: String,
     pub network: Arc<dyn network::Network>,
     pub environment: std::collections::BTreeMap<String, String>,
+    settings: Option<Arc<dotenv::SettingsSnapshot>>,
     pub on_identity: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 impl Service {
@@ -151,6 +152,9 @@ impl Service {
         bind: String,
         initial_id: String,
     ) -> Result<Self, Error> {
+        Self::new_with_environment(home,backend,token,port,bind,initial_id,std::env::vars().collect())
+    }
+    fn new_with_environment(home:&Path,backend:Option<&Path>,token:String,port:u16,bind:String,initial_id:String,environment:std::collections::BTreeMap<String,String>)->Result<Self,Error>{
         let path = |name| {
             crate::user_data::path(home, backend, name)
                 .map_err(|_| Error::unavailable())?
@@ -166,21 +170,23 @@ impl Service {
             bind,
             initial_id,
             network: Arc::new(network::SystemNetwork),
-            environment: std::env::vars().collect(),
+            environment,
+            settings: None,
             on_identity: None,
         })
     }
     pub fn from_state(st: &Arc<AppState>) -> Result<Self, Error> {
-        let mut service = Self::new(
+        let mut service = Self::new_with_environment(
             &st.accounts.env.home,
             crate::session_open::cli::backend_dir().as_deref(),
             st.cfg.auth_token.clone(),
             st.cfg.listen.port(),
             st.cfg.listen.ip().to_string(),
             st.current_server_id(),
+            st.accounts.env.base.clone(),
         )?;
         service.network = st.peer_network.clone();
-        service.environment = st.accounts.env.base.clone();
+        service.settings=Some(st.settings_snapshot().map_err(|_|Error::unavailable())?);
         let state = Arc::downgrade(st);
         service.on_identity = Some(Arc::new(move |id| {
             if let Some(state) = state.upgrade() {
@@ -190,6 +196,7 @@ impl Service {
         Ok(service)
     }
     pub fn value(&self, key: &str) -> String {
+        if let Some(settings)=&self.settings{return settings.value(key).ok().flatten().unwrap_or_default();}
         config_value_with_environment(&self.home, self.backend.as_deref(), key, &self.environment).ok().flatten().unwrap_or_default()
     }
 

@@ -168,3 +168,21 @@ fn account_environment_preserves_order_with_current_values_and_new_keys() {
     let from_map=AccountEnvironment::from_map(std::collections::BTreeMap::from([("Z".into(),"z".into()),("A".into(),"a".into())]));
     assert_eq!(from_map.ordered_pairs(),vec![("A".into(),"a".into()),("Z".into(),"z".into())]);
 }
+
+#[test]
+fn settings_snapshot_aliases_follow_captured_source_priority_and_duration() {
+    use hangar_server::machine_peers::dotenv::{SettingsEnvironment,SettingsSnapshot};
+    let fixture:serde_json::Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/config_sync/runtime-environment.json")).unwrap();
+    for row in fixture["cases"].as_array().unwrap(){
+        let temp=tempfile::tempdir().unwrap();let config=temp.path().join(".hangar/config");std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join(".env"),row["file"].as_str().unwrap()).unwrap();
+        let pairs=row["pairs"].as_array().unwrap().iter().map(|pair|(pair[0].as_str().unwrap(),pair[1].as_str().unwrap()));
+        let snapshot=SettingsSnapshot::capture(temp.path(),None,SettingsEnvironment::from_pairs(pairs)).unwrap();
+        for phase in ["before","changed"] {
+            if phase=="changed"{std::fs::write(config.join(".env"),"CP_EDITOR=late-file\nCP_GROQ_API_KEY=late-file\n").unwrap();}
+            for (field,keys) in [("editor",&["CP_EDITOR"][..]),("shortcuts",&["CP_SHORTCUTS"][..]),("groq_api_key",&["CP_GROQ_API_KEY","GROQ_API_KEY"][..])]{
+                assert_eq!(snapshot.aliases(keys).unwrap().unwrap_or_else(||if field=="editor"{"code".into()}else{String::new()}),row[phase][field].as_str().unwrap(),"{} {phase} {field}",row["name"]);
+            }
+        }
+    }
+}

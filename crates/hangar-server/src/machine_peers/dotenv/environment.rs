@@ -42,3 +42,34 @@ impl SettingsEnvironment {
         Ok(super::file_settings(raw,&self.exact).remove(&normalized).flatten())
     }
 }
+
+/// Configuração congelada por serviço: o arquivo e o ambiente pertencem à mesma leitura inicial.
+#[derive(Clone)]
+pub struct SettingsSnapshot {
+    environment:SettingsEnvironment,
+    file:BTreeMap<String,Option<String>>,
+}
+impl SettingsSnapshot {
+    pub fn from_parts(environment:SettingsEnvironment,raw:String)->Self {
+        let file=super::file_settings(&raw,&environment.exact);
+        Self{environment,file}
+    }
+    pub fn capture(home:&std::path::Path,backend:Option<&std::path::Path>,environment:SettingsEnvironment)->Result<Self,String>{
+        let raw=match crate::user_data::path(home,backend,".env").map_err(|e|e.to_string())? {
+            Some(path)=>match crate::runtime::queue::read_replaced_to_string(&path){
+                Ok(raw)=>raw,
+                Err(error) if error.kind()==std::io::ErrorKind::NotFound=>String::new(),
+                Err(error)=>return Err(error.to_string()),
+            },
+            None=>String::new(),
+        };
+        Ok(Self::from_parts(environment,raw))
+    }
+    pub fn value(&self,key:&str)->Result<Option<String>,String>{self.aliases(&[key])}
+    /// A fonte tem prioridade sobre o alias: qualquer alias no ambiente vence os do arquivo.
+    pub fn aliases(&self,keys:&[&str])->Result<Option<String>,String>{
+        for key in keys {if let Some(value)=self.environment.value("",key)?{return Ok(Some(value));}}
+        for key in keys {if let Some(value)=self.file.get(&key.to_lowercase()).cloned().flatten(){return Ok(Some(value));}}
+        Ok(None)
+    }
+}

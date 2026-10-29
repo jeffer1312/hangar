@@ -586,3 +586,15 @@ async fn child_restart_reads_the_persisted_identity_without_python_snapshot() {
     assert_eq!(child_identity(home.path(),Some("before")).await["identificador"],"published");
     assert_eq!(child_identity(home.path(),Some("manual")).await["identificador"],"manual");
 }
+
+#[test]
+fn peer_settings_snapshot_are_frozen_before_later_dotenv_edits() {
+    let home=tempfile::tempdir().unwrap();let config=home.path().join(".hangar/config");std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join(".env"),"CP_PUBLIC_URL=https://before.invalid\n").unwrap();
+    let mut state=AppState::new(Config{listen:"127.0.0.1:0".parse().unwrap(),upstream:crate::refused_address(),internal_secret:"contract-internal".into(),auth_token:"contract-owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
+    state.accounts=AccountService::new(AccountEnvironment::from_pairs([("HOME",home.path().to_str().unwrap()),("USERPROFILE",home.path().to_str().unwrap())]));
+    let state=Arc::new(state);
+    assert_eq!(hangar_server::machine_peers::Service::from_state(&state).unwrap().value("CP_PUBLIC_URL"),"https://before.invalid");
+    std::fs::write(config.join(".env"),"CP_PUBLIC_URL=https://after.invalid\n").unwrap();
+    assert_eq!(hangar_server::machine_peers::Service::from_state(&state).unwrap().value("CP_PUBLIC_URL"),"https://before.invalid");
+}
