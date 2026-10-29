@@ -1,11 +1,24 @@
 //! Um arquivo para os peers e a lista dos apps; a trava cobre leitura e publicação.
 use super::Error;
+use crate::orchestration::codec;
 use serde_json::{Map, Value, json};
 use std::{
     fs::{File, OpenOptions},
     io,
     path::{Path, PathBuf},
 };
+
+#[derive(Default)]
+pub struct Book(Map<String, Value>);
+impl Book {pub fn into_value(mut self)->Value{Value::Object(std::mem::take(&mut self.0))}}
+impl std::ops::Deref for Book {type Target=Map<String,Value>;fn deref(&self)->&Self::Target{&self.0}}
+impl std::ops::DerefMut for Book {fn deref_mut(&mut self)->&mut Self::Target{&mut self.0}}
+impl Drop for Book {fn drop(&mut self){codec::discard(Value::Object(std::mem::take(&mut self.0)));}}
+impl<'a> IntoIterator for &'a Book {
+    type Item=(&'a String,&'a Value);
+    type IntoIter=serde_json::map::Iter<'a>;
+    fn into_iter(self)->Self::IntoIter{self.0.iter()}
+}
 
 #[derive(Clone)]
 pub struct Store {
@@ -15,40 +28,51 @@ impl Store {
     pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
-    pub fn read(&self) -> Result<Map<String, Value>, Error> {
+    pub fn read(&self) -> Result<Book, Error> {
         let bytes = match crate::runtime::queue::read_replaced(&self.path) {
             Ok(b) => b,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Map::new()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Book::default()),
             Err(_) => {
                 return Err(Error::invalid(
                     "peers.json ilegível — corrija o arquivo antes de gravar",
                 ));
             }
         };
-        let value = serde_json::from_slice::<Value>(&bytes).map_err(|e| Error::invalid(format!("peers.json ilegível ({e}) — corrija o arquivo antes de gravar")))?;
-        value.as_object().cloned().ok_or_else(|| Error::invalid("peers.json não é um objeto JSON — corrija o arquivo antes de gravar"))
+        let value = std::str::from_utf8(&bytes).ok().and_then(codec::loads).ok_or_else(|| {
+            let diagnostic=serde_json::from_slice::<Value>(&bytes).err().map(|e|e.to_string()).unwrap_or_else(||"JSON inválido".into());
+            Error::invalid(format!("peers.json ilegível ({diagnostic}) — corrija o arquivo antes de gravar"))
+        })?;
+        match value {
+            Value::Object(data)=>Ok(Book(data)),
+            other=>{codec::discard(other);Err(Error::invalid("peers.json não é um objeto JSON — corrija o arquivo antes de gravar"))}
+        }
     }
 
-    pub fn tolerant(&self) -> Map<String, Value> {
+    pub fn tolerant(&self) -> Book {
         self.read().unwrap_or_else(|_| {
             tracing::warn!(code = "peers_unreadable", "peers.json ilegível");
-            Map::new()
+            Book::default()
         })
     }
-    pub fn change<T>(
+
+    pub fn change(
         &self,
-        apply: impl FnOnce(&mut Map<String, Value>) -> Result<T, Error>,
-    ) -> Result<T, Error> {
+        apply: impl FnOnce(&mut Map<String, Value>) -> Result<Value, Error>,
+    ) -> Result<Value, Error> {
         let _lock = lock(&self.path)?;
         let mut data = self.read()?;
-        let result = apply(&mut data)?;
+        let mut result = super::RequestValue(apply(&mut data)?);
         clean_temporary(&self.path)?;
-        let mut bytes = serde_json::to_vec_pretty(&data).map_err(|_| Error::unavailable())?;
+        let document=Value::Object(std::mem::take(&mut data.0));
+        let serialized=codec::dumps_indented_utf8(&document,2);
+        codec::discard(document);
+        let mut bytes=serialized.map_err(|_|Error::invalid("texto contém Unicode inválido"))?.into_bytes();
         bytes.push(b'\n');
         crate::runtime::queue::atomic_write(&self.path, &bytes)
             .map_err(|_| Error::unavailable())?;
-        Ok(result)
+        Ok(std::mem::take(&mut result.0))
     }
+
     pub fn list(&self) -> Value {
         list(&self.tolerant())
     }
@@ -76,11 +100,11 @@ impl Store {
             return Err(Error::invalid("texto contém Unicode inválido"));
         }
         self.change(|data| {
-            let mut entry = data
-                .get(id)
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
+            let mut entry = match data.get(id).map(codec::clone_value){
+                Some(Value::Object(entry))=>entry,
+                Some(other)=>{codec::discard(other);Map::new()},
+                None=>Map::new(),
+            };
             entry.insert("base_url".into(), json!(base.trim_end_matches('/')));
             entry.insert("token".into(), json!(token));
             if let Some(web) = web
@@ -90,7 +114,7 @@ impl Store {
             {
                 entry.insert("web_url".into(), json!(web));
             }
-            data.insert(id.into(), Value::Object(entry));
+            if let Some(previous)=data.insert(id.into(), Value::Object(entry)){codec::discard(previous);}
             Ok(list(data))
         })
     }

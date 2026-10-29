@@ -78,7 +78,8 @@ pub fn run(path: &Path, args: &[String], out: &mut dyn Write, err: &mut dyn Writ
             0
         }
         "json" => {
-            let _ = writeln!(out, "{}", Value::Object(data));
+            let value=super::RequestValue(data.into_value());
+            let _ = writeln!(out, "{}", value.0);
             0
         }
         _ => {
