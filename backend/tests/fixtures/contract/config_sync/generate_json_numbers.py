@@ -22,6 +22,8 @@ inputs = [
     ('invalid_unicode_escape', '{"x":"\\u1😀","i":' + large + '}'),
     ('array_leading_zero', '[0' + large + ']'),
     ('object_leading_zero', '{"x":0' + large + '}'),
+    ('nested_boundary', '[' * 150 + small + ']' * 150),
+    ('nested_overflow', '[' * 150 + large + ']' * 150),
 ]
 rows = []
 for name, raw in inputs:
