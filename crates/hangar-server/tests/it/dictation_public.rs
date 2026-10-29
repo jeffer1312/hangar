@@ -664,6 +664,10 @@ async fn dictation_public_180_second_deadline_cancels_both_audio_routes() {
         .unwrap();
         tokio::time::pause();
         tokio::time::advance(std::time::Duration::from_secs(181)).await;
+        // A resposta volta por um socket de verdade: com o relógio parado, o runtime ocioso adianta o
+        // relógio até o teto de 2 s antes de os bytes chegarem numa máquina lenta. O teto de 180 s já
+        // venceu no relógio virtual; a espera pela resposta é em tempo real.
+        tokio::time::resume();
         let response = tokio::time::timeout(std::time::Duration::from_secs(2), response)
             .await
             .expect("a rota deixou passar o teto público de180s")
@@ -675,7 +679,6 @@ async fn dictation_public_180_second_deadline_cancels_both_audio_routes() {
             4,
             "a tentativa vencida reteve sua vaga"
         );
-        tokio::time::resume();
         server.config.lock().unwrap()["providers"][0]["base_url"] = json!(endpoint);
         let response = reqwest::Client::new()
             .post(format!("{}{}", server.base, case["path"].as_str().unwrap()))

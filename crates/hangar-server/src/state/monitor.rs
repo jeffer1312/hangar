@@ -141,6 +141,9 @@ pub trait Sources: Send + Sync {
     fn preview_files(&self, stem: &str) -> impl Future<Output = Vec<HookFile>> + Send;
     /// Última resposta já gravada no transcript, normalizada (`preview::norm`).
     fn committed(&self) -> Option<Arc<str>>;
+    /// A leitura da última resposta gravada desta ligação já voltou (com ou sem texto). Antes dela, o
+    /// pane ainda mostra a resposta gravada e a prévia a repetiria.
+    fn committed_known(&self) -> bool;
     fn publish_preview(&self, event: PreviewEvent) -> impl Future<Output = bool> + Send;
     /// Relógio de parede em segundos, o do `ts` do arquivo do hook e do marcador.
     fn wall(&self) -> f64;
@@ -685,6 +688,7 @@ mod tests {
         async fn preview_capture(&self) -> Option<Result<Frame, CaptureFailed>> { None }
         async fn preview_files(&self, _: &str) -> Vec<HookFile> { self.hook.lock().unwrap().clone() }
         fn committed(&self) -> Option<Arc<str>> { None }
+        fn committed_known(&self) -> bool { true }
         async fn publish_preview(&self, event: PreviewEvent) -> bool { self.previews.lock().unwrap().push(event.text); true }
         fn wall(&self) -> f64 { wall_now() }
     }

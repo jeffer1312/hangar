@@ -1,6 +1,7 @@
 //! Animações das novidades da atualização: cada uma é desenhada com as mesmas partes do app que ela mostra.
 
 mod account_tags;
+mod codex_activity;
 mod composer_history;
 mod rename_suggestion;
 
@@ -14,6 +15,7 @@ pub type NewsAnimation = fn(started: Instant, width: Pixels, window: &mut Window
 pub fn animation(name: &str) -> Option<NewsAnimation> {
     match name {
         "historico-compositor" => Some(composer_history::render),
+        "codex-atividade" => Some(codex_activity::render),
         "etiquetas-maquina-conta" => Some(account_tags::render),
         "sugestao-de-nome" => Some(rename_suggestion::render),
         _ => None,

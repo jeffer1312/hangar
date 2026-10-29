@@ -269,7 +269,7 @@ pub async fn committed_changed<S: Sources>(src: &S, slot: &mut Slot, epoch: u64)
 /// Uma leitura da prévia. `frame`: o quadro da rodada de estado; `None` no toque rápido, que
 /// captura só para a prévia quando o arquivo do hook não decide. `false`: ninguém mais ouve.
 pub async fn tick<S: Sources>(src: &S, slot: &mut Slot, frame: Option<&Frame>, epoch: u64) -> bool {
-    if src.epoch() != epoch {
+    if src.epoch() != epoch || !src.committed_known() {
         return true;
     }
     let files = match src.sid() {
@@ -352,6 +352,7 @@ mod tests {
         pane: Mutex<String>,
         hook: Mutex<Vec<HookFile>>,
         committed: Mutex<Option<Arc<str>>>,
+        known: std::sync::atomic::AtomicBool,
         captures: AtomicU32,
         fast_captures: AtomicU32,
         hook_reads: AtomicU32,
@@ -362,7 +363,7 @@ mod tests {
 
     impl Fake {
         fn new(pane: String) -> Arc<Self> {
-            Arc::new(Self { pane: Mutex::new(pane), hook: Mutex::default(), committed: Mutex::default(),
+            Arc::new(Self { pane: Mutex::new(pane), hook: Mutex::default(), committed: Mutex::default(), known: true.into(),
                 captures: AtomicU32::new(0), fast_captures: AtomicU32::new(0), hook_reads: AtomicU32::new(0),
                 previews: Mutex::default(), wake: Arc::default(), hub: Arc::default() })
         }
@@ -395,6 +396,7 @@ mod tests {
             self.hook.lock().unwrap().clone()
         }
         fn committed(&self) -> Option<Arc<str>> { self.committed.lock().unwrap().clone() }
+        fn committed_known(&self) -> bool { self.known.load(Ordering::SeqCst) }
         async fn publish_preview(&self, event: PreviewEvent) -> bool {
             self.previews.lock().unwrap().push(event);
             true
@@ -423,6 +425,23 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(10)).await;
         assert_eq!(fake.texts().last().map(|t| t.0.clone()).as_deref(), Some(""));
         assert_eq!(fake.captures.load(Ordering::SeqCst), captures, "sem captura nem rodada a mais");
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn chat_opening_never_repeats_the_saved_answer_still_on_the_pane() {
+        // O chat abriu durante uma ferramenta: o pane ainda mostra a resposta gravada acima dela.
+        let saved = "Lib compila e passa; rodando os testes tocados";
+        let fake = Fake::new(pane(saved, true));
+        fake.known.store(false, Ordering::SeqCst);
+        let task = tokio::spawn(Monitor::new(fake.clone()).run());
+        tokio::time::sleep(POLL * 2).await;
+        assert!(fake.texts().is_empty(), "sem a leitura do transcript, nada sai");
+        *fake.committed.lock().unwrap() = Some(norm(saved).into());
+        fake.known.store(true, Ordering::SeqCst);
+        fake.hub.notify_one();
+        tokio::time::sleep(POLL * 2).await;
+        assert!(fake.texts().iter().all(|t| t.0 != saved), "{:?}", fake.texts());
         task.abort();
     }
 

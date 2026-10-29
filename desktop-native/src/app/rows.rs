@@ -76,6 +76,35 @@ fn warning_ending(text: String) -> AnyElement {
 /// Fim da linha de um subagente que acabou em erro de API.
 fn failed_ending() -> AnyElement { warning_ending(tr("tool_failed")) }
 
+pub(crate) fn agent_clock() -> Div {
+    div().flex_shrink_0().h(px(16.)).flex().items_center().gap(px(4.)).text_size(px(11.)).text_color(theme::muted())
+        .child(chrome::small_icon(IconName::Clock, 12., theme::muted()))
+}
+
+/// O cartão do subagente sem estado: o tempo, a marca e o fim vêm prontos de quem chama.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn agent_card(id: SharedString, name: String, description: String, model: Option<String>, failed: bool,
+    timer: Option<AnyElement>, mark: Option<AnyElement>, ending: Option<AnyElement>, cx: &App) -> Button {
+    let tint = if failed { theme::warning() } else { theme::muted() };
+    let label = format!("{}: {name} · {description}", super::activity::web("tool_abrir_agente"));
+    Button::new(id)
+        .custom(ButtonCustomVariant::new(cx).color(theme::boxed()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
+        .w_full().h(px(38.)).px(px(10.)).rounded(px(9.)).border_1().border_color(theme::border())
+        .accessibility_label(label)
+        .child(div().w_full().min_w_0().flex().items_center().gap(px(8.)).text_size(px(13.))
+            // Ladrilho de 18 com o ícone de 12, como o do Zeron.
+            .child(div().size(px(18.)).flex_none().rounded(px(5.)).bg(theme::hover()).flex().items_center().justify_center()
+                .child(chrome::small_icon(IconName::Bot, 12., tint)))
+            .child(div().flex_shrink_0().font_weight(FontWeight::MEDIUM).text_color(if failed { theme::warning() } else { theme::text() }).child(name))
+            .child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(description))
+            // O modelo fica no fim e não na descrição: é o que sobra para ler quando a descrição é cortada.
+            .when_some(model, |el, model| el.child(div().flex_shrink_0().text_size(px(11.)).text_color(theme::faint()).child(model)))
+            .when_some(timer, |el, timer| el.child(timer))
+            .when_some(mark, |el, mark| el.child(mark))
+            .when_some(ending, |el, ending| el.child(ending))
+            .child(chrome::small_icon(IconName::ExternalLink, 14., theme::faint())))
+}
+
 /// Uma chamada no modo Chips: linha da tabela com verbo, resumo em mono e desfecho à direita. Quem chama liga o clique;
 /// `label` troca o rótulo acessível quando o clique faz outra coisa que abrir.
 pub(super) fn chip_button(id: String, call: &ChatEvent, ending: AnyElement, open: bool, label: Option<String>, cx: &App) -> Button {
@@ -288,8 +317,7 @@ impl Hangar {
                 .child(chrome::small_icon(IconName::Hourglass, 12., theme::muted()))
                 .child(super::activity::web("tool_agente_esperando")).into_any_element())
         } else { duration.and_then(|elapsed| {
-            let clock = div().flex_shrink_0().h(px(16.)).flex().items_center().gap(px(4.)).text_size(px(11.)).text_color(theme::muted())
-                .child(chrome::small_icon(IconName::Clock, 12., theme::muted()));
+            let clock = agent_clock();
             if running {
                 let since = Instant::now().checked_sub(elapsed)?;
                 Some(clock.child(tr("agent_running_for"))
@@ -303,24 +331,9 @@ impl Hangar {
             div().flex_shrink_0().text_size(px(11.)).text_color(theme::muted())
                 .child(if running { tr("tool_running") } else { super::activity::web("atividade_sub_concluido") }).into_any_element()
         }))) };
-        let tint = if failed { theme::warning() } else { theme::muted() };
-        let label = format!("{}: {name} · {description}", super::activity::web("tool_abrir_agente"));
-        let card = Button::new(SharedString::from(format!("agent-card-{key}")))
-            .custom(ButtonCustomVariant::new(cx).color(theme::boxed()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
-            .w_full().h(px(38.)).px(px(10.)).rounded(px(9.)).border_1().border_color(theme::border())
-            .accessibility_label(label)
-            .child(div().w_full().min_w_0().flex().items_center().gap(px(8.)).text_size(px(13.))
-                // Ladrilho de 18 com o ícone de 12, como o do Zeron.
-                .child(div().size(px(18.)).flex_none().rounded(px(5.)).bg(theme::hover()).flex().items_center().justify_center()
-                    .child(chrome::small_icon(IconName::Bot, 12., tint)))
-                .child(div().flex_shrink_0().font_weight(FontWeight::MEDIUM).text_color(if failed { theme::warning() } else { theme::text() }).child(name))
-                .child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(description))
-                // O modelo fica no fim e não na descrição: é o que sobra para ler quando a descrição é cortada.
-                .when_some(model, |el, model| el.child(div().flex_shrink_0().text_size(px(11.)).text_color(theme::faint()).child(model)))
-                .when_some(timer, |el, timer| el.child(timer))
-                .when(running, |el| el.child(self.working_mark_slot(super::panes::Area::Conversation, format!("agent-{key}"), 12., theme::accent())))
-                .when(failed, |el| el.child(if duration.is_some() { chrome::small_icon(IconName::CircleX, 13., theme::warning()).into_any_element() } else { failed_ending() }))
-                .child(chrome::small_icon(IconName::ExternalLink, 14., theme::faint())))
+        let mark = running.then(|| self.working_mark_slot(super::panes::Area::Conversation, format!("agent-{key}"), 12., theme::accent()));
+        let ending = failed.then(|| if duration.is_some() { chrome::small_icon(IconName::CircleX, 13., theme::warning()).into_any_element() } else { failed_ending() });
+        let card = agent_card(SharedString::from(format!("agent-card-{key}")), name, description, model, failed, timer, mark, ending, cx)
             .on_click(cx.listener(move |this, _, _, cx| this.open_agent(request.clone(), cx)));
         Some(card.into_any_element())
     }
