@@ -336,7 +336,7 @@ async fn synthesize(st: &AppState, value: &Value) -> Response {
 async fn audio(path: &Path, headers: &HeaderMap) -> Response {
     let file = match tokio::fs::File::open(path).await {
         Ok(file) => file,
-        Err(_) => {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return detail(
                 StatusCode::NOT_FOUND,
                 "erro_tts_sem_cache",
@@ -344,11 +344,21 @@ async fn audio(path: &Path, headers: &HeaderMap) -> Response {
                 json!({}),
             );
         }
+        Err(error) => {
+            tracing::warn!(code="tts_audio_unavailable",kind=?error.kind(),"Não foi possível abrir o áudio em cache.");
+            return audio_unavailable();
+        }
     };
     let metadata = match file.metadata().await {
         Ok(meta) => meta,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(error) => {
+            tracing::warn!(code="tts_audio_unavailable",kind=?error.kind(),"Não foi possível ler os metadados do áudio.");
+            return audio_unavailable();
+        }
     };
+    if !metadata.is_file() {
+        return audio_unavailable();
+    }
     let modified = metadata
         .modified()
         .ok()
@@ -405,6 +415,15 @@ async fn audio(path: &Path, headers: &HeaderMap) -> Response {
     }
     response.headers_mut().remove("x-content-type-options");
     response
+}
+
+fn audio_unavailable() -> Response {
+    detail(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "erro_tts_audio_indisponivel",
+        "Não foi possível ler o áudio em cache.",
+        json!({}),
+    )
 }
 
 /// A fronteira aleatória impede que bytes do próprio áudio virem separadores de um intervalo.

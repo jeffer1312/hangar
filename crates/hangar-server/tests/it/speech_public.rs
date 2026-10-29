@@ -315,6 +315,58 @@ async fn speech_authentication_precedes_a_malformed_body() {
 }
 
 #[tokio::test]
+async fn speech_public_audio_io_failure_is_not_reported_as_expired_cache() {
+    let server = Server::start().await;
+    let fixtures: Value =
+        serde_json::from_str(include_str!("../fixtures/speech/http_audio_io.json")).unwrap();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for case in fixtures["cases"].as_array().unwrap() {
+        let hash = case["hash"].as_str().unwrap();
+        let path = server
+            ._root
+            .path()
+            .join("home/.claude/.hangar-tts")
+            .join(format!("{hash}.mp3"));
+        let permission = case["name"] == "permission";
+        if !permission {
+            std::fs::create_dir_all(&path).unwrap();
+        } else {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::write(&path, b"ID3fixture").unwrap();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0)).unwrap();
+                if std::fs::File::open(&path).is_ok() {
+                    // Root ignora os bits de leitura; a prova de diretório continua obrigatória.
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                        .unwrap();
+                    continue;
+                }
+            }
+            #[cfg(not(unix))]
+            continue;
+        }
+        let response = client
+            .get(format!("{}/api/tts/audio/{hash}", server.base))
+            .bearer_auth("fixture-owner")
+            .send()
+            .await
+            .unwrap();
+        #[cfg(unix)]
+        if permission {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        // D-018: falha antes de publicar o áudio, inclusive quando o Python já tinha enviado200.
+        assert_eq!(response.status(), 500, "{}", case["name"]);
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["detail"]["code"],
+            "erro_tts_audio_indisponivel"
+        );
+    }
+}
+
+#[tokio::test]
 async fn speech_preflight_is_rust_owned_without_the_python_upstream() {
     let server = Server::start().await;
     let client = reqwest::Client::builder().no_proxy().build().unwrap();

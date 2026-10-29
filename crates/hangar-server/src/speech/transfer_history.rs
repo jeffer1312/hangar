@@ -190,7 +190,6 @@ pub(super) fn read(
     let mut old = Vec::new();
     let mut previous = 0.;
     let mut start = 0.;
-    let mut parser = LineParser::new(Provider::Claude);
     for row in selected {
         let clock = super::timestamp(row);
         if clock != 0. {
@@ -199,7 +198,7 @@ pub(super) fn read(
         if start == 0. {
             start = previous;
         }
-        for mut event in parser.feed(row.to_string().as_bytes(), 0) {
+        for mut event in crate::transcript::parse_claude_object(row.as_object().unwrap()) {
             event.ts = Some(event.ts.filter(|t| *t != 0.).unwrap_or(previous));
             prefix_event(&mut event, id, "claude");
             old.push(event);
