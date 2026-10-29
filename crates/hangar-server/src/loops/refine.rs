@@ -147,8 +147,9 @@ impl Runner for Cli {
                 return Err(failed());
             }
             let (mut stdin, mut out, mut err) = (child.stdin.take().unwrap(), child.stdout.take().unwrap(), child.stderr.take().unwrap());
+            let input = crate::orchestration::codec::encode_utf8_replace(prompt);
             let done = tokio::time::timeout(TIMEOUT, async {
-                let write = async { let r = stdin.write_all(prompt.as_bytes()).await; drop(stdin); r };
+                let write = async { let r = stdin.write_all(&input).await; drop(stdin); r };
                 let (mut o, mut e) = (Vec::new(), Vec::new());
                 let (w, ro, re) = tokio::join!(write, out.read_to_end(&mut o), err.read_to_end(&mut e));
                 // Pipe fechado cedo pelo CLI não é falha: o código de saída diz.
@@ -224,6 +225,29 @@ mod tests {
             }
             let calls: Vec<Value> = fake.calls.lock().unwrap().iter().map(|a| a.clone().map_or(Value::Null, Value::String)).collect();
             assert_eq!(Value::Array(calls), c["calls"], "{}", c["label"]);
+        }
+    }
+}
+
+#[cfg(all(test,unix))]
+mod stdin_tests {
+    use super::*;
+    #[tokio::test]
+    async fn guest_loop_stdin_preserves_python_replacement_bytes() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/loop-stdin.json")).unwrap();
+        let dir=tempfile::tempdir().unwrap();let executable=dir.path().join("claude");
+        std::fs::write(&executable,"#!/bin/sh\n/bin/cat > \"${0%/*}/stdin.bin\"\nprintf 'fixture\\n'\n").unwrap();
+        std::fs::set_permissions(&executable,std::fs::Permissions::from_mode(0o700)).unwrap();
+        let env=crate::accounts::environment::AccountEnvironment::from_pairs([("HOME",dir.path().to_str().unwrap()),("PATH",dir.path().to_str().unwrap())]);
+        let cli=Cli {accounts:crate::accounts::AccountService::new(env),bridge:None};
+        for case in fixture["rows"].as_array().unwrap() {
+            let value=crate::orchestration::codec::loads(case["raw"].as_str().unwrap()).unwrap();
+            let output=cli.run(value.as_str().unwrap(),None).await.unwrap();
+            let raw=std::fs::read(dir.path().join("stdin.bin")).unwrap();
+            let hex=raw.iter().map(|byte|format!("{byte:02x}")).collect::<String>();
+            assert_eq!(hex,case["stdin_hex"],"GUE-083: bytes do stdin");
+            assert_eq!(output.code,case["returncode"].as_i64().unwrap());assert_eq!(output.stdout,case["stdout"]);
         }
     }
 }

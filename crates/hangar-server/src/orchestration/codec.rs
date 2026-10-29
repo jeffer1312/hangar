@@ -203,39 +203,45 @@ pub fn string_length(text: &str) -> usize {
     count
 }
 
+fn replace_surrogate_text(value: &str, prefix: &str, replacement: char) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(at) = rest.find(prefix) {
+        output.push_str(&rest[..at]);
+        let tail = &rest[at + prefix.len()..];
+        if tail.as_bytes().get(4) == Some(&b';')
+            && tail.as_bytes().get(..4).is_some_and(|bytes| bytes.iter().all(u8::is_ascii_hexdigit))
+            && u32::from_str_radix(&tail[..4], 16).is_ok_and(|code| (0xd800..=0xdfff).contains(&code))
+        {
+            output.push(replacement);
+            rest = &tail[5..];
+        } else {
+            output.push_str(prefix);
+            rest = tail;
+        }
+    }
+    output.push_str(rest);
+    output
+}
+
+/// O stdin histórico usa UTF-8 errors=replace, que substitui surrogate por '?'.
+pub fn encode_utf8_replace(value: &str) -> Vec<u8> {
+    replace_surrogate_text(value, &format!("{}surrogate:", *MARK), '?').into_bytes()
+}
+
 /// Normalização dos sidecars que historicamente usam models.dumps_safe.
 pub fn scrub_surrogates(mut value: Value) -> Value {
-    fn text(value: &str, prefix: &str) -> String {
-        let mut output = String::with_capacity(value.len());
-        let mut rest = value;
-        while let Some(at) = rest.find(prefix) {
-            output.push_str(&rest[..at]);
-            let tail = &rest[at + prefix.len()..];
-            if tail.as_bytes().get(4) == Some(&b';')
-                && tail.as_bytes().get(..4).is_some_and(|bytes| bytes.iter().all(u8::is_ascii_hexdigit))
-                && u32::from_str_radix(&tail[..4], 16).is_ok_and(|code| (0xd800..=0xdfff).contains(&code))
-            {
-                output.push('\u{fffd}');
-                rest = &tail[5..];
-            } else {
-                output.push_str(prefix);
-                rest = tail;
-            }
-        }
-        output.push_str(rest);
-        output
-    }
     let prefix = format!("{}surrogate:", *MARK);
     let mut pending = vec![&mut value];
     while let Some(value) = pending.pop() {
         match value {
-            Value::String(value) => *value = text(value, &prefix),
+            Value::String(value) => *value = replace_surrogate_text(value, &prefix, '\u{fffd}'),
             Value::Array(values) => pending.extend(values.iter_mut()),
             Value::Object(values) => {
                 let original = std::mem::take(values);
                 for (key, value) in original {
                     // A última chave normalizada vence, inclusive quando substitui uma árvore.
-                    if let Some(previous) = values.insert(text(&key, &prefix), value) { discard(previous); }
+                    if let Some(previous) = values.insert(replace_surrogate_text(&key, &prefix, '\u{fffd}'), value) { discard(previous); }
                 }
                 pending.extend(values.values_mut());
             }

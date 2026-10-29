@@ -1,0 +1,43 @@
+{
+  "source_commit": "3a7f56b6f09164d91b92ea84f404e2c7466967e6",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_loop_stdin.py",
+  "isolation": "_rodar_claude_p original e subprocesso tempor\u00e1rio sem LLM; captura Linux UTF-8 errors=replace; nenhum backend real",
+  "rows": [
+    {
+      "raw": "\"a\\ud800b\"",
+      "stdin_hex": "613f62",
+      "returncode": 0,
+      "stdout": "fixture\n"
+    },
+    {
+      "raw": "\"\\udfff\"",
+      "stdin_hex": "3f",
+      "returncode": 0,
+      "stdout": "fixture\n"
+    },
+    {
+      "raw": "\"\\ud83d\\ude00\"",
+      "stdin_hex": "f09f9880",
+      "returncode": 0,
+      "stdout": "fixture\n"
+    },
+    {
+      "raw": "\"\\ufffd\"",
+      "stdin_hex": "efbfbd",
+      "returncode": 0,
+      "stdout": "fixture\n"
+    },
+    {
+      "raw": "\"texto\\u0000fim\"",
+      "stdin_hex": "746578746f0066696d",
+      "returncode": 0,
+      "stdout": "fixture\n"
+    },
+    {
+      "raw": "\"a\u00e7\u00e3o\"",
+      "stdin_hex": "61c3a7c3a36f",
+      "returncode": 0,
+      "stdout": "fixture\n"
+    }
+  ]
+}
