@@ -123,13 +123,14 @@ pub async fn handle(State(state): State<Arc<AppState>>, ConnectInfo(peer): Conne
 
 /// O que cada conta de `/api/credenciais` mostra: o apelido, senão o nome natural. A lista é a da
 /// tela de Contas (`listed_ids`), sem login nem cota.
+/// Volta o id de `/api/credenciais` (o que o editor grava) e o nome.
 fn known_accounts(accounts: &AccountService) -> Result<Vec<(String, Value)>, &'static str> {
     let config = other::load(&accounts.env);
     let (listed, problems) = crate::accounts::credentials::listed_ids(accounts, &config);
     if let Some(&(_, code)) = problems.first() { return Err(code); }
     Ok(listed.into_iter().map(|l| {
         let name = config.aliases.get(&l.id).cloned().unwrap_or(l.natural);
-        (row_id(l.id), name)
+        (l.id, name)
     }).collect())
 }
 
@@ -149,8 +150,9 @@ pub(crate) fn event(accounts: &AccountService, machine_id: &str) -> Result<Value
     let mut out = Map::new();
     for (id, name) in known_accounts(accounts)? {
         let name = name.as_str().map(|n| n.split('@').next().unwrap_or(n)).unwrap_or_default();
+        // A etiqueta foi gravada pelo id da tela de Contas; a chave do evento é o da linha da lista.
         let tag = doc.accounts.get(&id);
-        out.insert(id, json!({"name": name, "icon": tag.map_or(AccountIcon::CreditCard, |t| t.icon), "color": tag.and_then(|t| t.color)}));
+        out.insert(row_id(id), json!({"name": name, "icon": tag.map_or(AccountIcon::CreditCard, |t| t.icon), "color": tag.and_then(|t| t.color)}));
     }
     Ok(json!({"machine_id": (!machine_id.is_empty()).then_some(machine_id), "machine": doc.machine, "accounts": out}))
 }
@@ -482,5 +484,9 @@ mod tests {
         assert!(keys.contains(&default), "conta padrão {default} fora do evento {keys:?}");
         let linked = row_account(&home, Some(link));
         assert!(keys.contains(&linked), "conta por link {linked} fora do evento {keys:?}");
+        // A etiqueta gravada pelo id da tela de Contas aparece na chave da linha.
+        let screen_id = format!("claude:{}", home.join(".claude").display());
+        write(&real.join(".hangar/tags.json"), &json!({"accounts": {screen_id: {"icon": "wallet", "color": "blue"}}}).to_string());
+        assert_eq!(event(&service(&home), "").unwrap()["accounts"][&default]["icon"], "wallet");
     }
 }
