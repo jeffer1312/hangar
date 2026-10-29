@@ -1,6 +1,9 @@
 //! Contrato CORS das rotas migradas, aplicado antes de autenticação e limite de corpo.
 use axum::{body::Body,extract::Request,http::{HeaderMap,HeaderValue,Method,StatusCode},middleware::Next,response::Response};
 
+#[derive(Clone, Copy, Debug)]
+pub struct UnhandledServerError;
+
 const METHODS:&str="DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT";
 const EXPOSE:&str="ETag, x-hangar-css-width, x-hangar-css-height";
 
@@ -20,7 +23,7 @@ pub fn preflight(method:&Method,headers:&HeaderMap)->Option<Response>{
 }
 
 pub fn apply(headers:&HeaderMap,response:&mut Response){
-    if !headers.contains_key("origin"){return;}
+    if response.extensions().get::<UnhandledServerError>().is_some() || !headers.contains_key("origin"){return;}
     response.headers_mut().insert("access-control-allow-origin",HeaderValue::from_static("*"));
     response.headers_mut().insert("access-control-expose-headers",HeaderValue::from_static(EXPOSE));
 }
