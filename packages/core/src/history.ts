@@ -16,11 +16,13 @@ export function waitsInQueue(e: ChatEvent, provider?: string | null, headless = 
     && (!filaDoProcesso || !e.queued_delivered);
 }
 
-const HELD_PROBLEMS = ['terminal_input_delivery_unproved', 'terminal_input_delivery_composer_busy'];
+/** A entrega incerta segura a escrita do terminal. */
+export const writeHeld = (problem?: string | null): boolean =>
+  problem === 'terminal_input_delivery_unproved' || problem === 'terminal_input_delivery_composer_busy';
 
 /** Entrega da fila que saiu sem prova e segura a fila (aviso "sem prova"). */
 export function holdsQueue(e: ChatEvent, problem?: string | null): boolean {
-  return HELD_PROBLEMS.includes(problem ?? '') && e.id.startsWith('queued-') && e.queued_delivered === true
+  return writeHeld(problem) && e.id.startsWith('queued-') && e.queued_delivered === true
     && !e.queued_consumed && !e.desistiu;
 }
 

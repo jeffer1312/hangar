@@ -988,8 +988,10 @@ impl TerminalDriver {
             Err(_) => return false,
         };
         // Sem escrita nossa pela metade, a limpeza só começa vendo o nosso texto inteiro: um começo dele pode ter
-        // sido digitado pela pessoa.
-        if !(if wrote { self.ours(&now, text, before) } else { now.owned(text, before) }) { return false; }
+        // sido digitado pela pessoa. Com ela, o começo vale só a partir de 12 caracteres (ou o texto todo, se
+        // menor): uma ou duas letras no campo podem ser a pessoa digitando enquanto a escrita falhava.
+        let long = compact(&now.content).chars().count() >= compact(text).chars().count().min(12);
+        if !(now.owned(text, before) || wrote && long && self.ours(&now, text, before)) { return false; }
         // O Ctrl+U apaga só a linha do cursor (numa linha vazia, só a quebra): o texto de várias linhas sai aos
         // pedaços, e cada pedaço que sobra tem de ser o começo do nosso. Qualquer outra coisa é da pessoa. O
         // teto segura o `serial` por um tempo limitado: acima dele, entrega incerta.

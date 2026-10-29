@@ -404,12 +404,13 @@ impl Hangar {
         own
     }
 
-    /// Igual ao `diagReportTargets` do core: "Só esta" só com a da tela elegível; com uma máquina, ela.
+    /// Igual ao `diagReportTargets` do core: com uma máquina, ela; "Só esta" só com a da tela elegível.
     fn diag_report_targets(&self) -> Vec<ServerEntry> {
         let machines = self.diag_report_machines();
+        // Com uma máquina a escolha nem aparece: vale ela, mesmo com "Só esta" guardado de antes.
         match self.device.report_scope {
-            ReportScope::This => machines.into_iter().filter(|s| self.is_active_key(&servers::norm(&s.address))).collect(),
             _ if machines.len() < 2 => machines,
+            ReportScope::This => machines.into_iter().filter(|s| self.is_active_key(&servers::norm(&s.address))).collect(),
             ReportScope::All => machines,
             ReportScope::Pick => machines.into_iter().filter(|s| self.diag_report_picked(s)).collect(),
         }

@@ -520,8 +520,9 @@ export type DiagReportScope = 'all' | 'this' | 'pick';
 /** As máquinas que a escolha manda; marcada sem escolha explícita só a da tela. A da tela só vai quando está
  *  entre as elegíveis (desligada, par ou removida não recebe relatório). */
 export function diagReportTargets(machines: Server[], current: Server | null, scope: DiagReportScope, picked: Record<string, boolean>): Server[] {
-  if (scope === 'this') return machines.filter((s) => s.id === current?.id);
+  // Com uma máquina a escolha nem aparece: vale ela, mesmo com "Só esta" guardado de antes.
   if (machines.length < 2) return machines;
+  if (scope === 'this') return machines.filter((s) => s.id === current?.id);
   return scope === 'all' ? machines : machines.filter((s) => picked[s.id] ?? s.id === current?.id);
 }
 

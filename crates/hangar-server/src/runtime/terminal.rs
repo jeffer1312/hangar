@@ -48,6 +48,7 @@ const FOCUS_STEP_POLL:Duration=Duration::from_millis(20);
 struct Away {row:String,since:tokio::time::Instant,next:tokio::time::Instant,tries:u32}
 fn error(code:&str)->RuntimeError {RuntimeError::new(code,"operação terminal conservada no diário")}
 pub const GIVE_UP_COMPOSER_BUSY:&str="terminal_give_up_composer_busy";
+pub const GIVE_UP_COMPOSER_UNREAD:&str="terminal_give_up_composer_unread";
 /// O Claude só põe o bypass no Shift+Tab de quem nasceu com ele.
 /// argv ilegível é erro com código, nunca "sem bypass" (que reabriria a sessão à toa).
 fn bypass_in_cycle(agent:u32)->Result<bool,RuntimeError> {
@@ -596,13 +597,15 @@ impl Executor {
                     let _=response.send(result);},
                 Some(Message::Queue {id,action,response})=>{
                     let retry_batch=matches!(&action,Action::Append {delivered:false,..}|Action::Edit {..}|Action::Cancel {..}|Action::Remove {..});
-                    let busy=matches!(&action,Action::GiveUp {..}) && {self.read_composer().await; self.composer_held};
+                    // Leitura que falha não vale como campo vazio nem reaproveita a trava antiga: recusa com o motivo.
+                    let field=if matches!(&action,Action::GiveUp {..}) {self.read_composer().await} else {Some(true)};
                     let result=match action {
                         Action::Finish {id,status,result}=>self.native_receipt(&id,status,result).await,
                         Action::ClaimBatch {..}|Action::Claim {..}|Action::SetDelivered {value:false,..}|Action::BumpAttempts {..}|Action::Reconcile {..}|Action::ReplaceRows {..}|Action::Prepare {..}|Action::BeginDispatch {..}|Action::MarkWriting {..}|Action::BindDispatch {..}|Action::BindDispatchIfPrepared {..}|Action::Recover|Action::Confirm {..}|Action::ConfirmOccurrence {..}|Action::ConfirmLegacy {..}|Action::SetRuntimeState {..}|Action::LateRpcResolution {..}=>Err(error("terminal_queue_action")),
                         // Desistir com o nosso texto no campo deixaria a pessoa com ele preso: vale para
                         // qualquer cliente, inclusive o que não esconde o Descartar.
-                        Action::GiveUp {..} if busy=>Err(RuntimeError::new(GIVE_UP_COMPOSER_BUSY,"há texto no campo do terminal")),
+                        Action::GiveUp {..} if field==Some(false)=>Err(RuntimeError::new(GIVE_UP_COMPOSER_BUSY,"há texto no campo do terminal")),
+                        Action::GiveUp {..} if field.is_none()=>Err(RuntimeError::new(GIVE_UP_COMPOSER_UNREAD,"o campo do terminal não foi lido")),
                         action@Action::GiveUp {..}=>{
                             let result=self.queue.exec(self.target.generation,&id,sample(),action).await.map_err(|_|error("queue_io"));
                             if result.as_ref().is_ok_and(|given|*given==json!(true)) {self.release_uncertain().await;}

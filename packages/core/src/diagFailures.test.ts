@@ -210,7 +210,8 @@ describe('sendDiagReportAll', () => {
     expect(diagReportTargets(machines, serverB, 'pick', { b: false }).map((s) => s.id)).toEqual([]);
     const off = { ...serverA, id: 'off', disabled: true };
     expect(diagReportTargets(diagReportMachines([off, serverB], off), off, 'all', {}).map((s) => s.id)).toEqual(['b']);
-    expect(diagReportTargets(diagReportMachines([off, serverB], off), off, 'this', {})).toEqual([]);
+    expect(diagReportTargets(diagReportMachines([off, serverB], off), off, 'this', {}).map((s) => s.id), 'com uma máquina a escolha não aparece').toEqual(['b']);
+    expect(diagReportTargets(diagReportMachines([off, serverB, serverC], off), off, 'this', {})).toEqual([]);
   });
 
   it('reenvio sem a assinatura do envio anterior não manda avulso: as que faltam ficam sem suporte', async () => {

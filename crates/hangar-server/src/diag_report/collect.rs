@@ -417,11 +417,16 @@ pub(crate) async fn sessions(st: &crate::routes::AppState, s: &Scrubber) -> Sess
                 Ok(Ok(Some(target))) => {
                     let record = target.metadata.config_dir.join("sessions").join(format!("{}.json", target.metadata.agent_pid));
                     fact.native_record = match tokio::time::timeout(TARGET_WAIT, tokio::fs::try_exists(record)).await {
-                        Ok(read) => read.ok(),
+                        Ok(Ok(found)) => Some(found),
+                        Ok(Err(error)) => { tracing::warn!(session = %name, kind = ?error.kind(), "relatório: registro nativo ilegível"); None }
                         Err(_) => { tracing::warn!(session = %name, "relatório: registro nativo sem resposta do disco no prazo"); None }
                     };
-                    fact.plugin = registry.plugin().ok().and_then(|plugin| plugin
-                        .pull_status(&crate::terminal_facts::LocalTerminalFacts::binding(&target), std::time::Instant::now()).ok());
+                    let status = registry.plugin().map_err(|error| error.code).and_then(|plugin| plugin
+                        .pull_status(&crate::terminal_facts::LocalTerminalFacts::binding(&target), std::time::Instant::now()).map_err(|error| error.0.to_owned()));
+                    fact.plugin = match status {
+                        Ok(status) => Some(status),
+                        Err(code) => { tracing::warn!(session = %name, code = %code, "relatório: estado do plugin ilegível"); None }
+                    };
                 }
                 Ok(Ok(None)) => {}
                 // O relatório sem a linha do plugin é o que diz "não consegui ler"; o motivo fica no log.

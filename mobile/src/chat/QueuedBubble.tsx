@@ -1,7 +1,7 @@
 import { memo, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { discardsHeld, holdsQueue, waitsInQueue, type ChatEvent, type QuoteRef, type SessionInfo } from '@hangar/core';
+import { discardsHeld, holdsQueue, waitsInQueue, writeHeld, type ChatEvent, type QuoteRef, type SessionInfo } from '@hangar/core';
 import { chatStore } from '../stores/chat';
 import { UserBubble } from './UserBubble';
 import * as m from '../paraglide/messages';
@@ -49,7 +49,6 @@ export const QueuedBubble = memo(function QueuedBubble({ event, working, problem
 }) {
   const queued = event.id.startsWith('queued-');
   const failed = event.desistiu === true;
-  const writeHeld = problem === 'terminal_input_delivery_unproved' || problem === 'terminal_input_delivery_composer_busy';
   const held = holdsQueue(event, problem);
   const notes: string[] = [];
   if (!event.queued_consumed) {
@@ -58,7 +57,7 @@ export const QueuedBubble = memo(function QueuedBubble({ event, working, problem
     }
     if (failed) notes.push(m.msg_nao_chegou_reenvie());
     else if (held) notes.push(m.native_delivery_unproved());
-    else if (queued && event.queued_delivered !== true && writeHeld) notes.push(m.native_queue_held());
+    else if (queued && event.queued_delivered !== true && writeHeld(problem)) notes.push(m.native_queue_held());
     else if (queued && event.queued_delivered !== true && problem === 'terminal_input_no_safe_delivery') notes.push(m.native_no_safe_delivery());
     else if (queued) notes.push(event.queued_delivered === true ? m.native_delivering() : m.native_queued());
   }
