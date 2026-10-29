@@ -451,10 +451,15 @@ export const DIAG_REPORT_TEXT_MAX = 2000;
 
 /** O que a tela diz da falha; só `unsupported` não deixa tentar de novo. */
 /** `expired`: a assinatura do envio venceu; repetir nele não adianta, só um envio novo. */
-export type DiagReportFailureKind = 'unsupported' | 'expired' | 'rate_limited' | 'unreachable' | 'failed';
+/** `ungrouped`: o receptor não juntou a máquina ao código do envio (não assinou o grupo); o servidor dela está
+ *  bem, e um envio novo pode juntar. */
+export type DiagReportFailureKind = 'unsupported' | 'expired' | 'ungrouped' | 'rate_limited' | 'unreachable' | 'failed';
 
 /** A máquina que falhou e que repetir no mesmo envio pode resolver. */
-export const diagReportRetryable = (r: DiagReportResult): boolean => !r.ok && r.kind !== 'unsupported' && r.kind !== 'expired';
+export const diagReportRetryable = (r: DiagReportResult): boolean =>
+  !r.ok && r.kind !== 'unsupported' && r.kind !== 'expired' && r.kind !== 'ungrouped';
+
+const UNGROUPED = 'diag_report_ungrouped';
 
 export type DiagReportResult =
   /** `groupToken`: a assinatura que o primeiro relatório recebe para as outras máquinas entrarem no código dele. */
@@ -466,6 +471,7 @@ export type DiagReportResult =
 function diagReportFailure(code: string, status: number): DiagReportResult {
   const kind: DiagReportFailureKind = code === 'unsupported' ? 'unsupported'
     : code === 'diag_report_group_unknown' ? 'expired'
+    : code === UNGROUPED ? 'ungrouped'
     : code === 'diag_report_rate_limited' ? 'rate_limited'
     : code === 'diag_report_unreachable' || code === 'network' ? 'unreachable'
     : 'failed';
@@ -488,8 +494,9 @@ export async function sendDiagReport(server: Server, { text, client, group }: { 
     const res = await apiFetchForServer<{ code?: unknown; diary?: unknown; group?: unknown; group_token?: unknown }>(server, '/api/diag/report',
       { method: 'POST', body: JSON.stringify(body) }, 150_000);
     if (typeof res?.code !== 'string') return diagReportFailure('unexpected', 201);
-    // Servidor antigo ignora o grupo e manda avulso: o relatório não entrou no código do envio.
-    if (group && res.group !== group.code) return diagReportFailure('unsupported', 201);
+    // Servidor antigo ignora o grupo e nem devolve o campo; o atual devolve `group: null` quando foi o receptor
+    // que não agrupou. Nos dois o relatório não entrou no código do envio.
+    if (group && res.group !== group.code) return diagReportFailure('group' in res ? UNGROUPED : 'unsupported', 201);
     return { ok: true, code: res.code, diary: res.diary === 'sent' ? 'sent' : 'failed',
       ...(typeof res.group_token === 'string' ? { groupToken: res.group_token } : {}) };
   } catch (e) {
@@ -534,7 +541,8 @@ export async function sendDiagReportAll(servers: Server[], input: { text?: strin
   let group: DiagReportGroup | null = previous ?? null;
   const results: DiagReportAllResult['results'] = [];
   for (const server of servers) {
-    const result = code !== null && group === null ? diagReportFailure('unsupported', 0)
+    // Sem assinatura do primeiro, o receptor não juntaria as outras: o servidor delas não tem culpa.
+    const result = code !== null && group === null ? diagReportFailure(UNGROUPED, 0)
       : await sendDiagReport(server, { ...input, ...(group ? { group } : {}) });
     if (result.ok && code === null) {
       code = result.code;
@@ -546,7 +554,7 @@ export async function sendDiagReportAll(servers: Server[], input: { text?: strin
 }
 
 /** O que o botão do relatório faz agora: `send` (envio novo pela escolha de agora), `resend` (só às que falharam
- *  e podem ir, no mesmo envio) ou `none` (nada a mandar, ou as que faltam não entrariam no código do envio). */
+ *  e podem ir, no mesmo envio) ou `none` (nada a mandar). */
 export function diagReportNext(previous: DiagReportAllResult | null, targets: Server[]): 'send' | 'resend' | 'none' {
   if (!targets.length) return 'none';
   if (!previous) return 'send';
@@ -554,15 +562,17 @@ export function diagReportNext(previous: DiagReportAllResult | null, targets: Se
   // A escolha mudou depois do envio: repetir mandaria só às antigas.
   if (targets.length !== sent.size || targets.some((t) => !sent.has(t.id))) return 'send';
   const missed = previous.results.filter((r) => !r.result.ok);
-  if (missed.some((r) => diagReportRetryable(r.result))) return previous.code !== null && previous.group === null ? 'none' : 'resend';
-  return missed.some((r) => !r.result.ok && r.result.kind === 'expired') ? 'send' : 'none';
+  // Com código e sem assinatura, as que faltam não entram nele: só um envio novo.
+  if (missed.some((r) => diagReportRetryable(r.result))) return previous.code !== null && previous.group === null ? 'send' : 'resend';
+  // Expirado ou não juntado pelo receptor: repetir no mesmo envio não adianta, um envio novo pode juntar.
+  return missed.some((r) => !r.result.ok && (r.result.kind === 'expired' || r.result.kind === 'ungrouped')) ? 'send' : 'none';
 }
 
 /** Reenvia só às máquinas que falharam num envio, no mesmo código, e junta ao resultado dele. */
 export async function resendDiagReportMissed(previous: DiagReportAllResult, input: { text?: string; client: string }): Promise<DiagReportAllResult> {
   // Envio com código e sem assinatura: as que faltam iriam avulsas, fora do código que a tela mostra.
   if (previous.code !== null && previous.group === null) {
-    return { ...previous, results: previous.results.map((r) => diagReportRetryable(r.result) ? { server: r.server, result: diagReportFailure('unsupported', 0) } : r) };
+    return { ...previous, results: previous.results.map((r) => diagReportRetryable(r.result) ? { server: r.server, result: diagReportFailure(UNGROUPED, 0) } : r) };
   }
   const missed = previous.results.filter((r) => diagReportRetryable(r.result)).map((r) => r.server);
   const again = await sendDiagReportAll(missed, input, previous.group ?? undefined);

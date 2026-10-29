@@ -5,7 +5,7 @@
   //
   // O que o arquivo contém e o que NÃO contém está em backend/app/diag.py e em lib/diag.ts. O texto
   // aqui repete a parte que importa pra quem vai enviar: fica na máquina, e não guarda conversa.
-  import { getDiagResumo, baixarDiag, type ResumoDiag, type LinhaDiag } from '@hangar/core';
+  import { getDiagSummaryForServer, getDiagFileForServer, type ResumoDiag, type LinhaDiag, type Server } from '@hangar/core';
   import { fmtBytes, sendDiagReportAll, resendDiagReportMissed, diagReportMachines, diagReportNext, diagReportTargets, DIAG_REPORT_TEXT_MAX,
     type DiagReportAllResult, type DiagReportResult, type DiagReportScope } from '@hangar/core';
   import { findServer, getActiveId, listServers, onServersChanged } from '../../lib/auth';
@@ -13,11 +13,13 @@
   import { copyText } from '../../lib/clipboard';
   import * as m from '../../paraglide/messages';
 
-  // O relatório vai ao mesmo servidor que a prévia e o download acima leem: o ativo.
+  // `server`: o do seletor do grupo Servidor; sem ele, o ativo. A prévia, o download e o relatório leem o mesmo.
+  let { server = null }: { server?: Server | null } = $props();
   const ativo = () => findServer(getActiveId() ?? '') ?? null;
-  let servidor = $state(ativo());
+  let active = $state(ativo());
   let all = $state(listServers());
-  $effect(() => onServersChanged(() => { servidor = ativo(); all = listServers(); }));
+  $effect(() => onServersChanged(() => { active = ativo(); all = listServers(); }));
+  const servidor = $derived(server ?? active);
   // Convidado não manda relatório da máquina de outra pessoa (o servidor recusa com 403).
   const podeReportar = $derived(!!servidor && !servidor.invite && papelDo(servidor) !== 'guest');
   // O erro costuma estar noutra máquina da pessoa (a VM, não o PC de onde ela envia): o padrão é mandar de todas.
@@ -52,6 +54,7 @@
   function reason(r: DiagReportResult): string {
     return r.ok ? '' : r.kind === 'unsupported' ? m.config_diag_report_unsupported()
       : r.kind === 'expired' ? m.config_diag_report_expired()
+      : r.kind === 'ungrouped' ? m.config_diag_report_ungrouped()
       : r.kind === 'rate_limited' ? m.config_diag_report_rate_limited()
       : r.kind === 'unreachable' ? m.config_diag_report_unreachable()
       : m.config_diag_report_failed({ code: r.code });
@@ -97,10 +100,11 @@
             l.ms !== undefined && `${l.ms}ms`].filter(Boolean).join(' · ');
   }
 
-  async function carregar() {
+  async function carregar(alvo: Server | null) {
+    if (!alvo) return;
     recarregando = true;
     try {
-      resumo = await getDiagResumo();
+      resumo = await getDiagSummaryForServer(alvo);
       erro = '';
     } catch (e) {
       // Backend mais velho que o app (rota ainda não existe) NÃO é erro pra quem lê: some o número
@@ -112,12 +116,13 @@
     }
   }
 
-  $effect(() => { void carregar(); });
+  $effect(() => { void carregar(servidor); });
 
   async function baixar() {
+    if (!servidor) return;
     baixando = true; erro = '';
     try {
-      const blob = await baixarDiag();
+      const blob = new Blob([await getDiagFileForServer(servidor)], { type: 'application/x-ndjson' });
       // Download do próprio navegador, a partir de um Blob local — nada é enviado a lugar nenhum.
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -224,7 +229,7 @@
   <div class="preview-head">
     <strong class="preview-tit">{m.config_diag_ultimas()}</strong>
     <!-- Rótulo ao lado do ↻: no toque não há hover, e o aria-label sozinho não chega a quem vê. -->
-    <button class="recarregar" onclick={carregar} disabled={recarregando}
+    <button class="recarregar" onclick={() => carregar(servidor)} disabled={recarregando}
             aria-label={m.arq_recarregar()}><span aria-hidden="true">{recarregando ? '…' : '↻'}</span>
       <span class="recarregar-txt">{m.arq_recarregar()}</span></button>
   </div>
@@ -340,8 +345,10 @@
     border-radius: var(--radius-md);
     /* Altura fixa com rolagem própria: a lista é longa por natureza e não pode empurrar o botão
        de baixar pra fora da tela — ele é o motivo desta tela existir. */
-    max-height: 340px;
+    max-height: 420px;
     overflow-y: auto;
+    /* No fim da lista a roda não passa para o painel: ela rola só aqui, para cima e para baixo. */
+    overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
   }
   /* Duas colunas fixas (relógio, evento) e o contexto ocupando o resto. `max-content` nas duas
