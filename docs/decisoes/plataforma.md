@@ -292,7 +292,8 @@ Este
 
 **Rotas públicas e auxiliares (28/10/2026):** `/api/dictation/transcribe`,
 `/api/ditado/relimpar`, `/api/dictation/models` e status/teste de provedores de transcrição
-chamam os motores dentro do Rust. As portas Python conservam autorização e repasse em fluxo.
+chamam os motores dentro do Rust. As portas Python não as atendem nem repassam: por elas
+(convidado com login próprio, 8768) e no modo `python`, o ditado responde 404.
 Os fatos de configuração continuam no Python, sem chamar o Rust de volta; as pontes de
 catálogo só ficam onde ainda têm consumidores. TTS é outra capacidade e continua identificado
 como Python no painel, enquanto voz ao vivo e transcrição aparecem na mesma área com seu dono real.

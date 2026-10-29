@@ -1461,54 +1461,6 @@ def test_do_notify_awaiting_no_match_is_noop(monkeypatch):
     assert calls == []
 
 
-def test_relimpar_aplica_outro_estilo_sem_audio(api_client, monkeypatch):
-    from starlette.responses import JSONResponse
-    from app import account_bridge
-    visto = {}
-
-    async def forward(request, *, guest=False):
-        visto.update(await request.json())
-        return JSONResponse({"text": "**Objetivo**\nfalar.", "raw": visto["texto"]})
-
-    monkeypatch.setattr(account_bridge, "owner_mode", lambda: "rust")
-    monkeypatch.setattr(account_bridge, "forward_stream", forward)
-    r = api_client.post("/api/ditado/relimpar",
-                        json={"texto": "eu queria falar sobre uma coisa aqui", "estilo": "briefing"},
-                        headers=_h())
-    assert r.status_code == 200
-    assert r.json()["text"] == "**Objetivo**\nfalar."
-    assert visto == {"texto": "eu queria falar sobre uma coisa aqui", "estilo": "briefing"}
-
-
-def test_status_dos_servicos_de_transcricao(api_client, monkeypatch):
-    from starlette.responses import JSONResponse
-    from app import account_bridge
-    linhas = [{"id": "el", "name": "ElevenLabs", "kind": "elevenlabs",
-               "waiting_until": 1900000000.0, "reason": "sem cota (402)"}]
-
-    async def forward(request, *, guest=False):
-        return JSONResponse({"providers": linhas})
-
-    monkeypatch.setattr(account_bridge, "owner_mode", lambda: "rust")
-    monkeypatch.setattr(account_bridge, "forward_stream", forward)
-    r = api_client.get("/api/transcription/providers/status", headers=_h())
-    assert r.status_code == 200
-    assert r.json() == {"providers": linhas}
-    assert api_client.get("/api/transcription/providers/status").status_code == 401
-
-
-def test_relimpar_recusa_estilo_que_nao_existe(api_client):
-    # 400, e nao "cai no padrao": aqui a pessoa CLICOU num botao. Entregar outro estilo calada seria
-    # mentir sobre o que ela apertou (na transcricao o estilo e palpite da tela, e cair na config e
-    # o certo — por isso a regra e diferente nos dois lugares).
-    r = api_client.post("/api/ditado/relimpar",
-                        json={"texto": "um texto qualquer aqui", "estilo": "resumir"},
-                        headers=_h())
-    assert r.status_code == 400
-    assert r.json()["detail"]["code"] == "erro_estilo_invalido"
-    assert "resumir" in r.json()["detail"]["msg"]
-
-
 def test_push_mute_route(api_client, monkeypatch, tmp_path):
     monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
     r = api_client.post("/api/push/mute", json={"session": "s1", "muted": True}, headers=_h())

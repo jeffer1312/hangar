@@ -343,41 +343,6 @@ fn dictation_public_generated_json_never_panics() {
 }
 
 #[tokio::test]
-async fn dictation_public_forwarded_authentication_and_guest_harness_limit() {
-    let mut server = PublicServer::start().await;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let app = hangar_server::routes::terminal_router(server.state.clone());
-    server.tasks.push(tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    }));
-    let client = reqwest::Client::new();
-    let raw = "uma frase com palavras suficientes para organizar";
-    let request = || {
-        client
-            .post(format!("http://{addr}/__hangar_server/forwarded"))
-            .header("x-hangar-path", "/api/ditado/relimpar")
-            .json(&json!({"texto":raw,"estilo":"prosa","organization_mode":"harness"}))
-    };
-    assert_eq!(request().send().await.unwrap().status(), 404);
-    let response = request()
-        .header("x-hangar-internal", "private")
-        .header("x-hangar-forwarded-guest", "1")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    let body: Value = response.json().await.unwrap();
-    assert_eq!(body["text"], raw);
-    assert_eq!(body["organization_code"], "dictation_harness_unauthorized");
-}
-
-#[tokio::test]
 async fn dictation_public_audio_edges_match_python() {
     let server = PublicServer::start().await;
     let fixture: Value = serde_json::from_str(include_str!(

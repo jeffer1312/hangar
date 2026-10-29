@@ -5486,68 +5486,6 @@ async def engine_cliproxy_management_key(body: CliproxyManagementBody):
     return await asyncio.to_thread(_cliproxy_naming)
 
 
-async def _forward_dictation(request: Request):
-    from app import account_bridge
-    if account_bridge.owner_mode() == "python":
-        raise HTTPException(503, detail={"code": "dictation_need_rust_server"})
-    return await account_bridge.forward_stream(request, guest=_convidado(request))
-
-
-@app.post("/api/dictation/transcribe", dependencies=[Depends(require_auth)])
-async def transcribe_dictation(request: Request):
-    return await _forward_dictation(request)
-
-
-class RelimparBody(_StrictBody):
-    texto: str = Field(min_length=1)
-    estilo: str
-    session: str | None = None
-    generation: str | None = None
-    organization_mode: str | None = None
-    organization_model: str | None = None
-    organization_account: str | None = None
-    include_recent_messages: bool | None = None
-    recent_messages: list[dict] | None = None
-
-
-@app.post("/api/ditado/relimpar", dependencies=[Depends(require_auth)])
-async def relimpar_ditado(body: RelimparBody, request: Request):
-    """Reorganiza o texto cru pelo Rust, sem repetir transcrição ou upload."""
-    if body.estilo not in ("limpar", "prosa", "briefing"):
-        raise HTTPException(400, detail=erro("erro_estilo_invalido", f"Estilo de organização inválido: '{body.estilo}'."))
-    if body.session:
-        from app import guest_users
-        guest = guest_of(request)
-        if guest is not None and not guest.sees(body.session):
-            raise HTTPException(403, "A conversa de destino não está autorizada.")
-        viewer = guest_users.current.get()
-        if viewer is not None and not guest_users.visible_to(viewer, body.session):
-            raise HTTPException(403, "A conversa de destino não está autorizada.")
-    return await _forward_dictation(request)
-
-
-@app.get("/api/dictation/models", dependencies=[Depends(require_auth)])
-async def dictation_models(request: Request, session: str, fresh: bool = False):
-    if _convidado(request) or request.scope.get("server", (None, None))[1] == 8768:
-        raise HTTPException(403, "O catálogo de organização é exclusivo do dono.")
-    return await _forward_dictation(request)
-
-
-@app.get("/api/transcription/providers/status", dependencies=[Depends(require_auth)])
-async def transcription_providers_status(request: Request):
-    if _convidado(request):
-        raise HTTPException(403, "A configuração de transcrição é exclusiva do dono.")
-    return await _forward_dictation(request)
-
-
-@app.post("/api/transcription/providers/{provider_id}/test", dependencies=[Depends(require_auth)])
-async def test_transcription_provider(provider_id: str, request: Request):
-    if _convidado(request):
-        raise HTTPException(403, "O teste de transcrição é exclusivo do dono.")
-    return await _forward_dictation(request)
-
-
-
 class PensamentoPtBody(_StrictBody):
     # Teto por ITEM só contra abuso: o pensamento do Pi e do Kimi vem CRU, sem tamanho previsível,
     # e recusar com 422 acima de `MAX_CHARS` deixava a pessoa abrindo o bloco sem nada acontecer.
@@ -8300,14 +8238,3 @@ async def tts_audio(h: str):
 @app.api_route("/mcp/", methods=["GET", "POST", "DELETE"], dependencies=[Depends(require_auth)])
 async def mcp_needs_rust():
     raise HTTPException(503, detail=erro("mcp_needs_rust_server", "o MCP do Hangar precisa do servidor Rust"))
-
-
-@app.api_route("/{path:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
-async def web_static_forward(path: str, request: Request):
-    """A tela nas portas Python vem do Rust; as rotas registradas têm precedência."""
-    from app import account_bridge
-    if path.split("/", 1)[0] in {"api", "internal", "__hangar_server", "mcp", "convite", "par", "docs", "redoc", "openapi.json"}:
-        raise HTTPException(404, "Not Found")
-    if account_bridge.owner_mode() == "python":
-        return JSONResponse({"detail": {"code": "web_ui_needs_rust_server"}}, status_code=503)
-    return await account_bridge.forward_stream(request, guest=False, static_origin=True)

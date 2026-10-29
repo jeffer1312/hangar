@@ -19,10 +19,6 @@ impl Fixture {
     }
 
     async fn start_with(upstream: std::net::SocketAddr) -> Self {
-        Self::start_router(upstream, false).await
-    }
-
-    async fn start_router(upstream: std::net::SocketAddr, private: bool) -> Self {
         let home = tempfile::tempdir().unwrap();
         // Sem a raiz temporária, a descoberta cairia no checkout real e no dist dele.
         std::fs::create_dir_all(home.path().join(".hangar/current")).unwrap();
@@ -36,7 +32,7 @@ impl Fixture {
             ("HOME".into(), home.path().to_string_lossy().into_owned()),
             ("USERPROFILE".into(), home.path().to_string_lossy().into_owned()),
         ].into()));
-        let router = if private { hangar_server::routes::terminal_router(Arc::new(state)) } else { hangar_server::routes::router(Arc::new(state)) };
+        let router = hangar_server::routes::router(Arc::new(state));
         let task = tokio::spawn(async move {
             axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap();
         });
@@ -393,25 +389,6 @@ fn static_external_paths_and_ranges_do_not_panic() {
     }).unwrap();
     fixture.task.abort();
     runtime.block_on(async { while !fixture.task.is_finished() { tokio::task::yield_now().await; } });
-}
-
-#[tokio::test]
-async fn static_private_transport_is_authenticated_and_never_forwards() {
-    let fixture=Fixture::start_router(crate::refused_address(),true).await;
-    write(&fixture.root().join("frontend/dist/sub/index.html"),"sub");
-    let client=reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
-    let request=||client.get(format!("{}/__hangar_server/forwarded?x=1",fixture.base))
-        .header("x-hangar-path","/sub").header("x-hangar-static-origin","https://connect.example");
-    assert_eq!(request().send().await.unwrap().status(),404);
-    let response=request().header("x-hangar-internal","fixture-internal").send().await.unwrap();
-    assert_eq!(response.status(),307);
-    assert_eq!(response.headers()["location"],"https://connect.example/sub/?x=1");
-    assert_eq!(request().header("x-hangar-internal","fixture-internal").header("x-hangar-forwarded-guest","1").send().await.unwrap().status(),404);
-    let missing=client.get(format!("{}/__hangar_server/forwarded",fixture.base)).header("x-hangar-path","/missing")
-        .header("x-hangar-internal","fixture-internal").send().await.unwrap();
-    assert_eq!(missing.status(),404);
-    fixture.task.abort();
-    while !fixture.task.is_finished() { tokio::task::yield_now().await; }
 }
 
 /// Sonda de uso HTTP isolada: o roteiro de medição encerra por SIGINT e espera a limpeza.

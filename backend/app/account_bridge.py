@@ -492,7 +492,7 @@ _HOP_BY_HOP = {"connection", "transfer-encoding", "keep-alive"}
 _STREAM_HEADERS = ("content-type", "x-filename", "range", "if-range", "if-none-match", "if-modified-since", "last-event-id")
 
 
-async def forward_stream(request, *, guest: bool, static_origin: bool = False):
+async def forward_stream(request, *, guest: bool):
     """Anexo, transcrição ou mídia da sessão que entrou por uma porta do Python, já autenticado:
     segue ao Rust em fluxo nos dois sentidos (até 100 MiB) e o transporte fecha quando o cliente sai.
     Tudo no loop, sem thread do executor padrão: uploads simultâneos não podem esgotá-lo."""
@@ -505,8 +505,6 @@ async def forward_stream(request, *, guest: bool, static_origin: bool = False):
     host, _, port = config[0].rpartition(":")
     query = request.url.query
     headers = [("host", config[0]), ("x-hangar-internal", config[1]), ("x-hangar-path", request.url.path)]
-    if static_origin:
-        headers.append(("x-hangar-static-origin", str(request.base_url).rstrip("/")))
     if guest:
         headers.append(("x-hangar-forwarded-guest", "1"))
     headers += [(key, request.headers[key]) for key in _STREAM_HEADERS if key in request.headers]
