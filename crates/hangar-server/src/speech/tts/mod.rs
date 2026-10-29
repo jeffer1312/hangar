@@ -44,10 +44,10 @@ pub fn cache_path(config: &SpeechConfig, hash: &str) -> PathBuf {
     cache::path(&config.cache_dir, hash)
 }
 pub async fn voices(config: &SpeechConfig) -> Result<Value, SpeechError> {
-    network::voices(config, network::API).await
+    Service::default().voices(config).await
 }
 pub async fn balance(config: &SpeechConfig) -> Result<Value, SpeechError> {
-    network::balance(config, network::API).await
+    Service::default().balance(config).await
 }
 
 fn adjustments(config: &SpeechConfig) -> Value {
@@ -96,11 +96,19 @@ fn valid_audio(audio: &[u8]) -> bool {
 
 impl Service {
     #[cfg(test)]
-    fn at(api: String) -> Self {
+    pub(crate) fn at(api: String) -> Self {
         Self {
             api,
             flights: Mutex::default(),
         }
+    }
+
+    pub async fn voices(&self, config: &SpeechConfig) -> Result<Value, SpeechError> {
+        network::voices(config, &self.api).await
+    }
+
+    pub async fn balance(&self, config: &SpeechConfig) -> Result<Value, SpeechError> {
+        network::balance(config, &self.api).await
     }
 
     pub async fn synthesize(

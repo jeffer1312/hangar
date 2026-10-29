@@ -54,6 +54,7 @@ pub async fn chat(
         let detail = bytes
             .map(|bytes| {
                 String::from_utf8_lossy(&bytes)
+                    .replace(&key, "[segredo removido]")
                     .chars()
                     .take(300)
                     .collect::<String>()
@@ -425,6 +426,15 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.detail, format!("provedor 500: {expected}"));
+    }
+
+    #[tokio::test]
+    async fn a_provider_error_never_returns_the_credential_it_echoed() {
+        let server = fake(vec![(401, json!({"error":"A chave fixture-key foi recusada."}))]).await;
+        let error = chat(&server.config, "s", "p", 0.0, Duration::from_secs(2)).await.unwrap_err();
+        assert_eq!(error.status, 502);
+        assert!(!error.detail.contains("fixture-key"));
+        assert!(error.detail.contains("[segredo removido]"));
     }
 
     proptest::proptest! {

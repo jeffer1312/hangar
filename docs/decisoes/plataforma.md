@@ -295,8 +295,8 @@ Este
 chamam os motores dentro do Rust. As portas Python não as atendem nem repassam: por elas
 (convidado com login próprio, 8768) e no modo `python`, o ditado responde 404.
 Os fatos de configuração continuam no Python, sem chamar o Rust de volta; as pontes de
-catálogo só ficam onde ainda têm consumidores. TTS é outra capacidade e continua identificado
-como Python no painel, enquanto voz ao vivo e transcrição aparecem na mesma área com seu dono real.
+catálogo só ficam onde ainda têm consumidores. TTS é outra capacidade: sua migração e a dos
+consumidores de narração estão descritas em [Leitura, narração e traduções no Rust](#leitura-narração-e-traduções-no-rust-29102026).
 
 As referências de equivalência vêm da execução do Python antes da remoção, em
 `backend/tests/fixtures/contract/dictation_public/`. Elas incluem validação da borda HTTP,
@@ -3597,3 +3597,50 @@ do motor e cobrava outra credencial. Catálogo vazio = sem sugestão, e a causa 
 trava compartilhada da conta enquanto roda. Erro do executor vira 204 e registro no diário
 (`rust.rename_suggestion`). O executor só roda a pedido do dono, por isso o gatilho é do cliente e
 não um trabalho de fundo.
+
+## Leitura, narração e traduções no Rust (29/10/2026)
+
+**Regra.** As cinco rotas `/api/tts*`, `/api/pensamento/pt`,
+`/api/config-sync/translate` e `/api/pair/task-suggestion` são atendidas em `speech/` no
+`hangar-server`. O Python não conserva os motores, handlers, schemas ou repasses dessas
+funções. O Connect já estava desativado; seus handlers e endpoints privados de voz saíram,
+assim como a ponte antiga da conferência de convite que só ele usava. O transporte genérico
+que o compartilhamento ainda usa tem responsabilidade própria.
+
+**Configuração.** O Rust lê `runtime-config.json` e os valores de ambiente que já existiam,
+sem buscar credenciais em uma rota interna. Narração e traduções funcionam independentemente
+do modo de organização do ditado. Endpoint próprio não herda a chave de outro serviço. A
+edição dos campos continua no escritor da configuração geral; a capacidade
+`somente_leitura.traducao_pensamento` é calculada no Rust sobre a resposta geral existente,
+sem uma chamada adicional ao Python. Mudar configuração vale no pedido seguinte.
+
+**Equivalência.** Referências congeladas em `crates/hangar-server/tests/fixtures/speech/`,
+capturadas dos helpers e handlers Python antes da remoção: 724 casos de preparo, 60 hashes,
+417 comandos locais, 36 de cliente de texto, 84 HTTP, 10 de histórico Pi/omp/Kimi, quatro de
+janela nativa e 11 de histórico transferido. Os programas de captura estão preservados nas
+próprias referências. Os testes Rust comparam as saídas e exercitam HTTP com o upstream Python
+indisponível. HEAD de áudio continua 405, e tipo MIME, Range e validadores conservam o contrato
+de arquivo anterior.
+
+O hash continua usando a codificação JSON Python, incluindo espaços e floats; áudios já em
+cache não geram novo gasto por causa da migração. O contexto da sugestão conserva a janela
+inteira que o consumidor original lia, os hooks e a fila dos provedores, e os snapshots e a
+fronteira das conversas transferidas. Overrides de transferência substituem somente suas
+linhas; uma máquina sem transferência não perde as sessões nativas da sugestão.
+
+**Correções do caminho.** Pedidos simultâneos de síntese do mesmo hash compartilham uma
+produção. O temporário é exclusivo e a troca atômica tolera leitores no Windows. Cancelamento
+e prazo do motor local encerram sua árvore; stdin e áudio continuam binários, sem shell. O
+comando configurado mantém suas variáveis de provedor, removendo somente a autoridade privada
+do Hangar. Não existe teto arbitrário de bytes que recuse um WAV válido dentro do limite de
+texto. Áudio vazio/inválido, JSON externo inválido e falha de disco têm erro visível.
+
+O cliente de texto reaproveita conexões, recusa redirecionamento de credenciais e não usa
+assinatura como reserva. Cache e pausa de pensamento distinguem a configuração do provedor;
+trocar de chave não deixa uma falha antiga bloqueando a tradução nova. Tradução de descrições
+conserva lotes, resultado parcial e cache persistente; só limite HTTP real provoca repetição.
+As mensagens corrigidas levam acentos, mantendo os códigos usados pelos clientes.
+
+**Limite de medição.** Uma prova HTTP com provedor controlado mede a borda e o cache do Hangar;
+ela não comprova aceleração da inferência de fala ou do modelo externo. Não atribuir ao Rust
+ganho de ponta a ponta que não tenha sido medido.

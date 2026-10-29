@@ -20,6 +20,11 @@ pub use py::ts_of_iso;
 pub(crate) use claude::{is_command_meta, strip_meta_blocks};
 pub(crate) use codex::is_context_wrapper;
 
+/// O histórico transferido já validou ramo e fronteira; não passa pelo filtro temporal do stream.
+pub(crate) fn parse_claude_object(object: &serde_json::Map<String, Value>) -> Vec<ChatEvent> {
+    claude::parse_obj(object, peer::name_of_pid)
+}
+
 /// Linhas com texto que não viraram objeto JSON. O Python pula calado; aqui o log mostra a conta.
 pub static SKIPPED_LINES: AtomicU64 = AtomicU64::new(0);
 

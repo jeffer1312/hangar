@@ -392,6 +392,13 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 
 ### Plataforma — nomes, pareamento, planos, ditado → [`docs/decisoes/plataforma.md`](docs/decisoes/plataforma.md)
 
+- **TTS, narração, tradução de pensamento/descrições e sugestão de tarefa do grupo são do Rust.**
+  `speech/` lê a configuração viva diretamente, preserva o cache de áudio e atende as rotas sem
+  bridge ou motor Python. A voz ao vivo também não conserva transporte privado para o Connect
+  desativado. A configuração geral mantém seus campos e escritor compartilhado; a capacidade
+  de tradução é calculada no Rust. Contrato e capturas em
+  [plataforma.md](docs/decisoes/plataforma.md#leitura-narração-e-traduções-no-rust-29102026).
+
 - **Orquestração: um time por trabalho, editado pela tela ou pelo LLM.** Sem grupo usa
   rascunho da identidade atual; não importa time padrão/contrato anterior. Ao lançar, associa
   esse registro ao grupo por `/orq/grupo`, preservando escolhas. O vigia fecha executor e

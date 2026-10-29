@@ -97,7 +97,8 @@ pub fn area_of(path: &str) -> usize {
 /// O Rust atende este pedido do dono sem repassar? Mesma decisão do `routes::router`: as rotas
 /// GET registradas lá, mais os `matches` de Git/arquivos e de worktrees que o `pass_any` consulta.
 pub fn rust_route(method: &Method, path: &str) -> bool {
-    if crate::ui::matches(method, path) || crate::dictation::http::matches(method, path) { return true; }
+    if crate::ui::matches(method, path) || crate::dictation::http::matches(method, path)
+        || crate::speech::http::matches(method, path) { return true; }
     // O serviço MCP responde também aos métodos recusados, sem repasse ao Python.
     if matches!(path, "/mcp" | "/mcp/") { return true; }
     if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/session-defaults" | "/api/tags" | "/api/web-ui") { return true; }
@@ -519,11 +520,11 @@ mod tests {
         let routes = speech["routes"].as_array().unwrap();
         for (method, path, rust) in [
             ("GET", "/api/voice", true),
-            ("POST", "/api/tts", false),
-            ("POST", "/api/tts/narrar", false),
-            ("GET", "/api/tts/voices", false),
-            ("GET", "/api/tts/saldo", false),
-            ("GET", "/api/tts/audio/x", false),
+            ("POST", "/api/tts", true),
+            ("POST", "/api/tts/narrar", true),
+            ("GET", "/api/tts/voices", true),
+            ("GET", "/api/tts/saldo", true),
+            ("GET", "/api/tts/audio/x", true),
         ] {
             assert!(routes.iter().any(|r| r["method"] == method && r["path"] == path && r["rust"] == rust), "rota ausente/incorreta: {method} {path}");
         }

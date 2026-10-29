@@ -53,13 +53,9 @@ impl SpeechConfig {
     }
 
     pub fn integer(&self, key: &str, default: i64) -> i64 {
-        match self.values.get(key) {
-            Some(Value::Bool(value)) => i64::from(*value),
-            Some(Value::Number(value)) => value.as_i64().or_else(|| value.as_f64().filter(|v| v.is_finite())
-                .map(|v| v.clamp(i64::MIN as f64, i64::MAX as f64) as i64)).unwrap_or(default),
-            Some(Value::String(value)) => value.trim().parse().unwrap_or(default),
-            _ => default,
-        }
+        let Some(value) = self.values.get(key).and_then(crate::orchestration::coerced_integer) else { return default };
+        value.0.clamp(num_bigint::BigInt::from(i64::MIN), num_bigint::BigInt::from(i64::MAX))
+            .to_string().parse().unwrap_or(default)
     }
 
     pub fn boolean(&self, key: &str, default: bool) -> bool {
@@ -112,5 +108,16 @@ mod tests {
         assert!(config.text_provider().1.is_empty());
         config.values["llm_base_url"] = json!("https://text.test/v1");
         assert_eq!(config.text_provider().1, "text");
+    }
+
+    #[test]
+    fn integer_settings_keep_python_coercion_before_the_effective_limit() {
+        let mut config = SpeechConfig { values: json!({}), home: PathBuf::new(), cache_dir: PathBuf::new() };
+        for (input, expected) in [(json!("1_000"), 1000), (json!("١٢٣"), 123),
+            (json!("999999999999999999999999999999999"), i64::MAX),
+            (json!(-7.9), -7), (json!(true), 1), (json!("1__0"), 50)] {
+            config.values["value"] = input;
+            assert_eq!(config.integer("value", 50), expected);
+        }
     }
 }
