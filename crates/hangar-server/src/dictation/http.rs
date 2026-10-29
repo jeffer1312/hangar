@@ -56,7 +56,7 @@ fn forbidden(message: &str) -> Response {
 
 pub async fn public(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
     if declared_too_large(&req) {
-        return crate::session_write::too_large(req.headers());
+        return refuse_declared(req);
     }
     let (forward, caller) = who(&st, peer, &req);
     let Some(caller) = caller else {
@@ -77,7 +77,7 @@ pub async fn serve(
     grant: Option<Arc<GuestGrant>>,
 ) -> Response {
     if declared_too_large(&req) {
-        return crate::session_write::too_large(req.headers());
+        return refuse_declared(req);
     }
     let path = req.uri().path().to_owned();
     let query: HashMap<String, String> =
@@ -363,14 +363,25 @@ async fn limited_body(mut body: axum::body::Body) -> Result<bytes::Bytes, BodyEr
     while let Some(frame) = body.frame().await {
         let Ok(chunk) = frame.map_err(|_| BodyError::Read)?.into_data() else { continue };
         if data.len() + chunk.len() > AUDIO_LIMIT {
-            tokio::spawn(tokio::time::timeout(std::time::Duration::from_secs(2), async move {
-                while let Some(Ok(_)) = body.frame().await {}
-            }));
+            drain_later(body);
             return Err(BodyError::TooLarge);
         }
         data.extend_from_slice(&chunk);
     }
     Ok(data.freeze())
+}
+
+fn drain_later(mut body: axum::body::Body) {
+    use http_body_util::BodyExt;
+    tokio::spawn(tokio::time::timeout(std::time::Duration::from_secs(2), async move {
+        while let Some(Ok(_)) = body.frame().await {}
+    }));
+}
+
+fn refuse_declared(req: Request) -> Response {
+    let response = crate::session_write::too_large(req.headers());
+    drain_later(req.into_body());
+    response
 }
 
 fn audio_body_error(error: BodyError, headers: &axum::http::HeaderMap) -> Response {

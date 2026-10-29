@@ -406,27 +406,60 @@ async fn dictation_public_audio_edges_match_python() {
 
 #[tokio::test]
 async fn dictation_public_declared_audio_limit_matches_python() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
     let server = PublicServer::start().await;
     let mut stream = tokio::net::TcpStream::connect(server.base.trim_start_matches("http://"))
         .await
         .unwrap();
     stream.write_all(format!("POST /api/dictation/transcribe HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer owner\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",100*1024*1024+1).as_bytes()).await.unwrap();
-    let mut response = Vec::new();
-    tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        stream.read_to_end(&mut response),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let response = String::from_utf8(response).unwrap();
+    let (mut reader, _writer) = stream.into_split();
+    let response = tokio::time::timeout(std::time::Duration::from_secs(2), read_too_large(&mut reader))
+        .await
+        .unwrap();
     assert!(response.starts_with("HTTP/1.1 413"), "{response}");
     assert!(
         response.contains("content-type: text/plain; charset=utf-8"),
         "{response}"
     );
     assert!(server.heard.lock().unwrap().is_empty());
+}
+
+/// O cliente continua enviando o corpo declarado: o 413 precisa chegar inteiro, sem RST no meio.
+#[tokio::test]
+async fn dictation_public_declared_limit_answers_while_body_still_arrives() {
+    use tokio::io::AsyncWriteExt;
+    let server = PublicServer::start().await;
+    let stream = tokio::net::TcpStream::connect(server.base.trim_start_matches("http://"))
+        .await
+        .unwrap();
+    let (mut reader, mut writer) = stream.into_split();
+    let upload = tokio::spawn(async move {
+        writer.write_all(format!("POST /api/dictation/transcribe HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer owner\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",100*1024*1024+1).as_bytes()).await?;
+        let chunk = vec![b'x'; 1024 * 1024];
+        for _ in 0..8 {
+            writer.write_all(&chunk).await?;
+        }
+        Ok::<_, std::io::Error>(())
+    });
+    let response = tokio::time::timeout(std::time::Duration::from_secs(2), read_too_large(&mut reader))
+        .await
+        .unwrap();
+    assert!(response.starts_with("HTTP/1.1 413"), "{response}");
+    assert!(response.ends_with("request body too large"), "{response}");
+    // O envio pode ser cortado depois que o 413 chegou; isso não é falha da resposta.
+    let _ = upload.await;
+}
+
+async fn read_too_large(reader: &mut tokio::net::tcp::OwnedReadHalf) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut wire = Vec::new();
+    let mut buf = [0u8; 4096];
+    while !wire.ends_with(b"request body too large") {
+        let n = reader.read(&mut buf).await.unwrap();
+        assert!(n > 0, "conexão fechou antes do 413: {}", String::from_utf8_lossy(&wire));
+        wire.extend_from_slice(&buf[..n]);
+    }
+    String::from_utf8(wire).unwrap()
 }
 
 #[tokio::test]
