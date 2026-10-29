@@ -178,11 +178,11 @@ describe('API e execução por máquina', () => {
     expect(result.failed.map((entry) => entry.id)).toEqual(['down']);
   });
 
-  it('máquina que não responde à identidade fica de fora sem esperar a busca nem os avisos; 404 segue', async () => {
+  it('máquina que não responde à identidade fica de fora sem esperar a busca nem os avisos; 404 e 503 seguem', async () => {
     identity = (id) => id === 'off' ? Promise.reject(new TypeError('fixture-network'))
-      : id === 'old' ? json({}, 404) : json({ identificador: id, lan_url: '' });
-    const result = await prepareUpdateAll(['on', 'off', 'old'].map((id) => server(id)), options);
-    expect(result.run.map((entry) => entry.server.id)).toEqual(['on', 'old']);
+      : id === 'old' ? json({}, 404) : id === 'busy' ? json({}, 503) : json({ identificador: id, lan_url: '' });
+    const result = await prepareUpdateAll(['on', 'off', 'old', 'busy'].map((id) => server(id)), options);
+    expect(result.run.map((entry) => entry.server.id)).toEqual(['on', 'old', 'busy']);
     expect(result.failed.map((entry) => entry.id)).toEqual(['off']);
     expect(calls.filter((path) => path.startsWith('off/'))).toEqual(['off/api/peers/identificador']);
   });

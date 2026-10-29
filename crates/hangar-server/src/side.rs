@@ -591,9 +591,14 @@ impl Hub {
         generation.is_some_and(|g| self.seeded.load(std::sync::atomic::Ordering::Acquire) == g + 1)
     }
 
+    /// Leitura de outra ligação não vale para a atual.
     fn mark_seeded(&self, generation: u64) {
-        self.seeded.store(generation + 1, std::sync::atomic::Ordering::Release);
-        self.wake.notify_one();
+        let bound = self.bound.lock().unwrap();
+        if bound.as_ref().is_some_and(|b| b.generation == generation) {
+            self.seeded.store(generation + 1, std::sync::atomic::Ordering::Release);
+            drop(bound);
+            self.wake.notify_one();
+        }
     }
 
     /// Resposta gravada lida na geração `generation`; troca de ligação no meio descarta.
@@ -1132,11 +1137,13 @@ async fn watch_commits(hub: Weak<Hub>, mut rx: broadcast::Receiver<Out>) {
     }
 }
 
+const SEED_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// O leitor do transcript começa no fim do arquivo: sem isto a resposta já gravada voltaria como
 /// prévia logo depois de abrir o chat. Só preenche o vazio; a resposta ao vivo vence.
 async fn seed_committed(hub: &Weak<Hub>, only_if_empty: bool) {
     let Some((binding, generation)) = hub.upgrade().and_then(|h| h.bound.lock().unwrap().as_ref().map(|b| (b.binding.clone(), b.generation))) else { return };
-    let last = tokio::task::spawn_blocking(move || match tail::last_committed(&binding.jsonl, binding.provider) {
+    let read = tokio::task::spawn_blocking(move || match tail::last_committed(&binding.jsonl, binding.provider) {
         Ok(text) => text,
         Err(e) => {
             if e.kind() != std::io::ErrorKind::NotFound && crate::warn_limit::allow(None, "state_committed_seed") {
@@ -1144,13 +1151,15 @@ async fn seed_committed(hub: &Weak<Hub>, only_if_empty: bool) {
             }
             None
         }
-    })
-    .await;
+    });
+    // Disco travado não pode calar a prévia da sessão: passado o prazo, ela segue sem a resposta gravada.
+    let last = tokio::time::timeout(SEED_TIMEOUT, read).await;
     let Some(h) = hub.upgrade() else { return };
     match last {
-        Ok(Some(text)) => h.set_committed(generation, text, only_if_empty),
-        Ok(None) => {}
-        Err(e) => tracing::warn!(panic = e.is_panic(), code = "state_committed_seed", "estado: leitura da resposta gravada caiu"),
+        Ok(Ok(Some(text))) => h.set_committed(generation, text, only_if_empty),
+        Ok(Ok(None)) => {}
+        Ok(Err(e)) => tracing::warn!(panic = e.is_panic(), code = "state_committed_seed", "estado: leitura da resposta gravada caiu"),
+        Err(_) => tracing::warn!(code = "state_committed_seed_timeout", "estado: leitura da resposta gravada passou do prazo; a prévia segue sem ela"),
     }
     // Com ou sem texto: a prévia só esperava esta leitura terminar.
     h.mark_seeded(generation);
