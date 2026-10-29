@@ -210,6 +210,9 @@ describe('aviso de máquina fora do ar', () => {
     expect(m.get('a')!.offlineSince).toBe(7_000);
     m.set('a', patchSlot(m, 'a', { error: 'offline', offlineSince: undefined }));
     expect(m.get('a')!.offlineSince).toBe(7_000);
+    // O início gravado vence o da memória: a recarga pode ter lido um mais antigo.
+    m.set('a', patchSlot(m, 'a', { error: 'offline', offlineSince: 3_000 }));
+    expect(m.get('a')!.offlineSince).toBe(3_000);
     m.set('b', patchSlot(m, 'b', { error: 'erro do servidor' }));
     expect(m.get('b')!.offlineSince).toBeUndefined();
   });
@@ -222,6 +225,10 @@ describe('aviso de máquina fora do ar', () => {
     expect(machinesAllDown([down, up])).toBe(false);
     expect(machinesAllDown([down, { ...up, error: 'erro do servidor' }])).toBe(false);
     expect(machinesAllDown([guest])).toBe(false);
+    const disabled = { ...up, server: { ...srv('d'), disabled: true } };
+    const ephemeral = { ...up, server: { ...srv('e'), ephemeral: true } };
+    const removed = { ...up, server: { ...srv('r'), removed: true } };
+    expect(machinesAllDown([down, disabled, ephemeral, removed])).toBe(true);
   });
 
   it('offline só aparece dentro da janela; outro erro fica; sem erro não há aviso', () => {

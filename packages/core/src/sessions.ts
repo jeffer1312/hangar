@@ -6,6 +6,7 @@ import type { SessionInfo, AggSession } from './types';
 import type { Server } from './servers';
 import { serverColor } from './servers';
 import { machineLabel, tagHex, type TagsEvent } from './tags';
+import { isOwnMachine } from './machineImport';
 
 export type KeyringState = 'unlocked' | 'locked' | 'absent';
 
@@ -15,14 +16,14 @@ export type KeyringState = 'unlocked' | 'locked' | 'absent';
 export interface Slot { sessions: SessionInfo[] | null; error: string | null; keyring?: KeyringState | null; tags?: TagsEvent | null; tagsRaw?: string; offlineSince?: number }
 
 /** Slot novo com o `patch` por cima do anterior: o que ele não cita (etiquetas, chaveiro) segue igual.
- *  `patch.offlineSince` é o início gravado da queda (`outageSince`), usado quando o slot ainda não tem um. */
+ *  `patch.offlineSince` é o início gravado da queda (`startOutage`) e vence o que o slot tem em memória. */
 export function patchSlot(slots: ReadonlyMap<string, Slot>, id: string, patch: Partial<Slot>): Slot {
   const prev = slots.get(id);
   const { offlineSince: _, ...next } = { sessions: null, error: null, ...prev, ...patch };
   if (!next.error) return next;
   // Tentativas frustradas regravam o slot, às vezes alternando offline e erro HTTP; a queda
   // continua contando da primeira até uma lista boa.
-  const since = (prev?.error && prev.offlineSince) || patch.offlineSince || (next.error === 'offline' ? Date.now() : undefined);
+  const since = patch.offlineSince ?? ((prev?.error && prev.offlineSince) || (next.error === 'offline' ? Date.now() : undefined));
   return since ? { ...next, offlineSince: since } : next;
 }
 
@@ -42,9 +43,9 @@ export function machineNoticeVisible(b: Notice, now: number): boolean {
   return noticeUntil(b) > now;
 }
 
-/** Toda máquina própria fora do ar: lista vazia não é "nenhuma sessão ativa". */
-export function machinesAllDown(buckets: readonly Pick<ServerBucket, 'server' | 'error'>[]): boolean {
-  const own = buckets.filter((b) => !b.server.invite);
+/** Toda máquina própria ligada fora do ar: lista vazia não é "nenhuma sessão ativa". */
+export function machinesAllDown(buckets: readonly { server: Pick<Server, 'invite' | 'ephemeral' | 'removed' | 'disabled'>; error: string | null }[]): boolean {
+  const own = buckets.filter((b) => isOwnMachine(b.server) && !b.server.disabled);
   return own.length > 0 && own.every((b) => b.error === 'offline');
 }
 

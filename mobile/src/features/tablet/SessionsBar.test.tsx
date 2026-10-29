@@ -136,6 +136,15 @@ describe('SessionsBar', () => {
     expect(container.textContent).not.toContain(m.tablet_sessions_empty());
     expect(container.querySelector('[role="alert"]')).toBeNull();
   });
+  it('máquina que acabou de cair avisa em vermelho, sem o texto cinza de todas fora', () => {
+    state.rows = [];
+    state.byServer = [{ server: { id: 'nb', label: 'Notebook', baseUrl: '', token: '' }, sessions: [], loaded: false,
+      error: 'offline', offlineSince: Date.now() }];
+    render('bottom');
+    expect(container.textContent).toContain(m.lista_servidor_offline({ label: 'Notebook' }));
+    expect(container.textContent).not.toContain(m.home_machines_offline());
+    expect(container.textContent).not.toContain(m.tablet_sessions_empty());
+  });
   it.each(['left', 'bottom', 'top'] as const)('%s troca a sessão pela identidade completa', placement => {
     state.rows = [session, { ...session, serverId: 'casa', serverLabel: 'Casa' }];
     const { onPick } = render(placement);

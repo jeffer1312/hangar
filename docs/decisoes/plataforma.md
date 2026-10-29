@@ -690,9 +690,12 @@ desligada. Cada nova tentativa regravava o slot com `error: 'offline'`, e o avis
 durasse a queda. Agora o slot guarda a primeira falha da queda (`offlineSince`, em `patchSlot`),
 e o aviso de queda só aparece por `OFFLINE_NOTICE_MS` (30 s, as primeiras tentativas) a partir
 dela (`machineNoticeVisible`, `packages/core/src/sessions.ts`); um timer só por janela redesenha
-a tela no fim. O início vai junto com o prazo no mesmo registro gravado (`since` em
-`hangar_servidores_desligados`), senão cada recarga do PWA ou reabertura do Expo mostrava a linha
-de novo por 30 s. Alternar entre offline e erro HTTP não reabre a janela: só uma lista boa encerra
+a tela no fim. O início é gravado em registro próprio (`hangar_quedas`, `startOutage`/`endOutage`
+em `esfriamento.ts`), senão cada recarga do PWA ou reabertura do Expo mostrava a linha de novo por
+30 s. Ele não pode morar no registro do prazo de tentativas: o servidor ativo nunca ganha prazo,
+"buscar agora" e a abertura do app apagam o prazo de quem respondeu nas últimas 24 h, e qualquer
+resposta (ping, erro HTTP, `list_error`) o apaga também; com o início ali, a janela reabria em
+cada um desses casos. Alternar entre offline e erro HTTP não reabre a janela: só uma lista boa encerra
 a queda. Erro HTTP e os demais erros continuam à vista. Com todas as máquinas próprias fora e
 nenhuma sessão, a lista vazia diz que elas estão fora do ar (texto neutro), não "Nenhuma sessão
 ativa". A escala de esperas não mudou.

@@ -3,9 +3,11 @@ import { registrar as registrarDiag } from './diag';
 
 const CHAVE = 'hangar_servidores_desligados';
 const CHAVE_RESPOSTAS = 'hangar_servidores_responderam';
+// Início da queda, fora do prazo de tentativas: resposta sem lista, proteção e "buscar agora"
+// mexem no prazo e não podem reabrir o aviso de offline.
+const CHAVE_QUEDAS = 'hangar_quedas';
 
-// `since`: primeira falha da queda; o aviso de offline conta dele, inclusive depois da recarga.
-type Estado = { failures: number; retryAt: number; since?: number };
+type Estado = { failures: number; retryAt: number };
 // As duas primeiras esperas são curtas: queda isolada (backend reiniciando) volta em segundos,
 // e só quem falha três vezes seguidas passa a esperar de verdade.
 const RETRY_DELAYS_MS = [2_000, 5_000, 30_000, 60_000, 120_000, 240_000, 300_000, 600_000, 1_800_000];
@@ -19,6 +21,7 @@ export const SERVIDOR_CANDIDATO = 'candidato';
 
 const estados = new Map<string, Estado>();
 const respostas = new Map<string, number>();
+const quedas = new Map<string, number>();
 let carregado = false;
 let avisouArmazem = false;
 const recoveredListeners = new Set<(id: string) => void>();
@@ -61,10 +64,11 @@ export function definirArmazem(a: ArmazemEsfriamento | null): void {
   carregado = false;   // armazém novo, estado gravado novo
   // Marca feita ANTES da injeção (só em memória) não pode se perder: funde com o que está
   // gravado e persiste — `registrarFalha` só grava na transição, não gravaria de novo.
-  if (estados.size > 0 || respostas.size > 0) {
+  if (estados.size > 0 || respostas.size > 0 || quedas.size > 0) {
     carregar();
     gravar();
-    gravarRespostas();
+    gravarMapa(CHAVE_RESPOSTAS, respostas);
+    gravarMapa(CHAVE_QUEDAS, quedas);
   }
 }
 
@@ -72,10 +76,11 @@ function armazem(): ArmazemEsfriamento | null {
   return armazemAtual;
 }
 
-function carregarRespostas(): void {
+/** Mapa id → instante gravado; `vence` decide entre o gravado e o que já está em memória. */
+function carregarMapa(chave: string, mapa: Map<string, number>, codigo: string, vence: (gravado: number, atual: number | undefined) => boolean): void {
   let bruto: string | null | undefined;
   try {
-    bruto = armazem()?.getItem(CHAVE_RESPOSTAS);
+    bruto = armazem()?.getItem(chave);
   } catch (e) {
     avisarSemArmazem(e);
     return;
@@ -85,17 +90,18 @@ function carregarRespostas(): void {
     const saved: unknown = JSON.parse(bruto);
     if (!saved || typeof saved !== 'object') return;
     for (const [id, em] of Object.entries(saved)) {
-      if (typeof em === 'number' && Number.isFinite(em) && em > (respostas.get(id) ?? 0)) respostas.set(id, em);
+      if (typeof em === 'number' && Number.isFinite(em) && vence(em, mapa.get(id))) mapa.set(id, em);
     }
   } catch (e) {
-    registrarDiag({ evento: 'esfriamento.estado_invalido', nivel: 'aviso', codigo: 'responderam',
+    registrarDiag({ evento: 'esfriamento.estado_invalido', nivel: 'aviso', codigo,
       detalhe: e instanceof Error ? e.message : String(e) });
   }
 }
 
-function gravarRespostas(): void {
+function gravarMapa(chave: string, mapa: Map<string, number>): void {
   try {
-    armazem()?.setItem(CHAVE_RESPOSTAS, JSON.stringify(Object.fromEntries(respostas)));
+    if (mapa.size) armazem()?.setItem(chave, JSON.stringify(Object.fromEntries(mapa)));
+    else armazem()?.removeItem(chave);
   } catch (e) {
     avisarSemArmazem(e);
   }
@@ -104,7 +110,9 @@ function gravarRespostas(): void {
 function carregar(): void {
   if (carregado) return;
   carregado = true;
-  carregarRespostas();
+  carregarMapa(CHAVE_RESPOSTAS, respostas, 'responderam', (gravado, atual) => gravado > (atual ?? 0));
+  // Vale o início mais antigo: a queda começou na primeira falha, gravada ou desta página.
+  carregarMapa(CHAVE_QUEDAS, quedas, 'quedas', (gravado, atual) => atual === undefined || gravado < atual);
   let bruto: string | null | undefined;
   try {
     bruto = armazem()?.getItem(CHAVE);
@@ -125,12 +133,7 @@ function carregar(): void {
       for (const [id, value] of Object.entries(saved)) {
         if (!value || !Number.isInteger(value.failures) || value.failures < 1 ||
           !Number.isFinite(value.retryAt)) continue;
-        // Gravado sem início por versão anterior: a queda começou no máximo na última falha.
-        const since = Number.isFinite(value.since) ? value.since
-          : value.retryAt - RETRY_DELAYS_MS[Math.min(value.failures, RETRY_DELAYS_MS.length) - 1];
-        if ((estados.get(id)?.retryAt ?? 0) <= value.retryAt) {
-          estados.set(id, { failures: value.failures, retryAt: value.retryAt, since });
-        }
+        if ((estados.get(id)?.retryAt ?? 0) <= value.retryAt) estados.set(id, value);
       }
     }
     // Marca do teste de adicionar gravada por versão anterior: apaga, não só ignora.
@@ -187,16 +190,29 @@ export function registrarFalha(id: string): void {
   carregar();
   if (protegido(id) || retryAfterMs(id) > 0) return;
   const teto = respondeuRecentemente(id) ? TETO_RECENTE : RETRY_DELAYS_MS.length;
-  const atual = estados.get(id);
-  const failures = Math.min((atual?.failures ?? 0) + 1, teto);
-  estados.set(id, { failures, retryAt: Date.now() + RETRY_DELAYS_MS[failures - 1], since: atual?.since ?? Date.now() });
+  const failures = Math.min((estados.get(id)?.failures ?? 0) + 1, teto);
+  estados.set(id, { failures, retryAt: Date.now() + RETRY_DELAYS_MS[failures - 1] });
   gravar();
 }
 
-/** Primeira falha da queda atual; ausente = sem queda registrada (ou gravada por versão antiga). */
-export function outageSince(id: string): number | undefined {
+/** Início da queda atual: o gravado, ou agora (e grava) na primeira falha desde a última lista boa. */
+export function startOutage(id: string): number {
+  if (id === SERVIDOR_CANDIDATO) return Date.now();
   carregar();
-  return estados.get(id)?.since;
+  const since = quedas.get(id);
+  if (since !== undefined) return since;
+  const agora = Date.now();
+  quedas.set(id, agora);
+  gravarMapa(CHAVE_QUEDAS, quedas);
+  return agora;
+}
+
+/** Lista boa: a queda acabou e devolve o início dela. Só ela encerra; outra resposta mantém o início. */
+export function endOutage(id: string): number | undefined {
+  carregar();
+  const since = quedas.get(id);
+  if (quedas.delete(id)) gravarMapa(CHAVE_QUEDAS, quedas);
+  return since;
 }
 
 /** Respondeu: está de pé. */
@@ -207,7 +223,7 @@ export function registrarSucesso(id: string): void {
   const agora = Date.now();
   if (agora - (respostas.get(id) ?? 0) > 60_000) {
     respostas.set(id, agora);
-    gravarRespostas();
+    gravarMapa(CHAVE_RESPOSTAS, respostas);
   }
   if (!estados.delete(id)) return;
   gravar();
@@ -231,16 +247,19 @@ export function retentarAgora(id?: string): void {
 export function esquecerServidor(id: string): void {
   carregar();
   if (estados.delete(id)) gravar();
-  if (respostas.delete(id)) gravarRespostas();
+  if (respostas.delete(id)) gravarMapa(CHAVE_RESPOSTAS, respostas);
+  endOutage(id);
 }
 
 export function _limparEsfriamentoParaTestes(): void {
   estados.clear();
   respostas.clear();
+  quedas.clear();
   carregado = false;
   try {
     armazem()?.removeItem(CHAVE);
     armazem()?.removeItem(CHAVE_RESPOSTAS);
+    armazem()?.removeItem(CHAVE_QUEDAS);
   } catch {
     /* sem armazém nos testes de nó */
   }

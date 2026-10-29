@@ -45,6 +45,8 @@ export function SessionsBar({ placement, selected, onPick, onNew }: Props) {
 
   if ((horizontal && collapsed) || (placement === 'bottom' && keyboardVisible)) return null;
   const rail = placement === 'left' && collapsed;
+  const notices = byServer.filter(b => machineNoticeVisible(b, noticeNow));
+  const allDown = machinesAllDown(byServer);
   const isSelected = (s: AggSession) => s.serverId === selected?.serverId && s.name === selected?.name;
   const sessionItem = (s: AggSession) => {
     if (placement === 'left' && !rail) return <SessionRow key={keyOf(s)} session={s} mostrarServidor compact selected={isSelected(s)} onPress={onPick} />;
@@ -76,11 +78,12 @@ export function SessionsBar({ placement, selected, onPick, onNew }: Props) {
         keyExtractor={item => item.kind === 'single' ? keyOf(item.session) : item.key}
         renderItem={renderItem} showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false}
         ListEmptyComponent={<View style={styles.emptyState}>
-          {loading ? <ActivityIndicator accessibilityLabel={m.lista_carregando()} /> :
+          {/* Todas fora com aviso vermelho na tela: o aviso já explica a lista vazia. */}
+          {loading ? <ActivityIndicator accessibilityLabel={m.lista_carregando()} /> : allDown && notices.length ? null :
             <Text style={[styles.empty, { color: theme.tokens.text.muted }]}>
-              {machinesAllDown(byServer) ? m.home_machines_offline() : m.tablet_sessions_empty()}
+              {allDown ? m.home_machines_offline() : m.tablet_sessions_empty()}
             </Text>}
-          {byServer.filter(b => machineNoticeVisible(b, noticeNow)).map(b => <Text key={b.server.id} accessibilityRole="alert"
+          {notices.map(b => <Text key={b.server.id} accessibilityRole="alert"
             style={[styles.empty, { color: theme.tokens.status.error }]}>
             {b.error === 'offline' ? m.lista_servidor_offline({ label: b.server.label }) : `${b.server.label}: ${b.error}`}
           </Text>)}

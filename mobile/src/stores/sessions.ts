@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { openSessionsStream, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverRemoteRoute, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
 import type { SessionInfo, Server, AggSession, ExternalPair } from '@hangar/core';
-import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, outageSince, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
+import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, startOutage, endOutage, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
 import { useServers } from './servers';
 import * as m from '../paraglide/messages';
@@ -36,7 +36,8 @@ export interface SessionsState {
 // internas — fora do set() para não virar proxy
 const slots = new Map<string, Slot>();
 // Sem resposta boa o chaveiro deixa de valer; lista e etiquetas ficam.
-const failedSlot = (id: string, error: string) => patchSlot(slots, id, { error, keyring: undefined, offlineSince: outageSince(id) });
+// O início gravado da queda vale depois de reabrir: só uma lista boa (`endOutage`) o encerra.
+const failedSlot = (id: string, error: string) => patchSlot(slots, id, { error, keyring: undefined, offlineSince: startOutage(id) });
 const streams = new Map<string, ReturnType<typeof openSessionsStream>>();
 type ConnectionAttempt = { server: Server; generation: number; abort: AbortController; routing: boolean };
 const connecting = new Map<string, ConnectionAttempt>();
@@ -290,6 +291,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     }
   };
   const receivedList = () => {
+    endOutage(s.id);
     countedHttpFailure = false;
     httpFailures.delete(s.id);
     httpRetryAt.delete(s.id);
@@ -360,6 +362,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       const sessions = await response.json() as SessionInfo[];
       if (!isCurrent(attempt)) return;
       if (!Array.isArray(sessions)) throw new Error('invalid_sessions');
+      endOutage(s.id);
       slots.set(s.id, patchSlot(slots, s.id, { sessions: reuseUnchanged(slots.get(s.id)?.sessions, sessions), error: null, keyring: undefined }));
       recompute(set);
     } catch (error) {

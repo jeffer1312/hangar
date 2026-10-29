@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   definirArmazem, definirProtegido, estaDesligado, esquecerServidor, registrarFalha, registrarSucesso, retentarAgora,
   _limparEsfriamentoParaTestes,
-  onServerRecovered, outageSince, respondeuRecentemente, retryAfterMs, SERVIDOR_CANDIDATO,
+  endOutage, onServerRecovered, respondeuRecentemente, retryAfterMs, SERVIDOR_CANDIDATO, startOutage,
 } from './esfriamento';
 
 beforeEach(() => { _limparEsfriamentoParaTestes(); definirProtegido(() => false); });
@@ -172,36 +172,54 @@ describe('servidor desligado', () => {
 });
 
 describe('início da queda', () => {
-  it('conta da primeira falha, sobrevive à recarga e some quando a máquina responde', async () => {
+  const armazemDe = (dados: Map<string, string>) => ({ getItem: (k: string) => dados.get(k) ?? null,
+    setItem: (k: string, v: string) => { dados.set(k, v); }, removeItem: (k: string) => { dados.delete(k); } });
+
+  it('conta da primeira falha e sobrevive à recarga até uma lista boa', async () => {
     vi.useFakeTimers({ now: 10_000 });
-    const dados = new Map<string, string>();
-    const armazem = { getItem: (k: string) => dados.get(k) ?? null, setItem: (k: string, v: string) => { dados.set(k, v); }, removeItem: (k: string) => { dados.delete(k); } };
+    const armazem = armazemDe(new Map());
     definirArmazem(armazem);
     try {
-      registrarFalha('pc');
-      expect(outageSince('pc')).toBe(10_000);
+      expect(startOutage('pc')).toBe(10_000);
       vi.advanceTimersByTime(60_000);
-      registrarFalha('pc');
-      expect(retryAfterMs('pc')).toBe(5_000);   // a escala segue igual
-      expect(outageSince('pc')).toBe(10_000);
+      expect(startOutage('pc')).toBe(10_000);
       vi.resetModules();   // recarga: memória nova, mesmo armazém
       const recarregado = await import('./esfriamento');
       recarregado.definirArmazem(armazem);
-      expect(recarregado.outageSince('pc')).toBe(10_000);
-      recarregado.registrarSucesso('pc');
-      expect(recarregado.outageSince('pc')).toBeUndefined();
+      expect(recarregado.startOutage('pc')).toBe(10_000);
+      expect(recarregado.endOutage('pc')).toBe(10_000);
+      expect(recarregado.endOutage('pc')).toBeUndefined();
+      expect(recarregado.startOutage('pc')).toBe(70_000);
       recarregado.definirArmazem(null);
     } finally {
       definirArmazem(null);
     }
   });
 
-  it('registro de versão antiga, sem início: a queda conta da última falha, não da reabertura', () => {
-    vi.useFakeTimers({ now: 100_000 });
-    const dados = new Map([['hangar_servidores_desligados', JSON.stringify({ pc: { failures: 2, retryAt: 95_000 + 5_000 } })]]);
-    definirArmazem({ getItem: (k: string) => dados.get(k) ?? null, setItem: (k: string, v: string) => { dados.set(k, v); }, removeItem: (k: string) => { dados.delete(k); } });
+  it('não depende do prazo: protegido, resposta e "buscar agora" não reabrem a janela', () => {
+    vi.useFakeTimers({ now: 10_000 });
+    definirProtegido((id) => id === 'ativo');
+    expect(startOutage('ativo')).toBe(10_000);
+    registrarFalha('ativo');
+    vi.advanceTimersByTime(5_000);
+    registrarSucesso('ativo');   // ping ou erro HTTP: respondeu, mas a lista não veio
+    retentarAgora('ativo');
+    retentarAgora();
+    expect(startOutage('ativo')).toBe(10_000);
+  });
+
+  it('servidor esquecido perde o início; o candidato nunca grava', () => {
+    vi.useFakeTimers({ now: 10_000 });
+    const dados = new Map<string, string>();
+    definirArmazem(armazemDe(dados));
     try {
-      expect(outageSince('pc')).toBe(95_000);
+      startOutage('pc');
+      startOutage(SERVIDOR_CANDIDATO);
+      expect(JSON.parse(dados.get('hangar_quedas')!)).toEqual({ pc: 10_000 });
+      vi.advanceTimersByTime(1_000);
+      esquecerServidor('pc');
+      expect(dados.has('hangar_quedas')).toBe(false);
+      expect(startOutage('pc')).toBe(11_000);
     } finally {
       definirArmazem(null);
     }

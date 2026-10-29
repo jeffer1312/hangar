@@ -15,11 +15,11 @@ import { forgetServer, setLiveTerminals } from './hangarTerminals.svelte';
 import { ouvirFechamentoNav, podarNavMortos } from './navegadorPanel.svelte';
 import { aggregateSessions, epocasDeRecriacao, jsonlDaSessao, parseTagsEvent, patchSlot, sweepHidden, type Slot, type Aggregate, type Epocas } from '@hangar/core';
 import { hasOpenChat } from './sessionServer';
-import { avisarSemArmazem, definirArmazem, definirProtegido, definirSemPrazo, estaDesligado, esquecerServidor, onServerRecovered, outageSince, registrarFalha, registrarSucesso, respondeuRecentemente, retentarAgora, retryAfterMs } from '@hangar/core';
+import { avisarSemArmazem, definirArmazem, definirProtegido, definirSemPrazo, endOutage, estaDesligado, esquecerServidor, onServerRecovered, registrarFalha, registrarSucesso, respondeuRecentemente, retentarAgora, retryAfterMs, startOutage } from '@hangar/core';
 
 // Fora do ar o chaveiro deixa de valer; lista e etiquetas ficam.
 // O início gravado da queda vale depois da recarga: máquina já fora há horas não reabre o aviso.
-const offline = (id: string): Partial<Slot> => ({ error: 'offline', keyring: undefined, offlineSince: outageSince(id) });
+const offline = (id: string): Partial<Slot> => ({ error: 'offline', keyring: undefined, offlineSince: startOutage(id) });
 
 function createSessionsStore() {
   let servers = $state<Server[]>([]);
@@ -62,7 +62,6 @@ function createSessionsStore() {
   // sem ser estado reativo, a reatribuição não chegaria em quem lê num `$derived`.
   let latencias = $state.raw(new Map<string, number>());
   const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const quedas = new Map<string, number>();
   const tentativas = new Map<string, number>();
   // Quando cada stream deu o último sinal de vida (qualquer evento, inclusive o `ping` de 10s).
   // É o que distingue stream vivo de stream ZUMBI na volta do segundo plano.
@@ -182,7 +181,7 @@ function createSessionsStore() {
         clearTimeout(watchdogs.get(id)); watchdogs.delete(id);
         clearTimeout(primeiros.get(id)); primeiros.delete(id);
         clearTimeout(retryTimers.get(id)); retryTimers.delete(id);
-        quedas.delete(id); tentativas.delete(id); esquecerServidor(id);
+        tentativas.delete(id); esquecerServidor(id);
         if (latencias.has(id)) { latencias = new Map(latencias); latencias.delete(id); }
       }
     }
@@ -248,7 +247,7 @@ function createSessionsStore() {
       // dois na mesma tentativa presa, e contar duas vezes esfriaria no dobro da velocidade.
       let jaContou = false;
       const falhou = (codigo: string, espera_ms?: number) => {
-        if (!quedas.has(s.id)) quedas.set(s.id, Date.now());
+        startOutage(s.id);
         registrarDiag({ evento: 'lista.falhou', nivel: 'aviso', tela: 'lista', req,
           codigo, tentativa, espera_ms }, s.baseUrl);
         if (!jaContou) { jaContou = true; registrarFalha(s.id); esquecerRota(s.id); }
@@ -360,13 +359,12 @@ function createSessionsStore() {
             slotsNeedingIdentity.delete(s.id);
           }
           if (slotsNeedingIdentity.size) for (const load of identityLoaders.values()) load();
-          const caiuEm = quedas.get(s.id);
+          const caiuEm = endOutage(s.id);
           if (primeiroValido || caiuEm !== undefined) {
             registrarDiag({ evento: caiuEm === undefined ? 'lista.conectou' : 'lista.voltou',
               tela: 'lista', req, tentativa,
               ms: caiuEm === undefined ? Math.round(performance.now() - abriuEm) : Date.now() - caiuEm }, s.baseUrl);
             primeiroValido = false;
-            quedas.delete(s.id);
             tentativas.delete(s.id);
           }
         } catch {
@@ -550,7 +548,7 @@ function createSessionsStore() {
     pairLeft = null;
     slots.clear();
     slotsNeedingIdentity.clear();
-    quedas.clear(); tentativas.clear();
+    tentativas.clear();
     // Parar não é sumiço: sem isto, o próximo retain() (o próprio DesktopShell, ao remontar)
     // veria todo nome "voltar" e subiria a época de todas as sessões — remontando chats vivos.
     epocas = { vistas: new Map(), sumidas: new Map(), epochs: epocas.epochs };

@@ -28,7 +28,7 @@ import * as m from '../paraglide/messages';
   import { abrirConfig } from '../lib/configNav';
   import { quotaFeed } from '../lib/quotaFeed.svelte';
   import { faixaDeCota } from '../lib/cota';
-  import { createSession, canPair, machineNoticeVisible, type DropResult } from '@hangar/core';
+  import { createSession, canPair, machineNoticeVisible, machinesAllDown, type DropResult } from '@hangar/core';
   import { listAllServers, getActiveId, selectServer, removeServer, renameServer, updateServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import type { AggSession, Provider, SessionOpeningExtras, WorktreeChoice } from '@hangar/core';
   import type { RemovalSnapshot } from '../lib/auth';
@@ -74,7 +74,9 @@ import * as m from '../paraglide/messages';
   const endedInvites = $derived(sessionsStore.byServer.filter((b) => b.server.inviteEnded).map((b) => b.server.label));
   // Só quando TODOS os servidores próprios estão fora: um fora e outro vazio é lista vazia com aviso.
   const ownBuckets = $derived(sessionsStore.byServer.filter((b) => !b.server.invite));
-  const listError = $derived(sessions.length === 0 && ownBuckets.length > 0 && ownBuckets.every((b) => b.error));
+  // Todas fora do ar: o aviso vermelho fica na faixa só no começo; depois, texto neutro.
+  const allDown = $derived(sessions.length === 0 && machinesAllDown(sessionsStore.byServer));
+  const listError = $derived(!allDown && sessions.length === 0 && ownBuckets.length > 0 && ownBuckets.every((b) => b.error));
   // Mensagem de AÇÃO (excluir/renomear), separada do `listError` acima: aquele substitui a lista inteira
   // (estado de "não consegui carregar"), e uma falha de exclusão não pode apagar a lista da tela.
   // Mesma forma do flash() da Sidebar, pra as duas views falharem igual.
@@ -125,8 +127,8 @@ import * as m from '../paraglide/messages';
   // agregada; o servidor-alvo de uma sessão é o dela, escolhido ao abrir/criar. Vem do store (derived).
   // A entrada temporária de par externo não é máquina desta pessoa: fica fora da conta e do menu.
   const servers = $derived(sessionsStore.servers.filter((x) => !x.ephemeral));
-  // Só `error`, SEM o portão `!loaded` do `serverErrors` acima: aquele existe pra o BANNER não
-  // gritar num piscar, mas aqui a pergunta é outra — "dá pra criar sessão nessa máquina agora?" —, e
+  // Só `error`, SEM a janela de tempo do `serverErrors` acima: aquela existe pra o BANNER não ficar
+  // avisando a queda inteira, mas aqui a pergunta é outra — "dá pra criar sessão nessa máquina agora?" —, e
   // quem respondeu há 5 minutos e calou não dá. Piscar não gera vaivém do chip: o erro só é marcado
   // depois de 25s de silêncio (watchdog) ou 10s sem o primeiro quadro.
   const servidoresOffline = $derived(
@@ -570,6 +572,12 @@ import * as m from '../paraglide/messages';
           <button class="retry-btn" onclick={() => abrirConfig('maquinas', null)}>{m.lista_erro_ver_servidores()}</button>
         </div>
       </div>
+    {:else if allDown}
+      {#if serverErrors.length === 0}
+        <div class="empty-state">
+          <p class="empty-sub">{m.home_machines_offline()}</p>
+        </div>
+      {/if}
     {:else if sessions.length === 0}
       <div class="empty-state">
         <p class="empty-title">{m.lista_nenhuma_ativa()}</p>
