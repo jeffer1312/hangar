@@ -38,20 +38,7 @@ pub(super) struct Failure {
     pub repr: String,
     pub transport_closed: bool,
 }
-fn quoted(text: &str) -> String {
-    let quote = if text.contains('\'') && !text.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    format!(
-        "{quote}{}{quote}",
-        text.replace('\\', "\\\\")
-            .replace(quote, &format!("\\{quote}"))
-            .replace('\n', "\\n")
-            .replace('\r', "\\r")
-    )
-}
+use super::value::quoted;
 impl Failure {
     pub(super) fn exception(kind: &str, message: String) -> Self {
         let repr = format!("{kind}({})", quoted(&message));

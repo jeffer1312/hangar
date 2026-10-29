@@ -4,7 +4,7 @@ use num_bigint::BigInt;
 use serde_json::{Value, json};
 use std::sync::LazyLock;
 
-static MARKER: LazyLock<String> = LazyLock::new(|| {
+pub(super) static MARKER: LazyLock<String> = LazyLock::new(|| {
     use ring::rand::SecureRandom;
     let mut bytes = [0u8; 16];
     ring::rand::SystemRandom::new().fill(&mut bytes).expect("aleatoriedade do sistema");

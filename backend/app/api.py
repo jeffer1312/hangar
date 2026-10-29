@@ -818,7 +818,7 @@ async def nav_ws_route(ws: WebSocket, name: str):
     # Mesma porta de entrada do painel de terminal (token + Origin) -- o de la abre um shell, este
     # abre o navegador que o agente esta dirigindo.
     from app import navsock
-    await navsock.nav_ws(ws, name, _session_exists)
+    await navsock.nav_ws(ws, name)
 
 
 @app.post("/api/sessions/{name}/shell", dependencies=[Depends(require_auth), Depends(_transfer_guard)])

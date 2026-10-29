@@ -173,6 +173,8 @@ impl Cdp {
                             Some(Err(tokio_tungstenite::tungstenite::Error::Capacity(
                                 tokio_tungstenite::tungstenite::error::CapacityError::MessageTooLong { size, max_size }
                             ))) => {
+                                // Comando enviado durante a drenagem falha na hora, como no socket fechado do Python.
+                                receive.close();
                                 drop(PumpEnd(waiters.clone()));
                                 let _ = socket.close(Some(CloseFrame {
                                     code: CloseCode::Size,
@@ -191,6 +193,8 @@ impl Cdp {
                         }
                     },
                     _ = tokio::time::sleep_until(pong.as_ref().map(|(_, until)| *until).unwrap_or(next_ping)), if pong.is_some() => {
+                        receive.close();
+                        drop(PumpEnd(waiters.clone()));
                         closing(&mut socket, Some(CloseFrame {
                             code: CloseCode::Error,
                             reason: "keepalive ping timeout".into(),
@@ -398,6 +402,36 @@ mod gap_tests {
         assert_eq!(expected["after_exit"], json!({"pump_done": true, "loose_pending": 0, "pending": 0}));
         assert_eq!(Arc::strong_count(&cdp.pending), 1);
         assert_eq!(Arc::strong_count(&cdp.events), 1);
+    }
+
+    #[tokio::test]
+    async fn oversized_frame_fails_commands_while_the_transport_drains() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (release, held) = oneshot::channel::<()>();
+        let peer = tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            // Só o cabeçalho de um texto de 33 MiB: o limite recusa antes do corpo.
+            let mut header = vec![0x81u8, 127];
+            header.extend_from_slice(&(33u64 * 1024 * 1024).to_be_bytes());
+            socket.get_mut().write_all(&header).await.unwrap();
+            // O transporte fica aberto: a drenagem do cliente dura até o teto dela.
+            let _ = held.await;
+        });
+        let mut cdp = connect(address).await;
+        let began = tokio::time::Instant::now();
+        let (first, second) = tokio::time::timeout(Duration::from_secs(3), async {
+            let first = cdp.cmd("Gap.first", json!({}), Duration::from_secs(10)).await;
+            (first, cdp.cmd("Gap.second", json!({}), Duration::from_secs(10)).await)
+        }).await.expect("comando ficou esperando a drenagem do quadro grande demais");
+        assert!(first.is_err() && second.is_err());
+        assert!(began.elapsed() < Duration::from_secs(3));
+        assert_eq!(cdp.pending.lock().unwrap().len(), 0);
+        release.send(()).unwrap();
+        peer.await.unwrap();
+        cdp.close().await;
     }
 
     #[tokio::test]

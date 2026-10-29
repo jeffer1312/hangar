@@ -155,12 +155,23 @@ impl Layouts {
         owner: Option<u64>,
         list: &ListBridge,
     ) {
-        let slot = self.slot(name);
-        let mut record = slot.lock().await;
-        if record.as_ref().is_none_or(|r| Some(r.owner) != owner) {
-            return;
+        let Some(slot) = self.slots.lock().unwrap().get(name).cloned() else { return };
+        let mut guard = slot.lock().await;
+        if guard.as_ref().is_some_and(|r| Some(r.owner) == owner) {
+            let record = guard.take().unwrap();
+            self.put_back(dir, name, record, list).await;
         }
-        let record = record.take().unwrap();
+        drop(guard);
+        let mut slots = self.slots.lock().unwrap();
+        // Só o mapa e esta cópia: ninguém espera a vaga, e ela vazia não guarda nada.
+        if Arc::strong_count(&slot) == 2
+            && slots.get(name).is_some_and(|current| Arc::ptr_eq(current, &slot))
+            && slot.try_lock().is_ok_and(|record| record.is_none())
+        {
+            slots.remove(name);
+        }
+    }
+    async fn put_back(&self, dir: &Path, name: &str, record: Record, list: &ListBridge) {
         let result = async {
             let Some(controller) = record.current(dir, name, list).await? else {
                 return Ok::<_, Failure>(());
@@ -203,8 +214,7 @@ impl Record {
         }
         if let Some(life) = self.life.as_ref() {
             // Uma recriação já publicada não pode usar a vida guardada pela lista.
-            list.invalidate();
-            match list.discovered_session(name).await {
+            match list.fresh_session(name).await {
                 Ok(Some((row, _))) if row.lifecycle_id.as_ref() != Some(life) => return Ok(None),
                 Err(_) => return Err(Failure::plain("remote_browser_discovery_unavailable")),
                 _ => {}
@@ -212,5 +222,28 @@ impl Record {
         }
         // O envio usa este mesmo destino; não relê por nome depois de conferir.
         Ok(Some(controller))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::list::{bridge::ListEnv, facts::FactsClient, procs::SystemProcs};
+
+    #[tokio::test]
+    async fn restore_never_creates_a_slot_and_drops_the_empty_one() {
+        let layouts = Layouts::default();
+        let list = ListBridge::new(ListEnv { mux: Default::default(), capture_program: "missing-test-mux".into(),
+            procs: Arc::new(SystemProcs::default()), dirs: None }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into()));
+        let dir = Path::new("/nonexistent");
+        layouts.restore(dir, "never-seen", Some(1), &list).await;
+        assert!(layouts.slots.lock().unwrap().is_empty());
+
+        let held = layouts.slot("viewed");
+        layouts.restore(dir, "viewed", Some(1), &list).await;
+        assert_eq!(layouts.slots.lock().unwrap().len(), 1, "a vaga que outro ainda segura fica");
+        drop(held);
+        layouts.restore(dir, "viewed", Some(1), &list).await;
+        assert!(layouts.slots.lock().unwrap().is_empty());
     }
 }

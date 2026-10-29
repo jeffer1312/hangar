@@ -107,13 +107,12 @@ impl Auth {
             Ok::<_, AuthError>(())
         })?).await.map_err(|_| AuthError::Panic)?
     }
+    // Só RNG e HMAC, sem o arquivo do contador: não precisa do pool bloqueante.
     pub async fn receipt(&self, context: &ReceiptContext) -> Result<Option<String>, AuthError> {
-        let auth = self.clone();
-        let context = context.clone();
-        tokio::task::spawn_blocking(move || match &auth.backend {
-            Backend::Shared(shared) => shared.receipt(&context).map(Some),
+        match &self.backend {
+            Backend::Shared(shared) => shared.receipt(context).map(Some),
             Backend::Local(_) => Ok(None), Backend::Broken(error) => Err(*error),
-        }).await.map_err(|_| AuthError::Panic)?
+        }
     }
 
     // Compatibilidade dos ensaios locais; chamadas de produção usam a operação assíncrona.

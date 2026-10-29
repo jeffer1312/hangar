@@ -26,7 +26,7 @@ def client(monkeypatch, tmp_path):
 
     @app.websocket("/api/sessions/{name}/nav-remoto")
     async def remote(ws: WebSocket, name: str):
-        await navsock.nav_ws(ws, name, lambda _: True)
+        await navsock.nav_ws(ws, name)
 
     with TestClient(app, client=("127.0.0.1", 1)) as result:
         yield result
