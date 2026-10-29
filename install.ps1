@@ -1622,15 +1622,10 @@ if ($SemNativo -and -not $SoChecar) {
 # Sem eles o Python atende a API, mas a tela web e o ditado nao: a falta fica como pendencia.
 if (-not $SoChecar) {
     Titulo 'Binarios Rust'
-    $pyRust = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
     if ($pacote) {
         $rcRust = 'pacote'
-    } elseif (-not (Test-Path $pyRust)) {
-        $rcRust = -1
     } else {
-        Push-Location (Join-Path $raiz 'backend')
-        $rcRust = Nativo $pyRust -m app.rust_release
-        Pop-Location
+        $rcRust = Nativo 'powershell' -NoProfile -ExecutionPolicy Bypass -File (Join-Path $raiz 'scripts\install-server-binaries.ps1')
     }
     if ("$rcRust" -eq 'pacote') {
         Ok 'hangar-server e hangar-cano: vieram no pacote'
@@ -1643,7 +1638,7 @@ if (-not $SoChecar) {
         Mark-Item 'rust' 'pendente' 'servidor rapido (nao ha para esta maquina)'
         $script:pendencias += 'binarios Rust'
     } else {
-        $motivo = if ($rcRust -eq -1) { 'sem o python do venv' } else { 'download ou conferencia falhou' }
+        $motivo = 'download ou conferência falhou'
         Falta "binarios Rust nao baixaram ($motivo) - o backend em Python atende sozinho"
         Mark-Item 'rust' 'pendente' 'servidor rapido'
         $script:pendencias += 'binarios Rust'

@@ -1,0 +1,26 @@
+{
+  "source_commit": "b64136e99165843d58e221bf43814e4679dc6a97",
+  "command": "python generate-bootstrap-extra.py --reference <checkout-Python> --output bootstrap-extra.json",
+  "cases": [
+    {
+      "name": "branch-invalid-json",
+      "result": [
+        "binários Rust não baixados: não consegui ler o manifesto da release (Expecting property name enclosed in double quotes: line 1 column 2 (char 1))"
+      ],
+      "urls": [
+        "https://github.com/jeffer1312/hangar/releases/download/server-beta/server-latest.json"
+      ],
+      "files": []
+    },
+    {
+      "name": "branch-list",
+      "result": [
+        "binários Rust não baixados: não consegui ler o manifesto da release (manifesto não é um objeto)"
+      ],
+      "urls": [
+        "https://github.com/jeffer1312/hangar/releases/download/server-beta/server-latest.json"
+      ],
+      "files": []
+    }
+  ]
+}

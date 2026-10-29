@@ -1,0 +1,253 @@
+{
+  "source_commit": "9e64dd6787df8362490adf3daac050a381494404",
+  "command": "python backend/tests/fixtures/contract/update-git/generate-release.py --reference <checkout-Python> --output backend/tests/fixtures/contract/update-git/release-cases.json",
+  "cases": [
+    {
+      "name": "new",
+      "result": [],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-server",
+        "https://release.invalid/server-latest/hangar-cano"
+      ],
+      "before_publish": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "install_warnings": null,
+      "after_publish": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      }
+    },
+    {
+      "name": "same",
+      "result": [],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json"
+      ],
+      "before_publish": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "install_warnings": null,
+      "after_publish": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      }
+    },
+    {
+      "name": "replace",
+      "result": [],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-server",
+        "https://release.invalid/server-latest/hangar-cano"
+      ],
+      "before_publish": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "install_warnings": null,
+      "after_publish": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      }
+    },
+    {
+      "name": "hold",
+      "result": [],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-server",
+        "https://release.invalid/server-latest/hangar-cano"
+      ],
+      "before_publish": {
+        "hangar-cano": "old-hangar-cano",
+        "hangar-server": "old-hangar-server"
+      },
+      "install_warnings": [],
+      "after_publish": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-cano.prev": "old-hangar-cano",
+        "hangar-server": "new-hangar-server",
+        "hangar-server.prev": "old-hangar-server"
+      },
+      "restore_warnings": [],
+      "after_restore": {
+        "hangar-cano": "old-hangar-cano",
+        "hangar-server": "old-hangar-server"
+      }
+    },
+    {
+      "name": "hash-mismatch",
+      "result": [
+        "hangar-server: o sha256 não confere com a release; o binário anterior ficou",
+        "hangar-cano: o sha256 não confere com a release; o binário anterior ficou"
+      ],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-server",
+        "https://release.invalid/server-latest/hangar-cano"
+      ],
+      "before_publish": {},
+      "install_warnings": null,
+      "after_publish": {},
+      "restore_warnings": null,
+      "after_restore": {}
+    },
+    {
+      "name": "missing-entry",
+      "result": [
+        "hangar-cano: a release não traz build para linux-x86_64"
+      ],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-server"
+      ],
+      "before_publish": {
+        "hangar-server": "new-hangar-server"
+      },
+      "install_warnings": null,
+      "after_publish": {
+        "hangar-server": "new-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "hangar-server": "new-hangar-server"
+      }
+    },
+    {
+      "name": "download-failure",
+      "result": [
+        "hangar-server: o download falhou (fixture-download-failed)",
+        "hangar-cano: o download falhou (fixture-download-failed)"
+      ],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-server",
+        "https://release.invalid/server-latest/hangar-cano"
+      ],
+      "before_publish": {},
+      "install_warnings": null,
+      "after_publish": {},
+      "restore_warnings": null,
+      "after_restore": {}
+    },
+    {
+      "name": "manifest-list",
+      "result": [
+        "binários Rust não baixados: não consegui ler o manifesto da release (manifesto não é um objeto)"
+      ],
+      "urls": [
+        "https://release.invalid/server-latest/server-latest.json"
+      ],
+      "before_publish": {},
+      "install_warnings": null,
+      "after_publish": {},
+      "restore_warnings": null,
+      "after_restore": {}
+    },
+    {
+      "name": "branch-404-empty",
+      "result": [
+        "release server-beta ausente; instalei os da main (hangar-server, hangar-cano)"
+      ],
+      "urls": [
+        "https://release.invalid/server-beta/server-latest.json",
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-server",
+        "https://release.invalid/server-latest/hangar-cano"
+      ],
+      "before_publish": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "install_warnings": null,
+      "after_publish": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      }
+    },
+    {
+      "name": "branch-404-keeps",
+      "result": [
+        "release server-beta ausente; mantive os binários instalados (hangar-server, hangar-cano)"
+      ],
+      "urls": [
+        "https://release.invalid/server-beta/server-latest.json",
+        "https://release.invalid/server-latest/server-latest.json"
+      ],
+      "before_publish": {
+        "hangar-cano": "old-hangar-cano",
+        "hangar-server": "old-hangar-server"
+      },
+      "install_warnings": null,
+      "after_publish": {
+        "hangar-cano": "old-hangar-cano",
+        "hangar-server": "old-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "hangar-cano": "old-hangar-cano",
+        "hangar-server": "old-hangar-server"
+      }
+    },
+    {
+      "name": "branch-no-platform",
+      "result": [
+        "release server-beta sem build para linux-x86_64; instalei os da main (hangar-server, hangar-cano)"
+      ],
+      "urls": [
+        "https://release.invalid/server-beta/server-latest.json",
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-server",
+        "https://release.invalid/server-latest/hangar-cano"
+      ],
+      "before_publish": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "install_warnings": null,
+      "after_publish": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "restore_warnings": null,
+      "after_restore": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      }
+    },
+    {
+      "name": "unsupported",
+      "result": null,
+      "urls": [],
+      "before_publish": {},
+      "install_warnings": null,
+      "after_publish": {},
+      "restore_warnings": null,
+      "after_restore": {}
+    }
+  ]
+}

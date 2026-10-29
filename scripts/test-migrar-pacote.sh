@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Trava do passo 2026-10-24-pacote-por-versao (scripts/migrar-pacote.sh): sai na hora com a marca;
 # sem binário do Rust para o sistema, grava a marca `not_migrated` e sai 0; binário não baixado é
-# falha; com ele, a migração roda da raiz do checkout. `uv` e o binário são falsos; HOME temporário.
+# falha; com ele, a migração roda da raiz do checkout. O bootstrap e o binário são falsos; HOME temporário.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,9 +28,9 @@ run() {
   fi
   [ "${5:-}" = ro ] && mkdir -p "$H/.hangar" && chmod 555 "$H/.hangar"
   # O download falso: anota, cria (ou não) o binário e sai com o código pedido.
-  cat > "$B/uv" <<EOF
+  cat > "$R/scripts/install-server-binaries.sh" <<EOF
 #!/bin/sh
-echo "uv \$*" >> "$S/calls"
+echo "bootstrap \$*" >> "$S/calls"
 if [ "$3" = 1 ]; then
   mkdir -p "\$HOME/.hangar/migrate"
   printf '#!/bin/sh\necho "migrate \$* em \$(pwd)" >> "$S/calls"\nexit 7\n' > "\$HOME/.hangar/migrate/hangar-server"
@@ -38,7 +38,7 @@ if [ "$3" = 1 ]; then
 fi
 exit $2
 EOF
-  chmod +x "$B/uv"
+  chmod +x "$R/scripts/install-server-binaries.sh"
   ( cd "$R" && env -i HOME="$H" PATH="$B:/usr/bin:/bin" bash scripts/migrar-pacote.sh >"$S/out" 2>&1 ); RC=$?
   [ -d "$H/.hangar" ] && chmod 755 "$H/.hangar"
 }

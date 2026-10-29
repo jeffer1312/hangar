@@ -906,12 +906,12 @@ fi
 say "Binários Rust"
 RUST_RC=0
 if [ "$PACOTE" = 1 ]; then RUST_RC=pacote
-else (cd backend && uv run --quiet --no-sync python -m app.rust_release) || RUST_RC=$?; fi
+else ./scripts/install-server-binaries.sh || RUST_RC=$?; fi
 case "$RUST_RC" in
   pacote) ok "hangar-server e hangar-cano: vieram no pacote"; mark_item rust ok "servidor rápido" ;;
   0) ok "hangar-server e hangar-cano em ~/.hangar/bin"; mark_item rust ok "servidor rápido" ;;
   2) anota_problema "sem binários Rust para esta máquina — sem eles a tela web e o ditado não funcionam"; mark_item rust pendente "servidor rápido (não há para esta máquina)" ;;
-  *) anota_problema "binários Rust não baixaram — o backend em Python atende sozinho (tente: cd backend && uv run python -m app.rust_release)"; mark_item rust pendente "servidor rápido" ;;
+  *) anota_problema "binários Rust não baixaram — o backend em Python atende sozinho (tente: ./scripts/install-server-binaries.sh)"; mark_item rust pendente "servidor rápido" ;;
 esac
 
 # ── 5/8 Wrappers do claude e do codex ────────────────────────────────────────
