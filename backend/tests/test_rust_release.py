@@ -15,7 +15,14 @@ from app import diag, rust_release
 
 SERVER = b"#!/bin/sh\necho server\n"
 CANO = b"#!/bin/sh\necho cano\n"
+AUTH = b"native-library-asset-fixture"
 REAL_PLATFORM_KEY = rust_release.platform_key
+
+
+def _legacy_names(dest):
+    # As asserções antigas continuam conferindo todos os executáveis/temporários; o novo par tem prova própria.
+    return sorted(p.name for p in dest.iterdir() if p.name not in
+                  {"auth", "hangar-server.auth.json", "hangar-server.auth.json.prev"})
 
 
 @pytest.fixture(autouse=True)
@@ -61,8 +68,10 @@ def release(tmp_path):
 
 def _publish(pasta, binaries: dict[str, bytes], plat="linux-x86_64", wrong_sha=()):
     files = {}
+    binaries = {"hangar-auth": AUTH, **binaries}
     for name, data in binaries.items():
-        asset = f"{name}-{plat}{'.exe' if plat.startswith('windows') else ''}"
+        suffix = (".dll" if plat.startswith("windows") else ".dylib" if plat.startswith("macos") else ".so") if name == "hangar-auth" else ".exe" if plat.startswith("windows") else ""
+        asset = f"{name}-{plat}{suffix}"
         (pasta / asset).write_bytes(data)
         sha = "0" * 64 if name in wrong_sha else hashlib.sha256(data).hexdigest()
         files[f"{plat}/{name}"] = {"name": asset, "sha256": sha}
@@ -109,7 +118,7 @@ def test_rollback_puts_back_the_binaries_the_update_replaced(release, tmp_path, 
     assert rust_release.restore_previous(dest) == []
     assert (dest / "hangar-server").read_bytes() == b"server antigo"
     assert (dest / "hangar-cano").read_bytes() == b"cano antigo"
-    assert sorted(p.name for p in dest.iterdir()) == ["hangar-cano", "hangar-server"]
+    assert _legacy_names(dest) == ["hangar-cano", "hangar-server"]
     assert ("hangar_server.baixar", "ok", {"codigo": "restaurado", "detalhe": "hangar-server"}) in events
 
 
@@ -138,7 +147,8 @@ def test_failed_copy_warns_and_drops_a_stale_one(release, tmp_path, monkeypatch)
     avisos = rust_release.install_held(hold)
     assert len(avisos) == 1 and avisos[0].startswith("hangar-server: sem cópia do binário anterior")
     assert rust_release.restore_previous(dest) == []
-    assert (dest / "hangar-server").read_bytes() == SERVER
+    assert (dest / "hangar-server").read_bytes() == b"server antigo"
+    assert not (dest / "hangar-server.prev").exists()
 
 
 def test_failed_install_leaves_no_copy_to_give_back(release, tmp_path, monkeypatch, events):
@@ -169,7 +179,7 @@ def test_discarded_copy_is_not_restored(release, tmp_path):
     rust_release.discard_previous(dest)
     assert rust_release.restore_previous(dest) == []
     assert (dest / "hangar-server").read_bytes() == SERVER
-    assert sorted(p.name for p in dest.iterdir()) == ["hangar-cano", "hangar-server"]
+    assert _legacy_names(dest) == ["hangar-cano", "hangar-server"]
 
 
 def test_same_release_again_downloads_only_the_manifest(release, tmp_path):
@@ -231,7 +241,10 @@ def test_unreadable_binary_there_is_downloaded_again(release, tmp_path, monkeypa
     dest = tmp_path / "bin"
     rust_release.fetch(url, dest)
 
+    original_sha = rust_release._sha256_file
     def nega(path):
+        if "auth" in path.parts:
+            return original_sha(path)
         raise PermissionError(13, "Permission denied")
 
     monkeypatch.setattr(rust_release, "_sha256_file", nega)
@@ -242,7 +255,7 @@ def test_platform_missing_from_manifest_warns_per_binary(release, tmp_path):
     url, pasta, _ = release
     _publish(pasta, {"hangar-server": SERVER, "hangar-cano": CANO}, plat="macos-aarch64")
     avisos = rust_release.fetch(url, tmp_path / "bin")
-    assert len(avisos) == 2 and all("linux-x86_64" in a for a in avisos)
+    assert len(avisos) == 3 and all("linux-x86_64" in a for a in avisos)
 
 
 def test_machine_without_build_returns_none(monkeypatch, tmp_path, events):
@@ -287,7 +300,7 @@ def test_windows_moves_the_running_exe_aside_and_sweeps_it_next_time(release, wi
     _publish(pasta, {"hangar-server": SERVER + b"#2", "hangar-cano": CANO}, plat="windows-x86_64")
     assert rust_release.fetch(url, dest) == []
     assert (dest / "hangar-server.exe").read_bytes() == SERVER + b"#2"
-    assert sorted(p.name for p in dest.iterdir()) == [
+    assert _legacy_names(dest) == [
         "hangar-cano.exe", "hangar-server.exe", "hangar-server.exe.old"]
 
 
@@ -309,14 +322,17 @@ def test_windows_failed_swap_puts_the_running_exe_back(release, windows, monkeyp
     dest = windows
     _publish(pasta, {"hangar-server": SERVER, "hangar-cano": CANO}, plat="windows-x86_64")
 
+    substitute = rust_release.atomico.substituir
     def recusa(origem, destino):
+        if destino.name.endswith(".prev"):
+            return substitute(origem, destino)
         raise PermissionError(5, "Acesso negado")
 
     monkeypatch.setattr(rust_release.atomico, "substituir", recusa)
     avisos = rust_release.fetch(url, dest)
     assert len(avisos) == 2 and all("gravar" in a for a in avisos)
     assert (dest / "hangar-server.exe").read_bytes() == b"rodando"
-    assert sorted(p.name for p in dest.iterdir()) == ["hangar-server.exe"]
+    assert _legacy_names(dest) == ["hangar-server.exe"]
 
 
 def test_permission_error_outside_windows_is_a_warning(release, tmp_path, monkeypatch):
@@ -357,6 +373,7 @@ def test_trickling_asset_hits_the_deadline_and_keeps_the_old_binary(tmp_path, mo
     manifest = json.dumps({"commit": "abc", "files": {
         "linux-x86_64/hangar-server": {"name": "srv", "sha256": hashlib.sha256(SERVER).hexdigest()},
         "linux-x86_64/hangar-cano": {"name": "cano", "sha256": hashlib.sha256(CANO).hexdigest()},
+        "linux-x86_64/hangar-auth": {"name": "auth.so", "sha256": hashlib.sha256(AUTH).hexdigest()},
     }}).encode()
 
     class Handler(BaseHTTPRequestHandler):
@@ -393,7 +410,7 @@ def test_trickling_asset_hits_the_deadline_and_keeps_the_old_binary(tmp_path, mo
     finally:
         httpd.shutdown()
         httpd.server_close()
-    assert len(avisos) == 2 and all("download" in a for a in avisos)
+    assert len(avisos) == 3 and all("download" in a for a in avisos)
     assert (dest / "hangar-server").read_bytes() == b"velho"
     assert not (dest / "hangar-cano").exists()
 
@@ -472,7 +489,7 @@ def test_branch_without_release_falls_back_to_main_and_logs_it(release, tmp_path
     dest.mkdir()
     (dest / "hangar-server").write_bytes(b"da branch")
     assert rust_release.fetch(dest=dest) == [
-        "release server-feature-x ausente; mantive os binários instalados (hangar-server)",
+        "release server-feature-x ausente; mantive os binários instalados (hangar-auth, hangar-server)",
         "release server-feature-x ausente; instalei os da main (hangar-cano)",
     ]
     assert pedidos[:2] == ["/server-feature-x/server-latest.json", "/server-latest/server-latest.json"]
@@ -552,7 +569,7 @@ def test_branch_release_without_this_system_falls_back_to_main(release, tmp_path
     _branch(monkeypatch, "feature/x\n")
     dest = tmp_path / "bin"
     assert rust_release.fetch(dest=dest) == [
-        "release server-feature-x sem build para windows-x86_64; instalei os da main (hangar-server, hangar-cano)"]
+        "release server-feature-x sem build para windows-x86_64; instalei os da main (hangar-auth, hangar-cano, hangar-server)"]
     assert pedidos[:2] == ["/server-feature-x/server-latest.json", "/server-latest/server-latest.json"]
     assert (dest / "hangar-server.exe").read_bytes() == SERVER and (dest / "hangar-cano.exe").read_bytes() == CANO
     assert ("hangar_server.baixar", "aviso",
@@ -580,6 +597,6 @@ def test_branch_and_main_without_this_system_say_both(release, tmp_path, monkeyp
     monkeypatch.delenv("HANGAR_SERVER_RELEASE_URL", raising=False)
     _branch(monkeypatch, "feature/x\n")
     avisos = rust_release.fetch(dest=tmp_path / "bin")
-    assert len(avisos) == 2 and all(a.startswith("release server-feature-x sem build para windows-x86_64; da main, ")
+    assert len(avisos) == 3 and all(a.startswith("release server-feature-x sem build para windows-x86_64; da main, ")
                                     and "não traz build" in a for a in avisos)
 

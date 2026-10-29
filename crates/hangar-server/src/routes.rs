@@ -45,6 +45,7 @@ pub struct AppState {
     pub command_catalog: Arc<crate::commands::Service>,
     pub cfg: Config,
     pub auth: Auth,
+    pub remote_browser: Arc<crate::remote_browser::layout::Layouts>,
     pub http: HttpClient,
     pub side: SideCtx,
     pub terminal: crate::terminal_control::TerminalPool,
@@ -169,7 +170,8 @@ impl AppState {
             Err(e) => { tracing::error!("{e}"); None }
         };
         if let Some(share) = &share { list.set_shares(share.clone()); }
-        let hangar_dir = std::path::PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap_or_default()).join(".hangar");
+        // O mesmo `~` do app nativo e do Python (USERPROFILE no Windows), que gravam `~/.hangar/nav`.
+        let hangar_dir = std::env::home_dir().unwrap_or_default().join(".hangar");
         let device_install = {
             let env = crate::accounts::environment::AccountEnvironment::capture();
             Arc::new(crate::device_install::job::DeviceInstall::new(
@@ -181,9 +183,10 @@ impl AppState {
                 .with_paths(list.env().dirs.as_ref().map(|d| d.home.clone()).unwrap_or_default(),
                     list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
                 .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone());
-        AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
+        AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             interactions, plugin,
+            remote_browser: Arc::default(),
             transcription: Arc::default(),
             omp_sync: Arc::default(),
             dictation_models: Arc::default(),
@@ -470,7 +473,7 @@ fn private_share_router(state: &Arc<AppState>, pair: Option<&Arc<PairState>>) ->
 
 async fn owner_only(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request,
                     next: axum::middleware::Next) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     // O preflight do CORS também é do Python.
     if !owner || req.method() == Method::OPTIONS {
         return pass(&st, req, &fwd).await;
@@ -486,6 +489,7 @@ fn session_routes<H, T>(fallback: H) -> Router<Arc<AppState>>
 where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
     Router::new()
         .route("/api/sessions/{name}/term", get(crate::term::session_ws).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/nav-remoto", get(crate::remote_browser::ws::public).head(fallback.clone()).fallback(fallback.clone()))
         // Outro método nessas rotas (preflight OPTIONS, HEAD) segue ao Python.
         .route("/api/sessions", get(crate::list::hub::list).post(crate::session_open::create).fallback(fallback.clone()))
         .route("/api/sessions/events", get(crate::list::hub::events).fallback(fallback.clone()))
@@ -525,6 +529,7 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/question/skip", axum::routing::post(crate::session_write::codex::skip_question).fallback(fallback.clone()))
         .route("/api/sessions/{name}/codex/terminate", axum::routing::post(crate::session_write::codex::terminate).fallback(fallback.clone()))
         .route("/api/orq/{exec_id}/conductor", get(crate::orq_conductor::public).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/navegador", get(crate::remote_browser::url::route).head(fallback.clone()).fallback(fallback.clone()))
         .route("/api/sessions/{name}/commands", get(crate::commands::route).fallback(fallback.clone()))
         .route("/api/sessions/{name}/codex-permissions", get(crate::session_write::codex::permissions).fallback(fallback.clone()))
         // Mesmo caminho: o axum junta o POST à rota de cima (um repasse só, o dela).
@@ -572,6 +577,7 @@ fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> 
     router.route("/__hangar_server/term", get(crate::term::private_ws))
         .route("/__hangar_server/state/{name}/events", get(crate::side::private_events))
         .route("/__hangar_server/voice", get(crate::voice::routes::private_ws))
+        .route("/__hangar_server/remote-browser", get(crate::remote_browser::ws::private))
         .with_state(state)
         .merge(share)
 }
@@ -697,6 +703,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .layer(axum::middleware::from_fn(crate::migration_status::count_public))
         .with_state(state.clone())
         .merge(owner_share_router(&state, pair))
+        .layer(axum::middleware::from_fn(request_auth))
 }
 
 /// A ponte do plugin do Claude (`plugin::routes`) é do Rust inteira; a interface dos mods também.
@@ -718,6 +725,7 @@ fn plugin_router(state: Arc<AppState>) -> Router {
     // A ponte local não expõe o restante da API nem dá acesso às rotas privadas.
     plugin_routes(&state).fallback(|| async { StatusCode::NOT_FOUND })
         .layer(axum::middleware::from_fn(crate::migration_status::count_public))
+        .layer(axum::middleware::from_fn(request_auth))
         .with_state(state)
 }
 
@@ -747,8 +755,8 @@ async fn health(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response
 
 /// `GET /api/client-api`: só o dono.
 async fn client_api(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
-    let mut resp = if owner { client_api_reply() } else { crate::share_reach::unauthorized(&st, &fwd.client_ip) };
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let mut resp = if owner { client_api_reply() } else { crate::share_reach::unauthorized(&st, &fwd.client_ip).await };
     cors(req.headers(), resp.headers_mut());
     resp
 }
@@ -758,23 +766,56 @@ pub(crate) fn client_api_reply() -> Response {
 }
 
 /// Quem pede e se é o dono, resolvidos uma vez por pedido.
-pub(crate) fn gate(st: &AppState, peer: SocketAddr, req: &Request) -> (Forward, bool) {
+#[derive(Clone, Default)]
+struct RequestAuth(Arc<tokio::sync::Mutex<Option<(auth::ReceiptContext, Option<String>)>>>);
+
+async fn request_auth(mut req: Request, next: axum::middleware::Next) -> Response {
+    req.extensions_mut().insert(RequestAuth::default());
+    // Cliente nenhum escolhe uma admissão anterior.
+    req.headers_mut().remove("x-hangar-auth-receipt");
+    req.headers_mut().remove(crate::proxy::AUTH_EMPTY_QUERY);
+    next.run(req).await
+}
+
+pub(crate) fn gate(st: &AppState, peer: SocketAddr, req: &Request)
+    -> impl std::future::Future<Output = Result<(Forward, bool), auth::AuthError>> + Send + use<> {
     let (client_ip, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
     // A ponte privada do Codex com terminal recebe o pedido já autenticado pela porta do Python.
-    if req.extensions().get::<crate::session_write::bridge::BridgedOwner>().is_some() { return (Forward { client_ip, https, guest: None }, true); }
+    let bridged = req.extensions().get::<crate::session_write::bridge::BridgedOwner>().is_some();
     let token = auth::presented_token(req.headers(), req.uri().query(), req.method(), https);
-    let owner = st.auth.is_owner(&client_ip, token.as_deref());
-    (Forward { client_ip, https, guest: None }, owner)
+    let source = if req.headers().get(header::AUTHORIZATION).is_some_and(|v| v.as_bytes().starts_with(b"Bearer ")) { "bearer" }
+        else if auth::query_param(req.uri().query(), "token").is_some_and(|t| !t.is_empty()) { "query" }
+        else if token.is_some() { "cookie" } else { "ausente" };
+    let context = auth::ReceiptContext { connection_kind: "private_upstream".into(), profile: auth::Profile::LegacyOwnerProbe,
+        origin: client_ip.clone(), method: req.method().as_str().into(),
+        raw_target: req.uri().path_and_query().map_or("/", |p| p.as_str()).into(),
+        credential_source: source.into(), presented_token: token.clone() };
+    let request_auth = req.extensions().get::<RequestAuth>().cloned().unwrap_or_default();
+    let auth = st.auth.clone();
+    async move {
+    if bridged { return Ok((Forward { client_ip, https, guest: None, auth_receipt: None }, true)); }
+    let mut admitted = request_auth.0.lock().await;
+    if let Some((_, receipt)) = admitted.as_ref().filter(|(previous, _)| *previous == context) {
+        return Ok((Forward { client_ip, https, guest: None, auth_receipt: receipt.clone() }, true));
+    }
+    let owner = auth.owner(&client_ip, token.as_deref()).await?;
+    let receipt = if owner { auth.receipt(&context).await? } else { None };
+    if owner { *admitted = Some((context, receipt.clone())); }
+    Ok((Forward { client_ip, https, guest: None, auth_receipt: receipt }, owner))
+    }
 }
 
 /// Quem pede. Na 8766 só o convidado que o porteiro pôs (nunca `is_owner`, nem `X-Forwarded-For`);
 /// na 8765, o dono pelo token.
-pub(crate) fn who(st: &AppState, peer: SocketAddr, req: &Request) -> (Forward, Option<Caller>) {
-    if on_guest_port(req) {
-        return (forward_for(st, peer, req), caller(req).cloned());
+pub(crate) fn who(st: &AppState, peer: SocketAddr, req: &Request)
+    -> impl std::future::Future<Output = Result<(Forward, Option<Caller>), auth::AuthError>> + Send + use<> {
+    let guest = on_guest_port(req).then(|| (forward_for(st, peer, req), caller(req).cloned()));
+    let owner = gate(st, peer, req);
+    async move {
+    if let Some(guest) = guest { return Ok(guest); }
+    let (fwd, owner) = owner.await?;
+    Ok((fwd, owner.then_some(Caller::Owner)))
     }
-    let (fwd, owner) = gate(st, peer, req);
-    (fwd, owner.then_some(Caller::Owner))
 }
 
 /// O repasse de quem pede, sem decidir se é o dono. Convidado vai como loopback para o Python
@@ -783,10 +824,10 @@ pub(crate) fn forward_for(st: &AppState, peer: SocketAddr, req: &Request) -> For
     if on_guest_port(req) {
         let guest = caller(req).and_then(Caller::grant).cloned();
         let client_ip = if guest.is_some() { "127.0.0.1".into() } else { peer.ip().to_string() };
-        return Forward { client_ip, https: false, guest };
+        return Forward { client_ip, https: false, guest, auth_receipt: None };
     }
     let (client_ip, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
-    Forward { client_ip, https, guest: None }
+    Forward { client_ip, https, guest: None, auth_receipt: None }
 }
 
 /// Chegou pela 8766: o `GuestConn` só existe no listener do convidado.
@@ -816,17 +857,24 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
     if on_guest_port(&req) {
         return not_found(req.headers());
     }
+    let cached = req.extensions().get::<RequestAuth>().cloned();
+    let mut admitted_forward = fwd.clone();
+    if admitted_forward.auth_receipt.is_none() {
+        if let Some(cached) = cached {
+            admitted_forward.auth_receipt = cached.0.lock().await.as_ref().and_then(|(_, receipt)| receipt.clone());
+        }
+    }
     let upgrade = req.headers().contains_key(header::UPGRADE);
-    let mut resp = proxy::forward(&st.http, st.cfg.upstream, req, fwd).await;
+    let mut resp = proxy::forward(&st.http, st.cfg.upstream, req, &admitted_forward).await;
     resp.extensions_mut().insert(crate::migration_status::Forwarded);
-    match resp.status() {
-        StatusCode::UNAUTHORIZED => st.auth.record_fail(&fwd.client_ip),
+    if !st.auth.shared() { match resp.status() {
+        StatusCode::UNAUTHORIZED => if let Err(e) = st.auth.record_failure(&fwd.client_ip).await { return auth::unavailable(e); },
         // WebSocket recusado antes do aceite chega como 403 e o Python já contou a falha.
         // Um 403 de origem também conta: só desliga o atalho, o lado seguro.
-        StatusCode::FORBIDDEN if upgrade => st.auth.record_fail(&fwd.client_ip),
-        StatusCode::TOO_MANY_REQUESTS => st.auth.mark_blocked(&fwd.client_ip),
+        StatusCode::FORBIDDEN if upgrade => if let Err(e) = st.auth.record_failure(&fwd.client_ip).await { return auth::unavailable(e); },
+        StatusCode::TOO_MANY_REQUESTS => if let Err(e) = st.auth.mark_blocked_async(&fwd.client_ip).await { return auth::unavailable(e); },
         _ => {}
-    }
+    } }
     resp
 }
 
@@ -850,12 +898,12 @@ pub(crate) async fn pass_any(
     let orchestration = crate::orchestration::matches(req.method(), req.uri().path());
     let sync = crate::omp_sync::matches(req.method(), req.uri().path());
     if models || orchestration || sync {
-        let (forward, caller) = who(&st, peer, &req);
+        let (forward, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
         let allowed = matches!(&caller, Some(Caller::Owner)) || (models && req.extensions().get::<SessionPath>()
             .is_some_and(|path| caller.as_ref().is_some_and(|who| who.can(&path.session, req.method()))));
         if !allowed {
             return if caller.is_some() { StatusCode::FORBIDDEN.into_response() }
-                else { crate::share_reach::unauthorized(&st, &forward.client_ip) };
+                else { crate::share_reach::unauthorized(&st, &forward.client_ip).await };
         }
         req.extensions_mut().insert(ConnectInfo(peer));
         let headers = req.headers().clone();
@@ -873,7 +921,7 @@ pub(crate) async fn pass_any(
     let (session, method) = (req.extensions().get::<SessionPath>().map(|p| p.session.clone()), req.method().clone());
     let session_ok = |who: &Option<Caller>| who.as_ref().is_some_and(|c| session.as_ref().is_some_and(|s| c.can(s, &method)));
     if (uploads || crate::accounts::http::matches(req.method(), req.uri().path()))
-        && match who(&st, peer, &req).1 {
+        && match (match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).1 {
             Some(Caller::Owner) => true,
             guest => uploads && session_ok(&guest),
         }
@@ -897,18 +945,18 @@ pub(crate) async fn pass_any(
         return response;
     }
     if crate::share_reach::matches(req.method(), req.uri().path()) && !on_guest_port(&req) {
-        let (forward, owner) = gate(&st, peer, &req);
+        let (forward, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
         let headers = req.headers().clone();
         let mut response = if owner {
             crate::share_reach::public(st, req).await
         } else {
-            crate::share_reach::unauthorized(&st, &forward.client_ip)
+            crate::share_reach::unauthorized(&st, &forward.client_ip).await
         };
         cors(&headers, response.headers_mut());
         return response;
     }
     if crate::worktree_routes::matches(req.method(), req.uri().path()) {
-        let (_forward, who) = who(&st, peer, &req);
+        let (_forward, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
         // Convidado segue ao Python, que o recusa como antes.
         if matches!(who, Some(Caller::Owner)) {
             let headers = req.headers().clone();
@@ -922,7 +970,7 @@ pub(crate) async fn pass_any(
         }
     }
     if crate::workspace_routes::matches(req.method(), req.uri().path()) {
-        let (forward, who) = who(&st, peer, &req);
+        let (forward, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
         // Só o convite (não o par) alcança as rotas da sessão dele; `/api/fs/*` não tem sessão.
         let share = who.as_ref().and_then(Caller::grant).zip(session.as_ref())
             .is_some_and(|(g, s)| g.sessions.get(s) == Some(&crate::share::store::Kind::Share));
@@ -961,7 +1009,7 @@ pub(crate) async fn history(
     path: Result<Path<String>, PathRejection>,
     req: Request,
 ) -> Response {
-    let (fwd, who) = who(&st, peer, &req);
+    let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let name = match path {
         Ok(Path(n)) if req.method() == Method::GET && who.as_ref().is_some_and(|c| c.can(&n, req.method())) => n,
         _ => return pass(&st, req, &fwd).await,
@@ -1045,7 +1093,7 @@ pub(crate) async fn events(
     path: Result<Path<String>, PathRejection>,
     req: Request,
 ) -> Response {
-    let (fwd, who) = who(&st, peer, &req);
+    let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let name = match path {
         Ok(Path(n)) if req.method() == Method::GET && who.as_ref().is_some_and(|c| c.can(&n, req.method())) => n,
         _ => return pass(&st, req, &fwd).await,
@@ -1307,15 +1355,14 @@ mod tests {
     }
 
     fn is_owner(st: &AppState, ip: &str) -> bool {
-        let peer: SocketAddr = "127.0.0.1:5000".parse().unwrap();
-        gate(st, peer, &request("/x", ip, false, "dono")).1
+        st.auth.is_owner(ip, Some(b"dono"))
     }
 
     #[tokio::test]
     async fn websocket_403_and_429_from_python_lock_the_shortcut() {
         let st = state_with_upstream().await;
         let peer: SocketAddr = "127.0.0.1:5000".parse().unwrap();
-        let fwd = |ip: &str| gate(&st, peer, &request("/x", ip, false, "x")).0;
+        let fwd = |ip: &str| forward_for(&st, peer, &request("/x", ip, false, "x"));
 
         // 8 palpites errados em WebSocket: o Python conta e fecha com 403.
         for _ in 0..8 {

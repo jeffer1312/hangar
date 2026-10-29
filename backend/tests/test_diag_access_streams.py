@@ -29,7 +29,8 @@ def _request(headers=(), query=b"", ip="127.0.0.1"):
 
 
 @pytest.mark.parametrize("mecanismo", ["bearer", "query", "cookie", "ausente"])
-def test_auth_registra_transicao_e_recuperacao_sem_credenciais(diario, monkeypatch, mecanismo):
+@pytest.mark.asyncio
+async def test_auth_registra_transicao_e_recuperacao_sem_credenciais(diario, monkeypatch, mecanismo):
     monkeypatch.setattr(auth.settings, "auth_token", "token-correto")
     headers = {
         "bearer": [(b"authorization", f"Bearer {SECRET}".encode())],
@@ -38,10 +39,10 @@ def test_auth_registra_transicao_e_recuperacao_sem_credenciais(diario, monkeypat
     query = f"token={SECRET}".encode() if mecanismo == "query" else b""
     for _ in range(3):
         with pytest.raises(HTTPException) as exc:
-            auth.require_auth(_request(headers, query))
+            await auth.require_auth(_request(headers, query))
         assert exc.value.status_code == 401
     for _ in range(2):
-        auth.require_auth(_request([(b"authorization", b"Bearer token-correto")]))
+        await auth.require_auth(_request([(b"authorization", b"Bearer token-correto")]))
     rows = diario()
     assert [r["evento"] for r in rows] == ["auth.recusado", "auth.recuperado"]
     assert rows[0]["etapa"] == mecanismo
@@ -49,16 +50,17 @@ def test_auth_registra_transicao_e_recuperacao_sem_credenciais(diario, monkeypat
     assert SECRET not in json.dumps(rows) and "127.0.0.1" not in json.dumps(rows)
 
 
-def test_auth_bloqueio_e_recuperacao_sem_repetir_poll(diario, monkeypatch):
+@pytest.mark.asyncio
+async def test_auth_bloqueio_e_recuperacao_sem_repetir_poll(diario, monkeypatch):
     monkeypatch.setattr(auth.settings, "auth_token", "token-correto")
     clock = [1000.0]
     monkeypatch.setattr(auth.time, "time", lambda: clock[0])
     bad = _request([(b"authorization", SECRET.encode())], ip="192.0.2.15")
     for _ in range(auth._MAX_FAILS + 3):
         with pytest.raises(HTTPException):
-            auth.require_auth(bad)
+            await auth.require_auth(bad)
     clock[0] += auth._WINDOW + 1
-    auth.require_auth(_request([(b"authorization", b"Bearer token-correto")], ip="192.0.2.15"))
+    await auth.require_auth(_request([(b"authorization", b"Bearer token-correto")], ip="192.0.2.15"))
     rows = diario()
     assert [r["detalhe"] for r in rows] == ["token_ausente", "bloqueio_temporario", "acesso_restabelecido"]
     assert "192.0.2.15" not in json.dumps(rows)

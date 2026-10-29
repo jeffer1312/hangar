@@ -634,7 +634,7 @@ async fn guest_loop(mut sub: Subscription, share: Arc<ShareState>, token: String
 
 /// `GET /api/sessions/events` do dono e do convidado da 8766.
 pub async fn events(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, who) = who(&st, peer, &req);
+    let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let grant = match &who {
         Some(caller) if req.method() == Method::GET => caller.grant().cloned(),
         _ => return pass(&st, req, &fwd).await,
@@ -661,7 +661,7 @@ pub async fn events(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 
 /// `GET /api/sessions` do dono e do convidado: o retrato de até 2 s (o do tique, com lista aberta).
 pub async fn list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, who) = who(&st, peer, &req);
+    let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if who.is_none() || req.method() != Method::GET {
         return pass(&st, req, &fwd).await;
     }

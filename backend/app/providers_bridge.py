@@ -35,7 +35,7 @@ def local(command: str, operation: str | None = None, **arguments):
         input=json.dumps(arguments, ensure_ascii=False), capture_output=True,
         text=True, encoding="utf-8", errors="replace", timeout=30,
         env={key: value for key, value in os.environ.items()
-             if key not in {"HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE", "CP_AUTH_TOKEN"}},
+             if key not in {"HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT", "CP_AUTH_TOKEN"}},
     )
     try:
         response = json.loads(result.stdout)

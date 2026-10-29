@@ -102,6 +102,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+      - working-directory: backend
+        run: uv sync --locked
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -132,6 +137,21 @@ jobs:
             crates/target/debug
           key: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
           restore-keys: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-
+      - name: Capturar referências Python do navegador neste sistema
+        if: runner.os != 'Windows'
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          source_commit=ba2db1021ab7fb801eca50a50f9509dcb825ac7e
+          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "$source_commit"
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse "$source_commit^{commit}")" = "$source_commit"
+          reference_tmp=$(mktemp -d /tmp/hr-XXXXXX)
+          reference_dir=$(mktemp -d "$RUNNER_TEMP/hangar-browser-contract.XXXXXX")
+          TMPDIR="$reference_tmp" "$GITHUB_WORKSPACE/backend/.venv/bin/python" "$GITHUB_WORKSPACE/backend/tests/fixtures/contract/remote-browser/generate_url_commands.py" --output "$reference_dir/url-commands.json"
+          TMPDIR="$reference_tmp" "$GITHUB_WORKSPACE/backend/.venv/bin/python" "$GITHUB_WORKSPACE/backend/tests/fixtures/contract/remote-browser/generate_url_gaps.py" --output "$reference_dir/url-gaps.json"
+          printf 'HANGAR_REMOTE_BROWSER_CONTRACT_DIR=%s\n' "$reference_dir" >> "$GITHUB_ENV"
+          printf 'HANGAR_REMOTE_BROWSER_TMPDIR=%s\n' "$reference_tmp" >> "$GITHUB_ENV"
       # Os testes do hangar-api leem as amostras de backend/tests/fixtures/, que vêm no mesmo checkout.
       # --no-fail-fast: sem ele o cargo para no primeiro executável que falha e esconde os outros.
       - run: cargo test --locked --workspace --no-fail-fast
@@ -144,11 +164,6 @@ jobs:
           path: *cache-dev
           key: ${{ steps.cache-dev.outputs.cache-primary-key }}
       # A suíte das regressões da entrega terminal não depende do binário de release.
-      - uses: astral-sh/setup-uv@v5
-        with:
-          python-version: "3.14"
-      - working-directory: backend
-        run: uv sync
       - name: Contenção e regressões da entrega terminal
         working-directory: backend
         run: uv run pytest tests/test_runtime_process.py tests/test_runtime_queue_terminal_v2.py tests/test_runtime_terminal_fix.py tests/test_runtime_terminal_fix2.py tests/test_runtime_terminal_failure_policy.py tests/test_runtime_final_fixes.py tests/test_sidecar_coordination.py -q
@@ -235,7 +250,7 @@ jobs:
       - name: glibc máxima exigida
         if: matrix.zigbuild
         run: |
-          for bin in hangar-server hangar-cano; do
+          for bin in hangar-server hangar-cano libhangar_auth.so; do
             top=$(objdump -T "${{ matrix.dir }}/${{ env.PERFIL }}/$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
             echo "$bin exige $top"
             test "$(printf '%s\n' "$top" GLIBC_2.28 | sort -V | tail -1)" = GLIBC_2.28
@@ -260,6 +275,12 @@ jobs:
           for bin in hangar-server hangar-cano; do
             cp "${{ matrix.dir }}/${{ env.PERFIL }}/$bin${{ matrix.exe }}" "out/$bin-${{ matrix.platform }}${{ matrix.exe }}"
           done
+          case '${{ matrix.platform }}' in
+            windows-*) auth=hangar_auth.dll; suffix=.dll ;;
+            macos-*) auth=libhangar_auth.dylib; suffix=.dylib ;;
+            *) auth=libhangar_auth.so; suffix=.so ;;
+          esac
+          cp "${{ matrix.dir }}/${{ env.PERFIL }}/$auth" "out/hangar-auth-${{ matrix.platform }}$suffix"
           ls -l out
       - if: &grava-perfil github.ref == 'refs/heads/main' && steps.cache-perfil.outputs.cache-hit != 'true'
         run: ../scripts/podar-target --cache target
@@ -372,7 +393,7 @@ jobs:
           # Versão da API que este servidor atende; o app compara com a que exige antes de se atualizar.
           api=$(sed -n 's/^pub const CLIENT_API: u32 = \([0-9][0-9]*\);.*/\1/p' ../hangar-api/src/lib.rs)
           test -n "$api" || { echo "::error::CLIENT_API não encontrado em crates/hangar-api/src/lib.rs"; exit 1; }
-          gh release upload "$tag" hangar-server-* hangar-cano-* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$tag" hangar-server-* hangar-cano-* hangar-auth-* --repo "$GITHUB_REPOSITORY" --clobber
           python3 - "$tag" "$PLATFORM" "$protocol" "$api" <<'EOF'
           import hashlib, json, os, pathlib, random, re, shutil, subprocess, sys, time
 
@@ -391,7 +412,7 @@ jobs:
           # composto das fontes e continua no formato que o instalador e o rust_release.py leem.
           files = {}
           for f in sorted(pathlib.Path().glob("hangar-*")):
-              name = "hangar-server" if f.name.startswith("hangar-server-") else "hangar-cano"
+              name = next(n for n in ("hangar-server", "hangar-cano", "hangar-auth") if f.name.startswith(n + "-"))
               files[f"{plat}/{name}"] = {"name": f.name, "sha256": hashlib.sha256(f.read_bytes()).hexdigest()}
           put(pathlib.Path(f"server-{plat}.json"),
               {"platform": plat, "commit": sha, "protocol": int(protocol), "api": int(api), "files": files})

@@ -5,6 +5,7 @@
 //! parte. O do diário é por servidor (o Python falso de cada um), e ali os nomes de sessão podem repetir.
 
 mod common;
+mod remote_browser;
 mod groups_text;
 mod session_defaults;
 mod tags;

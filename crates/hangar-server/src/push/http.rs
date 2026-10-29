@@ -35,7 +35,7 @@ fn invalid() -> Response { reply(StatusCode::UNPROCESSABLE_ENTITY, json!({"detai
 fn unwritable() -> Response { reply(StatusCode::SERVICE_UNAVAILABLE, json!({"detail": "push_store_unwritable"})) }
 
 pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return pass(&st, req, &fwd).await; }
     let (method, path) = (req.method().clone(), req.uri().path().to_owned());
     let dir = store::dir(&st.accounts.env.claude_base);

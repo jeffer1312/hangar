@@ -433,7 +433,7 @@ fn parse_broadcast(bytes: &Bytes) -> Option<(Vec<String>, String)> {
 /// num pedido só com os nomes deles, e os resultados se juntam na ordem pedida. Sem alvo do Rust, o pedido
 /// vai ao Python como chegou.
 pub async fn broadcast(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let (Some(runtime), true) = (st.state.runtime.get().cloned(), owner) else { return pass(&st, req, &fwd).await };
     let (parts, body) = req.into_parts();
     let Ok(bytes) = to_bytes(body, super::BODY_LIMIT).await else { return super::too_large(&parts.headers) };
@@ -463,7 +463,7 @@ pub async fn broadcast(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
         let body = json!({"names": rest, "text": text}).to_string();
         let Ok(forwarded) = Request::post("/api/broadcast").header(header::AUTHORIZATION, format!("Bearer {}", st.cfg.auth_token))
             .header(header::CONTENT_TYPE, "application/json").body(Body::from(body)) else { return super::forward_whole(&st, parts, bytes, &fwd).await };
-        let response = pass(&st, forwarded, &Forward { client_ip: "127.0.0.1".into(), https: false, guest: None }).await;
+        let response = pass(&st, forwarded, &Forward { client_ip: "127.0.0.1".into(), https: false, guest: None, auth_receipt: None }).await;
         if !response.status().is_success() { return response; }
         let reply = to_bytes(response.into_body(), RELAY_REPLY_LIMIT).await.unwrap_or_default();
         if let Some(results) = serde_json::from_slice::<Value>(&reply).ok().and_then(|v| v["results"].as_object().cloned()) { python = results; }
@@ -498,7 +498,7 @@ async fn relay_as_owner(st: &AppState, name: &str, body: String) -> (StatusCode,
     let path = format!("/api/sessions/{}/input", utf8_percent_encode(name, SEGMENT));
     let Ok(req) = Request::post(path).header(header::AUTHORIZATION, format!("Bearer {}", st.cfg.auth_token))
         .header(header::CONTENT_TYPE, "application/json").body(Body::from(body)) else { return (StatusCode::BAD_REQUEST, Value::Null) };
-    let fwd = Forward { client_ip: "127.0.0.1".into(), https: false, guest: None };
+    let fwd = Forward { client_ip: "127.0.0.1".into(), https: false, guest: None, auth_receipt: None };
     let response = pass(st, req, &fwd).await;
     let status = response.status();
     let bytes = to_bytes(response.into_body(), RELAY_REPLY_LIMIT).await.unwrap_or_default();

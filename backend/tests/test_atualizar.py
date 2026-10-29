@@ -1847,7 +1847,7 @@ def rust(repo, tmp_path, monkeypatch):
     _git(obra, "push", "-q", "origin", "main")
     pedidos, preparo = [], {}
     manifesto = {"commit": binario_35, "files": {
-        f"linux-x86_64/{n}": {"name": f"{n}-linux-x86_64", "sha256": "0" * 64} for n in ("hangar-server", "hangar-cano")}}
+        f"linux-x86_64/{n}": {"name": f"{n}-linux-x86_64", "sha256": "0" * 64} for n in ("hangar-server", "hangar-cano", "hangar-auth")}}
     monkeypatch.setattr(atualizar.config.settings, "rust_server", True)
     monkeypatch.setattr(atualizar.rust_release, "platform_key", lambda: "linux-x86_64")
     monkeypatch.delenv("HANGAR_SERVER_RELEASE_URL", raising=False)

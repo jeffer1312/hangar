@@ -145,7 +145,7 @@ pub const NOT_INHERITED: [&str; 46] = [
     "ENABLE_TOOL_SEARCH", "DISABLE_PROMPT_CACHING",
 ];
 /// Do servidor: nunca para o pane, nem para o cliente que pode subir o servidor tmux.
-const SERVER_SECRETS: [&str; 3] = ["CP_AUTH_TOKEN", "HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE"];
+const SERVER_SECRETS: [&str; 4] = ["CP_AUTH_TOKEN", "HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT"];
 
 /// O argv do `new-session`, sem o escopo.
 pub fn new_session_argv(env: &TerminalEnv, pane: &PaneSpec) -> Vec<String> {

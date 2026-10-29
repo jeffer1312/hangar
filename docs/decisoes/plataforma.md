@@ -3491,6 +3491,53 @@ código que não abre.
 sem clique. Exige consentimento explícito na instalação, controle de volume no worker e os mesmos
 limites de privacidade acima. Fica para quando o botão manual não bastar.
 
+## Navegador remoto e contador compartilhado de autenticação (28/10/2026)
+
+**Regra.** `GET /api/sessions/{name}/navegador` e `WS /api/sessions/{name}/nav-remoto`
+são atendidos por `crates/hangar-server/src/remote_browser/`: descoberta, CDP, entrada e layout.
+As portas Python só autenticam e transportam; sem Rust, HTTP responde 503 e WS fecha 1013.
+Não há motor Python de reserva nem volta Rust → Python → Rust.
+
+**Contador.** `hangar-auth` (`rlib` + `cdylib`) é a implementação comum ao `hangar-server` e ao
+Python, que a chama por `ctypes` em `shared_auth.py`, sem callback HTTP. A época nasce no pai
+Python; arquivo e trava conservam a contagem ao relançar o filho. Pai novo começa vazio.
+Bloquear, comparar e registrar/limpar são uma transação: oito falhas em 30 s, até 512 origens.
+Depois da ativação, erro de estado/ABI/época é indisponibilidade (503/1013), nunca outro contador.
+
+**Perfis preservados.** `RequireAuthHttp`, usado pela GET do navegador e pela guarda Python,
+limpa no acerto, exceto no Connect, onde token ausente não conta e acerto não limpa.
+`LegacyOwnerProbe`, usado pelos portões existentes do Rust, conserva a limpeza inclusive no
+Connect. WS do navegador e aliases Python não limpam; terminal e voz Rust mantêm seus perfis
+próprios. O recibo assinado é vinculado ao pedido já admitido: o repasse não repete
+limpeza, corpo, SSE ou upgrade, nem cria uma comparação preliminar de credenciais.
+
+**Par de artefatos.** Biblioteca em `auth/<sha256>/`, metadado `hangar-server.auth.json`,
+hashes do servidor e da biblioteca, ABI 1 e esquema 1 são conferidos antes de ativar. A DLL
+carregada nunca é substituída. Se o hash da biblioteca publicada mudar, `Context.child_env`
+recusa com `auth_pair_changed_restart_parent`: é preciso um pai novo. O protocolo interno é 94
+nos dois lados.
+
+**Primeira atualização Git.** Em `atualizacoes.aplicar_pendentes`, somente o motor com
+`HANGAR_UPDATE_OWNS_RUST=1` renova `rust_bins`/`rust_release` já carregados quando falta a
+capacidade do par. Conserva as referências do motor, o manifesto escolhido, um único fluxo de
+download e o desfazer. Pacote e fluxo novo de desenvolvimento já incluem biblioteca e metadado;
+falha no download do modo desenvolvedor continua sendo aviso, não garantia de instalação.
+
+**Parada protegida.** `Supervisor.stop` espera o filho por até 120 s e retorna assim que ele
+sair; os 45 s de `/cmd` são preservados. O ensaio com atraso artificial de 6 s não mede
+desempenho normal; os 6,080 s da captura Python original também não são uma medição do Rust.
+
+**Provas de escopo.** `backend/tests/test_shared_auth.py` cobre `hangar-server` e borda Python reais,
+contador cruzado, recibos e biblioteca carregada; `test_shared_auth_pair.py` cobre hashes e
+desfazer; `test_legacy_auth_pair_update.py` carrega os módulos antigos em pasta temporária,
+troca suas fontes e conserva manifesto/download/desfazer. `test_protected_browser_shutdown.py`
+cobre devolução protegida com Supervisor real; `scripts/test_cargo_pinned.py`, publicação só
+após Cargo válido e conservação do par anterior quando ele falha.
+
+**Limites.** Uso real no Linux/Windows, interface e desempenho continuam pendentes; estas provas
+não encerram a migração nem os 136 itens de inventário. Não se afirma igualdade literal da
+representação privada de `InvalidStatus`.
+
 ## Etiquetas de máquina e conta moram no servidor da máquina (28/10/2026)
 
 **Regra.** A etiqueta da máquina (nome curto, ícone, cor) e a de cada conta (ícone, cor) ficam em

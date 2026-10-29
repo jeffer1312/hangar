@@ -50,7 +50,7 @@ pub fn present(state: &AppState) -> bool { view(state, Instant::now())["present"
 
 /// `GET /api/presence`, `POST /api/presence {"mode"}` e `POST /api/presence/heartbeat {"leaving"?}`; só o dono.
 pub async fn route(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, request: Request) -> Response {
-    let (forward, owner) = gate(&state, peer, &request);
+    let (forward, owner) = match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner {
         return pass(&state, request, &forward).await;
     }

@@ -275,7 +275,7 @@ async fn session_key(st: &AppState, headers: &HeaderMap, name: &str) -> Result<S
 
 pub async fn page(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<(String, String)>, axum::extract::rejection::PathRejection>, req: Request) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let (name, id) = match path { Ok(Path(p)) if owner => p, _ => return pass(&st, req, &fwd).await };
     let query = req.uri().query();
     let (raw, source) = (crate::auth::query_param(query, "raw").is_some(), crate::auth::query_param(query, "source").is_some());
@@ -338,7 +338,7 @@ pub(crate) fn isolated_shell(html: &str, title: &str) -> Response {
 
 pub async fn shot(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<(String, String)>, axum::extract::rejection::PathRejection>, req: Request) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let (name, id) = match path { Ok(Path(p)) if owner => p, _ => return pass(&st, req, &fwd).await };
     let (headers, query) = (req.headers().clone(), req.uri().query().map(str::to_owned));
     drop(req);

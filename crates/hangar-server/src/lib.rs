@@ -2,6 +2,7 @@
 pub mod accounts;
 pub mod artifacts;
 pub mod auth;
+pub mod remote_browser;
 pub mod config;
 pub mod commands;
 pub mod orq_conductor;
@@ -91,7 +92,7 @@ mod warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 92;
+pub const INTERNAL_PROTOCOL: u32 = 94;
 
 /// Todo cliente HTTP do servidor nasce aqui. Uma dependência liga `gzip`, `http2` e (no Windows)
 /// `native-tls` no reqwest, e o Cargo estende isso a todo cliente: sem estes desligamentos ele
@@ -147,6 +148,9 @@ pub async fn serve_until_with_guest(
     // Lida na subida: no Windows o executável é aberto pela junction, que a troca de versão move.
     let _ = update::running_package();
     let cfg = state.cfg.clone();
+    let remote_browser = state.remote_browser.clone();
+    let browser_dir = state.hangar_dir.join("nav");
+    let browser_list = state.list.clone();
     let transcription = state.transcription.clone();
     let omp_sync = state.omp_sync.clone();
     let codex_logins=state.accounts.codex_logins.clone();
@@ -229,16 +233,21 @@ pub async fn serve_until_with_guest(
         () = stop => Ok(()),
     }
     }.await;
-    if let Some(service) = omp_sync.get() { service.close().await; }
-    transcription.shutdown().await;
-    if let Some((stop,task))=refresh_loop {
-        let _=stop.send(true);
-        let _=task.await;
-    }
-    tokio::join!(codex_readers.close(),codex_logins.close(),device_logins.close());
-    if let Some(registry)=runtime_registry {
-        registry.shutdown().await.map_err(|error|std::io::Error::other(error.code))?;
-    }
+    let cleanup = async {
+        if let Some(service) = omp_sync.get() { service.close().await; }
+        transcription.shutdown().await;
+        if let Some((stop,task))=refresh_loop {
+            let _=stop.send(true);
+            let _=task.await;
+        }
+        tokio::join!(codex_readers.close(),codex_logins.close(),device_logins.close());
+        if let Some(registry)=runtime_registry {
+            registry.shutdown().await.map_err(|error|std::io::Error::other(error.code))?;
+        }
+        Ok::<_, std::io::Error>(())
+    };
+    let (_, cleanup) = tokio::join!(remote_browser.shutdown(&browser_dir, &browser_list), cleanup);
+    cleanup?;
     result
 }
 

@@ -59,7 +59,7 @@ fn failure(status: StatusCode, code: &str, message: &str) -> Response {
 }
 
 pub async fn subscribe(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
-    if !gate(&state, peer, &request).1 {
+    if !(match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).1 {
         return failure(StatusCode::FORBIDDEN, "push_expo_owner_only", "só o dono pode registrar o aviso no celular");
     }
     serve(&state, request).await

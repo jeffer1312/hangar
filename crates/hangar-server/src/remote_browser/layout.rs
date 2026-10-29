@@ -1,0 +1,249 @@
+//! Posse do tamanho imposto: o último espectador conserva o original.
+use super::{shell, ws::Failure};
+use crate::list::bridge::ListBridge;
+use serde_json::{Value, json};
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
+struct Record {
+    owner: u64,
+    original: String,
+    imposed: String,
+    controller: shell::Controller,
+    life: Option<String>,
+}
+type Slot = Arc<tokio::sync::Mutex<Option<Record>>>;
+pub(super) struct LayoutChange {
+    pub event: Value,
+    pub dimensions: Option<(i64, i64)>,
+}
+
+pub struct Layouts {
+    pub(super) connections: Arc<super::shutdown::Connections>,
+    slots: Mutex<HashMap<String, Slot>>,
+    next: AtomicU64,
+    pub(super) http: reqwest::Client,
+}
+impl Default for Layouts {
+    fn default() -> Self {
+        Self {
+            connections: Arc::default(),
+            slots: Mutex::default(),
+            next: AtomicU64::new(1),
+            http: reqwest::Client::builder()
+                .no_proxy()
+                .connect_timeout(Duration::from_secs(45))
+                .read_timeout(Duration::from_secs(45))
+                .build()
+                .expect("cliente HTTP local"),
+        }
+    }
+}
+pub(super) fn label(answer: &str) -> Option<&str> {
+    answer.strip_prefix("layout:").map(str::trim)
+}
+impl Layouts {
+    pub async fn shutdown(&self, dir: &Path, list: &ListBridge) {
+        self.connections.stop();
+        let slots: Vec<_> = self.slots.lock().unwrap().iter()
+            .map(|(name, slot)| (name.clone(), slot.clone())).collect();
+        let restore = futures_util::future::join_all(slots.into_iter().map(|(name, slot)| async move {
+            let owner = slot.lock().await.as_ref().map(|record| record.owner);
+            self.restore(dir, &name, owner, list).await;
+        }));
+        // Alcança também quem já estava fechando o CDP quando a parada chegou.
+        tokio::join!(self.connections.shutdown(), restore);
+    }
+    fn slot(&self, name: &str) -> Slot {
+        self.slots
+            .lock()
+            .unwrap()
+            .entry(name.into())
+            .or_default()
+            .clone()
+    }
+    pub(super) async fn apply(
+        &self,
+        dir: &Path,
+        name: &str,
+        life: Option<&str>,
+        message: &Value,
+        owner: &mut Option<u64>,
+    ) -> Result<Option<LayoutChange>, Failure> {
+        if message.get("w").is_some() || message.get("h").is_some() {
+            let zero = json!(0);
+            let dimension = |key| -> Result<Option<Value>, Failure> {
+                let value = &message[key];
+                match super::value::integer(if super::input::truth(value) { value } else { &zero }) {
+                    Ok(value) => Ok(Some(value)),
+                    Err(error) if error.repr.starts_with("OverflowError(") => Err(error),
+                    Err(_) => Ok(None),
+                }
+            };
+            let Some(width) = dimension("w")? else { return Ok(None); };
+            let Some(height) = dimension("h")? else { return Ok(None); };
+            let (Some(width), Some(height)) = (
+                width.as_i64().filter(|v| (1..=8192).contains(v)),
+                height.as_i64().filter(|v| (1..=8192).contains(v)),
+            ) else {
+                return Ok(None);
+            };
+            let id = *owner.get_or_insert_with(|| self.next.fetch_add(1, Ordering::Relaxed));
+            let slot = self.slot(name);
+            let mut record = slot.lock().await;
+            let controller = shell::controller(dir, name).await?;
+            let original = match record.as_ref().filter(|record| {
+                record.controller == controller
+                    && (record.owner == id
+                        || record.life.as_deref().zip(life).is_none_or(|(old, new)| old == new))
+            }) {
+                Some(record) => record.original.clone(),
+                None => {
+                    let answer = controller.verb(&self.http, &[]).await?;
+                    let Some(label) = label(&answer) else {
+                        return Ok(Some(LayoutChange {
+                            event: json!({"t":"erro","m":answer}),
+                            dimensions: None,
+                        }));
+                    };
+                    label.to_owned()
+                }
+            };
+            let imposed_controller = shell::controller(dir, name).await?;
+            let answer = imposed_controller
+                .verb(&self.http, &[width.to_string(), height.to_string()])
+                .await?;
+            let dimensions = if label(&answer).is_some() {
+                // Um original consultado no desktop anterior não pertence ao substituto.
+                *record = (controller == imposed_controller).then_some(Record {
+                    owner: id,
+                    original,
+                    imposed: format!("{width}x{height}"),
+                    controller,
+                    life: life.map(str::to_owned),
+                });
+                Some((width, height))
+            } else {
+                None
+            };
+            Ok(Some(LayoutChange {
+                event: json!({"t":"layout","resposta":answer}),
+                dimensions,
+            }))
+        } else {
+            let mode = message["modo"].as_str().unwrap_or("");
+            if !["mobile", "desktop"].contains(&mode) {
+                return Ok(None);
+            }
+            let answer = shell::verb(&self.http, dir, name, &[mode.to_owned()]).await?;
+            Ok(Some(LayoutChange {
+                event: json!({"t":"layout","modo":mode,"resposta":answer}),
+                dimensions: None,
+            }))
+        }
+    }
+    pub(super) async fn restore(
+        &self,
+        dir: &Path,
+        name: &str,
+        owner: Option<u64>,
+        list: &ListBridge,
+    ) {
+        let Some(slot) = self.slots.lock().unwrap().get(name).cloned() else { return };
+        let mut guard = slot.lock().await;
+        if guard.as_ref().is_some_and(|r| Some(r.owner) == owner) {
+            let record = guard.take().unwrap();
+            self.put_back(dir, name, record, list).await;
+        }
+        drop(guard);
+        let mut slots = self.slots.lock().unwrap();
+        // Só o mapa e esta cópia: ninguém espera a vaga, e ela vazia não guarda nada.
+        if Arc::strong_count(&slot) == 2
+            && slots.get(name).is_some_and(|current| Arc::ptr_eq(current, &slot))
+            && slot.try_lock().is_ok_and(|record| record.is_none())
+        {
+            slots.remove(name);
+        }
+    }
+    async fn put_back(&self, dir: &Path, name: &str, record: Record, list: &ListBridge) {
+        let result = async {
+            let Some(controller) = record.current(dir, name, list).await? else {
+                return Ok::<_, Failure>(());
+            };
+            let current = controller.verb(&self.http, &[]).await?;
+            if label(&current) != Some(record.imposed.as_str()) {
+                return Ok::<_, Failure>(());
+            }
+            let args = if ["desktop", "mobile"].contains(&record.original.as_str()) {
+                vec![record.original.clone()]
+            } else {
+                record.original.split('x').map(str::to_owned).collect()
+            };
+            let Some(controller) = record.current(dir, name, list).await? else {
+                return Ok(());
+            };
+            let answer = controller.verb(&self.http, &args).await?;
+            if label(&answer).is_none() {
+                tracing::warn!(target: "hangar.navsock",
+                    "navsock {name}: layout de antes ({}) não voltou: {answer}", record.original);
+            }
+            Ok(())
+        }.await;
+        if let Err(error) = result {
+            tracing::warn!(target:"hangar.navsock","navsock {name}: layout de antes não voltou: {}",error.message);
+        }
+    }
+}
+
+impl Record {
+    async fn current(
+        &self,
+        dir: &Path,
+        name: &str,
+        list: &ListBridge,
+    ) -> Result<Option<shell::Controller>, Failure> {
+        let controller = shell::controller(dir, name).await?;
+        if controller != self.controller {
+            return Ok(None);
+        }
+        if let Some(life) = self.life.as_ref() {
+            // Uma recriação já publicada não pode usar a vida guardada pela lista.
+            match list.fresh_session(name).await {
+                Ok(Some((row, _))) if row.lifecycle_id.as_ref() != Some(life) => return Ok(None),
+                Err(_) => return Err(Failure::plain("remote_browser_discovery_unavailable")),
+                _ => {}
+            }
+        }
+        // O envio usa este mesmo destino; não relê por nome depois de conferir.
+        Ok(Some(controller))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::list::{bridge::ListEnv, facts::FactsClient, procs::SystemProcs};
+
+    #[tokio::test]
+    async fn restore_never_creates_a_slot_and_drops_the_empty_one() {
+        let layouts = Layouts::default();
+        let list = ListBridge::new(ListEnv { mux: Default::default(), capture_program: "missing-test-mux".into(),
+            procs: Arc::new(SystemProcs::default()), dirs: None }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into()));
+        let dir = Path::new("/nonexistent");
+        layouts.restore(dir, "never-seen", Some(1), &list).await;
+        assert!(layouts.slots.lock().unwrap().is_empty());
+
+        let held = layouts.slot("viewed");
+        layouts.restore(dir, "viewed", Some(1), &list).await;
+        assert_eq!(layouts.slots.lock().unwrap().len(), 1, "a vaga que outro ainda segura fica");
+        drop(held);
+        layouts.restore(dir, "viewed", Some(1), &list).await;
+        assert!(layouts.slots.lock().unwrap().is_empty());
+    }
+}

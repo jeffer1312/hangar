@@ -50,7 +50,7 @@ pub async fn route(
     RoutePath(name): RoutePath<String>,
     req: Request,
 ) -> Response {
-    let (fwd, caller) = who(&st, peer, &req);
+    let (fwd, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let Some(caller) = caller.filter(|c| c.can(&name, req.method())) else {
         return pass(&st, req, &fwd).await;
     };

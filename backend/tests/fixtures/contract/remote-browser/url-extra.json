@@ -1,0 +1,105 @@
+{
+  "source_commit": "ba2db1021ab7fb801eca50a50f9509dcb825ac7e",
+  "generator": "backend/.venv/bin/python backend/tests/fixtures/contract/remote-browser/generate_url_extra.py --output backend/tests/fixtures/contract/remote-browser/url-extra.json",
+  "python_version": "3.14.8",
+  "platform": "linux",
+  "original_get": {
+    "source": "@app.get(\"/api/sessions/{name}/navegador\", dependencies=[Depends(require_auth)])\ndef navegador_da_sessao(name: str):\n    \"\"\"URL que o navegador embutido (app desktop) da sessão está mostrando, pelo sidecar que o shell\n    grava em ~/.hangar/nav/ — o mesmo que `scripts/hangar-preview` lê. Sem navegador: url null.\"\"\"\n    pasta = Path.home() / \".hangar\" / \"nav\"\n    if pasta.is_dir():\n        for arq in pasta.glob(\"*.json\"):\n            try:\n                sc = json.loads(arq.read_text(encoding=\"utf-8\"))\n            except (OSError, ValueError) as e:\n                _log.warning(\"sidecar de navegador ilegivel %s: %s\", arq, e)\n                continue\n            chave = sc.get(\"chave\", \"\") if isinstance(sc, dict) else \"\"\n            if chave == name or chave.endswith(f\"::{name}\"):\n                return {\"url\": sc.get(\"url\")}\n    return {\"url\": None}\n",
+    "sha256": "88f867648644975058ed482d98cbacefc63d11e944121ea85a7c161bf538c2c7"
+  },
+  "head": {
+    "status": 405,
+    "body": "",
+    "headers": {
+      "allow": "GET",
+      "content-type": "application/json",
+      "content-length": "31"
+    }
+  },
+  "seam": "GET original completo por AST e autenticação FastAPI real, exportados por git archive da base; corpo HTTP literal.",
+  "limits": [
+    "Sem lifespan, porteiros Rust ou navegador gráfico.",
+    "Erros não tratados mantêm 500 Internal Server Error, sem correção do comportamento Python.",
+    "HOME, contas, configuração e cwd temporários, antes dos imports; nenhum servidor externo."
+  ],
+  "cases": [
+    {
+      "name": "url_bigint_float_order",
+      "raw": "{\"chave\":\"session\",\"url\":{\"big\":123456789012345678901234567890,\"float\":1.0,\"order\":{\"z\":1,\"a\":2}}}",
+      "status": 200,
+      "body": "{\"url\":{\"big\":123456789012345678901234567890,\"float\":1.0,\"order\":{\"z\":1,\"a\":2}}}"
+    },
+    {
+      "name": "url_lone_surrogate",
+      "raw": "{\"chave\":\"session\",\"url\":\"\\ud800\"}",
+      "status": 500,
+      "body": "Internal Server Error"
+    },
+    {
+      "name": "key_lone_surrogate_suffix",
+      "raw": "{\"chave\":\"\\ud800::session\",\"url\":\"u\"}",
+      "status": 200,
+      "body": "{\"url\":\"u\"}"
+    },
+    {
+      "name": "url_nan",
+      "raw": "{\"chave\":\"session\",\"url\":NaN}",
+      "status": 500,
+      "body": "Internal Server Error"
+    },
+    {
+      "name": "unused_nan",
+      "raw": "{\"chave\":\"session\",\"url\":\"u\",\"unused\":NaN}",
+      "status": 200,
+      "body": "{\"url\":\"u\"}"
+    },
+    {
+      "name": "url_infinite_float",
+      "raw": "{\"chave\":\"session\",\"url\":1e999}",
+      "status": 500,
+      "body": "Internal Server Error"
+    },
+    {
+      "name": "key_null",
+      "raw": "{\"chave\":null,\"url\":\"u\"}",
+      "status": 500,
+      "body": "Internal Server Error"
+    },
+    {
+      "name": "key_number",
+      "raw": "{\"chave\":12,\"url\":\"u\"}",
+      "status": 500,
+      "body": "Internal Server Error"
+    },
+    {
+      "name": "key_nan",
+      "raw": "{\"chave\":NaN,\"url\":\"u\"}",
+      "status": 500,
+      "body": "Internal Server Error"
+    },
+    {
+      "name": "json_bom",
+      "raw": "﻿{\"chave\":\"session\",\"url\":\"u\"}",
+      "status": 200,
+      "body": "{\"url\":null}"
+    },
+    {
+      "name": "url_float_rounding",
+      "raw": "{\"chave\":\"session\",\"url\":0.12345678901234567890123456789}",
+      "status": 200,
+      "body": "{\"url\":0.12345678901234568}"
+    },
+    {
+      "name": "url_float_exponent",
+      "raw": "{\"chave\":\"session\",\"url\":1e-7}",
+      "status": 200,
+      "body": "{\"url\":1e-07}"
+    },
+    {
+      "name": "url_private_unicode",
+      "raw": "{\"chave\":\"session\",\"url\":\"􏠀\"}",
+      "status": 200,
+      "body": "{\"url\":\"􏠀\"}"
+    }
+  ]
+}

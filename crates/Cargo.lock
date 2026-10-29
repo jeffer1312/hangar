@@ -1509,6 +1509,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-auth"
+version = "0.1.0"
+dependencies = [
+ "ring",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-cano"
 version = "0.1.0"
 dependencies = [
@@ -1559,6 +1570,7 @@ dependencies = [
  "form_urlencoded",
  "futures-util",
  "hangar-api",
+ "hangar-auth",
  "hangar-codex",
  "hangar-package",
  "hangar-workspace",
@@ -1599,6 +1611,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "toml",
+ "tower",
  "tower-service",
  "tracing",
  "tracing-subscriber",

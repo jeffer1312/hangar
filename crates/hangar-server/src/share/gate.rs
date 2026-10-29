@@ -100,7 +100,7 @@ fn token_of(req: &Request) -> String {
     }).unwrap_or_default()
 }
 
-fn is_websocket(req: &Request) -> bool {
+pub(crate) fn is_websocket(req: &Request) -> bool {
     req.headers().get(header::UPGRADE).is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"))
 }
 

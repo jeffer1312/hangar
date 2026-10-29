@@ -371,6 +371,20 @@ def main(argv=None) -> int:
             shutil.copyfile(src, root / "bin" / f"{name}{exe}")
             # O artefato do Actions perde o bit de execução.
             (root / "bin" / f"{name}{exe}").chmod(0o755)
+        auth_name = "hangar_auth.dll" if a.os.startswith("windows") else "libhangar_auth.dylib" if a.os.startswith("macos") else "libhangar_auth.so"
+        suffix = Path(auth_name).suffix
+        auth = next((a.bin_dir / n for n in (auth_name, f"hangar-auth-{a.os}{suffix}")
+                     if (a.bin_dir / n).is_file()), None)
+        if auth is None:
+            die(f"{auth_name} não está em {a.bin_dir}")
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("pin_auth_pair", Path(__file__).with_name("pin-auth-pair.py"))
+        pair = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pair)
+        # O artefato publicado leva nome de plataforma; o carregador usa o nome nativo estável.
+        native_auth = work / auth_name
+        shutil.copyfile(auth, native_auth)
+        pair.publish(root / "bin" / f"hangar-server{exe}", native_auth)
         copy_repo(root)
         version_notes = notes(root, a.os)
         compile_pyc(root, a.os, py_version)

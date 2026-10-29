@@ -39,6 +39,15 @@ impl Config {
     }
 
     pub fn from_env() -> Result<Config, String> {
+        if let Some(raw) = std::env::var_os("HANGAR_AUTH_CONTEXT") {
+            let raw = raw.to_str().ok_or_else(|| "auth_store_invalid".to_owned())?;
+            let config = serde_json::from_str::<hangar_auth::AuthConfig>(raw).map_err(|_| "auth_store_invalid".to_owned())?;
+            if config.mode != "attach" { return Err("auth_store_invalid".into()); }
+            if std::env::var("CP_AUTH_TOKEN").ok().as_deref() != Some(config.expected_token.as_str()) {
+                return Err("auth_context_changed".into());
+            }
+            hangar_auth::SharedLimiter::open(config).map_err(|e| e.to_string())?;
+        }
         Config::from_lookup(|k| std::env::var(k).ok())
     }
 

@@ -93,7 +93,7 @@ pub(crate) async fn forward_whole(st: &AppState, parts: Parts, bytes: Bytes, fwd
 /// Decide quem atende. `Ok`: o Rust atende, com o passe na mão e o corpo já lido. `Err`: a resposta
 /// pronta (repasse ao Python com o corpo intacto, recusa da porta fechada, ou a recusa do Rust).
 pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, route: WriteRoute) -> Result<(Ctx, Bytes), Response> {
-    let (fwd, who) = who(st, peer, &req);
+    let (fwd, who) = match who(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
     let runtime = st.state.runtime.get().cloned();
     let name = session_name(req.uri().path()).filter(|n| who.as_ref().is_some_and(|c| c.can(n, req.method())));
     if matches!(route, WriteRoute::Input | WriteRoute::Interrupt)

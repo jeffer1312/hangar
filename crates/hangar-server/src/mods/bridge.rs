@@ -72,7 +72,7 @@ fn hmac_hex(secret: &str, message: &str) -> String {
 /// o plugin manda o nome com que nasceu). Corpo que não serve ao tipo, de sessão do Rust, é 422, como o
 /// Pydantic do Python.
 async fn owned_sized<T: DeserializeOwned>(st: &Arc<AppState>, peer: SocketAddr, req: Request, limit: usize) -> Result<(Envelope<T>, String), Box<Response>> {
-    let (fwd, _) = gate(st, peer, &req);
+    let (fwd, _) = match gate(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(Box::new(crate::auth::unavailable(e))) };
     let (parts, raw) = req.into_parts();
     let Ok(bytes) = to_bytes(raw, limit).await else { return Err(Box::new(StatusCode::PAYLOAD_TOO_LARGE.into_response())) };
     let parsed = serde_json::from_slice::<Envelope<T>>(&bytes);

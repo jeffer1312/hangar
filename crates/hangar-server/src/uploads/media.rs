@@ -260,7 +260,7 @@ mod tests {
         for key in [
             "HANGAR_INTERNAL_SECRET",
             "CP_AUTH_TOKEN",
-            "HANGAR_RUNTIME_INSTANCE",
+            "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT",
             "HANGAR_PLUGIN_TOKEN",
         ] {
             assert!(removed.iter().any(|name| name == key), "{key} chega ao ffmpeg");

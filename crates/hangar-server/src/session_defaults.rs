@@ -88,7 +88,7 @@ fn failure(status: StatusCode, code: &str, message: &str) -> Response {
 }
 
 pub async fn handle(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
-    if !gate(&state, peer, &request).1 {
+    if !(match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).1 {
         return failure(StatusCode::FORBIDDEN, "session_defaults_owner_only", "só o dono pode ler ou alterar o padrão da abertura");
     }
     serve(&state, request).await

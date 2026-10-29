@@ -80,6 +80,8 @@ const FRAME: &str = "new Promise(r=>{requestAnimationFrame(()=>requestAnimationF
 /// '' = dá para digitar; senão, o que está com foco.
 const FOCUS: &str = "(()=>{const a=document.activeElement;if(!a||a===document.body)return 'nada';const t=a.tagName.toLowerCase();const ok=a.isContentEditable||t==='textarea'||(t==='input'&&!/^(button|submit|reset|checkbox|radio|file|image|range|color)$/i.test(a.type||''));return ok?'':t+(a.type?'['+a.type+']':'')})()";
 const PROBE_READ: &str = "(typeof window.__hangarSonda===\"undefined\"?2:window.__hangarSonda)";
+/// Lista nativa do `<select>` aberta: ela consome a tecla e o documento não vê o keydown.
+const OPEN_LIST: &str = "(()=>{const a=document.activeElement;try{return !!a&&a.tagName==='SELECT'&&a.matches(':open')}catch(e){return false}})()";
 /// Verbos que mudam a página: pausado, só estes são recusados; ler continua livre.
 const ACTING: [&str; 12] = ["click", "fill", "type", "press", "hover", "eval", "layout", "tema", "goto", "back", "reload", "dialog"];
 /// Com diálogo aberto a página não roda script: só estes respondem sem ele.
@@ -602,6 +604,9 @@ impl<P: Page> Controller<P> {
         let down = key_event(key);
         let mut up = down.clone();
         if let Some(o) = up.as_object_mut() { o.remove("text"); o.remove("unmodifiedText"); }
+        // Aba escondida engole a tecla mesmo com a lista aberta: lá a sonda continua sendo a prova.
+        let hidden = self.state.borrow().hidden;
+        let open_list = !hidden && self.value(OPEN_LIST).await.is_ok_and(|v| v == true);
         let ok = self.arrived(&["keydown"], async || {
             let mut d = down.clone();
             d["type"] = "keyDown".into();
@@ -610,7 +615,9 @@ impl<P: Page> Controller<P> {
             u["type"] = "keyUp".into();
             self.page.call("Input.dispatchKeyEvent", u).await.map(|_| ())
         }).await?;
-        Ok(if ok { format!("ok: press {key}") } else { format!("erro: press {key}: o evento nao chegou na pagina (aba escondida sem quadro) — tire um shot e repita") })
+        Ok(if ok { format!("ok: press {key}") }
+        else if open_list { format!("ok: press {key} (foi para a lista aberta do select, que nao avisa a pagina; confira com snapshot)") }
+        else { format!("erro: press {key}: o evento nao chegou na pagina (aba escondida sem quadro) — tire um shot e repita") })
     }
 
     async fn hover(&self, r: &str) -> Result<String, String> {
@@ -1059,6 +1066,34 @@ mod tests {
         }));
         block_on(c.run("snapshot", &[]));
         assert!(text(block_on(c.run("click", &s(&["@e1"])))).starts_with("erro: click @e1: o evento nao chegou"));
+    }
+
+    fn is_open_list(p: &Value) -> bool { p["expression"].as_str().is_some_and(|e| e.contains(":open")) }
+
+    #[test]
+    fn press_into_an_open_select_list_is_not_an_error() {
+        let c = ctl(|m, p| Ok(match m {
+            "Runtime.evaluate" if is_open_list(p) => json!({"result": {"value": true}}),
+            // A lista nativa consome a tecla: o documento não vê o keydown.
+            "Runtime.evaluate" if is_probe_read(p) => json!({"result": {"value": 0}}),
+            _ => json!({}),
+        }));
+        let r = text(block_on(c.run("press", &s(&["ArrowDown"]))));
+        assert!(r.starts_with("ok: press ArrowDown"), "{r}");
+        assert_eq!(c.page.calls.borrow().iter().filter(|(m, _)| m == "Input.dispatchKeyEvent").count(), 2, "uma tecla, sem repetir");
+    }
+
+    #[test]
+    fn press_that_never_arrives_without_an_open_list_is_an_error() {
+        for (hidden, open) in [(false, false), (true, true)] {
+            let c = Controller::new(fake(move |m, p| Ok(match m {
+                "Runtime.evaluate" if is_open_list(p) => json!({"result": {"value": open}}),
+                "Runtime.evaluate" if is_probe_read(p) => json!({"result": {"value": 0}}),
+                _ => json!({}),
+            }), ""), false);
+            block_on(c.set_hidden(hidden));
+            assert!(text(block_on(c.run("press", &s(&["Enter"])))).starts_with("erro: press Enter: o evento nao chegou"), "hidden={hidden} open={open}");
+        }
     }
 
     fn is_probe_read(p: &Value) -> bool { p["expression"].as_str().is_some_and(|e| e.starts_with("(typeof window.__hangarSonda")) }

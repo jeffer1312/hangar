@@ -21,7 +21,11 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     // nome de sessão com espaço não vira URI e um `%` seria decodificado duas vezes.
     let Some(path) = req.headers().get("x-hangar-path").and_then(|v| std::str::from_utf8(v.as_bytes()).ok())
         .filter(|p| p.starts_with("/api/"))
-        .map(|p| p.split('/').map(crate::groups::exit::segment).collect::<Vec<_>>().join("/"))
+        .map(|p| if req.method() == Method::GET && crate::remote_browser::url::matches(&Method::GET,p) {
+            p.to_owned()
+        } else {
+            p.split('/').map(crate::groups::exit::segment).collect::<Vec<_>>().join("/")
+        })
     else {
         return StatusCode::BAD_REQUEST.into_response();
     };
@@ -67,6 +71,8 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         Owned::Mermaid
     } else if crate::prewarm::http::matches(&method, &path) {
         Owned::Prewarm
+    } else if crate::remote_browser::url::matches(&method, &path) {
+        Owned::BrowserUrl(guest)
     } else if crate::nav_requests::matches(&method, &path) {
         Owned::Nav
     } else if crate::worktree_routes::matches(&method, &path) {
@@ -120,6 +126,7 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         Owned::Commands => crate::commands::serve(&st, req).await,
         Owned::Mermaid => crate::mermaid::serve(&st, req).await,
         Owned::Prewarm => crate::prewarm::http::serve(&st, req).await,
+        Owned::BrowserUrl(guest) => crate::remote_browser::url::serve_forwarded(&st, req, guest).await,
         Owned::Nav => crate::nav_requests::serve(&st, req).await,
         Owned::Worktrees => crate::worktree_routes::public(st, req).await,
         Owned::Plans => crate::plans::routes::serve(&st, req).await,
@@ -155,4 +162,4 @@ fn live_resume(method: &Method, path: &str) -> Option<String> {
 }
 
 /// As rotas do Rust que aceitam o repasse.
-enum Owned { Read(String, bool, bool), OrchestrationGuard(String), Models, Orchestration, OmpSync, Groups(bool), Conductor, Catalog, SessionDefaults, PushExpo, Commands, Mermaid, Prewarm, Nav, Plans, Worktrees, JevDelivery, ClientApi, ArchiveResume(String, String), Resume(String), Media(String, bool) }
+enum Owned { Read(String, bool, bool), OrchestrationGuard(String), Models, Orchestration, OmpSync, Groups(bool), Conductor, Catalog, SessionDefaults, PushExpo, Commands, Mermaid, Prewarm, Nav, BrowserUrl(bool), Plans, Worktrees, JevDelivery, ClientApi, ArchiveResume(String, String), Resume(String), Media(String, bool) }

@@ -647,6 +647,12 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   que ele mesmo já é dono, e o Python nunca repergunta ao Rust dentro de uma chamada que o Rust
   fez: a volta Rust → Python → Rust prende o pool do Python e trava o backend na subida. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#migrar-é-migrar-o-caminho-inteiro).
+- **O navegador remoto da sessão é do Rust (`remote_browser/`).** As rotas
+  `/api/sessions/{name}/navegador` e `/api/sessions/{name}/nav-remoto` não têm motor Python:
+  CDP, entrada, layout e descoberta são do Rust. As portas Python só autenticam e transportam,
+  com o binding nativo do contador compartilhado; sem Rust, HTTP responde 503 e WS fecha 1013.
+  Não há callback HTTP de autenticação nem volta Rust → Python → Rust. Contrato e provas em
+  [plataforma.md](docs/decisoes/plataforma.md#navegador-remoto-e-contador-compartilhado-de-autenticação-28102026).
 - **O que ainda passa pelo Python com o Rust de pé (modo `rust`).** Esta lista é o inventário
   vivo: migração que tira um item o apaga daqui no mesmo commit; item novo só entra com o arquivo
   e a linha. Conferir antes de afirmar que algo "é do Rust" ou "ainda é do Python".
@@ -664,7 +670,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     `worktrees/context`,
     `transcription/config`, `costs/scopes`, `migration/status`, `diag` e `ping`.
   - Partes ainda no Python: transcript, estado e entrada geral de Pi, omp e Kimi; Arquivo;
-    transferência Claude→Codex; navegador (`navegador`, `nav-remoto`); peers;
+    transferência Claude→Codex; peers;
     workflows e runners; login de convidado. O Connect (8768) está inativo.
   - Atualização: na máquina migrada (pacote ou modo desenvolvedor) as rotas `/api/atualizacao*`
     são do Rust (`update/http.rs`); na não migrada, ao motor `git` do Python (`atualizar.py`). No

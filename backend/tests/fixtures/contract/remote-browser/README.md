@@ -1,0 +1,73 @@
+# Referência Python do navegador remoto
+
+As saídas foram obtidas executando a implementação do commit
+`ba2db1021ab7fb801eca50a50f9509dcb825ac7e`, anterior à migração destas rotas.
+Os geradores exportam essa fonte com Git e isolam HOME, configuração e diretório corrente.
+Não iniciam o backend real nem usam contas ou navegadores das sessões do usuário.
+
+- `url-commands.json`: handler original da GET, autenticação/middleware originais e cliente
+  `navshell` contra servidores HTTP temporários. O handler é extraído com seu decorador por AST,
+  evitando o lifespan do app principal.
+- `transport.json`: `nav_ws` original em uma rota WebSocket, com desktop de ensaio que atende
+  `/cmd` e `/cdp` no loopback. Os quadros JPEG vêm da captura real congelada abaixo.
+- `chromium.json`: respostas CDP, quadro, screenshot e entrada medidos em um Chromium com
+  perfil temporário, usando o cliente `_Cdp` original. O teste de texto insere acento/emoji e
+  confirma que Backspace remove o emoji inteiro. Não representa o app nativo ou WebView2.
+
+Cada corpus registra commit, comando, versão, entradas, saídas, costura exercitada e limites.
+IDs do inventário identificam a área exercitada; não significam fechamento automático do item.
+As normalizações de caminhos, portas e valores aleatórios estão declaradas nos próprios arquivos.
+Os JSON esperados não devem ser editados à mão nem substituídos pela saída futura do Rust.
+
+## Executar na raiz do repositório
+
+```bash
+backend/.venv/bin/python backend/tests/fixtures/contract/remote-browser/generate_url_commands.py
+backend/.venv/bin/python backend/tests/fixtures/contract/remote-browser/generate_transport.py --check
+```
+
+O primeiro comando regenera o corpus Python; para comparar sem sobrescrever a referência,
+use `--output <arquivo-temporário>` e compare os bytes. O segundo compara a regeneração do
+transporte com a referência congelada. Só retire `--check` quando for intencional publicar uma
+nova caracterização Python, preservando a origem e explicando a mudança.
+
+Uma nova captura externa usa um executável instalado e um perfil novo:
+
+```bash
+backend/.venv/bin/python backend/tests/fixtures/contract/remote-browser/capture_chromium.py --browser <chrome-headless-shell> --output <nova-captura.json>
+```
+
+Metadados temporais, IDs e pixels dessa captura são dados medidos. Não se espera que outra
+execução do Chromium produza bytes idênticos. O transporte usa a captura congelada como entrada
+externa fixa; não sobrescreva `chromium.json` ao conferir a regeneração dos outros corpora.
+
+Esta referência foi executada no Linux. Não prova a migração Rust, o porteiro Rust, Electron,
+WebView2, encerramento/reabertura completos do Hangar ou desempenho comparado. A aprovação das
+diferenças e as provas restantes ficam nos documentos da migração.
+
+## Referências do sistema no CI Unix
+
+O job Server instala as dependências do `backend/uv.lock` com `uv sync --locked`, busca apenas
+o commit original acima e executa `generate_url_commands.py` e `generate_url_gaps.py` com
+`--output` em uma pasta temporária fora do checkout. Os JSON versionados ficam intactos.
+As referências novas vêm dos handlers e clientes Python originais; nenhuma saída Rust as alimenta.
+
+`HANGAR_REMOTE_BROWSER_CONTRACT_DIR` aponta para essa pasta absoluta, com `url-commands.json`
+e `url-gaps.json`. Só esses dois corpora aceitam a substituição; arquivo ausente ou inválido
+interrompe o teste. Os demais continuam usando os JSON versionados. Os filhos isolados recebem
+essa variável mesmo depois da limpeza do ambiente.
+
+Os dois geradores recebem `TMPDIR` de uma pasta privada curta criada com `mktemp` em `/tmp`.
+`HANGAR_REMOTE_BROWSER_TMPDIR` faz somente as suítes `url`, `commands` e `url_gaps` criarem
+seus temporários nessa mesma base. O `TMPDIR` dos testes de tmux e dos demais testes não muda.
+A enumeração continua sendo comparada por inteiro e na ordem medida, sem ordenação adicional.
+O identificador Python `darwin` corresponde a `macos` no Rust; outra plataforma é recusada.
+
+O suplemento `url-gaps` prepara os casos de arquivos ruins ou auxiliares antes de executar
+o Python: tenta primeiro `browser.json` e a criação original, depois a criação reversa e nomes
+ASCII alternativos para o único navegador válido. São até 132 tentativas (66 nomes, duas ordens),
+sem modificar o conteúdo dos arquivos. Todos os demais arquivos precisam anteceder o válido.
+Nome escolhido, ordem de criação, arquivos exigidos antes do válido e tentativa ficam nas entradas
+capturadas; o Rust recria a lista e exige a mesma enumeração. Se nenhuma tentativa conservar
+essas condições, a captura falha; status, eventos, efeitos e avisos continuam sendo medidos no
+Python original, sem ajustes posteriores para satisfazer o Rust.

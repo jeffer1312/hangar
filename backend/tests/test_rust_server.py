@@ -89,6 +89,11 @@ server.serve_forever()
 @pytest.fixture(autouse=True)
 def isolated_runtime(monkeypatch, tmp_path):
     from app import runtime_coordinator, runtime_queue, runtime_process
+    from app import shared_auth
+    # Esta suíte mede o Supervisor com executável falso; a DLL real roda em test_shared_auth.
+    monkeypatch.setattr(shared_auth, "activate", lambda *args: None)
+    monkeypatch.setattr(shared_auth, "current", lambda: None)
+    monkeypatch.setattr(shared_auth, "shutdown", lambda: None)
     monkeypatch.setattr(runtime_coordinator, "_current", None)
     monkeypatch.setattr(runtime_queue, "_coordinator", None)
     monkeypatch.setattr(runtime_process, "record_path", lambda: tmp_path / "runtime-process.json")
@@ -578,6 +583,40 @@ def test_closing_stdin_makes_the_child_exit(fake_bin, monkeypatch):
         cleanup(proc)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expires", [False, True])
+async def test_protected_stop_uses_120_seconds_and_kills_only_after_the_deadline(tmp_path, monkeypatch, expires):
+    import io
+    class Process:
+        stdin = io.BytesIO()
+        dead = False
+        kills = 0
+        waits = []
+        def poll(self):
+            return 0 if self.dead else None
+        def wait(self, timeout=None):
+            self.waits.append(timeout)
+            if expires and timeout is not None:
+                raise subprocess.TimeoutExpired("owned-fixture", timeout)
+            self.dead = True
+            return 0
+        def kill(self):
+            self.kills += 1
+            self.dead = True
+    process = Process()
+    supervisor = rust_server.Supervisor(tmp_path / "owned-fixture", "127.0.0.1", 1, 2, "fake", "", lambda: False)
+    supervisor.proc = process
+    confirmed = []
+    async def deactivated(*, confirmed_dead):
+        confirmed.append(confirmed_dead)
+    monkeypatch.setattr(supervisor, "deactivate_runtime", deactivated)
+    monkeypatch.setattr(rust_server, "_point_bridges", lambda *args: None)
+    assert rust_server.PROTECTED_SHUTDOWN_SECONDS == 120
+    await supervisor.stop()
+    assert process.waits == ([120, None] if expires else [120])
+    assert process.kills == int(expires) and process.stdin.closed and confirmed == [True]
+
+
 def test_child_dies_when_python_is_killed(fake_bin, tmp_path, monkeypatch):
     """O cano do stdin: um Python morto a SIGKILL fecha a ponta dele, e o filho sai."""
     monkeypatch.setenv("FAKE_MODE", "mudo")
@@ -766,7 +805,7 @@ def test_watcher_failure_puts_the_cause_in_the_diary(monkeypatch, events):
 def test_protocol_is_the_same_number_on_both_sides():
     lib = (Path(__file__).resolve().parents[2] / "crates/hangar-server/src/lib.rs").read_text()
     rust = int(re.search(r"pub const INTERNAL_PROTOCOL: u32 = (\d+);", lib).group(1))
-    assert rust == rust_server.RUST_SERVER_PROTOCOL == 92
+    assert rust == rust_server.RUST_SERVER_PROTOCOL == 94
 
 
 def _child_env(monkeypatch, tmp_path, host, port):

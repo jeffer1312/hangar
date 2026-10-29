@@ -478,7 +478,7 @@ async def _repasse_ao_rust(request: Request, sem_rust: dict, destino: str, **rep
     Rust não há reserva Python: a rota responde indisponível, com o código de `sem_rust`."""
     from app import account_bridge
     try:
-        require_auth(request)
+        await require_auth(request)
     except HTTPException as error:
         return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
     if account_bridge.owner_mode() == "python":
@@ -503,7 +503,7 @@ async def _providers_via_rust(request: Request, call_next):
                                or request.method == "POST" and write.group(2) is not None) else None
     if read or write:
         try:
-            require_auth(request)
+            await require_auth(request)
         except HTTPException as error:
             return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
         owned = True
@@ -512,7 +512,7 @@ async def _providers_via_rust(request: Request, call_next):
     if read:
         from app import account_bridge
         try:
-            require_auth(request)
+            await require_auth(request)
         except HTTPException as error:
             return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
         if account_bridge.owner_mode() == "python":
@@ -634,7 +634,7 @@ async def _midia_pelo_rust(request: Request, call_next):
     if not owned:
         return await call_next(request)
     try:
-        require_auth(request)
+        await require_auth(request)
     except HTTPException as error:
         return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
     if account_bridge.owner_mode() == "python":
@@ -818,7 +818,7 @@ async def nav_ws_route(ws: WebSocket, name: str):
     # Mesma porta de entrada do painel de terminal (token + Origin) -- o de la abre um shell, este
     # abre o navegador que o agente esta dirigindo.
     from app import navsock
-    await navsock.nav_ws(ws, name, _session_exists)
+    await navsock.nav_ws(ws, name)
 
 
 @app.post("/api/sessions/{name}/shell", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
@@ -8115,21 +8115,10 @@ def preview_stop():
 
 
 @app.get("/api/sessions/{name}/navegador", dependencies=[Depends(require_auth)])
-def navegador_da_sessao(name: str):
-    """URL que o navegador embutido (app desktop) da sessão está mostrando, pelo sidecar que o shell
-    grava em ~/.hangar/nav/ — o mesmo que `scripts/hangar-preview` lê. Sem navegador: url null."""
-    pasta = Path.home() / ".hangar" / "nav"
-    if pasta.is_dir():
-        for arq in pasta.glob("*.json"):
-            try:
-                sc = json.loads(arq.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as e:
-                _log.warning("sidecar de navegador ilegivel %s: %s", arq, e)
-                continue
-            chave = sc.get("chave", "") if isinstance(sc, dict) else ""
-            if chave == name or chave.endswith(f"::{name}"):
-                return {"url": sc.get("url")}
-    return {"url": None}
+async def navegador_da_sessao(name: str, request: Request):
+    request = Request({**request.scope, "path": f"/api/sessions/{urllib.parse.quote(name, safe='')}/navegador"}, request.receive)
+    return await _repasse_ao_rust(request, erro("browser_need_rust_server", "o navegador precisa do servidor Rust, que não está rodando"),
+                                  "/__hangar_server/forwarded")
 
 
 @app.get("/api/sessions/{name}/commands", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])

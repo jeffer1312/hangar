@@ -31,18 +31,21 @@ fn bad_body() -> Response {
 }
 
 /// Recusa repasse (Python, convidado), outra origem e quem não traz o token do dono.
-fn guard(st: &AppState, peer: SocketAddr, req: &Request) -> Result<(), Response> {
+fn guard(st: &AppState, peer: SocketAddr, req: &Request)
+    -> impl std::future::Future<Output = Result<(), Response>> + Send + use<> {
     let h = req.headers();
-    if crate::routes::on_guest_port(req) || h.contains_key("x-forwarded-for") || h.contains_key("x-hangar-guest") || !same_origin(h) {
-        return Err(failure(StatusCode::FORBIDDEN, Failure::new(FORBIDDEN)));
-    }
+    let forbidden = crate::routes::on_guest_port(req) || h.contains_key("x-forwarded-for") || h.contains_key("x-hangar-guest") || !same_origin(h);
     let ip = peer.ip().to_canonical().to_string();
     let token = crate::auth::presented_token(h, req.uri().query(), req.method(), false);
-    if !st.auth.is_owner(&ip, token.as_deref()) {
-        st.auth.record_fail(&ip);
+    let auth = st.auth.clone();
+    async move {
+    if forbidden { return Err(failure(StatusCode::FORBIDDEN, Failure::new(FORBIDDEN))); }
+    if !auth.owner(&ip, token.as_deref()).await.map_err(crate::auth::unavailable)? {
+        auth.record_failure(&ip).await.map_err(crate::auth::unavailable)?;
         return Err(failure(StatusCode::UNAUTHORIZED, Failure::new("unauthorized")));
     }
     Ok(())
+    }
 }
 
 /// Sem Origin (app nativo) passa; com ela, só a página servida por este mesmo endereço.
@@ -69,7 +72,7 @@ fn device_failure(e: DeviceError) -> Response {
 }
 
 pub async fn devices(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if let Err(r) = guard(&st, peer, &req) { return r; }
+    if let Err(r) = guard(&st, peer, &req).await { return r; }
     match st.device_install.link.list().await {
         Ok(devices) => reply(StatusCode::OK, json!({"service": "ok", "devices": devices})),
         Err(DeviceError::ServiceMissing) => reply(StatusCode::OK, json!({"service": "missing", "devices": []})),
@@ -83,7 +86,7 @@ struct Udid {
 }
 
 pub async fn trust(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if let Err(r) = guard(&st, peer, &req) { return r; }
+    if let Err(r) = guard(&st, peer, &req).await { return r; }
     let Some(Udid { udid }) = body(req).await else { return bad_body() };
     match st.device_install.link.request_trust(&udid).await {
         Ok(()) => reply(StatusCode::OK, json!({"ok": true})),
@@ -92,7 +95,7 @@ pub async fn trust(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
 }
 
 pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if let Err(r) = guard(&st, peer, &req) { return r; }
+    if let Err(r) = guard(&st, peer, &req).await { return r; }
     let Some(start) = body::<Start>(req).await else { return bad_body() };
     if start.udid.is_empty() || start.apple_id.trim().is_empty() || start.password.is_empty() {
         return bad_body();
@@ -114,7 +117,7 @@ struct Code {
 }
 
 pub async fn code(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if let Err(r) = guard(&st, peer, &req) { return r; }
+    if let Err(r) = guard(&st, peer, &req).await { return r; }
     let Some(Code { job, code, resend }) = body(req).await else { return bad_body() };
     let reply_to = if resend {
         CodeReply::Resend
@@ -141,7 +144,7 @@ struct Certs {
 }
 
 pub async fn certs(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if let Err(r) = guard(&st, peer, &req) { return r; }
+    if let Err(r) = guard(&st, peer, &req).await { return r; }
     let Some(Certs { job, revoke, cancel }) = body(req).await else { return bad_body() };
     let choice = match (cancel, revoke.is_empty()) {
         (true, true) => None,
@@ -158,7 +161,7 @@ pub async fn certs(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
 }
 
 pub async fn progress(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if let Err(r) = guard(&st, peer, &req) { return r; }
+    if let Err(r) = guard(&st, peer, &req).await { return r; }
     let job = crate::auth::query_param(req.uri().query(), "job").unwrap_or_default();
     match st.device_install.progress(&job) {
         Some(p) => reply(StatusCode::OK, json!(p)),

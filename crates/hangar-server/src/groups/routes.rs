@@ -72,7 +72,7 @@ fn relay_refused() -> Response {
 impl Asked {
     pub(super) async fn take(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Result<Asked, Response> {
         let bridged = req.extensions().get::<Bridged>().is_some();
-        let (fwd, owner) = gate(&st, peer, &req);
+        let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
         let (Some(groups), true, Some(name)) = (st.groups.clone(), owner || bridged, session_name(req.uri().path())) else {
             return Err(if bridged { relay_refused() } else { pass(&st, req, &fwd).await });
         };

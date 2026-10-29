@@ -222,8 +222,12 @@ async fn serve(st: Arc<AppState>, peer: SocketAddr, req: Request, want: Want) ->
     });
     // Só `?token=`, como o termsock: Bearer e cookie não abrem shell. Por isso não há Origin a
     // conferir: ela barra credencial ambiente, e página estranha não tem o token.
-    let owner = guest.is_none() && auth::query_param(req.uri().query(), "token").filter(|t| !t.is_empty())
-        .is_some_and(|t| st.auth.is_owner(&fwd.client_ip, Some(t.as_bytes())));
+    let token = auth::query_param(req.uri().query(), "token").filter(|t| !t.is_empty());
+    let owner = if guest.is_none() && token.is_some() {
+        match st.auth.owner(&fwd.client_ip, token.as_deref().map(str::as_bytes)).await {
+            Ok(owner) => owner, Err(e) => return crate::auth::unavailable(e),
+        }
+    } else { false };
     if !(owner || guest == Some(true)) || req.method() != Method::GET || (guest.is_some() && matches!(want, Want::Hangar(_))) {
         return pass(&st, req, &fwd).await;
     }

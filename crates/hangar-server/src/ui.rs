@@ -101,7 +101,9 @@ pub fn matches(_method: &Method, path: &str) -> bool {
 pub async fn fallback(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, mut req: Request) -> Response {
     if matches(req.method(), req.uri().path()) {
         req.headers_mut().remove("x-hangar-static-origin");
-        let scheme = if gate(&st, peer, &req).0.https { "https" } else { "http" };
+        // Arquivo estático não exige dono: só o esquema importa, sem consultar o contador.
+        let (_, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
+        let scheme = if https { "https" } else { "http" };
         if let Some(origin) = req.headers().get(header::HOST).and_then(|v|v.to_str().ok())
             .and_then(|host|format!("{scheme}://{host}").parse::<HeaderValue>().ok()) {
             req.headers_mut().insert("x-hangar-static-origin",origin);
@@ -316,7 +318,7 @@ fn not_modified(headers: &HeaderMap, etag: &str) -> bool {
 
 /// `GET`/`PUT /api/web-ui` com `{"web_ui": bool}`: só o dono.
 pub async fn setting(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if !gate(&st, peer, &req).1 {
+    if !(match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).1 {
         return detail(StatusCode::FORBIDDEN, "web_ui_owner_only", "só o dono pode ler ou mudar a tela web", json!({}));
     }
     let save = if req.method() == Method::PUT {

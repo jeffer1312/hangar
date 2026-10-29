@@ -1,0 +1,16 @@
+{
+  "source_commit": "ba2db1021ab7fb801eca50a50f9509dcb825ac7e",
+  "source_sha256": "7f6a047fa5f326dba2b72f0a9e404d6634e779661404672d5c66f1d301f29e0e",
+  "generator": "/home/jefferson/Projetos/hangar/backend/.venv/bin/python /tmp/generate_hangar_browser_cookie_ascii.py",
+  "python_version": "3.14.8",
+  "isolation": "filho env_clear/HOME/config/cwd temporários; só _token original, nenhum servidor ou sessão real",
+  "limits": [
+    "Um cabeçalho real em bytes; não converte a string Latin1 de volta a UTF8.",
+    "A prova Rust envia esses bytes ao roteador público e usa guests.json temporário real."
+  ],
+  "observed": {
+    "raw_cookie_hex": "63705f746f6b656e3d6c6f67696e2d67756573743b20c3aa3d31",
+    "token": "login-guest",
+    "simple_cookie_flags": 320
+  }
+}

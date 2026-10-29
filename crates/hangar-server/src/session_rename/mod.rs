@@ -37,7 +37,7 @@ fn refuse(headers: &HeaderMap, status: StatusCode, code: &str, msg: &str, params
 }
 
 pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, caller) = who(&st, peer, &req);
+    let (fwd, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let name = session_name(req.uri().path()).filter(|n| caller.as_ref().is_some_and(|c| c.can(n, req.method())));
     // Quem não é o dono nem convidado com acesso completo: o Python atende (convidado com conta) ou recusa.
     let Some(name) = name else { return pass(&st, req, &fwd).await };

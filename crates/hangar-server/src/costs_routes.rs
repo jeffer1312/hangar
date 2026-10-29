@@ -197,7 +197,7 @@ pub async fn costs(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     request: Request,
 ) -> Response {
-    let (forward, owner) = gate(&state, peer, &request);
+    let (forward, owner) = match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner || request.method() != Method::GET {
         return pass(&state, request, &forward).await;
     }
@@ -277,7 +277,7 @@ pub async fn cotacao(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     request: Request,
 ) -> Response {
-    let (forward, owner) = gate(&state, peer, &request);
+    let (forward, owner) = match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner || request.method() != Method::GET {
         return pass(&state, request, &forward).await;
     }
@@ -306,7 +306,7 @@ pub async fn session_cost(
     Path(name): Path<String>,
     request: Request,
 ) -> Response {
-    let (forward, who) = crate::routes::who(&state, peer, &request);
+    let (forward, who) = match crate::routes::who(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if request.method() != Method::GET || !who.is_some_and(|c| c.can(&name, request.method())) {
         return pass(&state, request, &forward).await;
     }
@@ -370,7 +370,7 @@ pub async fn usage(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     request: Request,
 ) -> Response {
-    let (forward, owner) = gate(&state, peer, &request);
+    let (forward, owner) = match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner || request.method() != Method::GET {
         return pass(&state, request, &forward).await;
     }

@@ -33,7 +33,7 @@ _log = logging.getLogger("hangar.rust_release")
 REPO = Path(__file__).resolve().parents[2]
 RELEASES_URL = "https://github.com/jeffer1312/hangar/releases/download"
 MAIN_TAG = "server-latest"
-NAMES = ("hangar-server", "hangar-cano")
+NAMES = ("hangar-server", "hangar-cano", "hangar-auth")
 _EVENT = "hangar_server.baixar"
 UPDATE_OWNS_RUST = "HANGAR_UPDATE_OWNS_RUST"
 
@@ -160,8 +160,25 @@ def stale(release: tuple | None) -> bool:
     ext = ".exe" if plat.startswith("windows") else ""
     files = manifest["files"]
     # Manifesto sem sha não prova nada: oferecer a troca que o download não consegue fazer prenderia a tela.
-    return any(isinstance(sha := files[f"{plat}/{name}"].get("sha256"), str)
-               and not _already_there(bin_dir() / f"{name}{ext}", sha.lower()) for name in NAMES)
+    for name in NAMES:
+        sha = files[f"{plat}/{name}"].get("sha256")
+        if isinstance(sha, str):
+            target = _auth_target(bin_dir(), plat, sha.lower()) if name == "hangar-auth" else bin_dir() / f"{name}{ext}"
+            if not _already_there(target, sha.lower()):
+                return True
+    try:
+        from app.rust_bins import auth_pair
+        auth_pair(bin_dir() / f"hangar-server{ext}")
+    except (OSError, ValueError, TypeError):
+        return True
+    return False
+
+
+def _auth_target(dest: Path, plat: str, sha: str) -> Path:
+    if len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
+        raise ValueError("auth_pair_invalid")
+    name = "hangar_auth.dll" if plat.startswith("windows") else "libhangar_auth.dylib" if plat.startswith("macos") else "libhangar_auth.so"
+    return dest / "auth" / sha / name
 
 
 def _free(path: Path) -> bool:
@@ -204,7 +221,7 @@ def _install(data: bytes, target: Path) -> None:
     try:
         tmp.write_bytes(data)
         tmp.chmod(0o755)
-        if _E_WINDOWS and not _free(target):
+        if _E_WINDOWS and target.suffix != ".json" and not _free(target):
             # Exe em uso não pode ser sobrescrito nem apagado, mas pode ser renomeado: o processo
             # vivo segue no nome velho e o próximo a subir pega o novo.
             old = _old_name(target)
@@ -246,29 +263,107 @@ def _fetch_one(url: str, files: object, plat: str, name: str, target: Path,
 
 def _install_one(data: bytes, target: Path, name: str, commit: str, tag: str | None) -> str | None:
     try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if name == "hangar-auth":
+            # Conteúdo endereçado pelo hash: jamais trocar uma DLL carregada.
+            if target.exists():
+                if _sha256_file(target) != hashlib.sha256(data).hexdigest():
+                    raise ValueError("auth_library_hash_mismatch")
+                return None
+            tmp = target.with_name(f".{target.name}.{secrets.token_hex(4)}.tmp")
+            try:
+                tmp.write_bytes(data)
+                try:
+                    os.link(tmp, target)
+                except FileExistsError:
+                    if _sha256_file(target) != hashlib.sha256(data).hexdigest():
+                        raise ValueError("auth_library_hash_mismatch")
+            finally:
+                tmp.unlink(missing_ok=True)
+            return None
         _install(data, target)
-    except OSError as e:
+    except (OSError, ValueError) as e:
         diag.registrar("hangar_server.baixar", "erro", etapa="gravar", detalhe=name, **diag.erro_campos(e))
         return f"{name}: não consegui gravar em {target.parent} ({e})"
     diag.registrar("hangar_server.baixar", codigo="trocado", detalhe=name, commit=commit, tag=tag)
     return None
 
 
-def install_held(hold: list) -> list[str]:
+def install_held(hold: list, *, preserve_previous: bool = True) -> list[str]:
     """Grava o que o `fetch(hold=...)` baixou e segurou. Devolve os avisos de quem não gravou."""
     avisos = []
-    for item in hold:
+    pair_names = {"hangar-auth", "hangar-server", "hangar-auth-pair"}
+    for item in (item for item in hold if item[2] not in pair_names):
         target, name = item[1], item[2]
-        if aviso := _keep_previous(target, name):
+        if preserve_previous and (aviso := _keep_previous(target, name)):
             avisos.append(aviso)
         if aviso := _install_one(*item):
             avisos.append(aviso)
-            # Nada foi trocado: a volta não tem o que devolver.
             with contextlib.suppress(OSError):
                 _previous(target).unlink(missing_ok=True)
+    pair = [item for item in hold if item[2] in pair_names]
+    if pair:
+        avisos.extend(_install_pair(pair, preserve_previous))
     for aviso in avisos:
         _log.warning(aviso)
     return avisos
+
+
+def _snapshot(paths: list[Path]) -> dict[Path, bytes | None]:
+    return {path: path.read_bytes() if path.exists() else None for path in paths}
+
+
+def _restore_snapshot(snapshot: dict[Path, bytes | None]) -> list[str]:
+    errors = []
+    for target, data in snapshot.items():
+        try:
+            if data is None:
+                target.unlink(missing_ok=True)
+            elif not target.is_file() or target.read_bytes() != data:
+                _install(data, target)
+        except OSError as error:
+            errors.append(f"{target.name}: desfazer falhou ({error})")
+    return errors
+
+
+def _pair_paths(items: list) -> tuple[Path, Path]:
+    item = next((item for item in items if item[2] == "hangar-server"), None)
+    if item is not None:
+        server = item[1]
+    else:
+        item = next((item for item in items if item[2] == "hangar-auth-pair"), None)
+        root = item[1].parent if item is not None else items[0][1].parents[2]
+        server = root / ("hangar-server.exe" if (platform_key() or "").startswith("windows") else "hangar-server")
+    return server, server.with_suffix(".auth.json")
+
+
+def _install_pair(items: list, preserve_previous: bool) -> list[str]:
+    server, metadata = _pair_paths(items)
+    try:
+        before = _snapshot([server, metadata])
+        previous = _snapshot([_previous(server), _previous(metadata)])
+    except OSError as error:
+        return [f"hangar-auth-pair: não consegui preparar a troca ({error})"]
+    mutable = [item for item in items if item[2] != "hangar-auth"]
+    if mutable:
+        for target, name in ((server, "hangar-server"), (metadata, "hangar-auth-pair")):
+            if warning := _keep_previous(target, name):
+                return [warning, *_restore_snapshot({path: None for path in previous})]
+    for item in sorted(items, key=lambda item: {"hangar-auth": 0, "hangar-server": 1, "hangar-auth-pair": 2}[item[2]]):
+        if warning := _install_one(*item):
+            undone = _restore_snapshot(before)
+            if not undone:
+                undone.extend(_restore_snapshot({path: None for path in previous}))
+            return [warning, *undone]
+    try:
+        from app.rust_bins import auth_pair
+        auth_pair(server)
+    except (OSError, ValueError, TypeError) as error:
+        undone = _restore_snapshot(before)
+        if not undone:
+            undone.extend(_restore_snapshot({path: None for path in previous}))
+        return [f"hangar-auth-pair: o par publicado não confere ({error})", *undone]
+    return [] if preserve_previous else _restore_snapshot(previous)
 
 
 def _previous(target: Path) -> Path:
@@ -277,13 +372,19 @@ def _previous(target: Path) -> Path:
 
 def _targets(dest: Path) -> list[tuple[str, Path]]:
     ext = ".exe" if (platform_key() or "").startswith("windows") else ""
-    return [(name, dest / f"{name}{ext}") for name in NAMES]
+    return [(name, dest / f"{name}{ext}") for name in NAMES if name != "hangar-auth"] + [
+        ("hangar-auth-pair", dest / "hangar-server.auth.json")]
 
 
 def _keep_previous(target: Path, name: str) -> str | None:
     """Cópia do binário que a atualização vai trocar: a volta do código precisa dele, porque código
     antigo com binário novo é contrato diferente e o Python atenderia sozinho. Devolve o aviso."""
     if not target.is_file():
+        if name in {"hangar-auth-pair", "hangar-server"}:
+            try:
+                _previous(target).write_bytes(b"")
+            except OSError as e:
+                return f"{name}: não consegui guardar a ausência do par anterior ({e})"
         return None
     prev = _previous(target)
     tmp = prev.with_name(f".{prev.name}.{secrets.token_hex(4)}.tmp")
@@ -304,21 +405,54 @@ def _keep_previous(target: Path, name: str) -> str | None:
 def restore_previous(dest: Path | None = None) -> list[str]:
     """Devolve os binários que o `install_held` trocou. Devolve os avisos de quem não voltou."""
     avisos = []
-    for name, target in _targets(dest or bin_dir()):
+    targets = _targets(dest or bin_dir())
+    for name, target in (item for item in targets if item[0] == "hangar-cano"):
         prev = _previous(target)
         if not prev.is_file():
             continue
         try:
-            _install(prev.read_bytes(), target)
+            data = prev.read_bytes()
+            _install(data, target)
             prev.unlink()
         except OSError as e:
             diag.registrar(_EVENT, "erro", etapa="restaurar", detalhe=name, **diag.erro_campos(e))
             avisos.append(f"{name}: não consegui devolver o binário anterior ({e})")
             continue
         diag.registrar(_EVENT, codigo="restaurado", detalhe=name)
+    pair = [(name, target) for name, target in targets if name != "hangar-cano"]
+    if any(_previous(target).exists() for _, target in pair):
+        avisos.extend(_restore_pair(pair))
     for aviso in avisos:
         _log.warning(aviso)
     return avisos
+
+
+def _restore_pair(pair: list[tuple[str, Path]]) -> list[str]:
+    server, metadata = pair[0][1], pair[1][1]
+    if not _previous(server).is_file() or (not _previous(metadata).is_file() and metadata.exists()):
+        return ["hangar-auth-pair: cópias anteriores incompletas; o par atual foi conservado"]
+    try:
+        before = _snapshot([server, metadata])
+        restored = {server: _previous(server).read_bytes() or None,
+                    metadata: _previous(metadata).read_bytes() or None if _previous(metadata).exists() else None}
+    except OSError as error:
+        return [f"hangar-auth-pair: cópias anteriores ilegíveis ({error})"]
+    errors = _restore_snapshot(restored)
+    if not errors and restored[metadata] is not None:
+        try:
+            from app.rust_bins import auth_pair
+            auth_pair(server)
+        except (OSError, ValueError, TypeError) as error:
+            errors.append(f"hangar-auth-pair: o par anterior não confere ({error})")
+    if errors:
+        return [*errors, *_restore_snapshot(before)]
+    for name, target in pair:
+        try:
+            _previous(target).unlink(missing_ok=True)
+        except OSError as error:
+            errors.append(f"{name}: cópia já restaurada não saiu ({error})")
+        diag.registrar(_EVENT, codigo="restaurado", detalhe=name)
+    return errors
 
 
 def discard_previous(dest: Path | None = None) -> list[str]:
@@ -383,20 +517,54 @@ def fetch(base_url: str | None = None, dest: Path | None = None,
         diag.registrar("hangar_server.baixar", "erro", etapa="manifesto", tag=tag, **diag.erro_campos(e))
         via = f" da main (release {branch_tag} {missing})" if branch_tag else ""
         return [f"binários Rust não baixados: não consegui ler o manifesto da release{via} ({e})"]
-    avisos, kept, installed = [], [], []
-    for name in NAMES:
-        target = dest / f"{name}{ext}"
-        _sweep_old(target)
+    avisos, kept, installed, pending = [], [], [], []
+    pair_failed = False
+    if not has_build(manifest, plat):
+        prefix = f"release {branch_tag} {missing}; da main, " if branch_tag else ""
+        return [f"{prefix}{name}: a release não traz build para {plat}" for name in NAMES
+                if not isinstance(files, dict) or not isinstance(files.get(f"{plat}/{name}"), dict)]
+    try:
+        auth_sha = files[f"{plat}/hangar-auth"]["sha256"].lower()
+        library = _auth_target(dest, plat, auth_sha)
+        server_sha = files[f"{plat}/hangar-server"]["sha256"].lower()
+        metadata = {"abi": 1, "store_version": 1, "server_sha256": server_sha,
+                    "library_sha256": auth_sha, "library": library.relative_to(dest).as_posix()}
+    except (KeyError, TypeError, AttributeError, ValueError):
+        return ["biblioteca de autenticação ausente ou inválida no manifesto"]
+    for name in ("hangar-auth", "hangar-cano", "hangar-server"):
+        target = library if name == "hangar-auth" else dest / f"{name}{ext}"
+        if name != "hangar-auth":
+            _sweep_old(target)
         # Sem a release da branch, o binário instalado pode ser o dela: o da main só preenche falta.
         if branch_tag and not _free(target):
             kept.append(name)
             continue
-        if aviso := _fetch_one(url, files, plat, name, target, commit, tag, hold):
+        if branch_tag and name == "hangar-auth" and not _free(dest / f"hangar-server{ext}"):
+            kept.append(name)
+            continue
+        target_hold = pending if hold is not None or name != "hangar-cano" else None
+        if aviso := _fetch_one(url, files, plat, name, target, commit, tag, target_hold):
             avisos.append(f"release {branch_tag} {missing}; da main, {aviso}" if branch_tag else aviso)
+            pair_failed = pair_failed or name != "hangar-cano"
         elif branch_tag:
             installed.append(name)
+    if not pair_failed:
+        if "hangar-server" not in kept:
+            data = json.dumps(metadata, sort_keys=True).encode()
+            target = dest / "hangar-server.auth.json"
+            if not _already_there(target, hashlib.sha256(data).hexdigest()):
+                pending.append((data, target, "hangar-auth-pair", commit, tag))
+        if hold is not None:
+            hold.extend(pending)
+        else:
+            avisos.extend(install_held(pending, preserve_previous=False))
+    elif hold is not None:
+        hold.extend(item for item in pending if item[2] == "hangar-cano")
     if kept:
         avisos.append(f"release {branch_tag} {missing}; mantive os binários instalados ({', '.join(kept)})")
+    if installed and hold is None:
+        installed = [name for name in installed if _already_there(
+            library if name == "hangar-auth" else dest / f"{name}{ext}", files[f"{plat}/{name}"]["sha256"].lower())]
     if installed:
         avisos.append(f"release {branch_tag} {missing}; instalei os da main ({', '.join(installed)})")
     for aviso in avisos:

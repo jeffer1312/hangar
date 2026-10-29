@@ -37,7 +37,7 @@ const LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
 // ── rotas ─────────────────────────────────────────────────────────────────────
 
 pub async fn public(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     // O convidado passa pelo porteiro do Python, que devolve o pedido pela ponte privada.
     let Some(target) = owner.then(|| target_of(req.uri().path())).flatten() else { return pass(&st, req, &fwd).await };
     serve(&st, target, req.uri().query(), req.headers()).await
@@ -283,7 +283,7 @@ async fn serve(st: &AppState, (name, agent): (String, Option<String>), query: Op
 /// `SendMessage` direto (fila do agente vivo, ou retomada do parado), sem passar pelo modelo pai.
 pub async fn message(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>,
     UrlPath((name, agent_id)): UrlPath<(String, String)>, req: Request) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return pass(&st, req, &fwd).await; }
     let headers = req.headers().clone();
     let invalid = || refusal(StatusCode::UNPROCESSABLE_ENTITY, "erro_corpo_invalido", "body must be {\"text\": non-empty string without control characters}", &headers);

@@ -15,7 +15,7 @@ use std::time::Duration;
 const GIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn route(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
-    if !gate(&state, peer, &request).1 {
+    if !(match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).1 {
         return json_response(StatusCode::FORBIDDEN, detail_body("update_notes_owner_only", "só o dono pode ler as novidades da atualização", json!({})));
     }
     let home = state.accounts.env.home.clone();

@@ -109,6 +109,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if crate::orchestration::matches(method, path) || crate::provider_models::matches(method, path)
         || crate::omp_sync::matches(method, path) { return true; }
     if crate::prewarm::http::matches(method, path) { return true; }
+    if crate::remote_browser::url::matches(method, path) { return true; }
     if crate::nav_requests::matches(method, path) { return true; }
     if crate::loops::http::matches(method, path) { return true; }
     if crate::push::http::matches(method, path) { return true; }
@@ -129,7 +130,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         }
         let tail = path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).map(|(_, t)| t);
         // `term`: o painel abre no Rust; login de convidado e Connect passam pelo Python e voltam ao mesmo PTY.
-        if matches!(tail, Some("history" | "events" | "artifacts" | "cost" | "term" | "models" | "limits" | "commands" | "codex-permissions" | "conta")) || tail.is_some_and(|t| t.starts_with("pages/")) {
+        if matches!(tail, Some("history" | "events" | "artifacts" | "cost" | "term" | "nav-remoto" | "models" | "limits" | "commands" | "codex-permissions" | "conta")) || tail.is_some_and(|t| t.starts_with("pages/")) {
             return true;
         }
         if tail.is_some_and(|t| t == "subagents" || t.strip_prefix("subagents/").is_some_and(|id| !id.is_empty() && !id.contains('/'))) {
@@ -224,6 +225,8 @@ fn share_route(method: &Method, path: &str) -> bool {
 /// Um ou mais pedidos reais por área, só para a tabela; a decisão é de `rust_route`.
 const PROBES: &[(&str, &str)] = &[
     ("GET", "/api/sessions/x/history"), ("GET", "/api/sessions/x/events"),
+    ("GET", "/api/sessions/x/navegador"),
+    ("GET", "/api/sessions/x/nav-remoto"),
     ("GET", "/api/sessions"), ("GET", "/api/sessions/events"), ("POST", "/api/sessions"),
     ("POST", "/api/sessions/x/input"), ("POST", "/api/sessions/x/interrupt"), ("POST", "/api/sessions/x/answer"),
     ("POST", "/api/sessions/x/steer"), ("POST", "/api/sessions/x/select"), ("POST", "/api/sessions/x/select/submit"),
@@ -382,7 +385,7 @@ async fn python_facts(st: &AppState) -> Result<Value, &'static str> {
 
 /// `GET /api/migration/status` do dono. Convidado e outro método seguem ao Python, que recusa.
 pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner || req.method() != Method::GET {
         return pass(&st, req, &fwd).await;
     }

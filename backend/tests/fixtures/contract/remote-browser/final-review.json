@@ -1,0 +1,180 @@
+{
+  "source_commit": "ba2db1021ab7fb801eca50a50f9509dcb825ac7e",
+  "source_sha256": {
+    "backend/app/navsock.py": "76dc90655e1aa7371a8c4ee5a83dd2abf6cf7bd3606929d9a93daf70915b7dc2",
+    "backend/app/guest_user_gate.py": "7f6a047fa5f326dba2b72f0a9e404d6634e779661404672d5c66f1d301f29e0e"
+  },
+  "generator": "/home/jefferson/Projetos/hangar/backend/.venv/bin/python /tmp/generate_hangar_browser_final_review.py",
+  "python_version": "3.14.8",
+  "websockets_version": "16.0",
+  "platform": "linux",
+  "comparison": {
+    "normalized_fields": [
+      "opening.connection_refused.message/repr: própria porta efêmera vira <PORT>"
+    ]
+  },
+  "limits": [
+    "Captura de _Cdp.__aenter__, _token e dois registros DEBUG originais, não desktop/cliente reais.",
+    "HTTP401/403 mínimos em porta de ensaio; conexão recusada usa porta própria reservada sem listen.",
+    "Prazo real5s de handshake, não simulado; comando CDP TimeoutError() continua caso separado."
+  ],
+  "observed": {
+    "guest_tokens": [
+      {
+        "name": "query_first_nonempty",
+        "headers": [],
+        "query": "token=&token=login-guest&token=owner",
+        "https": false,
+        "token": "login-guest"
+      },
+      {
+        "name": "query_owner_before_guest",
+        "headers": [],
+        "query": "token=owner&token=login-guest",
+        "https": false,
+        "token": "owner"
+      },
+      {
+        "name": "last_authorization",
+        "headers": [
+          [
+            "authorization",
+            "Bearer owner"
+          ],
+          [
+            "authorization",
+            "Bearer login-guest"
+          ]
+        ],
+        "query": "token=owner",
+        "https": false,
+        "token": "login-guest"
+      },
+      {
+        "name": "bearer_empty",
+        "headers": [
+          [
+            "authorization",
+            "Bearer "
+          ]
+        ],
+        "query": "token=login-guest",
+        "https": false,
+        "token": ""
+      },
+      {
+        "name": "host_cookie",
+        "headers": [
+          [
+            "cookie",
+            "cp_token=owner; __Host-cp_token=login-guest"
+          ]
+        ],
+        "query": "",
+        "https": true,
+        "token": "login-guest"
+      },
+      {
+        "name": "https_plain_cookie",
+        "headers": [
+          [
+            "cookie",
+            "cp_token=login-guest"
+          ]
+        ],
+        "query": "",
+        "https": true,
+        "token": ""
+      },
+      {
+        "name": "last_cookie",
+        "headers": [
+          [
+            "cookie",
+            "cp_token=owner"
+          ],
+          [
+            "cookie",
+            "cp_token=login-guest"
+          ]
+        ],
+        "query": "",
+        "https": false,
+        "token": "login-guest"
+      },
+      {
+        "name": "quoted_cookie",
+        "headers": [
+          [
+            "cookie",
+            "cp_token=\"login\\055guest\""
+          ]
+        ],
+        "query": "",
+        "https": false,
+        "token": "login-guest"
+      },
+      {
+        "name": "invalid_cookie",
+        "headers": [
+          [
+            "cookie",
+            "broken; cp_token=login-guest"
+          ]
+        ],
+        "query": "",
+        "https": false,
+        "token": ""
+      },
+      {
+        "name": "empty_host_cookie",
+        "headers": [
+          [
+            "cookie",
+            "__Host-cp_token=; cp_token=login-guest"
+          ]
+        ],
+        "query": "",
+        "https": false,
+        "token": ""
+      }
+    ],
+    "opening": [
+      {
+        "name": "http_401",
+        "type": "InvalidStatus",
+        "message": "server rejected WebSocket connection: HTTP 401",
+        "repr": "InvalidStatus(Response(status_code=401, reason_phrase='Unauthorized', headers=Headers([('Connection', 'close'), ('Content-Length', '0')]), body=bytearray(b''), _exception=InvalidStatus(...)))"
+      },
+      {
+        "name": "http_403",
+        "type": "InvalidStatus",
+        "message": "server rejected WebSocket connection: HTTP 403",
+        "repr": "InvalidStatus(Response(status_code=403, reason_phrase='Forbidden', headers=Headers([('Connection', 'close'), ('Content-Length', '0')]), body=bytearray(b''), _exception=InvalidStatus(...)))"
+      },
+      {
+        "name": "connection_refused",
+        "type": "ConnectionRefusedError",
+        "message": "[Errno 111] Connect call failed ('127.0.0.1', <PORT>)",
+        "repr": "ConnectionRefusedError(111, \"Connect call failed ('127.0.0.1', <PORT>)\")"
+      },
+      {
+        "name": "handshake_timeout",
+        "type": "TimeoutError",
+        "message": "timed out during opening handshake",
+        "repr": "TimeoutError('timed out during opening handshake')"
+      }
+    ],
+    "debug": [
+      {
+        "level": "DEBUG",
+        "message": "navsock: print falhou: TimeoutError()"
+      },
+      {
+        "level": "DEBUG",
+        "message": "navsock: url atual falhou: TimeoutError()"
+      }
+    ],
+    "fallback_url": "http://contract.test/fallback"
+  }
+}
