@@ -284,7 +284,9 @@ pub fn parse(bytes: &[u8]) -> Result<Value, (axum::http::StatusCode, Value)> {
             text[..text.floor_char_boundary(byte)].rfind("\\u")
                 .filter(|start| byte.saturating_sub(*start) <= 6)
         }).flatten();
-        let message=if raw.starts_with("trailing comma") {
+        let trailing_comma = matches!(text.as_bytes().get(byte), Some(b'}' | b']'))
+            && text[..text.floor_char_boundary(byte)].trim_end().ends_with(',');
+        let message=if raw.starts_with("trailing comma") || trailing_comma {
             // O diagnóstico aponta a vírgula, não o fechamento que a revelou.
             if let Some((offset, _)) = text[..text.floor_char_boundary(byte)].char_indices().rev().find(|(_, c)| !c.is_whitespace()) {
                 position = text[..offset].chars().count();
