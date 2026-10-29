@@ -11,6 +11,7 @@ use std::{collections::HashMap, num::NonZeroU32, path::PathBuf, sync::Mutex};
 use subtle::ConstantTimeEq;
 
 pub struct Sync {
+    pub(super) diary: super::diary::Diary,
     pub path: PathBuf,
     pub config_path: PathBuf,
     pub secret: Vec<u8>,
@@ -25,6 +26,7 @@ pub struct Sync {
 impl Sync {
     pub fn new(path: PathBuf, config_path: PathBuf, secret: Vec<u8>) -> Self {
         Self {
+            diary: Default::default(),
             path,
             config_path,
             secret,
@@ -147,12 +149,13 @@ impl Sync {
                 let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
                 let status = self.setup_status()?;
                 self.config(false)?;
+                self.diary.event("sync.desativado");
                 Ok(json!({"enabled":false,"registered":status["registered"],"user":status["user"]}))
             }
-            ("POST", "register") => self.register(body, entropy),
+            ("POST", "register") => self.diary.trace("sync.cadastrar", || self.register(body, entropy)),
             ("GET", "prelogin") => self.prelogin(user.unwrap_or_default()),
             ("POST", "login") => self.login(body, now, ip).map(|(value, _)| value),
-            ("POST", "logout") => Ok(json!({"ok":true})),
+            ("POST", "logout") => { self.diary.event("sync.logout"); Ok(json!({"ok":true})) },
             ("GET", "vault") => {
                 let Some(vault) = self.load()?.filter(|value|truthy(value)) else {
                     return Ok(json!({"enc_blob":null,"rev":0}));
@@ -161,7 +164,7 @@ impl Sync {
                 let acc = acc.as_object().ok_or_else(unreadable)?;
                 Ok(super::object([("enc_blob",acc.get("enc_blob").map(crate::orchestration::codec::clone_value).unwrap_or(Value::Null)),("rev",acc.get("rev").map(crate::orchestration::codec::clone_value).unwrap_or(json!(0)))]))
             }
-            ("PUT", "vault") => self.put_vault(body, user.unwrap_or_default()),
+            ("PUT", "vault") => self.diary.trace("sync.gravar", || self.put_vault(body, user.unwrap_or_default())),
             ("GET", "guests") => {
                 let vault = self.owner(user)?;
                 let Some(guests)=vault.get("guests").filter(|value|truthy(value)) else {return Ok(json!([]));};
@@ -172,7 +175,7 @@ impl Sync {
                 }).collect::<Result<Vec<_>>>()?;
                 Ok(Value::Array(rows))
             }
-            ("POST", "guests") => self.put_guest(body, user, entropy),
+            ("POST", "guests") => self.diary.trace("sync.convidado_gravar", || self.put_guest(body, user, entropy)),
             ("POST", p) if p.starts_with("guests/") && p.ends_with("/delete") => {
                 let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
                 let mut vault = self.owner(user)?;
@@ -256,6 +259,7 @@ impl Sync {
         if self.bootstrap.is_empty()
             || !bool::from(self.bootstrap.as_bytes().ct_eq(bootstrap.as_bytes()))
         {
+            self.diary.refused("sync.cadastro_recusado", "bootstrap_invalido", "403");
             return Err(Failure::code(
                 403,
                 "erro_bootstrap_invalido",
@@ -264,6 +268,7 @@ impl Sync {
         }
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         if self.load()?.is_some() {
+            self.diary.refused("sync.cadastro_recusado", "ja_cadastrado", "403");
             return Err(Failure::code(
                 403,
                 "erro_ja_registrado",
@@ -272,6 +277,7 @@ impl Sync {
         }
         let salt_bytes = entropy(16);
         self.save(&json!({"user":user,"salt":salt,"verifier_salt":STANDARD.encode(&salt_bytes),"auth_verifier":verifier(&auth,&salt_bytes),"enc_blob":null,"rev":0}))?;
+        self.diary.event("sync.cadastrado");
         Ok(json!({"ok":true}))
     }
     fn setup(&self, b: &Value, entropy: fn(usize) -> Vec<u8>) -> Result<Value> {
@@ -313,6 +319,7 @@ impl Sync {
             self.save(&json!({"user":b["user"],"salt":b["salt"],"verifier_salt":STANDARD.encode(&salt),"auth_verifier":verifier(b["auth_hash"].as_str().unwrap_or_default(),&salt),"enc_blob":b["enc_blob"],"rev":if b["enc_blob"].is_null(){0}else{1}}))?;
         }
         self.config(true)?;
+        self.diary.event("sync.ativado");
         self.setup_status()
     }
     fn prelogin(&self, user: &str) -> Result<Value> {
@@ -328,6 +335,9 @@ impl Sync {
         Ok(json!({"salt":salt,"iterations":600000}))
     }
     pub(super) fn login(&self, b: &Value, now: f64, ip: &str) -> Result<(Value, String)> {
+        self.diary.trace("sync.login", || self.login_snapshot(b, now, ip))
+    }
+    fn login_snapshot(&self, b: &Value, now: f64, ip: &str) -> Result<(Value, String)> {
         let user = v::text(b, "user", 0, usize::MAX)?;
         let auth = v::text(b, "auth_hash", 0, usize::MAX)?;
         {
@@ -342,6 +352,7 @@ impl Sync {
                     .is_ok_and(|elapsed|elapsed < self.rate_window)
             });
             if num_bigint::BigInt::from(hits.len()) >= self.rate_max {
+                self.diary.access("sync.login", ip, "senha", Some("bloqueio_temporario"));
                 return Err(Failure::code(
                     429,
                     "erro_muitas_tentativas",
@@ -362,6 +373,7 @@ impl Sync {
             false
         };
         if !valid {
+            self.diary.access("sync.login", ip, "senha", Some("credenciais_invalidas"));
             self.fails
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -370,11 +382,15 @@ impl Sync {
                 .push(now);
             return Err(unauthorized());
         }
-        Ok((json!({"ok":true}), generation_of(acc.ok_or_else(unreadable)?)?))
+        let generation = generation_of(acc.ok_or_else(unreadable)?)?;
+        self.diary.access("sync.login", ip, "senha", None);
+        self.diary.event("sync.login_concluido");
+        Ok((json!({"ok":true}), generation))
     }
     fn put_vault(&self, b: &Value, user: &str) -> Result<Value> {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut vault) = self.load()?.filter(|value|truthy(value)) else {
+            self.diary.refused("sync.gravacao_recusada", "cadastro_ausente", "409");
             return Err(Failure {
                 status: 409,
                 body: json!({"detail":{"enc_blob":null,"rev":0}}),
@@ -384,6 +400,7 @@ impl Sync {
         let acc = acc.as_object_mut().ok_or_else(unreadable)?;
         let revision = acc.get("rev").ok_or_else(unreadable)?.clone();
         if b["base_rev"] != revision {
+            self.diary.refused("sync.gravacao_recusada", "revisao_desatualizada", "409");
             return Err(Failure {
                 status: 409,
                 body: super::object([("detail",super::object([("enc_blob",crate::orchestration::codec::clone_value(acc.get("enc_blob").ok_or_else(unreadable)?)),("rev",revision)]))]),
@@ -402,6 +419,7 @@ impl Sync {
         let next = increment_revision(&revision)?;
         acc.insert("rev".into(), next.clone());
         self.save(&vault)?;
+        self.diary.event("sync.gravado");
         Ok(json!({"rev":next}))
     }
     fn put_guest(

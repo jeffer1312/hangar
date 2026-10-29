@@ -1223,3 +1223,67 @@ async fn deep_cases(fixture:Value, errors:bool) {
     assert!(failures.is_empty(),"rotas profundas: {failures:?}");
 }
 
+fn guest_diary_lines(dir: &std::path::Path) -> Vec<Value> {
+    let mut paths=std::fs::read_dir(dir).unwrap().map(|e|e.unwrap().path()).collect::<Vec<_>>();paths.sort();
+    let mut seen=std::collections::HashSet::new();let mut active:Option<(String,String)>=None;
+    let lines=paths.into_iter().flat_map(|path|std::fs::read_to_string(path).unwrap().lines().map(|line|serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>()).map(|mut value| {
+        let event=value["evento"].as_str().unwrap();
+        if let Some(name)=event.strip_suffix(".inicio") {
+            let id=value["operacao"].as_str().expect("GUE-070: operação identificada");
+            assert_eq!(id.len(),16);assert!(id.bytes().all(|b|b.is_ascii_hexdigit()));assert!(seen.insert(id.to_owned()));
+            assert!(active.replace((name.into(),id.into())).is_none());
+        }
+        if let Some((_,id))=&active {assert_eq!(value["operacao"],id.as_str(),"GUE-070: registros pertencem à mesma operação");}
+        if let Some(name)=event.strip_suffix(".fim") {
+            assert_eq!(active.take().unwrap().0,name);assert!(value["ms"].as_u64().is_some());
+        }
+        for key in ["ts","backend","pid_backend","origem","ms","operacao"] {value.as_object_mut().unwrap().remove(key);}
+        value
+    }).collect();
+    assert!(active.is_none(),"GUE-070: operação sempre registra o fim");lines
+}
+
+#[tokio::test]
+async fn login_guests_diary_matches_original_operations_and_access() {
+    use hangar_server::login_guests::{Service,Settings};
+    static NOW:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(2000000000);
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/diary.json")).unwrap();
+    let home=tempfile::tempdir().unwrap();let diary=home.path().join("diary");std::fs::create_dir(&diary).unwrap();
+    let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
+    service.set_diary_directory(diary.clone());service.now=||NOW.load(std::sync::atomic::Ordering::Relaxed);service.rate_now=||NOW.load(std::sync::atomic::Ordering::Relaxed) as f64;service.entropy=|n|vec![b'x';n];
+    let service=Arc::new(service);let mut count=0;
+    for row in fixture["rows"].as_array().unwrap() {
+        NOW.store(row["now"].as_u64().unwrap(),std::sync::atomic::Ordering::Relaxed);
+        if let Some(raw)=row["before_vault_raw"].as_str(){std::fs::write(home.path().join("vault.json"),raw).unwrap();}
+        let mut request=axum::http::Request::builder().method(row["method"].as_str().unwrap()).uri(row["path"].as_str().unwrap()).header("content-type","application/json");
+        if let Some(cookie)=row["cookie"].as_str(){request=request.header("cookie",format!("cp_sync={cookie}"));}
+        let request=request.body(axum::body::Body::from(if row["body"].is_null(){String::new()}else{row["body"].to_string()})).unwrap();
+        let response=service.respond(row["token"]=="owner","fixture-origin".into(),false,request).await;
+        assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"{}",row["name"]);
+        let lines=guest_diary_lines(&diary);
+        let expected=row["events"].as_array().unwrap().iter().filter(|v|v["evento"].as_str().unwrap().starts_with("sync.")).cloned().map(|mut event|{
+            if event["erro_tipo"]=="JSONDecodeError" {event["erro_tipo"]=serde_json::json!("sync_vault_unreadable");} event
+        }).collect::<Vec<_>>();
+        assert_eq!(&lines[count..],expected.as_slice(),"GUE-070 {}",row["name"]);count=lines.len();
+    }
+}
+
+#[tokio::test]
+async fn login_guests_diary_deduplicates_and_bounds_cookie_origins() {
+    use hangar_server::login_guests::{Service,Settings};
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/access-diary.json")).unwrap();
+    let home=tempfile::tempdir().unwrap();let diary=home.path().join("diary");std::fs::create_dir(&diary).unwrap();
+    let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
+    service.set_diary_directory(diary.clone());service.now=||2000000000;let service=Arc::new(service);
+    let deep:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/deep-routes.json")).unwrap();
+    let mut count=0;
+    for row in fixture["rows"].as_array().unwrap() {
+        let mut request=axum::http::Request::builder().uri("/api/sync/vault");
+        if row["reason"].is_null(){request=request.header("cookie",format!("cp_sync={}",deep["cookie"].as_str().unwrap()));}
+        else if row["reason"]!="cookie_ausente" {request=request.header("cookie","cp_sync=invalid");}
+        let response=service.respond(false,row["ip"].as_str().unwrap().into(),false,request.body(axum::body::Body::empty()).unwrap()).await;
+        assert_eq!(response.status().as_u16(),if row["reason"].is_null(){200}else{401});
+        let lines=guest_diary_lines(&diary);assert_eq!(&lines[count..],row["events"].as_array().unwrap().as_slice(),"GUE-070 {}",row["ip"]);count=lines.len();
+    }
+    let text=serde_json::to_string(&guest_diary_lines(&diary)).unwrap();assert!(!text.contains("fixture-"));assert!(!text.contains("cp_sync"));
+}

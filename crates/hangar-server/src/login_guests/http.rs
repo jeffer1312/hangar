@@ -80,6 +80,9 @@ pub struct Service {
     login_barriers: std::sync::Mutex<Option<Arc<(std::sync::Barrier, std::sync::Barrier)>>>,
 }
 impl Service {
+    pub fn set_diary_directory(&mut self, directory: PathBuf) {
+        self.sync.diary.directory = Some(directory);
+    }
     pub async fn from_state(state: &AppState) -> Self {
         let home=&state.accounts.env.home;let claude=&state.accounts.env.claude_base;
         let settings=state.settings_snapshot().map_err(|_|config_invalid())
@@ -95,7 +98,9 @@ impl Service {
                 Err(_)=>{let mut service=Self::new(settings);service.config_error=Some(Failure::code(503,"sync_session_context_unavailable","contexto de autenticação da sincronização indisponível"));return service;}
             };
         }
-        Self::new(settings)
+        let mut service = Self::new(settings);
+        service.sync.diary.directory = crate::diag::diary_dir_in(&state.accounts.env);
+        service
     }
     pub fn uninitialized(home:&std::path::Path,claude:&std::path::Path)->Self {
         let mut service=Self::new(Settings::defaults(home,claude));
@@ -264,7 +269,13 @@ impl Service {
                     return Err(Failure::code(403, "erro_nao_autorizado", "unauthorized"));
                 }
                 let cookie = cookie(headers, "cp_sync").unwrap_or_default();
-                let (u, g) = self.sync.authenticate(&cookie, now)?;
+                let result = self.sync.authenticate(&cookie, now);
+                match &result {
+                    Ok(_) => self.sync.diary.access("sync.sessao", ip, "cookie", None),
+                    Err(error) if error.status == 401 => self.sync.diary.access("sync.sessao", ip, "cookie", Some(if cookie.is_empty(){"cookie_ausente"}else{"sessao_invalida_ou_expirada"})),
+                    Err(_) => {}
+                }
+                let (u, g) = result?;
                 user = Some(u);
                 generation = g;
             }
