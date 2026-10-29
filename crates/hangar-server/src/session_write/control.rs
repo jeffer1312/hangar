@@ -39,6 +39,8 @@ const MSG_NOT_SUBMITTED: &str = "não consegui enviar as opções marcadas — t
 const MSG_PLAN_GONE: &str = "o terminal não mostra mais a aprovação do plano — nada foi enviado";
 const MSG_NO_PERMISSION: &str = "nenhum pedido de permissão pendente";
 const MSG_NOT_IN_QUEUE: &str = "entrada não está na fila";
+const GIVE_UP_COMPOSER_BUSY_CODE: &str = "erro_fila_campo_ocupado";
+const MSG_COMPOSER_BUSY: &str = "Há texto no campo do terminal: apague ou envie para a fila andar";
 
 fn ok() -> Answer { (StatusCode::OK, json!({"ok": true})) }
 
@@ -363,6 +365,8 @@ pub fn queue_answer(removed: &Result<Value, RuntimeError>) -> Answer {
     match removed {
         Ok(done) if *done == json!(true) => ok(),
         Ok(_) => (StatusCode::NOT_FOUND, detail_body("erro_fila_entrada_nao_encontrada", MSG_NOT_IN_QUEUE, json!({}))),
+        Err(error) if error.code == crate::runtime::terminal::GIVE_UP_COMPOSER_BUSY =>
+            (StatusCode::CONFLICT, detail_body(GIVE_UP_COMPOSER_BUSY_CODE, MSG_COMPOSER_BUSY, json!({}))),
         Err(error) => runtime_failed(error),
     }
 }

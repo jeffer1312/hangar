@@ -453,6 +453,10 @@ async fn unknown_fill_blocks_second_input_after_detach_restart_and_same_sid_gene
     // Texto no campo com a trava: frase própria, para a pessoa saber que é ela quem destrava.
     let stalled=|code:&str|f.status.subscribe().borrow().input_stalled.as_deref()==Some(code);
     f.wait_for("campo ocupado na vista",||stalled("delivery_composer_busy")).await;
+    // Descartar de qualquer cliente com o texto no campo: o ator recusa, e o texto fica.
+    let refused=h.queue("give-up-A".into(),Action::GiveUp {entry_id:"A".into()}).await.unwrap_err();
+    assert_eq!(refused.code,hangar_server::runtime::terminal::GIVE_UP_COMPOSER_BUSY);
+    assert!(stalled("delivery_composer_busy"));
     f.io.text.lock().unwrap().clear();
     f.wait_for("campo vazio volta à trava comum",||stalled("delivery_unproved")).await;
     h.stop().await.unwrap();

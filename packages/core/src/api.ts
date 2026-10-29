@@ -544,6 +544,19 @@ export async function sendDiagReportAll(servers: Server[], input: { text?: strin
   return { code, group, results };
 }
 
+/** O que o botão do relatório faz agora: `send` (envio novo pela escolha de agora), `resend` (só às que falharam
+ *  e podem ir, no mesmo envio) ou `none` (nada a mandar, ou as que faltam não entrariam no código do envio). */
+export function diagReportNext(previous: DiagReportAllResult | null, targets: Server[]): 'send' | 'resend' | 'none' {
+  if (!targets.length) return 'none';
+  if (!previous) return 'send';
+  const sent = new Set(previous.results.map((r) => r.server.id));
+  // A escolha mudou depois do envio: repetir mandaria só às antigas.
+  if (targets.length !== sent.size || targets.some((t) => !sent.has(t.id))) return 'send';
+  const missed = previous.results.filter((r) => !r.result.ok);
+  if (missed.some((r) => diagReportRetryable(r.result))) return previous.code !== null && previous.group === null ? 'none' : 'resend';
+  return missed.some((r) => !r.result.ok && r.result.kind === 'expired') ? 'send' : 'none';
+}
+
 /** Reenvia só às máquinas que falharam num envio, no mesmo código, e junta ao resultado dele. */
 export async function resendDiagReportMissed(previous: DiagReportAllResult, input: { text?: string; client: string }): Promise<DiagReportAllResult> {
   // Envio com código e sem assinatura: as que faltam iriam avulsas, fora do código que a tela mostra.

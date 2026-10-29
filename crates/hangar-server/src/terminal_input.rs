@@ -293,6 +293,7 @@ static AGENT_ROW: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:❯\s+)
 // Sem `#`: anexo (`[Image #1]`) nunca passa por dica.
 static ARG_HINT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:\[[^\[\]#]*\]|<[^<>#]*>)$").unwrap());
 static NEXT_BUFFER: AtomicU64 = AtomicU64::new(0);
+const CLEANUP_CEILING: usize = 200;
 fn compact(text: &str) -> String { text.chars().filter(|c| !c.is_whitespace() && !"│┃║".contains(*c)).collect() }
 /// O Claude marca `› stashed` na linha de dicas acima do composer enquanto guarda um rascunho.
 fn stash_held(screen: &str) -> bool {
@@ -976,7 +977,9 @@ impl TerminalDriver {
         if !output.success { return Err(IoFailure { code: "mux_effect_failed", may_have_written: true }); }
         Ok(())
     }
-    async fn cleanup_owned(&self, text: &str, before: &ComposerSnapshot) -> bool {
+    /// `wrote`: a escrita falhou no meio (pedaço da colagem, o `x` do Windows que não saiu). Só com ela e o
+    /// campo vazio antes, o começo do nosso texto conta como nosso desde o início.
+    async fn cleanup_owned(&self, text: &str, before: &ComposerSnapshot, wrote: bool) -> bool {
         // A prova da conversa sumiu depois da escrita: o pane e o agente conferidos bastam para
         // reconhecer o próprio texto e tirá-lo, sem apagar o que não é nosso.
         let (mut now, agent) = match self.snapshot().await {
@@ -984,12 +987,14 @@ impl TerminalDriver {
             Err(error) if error.code == "facts_unavailable" => match self.snapshot_agent().await { Ok(now) => (now, true), Err(_) => return false },
             Err(_) => return false,
         };
-        // A limpeza só começa vendo o nosso texto inteiro: um começo dele pode ter sido digitado pela pessoa.
-        if !now.owned(text, before) { return false; }
+        // Sem escrita nossa pela metade, a limpeza só começa vendo o nosso texto inteiro: um começo dele pode ter
+        // sido digitado pela pessoa.
+        if !(if wrote { self.ours(&now, text, before) } else { now.owned(text, before) }) { return false; }
         // O Ctrl+U apaga só a linha do cursor (numa linha vazia, só a quebra): o texto de várias linhas sai aos
         // pedaços, e cada pedaço que sobra tem de ser o começo do nosso. Qualquer outra coisa é da pessoa. O
-        // orçamento é o configurado: texto longo demais fica como entrega incerta, sem prender a entrada.
-        for _ in 0..self.limits.cleanup_attempts {
+        // teto segura o `serial` por um tempo limitado: acima dele, entrega incerta.
+        let budget = self.limits.cleanup_attempts.max(text.lines().count() * 2 + 2).min(CLEANUP_CEILING);
+        for _ in 0..budget {
             if if agent { self.key_agent("C-u").await } else { self.key_inner("C-u").await }.is_err() { return false; }
             self.settle().await;
             let Ok(after) = (if agent { self.snapshot_agent().await } else { self.snapshot().await }) else { return false; };
@@ -997,7 +1002,7 @@ impl TerminalDriver {
             if !self.ours(&after, text, before) || after.content.chars().count() >= now.content.chars().count() { return false; }
             now = after;
         }
-        tracing::warn!(pane = %self.binding.pane, attempts = self.limits.cleanup_attempts, "limpeza do campo parou no orçamento; o resto do nosso texto fica e a entrega segue incerta");
+        tracing::warn!(pane = %self.binding.pane, attempts = budget, "limpeza do campo parou no orçamento; o resto do nosso texto fica e a entrega segue incerta");
         false
     }
     /// O campo tem o nosso texto inteiro ou o começo dele (a parte que a limpeza ainda não tirou). Com texto
@@ -1011,7 +1016,7 @@ impl TerminalDriver {
         DeliveryResult::new(if error.may_have_written { Disposition::Unknown } else { Disposition::Deferred }, stage, error.code)
     }
     async fn partial(&self, text: &str, before: &ComposerSnapshot, stage: DeliveryStage) -> DeliveryResult {
-        let cleaned = self.cleanup_owned(text, before).await;
+        let cleaned = self.cleanup_owned(text, before, stage == DeliveryStage::Write).await;
         let mut result = DeliveryResult::new(if cleaned { Disposition::Deferred } else { Disposition::Unknown }, stage, "input_unproved");
         result.cleanup = if cleaned { Cleanup::Proved } else { Cleanup::Unproved };
         result

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi } from './apiEnv';
 import { _resetDiagForTests, recentFailures, recordFailure } from './diag';
 import { _limparEsfriamentoParaTestes } from './esfriamento';
-import { diagReportMachines, diagReportTargets, getConfigForServer, recentFailuresFor, resendDiagReportMissed, rotaGenerica, sendDiagReport, sendDiagReportAll, steerQueuedMessage } from './api';
+import { diagReportMachines, diagReportNext, diagReportTargets, getConfigForServer, recentFailuresFor, resendDiagReportMissed, rotaGenerica, sendDiagReport, sendDiagReportAll, steerQueuedMessage } from './api';
 import type { Server } from './servers';
 
 const serverA: Server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
@@ -232,6 +232,23 @@ describe('sendDiagReportAll', () => {
     expect(bodies(fetchMock).map(([url]) => url)).toEqual(['https://c.test/api/diag/report']);
     expect(res.code).toBe('cccc4444');
     expect(res.results.map((r) => [r.server.id, r.result.ok])).toEqual([['a', false], ['c', true]]);
+  });
+
+  it('o botão: envio novo quando a escolha muda, só as que falharam com a mesma, nada sem a assinatura', () => {
+    const fail = (kind: 'unreachable' | 'unsupported' | 'expired') => ({ ok: false as const, code: 'x', status: 0, kind });
+    const okA = { server: serverA, result: { ok: true as const, code: 'aaaa2222', diary: 'sent' as const } };
+    const onlyA = { code: null, group: null, results: [{ server: serverA, result: fail('unreachable') }] };
+    expect(diagReportNext(null, [serverA])).toBe('send');
+    expect(diagReportNext(null, [])).toBe('none');
+    expect(diagReportNext(onlyA, [serverA])).toBe('resend');
+    expect(diagReportNext(onlyA, [serverA, serverB]), '"só esta" falhou e a pessoa marcou todas').toBe('send');
+    const signed = { code: 'aaaa2222', group: { code: 'aaaa2222', token: TOKEN }, results: [okA, { server: serverB, result: fail('unreachable') }] };
+    expect(diagReportNext(signed, [serverA, serverB])).toBe('resend');
+    expect(diagReportNext({ ...signed, group: null }, [serverA, serverB]), 'com código e sem assinatura').toBe('none');
+    const expired = { ...signed, results: [okA, { server: serverB, result: fail('expired') }] };
+    expect(diagReportNext(expired, [serverA, serverB])).toBe('send');
+    const unsupported = { code: null, group: null, results: [{ server: serverA, result: fail('unsupported') }] };
+    expect(diagReportNext(unsupported, [serverA])).toBe('none');
   });
 
   it('nenhuma deu certo: sem código, com o motivo de cada uma', async () => {

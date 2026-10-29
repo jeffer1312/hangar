@@ -408,37 +408,28 @@ pub(crate) async fn sessions(st: &crate::routes::AppState, s: &Scrubber) -> Sess
             files.into_iter().map(|(key, (name, path, created))| (key, name, count_waiting(&path, created))).collect::<Vec<_>>()
         })).await;
         let counted = match counted { Ok(Ok(counted)) => counted, _ => Vec::new() };
-        let mut out = Vec::new();
-        // Cada alvo com prazo próprio: o registro preso (fila no meio de uma troca) não leva junto os fatos já
-        // lidos. Estourou uma vez, as seguintes esperariam o mesmo lock: ficam sem a linha do plugin.
-        let mut stuck = false;
-        for (key, name, waiting) in counted {
+        // Cada alvo com prazo próprio e em paralelo: um preso não tira a linha do plugin dos outros. O registro
+        // (lock da sessão) e o disco têm prazos separados; o que estourou fica fora do relatório, com o motivo no log.
+        let snapshots = &snapshots;
+        futures_util::future::join_all(counted.into_iter().map(|(key, name, waiting)| async move {
             let mut fact = runtime_fact(snapshots.get(&key).unwrap_or(&Value::Null), waiting, s);
-            let read = async {
-                let target = registry.terminal_target(&name).await?;
-                let record = match &target {
-                    Some(target) => tokio::fs::try_exists(target.metadata.config_dir.join("sessions").join(format!("{}.json", target.metadata.agent_pid))).await.ok(),
-                    None => None,
-                };
-                Ok::<_, crate::runtime::protocol::RuntimeError>((target, record))
-            };
-            match if stuck { None } else { tokio::time::timeout(TARGET_WAIT, read).await.ok() } {
-                Some(Ok((Some(target), record))) => {
-                    fact.native_record = record;
+            match tokio::time::timeout(TARGET_WAIT, registry.terminal_target(&name)).await {
+                Ok(Ok(Some(target))) => {
+                    let record = target.metadata.config_dir.join("sessions").join(format!("{}.json", target.metadata.agent_pid));
+                    fact.native_record = match tokio::time::timeout(TARGET_WAIT, tokio::fs::try_exists(record)).await {
+                        Ok(read) => read.ok(),
+                        Err(_) => { tracing::warn!(session = %name, "relatório: registro nativo sem resposta do disco no prazo"); None }
+                    };
                     fact.plugin = registry.plugin().ok().and_then(|plugin| plugin
                         .pull_status(&crate::terminal_facts::LocalTerminalFacts::binding(&target), std::time::Instant::now()).ok());
                 }
-                Some(Ok((None, _))) => {}
+                Ok(Ok(None)) => {}
                 // O relatório sem a linha do plugin é o que diz "não consegui ler"; o motivo fica no log.
-                Some(Err(error)) => tracing::warn!(session = %name, code = %error.code, "relatório: alvo do terminal ilegível"),
-                None => {
-                    if !stuck { tracing::warn!(session = %name, "relatório: alvo do terminal sem resposta no prazo; as demais ficam sem a linha do plugin"); }
-                    stuck = true;
-                }
+                Ok(Err(error)) => tracing::warn!(session = %name, code = %error.code, "relatório: alvo do terminal ilegível"),
+                Err(_) => tracing::warn!(session = %name, "relatório: alvo do terminal sem resposta no prazo"),
             }
-            out.push((clean(s, &name, VALUE_MAX), fact));
-        }
-        out
+            (clean(s, &name, VALUE_MAX), fact)
+        })).await
     };
     let ((list_error, mut facts), runtime) = tokio::join!(list, runtime);
     for (name, fact) in runtime {

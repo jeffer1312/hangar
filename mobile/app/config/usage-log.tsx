@@ -6,7 +6,7 @@ import { Directory } from 'expo-file-system';
 import * as Clipboard from 'expo-clipboard';
 import { runtimeVersion } from 'expo-updates';
 import {
-  DIAG_REPORT_TEXT_MAX, diagReportMachines, diagReportRetryable, diagReportTargets, getDiagFileForServer, getDiagSummaryForServer,
+  DIAG_REPORT_TEXT_MAX, diagReportMachines, diagReportNext, diagReportTargets, getDiagFileForServer, getDiagSummaryForServer,
   resendDiagReportMissed, sendDiagReportAll,
   type DiagReportAllResult, type DiagReportFailureKind, type DiagReportScope, type LinhaDiag, type ResumoDiag, type Server,
 } from '@hangar/core';
@@ -82,13 +82,13 @@ function ReportSection({ server }: { server: Server }) {
 
   const many = machines.length > 1;
   const targets = diagReportTargets(machines, server, scope, picked);
+  const sending = report?.state === 'sending';
+  const done = report?.state === 'done' ? report.result : null;
+  const next = diagReportNext(done, targets);
 
   const send = async () => {
-    if (report?.state === 'sending') return;
-    // Envio com máquinas que não foram e podem ir: o reenvio vai só a elas, no código dele (ou no primeiro que der
-    // certo). Sem nenhuma assim (envio expirado), é um envio novo.
-    const prev = report?.state === 'done' && report.result.results.some(({ result: r }) => diagReportRetryable(r)) ? report.result : null;
-    if (!prev && !targets.length) return;
+    if (sending || next === 'none') return;
+    const prev = next === 'resend' ? done : null;
     const now = ++generation.current;
     setReport({ state: 'sending' });
     setCopied(false);
@@ -112,19 +112,13 @@ function ReportSection({ server }: { server: Server }) {
     }
   };
 
-  const sending = report?.state === 'sending';
-  const done = report?.state === 'done' ? report.result : null;
   const sentCode = done?.code ?? null;
   const diaryFailed = !!done?.results.some(({ result: r }) => r.ok && r.diary === 'failed');
   const missed = done?.results.flatMap(({ server: s, result: r }) => r.ok ? [] : [{ server: s, failure: { code: r.code, kind: r.kind } }]) ?? [];
-  // Pela escolha de agora: outra máquina marcada depois de um envio sem suporte pode ser enviada.
-  const unsupported = !!done && !done.code
-    && targets.every((t) => missed.some((x) => x.server.id === t.id && x.failure.kind === 'unsupported'));
   // Quantas máquinas o envio teve, não a escolha de agora: trocar a escolha depois não muda o texto do erro.
   const several = (done?.results.length ?? 0) > 1;
-  const retryMissed = !!done?.results.some(({ result: r }) => diagReportRetryable(r));
-  // Envio expirado: repetir nele não adianta, e a nota pede um relatório novo.
-  const expired = missed.some((x) => x.failure.kind === 'expired');
+  // O nome é o de quem recebe: a máquina da tela pode estar fora (desligada, par) e outra ir no lugar.
+  const only = machines[0];
   return (
     <SectionCard icon="LifeBuoy" title={m.native_settings_diary_report_title()}>
       {many ? (
@@ -142,7 +136,8 @@ function ReportSection({ server }: { server: Server }) {
           />
         </SettingsRow>
       ) : (
-        <SettingsRow icon="Server" title={server.label} description={m.native_settings_diary_report_server({ server: server.label })} />
+        <SettingsRow icon="Server" title={only?.label ?? server.label}
+          description={only ? m.native_settings_diary_report_server({ server: only.label }) : m.native_settings_diary_report_no_target()} />
       )}
       {many && scope === 'pick' ? machines.map((s) => (
         <SettingsRow key={s.id} icon="Monitor" title={s.label}
@@ -185,6 +180,11 @@ function ReportSection({ server }: { server: Server }) {
             ))}
           </View>
         ) : null}
+        {!targets.length && machines.length > 0 && !sentCode ? (
+          <Text style={[styles.noteText, { color: c.text }]}>
+            {scope === 'pick' ? m.native_settings_diary_report_none_picked() : m.native_settings_diary_report_no_target()}
+          </Text>
+        ) : null}
         <View style={styles.row}>
           {sentCode ? (
             <Pill
@@ -193,13 +193,13 @@ function ReportSection({ server }: { server: Server }) {
               onPress={() => { void copy(sentCode); }}
             />
           ) : null}
-          {sentCode && !retryMissed && !expired ? null : (
+          {sentCode && next === 'none' ? null : (
             <Pill
-              icon={retryMissed ? 'RefreshCw' : 'Send'}
+              icon={next === 'resend' ? 'RefreshCw' : 'Send'}
               label={sending ? m.native_settings_diary_report_sending()
-                : retryMissed ? m.native_settings_diary_report_retry()
+                : next === 'resend' ? m.native_settings_diary_report_retry()
                 : m.native_settings_diary_report_send()}
-              disabled={sending || unsupported || (!retryMissed && !targets.length)}
+              disabled={sending || next === 'none'}
               onPress={() => { void send(); }}
             />
           )}

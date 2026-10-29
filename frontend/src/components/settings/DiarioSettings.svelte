@@ -6,7 +6,7 @@
   // O que o arquivo contém e o que NÃO contém está em backend/app/diag.py e em lib/diag.ts. O texto
   // aqui repete a parte que importa pra quem vai enviar: fica na máquina, e não guarda conversa.
   import { getDiagResumo, baixarDiag, type ResumoDiag, type LinhaDiag } from '@hangar/core';
-  import { fmtBytes, sendDiagReportAll, resendDiagReportMissed, diagReportMachines, diagReportRetryable, diagReportTargets, DIAG_REPORT_TEXT_MAX,
+  import { fmtBytes, sendDiagReportAll, resendDiagReportMissed, diagReportMachines, diagReportNext, diagReportTargets, DIAG_REPORT_TEXT_MAX,
     type DiagReportAllResult, type DiagReportResult, type DiagReportScope } from '@hangar/core';
   import { findServer, getActiveId, listServers, onServersChanged } from '../../lib/auth';
   import { papelDo } from '../../lib/papel.svelte';
@@ -58,11 +58,8 @@
   }
   const missed = $derived(resultado?.results.filter((r) => !r.result.ok) ?? []);
   const diaryFailed = $derived(resultado?.results.some((r) => r.result.ok && r.result.diary === 'failed') ?? false);
-  // Pela escolha de agora: outra máquina marcada depois de um envio sem suporte pode ser enviada.
-  const onlyUnsupported = $derived(!!resultado && resultado.code === null
-    && targets.every((t) => missed.some((r) => r.server.id === t.id && !r.result.ok && r.result.kind === 'unsupported')));
-  const retryable = $derived(missed.some((r) => diagReportRetryable(r.result)));
-  const expired = $derived(missed.some((r) => !r.result.ok && r.result.kind === 'expired'));
+  const next = $derived(diagReportNext(resultado, targets));
+  const act = () => (next === 'resend' ? resendMissed() : reportar());
   // Quantas máquinas o envio teve, não a escolha de agora: trocar a escolha depois não muda o texto do erro.
   const several = $derived((resultado?.results.length ?? 0) > 1);
 
@@ -162,7 +159,9 @@
   {#if servidor && podeReportar}
     <section class="reportar" aria-labelledby="diag-report-tit">
       <strong id="diag-report-tit" class="preview-tit">{m.config_diag_report_title()}</strong>
-      <p class="rep-servidor">{machines.length > 1 ? m.config_diag_report_server_many() : m.config_diag_report_server({ server: servidor.label })}</p>
+      <!-- O nome é o de quem recebe: a máquina da tela pode estar fora (desligada, par) e outra ir no lugar. -->
+      <p class="rep-servidor">{machines.length > 1 ? m.config_diag_report_server_many()
+        : machines.length ? m.config_diag_report_server({ server: machines[0].label }) : m.config_diag_report_no_target()}</p>
       {#if resultado?.code}
         {@const code = resultado.code}
         <p class="rep-msg" role="status">{m.config_diag_report_sent()}</p>
@@ -173,14 +172,10 @@
           </button>
         </div>
         {#if diaryFailed}<p class="rep-msg aviso">{m.config_diag_report_diary_failed()}</p>{/if}
-        {#if retryable}
-          <button class="btn primario" onclick={resendMissed} disabled={enviando}>
-            {enviando ? m.config_diag_report_sending() : m.config_diag_report_retry()}
-          </button>
-        {:else if expired}
-          <!-- Envio expirado: repetir nele não adianta, e a nota pede um relatório novo. -->
-          <button class="btn primario" onclick={reportar} disabled={enviando || !targets.length}>
-            {enviando ? m.config_diag_report_sending() : m.config_diag_report_send()}
+        {#if next !== 'none'}
+          <!-- Envio expirado vira envio novo: repetir nele não adianta. -->
+          <button class="btn primario" onclick={act} disabled={enviando}>
+            {enviando ? m.config_diag_report_sending() : next === 'resend' ? m.config_diag_report_retry() : m.config_diag_report_send()}
           </button>
         {/if}
       {:else}
@@ -204,10 +199,11 @@
         <textarea id="diag-report-texto" bind:value={texto} maxlength={DIAG_REPORT_TEXT_MAX} rows="3"
                   disabled={enviando} placeholder={m.config_diag_report_text_placeholder()}></textarea>
         <p class="rep-aviso">{m.config_diag_report_notice()}</p>
-        <button class="btn primario" onclick={retryable ? resendMissed : reportar} disabled={enviando || !targets.length || onlyUnsupported}>
-          {enviando ? m.config_diag_report_sending()
-            : resultado && !onlyUnsupported ? m.config_diag_report_retry()
-            : m.config_diag_report_send()}
+        {#if !targets.length && machines.length}
+          <p class="rep-aviso">{scope === 'pick' ? m.config_diag_report_none_picked() : m.config_diag_report_no_target()}</p>
+        {/if}
+        <button class="btn primario" onclick={act} disabled={enviando || next === 'none'}>
+          {enviando ? m.config_diag_report_sending() : next === 'resend' ? m.config_diag_report_retry() : m.config_diag_report_send()}
         </button>
       {/if}
       {#if missed.length}

@@ -509,8 +509,10 @@ impl Store {
         let mut memory = self.memory.lock().map_err(|_| unavailable())?;
         let s = session(&mut memory, binding)?;
         let seen = s.owner.as_ref().map(|owner| owner.seen);
+        // O mesmo critério da prova: o fim conta contra o começo do `/pull`.
+        let pulled = s.owner.as_ref().map(|owner| owner.pulled);
         Ok(PullStatus { open: s.waiter.is_some(), last_seen_s: seen.map(|seen| now.saturating_duration_since(seen).as_secs()),
-            reported: s.reported.is_some(), ended: s.ended.is_some_and(|ended| seen.is_none_or(|seen| ended >= seen)) })
+            reported: s.reported.is_some(), ended: s.ended.is_some_and(|ended| pulled.is_none_or(|pulled| ended >= pulled)) })
     }
     /// O `/pull` aberto, ou visto há pouco: entre um `/pull` e o seguinte a prova não pisca. O visto há
     /// pouco não diz a conversa de agora: só vale onde nenhuma outra leitura a contradiz.
@@ -778,6 +780,7 @@ mod tests {
         assert!(!store.conversation_pulling(&binding).unwrap(), "aberto antes do fim");
         drop(poll);
         assert!(!store.conversation_proved(&binding, Instant::now()).unwrap(), "encerrado depois do fim");
+        assert!(store.pull_status(&binding, Instant::now()).unwrap().ended, "o relatório diz o mesmo que a prova");
     }
 
     #[test]

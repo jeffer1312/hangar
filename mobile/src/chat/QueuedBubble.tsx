@@ -1,7 +1,7 @@
 import { memo, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { waitsInQueue, type ChatEvent, type QuoteRef, type SessionInfo } from '@hangar/core';
+import { discardsHeld, holdsQueue, waitsInQueue, type ChatEvent, type QuoteRef, type SessionInfo } from '@hangar/core';
 import { chatStore } from '../stores/chat';
 import { UserBubble } from './UserBubble';
 import * as m from '../paraglide/messages';
@@ -50,14 +50,14 @@ export const QueuedBubble = memo(function QueuedBubble({ event, working, problem
   const queued = event.id.startsWith('queued-');
   const failed = event.desistiu === true;
   const writeHeld = problem === 'terminal_input_delivery_unproved' || problem === 'terminal_input_delivery_composer_busy';
-  const holdsQueue = queued && !event.queued_consumed && writeHeld && event.queued_delivered === true && !failed;
+  const held = holdsQueue(event, problem);
   const notes: string[] = [];
   if (!event.queued_consumed) {
     if (failed || event.id.startsWith('held:') || event.hook_error != null) {
       notes.push(event.hook_error ?? m.native_delivery_failed());
     }
     if (failed) notes.push(m.msg_nao_chegou_reenvie());
-    else if (holdsQueue) notes.push(m.native_delivery_unproved());
+    else if (held) notes.push(m.native_delivery_unproved());
     else if (queued && event.queued_delivered !== true && writeHeld) notes.push(m.native_queue_held());
     else if (queued && event.queued_delivered !== true && problem === 'terminal_input_no_safe_delivery') notes.push(m.native_no_safe_delivery());
     else if (queued) notes.push(event.queued_delivered === true ? m.native_delivering() : m.native_queued());
@@ -70,8 +70,7 @@ export const QueuedBubble = memo(function QueuedBubble({ event, working, problem
           eventId={event.id} imageCount={event.image_count ?? 0} onQuoteClick={onQuoteClick} />
       </View>
       {notes.length ? <Text style={styles.note}>{notes.join(' · ')}</Text> : null}
-      {/* Descartar não tira o texto do campo do terminal: com texto lá, a pessoa apaga ou envia antes. */}
-      {queued && !event.queued_consumed && (failed || (holdsQueue && problem !== 'terminal_input_delivery_composer_busy')) && sessionName && serverId
+      {queued && !event.queued_consumed && (failed || discardsHeld(event, problem)) && sessionName && serverId
         ? <DiscardQueued id={event.id.slice('queued-'.length)} text={event.text ?? ''} sessionName={sessionName} serverId={serverId} /> : null}
     </View>
   );
