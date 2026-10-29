@@ -1,5 +1,5 @@
 //! Hooks próprios do Codex conservam comandos funcionais e a aprovação por índice.
-use super::hooks::refers;
+use super::hooks::refers_platform;
 use serde_json::{Value, json};
 use std::{fs, path::Path};
 fn command(python: &Path, script: &Path, windows: bool, guard: bool) -> String {
@@ -75,7 +75,7 @@ pub fn sync(home: &Path, repo: &Path, windows: bool) -> Result<Vec<String>, Stri
             let found = groups
                 .iter()
                 .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
-                .any(|h| refers(&h["command"], script, true));
+                .any(|h| refers_platform(&h["command"], script, true, windows));
             if !found {
                 let mut block = json!({"hooks":[{"type":"command","command":command}]});
                 if guard {
@@ -96,7 +96,7 @@ pub fn sync(home: &Path, repo: &Path, windows: bool) -> Result<Vec<String>, Stri
                         .into_iter()
                         .flatten()
                     {
-                        if refers(&hook["command"], script, true)
+                        if refers_platform(&hook["command"], script, true, windows)
                             && !hook["command"]
                                 .as_str()
                                 .unwrap_or("")

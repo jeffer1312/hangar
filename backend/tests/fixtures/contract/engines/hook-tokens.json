@@ -1,0 +1,174 @@
+{
+  "source_commit": "1deb20f270615f385c975c6bec9c49ca8b00d724",
+  "command": "PYTHONPATH=backend python backend/tests/fixtures/contract/engines/generate_hook_tokens.py",
+  "cases": [
+    {
+      "windows": false,
+      "command": "python /opt/Hangar\\ App/backend/hooks/kimi_state_hook.py",
+      "script": "/opt/Hangar App/backend/hooks/kimi_state_hook.py",
+      "basename": false,
+      "expected": true
+    },
+    {
+      "windows": false,
+      "command": "python /opt/Hangar\\ App/backend/hooks/kimi_state_hook.py",
+      "script": "/opt/Hangar App/backend/hooks/kimi_state_hook.py",
+      "basename": true,
+      "expected": true
+    },
+    {
+      "windows": false,
+      "command": "python '/broken quote /opt/kimi_state_hook.py",
+      "script": "/opt/kimi_state_hook.py",
+      "basename": false,
+      "expected": true
+    },
+    {
+      "windows": false,
+      "command": "python '/broken quote /opt/kimi_state_hook.py",
+      "script": "/opt/kimi_state_hook.py",
+      "basename": true,
+      "expected": true
+    },
+    {
+      "windows": false,
+      "command": "python \"C:\\Hangar App\\hooks\\state_hook.py\" || exit 0",
+      "script": "C:\\Hangar App\\hooks\\state_hook.py",
+      "basename": false,
+      "expected": true
+    },
+    {
+      "windows": false,
+      "command": "python \"C:\\Hangar App\\hooks\\state_hook.py\" || exit 0",
+      "script": "C:\\Hangar App\\hooks\\state_hook.py",
+      "basename": true,
+      "expected": true
+    },
+    {
+      "windows": false,
+      "command": "python C:\\Hangar\\hooks\\state_hook.py",
+      "script": "C:\\Hangar\\hooks\\state_hook.py",
+      "basename": false,
+      "expected": false
+    },
+    {
+      "windows": false,
+      "command": "python C:\\Hangar\\hooks\\state_hook.py",
+      "script": "C:\\Hangar\\hooks\\state_hook.py",
+      "basename": true,
+      "expected": false
+    },
+    {
+      "windows": false,
+      "command": "python \"/opt/Hangar\\ App/state_hook.py\"",
+      "script": "/opt/Hangar\\ App/state_hook.py",
+      "basename": false,
+      "expected": true
+    },
+    {
+      "windows": false,
+      "command": "python \"/opt/Hangar\\ App/state_hook.py\"",
+      "script": "/opt/Hangar\\ App/state_hook.py",
+      "basename": true,
+      "expected": true
+    },
+    {
+      "windows": false,
+      "command": "python /opt/hook.py\\",
+      "script": "/opt/hook.py",
+      "basename": false,
+      "expected": false
+    },
+    {
+      "windows": false,
+      "command": "python /opt/hook.py\\",
+      "script": "/opt/hook.py",
+      "basename": true,
+      "expected": false
+    },
+    {
+      "windows": true,
+      "command": "python /opt/Hangar\\ App/backend/hooks/kimi_state_hook.py",
+      "script": "/opt/Hangar App/backend/hooks/kimi_state_hook.py",
+      "basename": false,
+      "expected": false
+    },
+    {
+      "windows": true,
+      "command": "python /opt/Hangar\\ App/backend/hooks/kimi_state_hook.py",
+      "script": "/opt/Hangar App/backend/hooks/kimi_state_hook.py",
+      "basename": true,
+      "expected": true
+    },
+    {
+      "windows": true,
+      "command": "python '/broken quote /opt/kimi_state_hook.py",
+      "script": "/opt/kimi_state_hook.py",
+      "basename": false,
+      "expected": true
+    },
+    {
+      "windows": true,
+      "command": "python '/broken quote /opt/kimi_state_hook.py",
+      "script": "/opt/kimi_state_hook.py",
+      "basename": true,
+      "expected": true
+    },
+    {
+      "windows": true,
+      "command": "python \"C:\\Hangar App\\hooks\\state_hook.py\" || exit 0",
+      "script": "C:\\Hangar App\\hooks\\state_hook.py",
+      "basename": false,
+      "expected": true
+    },
+    {
+      "windows": true,
+      "command": "python \"C:\\Hangar App\\hooks\\state_hook.py\" || exit 0",
+      "script": "C:\\Hangar App\\hooks\\state_hook.py",
+      "basename": true,
+      "expected": true
+    },
+    {
+      "windows": true,
+      "command": "python C:\\Hangar\\hooks\\state_hook.py",
+      "script": "C:\\Hangar\\hooks\\state_hook.py",
+      "basename": false,
+      "expected": true
+    },
+    {
+      "windows": true,
+      "command": "python C:\\Hangar\\hooks\\state_hook.py",
+      "script": "C:\\Hangar\\hooks\\state_hook.py",
+      "basename": true,
+      "expected": true
+    },
+    {
+      "windows": true,
+      "command": "python \"/opt/Hangar\\ App/state_hook.py\"",
+      "script": "/opt/Hangar\\ App/state_hook.py",
+      "basename": false,
+      "expected": true
+    },
+    {
+      "windows": true,
+      "command": "python \"/opt/Hangar\\ App/state_hook.py\"",
+      "script": "/opt/Hangar\\ App/state_hook.py",
+      "basename": true,
+      "expected": true
+    },
+    {
+      "windows": true,
+      "command": "python /opt/hook.py\\",
+      "script": "/opt/hook.py",
+      "basename": false,
+      "expected": false
+    },
+    {
+      "windows": true,
+      "command": "python /opt/hook.py\\",
+      "script": "/opt/hook.py",
+      "basename": true,
+      "expected": false
+    }
+  ]
+}

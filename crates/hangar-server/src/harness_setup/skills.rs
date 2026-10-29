@@ -9,21 +9,24 @@ use std::{
 };
 static LOCK: Mutex<()> = Mutex::new(());
 
-fn children(path: &Path) -> Vec<PathBuf> {
-    let mut entries: Vec<_> = fs::read_dir(path)
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .collect();
+fn children(path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    match fs::metadata(path) {
+        Ok(meta) if !meta.is_dir() => return Ok(vec![]),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(error) => return Err(error),
+        _ => {}
+    }
+    let mut entries = fs::read_dir(path)?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
     entries.sort();
-    entries
+    Ok(entries)
 }
-fn skills(path: &Path) -> Vec<PathBuf> {
-    children(path)
+fn skills(path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    Ok(children(path)?
         .into_iter()
         .filter(|p| p.join("SKILL.md").is_file())
-        .collect()
+        .collect())
 }
 fn version(path: &Path) -> (bool, Vec<u64>, String) {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -45,29 +48,38 @@ fn roots(env: &AccountEnvironment, repo: &Path) -> Vec<PathBuf> {
         env.home.join(".agents/skills"),
     ]
 }
-pub fn sources(env: &AccountEnvironment, repo: &Path) -> BTreeMap<String, PathBuf> {
+pub fn sources(
+    env: &AccountEnvironment,
+    repo: &Path,
+) -> std::io::Result<BTreeMap<String, PathBuf>> {
     let mut result = BTreeMap::new();
     for (i, root) in roots(env, repo).iter().enumerate() {
-        let found = match i {
-            2 => children(root)
-                .into_iter()
-                .flat_map(|plugin| {
-                    let newest = children(&plugin)
-                        .into_iter()
-                        .flat_map(|sub| children(&sub))
-                        .filter(|v| v.join("skills").is_dir())
-                        .max_by_key(|p| (version(p), p.clone()));
-                    newest
-                        .map(|p| skills(&p.join("skills")))
-                        .unwrap_or_default()
-                })
-                .collect(),
-            3 => children(root)
-                .into_iter()
-                .flat_map(|p| skills(&p.join("skills")))
-                .collect(),
-            _ => skills(root),
-        };
+        let mut found = Vec::new();
+        match i {
+            2 => {
+                for plugin in children(root)? {
+                    let mut versions = Vec::new();
+                    for sub in children(&plugin)? {
+                        versions.extend(
+                            children(&sub)?
+                                .into_iter()
+                                .filter(|v| v.join("skills").is_dir()),
+                        );
+                    }
+                    if let Some(newest) =
+                        versions.into_iter().max_by_key(|p| (version(p), p.clone()))
+                    {
+                        found.extend(skills(&newest.join("skills"))?);
+                    }
+                }
+            }
+            3 => {
+                for market in children(root)? {
+                    found.extend(skills(&market.join("skills"))?);
+                }
+            }
+            _ => found = skills(root)?,
+        }
         for source in found {
             if let Some(name) = source.file_name() {
                 result
@@ -76,7 +88,7 @@ pub fn sources(env: &AccountEnvironment, repo: &Path) -> BTreeMap<String, PathBu
             }
         }
     }
-    result
+    Ok(result)
 }
 fn normalized(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
@@ -131,7 +143,7 @@ fn rebuild_one(
     dry: bool,
 ) -> std::io::Result<Value> {
     let mut result = json!({"criados":0,"trocados":0,"removidos":0,"mantidos":0,"pulados_reais":0});
-    let mut existing: BTreeMap<String, PathBuf> = children(bridge)
+    let mut existing: BTreeMap<String, PathBuf> = children(bridge)?
         .into_iter()
         .map(|p| (p.file_name().unwrap().to_string_lossy().into_owned(), p))
         .collect();
@@ -185,7 +197,13 @@ fn rebuild_one(
 }
 pub fn rebuild(env: &AccountEnvironment, repo: &Path, dry: bool) -> Value {
     let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let sources = sources(env, repo);
+    let sources = match sources(env, repo) {
+        Ok(sources) => sources,
+        Err(error) => {
+            tracing::warn!(%error,"Varredura de fontes incompleta; espelhos preservados");
+            return json!({"fontes":{"erro":1}});
+        }
+    };
     if sources.is_empty() {
         tracing::warn!("Nenhuma fonte de skills encontrada; espelhos preservados");
         return json!({});
@@ -202,7 +220,92 @@ pub fn rebuild(env: &AccountEnvironment, repo: &Path, dry: bool) -> Value {
                 tracing::warn!(target,%error,"Falha ao atualizar skills");
                 json!({"erro":1})
             });
+        if result[target].get("erro").is_none() {
+            match bridge_configured(env, target) {
+                Ok(Some(false)) => {
+                    let verb = if dry { "seria montada" } else { "foi montada" };
+                    tracing::warn!(
+                        "{} não está na config do {target} — a ponte {verb} mas o {target} não vai ler. Adicione o caminho à lista de skills dele.",
+                        parent.join("skills-bridge").display()
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(target,%error,"Configuração ilegível; não deu para conferir a lista de skills")
+                }
+                _ => {}
+            }
+        }
         tracing::info!(target,stats=%result[target],"Skills conferidas");
     }
     result
+}
+
+pub fn bridge_configured(env: &AccountEnvironment, target: &str) -> Result<Option<bool>, String> {
+    let (relative, file, key) = match target {
+        "pi" => (".pi/agent", "settings.json", "skills"),
+        "kimi" => (".kimi-code", "config.toml", "extra_skill_dirs"),
+        _ => return Err("harness desconhecido".into()),
+    };
+    let root = env.home.join(relative);
+    let raw = match fs::read_to_string(root.join(file)) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let data: Value = if target == "pi" {
+        serde_json::from_str(&raw).map_err(|e| e.to_string())?
+    } else {
+        toml::from_str(&raw).map_err(|e| e.to_string())?
+    };
+    let bridge = normalized(&root.join("skills-bridge"));
+    Ok(Some(
+        data[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .any(|value| {
+                let value = if value == "~" {
+                    env.home.to_string_lossy().into_owned()
+                } else if let Some(tail) = value
+                    .strip_prefix("~/")
+                    .or_else(|| value.strip_prefix("~\\"))
+                {
+                    env.home.join(tail).to_string_lossy().into_owned()
+                } else {
+                    value.to_owned()
+                };
+                let re = regex::Regex::new(r"\$\{([^}]+)\}|\$([A-Za-z0-9_]+)").unwrap();
+                let expanded = re.replace_all(&value, |captures: &regex::Captures| {
+                    let key = captures
+                        .get(1)
+                        .or_else(|| captures.get(2))
+                        .unwrap()
+                        .as_str();
+                    env.base
+                        .get(key)
+                        .cloned()
+                        .unwrap_or_else(|| captures[0].to_owned())
+                });
+                let expanded = if cfg!(windows) {
+                    let percent = regex::Regex::new(r"%%|%([^%]+)%").unwrap();
+                    percent
+                        .replace_all(&expanded, |captures: &regex::Captures| {
+                            captures.get(1).map_or_else(
+                                || "%".to_owned(),
+                                |key| {
+                                    env.base
+                                        .get(key.as_str())
+                                        .cloned()
+                                        .unwrap_or_else(|| captures[0].to_owned())
+                                },
+                            )
+                        })
+                        .into_owned()
+                } else {
+                    expanded.into_owned()
+                };
+                normalized(Path::new(&expanded)) == bridge
+            }),
+    ))
 }

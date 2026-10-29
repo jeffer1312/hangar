@@ -58,7 +58,7 @@ pub fn sync(env: &AccountEnvironment, repo: &Path) -> Result<Vec<String>, String
                 !data["hooks"].as_array().into_iter().flatten().any(|h| {
                     h["event"] == *event
                         && h["matcher"].as_str() == *matcher
-                        && super::hooks::refers(&h["command"], &script, false)
+                        && super::hooks::refers_platform(&h["command"], &script, false, false)
                 })
             })
             .collect();

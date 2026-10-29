@@ -9,16 +9,38 @@ use std::{
 };
 static LOCK: Mutex<()> = Mutex::new(());
 
-fn tokens(command: &str) -> Vec<String> {
+fn tokens(command: &str, windows: bool) -> Vec<String> {
+    let fallback = || command.split_whitespace().map(str::to_owned).collect();
     let mut result = Vec::new();
     let mut current = String::new();
     let mut quote = None;
-    for c in command.chars() {
-        if quote == Some(c) {
-            quote = None;
-        } else if quote.is_none() && (c == '\'' || c == '"') {
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+                if windows {
+                    result.push(std::mem::take(&mut current));
+                }
+            } else if !windows && q == '"' && c == '\\' {
+                let Some(next) = chars.next() else {
+                    return fallback();
+                };
+                if next != '"' && next != '\\' {
+                    current.push('\\');
+                }
+                current.push(next);
+            } else {
+                current.push(c);
+            }
+        } else if !windows && c == '\\' {
+            let Some(next) = chars.next() else {
+                return fallback();
+            };
+            current.push(next);
+        } else if (c == '\'' || c == '"') && (!windows || current.is_empty()) {
             quote = Some(c);
-        } else if quote.is_none() && c.is_whitespace() {
+        } else if c.is_whitespace() {
             if !current.is_empty() {
                 result.push(std::mem::take(&mut current));
             }
@@ -26,19 +48,38 @@ fn tokens(command: &str) -> Vec<String> {
             current.push(c);
         }
     }
+    if quote.is_some() {
+        return fallback();
+    }
     if !current.is_empty() {
         result.push(current);
     }
     result
 }
 pub fn refers(command: &Value, script: &str, basename: bool) -> bool {
+    refers_platform(command, script, basename, cfg!(windows))
+}
+pub fn refers_platform(command: &Value, script: &str, basename: bool, windows: bool) -> bool {
+    let basename_of = |text: &str| -> String {
+        if windows {
+            text.rsplit(['/', '\\']).next().unwrap_or("").to_owned()
+        } else {
+            text.rsplit('/').next().unwrap_or("").to_owned()
+        }
+    };
+    let target = if basename {
+        basename_of(script)
+    } else {
+        script.to_owned()
+    };
     command.as_str().is_some_and(|c| {
-        tokens(c).iter().any(|t| {
-            if basename {
-                t.rsplit(['/', '\\']).next() == script.rsplit(['/', '\\']).next()
+        tokens(c, windows).iter().any(|token| {
+            let token = token.trim_matches(['"', '\'']);
+            (if basename {
+                basename_of(token)
             } else {
-                t == script
-            }
+                token.to_owned()
+            }) == target
         })
     })
 }
