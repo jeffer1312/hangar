@@ -499,7 +499,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
           </SessionSectionCard>
           );
         }}
-        ListEmptyComponent={home && (machineErrors.length || byServer.some((b) => !b.error && !b.loaded)) ? null
+        ListEmptyComponent={home && (machineErrors.length || byServer.some((b) => !b.server.inviteEnded && !b.error && !b.loaded)) ? null
           : busca ? vazio(m.lista_vazia_filtro(), null, true) : vazio(m.lista_nenhuma_ativa(), null)}
         contentContainerStyle={styles.listContent}
         keyboardShouldPersistTaps="handled"
