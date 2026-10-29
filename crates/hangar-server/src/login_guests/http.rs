@@ -54,7 +54,7 @@ impl Settings {
     }
 }
 pub struct Service {
-    pub store: Store,
+    pub store: Arc<Store>,
     pub(crate) lives: std::sync::OnceLock<Arc<crate::share::life::Lives>>,
     pub(super) sync: Sync,
     pub now: fn() -> u64,
@@ -71,7 +71,7 @@ impl Service {
         sync.rate_max = settings.rate_max;
         sync.rate_window = settings.rate_window;
         Self {
-            store: Store::new(settings.guests),
+            store: Store::shared(settings.guests),
             lives: std::sync::OnceLock::new(),
             sync,
             now: || {
@@ -123,7 +123,14 @@ impl Service {
                     .into_response();
             }
         };
-        let body = match crate::orchestration::body::parse(&bytes) {
+        let expects_body = match (method.as_str(), path.as_str()) {
+            ("POST", "/api/guests" | "/api/sync/setup" | "/api/sync/register" | "/api/sync/login" | "/api/sync/guests") => true,
+            ("PUT", "/api/sync/vault") => true,
+            ("POST", path) => path.strip_prefix("/api/guests/").is_some_and(|id| !id.contains('/')),
+            _ => false,
+        };
+        let parsed = if expects_body { crate::orchestration::body::parse(&bytes) } else { Ok(Value::Null) };
+        let body = match parsed {
             Ok(value) => value,
             Err((status, body)) => {
                 return reply(

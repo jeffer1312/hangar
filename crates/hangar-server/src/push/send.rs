@@ -138,10 +138,13 @@ impl Sender {
             (true, Some(share)) => share.lives.life(session, false).await,
             _ => None,
         };
+        let name = session.to_owned();
+        let hidden_guest = tokio::task::spawn_blocking(move || guests.access(&[(name.clone(), life)]).1.contains(&name))
+            .await.unwrap_or(true);
         Gate {
             muted: store::is_muted(&prefs, session),
             quiet: store::in_quiet_hours(&prefs, chrono::Local::now().time()),
-            hidden_guest: guests.access(&[(session.to_owned(), life)]).1.iter().any(|h| h == session),
+            hidden_guest,
             owner_at_pc: crate::presence::present(&self.st),
         }
     }

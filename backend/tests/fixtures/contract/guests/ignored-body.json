@@ -1,0 +1,189 @@
+{
+  "source_commit": "1bceae0e60618283d2aeee59cab7aa981b5544f7",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_ignored_body.py",
+  "rows": [
+    {
+      "method": "GET",
+      "path": "/api/me",
+      "token": "owner",
+      "raw": "{",
+      "status": 200,
+      "response": {
+        "role": "owner",
+        "name": null
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/me",
+      "token": "unknown",
+      "raw": "{",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/guests/missing/delete",
+      "token": "owner",
+      "raw": "{",
+      "status": 404,
+      "response": {
+        "detail": {
+          "code": "erro_convidado_inexistente",
+          "params": {},
+          "msg": "convidado não existe"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/guests/missing/delete",
+      "token": "unknown",
+      "raw": "{",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/sync/setup",
+      "token": "owner",
+      "raw": "{",
+      "status": 200,
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/sync/setup",
+      "token": "unknown",
+      "raw": "{",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sync/setup/disable",
+      "token": "owner",
+      "raw": "{",
+      "status": 200,
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/sync/setup/disable",
+      "token": "unknown",
+      "raw": "{",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/sync/vault",
+      "token": "owner",
+      "raw": "{",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/sync/vault",
+      "token": "unknown",
+      "raw": "{",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/sync/guests",
+      "token": "owner",
+      "raw": "{",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/sync/guests",
+      "token": "unknown",
+      "raw": "{",
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/sync/prelogin?user=owner",
+      "token": "owner",
+      "raw": "{",
+      "status": 200,
+      "response": {
+        "salt": "dW5yZWdpc3RlcmVkLS0tLQ==",
+        "iterations": 600000
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/sync/prelogin?user=owner",
+      "token": "unknown",
+      "raw": "{",
+      "status": 200,
+      "response": {
+        "salt": "dW5yZWdpc3RlcmVkLS0tLQ==",
+        "iterations": 600000
+      }
+    }
+  ]
+}

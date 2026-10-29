@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::{
     io,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, LazyLock, Mutex},
 };
 use subtle::ConstantTimeEq;
 
@@ -129,6 +129,11 @@ pub struct Store {
     loaded: Mutex<Option<(FileStamp, Value)>>,
 }
 impl Store {
+    pub fn shared(path: PathBuf) -> Arc<Self> {
+        static STORES: LazyLock<Mutex<std::collections::HashMap<PathBuf, Arc<Store>>>> = LazyLock::new(Mutex::default);
+        let mut stores = STORES.lock().unwrap_or_else(|e| e.into_inner());
+        stores.entry(path.clone()).or_insert_with(|| Arc::new(Self::new(path))).clone()
+    }
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
@@ -220,11 +225,16 @@ impl Store {
         Ok(doc)
     }
     pub fn snapshot(&self, preserve: bool) -> Option<Value> {
-        self.load().ok().or_else(|| {
-            preserve
-                .then(|| self.last.lock().unwrap_or_else(|e| e.into_inner()).clone())
-                .flatten()
-        })
+        match self.load() {
+            Ok(doc) => Some(doc),
+            Err(_) if preserve => {
+                if crate::warn_limit::allow(None, "guests_unreadable") {
+                    tracing::warn!(code = "guests_unreadable", "guests.json ilegível; fica a última leitura boa");
+                }
+                self.last.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            }
+            Err(_) => None,
+        }
     }
     pub fn lookup(&self, token: &[u8]) -> Option<Guest> {
         if token.is_empty() {

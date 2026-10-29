@@ -559,3 +559,52 @@ async fn login_guests_terminal_closes_after_login_revocation() {
     task.abort();
     assert_eq!(code,Some(4410),"GUE-034: revogação encerra o terminal com 4410");
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn login_guests_owner_list_preserves_legacy_truthiness() {
+    use hangar_server::list::{bridge::{ListBridge,ListEnv,parse_dirs},facts::FactsClient,mux::Mux};
+    use hangar_server::login_guests::{Service,Settings};
+    use serde_json::json;
+    use std::time::Duration;
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/visibility.json")).unwrap();
+    for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
+    let root=tempfile::tempdir().unwrap();
+    let program=crate::list_support::sessions(root.path(),2);
+    let home=root.path().join("home");let claude=home.join(".claude");
+    let (python,upstream)=crate::fake::spawn_fake().await;
+    let mut state=AppState::new(crate::fake::config(upstream,""));
+    state.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::with_program(&program,Duration::from_secs(5)),capture_program:program.into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs:parse_dirs(&json!({"home":home,"claude":claude,"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string())},FactsClient::new(upstream,crate::fake::SECRET.into())));
+    state.login_guests=Arc::new(Service::new(Settings{guests:claude.join("guests.json"),vault:root.path().join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10,rate_window:300}));
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+    let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
+        let disk=row["before"].to_string().replace("⟦ROOT⟧",root.path().to_str().unwrap());
+        std::fs::write(claude.join("guests.json"),disk).unwrap();
+        let token=crate::fake::OWNER;
+        let response=reqwest::Client::new().get(format!("http://{address}/api/sessions")).bearer_auth(token).send().await.unwrap();
+        assert_eq!(response.status(),200,"GUE-025/027: observador {index}");
+        let text=response.text().await.unwrap();
+        let body:Value=serde_json::from_str(&text).unwrap_or(Value::String(text));
+        assert!(body.is_array(),"GUE-025/027: lista nativa: {body}");
+        let names:Vec<_>=body.as_array().unwrap().iter().map(|v|v["name"].clone()).collect();
+        assert_eq!(json!(names),row["names"],"GUE-025/027: observador {index}");
+    assert_eq!(python.hits_to("/api/sessions"),0,"GUE-027: nenhuma lista de login vai ao Python");
+    task.abort();
+    }
+}
+
+#[tokio::test]
+async fn login_guests_routes_without_body_ignore_malformed_json() {
+    use hangar_server::login_guests::{Service,Settings};
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/ignored-body.json")).unwrap();
+    for row in fixture["rows"].as_array().unwrap() {
+        let root=tempfile::tempdir().unwrap();
+        let service=Arc::new(Service::new(Settings{guests:root.path().join("guests.json"),vault:root.path().join("vault.json"),runtime_config:root.path().join("runtime-config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10,rate_window:300}));
+        let request=axum::http::Request::builder().method(row["method"].as_str().unwrap()).uri(row["path"].as_str().unwrap())
+            .header("content-type","application/json").body(axum::body::Body::from(row["raw"].as_str().unwrap().to_owned())).unwrap();
+        let response=service.respond(row["token"]=="owner","127.0.0.1".into(),false,request).await;
+        assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"GUE-081: {row}");
+        let bytes=axum::body::to_bytes(response.into_body(),usize::MAX).await.unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(),row["response"],"GUE-081: {row}");
+    }
+}

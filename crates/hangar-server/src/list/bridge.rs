@@ -748,7 +748,8 @@ impl ListBridge {
                 names.push((name.to_owned(), life));
             }
         }
-        let (owners, hidden) = guests.access(&names);
+        let (owners, hidden) = tokio::task::spawn_blocking(move || guests.access(&names))
+            .await.map_err(|e| joined(e, "acesso de convidados interrompido"))?;
         Ok(ListFacts { states, overrides, frozen, orq, owners, hidden: hidden.into_iter().collect(), problems, stall_seconds,
             shortcuts, unknown })
     }
