@@ -966,9 +966,9 @@ pub fn code_note(session: Option<&Path>, own: &Path) -> String {
     let own = format!("Sua pasta de trabalho é {}.", own.display());
     match session {
         Some(path) => format!("O código da sessão está em {}; leia e edite por caminho completo. {own}", path.display()),
-        None => format!("Nenhuma sessão desta máquina está na tela, então não há pasta de sessão definida. Você roda nesta máquina \
-            com acesso aos arquivos dela: para ler ou analisar um projeto, ache a pasta (pelas sessões ou pelo shell) e leia por \
-            caminho completo; edite quando ele pedir. {own}"),
+        None => format!("A pasta da sessão na tela não veio nesta nota. Se a sessão for desta máquina, ache a pasta pelas sessões; \
+            se for de outra máquina, o código dela não está neste disco, e um clone daqui não é ela. Você roda nesta máquina com \
+            acesso aos arquivos dela: leia e analise projetos por caminho completo e edite quando ele pedir. {own}"),
     }
 }
 
@@ -1389,12 +1389,14 @@ fn middle_cut(text: &str, keep: usize) -> String {
 
 /// O envio espera a fala assentar: o Codex encaminha a última frase antes de o usuário terminar. Um pedido por destino
 /// (`to`: nome falado, vazio = a sessão da tela): o novo substitui só o que ia para o mesmo lugar.
-pub struct SendGate<T> { pending: Vec<(String, T, String, Instant)>, last_voice: Option<Instant> }
+pub struct SendGate<T> { pending: Vec<(String, T, String, Instant)>, last_voice: Option<Instant>, last_speech: Option<Instant> }
 
-impl<T> Default for SendGate<T> { fn default() -> Self { Self { pending: Vec::new(), last_voice: None } } }
+impl<T> Default for SendGate<T> { fn default() -> Self { Self { pending: Vec::new(), last_voice: None, last_speech: None } } }
 
 impl<T> SendGate<T> {
     pub fn heard_voice(&mut self, now: Instant) { self.last_voice = Some(now); }
+    /// Pedaço da transcrição dele: segura como o microfone, e o teto não vence.
+    pub fn heard_speech(&mut self, now: Instant) { (self.last_voice, self.last_speech) = (Some(now), Some(now)); }
     pub fn quiet(&self, now: Instant) -> bool { self.last_voice.is_none_or(|at| now.saturating_duration_since(at) >= SILENCE) }
     pub fn offer(&mut self, call: T, to: &str, request: String, now: Instant) -> Result<Option<(T, String)>, (T, &'static str)> {
         if request.split_whitespace().count() < MIN_WORDS { return Err((call, "pedido curto demais; espere o usuário completar a ideia")); }
@@ -1423,7 +1425,8 @@ impl<T> SendGate<T> {
     /// Como `due`, sem soltar os pedidos que `held` segura (o usuário ainda fala no turno deles).
     pub fn due_except(&mut self, now: Instant, held: impl Fn(&T) -> bool) -> Option<(T, String)> {
         let quiet = self.quiet(now);
-        let waited = |at: &Instant| { let w = now.duration_since(*at); w >= SETTLE && (quiet || w >= MAX_WAIT) };
+        let noise_only = self.last_speech.is_none_or(|at| now.saturating_duration_since(at) >= TALK_SILENCE);
+        let waited = |at: &Instant| { let w = now.duration_since(*at); w >= SETTLE && (quiet || noise_only && w >= MAX_WAIT) };
         let at = self.pending.iter().position(|(_, call, _, at)| waited(at) && !held(call))?;
         let (_, call, request, _) = self.pending.remove(at);
         Some((call, request))
@@ -1497,7 +1500,9 @@ impl SpeechHold {
     }
     /// O próximo pedaço a falar, um por vez: com ele calado e a voz livre.
     pub fn due(&mut self, now: Instant) -> Option<String> {
-        if self.queue.is_empty() || self.voice_busy(now) { return None; }
+        if self.queue.is_empty() { return None; }
+        // O teto do ruído conta da voz livre: esperar ela terminar não pode gastá-lo.
+        if self.voice_busy(now) { self.since = Some(now); return None; }
         let noise_only = self.last_speech.is_none_or(|at| now.saturating_duration_since(at) >= TALK_SILENCE);
         let overdue = noise_only && self.since.is_some_and(|at| now.saturating_duration_since(at) >= MAX_HOLD);
         if !(self.quiet(now) || overdue) { return None; }
@@ -2378,6 +2383,16 @@ mod tests {
     }
 
     #[test]
+    fn send_ceiling_never_beats_transcribed_speech() {
+        let mut gate = SendGate::default();
+        let t0 = Instant::now();
+        gate.offer(1, "", "Mandar o plano para a sessão".into(), t0).unwrap();
+        for ms in (0..=6000).step_by(500) { gate.heard_speech(t0 + Duration::from_millis(ms)); }
+        assert!(gate.due(t0 + Duration::from_secs(6)).is_none(), "ele ainda corrige o pedido: o teto é só de barulho");
+        assert_eq!(gate.due(t0 + Duration::from_millis(8100)).map(|(id, _)| id), Some(1), "calou: sai");
+    }
+
+    #[test]
     fn send_waits_settle_then_goes() {
         let mut gate = SendGate::default();
         let t0 = Instant::now();
@@ -2718,6 +2733,22 @@ mod tests {
         talking.push("resposta", now);
         talking.heard_speech(now + MAX_HOLD);
         assert!(talking.due(now + MAX_HOLD).is_none(), "ele falando de verdade nunca é atropelado pelo teto");
+    }
+
+    #[test]
+    fn noise_ceiling_counts_from_when_the_voice_is_free() {
+        let now = Instant::now();
+        let mut hold = SpeechHold::default();
+        hold.voice_delta(now);
+        hold.push("resposta", now);
+        let mut at = now;
+        while at < now + Duration::from_secs(6) { at += Duration::from_millis(500); hold.voice_delta(at); assert!(hold.due(at).is_none()); }
+        hold.voice_done();
+        let free = at;
+        hold.heard_voice(free + Duration::from_millis(500));
+        assert!(hold.due(free + Duration::from_millis(500)).is_none(), "ele começou a falar logo depois da voz: a espera dela não gasta o teto");
+        hold.heard_voice(free + Duration::from_secs(4));
+        assert_eq!(hold.due(free + Duration::from_secs(4)).as_deref(), Some("resposta"), "só barulho, 4 s depois de a voz calar");
     }
 
     #[test]

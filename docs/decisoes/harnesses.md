@@ -787,7 +787,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   em "Voz: resultado de outra sessão tomando a vez (14/10/2026)".
 - **Voz: sem sessão local na tela, o organizador continua com o computador inteiro.** A nota de código
   (`code_note`) sem pasta de sessão diz que ele roda nesta máquina e lê por caminho completo, editando quando
-  pedido; nunca proíbe ler código. Medição em "Voz: barulho segurando a resposta e leitura proibida (28/10/2026)".
+  pedido; nunca proíbe ler código. Sessão da tela de outra máquina: o código dela não está neste disco, e um
+  clone daqui não é ela. O teto de ruído (`MAX_HOLD`/`MAX_WAIT`) conta da voz livre e nunca vence fala
+  transcrita. Medição em "Voz: barulho segurando a resposta e leitura proibida (28/10/2026)".
 - **Voz: quem fala o organizador é o Hangar, nunca o repasse do Codex.** `clientManagedHandoffs: true`: o
   Codex não repassa mais as mensagens do organizador à voz. Toda mensagem dele (as do meio do turno
   também) entra no `SpeechHold`, como resumo, aviso e confirmação: sai em pedaços de até `SPEECH_CHUNK`

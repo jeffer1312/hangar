@@ -459,7 +459,6 @@
   .lv-seg button.on { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
 
   .lv-lines { display: flex; flex-direction: column; gap: 4px; list-style: none; margin: 0; padding: 0; }
-  .lv-line { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.45; }
   .lv-backstage { display: flex; flex-direction: column; gap: 12px; list-style: none; margin: 0; padding: 0; }
   .lv-bs-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; }
   .lv-bs-who { font-size: var(--text-sm); font-weight: 700; color: var(--text-secondary); }

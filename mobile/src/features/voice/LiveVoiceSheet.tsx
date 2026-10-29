@@ -183,7 +183,7 @@ function backstageLabel(line: BackstageLine): string {
 const sameLine = (a: { line: BackstageLine }, b: { line: BackstageLine }) =>
   a.line.kind === b.line.kind && a.line.text === b.line.text && a.line.at === b.line.at && a.line.live === b.line.live;
 
-// O estado chega a cada ~150 ms durante a fala: só a linha que mudou redesenha.
+// O estado chega várias vezes por segundo durante a fala: só a linha que mudou redesenha.
 const BackstageRow = memo(function BackstageRow({ line }: { line: BackstageLine }) {
   const label = backstageLabel(line);
   const body = line.kind === 'result' ? '' : line.text;

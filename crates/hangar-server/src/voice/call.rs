@@ -68,12 +68,19 @@ pub enum Backstage { Heard(String), Result(String), Answer(String), You(String),
 
 /// Fala de um lado enquanto a transcrição chega: o texto acumulado e a hora (ms) do primeiro pedaço.
 #[derive(Default)]
-struct LiveSpeech { text: String, at: Option<i64> }
+struct LiveSpeech { text: String, at: Option<i64>, shown: Option<i64> }
+
+/// Cada parcial reenvia o retrato inteiro ao aparelho, que pode estar na rede móvel.
+const LIVE_EVERY_MS: i64 = 1000;
 
 impl LiveSpeech {
-    fn delta(&mut self, delta: &str, now: i64) -> (String, i64) {
+    /// A parcial para a tela, quando já passou `LIVE_EVERY_MS` da anterior.
+    fn delta(&mut self, delta: &str, now: i64) -> Option<(String, i64)> {
         self.text.push_str(delta);
-        (self.text.clone(), *self.at.get_or_insert(now))
+        let at = *self.at.get_or_insert(now);
+        if self.shown.is_some_and(|shown| now - shown < LIVE_EVERY_MS) { return None; }
+        self.shown = Some(now);
+        Some((self.text.clone(), at))
     }
     /// A final vale pelo texto dela; a hora continua a do começo da fala.
     fn done(&mut self, text: &str, now: i64) -> (String, i64) {
@@ -560,7 +567,6 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                     let mut items = vec![json!({"role": "developer", "text": context})];
                     items.extend(new_prefs.iter().map(|text| json!({"role": "developer", "text": text})));
                     // A voz nova não sabe nada do que foi falado, e a fala que ela não repassou nunca chegou ao organizador.
-                    close_live(events, &mut live_you, &mut live_voice).await;
                     let recap = transcript.recap();
                     log(format!("handoff recap lines={} unforwarded={}", recap.lines, recap.organizer.is_some()));
                     if let Some(text) = recap.voice { items.push(json!({"role": "developer", "text": text})); }
@@ -1155,8 +1161,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                         } {
                         let now = chrono::Local::now().timestamp_millis();
                         let event = if method.ends_with("/delta") {
-                            let (text, at) = live.delta(params["delta"].as_str().unwrap_or_default(), now);
-                            Some(VoiceEvent::Speaking(line(text), at))
+                            live.delta(params["delta"].as_str().unwrap_or_default(), now).map(|(text, at)| VoiceEvent::Speaking(line(text), at))
                         } else if method.ends_with("/done") {
                             let (text, at) = live.done(params["text"].as_str().unwrap_or_default(), now);
                             Some(VoiceEvent::Backstage(line(text), at))
@@ -1170,7 +1175,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             last_user_voice = Some(Instant::now());
                             last_user_delta = last_user_voice;
                             out.hold.heard_speech(Instant::now());
-                            plan_gate.heard_voice(Instant::now());
+                            plan_gate.heard_speech(Instant::now());
                             if speaking.is_none() && let Some((turn, at)) = &delegated && at.elapsed() >= organizer::CONTINUATION_AFTER {
                                 log("user still speaking after the delegation");
                                 speaking = Some((turn.clone(), Instant::now()));
@@ -1306,6 +1311,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
         }
     };
     stopped.store(true, Ordering::Relaxed);
+    close_live(events, &mut live_you, &mut live_voice).await;
     let (held, bytes) = out.hold.pending();
     if held > 0 { log(format!("held speech dropped at call end count={held} bytes={bytes}")); }
     if !out.parked.is_empty() { log(format!("parked speech dropped at call end count={}", out.parked.len())); }
@@ -1397,7 +1403,9 @@ impl Speech {
 async fn speak(rpc: &Rpc, thread: &str, out: &mut Speech, text: String, tag: &str) {
     if out.away { out.park(text, tag); return; }
     out.hold.push(&text, Instant::now());
+    let noisy = !out.hold.quiet(Instant::now());
     match out.hold.due(Instant::now()) {
+        Some(text) if noisy => append_speech(rpc, thread, &text, "held by noise ceiling").await,
         Some(text) => append_speech(rpc, thread, &text, tag).await,
         None => log(format!("{tag} speech held bytes={}", text.len())),
     }
@@ -1438,8 +1446,9 @@ mod tests {
     #[test]
     fn backstage_speech_keeps_the_time_it_started() {
         let mut live = LiveSpeech::default();
-        assert_eq!(live.delta("Tá, ", 1_000), ("Tá, ".to_owned(), 1_000));
-        assert_eq!(live.delta("eu preciso", 4_000), ("Tá, eu preciso".to_owned(), 1_000), "a parcial cresce sem mudar a hora");
+        assert_eq!(live.delta("Tá, ", 1_000), Some(("Tá, ".to_owned(), 1_000)));
+        assert_eq!(live.delta("eu ", 1_400), None, "a tela recebe a parcial no máximo uma vez por segundo");
+        assert_eq!(live.delta("preciso", 4_000), Some(("Tá, eu preciso".to_owned(), 1_000)), "a parcial cresce sem mudar a hora");
         assert_eq!(live.done("Tá, eu preciso de ajuda.", 30_000), ("Tá, eu preciso de ajuda.".to_owned(), 1_000), "final chega tarde, hora do começo");
         assert_eq!(live.done("", 31_000), (String::new(), 31_000), "a próxima fala começa do zero");
         live.delta("sim", 40_000);
@@ -1452,7 +1461,7 @@ mod tests {
         assert_eq!(live.close(), None, "nada falado, nada a fechar");
         live.delta("manda pra", 1_000);
         assert_eq!(live.close(), Some(("manda pra".to_owned(), 1_000)), "a parcial vira linha com o que chegou");
-        assert_eq!(live.delta("oi", 9_000), ("oi".to_owned(), 9_000), "a fala seguinte não emenda nem herda a hora");
+        assert_eq!(live.delta("oi", 9_000), Some(("oi".to_owned(), 9_000)), "a fala seguinte não emenda nem herda a hora");
     }
 
     fn options(tools: Value) -> CallOptions {
