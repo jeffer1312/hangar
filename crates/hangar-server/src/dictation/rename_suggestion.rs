@@ -253,25 +253,46 @@ fn same_life(before: &SessionRow, now: &SessionRow) -> bool {
         && before.codex_home == now.codex_home
 }
 
-/// `Ok(None)` = sem sugestão e sem falha (sem modelo de organização do provedor, sem pedido, resposta
-/// vazia). O modo da organização do ditado não conta: ele nasce desligado e só vale para o ditado.
+/// O modelo do executor, sempre um que o catálogo da conta (motor incluído) oferece: o de organização
+/// escolhido vence; sem ele, o modelo da conta Codex e, por fim, o padrão marcado no catálogo.
+fn suggestion_model(configured: &str, account: Option<&str>, models: &[serde_json::Value]) -> Result<String, &'static str> {
+    let offered = |id: &str| models.iter().any(|m| m["id"].as_str() == Some(id));
+    if !configured.is_empty() {
+        return if offered(configured) { Ok(configured.to_owned()) } else { Err("dictation_model_unavailable") };
+    }
+    account.filter(|m| offered(m))
+        .or_else(|| models.iter().find(|m| m["active"] == true).and_then(|m| m["id"].as_str()))
+        .or_else(|| models.first().and_then(|m| m["id"].as_str()))
+        .map(str::to_owned)
+        .ok_or("rename_suggestion_no_model")
+}
+
+/// `Ok(None)` = sem sugestão e sem falha (sem pedido, resposta vazia). O modo da organização do
+/// ditado não conta: ele nasce desligado e só vale para o ditado.
 async fn generate(st: &AppState, row: &SessionRow) -> Result<Option<String>, &'static str> {
     let name = row.name.as_str();
     let config = super::routes::configuration(st).await.map_err(|()| "dictation_rust_unavailable")?;
     // A rota é só do dono: é o pedido do dono que a conta do harness exige.
     let request = OrganizationRequest { session: Some(name.into()), harness_allowed: true, ..Default::default() };
     let context = context::for_row(st, row, &request)?;
-    let model = if context.provider == "claude" { &config.dictation_claude_model } else { &config.dictation_codex_model };
-    if model.is_empty() {
-        return Ok(None);
-    }
+    let configured = if context.provider == "claude" { &config.dictation_claude_model } else { &config.dictation_codex_model };
     let Some(jsonl) = context.jsonl.clone() else { return Ok(None) };
     let provider = context.provider.clone();
     let first = tokio::task::spawn_blocking(move || first_user_message(&provider, &jsonl)).await
         .map_err(|_| "dictation_context_unavailable")??;
     let Some(first) = first else { return Ok(None) };
+    let account = if context.provider != "claude" && configured.is_empty() {
+        let home = context.home.clone();
+        tokio::task::spawn_blocking(move || super::catalog::codex_configuration(&home)).await
+            .map_err(|_| "dictation_context_unavailable")??
+            .get("model").and_then(toml::Value::as_str).map(str::to_owned)
+    } else {
+        None
+    };
+    let (models, _) = st.dictation_models.get_context(&st.accounts, &st.dictation_slots, &context, false).await?;
+    let model = suggestion_model(configured, account.as_deref(), &models)?;
     let input = format!("Branch: {}\nPrimeiro pedido:\n{first}", row.branch.as_deref().unwrap_or("-"));
-    let output = harness::run_prompt(st, &context, model, PROMPT, &input, TIMEOUT).await?;
+    let output = harness::run_prompt(st, &context, &model, PROMPT, &input, TIMEOUT).await?;
     // O retrato da lista basta para ver se a vida mudou: outra descoberta inteira não acrescenta nada.
     let current = st.list.find_row(name).await.map_err(|_| "dictation_target_missing")?.ok_or("dictation_target_missing")?;
     if !same_life(row, &current) {
@@ -387,6 +408,20 @@ mod tests {
     fn only_claude_and_codex_have_an_executor() {
         assert!(has_executor("claude") && has_executor("codex"));
         for provider in ["pi", "omp", "kimi"] { assert!(!has_executor(provider), "{provider}"); }
+    }
+
+    #[test]
+    fn without_an_organization_model_the_account_catalog_decides() {
+        let claude = [json!({"id": "default", "active": true}), json!({"id": "opus", "active": false})];
+        let codex = [json!({"id": "gpt-a"}), json!({"id": "gpt-b"})];
+        let ok = |s: &str| Ok(s.to_owned());
+        assert_eq!(suggestion_model("", None, &claude), ok("default"), "Claude: o padrão marcado da conta, motor incluído");
+        assert_eq!(suggestion_model("opus", None, &claude), ok("opus"), "o modelo de organização escolhido vence");
+        assert_eq!(suggestion_model("sonnet", None, &claude), Err("dictation_model_unavailable"), "escolhido fora do catálogo");
+        assert_eq!(suggestion_model("", Some("gpt-b"), &codex), ok("gpt-b"), "Codex: o modelo da conta");
+        assert_eq!(suggestion_model("", Some("gpt-velho"), &codex), ok("gpt-a"), "modelo da conta fora do catálogo: o primeiro");
+        assert_eq!(suggestion_model("", Some(""), &codex), ok("gpt-a"));
+        assert_eq!(suggestion_model("", None, &[]), Err("rename_suggestion_no_model"), "sem catálogo, a causa vai ao diário");
     }
 
     #[test]
