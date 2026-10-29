@@ -3523,7 +3523,10 @@ em recados, grupos e pares.
 **Por quê.** Pedido de 28/10: sessões abertas sem nome ficavam como `hangar-2` e ninguém sabia o
 que eram. Renomear sozinho foi descartado pelo usuário em favor da sugestão com um clique.
 
-**Limites.** Sem modelo de organização configurado para o provedor da sessão, não há sugestão
-(não é falha, não aparece aviso). Erro do executor vira 204 e registro no diário
+**Limites.** O modelo de organização escolhido para o provedor da sessão vence; sem ele, o Claude
+usa o alias `haiku` (o mais barato que o CLI aceita, de sobra para um nome curto), porque a
+organização do ditado nasce desligada e a sugestão não funcionava sem configurar. O Codex não tem
+alias estável e o catálogo muda por conta: sem modelo escolhido, não há sugestão, e a causa vai ao
+diário (`rename_suggestion_no_model`), sem aviso na tela. Erro do executor vira 204 e registro no diário
 (`rust.rename_suggestion`). O executor só roda a pedido do dono, por isso o gatilho é do cliente e
 não um trabalho de fundo.
