@@ -959,6 +959,12 @@ fn invited_engine_catalog(caller: &Option<Caller>, req: &Request) -> bool {
         && matches!(caller, Some(Caller::Guest(grant)) if grant.invite)
 }
 
+fn login_catalog_read(req: &Request) -> bool {
+    req.extensions().get::<crate::login_guests::gate::Login>().is_some()
+        && req.method() == Method::GET
+        && matches!(req.uri().path(), "/api/engines" | "/api/providers" | "/api/model-options")
+}
+
 pub(crate) async fn pass_any(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -985,7 +991,7 @@ pub(crate) async fn pass_any(
         return response;
     }
     if crate::engines::model_http::candidate(req.method(),req.uri().path()) {
-        if !on_guest_port(&req) {
+        if !on_guest_port(&req) && req.extensions().get::<crate::login_guests::gate::Login>().is_none() {
             if let Err(mut response) = owner_gate(&st, peer, &req).await {
                 crate::http_cors::apply(req.headers(), &mut response);
                 return response;
@@ -994,7 +1000,7 @@ pub(crate) async fn pass_any(
         let (forward,caller)=match who(&st,peer,&req).await {Ok(value)=>value, Err(e)=>return crate::auth::unavailable(e)};
         let session_read = req.extensions().get::<SessionPath>().is_some_and(|path|
             caller.as_ref().is_some_and(|who| who.can(&path.session, req.method())));
-        let catalog_read = invited_engine_catalog(&caller, &req);
+        let catalog_read = invited_engine_catalog(&caller, &req) || login_catalog_read(&req);
         if !matches!(caller,Some(Caller::Owner)) && !session_read && !catalog_read {
             return if caller.is_some() {StatusCode::FORBIDDEN.into_response()} else {crate::share_reach::unauthorized(&st,&forward.client_ip).await};
         }
@@ -1008,7 +1014,7 @@ pub(crate) async fn pass_any(
     let orchestration = crate::orchestration::matches(req.method(), req.uri().path());
     let sync = crate::omp_sync::matches(req.method(), req.uri().path());
     let engines = crate::engines::matches(req.method(), req.uri().path());
-    if engines && !on_guest_port(&req) {
+    if engines && !on_guest_port(&req) && !login_catalog_read(&req) {
         if let Err(mut response) = owner_gate(&st, peer, &req).await {
             crate::http_cors::apply(req.headers(), &mut response);
             return response;
@@ -1017,6 +1023,7 @@ pub(crate) async fn pass_any(
     if models || orchestration || sync || engines {
         let (forward, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
         let allowed = matches!(&caller, Some(Caller::Owner))
+            || ((engines || models) && login_catalog_read(&req))
             || (engines && invited_engine_catalog(&caller, &req))
             || (models && req.extensions().get::<SessionPath>()
             .is_some_and(|path| caller.as_ref().is_some_and(|who| who.can(&path.session, req.method()))));
