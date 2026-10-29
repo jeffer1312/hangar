@@ -312,9 +312,9 @@ pub fn parse(bytes: &[u8]) -> Result<Value, (axum::http::StatusCode, Value)> {
                 } else { "Expecting ',' delimiter" }
             }
             else if raw.starts_with("trailing characters"){"Extra data"}
-            else if raw.starts_with("key must be a string")||(eof&&matches!(last,Some('{'))){"Expecting property name enclosed in double quotes"}
+            else if raw.starts_with("key must be a string")||(eof&&matches!(last,Some('{')))||(raw.starts_with("EOF while parsing an object")&&last==Some(',')){"Expecting property name enclosed in double quotes"}
             else if raw.starts_with("expected `:`"){"Expecting ':' delimiter"}
-            else if raw.starts_with("expected `,`")||(eof&&!matches!(last,Some('['|':'|','))){"Expecting ',' delimiter"}
+            else if raw.starts_with("expected `,`")||(eof&&last.is_some()&&!matches!(last,Some('['|':'|','))){"Expecting ',' delimiter"}
             else {"Expecting value"};
         let position = decoded.position(position).saturating_sub(usize::from(raw.starts_with("invalid escape") && unicode_escape.is_none()));
         (StatusCode::UNPROCESSABLE_ENTITY,json!({"detail":[{"type":"json_invalid","loc":["body",position],"msg":"JSON decode error","input":{},"ctx":{"error":message}}]}))
