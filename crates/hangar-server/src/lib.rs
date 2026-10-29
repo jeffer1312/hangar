@@ -402,3 +402,4 @@ pub mod http_body_limit;
 pub mod http_route_response;
 pub mod boot_version;
 pub mod migration_branch;
+pub mod login_guests;

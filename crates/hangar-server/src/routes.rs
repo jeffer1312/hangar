@@ -38,6 +38,7 @@ pub struct AppState {
     pub config_sync_translation: crate::config_sync::translate::Translator,
     pub migration_branch: Arc<crate::migration_branch::Service>,
     settings_snapshot: std::sync::OnceLock<Result<Arc<crate::machine_peers::dotenv::SettingsSnapshot>,String>>,
+    pub login_guests: Arc<crate::login_guests::Service>,
     pub omp_sync: Arc<std::sync::OnceLock<Arc<crate::omp_sync::Service>>>,
     pub interactions: Arc<crate::interactions::InteractionStore>,
     pub dictation_models: Arc<crate::dictation::catalog::Models>,
@@ -211,6 +212,7 @@ impl AppState {
                     list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
                 .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone());
         AppState { migration_branch: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peer_network: Arc::new(crate::machine_peers::network::SystemNetwork), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
+            login_guests: Arc::new(crate::login_guests::Service::new(crate::login_guests::Settings::from_env())),
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             interactions, plugin,
             remote_browser: Arc::default(),
@@ -620,6 +622,10 @@ fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
 
 fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
     session_routes(pass_any)
+        .route("/api/me", axum::routing::any(crate::login_guests::route))
+        .route("/api/guests", axum::routing::any(crate::login_guests::route))
+        .route("/api/guests/{*rest}", axum::routing::any(crate::login_guests::route))
+        .route("/api/sync/{*rest}", axum::routing::any(crate::login_guests::route))
         .route("/api/hangar-terminals/{ident}/term", get(crate::term::hangar_ws).fallback(pass_any))
         .route("/__hangar_server/health", get(health))
         .route("/api/client-api", get(client_api).fallback(pass_any))

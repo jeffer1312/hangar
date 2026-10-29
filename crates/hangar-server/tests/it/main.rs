@@ -11,6 +11,7 @@ mod provider_discovery;
 mod json_body;
 mod json_numbers;
 mod json_large_input;
+mod login_guests;
 mod groups_text;
 mod session_defaults;
 mod tags;

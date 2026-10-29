@@ -1,0 +1,266 @@
+{
+  "source_commit": "fc1ed83a37fe22c126328f3717ccd6b37db17e10",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_store.py",
+  "initial": {
+    "guests": [
+      {
+        "id": "0000000000000000",
+        "name": "Ana",
+        "token_hash": "6c02cf2083469e72758a38be0b7c6eabe9bc58580774daf6b2cf4b6ea1469722",
+        "root": "⟦ROOT⟧",
+        "sees_owner": false,
+        "owner_sees": false
+      },
+      {
+        "id": "1111111111111111",
+        "name": "Bia",
+        "token_hash": "3f08aace122ee2368432c1ca23a049bc640bafbf00fdf33a52429f38ba12dbf9",
+        "root": "⟦ROOT⟧",
+        "sees_owner": true,
+        "owner_sees": true
+      }
+    ],
+    "sessions": {}
+  },
+  "rows": [
+    {
+      "name": "same_life",
+      "life": "k:first",
+      "owner": "0000000000000000",
+      "visible": [
+        false,
+        true,
+        false
+      ],
+      "disk": {
+        "guests": [
+          {
+            "id": "0000000000000000",
+            "name": "Ana",
+            "token_hash": "6c02cf2083469e72758a38be0b7c6eabe9bc58580774daf6b2cf4b6ea1469722",
+            "root": "⟦ROOT⟧",
+            "sees_owner": false,
+            "owner_sees": false
+          },
+          {
+            "id": "1111111111111111",
+            "name": "Bia",
+            "token_hash": "3f08aace122ee2368432c1ca23a049bc640bafbf00fdf33a52429f38ba12dbf9",
+            "root": "⟦ROOT⟧",
+            "sees_owner": true,
+            "owner_sees": true
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "0000000000000000",
+            "life": "k:first"
+          }
+        }
+      }
+    },
+    {
+      "name": "unknown_life",
+      "life": null,
+      "owner": "0000000000000000",
+      "visible": [
+        false,
+        true,
+        false
+      ],
+      "disk": {
+        "guests": [
+          {
+            "id": "0000000000000000",
+            "name": "Ana",
+            "token_hash": "6c02cf2083469e72758a38be0b7c6eabe9bc58580774daf6b2cf4b6ea1469722",
+            "root": "⟦ROOT⟧",
+            "sees_owner": false,
+            "owner_sees": false
+          },
+          {
+            "id": "1111111111111111",
+            "name": "Bia",
+            "token_hash": "3f08aace122ee2368432c1ca23a049bc640bafbf00fdf33a52429f38ba12dbf9",
+            "root": "⟦ROOT⟧",
+            "sees_owner": true,
+            "owner_sees": true
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "0000000000000000",
+            "life": "k:first"
+          }
+        }
+      }
+    },
+    {
+      "name": "recreated_name",
+      "life": "k:second",
+      "owner": null,
+      "visible": [
+        true,
+        false,
+        true
+      ],
+      "disk": {
+        "guests": [
+          {
+            "id": "0000000000000000",
+            "name": "Ana",
+            "token_hash": "6c02cf2083469e72758a38be0b7c6eabe9bc58580774daf6b2cf4b6ea1469722",
+            "root": "⟦ROOT⟧",
+            "sees_owner": false,
+            "owner_sees": false
+          },
+          {
+            "id": "1111111111111111",
+            "name": "Bia",
+            "token_hash": "3f08aace122ee2368432c1ca23a049bc640bafbf00fdf33a52429f38ba12dbf9",
+            "root": "⟦ROOT⟧",
+            "sees_owner": true,
+            "owner_sees": true
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "0000000000000000",
+            "life": "k:first"
+          }
+        }
+      }
+    },
+    {
+      "name": "mode_change",
+      "life": "k:second",
+      "owner": "0000000000000000",
+      "visible": [
+        false,
+        true,
+        false
+      ],
+      "disk": {
+        "guests": [
+          {
+            "id": "0000000000000000",
+            "name": "Ana",
+            "token_hash": "6c02cf2083469e72758a38be0b7c6eabe9bc58580774daf6b2cf4b6ea1469722",
+            "root": "⟦ROOT⟧",
+            "sees_owner": false,
+            "owner_sees": false
+          },
+          {
+            "id": "1111111111111111",
+            "name": "Bia",
+            "token_hash": "3f08aace122ee2368432c1ca23a049bc640bafbf00fdf33a52429f38ba12dbf9",
+            "root": "⟦ROOT⟧",
+            "sees_owner": true,
+            "owner_sees": true
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "0000000000000000",
+            "life": "k:second"
+          }
+        }
+      }
+    },
+    {
+      "name": "null_mode_change",
+      "life": "k:second",
+      "owner": "0000000000000000",
+      "visible": [
+        false,
+        true,
+        false
+      ],
+      "disk": {
+        "guests": [
+          {
+            "id": "0000000000000000",
+            "name": "Ana",
+            "token_hash": "6c02cf2083469e72758a38be0b7c6eabe9bc58580774daf6b2cf4b6ea1469722",
+            "root": "⟦ROOT⟧",
+            "sees_owner": false,
+            "owner_sees": false
+          },
+          {
+            "id": "1111111111111111",
+            "name": "Bia",
+            "token_hash": "3f08aace122ee2368432c1ca23a049bc640bafbf00fdf33a52429f38ba12dbf9",
+            "root": "⟦ROOT⟧",
+            "sees_owner": true,
+            "owner_sees": true
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "0000000000000000",
+            "life": "k:second"
+          }
+        }
+      }
+    },
+    {
+      "name": "adopt_unknown_life",
+      "life": "t:123",
+      "owner": "1111111111111111",
+      "visible": [
+        true,
+        false,
+        true
+      ],
+      "disk": {
+        "guests": [
+          {
+            "id": "0000000000000000",
+            "name": "Ana",
+            "token_hash": "6c02cf2083469e72758a38be0b7c6eabe9bc58580774daf6b2cf4b6ea1469722",
+            "root": "⟦ROOT⟧",
+            "sees_owner": false,
+            "owner_sees": false
+          },
+          {
+            "id": "1111111111111111",
+            "name": "Bia",
+            "token_hash": "3f08aace122ee2368432c1ca23a049bc640bafbf00fdf33a52429f38ba12dbf9",
+            "root": "⟦ROOT⟧",
+            "sees_owner": true,
+            "owner_sees": true
+          }
+        ],
+        "sessions": {
+          "session": {
+            "guest": "1111111111111111",
+            "life": "t:123"
+          }
+        }
+      }
+    },
+    {
+      "name": "deleted_owner",
+      "life": "t:123",
+      "owner": null,
+      "visible": [
+        true,
+        false,
+        true
+      ],
+      "disk": {
+        "guests": [
+          {
+            "id": "0000000000000000",
+            "name": "Ana",
+            "token_hash": "6c02cf2083469e72758a38be0b7c6eabe9bc58580774daf6b2cf4b6ea1469722",
+            "root": "⟦ROOT⟧",
+            "sees_owner": false,
+            "owner_sees": false
+          }
+        ],
+        "sessions": {}
+      }
+    }
+  ]
+}
