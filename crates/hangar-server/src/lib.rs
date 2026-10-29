@@ -397,3 +397,5 @@ pub mod value_coercion;
 pub mod provider_discovery;
 pub mod http_contract;
 pub mod http_cors;
+
+pub mod http_body_limit;

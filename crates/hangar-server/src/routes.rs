@@ -122,7 +122,7 @@ impl AppState {
     pub fn settings_snapshot(&self)->Result<Arc<crate::machine_peers::dotenv::SettingsSnapshot>,String>{
         self.settings_snapshot.get_or_init(||{
             crate::machine_peers::dotenv::SettingsSnapshot::capture(
-                &self.accounts.env.home,crate::session_open::cli::backend_dir().as_deref(),
+                &self.accounts.env.home,crate::session_open::cli::backend_dir_for_home(&self.accounts.env.home).as_deref(),
                 crate::machine_peers::dotenv::SettingsEnvironment::from_pairs(self.accounts.env.ordered_pairs()),
             ).map(Arc::new)
         }).clone()

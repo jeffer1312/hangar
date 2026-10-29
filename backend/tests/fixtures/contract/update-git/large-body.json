@@ -1,0 +1,44 @@
+{
+  "source_commit": "a65d518784db4468030c52242600a738a8fdcfaa",
+  "command": "python generate-large-body.py <checkout-Python> <fixture>",
+  "cases": [
+    {
+      "extra_bytes": 65537,
+      "wire_bytes": 65628,
+      "wire_sha256": "4fbb5a3ada958436516b5725d67f3cea5dffb358fc9da5c4b68f0afe9ae76d40",
+      "status": 200,
+      "response": [
+        {
+          "id": "remote",
+          "base_url": "https://peer.invalid",
+          "token": "fixt••••••••oken"
+        }
+      ],
+      "effect": {
+        "remote": {
+          "base_url": "https://peer.invalid",
+          "token": "fixture-token"
+        }
+      }
+    },
+    {
+      "extra_bytes": 17825792,
+      "wire_bytes": 17825883,
+      "wire_sha256": "68ce2ec21b1114db866af2c9564f409bdf57283c102ac3b8741c5735cf16c2d7",
+      "status": 200,
+      "response": [
+        {
+          "id": "remote",
+          "base_url": "https://peer.invalid",
+          "token": "fixt••••••••oken"
+        }
+      ],
+      "effect": {
+        "remote": {
+          "base_url": "https://peer.invalid",
+          "token": "fixture-token"
+        }
+      }
+    }
+  ]
+}

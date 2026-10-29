@@ -1,0 +1,361 @@
+{
+  "source_commit": "a65d518784db4468030c52242600a738a8fdcfaa",
+  "command": "python generate-body-limit.py <checkout-Python> <fixture>",
+  "limit": 104857600,
+  "cases": [
+    {
+      "header": null,
+      "chunks": [
+        0
+      ],
+      "authorized": false,
+      "entered": 1,
+      "reads": 0,
+      "status": 401,
+      "headers": {},
+      "body": "unauthorized"
+    },
+    {
+      "header": null,
+      "chunks": [
+        0
+      ],
+      "authorized": true,
+      "entered": 1,
+      "reads": 1,
+      "status": 200,
+      "headers": {},
+      "body": "OK"
+    },
+    {
+      "header": "",
+      "chunks": [
+        0
+      ],
+      "authorized": false,
+      "entered": 1,
+      "reads": 0,
+      "status": 401,
+      "headers": {},
+      "body": "unauthorized"
+    },
+    {
+      "header": "",
+      "chunks": [
+        0
+      ],
+      "authorized": true,
+      "entered": 1,
+      "reads": 1,
+      "status": 200,
+      "headers": {},
+      "body": "OK"
+    },
+    {
+      "header": "104857600",
+      "chunks": [
+        0
+      ],
+      "authorized": false,
+      "entered": 1,
+      "reads": 0,
+      "status": 401,
+      "headers": {},
+      "body": "unauthorized"
+    },
+    {
+      "header": "104857600",
+      "chunks": [
+        0
+      ],
+      "authorized": true,
+      "entered": 1,
+      "reads": 1,
+      "status": 200,
+      "headers": {},
+      "body": "OK"
+    },
+    {
+      "header": "104857601",
+      "chunks": [
+        0
+      ],
+      "authorized": false,
+      "entered": 0,
+      "reads": 0,
+      "status": 413,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "request body too large"
+    },
+    {
+      "header": "104857601",
+      "chunks": [
+        0
+      ],
+      "authorized": true,
+      "entered": 0,
+      "reads": 0,
+      "status": 413,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "request body too large"
+    },
+    {
+      "header": "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+      "chunks": [
+        0
+      ],
+      "authorized": false,
+      "entered": 0,
+      "reads": 0,
+      "status": 413,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "request body too large"
+    },
+    {
+      "header": "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+      "chunks": [
+        0
+      ],
+      "authorized": true,
+      "entered": 0,
+      "reads": 0,
+      "status": 413,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "request body too large"
+    },
+    {
+      "header": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "chunks": [
+        0
+      ],
+      "authorized": false,
+      "entered": 1,
+      "reads": 0,
+      "status": 401,
+      "headers": {},
+      "body": "unauthorized"
+    },
+    {
+      "header": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "chunks": [
+        0
+      ],
+      "authorized": true,
+      "entered": 1,
+      "reads": 1,
+      "status": 200,
+      "headers": {},
+      "body": "OK"
+    },
+    {
+      "header": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000104857600",
+      "chunks": [
+        0
+      ],
+      "authorized": false,
+      "entered": 1,
+      "reads": 0,
+      "status": 401,
+      "headers": {},
+      "body": "unauthorized"
+    },
+    {
+      "header": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000104857600",
+      "chunks": [
+        0
+      ],
+      "authorized": true,
+      "entered": 1,
+      "reads": 1,
+      "status": 200,
+      "headers": {},
+      "body": "OK"
+    },
+    {
+      "header": "-1",
+      "chunks": [
+        0
+      ],
+      "authorized": false,
+      "entered": 1,
+      "reads": 0,
+      "status": 401,
+      "headers": {},
+      "body": "unauthorized"
+    },
+    {
+      "header": "-1",
+      "chunks": [
+        0
+      ],
+      "authorized": true,
+      "entered": 1,
+      "reads": 1,
+      "status": 200,
+      "headers": {},
+      "body": "OK"
+    },
+    {
+      "header": "+123",
+      "chunks": [
+        0
+      ],
+      "authorized": false,
+      "entered": 1,
+      "reads": 0,
+      "status": 401,
+      "headers": {},
+      "body": "unauthorized"
+    },
+    {
+      "header": "+123",
+      "chunks": [
+        0
+      ],
+      "authorized": true,
+      "entered": 1,
+      "reads": 1,
+      "status": 200,
+      "headers": {},
+      "body": "OK"
+    },
+    {
+      "header": " 123",
+      "chunks": [
+        0
+      ],
+      "authorized": false,
+      "entered": 1,
+      "reads": 0,
+      "status": 401,
+      "headers": {},
+      "body": "unauthorized"
+    },
+    {
+      "header": " 123",
+      "chunks": [
+        0
+      ],
+      "authorized": true,
+      "entered": 1,
+      "reads": 1,
+      "status": 200,
+      "headers": {},
+      "body": "OK"
+    },
+    {
+      "header": "abc",
+      "chunks": [
+        0
+      ],
+      "authorized": false,
+      "entered": 1,
+      "reads": 0,
+      "status": 401,
+      "headers": {},
+      "body": "unauthorized"
+    },
+    {
+      "header": "abc",
+      "chunks": [
+        0
+      ],
+      "authorized": true,
+      "entered": 1,
+      "reads": 1,
+      "status": 200,
+      "headers": {},
+      "body": "OK"
+    },
+    {
+      "header": null,
+      "chunks": [
+        104857600
+      ],
+      "authorized": false,
+      "entered": 1,
+      "reads": 0,
+      "status": 401,
+      "headers": {},
+      "body": "unauthorized"
+    },
+    {
+      "header": null,
+      "chunks": [
+        104857600
+      ],
+      "authorized": true,
+      "entered": 1,
+      "reads": 1,
+      "status": 200,
+      "headers": {},
+      "body": "OK"
+    },
+    {
+      "header": null,
+      "chunks": [
+        104857600,
+        1
+      ],
+      "authorized": false,
+      "entered": 1,
+      "reads": 0,
+      "status": 401,
+      "headers": {},
+      "body": "unauthorized"
+    },
+    {
+      "header": null,
+      "chunks": [
+        104857600,
+        1
+      ],
+      "authorized": true,
+      "entered": 1,
+      "reads": 2,
+      "status": 413,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "request body too large"
+    },
+    {
+      "header": null,
+      "chunks": [
+        52428800,
+        52428800,
+        1
+      ],
+      "authorized": false,
+      "entered": 1,
+      "reads": 0,
+      "status": 401,
+      "headers": {},
+      "body": "unauthorized"
+    },
+    {
+      "header": null,
+      "chunks": [
+        52428800,
+        52428800,
+        1
+      ],
+      "authorized": true,
+      "entered": 1,
+      "reads": 3,
+      "status": 413,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "request body too large"
+    }
+  ]
+}

@@ -178,7 +178,7 @@ impl Service {
     pub fn from_state(st: &Arc<AppState>) -> Result<Self, Error> {
         let mut service = Self::new_with_environment(
             &st.accounts.env.home,
-            crate::session_open::cli::backend_dir().as_deref(),
+            crate::session_open::cli::backend_dir_for_home(&st.accounts.env.home).as_deref(),
             st.cfg.auth_token.clone(),
             st.cfg.listen.port(),
             st.cfg.listen.ip().to_string(),
@@ -325,7 +325,7 @@ pub async fn handle(
 ) -> Response {
     if let Some(response)=crate::http_cors::preflight(request.method(),request.headers()){return response;}
     let headers=request.headers().clone();
-    let mut response=handle_inner(State(st),ConnectInfo(peer),request).await;
+    let mut response=if let Some(response)=crate::http_body_limit::precheck(request.headers()){response}else{handle_inner(State(st),ConnectInfo(peer),request).await};
     crate::http_cors::apply(&headers,&mut response);
     response
 }
@@ -364,10 +364,12 @@ async fn handle_inner(
                 "/api/peers/app-list" | "/api/peers/identificador"
             ) || path.starts_with("/api/peers/") && path.ends_with("/enabled")));
     let body = if needs_body {
-        match axum::body::to_bytes(request.into_body(), 16 * 1024 * 1024)
-            .await
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        let bytes=match crate::http_body_limit::read(request.into_body()).await {
+            Ok(bytes)=>Some(bytes),
+            Err(error) if crate::http_body_limit::is_limit(&error)=>return crate::http_body_limit::rejected(),
+            Err(_)=>None,
+        };
+        match bytes.and_then(|b| serde_json::from_slice::<Value>(&b).ok())
             .filter(Value::is_object)
         {
             Some(v) => v,
