@@ -81,6 +81,31 @@ fn local_argv_matches_python_shlex_including_quoted_dollar_and_unicode_spaces() 
     }
 }
 
+#[tokio::test]
+async fn local_api_wrappers_keep_provider_credentials_but_never_hangar_authority() {
+    let dir = tempfile::tempdir().unwrap();
+    let args = local::split(&command(dir.path(), "environment", &[])).unwrap();
+    let mut process = tokio::process::Command::new(&args[0]);
+    process.args(&args[1..]);
+    for key in [
+        "CP_GROQ_API_KEY",
+        "GROQ_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "ELEVENLABS_API_KEY",
+    ] {
+        process.env(key, "fixture-provider-value");
+    }
+    for key in crate::terminal_process::PRIVATE_ENV_KEYS {
+        process.env(key, "fixture-authority-value");
+    }
+    local::isolate(&mut process);
+    let output = process.output().await.unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"ID3providers:11111;authority:000000");
+    assert!(output.stderr.is_empty());
+}
+
 #[test]
 fn adjustments_omit_defaults_coerce_integers_and_clamp_before_the_hash() {
     let dir = tempfile::tempdir().unwrap();
@@ -632,6 +657,45 @@ async fn a_redirect_never_receives_the_synthesis_credential_on_another_host() {
         502
     );
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn uncompressed_local_and_remote_audio_above_64_mib_remains_supported() {
+    use axum::response::IntoResponse;
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = config(dir.path());
+    c.values["tts_local_cmd"] = json!(command(dir.path(), "large", &[]));
+    let local = Service::default()
+        .synthesize(&c, "oi", "", "local", "")
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::metadata(cache_path(&c, &local.hash))
+            .unwrap()
+            .len(),
+        65 * 1024 * 1024 + 4
+    );
+    let remote = server(|_| {
+        Box::pin(async {
+            let chunk = bytes::Bytes::from(vec![0; 1024 * 1024]);
+            let chunks =
+                std::iter::once(Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"RIFF")))
+                    .chain((0..65).map(move |_| Ok(chunk.clone())));
+            axum::body::Body::from_stream(futures_util::stream::iter(chunks)).into_response()
+        })
+    })
+    .await;
+    c.values["elevenlabs_api_key"] = json!("fixture");
+    let audio = Service::at(remote.url.clone())
+        .synthesize(&c, "oi", "", "elevenlabs", "")
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::metadata(cache_path(&c, &audio.hash))
+            .unwrap()
+            .len(),
+        65 * 1024 * 1024 + 4
+    );
 }
 
 proptest! {

@@ -1,4 +1,4 @@
-use super::{MAX_AUDIO_BYTES, SpeechConfig, SpeechError, valid_audio};
+use super::{SpeechConfig, SpeechError, valid_audio};
 use crate::terminal_process::{CommandTree, OwnedTree};
 use std::{io, process::Stdio, time::Duration};
 use tokio::{
@@ -107,14 +107,9 @@ impl Drop for Managed {
     }
 }
 
-async fn audio(pipe: impl AsyncRead + Unpin) -> io::Result<Vec<u8>> {
+async fn audio(mut pipe: impl AsyncRead + Unpin) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    pipe.take(MAX_AUDIO_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .await?;
-    if bytes.len() > MAX_AUDIO_BYTES {
-        return Err(io::Error::other("áudio acima do limite de segurança"));
-    }
+    pipe.read_to_end(&mut bytes).await?;
     Ok(bytes)
 }
 
@@ -138,6 +133,13 @@ pub(super) async fn run(config: &SpeechConfig, text: &str) -> Result<Vec<u8>, Sp
     run_with_deadline(config, text, Duration::from_secs(180)).await
 }
 
+pub(super) fn isolate(command: &mut Command) {
+    // O motor escolhido pode ser um wrapper de API; só a autoridade do Hangar é retirada.
+    for key in crate::terminal_process::PRIVATE_ENV_KEYS {
+        command.env_remove(key);
+    }
+}
+
 pub(super) async fn run_with_deadline(
     config: &SpeechConfig,
     text: &str,
@@ -158,18 +160,7 @@ pub(super) async fn run_with_deadline(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    for key in crate::terminal_process::PRIVATE_ENV_KEYS
-        .into_iter()
-        .chain([
-            "CP_GROQ_API_KEY",
-            "GROQ_API_KEY",
-            "OPENAI_API_KEY",
-            "OPENROUTER_API_KEY",
-            "ELEVENLABS_API_KEY",
-        ])
-    {
-        command.env_remove(key);
-    }
+    isolate(&mut command);
     let mut tree = CommandTree::configure(&mut command)
         .map_err(|_| SpeechError::new(502, "Não foi possível controlar o motor de voz local."))?;
     let child = command.spawn().map_err(|error| {

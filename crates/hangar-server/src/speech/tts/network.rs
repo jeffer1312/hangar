@@ -1,4 +1,4 @@
-use super::{MAX_AUDIO_BYTES, SpeechConfig, SpeechError, valid_audio};
+use super::{SpeechConfig, SpeechError, valid_audio};
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -25,7 +25,8 @@ pub(super) async fn request(
         .build()
         .map_err(|_| SpeechError::new(502, "Não foi possível iniciar o cliente da ElevenLabs."))?;
     let url = format!("{}{path}", api.trim_end_matches('/'));
-    let mut request = if body.is_some() {
+    let is_audio = body.is_some();
+    let mut request = if is_audio {
         client.post(url)
     } else {
         client.get(url)
@@ -41,10 +42,13 @@ pub(super) async fn request(
         .await
         .map_err(|_| SpeechError::new(502, "Falha ao contatar a ElevenLabs."))?;
     let status = response.status();
-    let limit = if status.is_success() {
-        MAX_AUDIO_BYTES
+    // O áudio pode ser WAV sem compressão; seu tamanho não representa o número de caracteres.
+    let limit = if status.is_success() && is_audio {
+        None
+    } else if status.is_success() {
+        Some(8 * 1024 * 1024)
     } else {
-        16 * 1024
+        Some(16 * 1024)
     };
     let mut bytes = Vec::new();
     while let Some(chunk) = response
@@ -52,14 +56,16 @@ pub(super) async fn request(
         .await
         .map_err(|_| SpeechError::new(502, "Falha ao ler a resposta da ElevenLabs."))?
     {
-        if bytes.len().saturating_add(chunk.len()) > limit {
+        if let Some(limit) = limit
+            && bytes.len().saturating_add(chunk.len()) > limit
+        {
             if !status.is_success() {
                 bytes.extend_from_slice(&chunk[..limit - bytes.len()]);
                 break;
             }
             return Err(SpeechError::new(
                 502,
-                "A ElevenLabs devolveu áudio acima do limite de segurança.",
+                "A ElevenLabs devolveu metadados acima do limite de segurança.",
             ));
         }
         bytes.extend_from_slice(&chunk);

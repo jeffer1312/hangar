@@ -14,8 +14,6 @@ mod text;
 
 pub const CHARACTER_LIMIT: usize = 10_000;
 
-const MAX_AUDIO_BYTES: usize = 64 * 1024 * 1024;
-
 pub struct Service {
     api: String,
     flights: Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>,

@@ -9,6 +9,52 @@ use std::{
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let mode = args.first().map(String::as_str).unwrap_or("");
+    if mode == "environment" {
+        let providers: String = [
+            "CP_GROQ_API_KEY",
+            "GROQ_API_KEY",
+            "OPENAI_API_KEY",
+            "OPENROUTER_API_KEY",
+            "ELEVENLABS_API_KEY",
+        ]
+        .into_iter()
+        .map(|key| {
+            if std::env::var_os(key).is_some() {
+                '1'
+            } else {
+                '0'
+            }
+        })
+        .collect();
+        let authority: String = [
+            "HANGAR_INTERNAL_SECRET",
+            "CP_AUTH_TOKEN",
+            "HANGAR_RUNTIME_INSTANCE",
+            "HANGAR_PLUGIN_TOKEN",
+            "HANGAR_SERVER_LISTEN",
+            "HANGAR_SERVER_UPSTREAM",
+        ]
+        .into_iter()
+        .map(|key| {
+            if std::env::var_os(key).is_some() {
+                '1'
+            } else {
+                '0'
+            }
+        })
+        .collect();
+        print!("ID3providers:{providers};authority:{authority}");
+        return;
+    }
+    if mode == "large" {
+        let mut output = std::io::stdout().lock();
+        output.write_all(b"RIFF").unwrap();
+        let chunk = vec![0; 64 * 1024];
+        for _ in 0..65 * 16 {
+            output.write_all(&chunk).unwrap();
+        }
+        return;
+    }
     if mode == "child" {
         std::fs::write(&args[1], std::process::id().to_string()).unwrap();
         std::thread::sleep(Duration::from_secs(120));
