@@ -1,5 +1,7 @@
 //! Apelidos compartilhados entre contas; o arquivo não pertence ao login de nenhuma delas.
 use super::environment::AccountEnvironment;
+use super::quotas::other::py_strip;
+use crate::orchestration::codec;
 use serde_json::{Map, Value};
 use std::{io, path::PathBuf, sync::Mutex};
 
@@ -11,22 +13,27 @@ pub fn path(env: &AccountEnvironment) -> PathBuf {
 
 pub fn read(env: &AccountEnvironment) -> Map<String, Value> {
     let path = super::quotas::other::read_path(path(env));
-    let value = std::fs::read(path)
+    let value = std::fs::read_to_string(path)
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-    value
+        .and_then(|text| codec::loads(&text));
+    let result = value
         .as_ref()
         .and_then(Value::as_object)
         .into_iter()
         .flatten()
+        .filter(|(_, value)| !codec::contains_nonfinite(value))
         .filter_map(|(key, value)| {
             value
                 .as_str()
-                .map(str::trim)
+                .map(py_strip)
                 .filter(|s| !s.is_empty())
                 .map(|s| (key.clone(), Value::String(s.to_owned())))
         })
-        .collect()
+        .collect();
+    if let Some(value) = value {
+        codec::discard(value);
+    }
+    result
 }
 
 pub fn set(
@@ -38,13 +45,20 @@ pub fn set(
         .lock()
         .map_err(|_| io::Error::other("trava de apelidos indisponível"))?;
     let mut current = read(env);
-    let clean: String = value.unwrap_or_default().trim().chars().take(40).collect();
+    let clean = codec::truncate_string(py_strip(value.unwrap_or_default()), 40).to_owned();
     if clean.is_empty() {
         current.shift_remove(id);
     } else {
         current.insert(id.into(), Value::String(clean));
     }
-    let bytes = crate::transcript::pyjson::dumps_indent(&Value::Object(current.clone()), 1, false);
+    let result = Value::Object(current.clone());
+    if codec::contains_surrogate(&result) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "apelido não pode ser gravado em UTF-8",
+        ));
+    }
+    let bytes = crate::transcript::pyjson::dumps_indent(&result, 1, false);
     let path = path(env);
     std::fs::create_dir_all(path.parent().unwrap())?;
     use std::io::Write;

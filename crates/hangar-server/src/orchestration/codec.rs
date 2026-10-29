@@ -155,3 +155,23 @@ pub fn clone_value(value: &Value) -> Value {
 pub fn discard(value: Value) {
     crate::transcript::json_tree::discard(value);
 }
+
+/// Fatia texto por codepoints Python sem partir um surrogate representado internamente.
+pub fn truncate_string(text: &str, count: usize) -> &str {
+    let prefix = format!("{}surrogate:", *MARK);
+    let mut end = 0;
+    for _ in 0..count {
+        let rest = &text[end..];
+        if rest.is_empty() { break; }
+        if let Some(tail) = rest.strip_prefix(&prefix)
+            && tail.len() >= 5
+            && tail.as_bytes()[4] == b';'
+            && tail.as_bytes()[..4].iter().all(u8::is_ascii_hexdigit)
+        {
+            end += prefix.len() + 5;
+        } else {
+            end += rest.chars().next().unwrap().len_utf8();
+        }
+    }
+    &text[..end]
+}

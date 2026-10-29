@@ -24,3 +24,5 @@ pub mod types;
 pub mod usage;
 pub use locks::{AccountGuard, AccountLocks, LockError};
 pub use types::{AccountKey, GuardMode, Provider, UsageFacts};
+
+pub mod aliases;
