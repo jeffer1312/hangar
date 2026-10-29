@@ -57,12 +57,12 @@ pub(super) fn meta_line(session: &SessionInfo, full: bool) -> Option<Div> {
 }
 
 /// Um pedaço da placa: o ícone (ou o logo do provider da conta), a cor dele e o nome.
-enum PlateMark { Icon(IconName), Provider(String) }
-struct PlateSegment { mark: PlateMark, color: Hsla, name: String }
+pub(crate) enum PlateMark { Icon(IconName), Provider(String) }
+pub(crate) struct PlateSegment { pub(crate) mark: PlateMark, pub(crate) color: Hsla, pub(crate) name: String }
 
 /// A placa no canto direito da borda de cima: a máquina (quando é outra) e a conta. O fundo cheio corta a linha da borda
 /// atrás do texto.
-fn plate(machine: Option<PlateSegment>, account: Option<PlateSegment>, on: bool) -> Div {
+pub(crate) fn plate(machine: Option<PlateSegment>, account: Option<PlateSegment>, on: bool) -> Div {
     let segment = |s: PlateSegment| div().min_w_0().flex().items_center().gap(px(3.))
         .child(match s.mark {
             PlateMark::Icon(icon) => chrome::small_icon(icon, 9., s.color).into_any_element(),
@@ -93,7 +93,7 @@ fn speak_extras(label: &mut String, account: Option<String>, pct: Option<f64>) {
 }
 
 /// O anel de contexto logo fora do avatar, sem mudar a medida da aba; sem dado, nenhum anel.
-fn with_context_ring(mark: AnyElement, pct: Option<f64>, side: f32) -> AnyElement {
+pub(crate) fn with_context_ring(mark: AnyElement, pct: Option<f64>, side: f32) -> AnyElement {
     const GAP: f32 = 3.;
     let Some(pct) = pct else { return mark };
     div().relative().size(px(side)).flex_shrink_0()
@@ -124,6 +124,31 @@ pub(super) fn short_names(names: &[&str]) -> Vec<String> {
 const TAB_WIDTH: f32 = 240.;
 const REAR_WIDTH: f32 = 88.;
 const OVERLAP: f32 = 12.;
+
+// Partes da aba por dado simples, sem foco nem clique: a barra põe os dois, a miniatura das novidades (`crate::news`)
+// usa as mesmas sem nenhum.
+
+/// A caixa da aba: medida, borda e as cores de aberta, de grupo ou solta.
+pub(crate) fn tab_frame(on: bool, grouped: bool, compact: bool) -> Div {
+    div().flex_shrink_0().w(px(TAB_WIDTH)).h(px(tab_height())).px(px(8.))
+        .when(compact, |el| el.pl(px(20.)))
+        .flex().items_center().gap(px(if compact { 4. } else { 6. })).rounded(px(6.)).border_1()
+        .map(|el| if on { el.bg(theme::accent_dim()).border_color(theme::accent()).text_color(theme::text()).font_weight(FontWeight::SEMIBOLD) }
+            else if grouped { el.bg(theme::raised()).border_color(theme::border()).text_color(theme::muted()) }
+            // Toda aba tem a borda à vista; a solta fica sem fundo, o que a separa da de grupo.
+            else { el.border_color(theme::border_strong()).text_color(theme::muted()) })
+}
+
+/// O nome da aba, com o rótulo do grupo em cima, a marca sem terminal ao lado e a linha de baixo.
+pub(crate) fn tab_title(name: String, group_label: Option<&str>, grouped: bool, full: bool, terminal: Option<Div>, meta: Option<Div>) -> Div {
+    div().min_w_0().overflow_hidden().flex_1().flex().flex_col().when(full, |el| el.gap(px(1.)))
+        .when_some(group_label, |el, text| el.child(div().truncate().text_size(px(9.)).line_height(px(11.))
+            .text_color(theme::accent_text()).child(text.to_owned())))
+        .child(div().min_w_0().flex().items_center().gap(px(4.))
+            .child(div().min_w_0().truncate().text_size(px(if grouped { 11. } else { 13. })).line_height(px(14.)).child(name))
+            .children(terminal))
+        .children(meta)
+}
 
 impl TabGroup {
     fn slot(&self, index: usize) -> Option<(f32, f32)> {
@@ -640,22 +665,10 @@ impl Hangar {
         let weak = cx.entity().downgrade();
         // A aba estreita de trás da faixa fica só com a máquina: pasta e branch não cabem nela.
         let full = appearance::get().tabs_full && !compact;
-        let title = div().min_w_0().overflow_hidden().flex_1().flex().flex_col().when(full, |el| el.gap(px(1.)))
-            .when_some(group_label, |el, text| el.child(div().truncate().text_size(px(9.)).line_height(px(11.))
-                .text_color(theme::accent_text()).child(text.to_owned())))
-            .child(div().min_w_0().flex().items_center().gap(px(4.))
-                .child(div().min_w_0().truncate().text_size(px(if grouped { 11. } else { 13. })).line_height(px(14.)).child(session.name.clone()))
-                .children(terminal_mark(session).filter(|_| !compact)))
-            .children(meta_line(session, full));
-        let tab = div().id(SharedString::from(format!("tab-{}", target.id()))).relative().track_focus(&focus)
-            .flex_shrink_0().w(px(TAB_WIDTH)).h(px(tab_height())).px(px(8.))
+        let title = tab_title(session.name.clone(), group_label, grouped, full, terminal_mark(session).filter(|_| !compact), meta_line(session, full));
+        let tab = tab_frame(on, grouped, compact).id(SharedString::from(format!("tab-{}", target.id()))).relative().track_focus(&focus)
             .when_some(slot, |el, (left, width)| el.absolute().top_0().left(px(left)).w(px(width)).block_mouse_except_scroll())
-            .when(compact, |el| el.pl(px(20.)))
-            .flex().items_center().gap(px(if compact { 4. } else { 6. })).rounded(px(6.)).border_1().cursor_pointer()
-            .map(|el| if on { el.bg(theme::accent_dim()).border_color(theme::accent()).text_color(theme::text()).font_weight(FontWeight::SEMIBOLD) }
-                else if grouped { el.bg(theme::raised()).border_color(theme::border()).text_color(theme::muted()).hover(|el| el.border_color(theme::accent())) }
-                // Toda aba tem a borda à vista; a solta fica sem fundo, o que a separa da de grupo.
-                else { el.border_color(theme::border_strong()).text_color(theme::muted()).hover(|el| el.border_color(theme::accent())) })
+            .cursor_pointer().when(!on, |el| el.hover(|el| el.border_color(theme::accent())))
             .when(focus.is_focused(window), |el| el.focus_ring_style(window, cx))
             .role(Role::Tab).aria_selected(on).aria_label(label.clone())
             .when(!appearance::get().tab_preview, |el| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(label.clone()).build(window, cx)))

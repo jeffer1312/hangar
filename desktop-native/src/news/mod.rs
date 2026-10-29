@@ -1,6 +1,8 @@
 //! Animações das novidades da atualização: cada uma é desenhada com as mesmas partes do app que ela mostra.
 
+mod account_tags;
 mod composer_history;
+mod rename_suggestion;
 
 use std::time::Instant;
 use gpui_kit::*;
@@ -12,6 +14,8 @@ pub type NewsAnimation = fn(started: Instant, width: Pixels, window: &mut Window
 pub fn animation(name: &str) -> Option<NewsAnimation> {
     match name {
         "historico-compositor" => Some(composer_history::render),
+        "etiquetas-maquina-conta" => Some(account_tags::render),
+        "sugestao-de-nome" => Some(rename_suggestion::render),
         _ => None,
     }
 }

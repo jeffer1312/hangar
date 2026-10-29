@@ -9407,5 +9407,13 @@
   "tags_apply_retry": "Tentar de novo",
   "rename_suggest_title": "Renomear para {name}?",
   "rename_suggest_apply": "Renomear",
-  "rename_suggest_dismiss": "Agora não"
+  "rename_suggest_dismiss": "Agora não",
+  "news_tags_sample_session": "api-pagamentos",
+  "news_tags_sample_session_other": "site-novo",
+  "news_tags_sample_machine": "VPS",
+  "news_tags_sample_account_work": "trabalho",
+  "news_tags_sample_account_personal": "pessoal",
+  "news_rename_sample_generic": "hangar-2",
+  "news_rename_sample_message": "o login do app quebra depois de atualizar, dá uma olhada?",
+  "news_rename_sample_name": "corrigir-login-do-app"
 }

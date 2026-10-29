@@ -72,6 +72,10 @@ mod pair_accept;
 mod external;
 mod servers;
 pub(crate) use servers::{ServerEntry, new_id as new_server_id};
+// Partes de vista que a miniatura das novidades (`crate::news`) também desenha.
+pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
+pub(crate) use tags::{account_icon, machine_icon};
+pub(crate) use rename_suggest::rename_strip;
 mod shortcuts;
 mod shortcut_transfer;
 mod keyboard;
@@ -261,7 +265,7 @@ fn conversation_metrics(user: bool) -> (f32, f32) { if user { (16., 1.55) } else
 
 /// Texto da conversa com a fonte, o tamanho e a entrelinha escolhidos em Aparência. Em 100% são os do web no desktop:
 /// resposta 17 px/1,7 (`.prose`, AssistantBubble.svelte) e bolha do usuário 16 px/1,55 (`.bubble-text`, UserBubble.svelte).
-fn conversation_text(el: Div, user: bool) -> Div {
+pub(crate) fn conversation_text(el: Div, user: bool) -> Div {
     let a = crate::appearance::get();
     let (size, line) = conversation_metrics(user);
     el.font_family(a.font.family())
@@ -5405,8 +5409,8 @@ fn render_history_skeleton() -> Div {
         .child(in_column(div().flex().flex_col().gap(px(28.)).children(turns)))
 }
 
-/// Bolha do usuário, na conversa e no subagente.
-fn user_bubble(content: impl IntoElement) -> Div {
+/// Bolha do usuário, na conversa, no subagente e na miniatura das novidades.
+pub(crate) fn user_bubble(content: impl IntoElement) -> Div {
     div().max_w(relative(0.78)).px(px(14.)).py(px(10.)).rounded(px(18.)).bg(theme::user_bubble()).child(content)
 }
 

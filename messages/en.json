@@ -9407,5 +9407,13 @@
   "tags_apply_retry": "Try again",
   "rename_suggest_title": "Rename to {name}?",
   "rename_suggest_apply": "Rename",
-  "rename_suggest_dismiss": "Not now"
+  "rename_suggest_dismiss": "Not now",
+  "news_tags_sample_session": "payments-api",
+  "news_tags_sample_session_other": "new-site",
+  "news_tags_sample_machine": "VPS",
+  "news_tags_sample_account_work": "work",
+  "news_tags_sample_account_personal": "personal",
+  "news_rename_sample_generic": "hangar-2",
+  "news_rename_sample_message": "the app login breaks after updating, can you take a look?",
+  "news_rename_sample_name": "fix-app-login"
 }

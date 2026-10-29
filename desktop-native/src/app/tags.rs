@@ -33,7 +33,7 @@ pub(super) fn store(map: &mut HashMap<String, Event>, key: &str, data: &Value) -
     Some(true)
 }
 
-pub(super) fn machine_icon(key: &str) -> IconName {
+pub(crate) fn machine_icon(key: &str) -> IconName {
     match key {
         "laptop" => IconName::Laptop, "server" => IconName::Server, "house" => IconName::House,
         "briefcase" => IconName::Briefcase, "cloud" => IconName::Cloud, _ => IconName::Monitor,
@@ -41,7 +41,7 @@ pub(super) fn machine_icon(key: &str) -> IconName {
 }
 
 /// `provider` não tem ícone: quem desenha usa o logo do agente da conta.
-pub(super) fn account_icon(key: &str) -> Option<IconName> {
+pub(crate) fn account_icon(key: &str) -> Option<IconName> {
     Some(match key {
         "provider" => return None,
         "key-round" => IconName::KeyRound, "wallet" => IconName::Wallet, "user-round" => IconName::UserRound,

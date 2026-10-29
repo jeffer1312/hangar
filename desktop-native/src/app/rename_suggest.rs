@@ -59,17 +59,25 @@ impl Hangar {
         let suggestion = session.rename_suggestion.clone().filter(|s| *s != session.name && !session.read_only())?;
         let renaming = self.is_renaming(&target);
         let (dismiss, apply) = (target.clone(), target);
-        let title = tr_shared("rename_suggest_title", &[("name", &suggestion)]);
-        Some(div().id("rename-suggest").py_2().flex().items_center().gap_2().border_t_1().border_color(theme::border())
-            .role(Role::Group).aria_label(title.clone())
-            .child(div().flex_1().min_w_0().text_sm().truncate().child(title))
-            .child(Button::new("rename-suggest-dismiss").small().ghost().label(tr_shared("rename_suggest_dismiss", &[])).disabled(renaming)
-                .on_click(cx.listener(move |this, _, _, cx| this.dismiss_rename_suggestion(dismiss.clone(), cx))))
-            .child(Button::new("rename-suggest-apply").small().primary().label(tr_shared("rename_suggest_apply", &[]))
-                .loading(renaming).disabled(renaming)
-                .on_click(cx.listener(move |this, _, _, cx| this.rename_session_to(apply.clone(), suggestion.clone(), cx))))
+        let name = suggestion.clone();
+        Some(rename_strip(&suggestion, renaming,
+            |button| button.on_click(cx.listener(move |this, _, _, cx| this.dismiss_rename_suggestion(dismiss.clone(), cx))),
+            |button| button.on_click(cx.listener(move |this, _, _, cx| this.rename_session_to(apply.clone(), name.clone(), cx))))
             .into_any_element())
     }
+}
+
+/// A faixa por dado simples: a aberta liga o clique nos botões (`dismiss` e `apply` recebem cada um), a miniatura das
+/// novidades (`crate::news`) usa a mesma sem clique.
+pub(crate) fn rename_strip(suggestion: &str, renaming: bool, dismiss: impl FnOnce(Button) -> Button, apply: impl FnOnce(Button) -> Button)
+    -> Stateful<Div> {
+    let title = tr_shared("rename_suggest_title", &[("name", suggestion)]);
+    div().id("rename-suggest").py_2().flex().items_center().gap_2().border_t_1().border_color(theme::border())
+        .role(Role::Group).aria_label(title.clone())
+        .child(div().flex_1().min_w_0().text_sm().truncate().child(title))
+        .child(dismiss(Button::new("rename-suggest-dismiss").small().ghost().label(tr_shared("rename_suggest_dismiss", &[])).disabled(renaming)))
+        .child(apply(Button::new("rename-suggest-apply").small().primary().label(tr_shared("rename_suggest_apply", &[]))
+            .loading(renaming).disabled(renaming)))
 }
 
 #[cfg(test)]

@@ -56,23 +56,35 @@ export const RenameSuggestion = memo(function RenameSuggestion({ serverId, name,
   }, [server, name]);
 
   if (!suggestion || !server) return null;
+  return <RenameSuggestionView suggestion={suggestion} busy={busy} onApply={apply} onDismiss={dismiss} />;
+});
+
+// A faixa sem servidor nem loja: a conversa e a animação da novidade desenham esta.
+// `applyPressed` mostra o Renomear apertado sem toque (a miniatura não recebe toques).
+export function RenameSuggestionView({ suggestion, busy = false, applyPressed = false, onApply, onDismiss }: {
+  suggestion: string;
+  busy?: boolean;
+  applyPressed?: boolean;
+  onApply: () => void;
+  onDismiss: () => void;
+}) {
   const title = m.rename_suggest_title({ name: suggestion });
   return (
     <View style={styles.wrap} accessibilityLabel={title}>
       <Text style={styles.title} numberOfLines={2}>{title}</Text>
       <View style={styles.actions}>
-        <Pressable onPress={dismiss} disabled={busy} accessibilityRole="button" accessibilityState={{ disabled: busy }}
+        <Pressable onPress={onDismiss} disabled={busy} accessibilityRole="button" accessibilityState={{ disabled: busy }}
                    style={({ pressed }) => [styles.btn, styles.secondary, pressed && styles.pressed, busy && styles.off]}>
           <Text style={styles.secondaryText}>{m.rename_suggest_dismiss()}</Text>
         </Pressable>
-        <Pressable onPress={apply} disabled={busy} accessibilityRole="button" accessibilityState={{ disabled: busy, busy }}
-                   style={({ pressed }) => [styles.btn, styles.primary, pressed && styles.primaryPressed, busy && styles.off]}>
+        <Pressable onPress={onApply} disabled={busy} accessibilityRole="button" accessibilityState={{ disabled: busy, busy }}
+                   style={({ pressed }) => [styles.btn, styles.primary, (pressed || applyPressed) && styles.primaryPressed, busy && styles.off]}>
           <Text style={styles.primaryText}>{m.rename_suggest_apply()}</Text>
         </Pressable>
       </View>
     </View>
   );
-});
+}
 
 const styles = StyleSheet.create((theme) => ({
   wrap: {
