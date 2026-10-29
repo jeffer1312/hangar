@@ -83,7 +83,17 @@ fn harness_health_external_values_match_python() {
             {
                 ()
             }
-            Err(_) if case["expected"].get("error").is_some() => (),
+            Err(error) if case["expected"].get("error").is_some() => {
+                let expected = match (case["expected"]["error"].as_str(), case["kind"].as_str()) {
+                    (Some("UnicodeDecodeError"), _) => "configuração TOML não está em UTF-8",
+                    (Some("AttributeError"), Some("_mcp")) => "configuração MCP não é um objeto",
+                    (Some("TypeError"), Some("_modelo_padrao")) => "modelo padrão não é texto",
+                    other => panic!("classe original sem contrato: {other:?}"),
+                };
+                if error != expected {
+                    failures.push(format!("{}: {error:?} != {expected:?}", case["name"]));
+                }
+            }
             other => failures.push(format!(
                 "{}: {:?} != {}",
                 case["name"],
@@ -238,7 +248,17 @@ fn harness_health_read_types_match_python() {
             {
                 ()
             }
-            Err(_) if case["expected"].get("error").is_some() => (),
+            Err(error) if case["expected"].get("error").is_some() => {
+                let expected = match (case["expected"]["error"].as_str(), case["kind"].as_str()) {
+                    (Some("UnicodeDecodeError"), _) => "configuração TOML não está em UTF-8",
+                    (Some("AttributeError"), Some("_mcp")) => "configuração MCP não é um objeto",
+                    (Some("TypeError"), Some("_modelo_padrao")) => "modelo padrão não é texto",
+                    other => panic!("classe original sem contrato: {other:?}"),
+                };
+                if error != expected {
+                    failures.push(format!("{}: {error:?} != {expected:?}", case["name"]));
+                }
+            }
             other => failures.push(format!(
                 "{}: {:?} != {}",
                 case["name"],
