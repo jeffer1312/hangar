@@ -133,7 +133,10 @@ impl Cdp {
                             }
                         }
                         _ => {
-                            closing(&mut socket, None).await;
+                            closing(&mut socket, Some(CloseFrame {
+                                code: CloseCode::Normal,
+                                reason: "".into(),
+                            })).await;
                             break;
                         }
                     },
