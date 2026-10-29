@@ -122,8 +122,20 @@ pub(super) fn store(directory: &Path, hash: &str, audio: AudioFile) -> Result<()
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn clean(directory: &Path, now: SystemTime) -> bool {
-    let Some(cutoff) = now.checked_sub(Duration::from_secs(30 * 86400)) else {
+    clean_with_selection(directory, now, Instant::now(), None)
+}
+
+const RETENTION: Duration = Duration::from_secs(30 * 86400);
+
+fn clean_with_selection(
+    directory: &Path,
+    now: SystemTime,
+    selected_now: Instant,
+    selected: Option<&Mutex<std::collections::HashMap<String, Instant>>>,
+) -> bool {
+    let Some(cutoff) = now.checked_sub(RETENTION) else {
         return true;
     };
     let Ok(entries) = fs::read_dir(directory) else {
@@ -151,6 +163,23 @@ pub(super) fn clean(directory: &Path, now: SystemTime) -> bool {
             if !owned || !entry.file_type()?.is_file() {
                 return Ok(());
             }
+            // A seleção e a remoção usam a mesma exclusão; quem já começou a leitura fica protegido.
+            let selections = selected
+                .map(|selected| selected.lock())
+                .transpose()
+                .map_err(|_| std::io::Error::other("controle de retenção indisponível"))?;
+            let hash = name
+                .to_str()
+                .and_then(|name| name.rsplit_once('.'))
+                .unwrap()
+                .0;
+            if selections.as_ref().is_some_and(|selections| {
+                selections
+                    .get(hash)
+                    .is_some_and(|used| selected_now.saturating_duration_since(*used) < RETENTION)
+            }) {
+                return Ok(());
+            }
             let metadata = fs::symlink_metadata(entry.path())?;
             if metadata.is_file() && metadata.modified()? < cutoff {
                 fs::remove_file(entry.path())?;
@@ -168,7 +197,13 @@ pub(super) fn clean(directory: &Path, now: SystemTime) -> bool {
     success
 }
 
-type Schedule = Arc<Mutex<Option<Instant>>>;
+#[derive(Default)]
+struct DirectoryMaintenance {
+    next: Mutex<Option<Instant>>,
+    selected: Mutex<std::collections::HashMap<String, Instant>>,
+}
+
+type Schedule = Arc<DirectoryMaintenance>;
 
 #[derive(Default)]
 pub(super) struct Maintenance {
@@ -176,9 +211,28 @@ pub(super) struct Maintenance {
 }
 
 impl Maintenance {
+    fn state(&self, directory: &Path) -> Result<Schedule, SpeechError> {
+        self.directories
+            .lock()
+            .map(|mut directories| directories.entry(directory.to_owned()).or_default().clone())
+            .map_err(|_| {
+                SpeechError::new(500, "O controle de retenção do cache está indisponível.")
+            })
+    }
+
+    pub fn select(&self, directory: &Path, hash: &str) -> Result<(), SpeechError> {
+        let state = self.state(directory)?;
+        let mut selected = state.selected.lock().map_err(|_| {
+            SpeechError::new(500, "O controle de retenção do cache está indisponível.")
+        })?;
+        // O último uso vale também quando o sistema recusa renovar o mtime do arquivo.
+        selected.insert(hash.to_owned(), Instant::now());
+        Ok(())
+    }
+
     pub fn run(&self, directory: &Path, now: Instant) -> bool {
-        let state = match self.directories.lock() {
-            Ok(mut directories) => directories.entry(directory.to_owned()).or_default().clone(),
+        let state = match self.state(directory) {
+            Ok(state) => state,
             Err(_) => {
                 tracing::warn!(
                     code = "speech_cache_cleanup_failed",
@@ -188,7 +242,7 @@ impl Maintenance {
             }
         };
         // Uma varredura por pasta e por hora; pedidos concorrentes não disputam o disco.
-        let mut next = match state.try_lock() {
+        let mut next = match state.next.try_lock() {
             Ok(next) => next,
             Err(TryLockError::WouldBlock) => return false,
             Err(TryLockError::Poisoned(_)) => {
@@ -202,7 +256,20 @@ impl Maintenance {
         if next.is_some_and(|deadline| now < deadline) {
             return false;
         }
-        let success = clean(directory, SystemTime::now());
+        match state.selected.lock() {
+            Ok(mut selected) => {
+                selected.retain(|_, used| now.saturating_duration_since(*used) < RETENTION)
+            }
+            Err(_) => {
+                tracing::warn!(
+                    code = "speech_cache_cleanup_failed",
+                    "O controle de retenção do cache está indisponível."
+                );
+                return false;
+            }
+        }
+        let success =
+            clean_with_selection(directory, SystemTime::now(), now, Some(&state.selected));
         *next = Some(now + Duration::from_secs(if success { 3600 } else { 60 }));
         true
     }

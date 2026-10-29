@@ -378,19 +378,26 @@ async fn a_read_only_cached_audio_survives_a_failed_retention_touch_without_a_pr
     std::fs::create_dir_all(&c.cache_dir).unwrap();
     let path = c.cache_dir.join(format!("{hash}.mp3"));
     std::fs::write(&path, b"ID3audio").unwrap();
+    mark_old(&path, SystemTime::now());
+    let unrelated = c.cache_dir.join("unrelated-old.txt");
+    std::fs::write(&unrelated, b"foreign").unwrap();
+    mark_old(&unrelated, SystemTime::now());
     let writable = std::fs::metadata(&path).unwrap().permissions();
     let mut read_only = writable.clone();
     read_only.set_readonly(true);
     std::fs::set_permissions(&path, read_only).unwrap();
     assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
-    let result = Service::default()
-        .synthesize(&c, "oi", "", "local", "")
-        .await;
+    let service = Service::default();
+    let result = service.synthesize(&c, "oi", "", "local", "").await;
     std::fs::set_permissions(&path, writable).unwrap();
     let result = result.unwrap();
     assert!(result.cached);
     assert_eq!(result.hash, hash);
     assert_eq!(std::fs::read(&path).unwrap(), b"ID3audio");
+    assert_eq!(std::fs::read(&unrelated).unwrap(), b"foreign");
+    let probe = c.cache_dir.join("directory-is-writable");
+    std::fs::write(&probe, b"probe").unwrap();
+    std::fs::remove_file(probe).unwrap();
 }
 
 fn mark_old(path: &Path, now: SystemTime) {
@@ -489,6 +496,37 @@ fn maintenance_scans_once_per_folder_and_interval_and_retries_a_failed_scan() {
     assert!(!maintenance.run(&missing, now + Duration::from_secs(59)));
     assert!(maintenance.run(&missing, now + Duration::from_secs(60)));
     assert!(!expired.exists());
+}
+
+#[test]
+fn maintenance_protects_concurrent_selections_until_last_use_reaches_the_retention_period() {
+    let dir = tempfile::tempdir().unwrap();
+    let maintenance = Arc::new(cache::Maintenance::default());
+    let selected: Vec<_> = (0..16).map(|index| format!("{index:064x}")).collect();
+    for hash in &selected {
+        let path = dir.path().join(format!("{hash}.mp3"));
+        std::fs::write(&path, b"ID3old").unwrap();
+        mark_old(&path, SystemTime::now());
+    }
+    std::thread::scope(|scope| {
+        for hash in &selected {
+            let maintenance = maintenance.clone();
+            let path = dir.path();
+            scope.spawn(move || maintenance.select(path, hash).unwrap());
+        }
+    });
+    let now = std::time::Instant::now();
+    assert!(maintenance.run(dir.path(), now));
+    for hash in &selected {
+        assert_eq!(
+            std::fs::read(dir.path().join(format!("{hash}.mp3"))).unwrap(),
+            b"ID3old"
+        );
+    }
+    assert!(maintenance.run(dir.path(), now + Duration::from_secs(3600)));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 16);
+    assert!(maintenance.run(dir.path(), now + Duration::from_secs(31 * 86400)));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }
 
 #[tokio::test]

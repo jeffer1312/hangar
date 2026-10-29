@@ -237,6 +237,7 @@ impl Service {
         let maintenance = self.maintenance.clone();
         let (cached, guard) = tokio::task::spawn_blocking(move || {
             cache::prepare(&directory)?;
+            maintenance.select(&directory, &key)?;
             let cached = cache::lookup(&directory, &key)?;
             maintenance.run(&directory, std::time::Instant::now());
             Ok::<_, SpeechError>((cached, guard))
