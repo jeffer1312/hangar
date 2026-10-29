@@ -224,7 +224,7 @@ impl Service {
         };
         let mut seen = false;
         let mut output = String::new();
-        for line in old.split_inclusive('\n') {
+        for line in old.split_inclusive(['\n','\x0b','\x0c','\x1c','\x1d','\x1e','\u{85}','\u{2028}','\u{2029}']) {
             if line.starts_with(ID_PUBLICATION) { continue; }
             if line.starts_with("CP_SERVER_ID=") {
                 seen = true;

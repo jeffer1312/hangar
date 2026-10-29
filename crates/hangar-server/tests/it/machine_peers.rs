@@ -599,3 +599,19 @@ fn peer_settings_snapshot_are_frozen_before_later_dotenv_edits() {
     std::fs::write(config.join(".env"),"CP_PUBLIC_URL=https://after.invalid\n").unwrap();
     assert_eq!(hangar_server::machine_peers::Service::from_state(&state).unwrap().value("CP_PUBLIC_URL"),"https://before.invalid");
 }
+
+#[test]
+fn identity_writer_preserves_captured_line_semantics() {
+    let fixture:serde_json::Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/peers/identity-lines.json")).unwrap();
+    let mut differences=vec![];
+    for (index,row) in fixture["cases"].as_array().unwrap().iter().enumerate() {
+        let home=tempfile::tempdir().unwrap();let backend=home.path().join("backend");std::fs::create_dir(&backend).unwrap();
+        let path=backend.join(".env");std::fs::write(&path,row["raw"].as_str().unwrap()).unwrap();
+        let mut service=hangar_server::machine_peers::Service::new(home.path(),Some(&backend),"fixture-token".into(),8765,"127.0.0.1".into(),"".into()).unwrap();
+        service.environment.clear();assert_eq!(service.env,path);
+        service.save_identity(&serde_json::json!({"identificador":row["value"]})).unwrap();
+        let actual=std::fs::read_to_string(&path).unwrap();
+        if actual!=row["output"].as_str().unwrap(){differences.push(format!("caso {index}: {actual:?} != {:?}",row["output"]));}
+    }
+    assert!(differences.is_empty(),"{}",differences.join("\n"));
+}
