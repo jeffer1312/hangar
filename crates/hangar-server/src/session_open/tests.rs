@@ -1618,7 +1618,7 @@ fn a_fixed_chatgpt_account_resolves_and_routes_the_engine() {
     let home_text = home.join(".codex-work").to_string_lossy().into_owned();
     assert_eq!(command[..12], ["hangar-engine", "--exec", "gpt", "--account", "work", "--account-home", &home_text,
         "--account-base-url", &format!("http://127.0.0.1:{port}"), "--model", "gpt-5.5", "--context"]);
-    assert_eq!(route.credential_id, format!("codex:{home_text}"));
+    assert_eq!(route.credential_id, format!("codex:{}", crate::accounts::catalog::resolved(&home.join(".codex-work")).to_string_lossy()));
     // A `conta` da linha do motor é este id: o evento `tags` tem de nomear a mesma conta.
     let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
         [("HOME".to_owned(), home.to_string_lossy().into_owned())].into()));

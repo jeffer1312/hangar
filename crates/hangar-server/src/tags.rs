@@ -410,6 +410,12 @@ mod tests {
 
     fn keys(event: &Value) -> Vec<String> { event["accounts"].as_object().unwrap().keys().cloned().collect() }
 
+    // Pela chave, não pelo texto: no JSON a barra do Windows vem escapada.
+    fn has_account(event: &str, dir: &Path) -> bool {
+        let event: Value = serde_json::from_str(event).unwrap();
+        keys(&event).contains(&format!("claude:{}", dir.display()))
+    }
+
     #[test]
     fn names_are_cut_at_the_at_sign_and_untagged_accounts_get_the_card() {
         let tmp = tempfile::tempdir().unwrap();
@@ -444,7 +450,7 @@ mod tests {
         let added = account(&home, ".claude-nova");
         let after = feed.read().await.unwrap().unwrap();
         assert_ne!(after, first);
-        assert!(after.contains(&format!("claude:{}", added.display())), "conta nova fora do evento: {after}");
+        assert!(has_account(&after, &added), "conta nova fora do evento: {after}");
     }
 
     #[tokio::test]
@@ -459,7 +465,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(10), feed.changed.notified()).await.expect("o vigia não acordou o evento");
         let after = feed.read().await.unwrap().unwrap();
         assert_ne!(after, first);
-        assert!(after.contains(&format!("claude:{}", added.display())), "conta nova fora do evento: {after}");
+        assert!(has_account(&after, &added), "conta nova fora do evento: {after}");
         // A pasta nova foi armada no rearme: mexer no marcador dela acorda de novo (com conteúdo:
         // só abrir e fechar é acesso, e acesso não acorda).
         std::fs::write(home.join(".claude-x").join(CLAUDE_MARKER), "x").unwrap();

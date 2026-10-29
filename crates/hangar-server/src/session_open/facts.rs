@@ -201,7 +201,7 @@ pub fn fixed_account(accounts: &AccountService, engine: &str, account: &str) -> 
         if matches.len() > 1 { return Err(cliproxy(format!("CLIProxyAPI: mais de uma credencial ativa para a conta {}", codex.id))); }
         let Some(&found) = matches.first() else { continue };
         if entries.iter().any(|e| e.3 == found) { return Err(cliproxy("CLIProxyAPI: a mesma credencial corresponde a mais de uma conta Hangar")); }
-        let home = crate::accounts::catalog::resolved(&codex.home).to_string_lossy().into_owned();
+        let home = codex.home.canonicalize().unwrap_or(codex.home.clone()).to_string_lossy().into_owned();
         entries.push((codex.id, home, text(&creds[found].1["prefix"]), found));
     }
     for (_, _, prefix, at) in &entries {
@@ -214,7 +214,9 @@ pub fn fixed_account(accounts: &AccountService, engine: &str, account: &str) -> 
     let (id, home, prefix, _) = entries.into_iter().find(|e| e.0 == account)
         .ok_or_else(|| cliproxy(format!("CLIProxyAPI: conta {account} desconhecida, desconectada ou desativada")))?;
     let prefix = prefix.ok_or_else(|| cliproxy("CLIProxyAPI: conta sem prefixo; prepare as contas primeiro"))?;
-    Ok(super::claude::EngineRoute { account: id, credential_id: format!("codex:{home}"), home, base_url: local, prefix })
+    // O id na forma dos ids de conta (cota, tela de Contas, etiquetas): sem o `\\?\` do Windows.
+    let credential_id = format!("codex:{}", crate::accounts::catalog::resolved(std::path::Path::new(&home)).to_string_lossy());
+    Ok(super::claude::EngineRoute { account: id, credential_id, home, base_url: local, prefix })
 }
 
 /// `cliproxy_accounts.prefix_model` sem o prefixo: o modelo como a conta o expõe.
