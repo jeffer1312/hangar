@@ -232,3 +232,70 @@ async fn login_guests_list_visibility_uses_python_matrix_without_forwarding() {
     assert_eq!(python.hits_to("/api/sessions"),0,"GUE-027: nenhuma lista de login vai ao Python");
     task.abort();
 }
+
+#[tokio::test]
+async fn login_guests_invalid_forms_match_all_python_errors() {
+    use hangar_server::login_guests::{Service,Settings};
+    let home=tempfile::tempdir().unwrap();
+    let http:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/http.json")).unwrap();
+    let registered=http["rows"].as_array().unwrap().iter().find(|r|r["name"]=="registrar").unwrap();
+    std::fs::write(home.path().join("vault.json"),registered["vault"].to_string()).unwrap();
+    let cookie=http["rows"].as_array().unwrap().iter().find(|r|r["name"]=="cofre_vazio").unwrap()["cookie"].as_str().unwrap();
+    let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10,rate_window:300});
+    service.now=||2000000000;let service=Arc::new(service);
+    let cases:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/validation.json")).unwrap();
+    for row in cases["rows"].as_array().unwrap().iter().filter(|r|r["status"]==422) {
+        let request=axum::http::Request::builder().method(row["method"].as_str().unwrap()).uri(row["path"].as_str().unwrap())
+            .header("cookie",format!("cp_sync={cookie}")).body(axum::body::Body::from(row["body"].to_string())).unwrap();
+        let response=service.respond(true,"127.0.0.1".into(),false,request).await;
+        assert_eq!(response.status().as_u16(),422,"GUE-081 {} {}",row["model"],row["index"]);
+        let body=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
+        let actual:Value=serde_json::from_slice(&body).unwrap();
+        assert_eq!(actual,row["response"],"GUE-081 {} {}",row["model"],row["index"]);
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn login_guests_filesystem_uses_only_guest_root() {
+    use hangar_server::login_guests::{Service,Settings};
+    let home=tempfile::tempdir().unwrap();let root=home.path().join("allowed");
+    std::fs::create_dir_all(root.join("project")).unwrap();std::fs::create_dir(home.path().join("outside")).unwrap();
+    std::fs::write(root.join("file"),"fixture").unwrap();std::os::unix::fs::symlink(home.path().join("outside"),root.join("escape")).unwrap();
+    std::fs::File::open(root.join("project")).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH+std::time::Duration::from_secs(2000000000))).unwrap();
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+    let mut state=AppState::new(Config{listen:address,upstream:crate::refused_address(),internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
+    let service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10,rate_window:300});
+    service.store.create("Ana",root.to_str().unwrap(),false,true,"fixture".into(),"guest".into()).unwrap();state.login_guests=Arc::new(service);
+    let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
+    let fixture:Value=serde_json::from_str(&include_str!("../../../../backend/tests/fixtures/contract/guests/fs.json").replace("⟦ROOT⟧",home.path().to_str().unwrap())).unwrap();
+    for row in fixture["rows"].as_array().unwrap() {
+        let route=if row["name"]=="roots"{"roots"}else{"scan"};
+        let mut query=form_urlencoded::Serializer::new(String::new());
+        if let Some(root)=row["root"].as_str(){query.append_pair("root",root);}
+        if let Some(path)=row["path"].as_str(){query.append_pair("path",path);}
+        let request=reqwest::Client::new().get(format!("http://{address}/api/fs/{route}?{}",query.finish())).bearer_auth("guest");
+        let response=request.send().await.unwrap();assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"GUE-036 {}",row["name"]);
+        let body:Value=response.json().await.unwrap();assert_eq!(body,row["response"],"GUE-036 {}",row["name"]);
+    }
+    task.abort();
+}
+
+#[tokio::test]
+async fn login_guests_vault_revisions_keep_python_integer_range() {
+    use hangar_server::login_guests::{Service,Settings};
+    let home=tempfile::tempdir().unwrap();
+    let cases:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/revision.json")).unwrap();
+    let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10,rate_window:300});
+    service.now=||2000000000;let service=Arc::new(service);
+    for (index,row) in cases["rows"].as_array().unwrap().iter().enumerate() {
+        std::fs::write(home.path().join("vault.json"),row["initial"].to_string()).unwrap();
+        let request=axum::http::Request::builder().method("PUT").uri("/api/sync/vault")
+            .header("cookie",format!("cp_sync={}",cases["cookie"].as_str().unwrap())).body(axum::body::Body::from(row["body"].to_string())).unwrap();
+        let response=service.respond(false,"127.0.0.1".into(),false,request).await;
+        assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"GUE-054/081 revisão {index}");
+        let body=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(),row["response"],"GUE-054/081 resposta {index}");
+        assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(home.path().join("vault.json")).unwrap()).unwrap(),row["vault"],"GUE-054 disco {index}");
+    }
+}

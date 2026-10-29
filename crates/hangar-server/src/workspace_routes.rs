@@ -334,7 +334,12 @@ pub async fn public(st: Arc<AppState>, req: Request, forward: Forward) -> Respon
         Ok(b) => b,
         Err(_) => return response(json!({"detail":"request body too large"}), 413),
     };
-    let ctx = match context(&st, name.as_deref()).await {
+    let guest_root = parts.extensions.get::<crate::login_guests::gate::Login>()
+        .filter(|_| name.is_none()).map(|login| login.guest.root.clone());
+    let resolved = if let Some(root) = guest_root {
+        Ok(json!({"roots":[root],"sessions":[]}))
+    } else { context(&st, name.as_deref()).await };
+    let ctx = match resolved {
         Ok(ctx) => ctx,
         // Sessão inexistente: o 404 é do Python, nada roda.
         Err(None) => return pass(&st, Request::from_parts(parts, Body::from(bytes)), &forward).await,

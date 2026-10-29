@@ -1051,7 +1051,7 @@ pub(crate) async fn pass_any(
         // Só o convite (não o par) alcança as rotas da sessão dele; `/api/fs/*` não tem sessão.
         let share = who.as_ref().and_then(Caller::grant).zip(session.as_ref())
             .is_some_and(|(g, s)| g.sessions.get(s) == Some(&crate::share::store::Kind::Share));
-        if matches!(who, Some(Caller::Owner)) || share {
+        if matches!(who, Some(Caller::Owner)) || share || req.extensions().get::<crate::login_guests::gate::Login>().is_some() {
             let headers = req.headers().clone();
             let mut response = crate::workspace_routes::public(st, req, forward).await;
             cors(&headers, response.headers_mut());

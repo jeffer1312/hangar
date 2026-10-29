@@ -3,6 +3,7 @@ mod http;
 pub mod store;
 mod sync;
 mod validation;
+mod schema;
 pub use http::{Service, Settings, route};
 
 pub mod gate;

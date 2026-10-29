@@ -217,6 +217,21 @@ impl Service {
             if path == "prelogin" {
                 user = crate::auth::query_param(query, "user");
             }
+            if path == "guests" && method == Method::POST {
+                self.sync.owner(user.as_deref())?;
+            }
+            let model = match (method.as_str(), path) {
+                ("POST", "setup") => Some("SetupBody"),
+                ("POST", "register") => Some("RegisterBody"),
+                ("POST", "login") => Some("LoginBody"),
+                ("PUT", "vault") => Some("VaultPutBody"),
+                ("POST", "guests") => Some("GuestAccountBody"),
+                _ => None,
+            };
+            let normalized = model
+                .map(|model| super::schema::validate(model, body))
+                .transpose()?;
+            let body = normalized.as_ref().unwrap_or(body);
             let value = self.sync.handle(
                 method.as_str(),
                 path,
@@ -271,6 +286,20 @@ impl Service {
                 "fora do acesso do convidado",
             ));
         }
+        let model = if method == Method::POST && path == "/api/guests" {
+            Some("NewGuest")
+        } else if method == Method::POST
+            && path.starts_with("/api/guests/")
+            && !path.ends_with("/delete")
+        {
+            Some("GuestSettings")
+        } else {
+            None
+        };
+        let normalized = model
+            .map(|model| super::schema::validate(model, body))
+            .transpose()?;
+        let body = normalized.as_ref().unwrap_or(body);
         let value = if method == Method::POST && path == "/api/guests" {
             let (root, sees, owner) = validation::guest_settings(body)?;
             let name = validation::text(body, "name", 1, 100)?;

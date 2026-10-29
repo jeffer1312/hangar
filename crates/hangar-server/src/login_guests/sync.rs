@@ -181,7 +181,7 @@ impl Sync {
             }),
         }
     }
-    fn owner(&self, user: Option<&str>) -> Result<Value> {
+    pub(super) fn owner(&self, user: Option<&str>) -> Result<Value> {
         let vault = self
             .load()?
             .ok_or_else(|| Failure::code(403, "erro_so_dono", "só o dono"))?;
@@ -379,14 +379,8 @@ impl Sync {
             ));
         }
         acc["enc_blob"] = b["enc_blob"].clone();
-        let next = acc["rev"]
-            .as_u64()
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or_else(|| {
-                Failure::code(500, "sync_revision_overflow", "revisão fora do intervalo")
-            })?;
-        acc["rev"] = json!(next);
+        let next = increment_revision(&acc["rev"])?;
+        acc["rev"] = next.clone();
         self.save(&vault)?;
         Ok(json!({"rev":next}))
     }
@@ -504,4 +498,49 @@ fn validate_blob(b: &Value) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// A revisão do cofre não tem teto: o formato em disco vem do inteiro Python.
+fn increment_revision(value: &Value) -> Result<Value> {
+    let text = value.to_string();
+    let negative = text.starts_with('-');
+    let mut digits = text.trim_start_matches('-').as_bytes().to_vec();
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return Err(Failure::code(
+            500,
+            "sync_revision_invalid",
+            "revisão inválida",
+        ));
+    }
+    if negative {
+        for digit in digits.iter_mut().rev() {
+            if *digit > b'0' {
+                *digit -= 1;
+                break;
+            }
+            *digit = b'9';
+        }
+        let magnitude = String::from_utf8(digits).expect("dígitos ASCII");
+        let magnitude = magnitude.trim_start_matches('0');
+        return serde_json::from_str(&if magnitude.is_empty() {
+            "0".into()
+        } else {
+            format!("-{magnitude}")
+        })
+        .map_err(|_| Failure::code(500, "sync_revision_invalid", "revisão inválida"));
+    }
+    let mut carry = true;
+    for digit in digits.iter_mut().rev() {
+        if *digit < b'9' {
+            *digit += 1;
+            carry = false;
+            break;
+        }
+        *digit = b'0';
+    }
+    if carry {
+        digits.insert(0, b'1');
+    }
+    serde_json::from_slice(&digits)
+        .map_err(|_| Failure::code(500, "sync_revision_invalid", "revisão inválida"))
 }

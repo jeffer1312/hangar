@@ -1,0 +1,3950 @@
+{
+  "source_commit": "8cb869697380efa194543aa4ab1ebba758f8f11b",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_validation.py",
+  "rows": [
+    {
+      "model": "NewGuest",
+      "index": 0,
+      "path": "/api/guests",
+      "method": "POST",
+      "body": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "model": "NewGuest",
+      "index": 1,
+      "path": "/api/guests",
+      "method": "POST",
+      "body": {},
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "model": "NewGuest",
+      "index": 2,
+      "path": "/api/guests",
+      "method": "POST",
+      "body": [],
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "model": "NewGuest",
+      "index": 3,
+      "path": "/api/guests",
+      "method": "POST",
+      "body": 4,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": 4
+          }
+        ]
+      }
+    },
+    {
+      "model": "NewGuest",
+      "index": 4,
+      "path": "/api/guests",
+      "method": "POST",
+      "body": "",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": ""
+          }
+        ]
+      }
+    },
+    {
+      "model": "NewGuest",
+      "index": 5,
+      "path": "/api/guests",
+      "method": "POST",
+      "body": {
+        "root": "",
+        "name": "",
+        "sees_owner": null,
+        "owner_sees": "maybe"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_too_short",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "String should have at least 1 character",
+            "input": "",
+            "ctx": {
+              "min_length": 1
+            }
+          },
+          {
+            "type": "bool_type",
+            "loc": [
+              "body",
+              "sees_owner"
+            ],
+            "msg": "Input should be a valid boolean",
+            "input": null
+          },
+          {
+            "type": "bool_parsing",
+            "loc": [
+              "body",
+              "owner_sees"
+            ],
+            "msg": "Input should be a valid boolean, unable to interpret input",
+            "input": "maybe"
+          },
+          {
+            "type": "string_too_short",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "String should have at least 1 character",
+            "input": "",
+            "ctx": {
+              "min_length": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "NewGuest",
+      "index": 6,
+      "path": "/api/guests",
+      "method": "POST",
+      "body": {
+        "user": 1,
+        "salt": false,
+        "auth_hash": [],
+        "bootstrap": {},
+        "enc_blob": [],
+        "base_rev": "wat"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": 1,
+              "salt": false,
+              "auth_hash": [],
+              "bootstrap": {},
+              "enc_blob": [],
+              "base_rev": "wat"
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": 1,
+              "salt": false,
+              "auth_hash": [],
+              "bootstrap": {},
+              "enc_blob": [],
+              "base_rev": "wat"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "NewGuest",
+      "index": 7,
+      "path": "/api/guests",
+      "method": "POST",
+      "body": {
+        "root": "fixture",
+        "name": "Ana",
+        "sees_owner": "true",
+        "owner_sees": 0
+      },
+      "status": 200,
+      "response": {
+        "root": "fixture",
+        "sees_owner": true,
+        "owner_sees": false,
+        "name": "Ana"
+      }
+    },
+    {
+      "model": "NewGuest",
+      "index": 8,
+      "path": "/api/guests",
+      "method": "POST",
+      "body": {
+        "base_rev": true,
+        "enc_blob": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": true,
+              "enc_blob": null
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": true,
+              "enc_blob": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "NewGuest",
+      "index": 9,
+      "path": "/api/guests",
+      "method": "POST",
+      "body": {
+        "base_rev": "1.0",
+        "enc_blob": {}
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": "1.0",
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": "1.0",
+              "enc_blob": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "NewGuest",
+      "index": 10,
+      "path": "/api/guests",
+      "method": "POST",
+      "body": {
+        "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+        "enc_blob": {}
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+              "enc_blob": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "NewGuest",
+      "index": 11,
+      "path": "/api/guests",
+      "method": "POST",
+      "body": {
+        "user": null,
+        "salt": null,
+        "auth_hash": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": null,
+              "salt": null,
+              "auth_hash": null
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": null,
+              "salt": null,
+              "auth_hash": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "NewGuest",
+      "index": 12,
+      "path": "/api/guests",
+      "method": "POST",
+      "body": {
+        "user": " ",
+        "salt": "!",
+        "auth_hash": "!",
+        "enc_blob": {
+          "iv": "x",
+          "data": "x"
+        },
+        "admin_blob": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": " ",
+              "salt": "!",
+              "auth_hash": "!",
+              "enc_blob": {
+                "iv": "x",
+                "data": "x"
+              },
+              "admin_blob": null
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": " ",
+              "salt": "!",
+              "auth_hash": "!",
+              "enc_blob": {
+                "iv": "x",
+                "data": "x"
+              },
+              "admin_blob": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "NewGuest",
+      "index": 13,
+      "path": "/api/guests",
+      "method": "POST",
+      "body": {
+        "user": "ana",
+        "salt": "",
+        "auth_hash": "",
+        "enc_blob": {},
+        "admin_blob": {},
+        "extra": true
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": "ana",
+              "salt": "",
+              "auth_hash": "",
+              "enc_blob": {},
+              "admin_blob": {},
+              "extra": true
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": "ana",
+              "salt": "",
+              "auth_hash": "",
+              "enc_blob": {},
+              "admin_blob": {},
+              "extra": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestSettings",
+      "index": 0,
+      "path": "/api/guests/fixture",
+      "method": "POST",
+      "body": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestSettings",
+      "index": 1,
+      "path": "/api/guests/fixture",
+      "method": "POST",
+      "body": {},
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestSettings",
+      "index": 2,
+      "path": "/api/guests/fixture",
+      "method": "POST",
+      "body": [],
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestSettings",
+      "index": 3,
+      "path": "/api/guests/fixture",
+      "method": "POST",
+      "body": 4,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": 4
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestSettings",
+      "index": 4,
+      "path": "/api/guests/fixture",
+      "method": "POST",
+      "body": "",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": ""
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestSettings",
+      "index": 5,
+      "path": "/api/guests/fixture",
+      "method": "POST",
+      "body": {
+        "root": "",
+        "name": "",
+        "sees_owner": null,
+        "owner_sees": "maybe"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_too_short",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "String should have at least 1 character",
+            "input": "",
+            "ctx": {
+              "min_length": 1
+            }
+          },
+          {
+            "type": "bool_type",
+            "loc": [
+              "body",
+              "sees_owner"
+            ],
+            "msg": "Input should be a valid boolean",
+            "input": null
+          },
+          {
+            "type": "bool_parsing",
+            "loc": [
+              "body",
+              "owner_sees"
+            ],
+            "msg": "Input should be a valid boolean, unable to interpret input",
+            "input": "maybe"
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestSettings",
+      "index": 6,
+      "path": "/api/guests/fixture",
+      "method": "POST",
+      "body": {
+        "user": 1,
+        "salt": false,
+        "auth_hash": [],
+        "bootstrap": {},
+        "enc_blob": [],
+        "base_rev": "wat"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": 1,
+              "salt": false,
+              "auth_hash": [],
+              "bootstrap": {},
+              "enc_blob": [],
+              "base_rev": "wat"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestSettings",
+      "index": 7,
+      "path": "/api/guests/fixture",
+      "method": "POST",
+      "body": {
+        "root": "fixture",
+        "name": "Ana",
+        "sees_owner": "true",
+        "owner_sees": 0
+      },
+      "status": 200,
+      "response": {
+        "root": "fixture",
+        "sees_owner": true,
+        "owner_sees": false
+      }
+    },
+    {
+      "model": "GuestSettings",
+      "index": 8,
+      "path": "/api/guests/fixture",
+      "method": "POST",
+      "body": {
+        "base_rev": true,
+        "enc_blob": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": true,
+              "enc_blob": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestSettings",
+      "index": 9,
+      "path": "/api/guests/fixture",
+      "method": "POST",
+      "body": {
+        "base_rev": "1.0",
+        "enc_blob": {}
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": "1.0",
+              "enc_blob": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestSettings",
+      "index": 10,
+      "path": "/api/guests/fixture",
+      "method": "POST",
+      "body": {
+        "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+        "enc_blob": {}
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+              "enc_blob": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestSettings",
+      "index": 11,
+      "path": "/api/guests/fixture",
+      "method": "POST",
+      "body": {
+        "user": null,
+        "salt": null,
+        "auth_hash": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": null,
+              "salt": null,
+              "auth_hash": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestSettings",
+      "index": 12,
+      "path": "/api/guests/fixture",
+      "method": "POST",
+      "body": {
+        "user": " ",
+        "salt": "!",
+        "auth_hash": "!",
+        "enc_blob": {
+          "iv": "x",
+          "data": "x"
+        },
+        "admin_blob": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": " ",
+              "salt": "!",
+              "auth_hash": "!",
+              "enc_blob": {
+                "iv": "x",
+                "data": "x"
+              },
+              "admin_blob": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestSettings",
+      "index": 13,
+      "path": "/api/guests/fixture",
+      "method": "POST",
+      "body": {
+        "user": "ana",
+        "salt": "",
+        "auth_hash": "",
+        "enc_blob": {},
+        "admin_blob": {},
+        "extra": true
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": "ana",
+              "salt": "",
+              "auth_hash": "",
+              "enc_blob": {},
+              "admin_blob": {},
+              "extra": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "SetupBody",
+      "index": 0,
+      "path": "/api/sync/setup",
+      "method": "POST",
+      "body": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "model": "SetupBody",
+      "index": 1,
+      "path": "/api/sync/setup",
+      "method": "POST",
+      "body": {},
+      "status": 200,
+      "response": {
+        "user": null,
+        "salt": null,
+        "auth_hash": null,
+        "enc_blob": null
+      }
+    },
+    {
+      "model": "SetupBody",
+      "index": 2,
+      "path": "/api/sync/setup",
+      "method": "POST",
+      "body": [],
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "model": "SetupBody",
+      "index": 3,
+      "path": "/api/sync/setup",
+      "method": "POST",
+      "body": 4,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": 4
+          }
+        ]
+      }
+    },
+    {
+      "model": "SetupBody",
+      "index": 4,
+      "path": "/api/sync/setup",
+      "method": "POST",
+      "body": "",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": ""
+          }
+        ]
+      }
+    },
+    {
+      "model": "SetupBody",
+      "index": 5,
+      "path": "/api/sync/setup",
+      "method": "POST",
+      "body": {
+        "root": "",
+        "name": "",
+        "sees_owner": null,
+        "owner_sees": "maybe"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": ""
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": ""
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "sees_owner"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": null
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "owner_sees"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "maybe"
+          }
+        ]
+      }
+    },
+    {
+      "model": "SetupBody",
+      "index": 6,
+      "path": "/api/sync/setup",
+      "method": "POST",
+      "body": {
+        "user": 1,
+        "salt": false,
+        "auth_hash": [],
+        "bootstrap": {},
+        "enc_blob": [],
+        "base_rev": "wat"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 1
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Input should be a valid string",
+            "input": false
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Input should be a valid string",
+            "input": []
+          },
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body",
+              "enc_blob"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "bootstrap"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": {}
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "wat"
+          }
+        ]
+      }
+    },
+    {
+      "model": "SetupBody",
+      "index": 7,
+      "path": "/api/sync/setup",
+      "method": "POST",
+      "body": {
+        "root": "fixture",
+        "name": "Ana",
+        "sees_owner": "true",
+        "owner_sees": 0
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "fixture"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "Ana"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "sees_owner"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "true"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "owner_sees"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": 0
+          }
+        ]
+      }
+    },
+    {
+      "model": "SetupBody",
+      "index": 8,
+      "path": "/api/sync/setup",
+      "method": "POST",
+      "body": {
+        "base_rev": true,
+        "enc_blob": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": true
+          }
+        ]
+      }
+    },
+    {
+      "model": "SetupBody",
+      "index": 9,
+      "path": "/api/sync/setup",
+      "method": "POST",
+      "body": {
+        "base_rev": "1.0",
+        "enc_blob": {}
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob",
+              "iv"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "1.0"
+          }
+        ]
+      }
+    },
+    {
+      "model": "SetupBody",
+      "index": 10,
+      "path": "/api/sync/setup",
+      "method": "POST",
+      "body": {
+        "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+        "enc_blob": {}
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob",
+              "iv"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": 100000000000000000000000000000000000000000000000000000000000000000000000000000000
+          }
+        ]
+      }
+    },
+    {
+      "model": "SetupBody",
+      "index": 11,
+      "path": "/api/sync/setup",
+      "method": "POST",
+      "body": {
+        "user": null,
+        "salt": null,
+        "auth_hash": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body"
+            ],
+            "msg": "Value error, informe usuário, salt e auth_hash juntos",
+            "input": {
+              "user": null,
+              "salt": null,
+              "auth_hash": null
+            },
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "SetupBody",
+      "index": 12,
+      "path": "/api/sync/setup",
+      "method": "POST",
+      "body": {
+        "user": " ",
+        "salt": "!",
+        "auth_hash": "!",
+        "enc_blob": {
+          "iv": "x",
+          "data": "x"
+        },
+        "admin_blob": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Value error, usuário obrigatório",
+            "input": " ",
+            "ctx": {
+              "error": {}
+            }
+          },
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Value error, Only base64 data is allowed",
+            "input": "!",
+            "ctx": {
+              "error": {}
+            }
+          },
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Value error, Only base64 data is allowed",
+            "input": "!",
+            "ctx": {
+              "error": {}
+            }
+          },
+          {
+            "type": "string_too_short",
+            "loc": [
+              "body",
+              "enc_blob",
+              "iv"
+            ],
+            "msg": "String should have at least 16 characters",
+            "input": "x",
+            "ctx": {
+              "min_length": 16
+            }
+          },
+          {
+            "type": "string_too_short",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "String should have at least 24 characters",
+            "input": "x",
+            "ctx": {
+              "min_length": 24
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "admin_blob"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "model": "SetupBody",
+      "index": 13,
+      "path": "/api/sync/setup",
+      "method": "POST",
+      "body": {
+        "user": "ana",
+        "salt": "",
+        "auth_hash": "",
+        "enc_blob": {},
+        "admin_blob": {},
+        "extra": true
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Value error, tamanho inválido da credencial",
+            "input": "",
+            "ctx": {
+              "error": {}
+            }
+          },
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Value error, tamanho inválido da credencial",
+            "input": "",
+            "ctx": {
+              "error": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob",
+              "iv"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "admin_blob"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": {}
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "extra"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": true
+          }
+        ]
+      }
+    },
+    {
+      "model": "RegisterBody",
+      "index": 0,
+      "path": "/api/sync/register",
+      "method": "POST",
+      "body": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "model": "RegisterBody",
+      "index": 1,
+      "path": "/api/sync/register",
+      "method": "POST",
+      "body": {},
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "bootstrap"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "model": "RegisterBody",
+      "index": 2,
+      "path": "/api/sync/register",
+      "method": "POST",
+      "body": [],
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "model": "RegisterBody",
+      "index": 3,
+      "path": "/api/sync/register",
+      "method": "POST",
+      "body": 4,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": 4
+          }
+        ]
+      }
+    },
+    {
+      "model": "RegisterBody",
+      "index": 4,
+      "path": "/api/sync/register",
+      "method": "POST",
+      "body": "",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": ""
+          }
+        ]
+      }
+    },
+    {
+      "model": "RegisterBody",
+      "index": 5,
+      "path": "/api/sync/register",
+      "method": "POST",
+      "body": {
+        "root": "",
+        "name": "",
+        "sees_owner": null,
+        "owner_sees": "maybe"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "",
+              "name": "",
+              "sees_owner": null,
+              "owner_sees": "maybe"
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "",
+              "name": "",
+              "sees_owner": null,
+              "owner_sees": "maybe"
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "",
+              "name": "",
+              "sees_owner": null,
+              "owner_sees": "maybe"
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "bootstrap"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "",
+              "name": "",
+              "sees_owner": null,
+              "owner_sees": "maybe"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "RegisterBody",
+      "index": 6,
+      "path": "/api/sync/register",
+      "method": "POST",
+      "body": {
+        "user": 1,
+        "salt": false,
+        "auth_hash": [],
+        "bootstrap": {},
+        "enc_blob": [],
+        "base_rev": "wat"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 1
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Input should be a valid string",
+            "input": false
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Input should be a valid string",
+            "input": []
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "bootstrap"
+            ],
+            "msg": "Input should be a valid string",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "model": "RegisterBody",
+      "index": 7,
+      "path": "/api/sync/register",
+      "method": "POST",
+      "body": {
+        "root": "fixture",
+        "name": "Ana",
+        "sees_owner": "true",
+        "owner_sees": 0
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "fixture",
+              "name": "Ana",
+              "sees_owner": "true",
+              "owner_sees": 0
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "fixture",
+              "name": "Ana",
+              "sees_owner": "true",
+              "owner_sees": 0
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "fixture",
+              "name": "Ana",
+              "sees_owner": "true",
+              "owner_sees": 0
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "bootstrap"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "fixture",
+              "name": "Ana",
+              "sees_owner": "true",
+              "owner_sees": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "RegisterBody",
+      "index": 8,
+      "path": "/api/sync/register",
+      "method": "POST",
+      "body": {
+        "base_rev": true,
+        "enc_blob": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": true,
+              "enc_blob": null
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": true,
+              "enc_blob": null
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": true,
+              "enc_blob": null
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "bootstrap"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": true,
+              "enc_blob": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "RegisterBody",
+      "index": 9,
+      "path": "/api/sync/register",
+      "method": "POST",
+      "body": {
+        "base_rev": "1.0",
+        "enc_blob": {}
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": "1.0",
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": "1.0",
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": "1.0",
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "bootstrap"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": "1.0",
+              "enc_blob": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "RegisterBody",
+      "index": 10,
+      "path": "/api/sync/register",
+      "method": "POST",
+      "body": {
+        "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+        "enc_blob": {}
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "bootstrap"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+              "enc_blob": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "RegisterBody",
+      "index": 11,
+      "path": "/api/sync/register",
+      "method": "POST",
+      "body": {
+        "user": null,
+        "salt": null,
+        "auth_hash": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Input should be a valid string",
+            "input": null
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Input should be a valid string",
+            "input": null
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Input should be a valid string",
+            "input": null
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "bootstrap"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": null,
+              "salt": null,
+              "auth_hash": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "RegisterBody",
+      "index": 12,
+      "path": "/api/sync/register",
+      "method": "POST",
+      "body": {
+        "user": " ",
+        "salt": "!",
+        "auth_hash": "!",
+        "enc_blob": {
+          "iv": "x",
+          "data": "x"
+        },
+        "admin_blob": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "bootstrap"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": " ",
+              "salt": "!",
+              "auth_hash": "!",
+              "enc_blob": {
+                "iv": "x",
+                "data": "x"
+              },
+              "admin_blob": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "RegisterBody",
+      "index": 13,
+      "path": "/api/sync/register",
+      "method": "POST",
+      "body": {
+        "user": "ana",
+        "salt": "",
+        "auth_hash": "",
+        "enc_blob": {},
+        "admin_blob": {},
+        "extra": true
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "bootstrap"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": "ana",
+              "salt": "",
+              "auth_hash": "",
+              "enc_blob": {},
+              "admin_blob": {},
+              "extra": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "LoginBody",
+      "index": 0,
+      "path": "/api/sync/login",
+      "method": "POST",
+      "body": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "model": "LoginBody",
+      "index": 1,
+      "path": "/api/sync/login",
+      "method": "POST",
+      "body": {},
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "model": "LoginBody",
+      "index": 2,
+      "path": "/api/sync/login",
+      "method": "POST",
+      "body": [],
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "model": "LoginBody",
+      "index": 3,
+      "path": "/api/sync/login",
+      "method": "POST",
+      "body": 4,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": 4
+          }
+        ]
+      }
+    },
+    {
+      "model": "LoginBody",
+      "index": 4,
+      "path": "/api/sync/login",
+      "method": "POST",
+      "body": "",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": ""
+          }
+        ]
+      }
+    },
+    {
+      "model": "LoginBody",
+      "index": 5,
+      "path": "/api/sync/login",
+      "method": "POST",
+      "body": {
+        "root": "",
+        "name": "",
+        "sees_owner": null,
+        "owner_sees": "maybe"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "",
+              "name": "",
+              "sees_owner": null,
+              "owner_sees": "maybe"
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "",
+              "name": "",
+              "sees_owner": null,
+              "owner_sees": "maybe"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "LoginBody",
+      "index": 6,
+      "path": "/api/sync/login",
+      "method": "POST",
+      "body": {
+        "user": 1,
+        "salt": false,
+        "auth_hash": [],
+        "bootstrap": {},
+        "enc_blob": [],
+        "base_rev": "wat"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 1
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Input should be a valid string",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "model": "LoginBody",
+      "index": 7,
+      "path": "/api/sync/login",
+      "method": "POST",
+      "body": {
+        "root": "fixture",
+        "name": "Ana",
+        "sees_owner": "true",
+        "owner_sees": 0
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "fixture",
+              "name": "Ana",
+              "sees_owner": "true",
+              "owner_sees": 0
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "fixture",
+              "name": "Ana",
+              "sees_owner": "true",
+              "owner_sees": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "LoginBody",
+      "index": 8,
+      "path": "/api/sync/login",
+      "method": "POST",
+      "body": {
+        "base_rev": true,
+        "enc_blob": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": true,
+              "enc_blob": null
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": true,
+              "enc_blob": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "LoginBody",
+      "index": 9,
+      "path": "/api/sync/login",
+      "method": "POST",
+      "body": {
+        "base_rev": "1.0",
+        "enc_blob": {}
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": "1.0",
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": "1.0",
+              "enc_blob": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "LoginBody",
+      "index": 10,
+      "path": "/api/sync/login",
+      "method": "POST",
+      "body": {
+        "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+        "enc_blob": {}
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+              "enc_blob": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "LoginBody",
+      "index": 11,
+      "path": "/api/sync/login",
+      "method": "POST",
+      "body": {
+        "user": null,
+        "salt": null,
+        "auth_hash": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Input should be a valid string",
+            "input": null
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Input should be a valid string",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "model": "LoginBody",
+      "index": 12,
+      "path": "/api/sync/login",
+      "method": "POST",
+      "body": {
+        "user": " ",
+        "salt": "!",
+        "auth_hash": "!",
+        "enc_blob": {
+          "iv": "x",
+          "data": "x"
+        },
+        "admin_blob": null
+      },
+      "status": 200,
+      "response": {
+        "user": " ",
+        "auth_hash": "!"
+      }
+    },
+    {
+      "model": "LoginBody",
+      "index": 13,
+      "path": "/api/sync/login",
+      "method": "POST",
+      "body": {
+        "user": "ana",
+        "salt": "",
+        "auth_hash": "",
+        "enc_blob": {},
+        "admin_blob": {},
+        "extra": true
+      },
+      "status": 200,
+      "response": {
+        "user": "ana",
+        "auth_hash": ""
+      }
+    },
+    {
+      "model": "VaultPutBody",
+      "index": 0,
+      "path": "/api/sync/vault",
+      "method": "PUT",
+      "body": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "model": "VaultPutBody",
+      "index": 1,
+      "path": "/api/sync/vault",
+      "method": "PUT",
+      "body": {},
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "model": "VaultPutBody",
+      "index": 2,
+      "path": "/api/sync/vault",
+      "method": "PUT",
+      "body": [],
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "model": "VaultPutBody",
+      "index": 3,
+      "path": "/api/sync/vault",
+      "method": "PUT",
+      "body": 4,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": 4
+          }
+        ]
+      }
+    },
+    {
+      "model": "VaultPutBody",
+      "index": 4,
+      "path": "/api/sync/vault",
+      "method": "PUT",
+      "body": "",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": ""
+          }
+        ]
+      }
+    },
+    {
+      "model": "VaultPutBody",
+      "index": 5,
+      "path": "/api/sync/vault",
+      "method": "PUT",
+      "body": {
+        "root": "",
+        "name": "",
+        "sees_owner": null,
+        "owner_sees": "maybe"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "",
+              "name": "",
+              "sees_owner": null,
+              "owner_sees": "maybe"
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "",
+              "name": "",
+              "sees_owner": null,
+              "owner_sees": "maybe"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "VaultPutBody",
+      "index": 6,
+      "path": "/api/sync/vault",
+      "method": "PUT",
+      "body": {
+        "user": 1,
+        "salt": false,
+        "auth_hash": [],
+        "bootstrap": {},
+        "enc_blob": [],
+        "base_rev": "wat"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "dict_type",
+            "loc": [
+              "body",
+              "enc_blob"
+            ],
+            "msg": "Input should be a valid dictionary",
+            "input": []
+          },
+          {
+            "type": "int_parsing",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "input": "wat"
+          }
+        ]
+      }
+    },
+    {
+      "model": "VaultPutBody",
+      "index": 7,
+      "path": "/api/sync/vault",
+      "method": "PUT",
+      "body": {
+        "root": "fixture",
+        "name": "Ana",
+        "sees_owner": "true",
+        "owner_sees": 0
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "fixture",
+              "name": "Ana",
+              "sees_owner": "true",
+              "owner_sees": 0
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "fixture",
+              "name": "Ana",
+              "sees_owner": "true",
+              "owner_sees": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "VaultPutBody",
+      "index": 8,
+      "path": "/api/sync/vault",
+      "method": "PUT",
+      "body": {
+        "base_rev": true,
+        "enc_blob": null
+      },
+      "status": 200,
+      "response": {
+        "enc_blob": null,
+        "base_rev": 1
+      }
+    },
+    {
+      "model": "VaultPutBody",
+      "index": 9,
+      "path": "/api/sync/vault",
+      "method": "PUT",
+      "body": {
+        "base_rev": "1.0",
+        "enc_blob": {}
+      },
+      "status": 200,
+      "response": {
+        "enc_blob": {},
+        "base_rev": 1
+      }
+    },
+    {
+      "model": "VaultPutBody",
+      "index": 10,
+      "path": "/api/sync/vault",
+      "method": "PUT",
+      "body": {
+        "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+        "enc_blob": {}
+      },
+      "status": 200,
+      "response": {
+        "enc_blob": {},
+        "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000
+      }
+    },
+    {
+      "model": "VaultPutBody",
+      "index": 11,
+      "path": "/api/sync/vault",
+      "method": "PUT",
+      "body": {
+        "user": null,
+        "salt": null,
+        "auth_hash": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": null,
+              "salt": null,
+              "auth_hash": null
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": null,
+              "salt": null,
+              "auth_hash": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "VaultPutBody",
+      "index": 12,
+      "path": "/api/sync/vault",
+      "method": "PUT",
+      "body": {
+        "user": " ",
+        "salt": "!",
+        "auth_hash": "!",
+        "enc_blob": {
+          "iv": "x",
+          "data": "x"
+        },
+        "admin_blob": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": " ",
+              "salt": "!",
+              "auth_hash": "!",
+              "enc_blob": {
+                "iv": "x",
+                "data": "x"
+              },
+              "admin_blob": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "VaultPutBody",
+      "index": 13,
+      "path": "/api/sync/vault",
+      "method": "PUT",
+      "body": {
+        "user": "ana",
+        "salt": "",
+        "auth_hash": "",
+        "enc_blob": {},
+        "admin_blob": {},
+        "extra": true
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": "ana",
+              "salt": "",
+              "auth_hash": "",
+              "enc_blob": {},
+              "admin_blob": {},
+              "extra": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestAccountBody",
+      "index": 0,
+      "path": "/api/sync/guests",
+      "method": "POST",
+      "body": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestAccountBody",
+      "index": 1,
+      "path": "/api/sync/guests",
+      "method": "POST",
+      "body": {},
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "admin_blob"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestAccountBody",
+      "index": 2,
+      "path": "/api/sync/guests",
+      "method": "POST",
+      "body": [],
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestAccountBody",
+      "index": 3,
+      "path": "/api/sync/guests",
+      "method": "POST",
+      "body": 4,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": 4
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestAccountBody",
+      "index": 4,
+      "path": "/api/sync/guests",
+      "method": "POST",
+      "body": "",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": ""
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestAccountBody",
+      "index": 5,
+      "path": "/api/sync/guests",
+      "method": "POST",
+      "body": {
+        "root": "",
+        "name": "",
+        "sees_owner": null,
+        "owner_sees": "maybe"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "",
+              "name": "",
+              "sees_owner": null,
+              "owner_sees": "maybe"
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "",
+              "name": "",
+              "sees_owner": null,
+              "owner_sees": "maybe"
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "",
+              "name": "",
+              "sees_owner": null,
+              "owner_sees": "maybe"
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "",
+              "name": "",
+              "sees_owner": null,
+              "owner_sees": "maybe"
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "admin_blob"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "",
+              "name": "",
+              "sees_owner": null,
+              "owner_sees": "maybe"
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": ""
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": ""
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "sees_owner"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": null
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "owner_sees"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "maybe"
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestAccountBody",
+      "index": 6,
+      "path": "/api/sync/guests",
+      "method": "POST",
+      "body": {
+        "user": 1,
+        "salt": false,
+        "auth_hash": [],
+        "bootstrap": {},
+        "enc_blob": [],
+        "base_rev": "wat"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 1
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Input should be a valid string",
+            "input": false
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Input should be a valid string",
+            "input": []
+          },
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body",
+              "enc_blob"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "admin_blob"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": 1,
+              "salt": false,
+              "auth_hash": [],
+              "bootstrap": {},
+              "enc_blob": [],
+              "base_rev": "wat"
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "bootstrap"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": {}
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "wat"
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestAccountBody",
+      "index": 7,
+      "path": "/api/sync/guests",
+      "method": "POST",
+      "body": {
+        "root": "fixture",
+        "name": "Ana",
+        "sees_owner": "true",
+        "owner_sees": 0
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "fixture",
+              "name": "Ana",
+              "sees_owner": "true",
+              "owner_sees": 0
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "fixture",
+              "name": "Ana",
+              "sees_owner": "true",
+              "owner_sees": 0
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "fixture",
+              "name": "Ana",
+              "sees_owner": "true",
+              "owner_sees": 0
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "fixture",
+              "name": "Ana",
+              "sees_owner": "true",
+              "owner_sees": 0
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "admin_blob"
+            ],
+            "msg": "Field required",
+            "input": {
+              "root": "fixture",
+              "name": "Ana",
+              "sees_owner": "true",
+              "owner_sees": 0
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "root"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "fixture"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "Ana"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "sees_owner"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "true"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "owner_sees"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": 0
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestAccountBody",
+      "index": 8,
+      "path": "/api/sync/guests",
+      "method": "POST",
+      "body": {
+        "base_rev": true,
+        "enc_blob": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": true,
+              "enc_blob": null
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": true,
+              "enc_blob": null
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": true,
+              "enc_blob": null
+            }
+          },
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body",
+              "enc_blob"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": null
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "admin_blob"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": true,
+              "enc_blob": null
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": true
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestAccountBody",
+      "index": 9,
+      "path": "/api/sync/guests",
+      "method": "POST",
+      "body": {
+        "base_rev": "1.0",
+        "enc_blob": {}
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": "1.0",
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": "1.0",
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": "1.0",
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob",
+              "iv"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "admin_blob"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": "1.0",
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "1.0"
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestAccountBody",
+      "index": 10,
+      "path": "/api/sync/guests",
+      "method": "POST",
+      "body": {
+        "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+        "enc_blob": {}
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob",
+              "iv"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "admin_blob"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_rev": 100000000000000000000000000000000000000000000000000000000000000000000000000000000,
+              "enc_blob": {}
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "base_rev"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": 100000000000000000000000000000000000000000000000000000000000000000000000000000000
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestAccountBody",
+      "index": 11,
+      "path": "/api/sync/guests",
+      "method": "POST",
+      "body": {
+        "user": null,
+        "salt": null,
+        "auth_hash": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Input should be a valid string",
+            "input": null
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Input should be a valid string",
+            "input": null
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Input should be a valid string",
+            "input": null
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": null,
+              "salt": null,
+              "auth_hash": null
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "admin_blob"
+            ],
+            "msg": "Field required",
+            "input": {
+              "user": null,
+              "salt": null,
+              "auth_hash": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestAccountBody",
+      "index": 12,
+      "path": "/api/sync/guests",
+      "method": "POST",
+      "body": {
+        "user": " ",
+        "salt": "!",
+        "auth_hash": "!",
+        "enc_blob": {
+          "iv": "x",
+          "data": "x"
+        },
+        "admin_blob": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "user"
+            ],
+            "msg": "Value error, usuário inválido",
+            "input": " ",
+            "ctx": {
+              "error": {}
+            }
+          },
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Value error, Only base64 data is allowed",
+            "input": "!",
+            "ctx": {
+              "error": {}
+            }
+          },
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Value error, Only base64 data is allowed",
+            "input": "!",
+            "ctx": {
+              "error": {}
+            }
+          },
+          {
+            "type": "string_too_short",
+            "loc": [
+              "body",
+              "enc_blob",
+              "iv"
+            ],
+            "msg": "String should have at least 16 characters",
+            "input": "x",
+            "ctx": {
+              "min_length": 16
+            }
+          },
+          {
+            "type": "string_too_short",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "String should have at least 24 characters",
+            "input": "x",
+            "ctx": {
+              "min_length": 24
+            }
+          },
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body",
+              "admin_blob"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "model": "GuestAccountBody",
+      "index": 13,
+      "path": "/api/sync/guests",
+      "method": "POST",
+      "body": {
+        "user": "ana",
+        "salt": "",
+        "auth_hash": "",
+        "enc_blob": {},
+        "admin_blob": {},
+        "extra": true
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "salt"
+            ],
+            "msg": "Value error, tamanho inválido da credencial",
+            "input": "",
+            "ctx": {
+              "error": {}
+            }
+          },
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "auth_hash"
+            ],
+            "msg": "Value error, tamanho inválido da credencial",
+            "input": "",
+            "ctx": {
+              "error": {}
+            }
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob",
+              "iv"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "enc_blob",
+              "data"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "admin_blob",
+              "iv"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "admin_blob",
+              "data"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "extra"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": true
+          }
+        ]
+      }
+    }
+  ]
+}
