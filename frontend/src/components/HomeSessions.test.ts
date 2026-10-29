@@ -50,13 +50,15 @@ it('vazio quando as máquinas responderam sem sessão aberta', async () => {
   expect(await mount()).toContain('Nenhuma sessão ativa');
 });
 
-it('erro por máquina aparece junto das sessões das outras', async () => {
+it('erro por máquina aparece junto das sessões das outras; máquina desligada só sai da lista', async () => {
   Object.assign(store, { loading: false, rows: [row('s1', 'working')], byServer: [
     { server: server('a'), sessions: [], error: null, loaded: true },
     { server: server('b'), sessions: [], error: 'offline', loaded: false },
+    { server: server('c'), sessions: [], error: '401', loaded: false },
   ] });
   const text = await mount();
-  expect(text).toContain('b offline');
+  expect(text).not.toContain('b offline');
+  expect(text).toContain('c: 401');
   expect(text).toContain('Trabalhando');
 });
 

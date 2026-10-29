@@ -103,7 +103,13 @@ export async function acceptAndStart(server: Server, acceptance: UpdateAcceptanc
 
 /** As máquinas próprias, uma por identidade; `last` vence como representante da dele. */
 export async function distinctMachines(servers: readonly Server[], opts: Pick<UpdateAllOptions, 'last' | 'fetch'> = {}): Promise<Server[]> {
+  return (await readMachines(servers, opts)).targets;
+}
+
+/** `offline`: não respondeu à identidade (rede ou prazo, não um status HTTP). */
+async function readMachines(servers: readonly Server[], opts: Pick<UpdateAllOptions, 'last' | 'fetch'>): Promise<{ targets: Server[]; offline: Set<string> }> {
   const candidates = ownUpdatableServers(servers);
+  const offline = new Set<string>();
   const identities = await Promise.all(candidates.map(async (server) => {
     try {
       const response = await getIdentificadorEm(server, opts.fetch);
@@ -111,6 +117,7 @@ export async function distinctMachines(servers: readonly Server[], opts: Pick<Up
     } catch (error) {
       registerDiagnostic({ evento: 'update_all.identity_failed', nivel: 'aviso',
         codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
+      if (httpStatus(error) === undefined) offline.add(server.id);
       return '';
     }
   }));
@@ -119,7 +126,7 @@ export async function distinctMachines(servers: readonly Server[], opts: Pick<Up
     const identity = identities[index];
     if (identity && (!representatives.has(identity) || server.id === opts.last)) representatives.set(identity, server);
   });
-  return candidates.filter((server, index) => !identities[index] || representatives.get(identities[index]) === server);
+  return { offline, targets: candidates.filter((server, index) => !identities[index] || representatives.get(identities[index]) === server) };
 }
 
 export interface MachineNotes { server: Server; notes: UpdateNotes | null }
@@ -127,8 +134,10 @@ export interface PreparedUpdateAll { run: MachineNotes[]; failed: Server[] }
 
 /** Avisos de cada máquina a atualizar; quem não responde fica de fora (`failed`), `null` = servidor antigo. */
 export async function prepareUpdateAll(servers: readonly Server[], opts: Pick<UpdateAllOptions, 'last' | 'fetch'> = {}): Promise<PreparedUpdateAll> {
-  const targets = await distinctMachines(servers, opts);
+  const { targets, offline } = await readMachines(servers, opts);
   const read = await Promise.all(targets.map(async (server): Promise<MachineNotes | null> => {
+    // Máquina desligada atrás de VPN não recusa a conexão: a busca esperaria o prazo inteiro e prenderia a folha.
+    if (offline.has(server.id)) return null;
     try {
       // Busca o alvo antes: sem isso os avisos podem ser os da versão anterior. Falhou, segue com o alvo que ela tem; a
       // releitura antes de iniciar (`refuseUnseenWarnings`) barra o que mudou.

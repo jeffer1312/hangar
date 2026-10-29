@@ -36,10 +36,10 @@
 
 <div class="home-sessions">
   {#each machines as b (b.server.id)}
-    {#if b.error}
-      <p class="machine error" role="alert">
-        {b.error === 'offline' ? m.lista_servidor_offline({ label: b.server.label }) : `${b.server.label}: ${b.error}`}
-      </p>
+    <!-- Máquina desligada só sai da lista: o aviso na tela é para falha que pede ação. -->
+    {#if b.error === 'offline'}
+    {:else if b.error}
+      <p class="machine error" role="alert">{`${b.server.label}: ${b.error}`}</p>
     {:else if manyServers}
       <p class="machine">{b.server.label}: {m.lista_carregando()}</p>
     {/if}

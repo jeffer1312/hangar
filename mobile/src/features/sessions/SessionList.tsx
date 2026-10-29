@@ -425,7 +425,8 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
   );
 
   const machineErrors = byServer.filter((bucket) => bucket.error);
-  const machineStatus = home ? byServer.filter((bucket) => bucket.error || !bucket.loaded).map((bucket) => (
+  // Máquina desligada só sai da lista: o aviso na tela é para falha que pede ação (Servidores mostra o estado).
+  const machineStatus = home ? byServer.filter((bucket) => bucket.error !== 'offline' && (bucket.error || !bucket.loaded)).map((bucket) => (
     <View key={bucket.server.id} style={styles.machineStatus}>
       {bucket.error ? (
         <Text style={styles.machineError} accessibilityRole="alert" selectable>
