@@ -26,7 +26,8 @@ try {
       if(!failed&&((name==='server-publish-failure'&&target===prepared.server)||(name==='metadata-publish-failure'&&target===prepared.metadataPath))){failed=true;throw new Error('fixture-publication-failed');}return fs.renameSync(src,target);
     };
     const errors=items.length?publishPair(items,{platform,dest,io}):[];
-    assert.deepEqual(errors.map(text=>text.replaceAll(dest,'<DEST>')),row.result,name+' avisos');
+    // A captura simula o Windows no Linux; só o caminho temporário usa separador nativo.
+    assert.deepEqual(errors.map(text=>text.replaceAll(dest,'<DEST>').replace(/<DEST>\\auth\\/g,'<DEST>/auth/')),row.result,name+' avisos');
     assert.deepEqual(snapshot(dest),row.after_publish,name+' arquivos');
     if(!errors.length)validatePair(prepared.server);
     count++;

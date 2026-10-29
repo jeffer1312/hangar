@@ -46,8 +46,9 @@ function global:Invoke-WebRequest {
     [IO.File]::WriteAllBytes($OutFile,[Text.Encoding]::UTF8.GetBytes($data))
 }
 $env:PROOF_CASE = $global:ProofCase.name
-$env:NODE_OPTIONS = '--require="' + (Join-Path $Root 'failure.cjs') + '"'
+$env:NODE_OPTIONS = '--require="' + (Join-Path $Root 'failure.cjs').Replace('\', '/') + '"'
 & $Bootstrap
+exit $LASTEXITCODE
 '@
 try {
     $probeFile = Join-Path $scratch 'probe.ps1'
@@ -70,7 +71,7 @@ try {
         $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $probeFile -Root $root -CasePath $caseFile -Bootstrap $bootstrap 2>&1
         $expectedCode = if ($case.result.Count) { 1 } else { 0 }
         if ($LASTEXITCODE -ne $expectedCode) { throw "$($case.name): código $LASTEXITCODE, esperado $($case.code): $output" }
-        $urls = @(Get-Content -Encoding UTF8 (Join-Path $root 'calls'))
+        $urls = @([IO.File]::ReadAllLines((Join-Path $root 'calls'), [Text.Encoding]::UTF8))
         if (($urls | ConvertTo-Json -Compress) -cne (@($case.urls | ForEach-Object { $_.Replace('https://release.invalid','https://github.com/jeffer1312/hangar/releases/download') }) | ConvertTo-Json -Compress)) { throw "$($case.name): URLs divergentes." }
         $files = @(Get-ChildItem -LiteralPath (Join-Path $root 'dest') -File -Recurse)
         $expectedCount = @($case.after_publish.PSObject.Properties).Count

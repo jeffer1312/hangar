@@ -116,6 +116,10 @@ if (require.main === module) {
       process.stdout.write(names.join(', ')); process.exit(0);
     }
     if (mode === 'target') { process.stdout.write(name === 'hangar-auth' ? prepared.library : path.join(dest, `${name}${platform.startsWith('windows') ? '.exe' : ''}`)); process.exit(0); }
+    if (mode === 'install-cano') {
+      installFile(fs.readFileSync(path.join(stage, 'hangar-cano')), path.join(dest, `hangar-cano${platform.startsWith('windows') ? '.exe' : ''}`), platform);
+      process.exit(0);
+    }
     if (mode !== 'publish') throw new Error('operação inválida');
     const items = [];
     for (const [name, target] of [['hangar-auth', prepared.library], ['hangar-server', prepared.server]]) {

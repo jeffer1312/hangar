@@ -62,7 +62,7 @@ function Install-ServerBinaries {
                     Invoke-WebRequest -UseBasicParsing -Uri "$url/$($entry.name)" -OutFile $tmp -TimeoutSec 200
                     if ((Get-FileHash -LiteralPath $tmp -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sha) { throw 'o sha256 não confere com a release; o binário anterior ficou' }
                     if ($name -eq 'hangar-cano') {
-                        & node -e 'const fs=require("fs"),p=require(process.argv[1]);p.installFile(fs.readFileSync(process.argv[2]),process.argv[3],"windows-x86_64")' $publisher $tmp $target | Out-Host
+                        & node $publisher install-cano $platform $dest $manifestFile $stage | Out-Host
                         if ($LASTEXITCODE -ne 0) { throw 'não consegui gravar o binário' }
                     }
                 } catch { Write-Warning "${name}: $($_.Exception.Message)"; $failed = $true; if ($name -ne 'hangar-cano') { $pairFailed = $true }; continue }

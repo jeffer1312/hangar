@@ -36,6 +36,7 @@ function global:Invoke-WebRequest {
     [IO.File]::WriteAllBytes($OutFile,[Text.Encoding]::UTF8.GetBytes('new-' + ($Uri -split '/')[-1]))
 }
 & $Bootstrap
+exit $LASTEXITCODE
 '@
 try {
     $probeFile = Join-Path $scratch 'probe.ps1'
@@ -47,8 +48,8 @@ try {
         [IO.File]::WriteAllText($caseFile, ($case | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($true))
         $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $probeFile -Root $root -CasePath $caseFile -Bootstrap $bootstrap 2>&1
         if ($LASTEXITCODE -ne $case.code) { throw "$($case.name): código $LASTEXITCODE, esperado $($case.code): $output" }
-        $urls = @(Get-Content -Encoding UTF8 (Join-Path $root 'calls'))
-        if (($urls | ConvertTo-Json -Compress) -cne ($case.urls | ConvertTo-Json -Compress)) { throw "$($case.name): URLs divergentes." }
+        $urls = @([IO.File]::ReadAllLines((Join-Path $root 'calls'), [Text.Encoding]::UTF8))
+        if (($urls | ConvertTo-Json -Compress) -cne ($case.urls | ConvertTo-Json -Compress)) { throw "$($case.name): URLs divergentes. Recebidas: $($urls | ConvertTo-Json -Compress); esperadas: $($case.urls | ConvertTo-Json -Compress)." }
         $files = @(Get-ChildItem -LiteralPath (Join-Path $root 'dest') -File -Recurse)
         $expectedCount = @($case.files.PSObject.Properties).Count
         if ($files.Count -ne $expectedCount) { throw "$($case.name): número de arquivos divergente." }
