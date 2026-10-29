@@ -57,7 +57,9 @@ fn identity(group: &Value, hook: &Value) -> String {
         if hook["type"] == "command" {
             hook["command"].clone()
         } else {
-            hook.clone()
+            let mut canonical = hook.clone();
+            canonical.sort_all_objects();
+            canonical
         }
     ])
     .to_string()

@@ -104,7 +104,7 @@ while IFS= read -r message; do
   id=$(printf '%s' "$message" | /usr/bin/sed -n 's/.*"id":\([0-9]*\).*/\1/p')
   case "$message" in
     *'"method":"config/batchWrite"'*)
-      printf '%s\n%s\n' "$HOME" "$CODEX_HOME" >> "$FIXTURE_OBSERVATIONS"
+      printf '%s\n' "$HOME" "$CODEX_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" >> "$FIXTURE_OBSERVATIONS"
       printf 'model = "novo"\n' > "$CODEX_HOME/config.toml"
       printf '{"id":%s,"result":{}}\n' "$id";;
     *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id";;
@@ -121,6 +121,10 @@ done
         [
             ("HOME".into(), root.path().to_string_lossy().into_owned()),
             ("PATH".into(), binary.to_string_lossy().into_owned()),
+            ("XDG_CONFIG_HOME".into(), "/dados-reais/config".into()),
+            ("XDG_DATA_HOME".into(), "/dados-reais/data".into()),
+            ("XDG_STATE_HOME".into(), "/dados-reais/state".into()),
+            ("XDG_CACHE_HOME".into(), "/dados-reais/cache".into()),
             (
                 "FIXTURE_OBSERVATIONS".into(),
                 observations.to_string_lossy().into_owned(),
@@ -152,11 +156,62 @@ done
     );
     let recorded = std::fs::read_to_string(observations).unwrap();
     let lines: Vec<_> = recorded.lines().collect();
-    assert_eq!(lines.len(), 4);
+    assert_eq!(lines.len(), 12);
     assert!(
         lines
             .iter()
             .all(|p| std::path::Path::new(p).starts_with(&work))
     );
     assert_eq!(std::fs::read_dir(work).unwrap().count(), 0);
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn codex_native_cleanup_failure_blocks_config_write() {
+    use hangar_server::accounts::environment::AccountEnvironment;
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let script = bin.join("codex");
+    std::fs::write(
+        &script,
+        r##"#!/bin/sh
+while IFS= read -r message; do
+ id=$(printf '%s' "$message" | /usr/bin/sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+ case "$message" in
+ *'"method":"config/batchWrite"'*)
+   printf 'model = "novo"\n' > "$CODEX_HOME/config.toml"
+   /usr/bin/chmod 500 "$FIXTURE_WORK"
+   printf '{"id":%s,"result":{}}\n' "$id";;
+ *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id";;
+ esac
+done
+"##,
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let work = root.path().join("work");
+    let path = root.path().join("config.toml");
+    std::fs::write(&path, "model = \"antigo\"\n").unwrap();
+    let env = AccountEnvironment::from_map(
+        [
+            ("HOME".into(), root.path().to_string_lossy().into_owned()),
+            ("PATH".into(), bin.to_string_lossy().into_owned()),
+            ("FIXTURE_WORK".into(), work.to_string_lossy().into_owned()),
+        ]
+        .into(),
+    );
+    let result = files::edit_config(&env, &path, &root.path().join("backups"), &work, |_| {
+        Ok(vec![
+            json!({"keyPath":"model","value":"novo","mergeStrategy":"replace"}),
+        ])
+    })
+    .await;
+    std::fs::set_permissions(&work, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.is_err(), "falha de limpeza precisa impedir sucesso");
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        "model = \"antigo\"\n"
+    );
 }

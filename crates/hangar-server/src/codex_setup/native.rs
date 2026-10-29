@@ -8,7 +8,7 @@ pub struct Native {
     client: Client,
     close: Option<tokio::sync::oneshot::Sender<Option<tempfile::TempDir>>>,
     directory: Option<tempfile::TempDir>,
-    cleanup: Option<tokio::task::JoinHandle<()>>,
+    cleanup: Option<tokio::task::JoinHandle<Result<(), String>>>,
     pub events: tokio::sync::mpsc::UnboundedReceiver<(String, Value)>,
 }
 impl Native {
@@ -42,6 +42,16 @@ impl Native {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        if home != env.home {
+            for (key, relative) in [
+                ("XDG_CONFIG_HOME", ".config"),
+                ("XDG_DATA_HOME", ".local/share"),
+                ("XDG_STATE_HOME", ".local/state"),
+                ("XDG_CACHE_HOME", ".cache"),
+            ] {
+                command.env(key, home.join(relative));
+            }
+        }
         let mut tree = crate::terminal_process::CommandTree::configure(&mut command)
             .map_err(|_| "contenção do Codex indisponível")?;
         let (client, mut incoming, mut child) =
@@ -76,7 +86,18 @@ impl Native {
             drain.abort();
             crate::terminal_process::finish(&mut tree).await;
             let _ = child.wait().await;
-            drop(directory);
+            let result = directory
+                .map_or(Ok(()), tempfile::TempDir::close)
+                .map_err(|error| {
+                    format!(
+                        "não foi possível remover o diretório temporário do Codex: {:?}",
+                        error.kind()
+                    )
+                });
+            if let Err(error) = &result {
+                tracing::warn!(%error, "limpeza do Codex incompleta");
+            }
+            result
         });
         let mut native = Self {
             client,
@@ -87,7 +108,7 @@ impl Native {
         };
         let result=native.request("initialize",json!({"clientInfo":{"name":"hangar","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}),Duration::from_secs(60)).await;
         if let Err(error) = result {
-            native.close().await;
+            native.close().await?;
             return Err(error);
         }
         if native
@@ -96,7 +117,7 @@ impl Native {
             .await
             .is_err()
         {
-            native.close().await;
+            native.close().await?;
             return Err("Codex encerrou na inicialização".into());
         }
         Ok(native)
@@ -119,13 +140,14 @@ impl Native {
                 format!("Codex {kind} em {method}")
             })
     }
-    pub async fn close(&mut self) {
+    pub async fn close(&mut self) -> Result<(), String> {
         if let Some(close) = self.close.take() {
             let _ = close.send(self.directory.take());
         }
         if let Some(task) = self.cleanup.take() {
-            let _ = task.await;
+            task.await.map_err(|_| "limpeza do Codex interrompida")??;
         }
+        Ok(())
     }
 }
 impl Drop for Native {

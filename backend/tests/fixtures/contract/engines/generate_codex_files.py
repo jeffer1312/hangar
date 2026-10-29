@@ -15,4 +15,12 @@ for current in documents:
             try:case["expected"]={"ok":mesclar_hooks(current,source,previous)}
             except ValueError as error:case["expected"]={"error":str(error)}
             cases.append(case)
+for payload in [{"type":"prompt","prompt":"pessoal","nested":{"a":1,"b":[{"c":2,"d":3}]}}]:
+    def reverse(value):
+        if isinstance(value,dict):return {k:reverse(v) for k,v in reversed(list(value.items()))}
+        if isinstance(value,list):return [reverse(v) for v in value]
+        return value
+    current={"hooks":{"Stop":[{"hooks":[payload]}]}}
+    source={"hooks":{"Stop":[{"hooks":[reverse(payload)]}]}}
+    cases.append({"current":current,"source":source,"previous":{},"expected":{"ok":mesclar_hooks(current,source,{})}})
 Path(__file__).with_name("codex-files.json").write_text(json.dumps({"source_commit":subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),"command":"PYTHONPATH=backend python backend/tests/fixtures/contract/engines/generate_codex_files.py","cases":cases},ensure_ascii=False,indent=2)+"\n")

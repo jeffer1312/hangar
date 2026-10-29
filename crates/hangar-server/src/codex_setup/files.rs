@@ -225,7 +225,7 @@ pub async fn edit_config(
             )
             .await;
         let updated = result.and_then(|_| fs::read(copy).map_err(|e| e.to_string()));
-        native.close().await;
+        native.close().await?;
         let updated = updated?;
         match write(path, &updated, raw.as_deref(), Some(backups)) {
             Ok(_) => return Ok(()),

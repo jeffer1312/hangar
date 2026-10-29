@@ -1,5 +1,5 @@
 {
-  "source_commit": "fc1ed83a37fe22c126328f3717ccd6b37db17e10",
+  "source_commit": "404bee0f29643f95163b82b2214e18da02bd5880",
   "command": "PYTHONPATH=backend python backend/tests/fixtures/contract/engines/generate_codex_files.py",
   "cases": [
     {
@@ -6125,6 +6125,80 @@
       },
       "expected": {
         "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "Stop": [
+            {
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal",
+                  "nested": {
+                    "a": 1,
+                    "b": [
+                      {
+                        "c": 2,
+                        "d": 3
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "Stop": [
+            {
+              "hooks": [
+                {
+                  "nested": {
+                    "b": [
+                      {
+                        "d": 3,
+                        "c": 2
+                      }
+                    ],
+                    "a": 1
+                  },
+                  "prompt": "pessoal",
+                  "type": "prompt"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "Stop": [
+              {
+                "hooks": [
+                  {
+                    "nested": {
+                      "b": [
+                        {
+                          "d": 3,
+                          "c": 2
+                        }
+                      ],
+                      "a": 1
+                    },
+                    "prompt": "pessoal",
+                    "type": "prompt"
+                  }
+                ]
+              }
+            ]
+          }
+        }
       }
     }
   ]
