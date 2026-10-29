@@ -1106,3 +1106,98 @@ async fn terminal_input_slash_accepts_when_the_prompt_hooks_start_without_a_seco
  assert_eq!((r.disposition,r.code.as_str()),(Disposition::Accepted,"prompt_started"));
  assert_eq!(io.writes().iter().filter(|w|w.args.last().is_some_and(|a|a=="\r")).count(),1);
 }
+
+#[tokio::test]
+async fn engine_model_driver_matches_python_contract() {
+ let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/engines/engine-model.json")).unwrap();
+ for case in fixture["cases"].as_array().unwrap() {
+  let name = case["name"].as_str().unwrap();
+  let model = hangar_server::model_picker::normalize_engine(case["model"].as_str().unwrap());
+  if let Some(invalid) = case["expected"]["invalid"].as_str() {
+   assert_eq!(model.unwrap_err(), invalid, "{name}");
+   continue;
+  }
+  let io = Arc::new(FakeIo::new(picker_screens(case)));
+  let out = hangar_server::model_picker::drive_engine(&driver(io.clone(), Arc::new(Services::new())), &model.unwrap()).await;
+  let want: Vec<String> = case["keys"].as_array().unwrap().iter().map(|k| k.as_str().unwrap().to_owned()).collect();
+  assert_eq!(picker_keys(&io), want, "{name}: teclas");
+  if case["expected"].get("error").is_some() {
+   assert_eq!(out.unwrap_err().detail, case["expected"]["error"]["detail"].as_str().unwrap(), "{name}");
+  } else {
+   assert_eq!(out.unwrap(), case["expected"]["ok"], "{name}");
+  }
+ }
+}
+
+#[test]
+fn engine_model_default_restore_matches_python() {
+    use hangar_server::model_picker::default_model;
+    let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/engines/default-model.json")).unwrap();
+    let values: serde_json::Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/engines/default-values.json")).unwrap();
+    for case in fixture["cases"].as_array().unwrap().iter().chain(values["cases"].as_array().unwrap()) {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        if let Some(initial) = case["initial"].as_str() {
+            std::fs::write(&path, initial).unwrap();
+        }
+        let before = default_model::snapshot(root.path()).unwrap();
+        std::fs::write(&path, serde_json::to_vec(&case["after_cli"]).unwrap()).unwrap();
+        assert_eq!(serde_json::json!(default_model::restore(root.path(), &before).unwrap()), case["changed"], "{case}");
+        let after: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(after, case["after_restore"]);
+    }
+}
+
+#[tokio::test]
+async fn engine_model_default_restore_waits_for_both_cli_writes() {
+    use hangar_server::model_picker::default_model;
+    use std::time::Duration;
+    let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/engines/default-model.json")).unwrap();
+    for case in fixture["late"].as_array().unwrap() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        std::fs::write(&path, r#"{"model":"sonnet","other":1}"#).unwrap();
+        let before = default_model::snapshot(root.path()).unwrap();
+        let twice = case["twice"].as_bool().unwrap();
+        let writer = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            std::fs::write(&path, r#"{"model":"engine-id","other":2}"#).unwrap();
+            if twice {
+                tokio::time::timeout(Duration::from_secs(3), async {
+                    loop {
+                        let data: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                        if data["model"] == "sonnet" { break; }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }).await.unwrap();
+                std::fs::write(&path, r#"{"model":"engine-id","other":2}"#).unwrap();
+            }
+        });
+        let changed = default_model::restore_after_write(root.path(), &before).await.unwrap();
+        assert_eq!(serde_json::json!(changed), case["changed"]);
+        writer.await.unwrap();
+        let after: serde_json::Value = serde_json::from_slice(&std::fs::read(root.path().join("settings.json")).unwrap()).unwrap();
+        assert_eq!(after, case["after_restore"]);
+    }
+}
+
+
+#[test]
+fn engine_model_default_rejects_invalid_encoding_before_writing() {
+    use hangar_server::model_picker::default_model;
+    let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/engines/default-encoding.json")).unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        std::fs::write(&path, r#"{"model":"sonnet"}"#).unwrap();
+        let before = default_model::snapshot(root.path()).unwrap();
+        std::fs::write(&path, [255u8]).unwrap();
+        assert_eq!(case["error"], "UnicodeDecodeError");
+        if case["operation"] == "snapshot" {
+            assert!(default_model::snapshot(root.path()).is_err());
+        } else {
+            assert!(default_model::restore(root.path(), &before).is_err());
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), [255u8]);
+    }
+}

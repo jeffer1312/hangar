@@ -1,0 +1,18 @@
+{
+  "source_commit": "1a7b5061af431e31992c133dd2219abc0ea2ce2c",
+  "command": "PYTHONPATH=backend python backend/tests/fixtures/contract/engines/generate_default_encoding.py",
+  "cases": [
+    {
+      "operation": "snapshot",
+      "raw_hex": "ff",
+      "error": "UnicodeDecodeError",
+      "after_hex": "ff"
+    },
+    {
+      "operation": "restore",
+      "raw_hex": "ff",
+      "error": "UnicodeDecodeError",
+      "after_hex": "ff"
+    }
+  ]
+}

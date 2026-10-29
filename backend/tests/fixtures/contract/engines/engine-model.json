@@ -1,0 +1,142 @@
+{
+  "source_commit": "165927796b07bf299a95f1628afba321815a3ebd",
+  "command": "PYTHONPATH=backend python backend/tests/fixtures/contract/engines/generate_engine_model.py",
+  "cases": [
+    {
+      "name": "success",
+      "model": "k3",
+      "panes": [
+        "assistant: pronto\n❯ \n",
+        "❯ \n  ⎿  Set model to k3-256k and saved as your default for new sessions\n  ⎿  Set model to k3 and saved as your default for new sessions\n"
+      ],
+      "keys": [
+        "/model k3",
+        "Enter"
+      ],
+      "expected": {
+        "ok": {
+          "ok": true,
+          "result": "Set model to k3 and saved as your default for new sessions"
+        }
+      }
+    },
+    {
+      "name": "trim",
+      "model": " k3 ",
+      "panes": [
+        "assistant: pronto\n❯ \n",
+        "❯ \n  ⎿  Set model to k3-256k and saved as your default for new sessions\n  ⎿  Set model to k3 and saved as your default for new sessions\n"
+      ],
+      "keys": [
+        "/model k3",
+        "Enter"
+      ],
+      "expected": {
+        "ok": {
+          "ok": true,
+          "result": "Set model to k3 and saved as your default for new sessions"
+        }
+      }
+    },
+    {
+      "name": "old_confirmation",
+      "model": "k3",
+      "panes": [
+        "assistant: pronto\n❯ \n",
+        "❯ \n  ⎿  Set model to k3-256k and saved as your default for new sessions\n",
+        "❯ \n  ⎿  Set model to k3-256k and saved as your default for new sessions\n",
+        "❯ \n  ⎿  Set model to k3-256k and saved as your default for new sessions\n  ⎿  Set model to k3 and saved as your default for new sessions\n"
+      ],
+      "keys": [
+        "/model k3",
+        "Enter"
+      ],
+      "expected": {
+        "ok": {
+          "ok": true,
+          "result": "Set model to k3 and saved as your default for new sessions"
+        }
+      }
+    },
+    {
+      "name": "rejected_picker",
+      "model": "missing",
+      "panes": [
+        "assistant: pronto\n❯ \n",
+        "   Select model\n   Switch between Claude models. Your pick becomes the default for new sessions. For other/previous model names, specify with --model.\n\n     1. Default (recommended)  Opus 5 with 1M context · Best for everyday, complex tasks\n   ❯ 2. Opus (1M context) ✔    Opus 5 with 1M context · Best for everyday, complex tasks\n     3. Fable                  Fable 5 · Most capable for your hardest and longest-running tasks\n     4. Sonnet                 Sonnet 5 · Efficient for routine tasks\n     5. Haiku                  Haiku 4.5 · Fastest for quick answers\n\n   ● High effort (default) ←/→ to adjust\n\n   Enter to set as default · s to use this session only · Esc to cancel\n"
+      ],
+      "keys": [
+        "/model missing",
+        "Enter",
+        "Escape"
+      ],
+      "expected": {
+        "error": {
+          "status": 409,
+          "detail": "o Claude Code nao aceitou `/model missing`"
+        }
+      }
+    },
+    {
+      "name": "unconfirmed",
+      "model": "k3",
+      "panes": [
+        "assistant: pronto\n❯ \n"
+      ],
+      "keys": [
+        "/model k3",
+        "Enter"
+      ],
+      "expected": {
+        "error": {
+          "status": 409,
+          "detail": "sem confirmacao do `/model k3` no terminal"
+        }
+      }
+    },
+    {
+      "name": "space",
+      "model": "k3 --argument",
+      "panes": [
+        "assistant: pronto\n❯ \n"
+      ],
+      "keys": [],
+      "expected": {
+        "invalid": "model invalido: 'k3 --argument'"
+      }
+    },
+    {
+      "name": "control",
+      "model": "k3\u0000",
+      "panes": [
+        "assistant: pronto\n❯ \n"
+      ],
+      "keys": [],
+      "expected": {
+        "invalid": "model invalido: 'k3\\x00'"
+      }
+    },
+    {
+      "name": "empty",
+      "model": "",
+      "panes": [
+        "assistant: pronto\n❯ \n"
+      ],
+      "keys": [],
+      "expected": {
+        "invalid": "model invalido: ''"
+      }
+    },
+    {
+      "name": "unicode_space",
+      "model": "k3 bad",
+      "panes": [
+        "assistant: pronto\n❯ \n"
+      ],
+      "keys": [],
+      "expected": {
+        "invalid": "model invalido: 'k3\\xa0bad'"
+      }
+    }
+  ]
+}

@@ -2227,11 +2227,14 @@ async fn probe_that_does_not_restore_still_answers_the_list() {
 // ── Seletor do `/model` no ator ─────────────────────────────────────────────────────────────────────
 /// As capturas da tela (sem `-e`) saem do roteiro do golden, a última fica; as da guarda e o resto vão ao
 /// `Io` da fixture. As teclas só são anotadas.
-struct PickerIo {inner:Arc<Io>,script:Mutex<std::collections::VecDeque<String>>,keys:Mutex<Vec<String>>}
+struct PickerIo {inner:Arc<Io>,script:Mutex<std::collections::VecDeque<String>>,keys:Mutex<Vec<String>>,engine_settings:Mutex<Option<std::path::PathBuf>>}
 impl TerminalIo for PickerIo {
     fn command<'a>(&'a self,r:CommandRequest)->IoFuture<'a,CommandOutput> { Box::pin(async move {
         if r.args[0]=="send-keys" {
             let key=r.args.last().unwrap().clone();
+            if matches!(key.as_str(), "\r" | "Enter") && let Some(path) = self.engine_settings.lock().unwrap().take() {
+                std::fs::write(path, r#"{"model":"engine-id","other":2}"#).unwrap();
+            }
             self.keys.lock().unwrap().push(if key=="\r" {"Enter".into()} else {key});
             return Ok(CommandOutput {success:true,stdout:vec![]});
         }
@@ -2251,7 +2254,7 @@ fn picker_golden(name:&str)->Value {
 }
 fn picker_actor(f:&Fixture,case:&Value)->(Arc<PickerIo>,hangar_server::runtime::terminal::TerminalHandle) {
     let script=case["panes"].as_array().unwrap().iter().map(|p|p.as_str().unwrap().to_owned()).collect();
-    let io=Arc::new(PickerIo {inner:f.io.clone(),script:Mutex::new(script),keys:Default::default()});
+    let io=Arc::new(PickerIo {inner:f.io.clone(),script:Mutex::new(script),keys:Default::default(),engine_settings:Default::default()});
     let lease=crate::lease_when_free(&f.target.lease_path);
     let store=Store::open(&f.target.state_path,&f.target.projection_dir,queue::State::new("key",1,"session",vec![])).unwrap();
     let terms=Arc::new(hangar_server::term::Terms::new(hangar_server::term::TermConfig::default()));
@@ -2324,3 +2327,47 @@ async fn queued_row_goes_out_at_turn_end_and_is_confirmed_without_any_drain_or_c
     h.stop().await.unwrap();
 }
 
+
+
+#[tokio::test]
+async fn engine_model_actor_restores_default_after_success_and_refusal_and_deduplicates() {
+    use hangar_server::runtime::protocol::Disposition;
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/engines/engine-model.json")).unwrap();
+    for name in ["success", "rejected_picker", "unconfirmed"] {
+        let case=fixture["cases"].as_array().unwrap().iter().find(|case|case["name"]==name).unwrap();
+        let f=Fixture::new().await;
+        let settings=f.target.metadata.config_dir.join("settings.json");
+        std::fs::write(&settings, r#"{"model":"sonnet","other":1}"#).unwrap();
+        let (io,h)=picker_actor(&f,case);
+        *io.engine_settings.lock().unwrap()=Some(settings.clone());
+        let payload=json!({"model":case["model"],"effort":null});
+        let reply=h.control("engine".into(),"set_engine_model".into(),payload.clone()).await.unwrap();
+        let expected:Vec<String>=case["keys"].as_array().unwrap().iter().map(|v|v.as_str().unwrap().into()).collect();
+        assert_eq!(*io.keys.lock().unwrap(),expected,"{name}");
+        if case["expected"].get("error").is_some() {
+            assert_eq!(reply.disposition,Disposition::Rejected);
+            assert_eq!(reply.payload["detail"],case["expected"]["error"]["detail"]);
+        } else {
+            assert_eq!(reply.disposition,Disposition::Accepted);
+            assert_eq!(reply.payload["result"],case["expected"]["ok"]["result"]);
+            assert_eq!(reply.payload["model"],case["model"]);
+        }
+        let after:Value=serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+        assert_eq!(after,json!({"model":"sonnet","other":2}),"{name}");
+        let repeated=h.control("engine".into(),"set_engine_model".into(),payload).await.unwrap();
+        assert_eq!(repeated.disposition,reply.disposition);
+        assert_eq!(*io.keys.lock().unwrap(),expected,"recibo repetido não digita novamente");
+        h.stop().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn engine_model_actor_refuses_borrowed_keyboard_before_waiting_for_default() {
+    let f=Fixture::new().await;
+    let (io,h)=picker_actor(&f,&picker_golden("session_navigates_and_presses_s"));
+    h.control("loan".into(),"keyboard_loan".into(),json!({"seconds":30})).await.unwrap();
+    let refusal=tokio::time::timeout(Duration::from_secs(1),h.control("engine".into(),"set_engine_model".into(),json!({"model":"k3","effort":null}))).await.unwrap();
+    assert_eq!(refusal.unwrap_err().code,"erro_opcao_nao_convergiu");
+    assert!(io.keys.lock().unwrap().is_empty());
+    h.stop().await.unwrap();
+}
