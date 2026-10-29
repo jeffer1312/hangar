@@ -138,7 +138,7 @@ fn file_name(p: &std::path::Path) -> String {
 /// recebe pela lista de sessões. `plugin_ui` (faixa dos mods) sai quando muda: sem o cache, quem
 /// abre o chat depois ficava sem a faixa até o mod redesenhar. `queue` (painel da fila) sai quando muda e vale
 /// para quem chega depois.
-const LATEST: [&str; 9] = ["state", "suggest", "ask_question", "stats", "preview", "pensamento", "ferramenta", "plugin_ui", crate::queue_panel::EVENT];
+const LATEST: [&str; 10] = ["state", "suggest", "ask_question", "stats", "preview", "pensamento", "ferramenta", "plugin_ui", crate::queue_panel::EVENT, "saida"];
 const ASK_QUESTION: usize = 2;
 const PLUGIN_UI: usize = 7;
 /// Mesmos tetos do Python (`plugin_bridge.TOASTS_KEPT`, `TOAST_MAX_MS`).
@@ -196,8 +196,8 @@ pub type SpawnMonitor = Arc<dyn Fn(&Arc<Hub>) -> tokio::task::JoinHandle<()> + S
 
 /// Os quatro eventos que, com o `Monitor` vivo, só o Rust produz para a sessão.
 const STATE_EVENTS: [&str; 4] = ["state", "preview", "ask_question", "suggest"];
-/// Os seis do feed (Claude e Codex sem terminal): os quatro mais pensamento e ferramenta em voo.
-const FEED_EVENTS: [&str; 6] = ["state", "preview", "ask_question", "suggest", "pensamento", "ferramenta"];
+/// Os do feed (Claude e Codex sem terminal): os quatro mais pensamento e ferramenta em voo e a saída dos comandos do Codex.
+const FEED_EVENTS: [&str; 7] = ["state", "preview", "ask_question", "suggest", "pensamento", "ferramenta", "saida"];
 
 #[derive(Clone)]
 pub struct SideCtx {
@@ -232,7 +232,7 @@ impl SideCtx {
 
 #[derive(Default)]
 struct SideCache {
-    latest: [Option<Bytes>; 9],
+    latest: [Option<Bytes>; 10],
     /// Sobe a cada `plugin_ui` gravado; é o que o marcador `Out::Ui` leva.
     ui_version: u64,
     /// A vista da versão atual, lida, para calcular a diferença da próxima.
@@ -1838,7 +1838,7 @@ mod tests {
 
     #[test]
     fn private_channel_serves_headless_six_events() {
-        let six = ["state", "preview", "ask_question", "suggest", "pensamento", "ferramenta"];
+        let six = ["state", "preview", "ask_question", "suggest", "pensamento", "ferramenta", "saida"];
         let codex = Binding { provider: Provider::Codex, jsonl: "c".into(), key: "c".into(), headless: true, life: None };
         let claude = Binding { headless: false, provider: Provider::Claude, ..codex.clone() };
         let terminal = Binding { headless: false, ..codex.clone() };

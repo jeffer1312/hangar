@@ -266,6 +266,7 @@ impl RuntimeEngine {
     }
     fn interaction_guard(&self,id:&str) -> Result<Option<hangar_codex::client::RawWriteGuard>,RuntimeError> {
         use crate::interactions::{InteractionError,runtime_error};
+        if let Core::Codex(core)=&self.core && let Some(guard)=core.subagent_write_guard(id) {return Ok(Some(guard));}
         // Resposta reservada: o id gravado pode ser de outra vida, então a guarda confere só que a pergunta segue aberta.
         if let Core::Codex(core) = &self.core && let Some(request_id) = core.reserved_question(id) {
             let open = Arc::new(AtomicBool::new(core.async_question_pending(&request_id)));
@@ -835,7 +836,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
     // Claude sem terminal: próxima conferência da fila enquanto houver entrada entregue sem prova. Nasce
     // vencida para a subida acertar o que ficou da vida anterior.
     let mut confirm_recheck: Option<Instant> = (target.provider == "claude").then(Instant::now);
-    let mut channels:BTreeMap<String,Value> = ["preview","thinking","tool"].into_iter().map(|channel|
+    let mut channels:BTreeMap<String,Value> = ["preview","thinking","tool","output"].into_iter().map(|channel|
         (channel.into(),json!({"session":target.name,"text":"","md":true,"full":true,"vivo":true}))).collect();
     let mut live = LiveOut { sender:engine.live.clone(),state:LiveState {
         binding:engine.view()["conversation"].as_str().filter(|conversation|!conversation.is_empty()).map(|conversation|crate::interactions::InteractionBinding {key:target.key.clone(),generation:target.generation,conversation:conversation.into()}),
@@ -1085,7 +1086,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     });
                 }
                 Effect::Publish { channel,data } => {
-                    if ["preview","thinking","tool"].contains(&channel.as_str()) {
+                    if ["preview","thinking","tool","output"].contains(&channel.as_str()) {
                         channels.insert(channel.clone(),data.clone());
                         // Prévia só pelo canal do hub: no `events` ela subiria a
                         // revisão e o Python a decodificaria a cada delta.
@@ -1139,8 +1140,10 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         let queue = queue.clone(); let generation = target.generation; let sample = clock(start);
                         let text = payload["text"].as_str().unwrap_or("").to_owned();
                         let confirms = payload["source"].as_str().map(str::to_owned);
+                        let hook_error = payload["hook_error"].as_str().map(str::to_owned);
+                        let notice = payload["notice"].as_str().map(str::to_owned);
                         jobs.spawn(async move { Job::Saved(queue.exec(generation,&format!("local:{}",unique()),sample,
-                            Action::AppendLocal { text,entry_id:None,confirms }).await.map(|_|()).map_err(io_failure)) });
+                            Action::AppendLocal { text,entry_id:None,confirms,hook_error,notice }).await.map(|_|()).map_err(io_failure)) });
                         continue;
                     }
                     sequence += 1;
@@ -2862,7 +2865,7 @@ impl LiveOut {
     fn channel(&mut self,channel:&str,data:&Value) -> bool {
         if self.sender.is_none() { return false; }
         let text = data["text"].as_str().unwrap_or("").to_owned();
-        self.update(|state| match channel { "preview"=>state.preview = text, "thinking"=>state.thinking = text, _=>state.tool = text });
+        self.update(|state| match channel { "preview"=>state.preview = text, "thinking"=>state.thinking = text, "output"=>state.output = text, _=>state.tool = text });
         true
     }
     fn error(&mut self,error:&Option<RuntimeError>) {

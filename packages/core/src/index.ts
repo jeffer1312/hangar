@@ -13,6 +13,8 @@ export type { DiagSink, Evento as EventoDiag, Nivel as NivelDiag } from './diag'
 export { criarTransporteDiag } from './diagTransport';
 export type { ApiEnv, EventSourceLike } from './apiEnv';
 export * from './types';
+export * from './codexCommands';
+export * from './codexSubagents';
 export * from './updateNotes';
 export * from './history';
 export * from './costs';

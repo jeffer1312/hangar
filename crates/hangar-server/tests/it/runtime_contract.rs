@@ -24,7 +24,8 @@ fn golden_preserves_public_fields() {
 
 /// O `interaction_id` do cartão é aleatório e posterior ao oráculo Python: a comparação é do resto.
 fn without_ids(mut state:Value) -> Value {
-    if let Some(state) = state.as_object_mut() { state.remove("interaction_id"); }
+    // Campos que só o Rust publica: o oráculo do Python nunca os teve.
+    if let Some(state) = state.as_object_mut() { state.remove("interaction_id"); state.remove("codex_subagents"); }
     if let Some(form) = state["codex_question"].as_object_mut() { form.remove("interaction_id"); }
     state
 }

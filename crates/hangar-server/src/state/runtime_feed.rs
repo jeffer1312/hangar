@@ -64,7 +64,7 @@ pub struct RuntimeFeed {
 enum Parked { Absent, State(StateEvent), Hold }
 
 #[derive(Default)]
-struct Sent { generation: Option<u64>, question: Option<String>, state: Option<String>, preview: Option<String>, thinking: Option<String>, tool: Option<String>, suggestion: Option<String> }
+struct Sent { generation: Option<u64>, question: Option<String>, state: Option<String>, preview: Option<String>, thinking: Option<String>, tool: Option<String>, output: Option<String>, suggestion: Option<String> }
 
 /// Problema do ator, como o `runtime_problem` do Python: `<código>: <frase>` com teto de 300.
 fn actor_problem(code: &str, message: &str) -> String {
@@ -299,7 +299,7 @@ impl RuntimeFeed {
                     state.problema = Some("runtime_falhou".into());
                     state.problema_detalhe = Some(actor_problem(code, message));
                 }
-                (state, [live.preview.clone(), live.thinking.clone(), live.tool.clone()])
+                (state, [live.preview.clone(), live.thinking.clone(), live.tool.clone(), live.output.clone()])
             }
         };
         // Como no `Monitor`: sem retrato, a sugestão e a sessão parada podem estar velhas, e a tela diz isso.
@@ -313,7 +313,7 @@ impl RuntimeFeed {
         }
         // Sem terminal, o cartão é só o do canal nativo (que o motor responde): o `ask:`/`perm:` do plugin
         // seria respondido com 409, e o `ask.ts` encerra a própria pergunta quando o nativo vence.
-        let [preview, thinking, tool] = texts;
+        let [preview, thinking, tool, output] = texts;
         // A prévia daqui é o texto exato do bloco, não a tela pintada: o começo da resposta gravada é ela
         // mesma lida antes do commit, em qualquer tamanho.
         let preview = match hub.committed() {
@@ -339,7 +339,10 @@ impl RuntimeFeed {
         let preview = serde_json::to_string(&PreviewEvent { session: self.name.clone(), text: preview, md: true, full: true, vivo: true }).unwrap_or_default();
         let sent = self.emit(&hub, &source, runtime_binding.as_ref(), "preview", preview, |s| &mut s.preview).await
             && self.emit(&hub, &source, runtime_binding.as_ref(), "pensamento", serde_json::json!({"text": thinking}).to_string(), |s| &mut s.thinking).await
-            && self.emit(&hub, &source, runtime_binding.as_ref(), "ferramenta", serde_json::json!({"text": tool}).to_string(), |s| &mut s.tool).await;
+            && self.emit(&hub, &source, runtime_binding.as_ref(), "ferramenta", serde_json::json!({"text": tool}).to_string(), |s| &mut s.tool).await
+            // Só quem já teve comando rodando recebe `saida`; o `{}` limpa o último rabo.
+            && (output.is_empty() && self.sent.output.is_none()
+                || self.emit(&hub, &source, runtime_binding.as_ref(), "saida", if output.is_empty() { "{}".into() } else { output }, |s| &mut s.output).await);
         sent || hub.generation().is_some()
     }
 

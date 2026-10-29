@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createActivityFolder, rotuloDeComando } from './activity';
-import type { ChatEvent } from './types';
+import { createActivityFolder, rotuloDeComando, matchAgentSubagent, projectSubagentActivity } from './activity';
+import type { ChatEvent, SubagentRun } from './types';
 
 let seq = 0;
 // Agent (launch bloqueante em background) -> vira uma linha no painel.
@@ -19,7 +19,70 @@ function run(events: ChatEvent[]) {
   return f.snapshot();
 }
 
+describe('subagentes nativos do Codex', () => {
+  const spawn = (name = 'spawn_agent'): ChatEvent => ({ id: 'spawn', kind: 'tool_use', tool_name: name, tool_use_id: 'launch',
+    tool_input: { task_name: 'review', agent_type: 'worker', message: `gAAAA${'x'.repeat(80)}` } });
+  const started: ChatEvent = { id: 'started', kind: 'tool_result', tool_use_id: 'launch', result: '{"task_name":"/root/review"}' };
+  const sub = { agentId: 'thread-uuid', agentPath: '/root/review', prompt: null, state: 'finished' } as SubagentRun;
+
+  it('lançamento e fala do pai não encerram o filho nem expõem mensagem cifrada', () => {
+    for (const name of ['spawn_agent', 'collaboration.spawn_agent', 'multi_agent.spawn_agent', 'functions.spawn_agent']) {
+      const activity = run([spawn(name), started, { id: 'parent', kind: 'assistant_msg', text: 'Continuo aqui.' }]);
+      expect(activity.runningAgents).toBe(1);
+      expect(activity.agents[0]).toMatchObject({ description: 'review', subagentType: 'worker', agentPath: '/root/review' });
+      expect(activity.agents[0].agentId).toBeUndefined();
+      expect(activity.agents[0].prompt).toBeUndefined();
+    }
+    expect(run([spawn('unrelated.spawn_agent'), started]).agents).toHaveLength(0);
+  });
+
+  it('estado nativo conclui e retoma o mesmo lançamento sem outro tool_result', () => {
+    const raw = run([spawn(), started]);
+    const finished = projectSubagentActivity(raw, [sub]);
+    expect(finished.runningAgents).toBe(0);
+    expect(raw.runningAgents).toBe(1);
+    expect(projectSubagentActivity(finished, [{ ...sub, state: 'running' }]).runningAgents).toBe(1);
+    expect(matchAgentSubagent([{ ...sub, agentId: 'wrong', agentPath: '/root/other' }, sub], raw.agents[0])?.agentId).toBe('thread-uuid');
+  });
+
+  it('UUID de lançamento e caminho são identidades diferentes; recusa não deixa agente rodando', () => {
+    const uuid = run([spawn(), { ...started, result: '{"agent_id":"thread-uuid"}' }]);
+    expect(uuid.agents[0].agentId).toBe('thread-uuid');
+    expect(uuid.agents[0].agentPath).toBeUndefined();
+    expect(run([spawn(), { ...started, is_error: true }]).runningAgents).toBe(0);
+    expect(run([spawn(), { ...started, result: 'collab spawn failed: agent thread limit reached', is_error: false }]).runningAgents).toBe(0);
+    const notice: ChatEvent = { id: 'done', kind: 'user_msg', text: '<subagent_notification>{"agent_path":"/root/review","status":{"completed":"ok"}}</subagent_notification>' };
+    expect(run([spawn(), started, notice]).runningAgents).toBe(0);
+  });
+
+  it.each([false, true])('fecha pelo caminho quando o lançamento também traz UUID (aviso antes: %s)', before => {
+    const both: ChatEvent = { ...started, result: '{"agent_id":"thread-uuid","task_name":"/root/review"}' };
+    const notice: ChatEvent = { id: 'done', kind: 'user_msg', text: '<subagent_notification>{"agent_path":"/root/review","status":{"completed":"ok"}}</subagent_notification>' };
+    const events = before ? [spawn(), notice, both] : [spawn(), both, notice];
+    const folder = createActivityFolder();
+    for (const event of events) folder.push(event);
+    expect(folder.snapshot().runningAgents).toBe(0);
+    folder.reset(events);
+    expect(folder.snapshot().runningAgents).toBe(0);
+    folder.push({ id: 'send', kind: 'tool_use', tool_use_id: 'send', tool_name: 'followup_task', tool_input: { target: 'thread-uuid', message: 'Continue' } });
+    folder.push({ id: 'sent', kind: 'tool_result', tool_use_id: 'send', result: 'ok' });
+    expect(folder.snapshot().runningAgents).toBe(1);
+    folder.push({ ...notice, id: 'done-again' });
+    expect(folder.snapshot().runningAgents).toBe(0);
+  });
+});
+
 describe('activity — pareamento de agente background', () => {
+  it('projeção usa o ID explícito antes do prompt de um registro antigo', () => {
+    const activity = run([{ ...launch('launch'), tool_input: { description: 'Conferir atividade', prompt: 'mesmo roteiro' } },
+      { id: 'created', kind: 'tool_result', tool_use_id: 'launch', bg_agent_id: 'right' }]);
+    const wrong = { agentId: 'old', prompt: 'mesmo roteiro', state: 'finished' } as SubagentRun;
+    const right = { agentId: 'right', prompt: 'outro texto registrado', state: 'running' } as SubagentRun;
+    const ids = new Map([['launch', 'right']]);
+    expect(projectSubagentActivity(activity, [wrong, right], ids).runningAgents).toBe(1);
+    expect(projectSubagentActivity(activity, [{ ...wrong, state: 'running' }, { ...right, state: 'finished' }], ids).runningAgents).toBe(0);
+  });
+
   it('marca terminado quando o fim vem DEPOIS do launch (ordem normal)', () => {
     const s = run([launch('tu1'), launched('tu1', 'aa0777'), done('aa0777')]);
     expect(s.runningAgents).toBe(0);

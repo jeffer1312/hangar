@@ -36,6 +36,7 @@ import {
   formataErro,
   composeWithContextRefs,
   splitContextRefs,
+  parseCodexOutput,
   type ContextRef,
 } from '@hangar/core';
 import type { ChatEvent, StateEvent, PreviewEvent, AskQuestionPayload, StatsEvent, EventSourceLike, Server, QueuePanel, QueueEdit } from '@hangar/core';
@@ -73,6 +74,7 @@ export interface ChatState {
   // Invalida a leitura incremental quando algo além de append muda o histórico.
   eventsRevision: number;
   stateEvent: StateEvent | null;
+  commandOutput: Record<string, string>;
   // Prévia do bloco em voo (texto cru/markdown). Full-replace; some quando o assistant_msg
   // real chega ou quando a sessão sai de working.
   preview: string;
@@ -164,6 +166,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     events: [],
     eventsRevision: 0,
     stateEvent: null,
+    commandOutput: {},
     preview: '',
     previewMd: false,
     previewFull: false,
@@ -573,6 +576,12 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     es.addEventListener('message', onMessage);
     es.addEventListener('queue_confirmed', onMessage);
 
+    es.addEventListener('saida', (e) => {
+      try {
+        useChatStore.setState({ commandOutput: parseCodexOutput(e.data as string) });
+      } catch { quadroFalhou('saida'); }
+    });
+
     es.addEventListener('state', (e) => {
       try {
         const ev = JSON.parse(e.data as string) as StateEvent;
@@ -753,6 +762,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         ferramenta: null,
         turnSeen: null,
         stateEvent: null,
+        commandOutput: {},
         statusLine: null,
         stats: null,
         preview: '',

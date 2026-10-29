@@ -523,6 +523,7 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/codex/mode", axum::routing::post(crate::session_write::codex::mode).fallback(fallback.clone()))
         .route("/api/sessions/{name}/limits", get(crate::session_write::codex::limits).fallback(fallback.clone()))
         .route("/api/sessions/{name}/question/skip", axum::routing::post(crate::session_write::codex::skip_question).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/codex/terminate", axum::routing::post(crate::session_write::codex::terminate).fallback(fallback.clone()))
         .route("/api/orq/{exec_id}/conductor", get(crate::orq_conductor::public).fallback(fallback.clone()))
         .route("/api/sessions/{name}/commands", get(crate::commands::route).fallback(fallback.clone()))
         .route("/api/sessions/{name}/codex-permissions", get(crate::session_write::codex::permissions).fallback(fallback.clone()))

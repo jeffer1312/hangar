@@ -14,7 +14,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use serde_json::{Map, Value, json};
 
-use super::input::{MSG_CODEX_CONTROL, answer, codex_control, json_content_type};
+use super::input::{MSG_CODEX_CONTROL, MSG_CONTROL_UNCONFIRMED, answer, codex_control, control_failed, json_content_type};
 use super::{Ctx, Owner, Provider, WriteRoute, admit, decide, detail_body, enter_then_find, invalid_body, json_response, session_name};
 use crate::mods::state::random_hex;
 use crate::permission_control::PermissionAction;
@@ -65,6 +65,19 @@ pub fn models_answer(settings: &Result<RuntimeReply, RuntimeError>, models: &Res
 
 pub fn model_answer(sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
     if accepted(sent).is_some() { (StatusCode::OK, json!({"ok": true})) } else { refused() }
+}
+
+/// `/codex/terminate`: a recusa do motor ou do Codex ("esse comando já terminou", erro do app-server) chega à tela.
+pub fn terminate_answer(sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
+    match sent {
+        Ok(reply) if reply.disposition == Disposition::Accepted => (StatusCode::OK, json!({"ok": true})),
+        // Prazo estourado: o encerramento pode ter acontecido; dizer "recusado" seria falso.
+        Ok(reply) if reply.disposition == Disposition::Unknown => control_failed(MSG_CONTROL_UNCONFIRMED),
+        Ok(reply) => reply.payload["error"]["message"].as_str().or(reply.payload["error"].as_str())
+            .map_or_else(refused, codex_control),
+        Err(error) if error.code == "codex_command" => codex_control(&error.message),
+        Err(_) => refused(),
+    }
 }
 
 pub fn service_tier_answer(tier: &str, sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
@@ -358,6 +371,15 @@ pub async fn skip_question(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
     let sent = run(&ctx, OperationKind::SkipQuestion, json!({"request_id": body["request_id"], "interaction_id": body.get("interaction_id")})).await;
     log_outcome(&ctx.name, "question_skip", &sent, "pular pergunta do Codex não confirmado");
     answer(&ctx, skip_answer(&sent))
+}
+
+/// `/codex/terminate`: encerra um comando que o Codex deixou rodando (`codex_commands` do estado).
+pub async fn terminate(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let (ctx, bytes) = admitted!(st, peer, req);
+    let Some(body) = object(&bytes, ctx.headers()).and_then(|f| strings(&f, "process_id", None)) else { return invalid_body(ctx.headers()) };
+    let sent = run(&ctx, OperationKind::TerminateTerminal, json!({"process_id": body["process_id"]})).await;
+    log_outcome(&ctx.name, "terminate", &sent, "encerrar comando do Codex não confirmado; a rota responde 409 erro_codex_controle");
+    answer(&ctx, terminate_answer(&sent))
 }
 
 pub async fn commands(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {

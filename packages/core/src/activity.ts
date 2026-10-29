@@ -1,5 +1,6 @@
 import * as m from './paraglide/messages';
-import type { ChatEvent } from './types';
+import type { ChatEvent, SubagentRun, CodexSubagents } from './types';
+import { codexSubagentState } from './codexSubagents';
 
 // Painel de atividade: deriva, SÓ no cliente, a lista de tarefas (TaskCreate/TaskUpdate/TaskStop,
 // ou TodoWrite stock) + os subagentes rodando (Agent/Workflow) a partir dos eventos que já chegam
@@ -26,6 +27,61 @@ export interface AgentRun {
   subagentType?: string;
   model?: string;
   prompt?: string;
+  agentId?: string;
+  agentPath?: string;
+}
+
+export function isCodexAgentSpawn(name: string): boolean {
+  return ['spawn_agent', 'collaboration.spawn_agent', 'multi_agent.spawn_agent', 'functions.spawn_agent'].includes(name);
+}
+
+function isCodexAgentFollowup(name: string): boolean {
+  return ['followup_task', 'collaboration.followup_task', 'multi_agent.followup_task', 'functions.followup_task'].includes(name);
+}
+
+function codexAgentIdentity(result: string): { agentId?: string; agentPath?: string } {
+  try {
+    const data = JSON.parse(result) as Record<string, unknown>;
+    if (!data || typeof data !== 'object') return {};
+    const id = typeof data.agent_id === 'string' ? data.agent_id : undefined;
+    const path = typeof data.task_name === 'string' ? data.task_name : typeof data.agent_path === 'string' ? data.agent_path : undefined;
+    return { agentId: id?.startsWith('/') ? undefined : id, agentPath: path ?? (id?.startsWith('/') ? id : undefined) };
+  } catch { return {}; }
+}
+
+function readableAgentPrompt(value: unknown): string | undefined {
+  return typeof value === 'string' && !/^gAAAA[A-Za-z0-9_-]{40,}={0,2}$/.test(value) ? value : undefined;
+}
+
+/** A identidade explícita vence o prompt; caminhos Codex nunca são tratados como UUIDs. */
+export function matchAgentSubagent(subs: SubagentRun[], agent: Pick<AgentRun, 'id' | 'prompt' | 'agentId' | 'agentPath'>, ids?: Map<string, string>): SubagentRun | undefined {
+  const id = agent.agentId ?? ids?.get(agent.id);
+  if (id) return subs.find(sub => sub.agentId === id);
+  if (agent.agentPath) return subs.find(sub => sub.agentPath === agent.agentPath);
+  const normalize = (text: string) => text.replace(/\s+/g, ' ').trim().toLowerCase();
+  const full = normalize(agent.prompt ?? '');
+  if (!full) return undefined;
+  const only = (test: (prompt: string) => boolean) => {
+    const found = subs.filter(sub => sub.prompt && test(normalize(sub.prompt)));
+    return found.length === 1 ? found[0] : undefined;
+  };
+  return only(prompt => prompt === full) ?? only(prompt => prompt.startsWith(full.slice(0, 400)));
+}
+
+export function projectSubagentActivity(activity: Activity, subs: SubagentRun[], ids?: Map<string, string>, states?: CodexSubagents): Activity {
+  let changed = false;
+  const agents = activity.agents.map(agent => {
+    const sub = matchAgentSubagent(subs, agent, ids);
+    const native = codexSubagentState(states, agent.agentId ?? ids?.get(agent.id), agent.agentPath);
+    const running = native?.state ? native.state === 'running'
+      : sub?.state ? sub.state === 'running' : sub?.finished === undefined ? agent.running : !sub.finished;
+    if (running === agent.running) return agent;
+    changed = true;
+    return { ...agent, running };
+  });
+  if (!changed) return activity;
+  agents.sort((a, b) => Number(b.running) - Number(a.running));
+  return { ...activity, agents, runningAgents: agents.filter(agent => agent.running).length };
 }
 
 // Shell de fundo (`Bash` com `run_in_background: true`). Fecha pelo MESMO caminho do agente em
@@ -130,6 +186,7 @@ export function createActivityFolder(): ActivityFolder {
   // SendMessage ao agentId de um agente de fundo comum: tool_use_id -> agentId. Só retoma quando o
   // resultado vem sem erro (recado recusado não reabre nada).
   let retomada = new Map<string, string>();
+  let codexCalls = new Set<string>();
   // Marca um agente background como terminado pelo agentId, com o launch vindo ANTES ou DEPOIS do fim.
   function completeAgent(agentId: string): void {
     const tuid = bgAgent.get(agentId);
@@ -164,6 +221,21 @@ export function createActivityFolder(): ActivityFolder {
         return;
       }
       const r = e.result ?? '';
+      if (codexCalls.has(e.tool_use_id) && !e.is_error) {
+        const agent = agents.find(agent => agent.id === e.tool_use_id);
+        const identity = codexAgentIdentity(r);
+        if (agent) Object.assign(agent, identity);
+        const keys = [identity.agentId, identity.agentPath].filter((key): key is string => !!key);
+        if (keys.length) {
+          for (const key of keys) {
+            bgAgent.set(key, e.tool_use_id);
+            if (completedIds.delete(key)) resulted.add(e.tool_use_id);
+          }
+        } else {
+          resulted.add(e.tool_use_id);
+        }
+        return;
+      }
       // O campo estruturado vence o texto, que muda entre versoes do Claude Code.
       const textLaunch = /Async agent launched/i.test(r);
       const launchedId = e.bg_agent_id ?? (textLaunch ? r.match(/agentId:\s*([A-Za-z0-9_-]+)/)?.[1] : undefined);
@@ -188,6 +260,17 @@ export function createActivityFolder(): ActivityFolder {
       resulted.add(e.tool_use_id);
       return;
     }
+    if (e.kind === 'user_msg' && e.text?.trim().startsWith('<subagent_notification>')) {
+      const inner = e.text.trim().match(/^<subagent_notification>\s*([\s\S]*?)\s*<\/subagent_notification>$/)?.[1];
+      if (inner) {
+        try {
+          const value = JSON.parse(inner) as { agent_path?: unknown; status?: Record<string, unknown> };
+          if (typeof value.agent_path === 'string' && value.status
+              && ['completed', 'errored', 'failed', 'shutdown', 'not_found'].some(status => Object.hasOwn(value.status!, status))) completeAgent(value.agent_path);
+        } catch { /* Mensagem fora do formato segue no chat. */ }
+      }
+      return;
+    }
     if (e.kind === 'user_msg' && e.text && e.text.includes('<task-notification>')) {
       // Subagente que só parou para esperar o próprio trabalho de fundo: segue vivo. Só o <summary>,
       // porque o <result> do fim de verdade pode citar a frase.
@@ -198,6 +281,21 @@ export function createActivityFolder(): ActivityFolder {
     }
     if (e.kind !== 'tool_use' || !e.tool_name) return;
     const input = (e.tool_input ?? {}) as Record<string, unknown>;
+    if (isCodexAgentSpawn(e.tool_name) && e.tool_use_id) {
+      codexCalls.add(e.tool_use_id);
+      agents.push({ id: e.tool_use_id, kind: 'agent',
+        description: String(input.task_name ?? input.description ?? input.agent_type ?? m.atividade_agente()),
+        subagentType: typeof input.agent_type === 'string' ? input.agent_type : undefined,
+        model: typeof input.model === 'string' ? input.model : undefined,
+        prompt: readableAgentPrompt(input.message),
+      });
+      return;
+    }
+    if (isCodexAgentFollowup(e.tool_name) && e.tool_use_id) {
+      const target = input.target ?? input.agent_id;
+      if (typeof target === 'string' && bgAgent.has(target)) retomada.set(e.tool_use_id, target);
+      return;
+    }
 
     // Tarefas: este build usa TaskCreate/TaskUpdate (incremental, event-sourced) — é preciso FOLDAR
     // o stream, não "pegar o último". Suporta também TodoWrite stock (lista inteira por chamada)
@@ -338,6 +436,7 @@ export function createActivityFolder(): ActivityFolder {
     semResultado = new Set();
     acordado = new Map();
     retomada = new Map();
+    codexCalls = new Set();
     shells = [];
     bgPendente = new Set();
     for (const e of events) push(e);

@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use serde_json::Value;
 use super::{Activity, ActivityTask, AgentRun, Item, ShellRun, Task, TaskStatus, Tool, View,
     command_label, fold_tasks, is_agent_call, is_page_call, is_task_call, joins_thinking, loose_id,
-    task_status, tool_key, whole_list, word_after, shown_agent_id, GROUP_MIN};
+    task_status, tool_key, whole_list, word_after, shown_agent_id, agent_run, codex_agent_identity,
+    is_codex_agent_spawn, is_codex_agent_followup, GROUP_MIN};
 use crate::api::dto::ChatEvent;
 
 /// A região anterior a `from` conserva linhas e conteúdo, não apenas os eventos.
@@ -28,6 +29,9 @@ pub struct Incremental {
     view: Option<View>,
     open: HashMap<String, VecDeque<usize>>,
     activity_fold: ActivityFold,
+    agent_states: HashMap<String, (bool, Option<f64>)>,
+    agent_states_required: bool,
+    agents_dirty: bool,
     /// Um evento comum fecha a sequência estrutural anterior, mesmo que sua linha seja deduplicada.
     frontier: usize,
     segments: Vec<usize>,
@@ -44,17 +48,39 @@ impl Incremental {
     pub fn running_agents(&self) -> impl Iterator<Item = &AgentRun> { self.activity.agents[..self.running_count].iter() }
     pub fn activity_badge(&self) -> usize { self.activity_badge }
 
+    pub fn require_agent_states(&mut self, required: bool) {
+        if self.agent_states_required != required {
+            self.agent_states_required = required;
+            self.agents_dirty = true;
+        }
+    }
+
+    pub fn set_agent_states(&mut self, states: impl IntoIterator<Item = (String, bool, Option<f64>)>) {
+        let states = states.into_iter().map(|(id, running, ended)| (id, (running, ended))).collect();
+        if self.agent_states != states {
+            self.agent_states = states;
+            self.agents_dirty = true;
+        }
+    }
+
     pub fn update(&mut self, events: &[ChatEvent], stable: usize, view: View) -> Delta {
         let previous_len = self.items.len();
         let full = self.view != Some(view) || stable < self.cursor || events.len() < self.cursor;
-        if full { *self = Self::default(); }
-        if !full && self.cursor == events.len() {
+        if full {
+            let states = std::mem::take(&mut self.agent_states);
+            let required = self.agent_states_required;
+            *self = Self::default();
+            self.agent_states = states;
+            self.agent_states_required = required;
+        }
+        if !full && self.cursor == events.len() && !self.agents_dirty {
             return Delta { from: previous_len, previous_len, stable_events: stable, full: false, activity_changed: false };
         }
         let mut boundary = self.frontier;
         let previous_task_frontier = self.task_frontier;
         let mut tasks_changed = full;
-        let mut activity_changed = full;
+        let mut activity_changed = full || self.agents_dirty;
+        self.agents_dirty = false;
         for (i, event) in events.iter().enumerate().skip(self.cursor) {
             self.segments.push(self.frontier);
             if !matches!(event.kind.as_str(), "tool_use" | "tool_result" | "thinking") {
@@ -79,6 +105,19 @@ impl Incremental {
         }
         if activity_changed {
             self.activity = self.activity_fold.snapshot();
+            for agent in &mut self.activity.agents {
+                if let Some(&(running, ended)) = self.agent_states.get(&agent.id)
+                    .or_else(|| match &agent.agent_id {
+                        Some(id) => self.agent_states.get(id),
+                        None => agent.agent_path.as_ref().and_then(|path| self.agent_states.get(path)),
+                    }) {
+                    agent.running = running;
+                    agent.finished_at = if running { None } else { ended.or(agent.finished_at) };
+                } else if self.agent_states_required {
+                    agent.running = false;
+                }
+            }
+            self.activity.agents.sort_by_key(|agent| !agent.running);
             self.running_count = self.activity.agents.iter().take_while(|agent| agent.running).count();
             self.activity_badge = self.activity.badge();
             let pinned: HashSet<_> = self.running_agents().map(|agent| agent.call).collect();
@@ -175,6 +214,8 @@ struct ActivityFold {
     shell_pending: HashSet<String>,
     shell_calls: HashSet<String>,
     agent_calls: HashSet<String>,
+    codex_calls: HashSet<String>,
+    codex_resume: HashMap<String, String>,
     agent_ids: HashMap<String, String>,
     agent_descs: HashMap<String, String>,
     agents: Vec<AgentRun>,
@@ -194,6 +235,10 @@ impl ActivityFold {
         match event.kind.as_str() {
             "tool_result" => {
                 let Some(id) = tool_key(event) else { return false };
+                if let Some(target) = self.codex_resume.remove(id) {
+                    if event.is_error == Some(true) { return false; }
+                    return self.background.get(&target).is_some_and(|call| self.resulted.remove(call).is_some());
+                }
                 // Parada pelo usuário: o aviso do Claude Code traz só a descrição, sem task-id. Cada citação fecha o
                 // lançamento aberto mais antigo com ela; dois com a mesma descrição não saem juntos.
                 if let Some(stopped) = id.strip_prefix("task:stopped:") {
@@ -206,6 +251,21 @@ impl ActivityFold {
                     return self.finish(task, event.ts);
                 }
                 let text = event.result.as_deref().unwrap_or("");
+                if self.codex_calls.contains(id) && event.is_error != Some(true) {
+                    let (agent_id, agent_path) = codex_agent_identity(text);
+                    let key = agent_id.as_ref().or(agent_path.as_ref()).cloned();
+                    if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == id) {
+                        agent.agent_id = agent_id;
+                        agent.agent_path = agent_path;
+                    }
+                    if let Some(key) = key {
+                        if let Some(at) = self.finished_early.remove(&key) { super::record_completion(&mut self.resulted, id.to_owned(), at); }
+                        self.background.insert(key, id.to_owned());
+                    } else {
+                        super::record_completion(&mut self.resulted, id.to_owned(), event.ts);
+                    }
+                    return true;
+                }
                 let mut changed = false;
                 if self.agent_calls.contains(id) {
                     // O campo estruturado vence o texto, que muda entre versões do Claude Code.
@@ -240,6 +300,10 @@ impl ActivityFold {
             }
             "user_msg" => {
                 let text = event.text.as_deref().unwrap_or("");
+                if let Some(notice) = crate::cards::codex_subagent(text) {
+                    return matches!(notice.status.as_str(), "completed" | "errored" | "failed" | "shutdown" | "not_found")
+                        && self.finish(&notice.agent_path, event.ts);
+                }
                 if !text.contains("<task-notification>") || super::interim_notification(text) { return false; }
                 let Some(task) = text.split_once("<task-id>").and_then(|(_, rest)| rest.split_once("</task-id>")).map(|(id, _)| id.trim()) else { return false };
                 self.finish(task, event.ts)
@@ -247,6 +311,13 @@ impl ActivityFold {
             "tool_use" => {
                 let input = event.tool_input.as_ref();
                 let text = |key: &str| input.and_then(|v| v.get(key)).and_then(Value::as_str).map(str::to_owned);
+                if is_codex_agent_followup(event.tool_name.as_deref()) {
+                    if let Some(target) = text("target").or_else(|| text("agent_id"))
+                        && self.background.contains_key(&target) && let Some(send) = tool_key(event) {
+                        self.codex_resume.insert(send.to_owned(), target);
+                    }
+                    return false;
+                }
                 match event.tool_name.as_deref() {
                     Some("TodoWrite") => { if let Some(list) = whole_list(input, "todos", "content") { self.whole = Some(list); } return true; }
                     Some("update_plan") => { if let Some(list) = whole_list(input, "plan", "step") { self.whole = Some(list); } return true; }
@@ -281,19 +352,11 @@ impl ActivityFold {
                 }
                 let Some(id) = tool_key(event) else { return false };
                 match event.tool_name.as_deref() {
-                    Some("Agent" | "AgentSwarm") => {
-                        let items = input.and_then(|v| v.get("items")).and_then(Value::as_array).map_or(0, Vec::len);
-                        let desc = text("description").or_else(|| text("subagent_type"))
-                            .unwrap_or_else(|| crate::i18n::tr_web("atividade_agente", &HashMap::new()).unwrap_or_else(|| "Agente".into()));
-                        let description = if items > 0 {
-                            let params = HashMap::from([("desc".to_owned(), desc.clone()), ("n".to_owned(), items.to_string())]);
-                            crate::i18n::tr_web("atividade_swarm_itens", &params).unwrap_or(desc)
-                        } else { desc };
+                    name if is_agent_call(name) => {
                         self.agent_calls.insert(id.to_owned());
+                        if is_codex_agent_spawn(name) { self.codex_calls.insert(id.to_owned()); }
                         if let Some(raw) = text("description") { self.agent_descs.insert(id.to_owned(), raw); }
-                        self.agents.push(AgentRun { call: i, id: id.to_owned(), description, subagent_type: text("subagent_type"),
-                            model: text("model"), prompt: text("prompt"), running: false, agent_id: None,
-                            started_at: event.ts, finished_at: None });
+                        self.agents.push(agent_run(event, i, id));
                         true
                     }
                     Some("Bash") if input.and_then(|v| v.get("run_in_background")).and_then(Value::as_bool) == Some(true) => {
@@ -317,7 +380,7 @@ impl ActivityFold {
         for agent in &mut agents {
             agent.running = !self.resulted.contains_key(&agent.id);
             agent.finished_at = self.resulted.get(&agent.id).copied().flatten();
-            agent.agent_id = self.agent_ids.get(&agent.id).cloned();
+            if let Some(id) = self.agent_ids.get(&agent.id) { agent.agent_id = Some(id.clone()); }
         }
         for shell in &mut shells { shell.running = !self.resulted.contains_key(&shell.id); }
         agents.sort_by_key(|agent| !agent.running);

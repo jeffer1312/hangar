@@ -1832,6 +1832,54 @@ impl RuntimeRegistry {
         Some(handle.view().await.map(|view|view["subagents"].clone()))
     }
 
+    async fn codex_agent_handle(&self,name:&str) -> Option<EntryHandle> {
+        let entries=self.entries.lock().await;
+        let mut matches=entries.values().filter(|entry|entry.name==name && entry.provider=="codex");
+        let entry=matches.next()?;
+        if matches.next().is_some() || matches!(&entry.handle,EntryHandle::Terminal {..}) { return None; }
+        Some(entry.handle.clone())
+    }
+
+    /// O retrato e o pai são conferidos juntos: um `/clear` não empresta os estados da conversa nova à antiga.
+    pub async fn codex_subagents(&self,name:&str,parent_thread_id:&str) -> Option<Result<Value,RuntimeError>> {
+        let handle=self.codex_agent_handle(name).await?;
+        Some(handle.view().await.and_then(|view| {
+            if view["thread_id"] != parent_thread_id {
+                return Err(RuntimeError::new("erro_subagente_mensagem_vinculo_desatualizado","a conversa principal mudou"));
+            }
+            Ok(view["subagents"].as_object().cloned().map(Value::Object).unwrap_or_else(||json!({})))
+        }))
+    }
+
+    /// A primeira abertura do detalhe consulta a capacidade oficial; as seguintes usam o estado observado pelo ator.
+    pub async fn codex_subagent_status(&self,name:&str,parent_thread_id:&str,agent_id:&str) -> Option<Result<Value,RuntimeError>> {
+        let handle=self.codex_agent_handle(name).await?;
+        Some(Self::codex_agent_command(&handle,OperationKind::ReadSubagent,parent_thread_id,agent_id,None).await)
+    }
+
+    pub async fn codex_subagent_message(&self,name:&str,parent_thread_id:&str,agent_id:&str,text:&str) -> Option<Result<Value,RuntimeError>> {
+        let _pass=match self.ingress.enter(name,Duration::ZERO).await {
+            Ok(pass)=>pass,
+            Err(_)=>return Some(Err(RuntimeError::new("session_transfer_busy","a sessão está trocando de agente"))),
+        };
+        let handle=self.codex_agent_handle(name).await?;
+        Some(Self::codex_agent_command(&handle,OperationKind::SubagentMessage,parent_thread_id,agent_id,Some(text)).await)
+    }
+
+    async fn codex_agent_command(handle:&EntryHandle,kind:OperationKind,parent:&str,agent:&str,text:Option<&str>) -> Result<Value,RuntimeError> {
+        static CALLS:AtomicU64=AtomicU64::new(0);
+        let stamp=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|failure("runtime_clock"))?.as_nanos();
+        let command=RuntimeCommand {operation_id:format!("subagent:{}:{stamp}:{}",std::process::id(),CALLS.fetch_add(1,std::sync::atomic::Ordering::Relaxed)),kind,
+            payload:json!({"parent_thread_id":parent,"agent_id":agent,"text":text})};
+        let result=handle.command(command).await?;
+        match result.disposition {
+            Disposition::Accepted=>Ok(result.payload),
+            Disposition::Unknown=>Err(RuntimeError::new("erro_subagente_mensagem_sem_resposta","o Codex não confirmou a operação do subagente")),
+            _=>Err(RuntimeError::new(result.payload["code"].as_str().unwrap_or("erro_subagente_mensagem_codex_indisponivel"),
+                result.payload["error"].as_str().unwrap_or("o Codex recusou a operação do subagente"))),
+        }
+    }
+
     /// Leitura do catálogo também com o processo estacionado; não passa pela porta de escrita.
     pub async fn claude_catalog_view(&self,name:&str) -> Option<Result<(Value,Value),RuntimeError>> {
         let found = {
@@ -2837,6 +2885,17 @@ async fn events(State(state):State<Gateway>) -> Response {
 pub(crate) mod tests {
     use super::*;
     use crate::runtime::queue::acquire_lease;
+
+    #[tokio::test]
+    async fn a_subagent_message_checks_ingress_before_choosing_an_actor() {
+        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "fixture".into(), "instance".into());
+        registry.ingress.hold("session", Duration::from_secs(1)).await.unwrap();
+        let _entries = registry.entries.lock().await;
+        let error = tokio::time::timeout(Duration::from_secs(1), registry.codex_subagent_message("session", "parent", "child", "continue"))
+            .await.expect("a porta fechada recusa antes de esperar a escolha do ator").unwrap().unwrap_err();
+        assert_eq!(error.code, "session_transfer_busy");
+        registry.ingress.release("session");
+    }
 
     #[test]
     fn a_session_recreated_with_the_same_name_is_not_the_dead_life() {
