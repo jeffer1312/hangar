@@ -3524,9 +3524,10 @@ em recados, grupos e pares.
 que eram. Renomear sozinho foi descartado pelo usuário em favor da sugestão com um clique.
 
 **Limites.** O modelo de organização escolhido para o provedor da sessão vence; sem ele, o Claude
-usa o alias `haiku` (o mais barato que o CLI aceita, de sobra para um nome curto), porque a
-organização do ditado nasce desligada e a sugestão não funcionava sem configurar. O Codex não tem
-alias estável e o catálogo muda por conta: sem modelo escolhido, não há sugestão, e a causa vai ao
-diário (`rename_suggestion_no_model`), sem aviso na tela. Erro do executor vira 204 e registro no diário
+usa o alias `sonnet`, porque a organização do ditado nasce desligada e a sugestão não funcionava
+sem configurar; o `haiku` foi descartado pela medição de 08/09 neste mesmo executor (27,8–39,2 s
+contra 3,6–4,5 s do sonnet). O Codex não tem alias estável e o catálogo muda por conta: sem modelo
+escolhido, usa o `model` do `config.toml` da conta (perfil incluído); sem esse também, não há
+sugestão, e a causa vai ao diário (`rename_suggestion_no_model`), sem aviso na tela. Erro do executor vira 204 e registro no diário
 (`rust.rename_suggestion`). O executor só roda a pedido do dono, por isso o gatilho é do cliente e
 não um trabalho de fundo.
