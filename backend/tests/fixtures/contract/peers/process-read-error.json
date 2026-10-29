@@ -1,0 +1,12 @@
+{
+  "source_commit": "9e64dd6787df8362490adf3daac050a381494404",
+  "command": "python backend/tests/fixtures/contract/peers/generate-read-error.py --reference <checkout-Python> --output backend/tests/fixtures/contract/peers/process-read-error.json",
+  "returncode": 0,
+  "stdout": "partial",
+  "thread_errors": [
+    {
+      "type": "OSError",
+      "message": "fixture-read-failed"
+    }
+  ]
+}

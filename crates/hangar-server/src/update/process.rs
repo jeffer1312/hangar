@@ -17,12 +17,21 @@ pub struct ProcessOutput {
 #[derive(Debug)]
 pub enum ProcessError {
     Spawn(std::io::Error),
-    Timeout { stdout: String },
+    Read {
+        source: std::io::Error,
+        stdout: String,
+    },
+    Timeout {
+        stdout: String,
+    },
 }
 impl std::fmt::Display for ProcessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Spawn(e) => write!(f, "não foi possível executar o comando: {e}"),
+            Self::Read { source, .. } => {
+                write!(f, "não foi possível ler a saída do comando: {source}")
+            }
             Self::Timeout { .. } => write!(f, "o comando ultrapassou o prazo"),
         }
     }
@@ -49,11 +58,23 @@ pub fn run_with_env(
     env: &BTreeMap<String, String>,
     log: &dyn Fn(&str),
 ) -> Result<ProcessOutput, ProcessError> {
+    run_with_reader(args, cwd, timeout, env, log, |reader| Box::new(reader))
+}
+
+fn run_with_reader(
+    args: &[String],
+    cwd: &Path,
+    timeout: Duration,
+    env: &BTreeMap<String, String>,
+    log: &dyn Fn(&str),
+    reader: impl FnOnce(std::io::PipeReader) -> Box<dyn Read + Send>,
+) -> Result<ProcessOutput, ProcessError> {
     let Some(program) = args.first() else {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "comando vazio").into());
     };
     log(&format!("$ {}", args.join(" ")));
-    let (reader, writer) = std::io::pipe()?;
+    let (pipe_reader, writer) = std::io::pipe()?;
+    let reader = reader(pipe_reader);
     let mut command = Command::new(program);
     command
         .args(&args[1..])
@@ -83,54 +104,20 @@ pub fn run_with_env(
     }
     drop(command);
     let (send, receive) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut reader = reader;
-        let mut buffer = [0u8; 8192];
-        let mut line = Vec::new();
-        let mut pending_cr = false;
-        loop {
-            let count = match reader.read(&mut buffer) {
-                Ok(0) | Err(_) => break,
-                Ok(count) => count,
-            };
-            for &byte in &buffer[..count] {
-                if pending_cr {
-                    pending_cr = false;
-                    if send.send(Some(std::mem::take(&mut line))).is_err() {
-                        return;
-                    }
-                    if byte == b'\n' {
-                        continue;
-                    }
-                }
-                match byte {
-                    b'\r' => pending_cr = true,
-                    b'\n' => {
-                        if send.send(Some(std::mem::take(&mut line))).is_err() {
-                            return;
-                        }
-                    }
-                    byte => line.push(byte),
-                }
-            }
-        }
-        if (pending_cr || !line.is_empty()) && send.send(Some(line)).is_err() {
-            return;
-        }
-        let _ = send.send(None);
-    });
+    std::thread::spawn(move || read_lines(reader, send));
     static ANSI: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]").unwrap());
     let mut lines = Vec::new();
     let mut pending = Vec::new();
     let mut flushed = Instant::now();
+    let mut read_error = None;
     let timed_out = loop {
         let now = Instant::now();
         if now >= deadline {
             break true;
         }
         match receive.recv_timeout((deadline - now).min(Duration::from_secs(1))) {
-            Ok(Some(bytes)) => {
+            Ok(Ok(Some(bytes))) => {
                 let text = String::from_utf8_lossy(&bytes);
                 let clean = ANSI.replace_all(&text, "");
                 let line = clean.trim_end().to_owned();
@@ -139,7 +126,15 @@ pub fn run_with_env(
                 }
                 lines.push(line);
             }
-            Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => break false,
+            Ok(Ok(None)) => break false,
+            Ok(Err(error)) => {
+                read_error = Some(error);
+                break false;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                read_error = Some(std::io::Error::other("a leitura da saída foi interrompida"));
+                break false;
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         if !pending.is_empty() && flushed.elapsed() >= Duration::from_secs(1) {
@@ -152,7 +147,7 @@ pub fn run_with_env(
         log(&pending.join("\n"));
     }
     let output = lines.join("\n");
-    if timed_out {
+    if timed_out || read_error.is_some() {
         #[cfg(unix)]
         kill_tree(&mut child);
         #[cfg(windows)]
@@ -161,7 +156,13 @@ pub fn run_with_env(
             tree.terminate()?;
         }
         let _ = child.wait();
-        return Err(ProcessError::Timeout { stdout: output });
+        return Err(match read_error {
+            Some(source) => ProcessError::Read {
+                source,
+                stdout: output,
+            },
+            None => ProcessError::Timeout { stdout: output },
+        });
     }
     // O fechamento dos canos inicia a espera final, que sempre dispõe de ao menos um segundo.
     let now = Instant::now();
@@ -217,4 +218,109 @@ fn kill_tree(child: &mut std::process::Child) {
         }
     }
     let _ = child.kill();
+}
+
+fn read_lines(mut reader: impl Read, send: mpsc::Sender<Result<Option<Vec<u8>>, std::io::Error>>) {
+    let mut buffer = [0u8; 8192];
+    let mut line = Vec::new();
+    let mut pending_cr = false;
+    loop {
+        let count = match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                if pending_cr || !line.is_empty() {
+                    let _ = send.send(Ok(Some(line)));
+                }
+                let _ = send.send(Err(error));
+                return;
+            }
+            Ok(count) => count,
+        };
+        for &byte in &buffer[..count] {
+            if pending_cr {
+                pending_cr = false;
+                if send.send(Ok(Some(std::mem::take(&mut line)))).is_err() {
+                    return;
+                }
+                if byte == b'\n' {
+                    continue;
+                }
+            }
+            match byte {
+                b'\r' => pending_cr = true,
+                b'\n' => {
+                    if send.send(Ok(Some(std::mem::take(&mut line)))).is_err() {
+                        return;
+                    }
+                }
+                byte => line.push(byte),
+            }
+        }
+    }
+    if (pending_cr || !line.is_empty()) && send.send(Ok(Some(line))).is_err() {
+        return;
+    }
+    let _ = send.send(Ok(None));
+}
+
+#[cfg(test)]
+mod read_error_tests {
+    use super::*;
+    struct Broken {
+        first: bool,
+    }
+    impl Read for Broken {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            if self.first {
+                self.first = false;
+                bytes[..8].copy_from_slice(b"partial\n");
+                Ok(8)
+            } else {
+                Err(std::io::Error::other("fixture-read-failed"))
+            }
+        }
+    }
+    #[test]
+    fn process_reader_failure_is_not_successful_eof() {
+        let (send, receive) = mpsc::channel();
+        read_lines(Broken { first: true }, send);
+        assert_eq!(receive.recv().unwrap().unwrap(), Some(b"partial".to_vec()));
+        assert!(
+            receive.recv().unwrap().is_err(),
+            "PEE072: saída parcial não comprova leitura completa"
+        );
+    }
+    #[test]
+    fn process_read_error_returns_partial_output_and_stops_its_child() {
+        let args = vec![
+            std::env::current_exe().unwrap().display().to_string(),
+            "--exact".into(),
+            "update::process::read_error_tests::read_error_child".into(),
+            "--ignored".into(),
+        ];
+        let temp = tempfile::tempdir().unwrap();
+        let began = Instant::now();
+        let result = run_with_reader(
+            &args,
+            temp.path(),
+            Duration::from_secs(20),
+            &BTreeMap::new(),
+            &|_| {},
+            |_| Box::new(Broken { first: true }),
+        );
+        match result {
+            Err(ProcessError::Read { source, stdout }) => {
+                assert_eq!(source.to_string(), "fixture-read-failed");
+                assert_eq!(stdout, "partial");
+            }
+            other => panic!("erro de leitura não propagado: {other:?}"),
+        }
+        assert!(began.elapsed() < Duration::from_secs(5));
+    }
+    #[test]
+    #[ignore]
+    fn read_error_child() {
+        std::thread::sleep(Duration::from_secs(60));
+    }
 }
