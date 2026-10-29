@@ -297,3 +297,4 @@ mod value_coercion;
 mod runtime_environment;
 mod plugin_publish;
 mod codec_values;
+mod http_contract;
