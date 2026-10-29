@@ -762,8 +762,7 @@ async def _estados_com_marcador_idle(panes: list[str], n: int) -> list[str]:
     frames = iter(panes)
     with patch.object(state_mod.tmux, "has_session", return_value=True), \
          patch.object(state_mod.tmux, "capture_pane", side_effect=lambda *a, **k: next(frames)), \
-         patch.object(state_mod.hook_state, "get_state", return_value=("idle", 0.0)), \
-         patch.object(state_mod.plugin_bridge, "estado_recente", return_value=None):
+         patch.object(state_mod.hook_state, "get_state", return_value=("idle", 0.0)):
         mon = StateMonitor("cc-idle-marker", poll=0.001, sid_get=lambda: "sid-x")
         mon.FRAME_MAX_AGE = 0
         seen = []

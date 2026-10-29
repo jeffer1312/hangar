@@ -101,8 +101,7 @@ reproduziu depois.
 Em 04/10/2026 o diário desta máquina de 03/10 bateu os 4 MiB às 23:39 e parou de gravar
 tudo, falhas inclusive: 94,8% dos bytes eram nível `ok`, e 60% do arquivo (8.259 linhas) era
 `api.servidor` de `POST /api/plugin/pull`, o long-poll do plugin, que fecha vazio a cada 25 s
-e caía como "pedido lento". O sucesso do long-poll saiu do diário (falha dele continua), e o
-teto passou a valer por nível: acima de `_TETO_DIA` (4 MiB) só entram `aviso`/`erro`, até o
+e caía como "pedido lento". O teto passou a valer por nível: acima de `_TETO_DIA` (4 MiB) só entram `aviso`/`erro`, até o
 `_TETO_RIGIDO` (8 MiB), que existe só para um laço de falhas não encher o disco. Cada teto
 cruzado deixa uma linha `diag.teto` com `etapa` `sucesso` ou `tudo`. Os 4 MiB a mais só
 existem num dia de laço de falhas, que é justamente o dia que precisa ir para quem analisa.
@@ -748,9 +747,8 @@ transcript. Prova ponta a ponta: `enviar` de `hangar-2` pra `cx-pergunta` entreg
 (`crates/hangar-server/src/mcp/`, SDK `rmcp` 3.5.0); `mcp_server.py` saiu. Mesmas tools,
 nomes, parâmetros e identidade; cada tool chama a rota pública que o CLI chama, por dentro do
 processo. A sessão MCP fecha após 30 min parada, como no Python: o padrão do `rmcp` (5 min) não
-conta a tool em curso como atividade e o `browser_goal` (até 300 s) perdia a resposta. No modo
-`python` do Supervisor, `/mcp` e `/mcp/` respondem 503 `mcp_needs_rust_server`, sem reserva
-Python; antes da rota própria caíam no estático e voltavam 405.
+conta a tool em curso como atividade e o `browser_goal` (até 300 s) perdia a resposta. O Rust
+atende todo método de `/mcp`; o Python não tem a rota.
 
 ## Arquivo citado na conversa é editável, com a citação como consentimento
 

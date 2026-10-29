@@ -3,7 +3,7 @@ Rust pergunta quando a lista as tem (`POST /internal/list/facts`)."""
 import asyncio
 import json
 
-from app import hook_state, list_facts, plugin_bridge, registry, sse
+from app import hook_state, list_facts, registry, sse
 
 
 def _row(name, provider="claude", **extra):
@@ -59,14 +59,3 @@ def test_demote_service_updates_map_and_file(tmp_path, monkeypatch):
     assert json.loads(sidecar.read_text()) == {"state": "idle", "ts": 5.0}
 
 
-def test_facts_never_read_or_feed_the_python_plugin(monkeypatch):
-    # Pergunta segurada e presença do app são do plugin no Rust: os fatos não consultam o do Python.
-    def refuse(*args):
-        raise AssertionError("plugin do Python consultado")
-    monkeypatch.setattr(plugin_bridge, "pergunta_pendente", refuse)
-
-    async def keep(infos, state_only=False):
-        return infos
-
-    monkeypatch.setattr(sse._list_registry, "list_with_state", keep)
-    assert set(_compute([_row("ct"), _row("pp", "pi")])) == {"states"}

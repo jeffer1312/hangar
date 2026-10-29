@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app import runtime_coordinator as rc, runtime_adapter as ra, plugin_bridge as pb
+from app import runtime_coordinator as rc, runtime_adapter as ra
 from app.runtime_coordinator import Binding, RuntimeCoordinator, Phase, WriterLease
 
 
@@ -104,47 +104,6 @@ def test_terminal_native_slot_never_replaces_2c_observation(tmp_path):
     assert ra.native_slot('session') is None
 
 
-def test_plugin_old_capability_refuses_before_enqueue(monkeypatch):
-    pb._waiters['session'] = asyncio.Queue()
-    pb._donos['session'] = ('i', {'fill','user'}, time.monotonic())
-    monkeypatch.setattr(pb, 'tracked_session_id', lambda name:'sid')
-    try:
-        assert pb.publish_terminal('session', 'sid', 1, {'id':'pub', 'text':'hello','mode':'fill'}, lambda:None) == 'not_written'
-        assert pb._waiters['session'].empty()
-    finally:
-        pb._waiters.clear()
-        pb._donos.clear()
-
-
-@pytest.mark.parametrize('ack', ['old', 'uncorrelated', 'wrong_generation', 'wrong_conversation', 'matching'])
-def test_plugin_receipt_correlates_publication_generation_conversation(monkeypatch, ack):
-    monkeypatch.setattr(pb, 'PUBLICA_S', .06)
-    monkeypatch.setattr(pb, 'tracked_session_id', lambda name:'sid')
-    async def flow():
-        pb._loop = asyncio.get_running_loop()
-        pb._waiters['session'] = asyncio.Queue()
-        pb._donos['session'] = ('i', {'fill','user','receipt_v2'}, time.monotonic())
-        task = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, 'session', 'sid', 1,
-            {'id':'new', 'text':'hello','mode':'fill'}, lambda:None))
-        payload = await asyncio.wait_for(pb._waiters['session'].get(), .5)
-        assert payload['publication_id'] == 'new'
-        extra = {'publication_id':'new','generation':1,'session_id':'sid'}
-        if ack == 'old': extra['publication_id'] = 'old'
-        if ack == 'uncorrelated': extra = {}
-        if ack == 'wrong_generation': extra['generation'] = 0
-        if ack == 'wrong_conversation': extra['session_id'] = 'old-sid'
-        await pb.filled(pb.FilledBody(sessao='session', token=pb.mint('session'), ok=True, **extra))
-        assert await task == ('filled' if ack == 'matching' else 'unknown')
-        if ack != 'matching':
-            assert pb._publications['session']['id'] == 'new'
-    try:
-        asyncio.run(flow())
-    finally:
-        pb._publications.clear()
-        pb._waiters.clear()
-        pb._donos.clear()
-
-
 def test_rust_alive_or_missing_descendant_proof_never_recovers_terminal(tmp_path):
     async def flow():
         owner = RuntimeCoordinator()
@@ -187,7 +146,6 @@ def live_owner(monkeypatch, tmp_path, *, gateway=None):
     monkeypatch.setattr(ti,'_capture',lambda name:'─'*30+'\n❯ \n'+'─'*30+'\n')
     monkeypatch.setattr(ti,'classify',lambda pane:('idle',None,None,None))
     monkeypatch.setattr(ti,'is_overlay',lambda pane:False)
-    monkeypatch.setattr(pb,'pergunta_pendente',lambda name:None)
     owner = RuntimeCoordinator(gateway)
     owner.legacy = LegacyBridge(owner, {'claude':object()})
     target = terminal.resolve_binding('session')
@@ -530,31 +488,6 @@ def test_reserve_consumes_partial_proof_on_reused_worker(monkeypatch,tmp_path):
     asyncio.run(flow())
 
 
-@pytest.mark.parametrize('ack', ['matching','old','wrong_generation','wrong_conversation','uncorrelated'])
-def test_managed_held_permission_ack_correlates_without_fallback(monkeypatch,ack):
-    monkeypatch.setattr(pb,'CONFIRMA_S',.05)
-    async def flow():
-        pb._loop=asyncio.get_running_loop()
-        queue=asyncio.Queue()
-        pb._perguntas['session']={'id':'perm:request','questions':[], 'fila':queue,'visto':time.monotonic()}
-        receipt={'publication_id':'new','generation':1,'session_id':'sid'}
-        task=asyncio.create_task(asyncio.to_thread(pb.responder_pergunta,'session',{'permitir':True},'perm:request',receipt))
-        body=await asyncio.wait_for(queue.get(),.5)
-        assert body['publication_id']=='new'
-        extra=copy.deepcopy(receipt)
-        if ack=='old':extra['publication_id']='old'
-        if ack=='wrong_generation':extra['generation']=0
-        if ack=='wrong_conversation':extra['session_id']='old-sid'
-        if ack=='uncorrelated':extra={}
-        await pb.ask_fim(pb.AskFimBody(sessao='session',token=pb.mint('session'),id='perm:request',vencedor='app',**extra))
-        assert await task == (ack=='matching')
-    try:
-        asyncio.run(flow())
-    finally:
-        pb._perguntas.clear()
-        pb._fechadas.clear()
-
-
 @pytest.mark.skipif(sys.platform == 'win32', reason='CLI falsa POSIX; Windows tem Job real separado')
 def test_binding_and_reserve_real_fake_cli_isolated_mux(monkeypatch,tmp_path):
     import os, shlex, subprocess, sys, uuid
@@ -742,7 +675,7 @@ def test_clear_serialized_and_clears_old_queue(monkeypatch,tmp_path):
     asyncio.run(flow())
 
 
-@pytest.mark.parametrize('kind', ['option','text','chat'])
+@pytest.mark.parametrize('kind', ['option','text'])
 def test_answer_model_dump_reaches_terminal_contract(monkeypatch,tmp_path,kind):
     from app import api
     from app.runtime_terminal import answer_sync
@@ -751,7 +684,6 @@ def test_answer_model_dump_reaches_terminal_contract(monkeypatch,tmp_path,kind):
     item=api.AnswerItem(kind=kind,question_id='question-a',indices=[0] if kind=='option' else None,
         labels=['A'] if kind=='option' else [],value='texto' if kind=='text' else None,
         type_index=1 if kind=='text' else None,chat_index=1 if kind=='chat' else None)
-    monkeypatch.setattr(pb,'pergunta_pendente',lambda name:{'id':'ask:tui-request','questions':[{'id':'question-a'}]})
     observed=[]
     original=gateway.op
     async def op(target,command,operation,clock):
@@ -900,21 +832,6 @@ def test_terminal_native_socket_belongs_to_current_agent_not_reused_sid(monkeypa
     assert terminal._native_socket(current)==str(own)
 
 
-def test_plugin_instance_from_old_life_not_published(monkeypatch,tmp_path):
-    from app import runtime_terminal as terminal
-    current=terminal_binding(tmp_path)
-    current.meta['created']=123.5
-    pb._donos['session']=('1-test',{'receipt_v2','user'},time.monotonic())
-    monkeypatch.setattr(terminal,'validate_binding',lambda descriptor:current)
-    monkeypatch.setattr(pb,'publish_terminal',lambda *args:pytest.fail('publicação na vida antiga'))
-    try:
-        assert terminal.publish({'binding':current.meta['terminal'],'generation':1,
-            'publication':{'id':'new','text':'text','mode':'fill'}},
-            {'descriptor':current.descriptor(),'validate':lambda:None})=='not_written'
-    finally:
-        pb._donos.clear()
-
-
 def test_headless_to_terminal_pending_binding_keeps_key_and_old_queue(monkeypatch,tmp_path):
     from app import runtime_terminal as terminal, terminal_input as ti
     from app.runtime_adapter import LegacyBridge
@@ -948,7 +865,6 @@ def test_headless_to_terminal_pending_binding_keeps_key_and_old_queue(monkeypatc
         monkeypatch.setattr(ti,'_capture',lambda name:'─'*30+'\n❯ \n'+'─'*30+'\n')
         monkeypatch.setattr(ti,'classify',lambda pane:('idle',None,None,None))
         monkeypatch.setattr(ti,'is_overlay',lambda pane:False)
-        monkeypatch.setattr(pb,'pergunta_pendente',lambda name:None)
         monkeypatch.setattr(ti.TerminalInput,'send_prompt',lambda *args:'sent')
         owner.legacy=LegacyBridge(owner,{'claude':object()})
         assert await owner.prepare_session('session','claude')
