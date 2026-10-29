@@ -100,7 +100,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if crate::ui::matches(method, path) || crate::dictation::http::matches(method, path) { return true; }
     // O serviço MCP responde também aos métodos recusados, sem repasse ao Python.
     if matches!(path, "/mcp" | "/mcp/") { return true; }
-    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/session-defaults" | "/api/web-ui") { return true; }
+    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/session-defaults" | "/api/tags" | "/api/web-ui") { return true; }
     if (matches!(*method, Method::GET | Method::PUT) && path == "/api/update-channel") { return true; }
     if (*method == Method::GET && path == "/api/atualizacao")
         || (*method == Method::POST && matches!(path, "/api/atualizacao/iniciar" | "/api/atualizacao/reiniciar" | "/api/atualizacao/dev-mode")) { return true; }
@@ -170,6 +170,10 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     // conta ChatGPT fixa): o Rust atende as sessões dele.
     if *method == Method::POST && matches!(tail, Some("model" | "service-tier" | "codex/mode" | "codex/plan/implement" | "codex/terminate" | "question/skip" | "codex-permissions"
         | "permission-mode" | "modo-execucao" | "recarregar" | "conta" | "engine/model" | "model-effort" | "bastao" | "resume" | "rename")) {
+        return true;
+    }
+    // Sugestão de nome da sessão genérica (`dictation::rename_suggestion`): só o dono, nunca repassada.
+    if matches!(*method, Method::POST | Method::DELETE) && tail == Some("rename-suggestion") {
         return true;
     }
     // A pergunta lateral do Claude, com e sem terminal, e o histórico dela.

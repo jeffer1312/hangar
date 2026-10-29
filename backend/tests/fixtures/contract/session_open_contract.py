@@ -850,6 +850,7 @@ RUST_DIFFERENCES = (
     ("registro do spec (Task 3)", _rule_spec_record),
     ("S-15/S-35 (diário do lançamento)", _rule_s15_diary),
     ("só do Python", _rule_only_python),
+    ("D-003 (conta escolhida esgotada nasce na de mais folga antes de criar)", lambda e, r, s: (r.__setitem__("_replaced", True), (r.get("steps") or [{}])[0].get("status") == 200 and "nasceu em" in json.dumps(r.get("steps") or [], ensure_ascii=False))[1] if s.get("name") == "create_quota_explicit_account_kept" else None),
 )
 
 

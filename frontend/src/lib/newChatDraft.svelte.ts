@@ -6,7 +6,7 @@ import {
   getFolderBranchesForServer, getRootsForServer, listClaudeConfigs, getClaudeAccountSuggestion, getProviders,
   uniqueSessionName, basename, effortLevels, defaultCodexAccount, SESSION_PROVIDERS,
   getEnginesForServer, getConfigForServer, contextModel, setClaudeDefaultsForServer,
-  getWorktreesForServer, getCreationProgress, uploadFileForServer,
+  getWorktreesForServer, getCreationProgress, uploadFileForServer, contaComFolga,
   PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer,
   type WorktreeStatus, type CreationProgress, type CreateSessionBody,
   type CodexAccount, type ConfigDirInfo, type FolderBranches, type FsRoot, type ModelOption, type Provider,
@@ -14,7 +14,7 @@ import {
 } from '@hangar/core';
 import { listOwnServers, selectServer, getActiveId, type Server } from './auth';
 import { carregarModelos, matchRemembered, valorModelo } from './modelosPorConta';
-import { bestAccountWithQuota, exhaustedWindow, type ContaCota } from './cota';
+import { type ContaCota } from './cota';
 import * as m from '../paraglide/messages';
 
 type ProviderProbe = Record<string, { disponivel: boolean; motivo: string | null; default?: boolean }>;
@@ -324,13 +324,11 @@ export class NewChatDraft {
     void this.loadModels();
   }
 
-  /** Conta escolhida sem limite e sem escolha manual: troca sozinha pra conta com folga. */
+  /** Conta a 95% ou mais e sem escolha manual: troca sozinha pra de mais folga, a regra do servidor. */
   switchFromExhausted(linha: ContaCota[] | null) {
     this.#quotaLine = linha;
     if (this.provider !== 'claude' || this.#accountPicked || this.configsLoading || !this.configDir) return;
-    const atual = linha?.find((c) => c.id === `claude:${this.configDir}`);
-    if (!exhaustedWindow(atual)) return;
-    const alvo = bestAccountWithQuota(linha, this.configs.map((c) => c.path));
+    const alvo = contaComFolga(this.configDir, this.configs, linha ?? []);
     if (!alvo || alvo === this.configDir) return;
     this.configDir = alvo;
     void this.loadModels();
@@ -621,7 +619,7 @@ export class NewChatDraft {
       // Sonda falhada deixa o Claude por omissão, e isso não é escolha a lembrar.
       remember_provider: this.#providerPicked || Object.keys(this.providers).length > 0,
       // D-003: a conta que ninguém escolheu não vai, e o servidor troca a que estiver a 95% ou mais;
-      // a troca automática da esgotada é essa mesma regra, então também não conta como escolha.
+      // a troca automática da tela é essa mesma regra, então também não conta como escolha.
       config_dir: claude && (this.#accountPicked || this.#accountSuggested) ? this.configDir : null,
       codex_account: codex ? this.codexAccount : undefined,
       engine: claude ? this.engine || null : null,

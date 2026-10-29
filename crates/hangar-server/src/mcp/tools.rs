@@ -22,6 +22,7 @@ use super::identity::{self, Local, Origin};
 use super::nav;
 use crate::groups::exit::segment;
 use crate::groups::model::Sidecar;
+use crate::groups::peers::PeerClient;
 use crate::routes::AppState;
 use crate::transcript::pyjson::dumps_unicode;
 
@@ -112,7 +113,7 @@ struct Close { alvo: String }
 
 #[derive(Deserialize)]
 struct NewSession {
-    nome: String, cwd: String, provider: Option<String>, engine: Option<String>, model: Option<String>, effort: Option<String>,
+    nome: String, cwd: Option<String>, provider: Option<String>, engine: Option<String>, model: Option<String>, effort: Option<String>,
     permissao: Option<String>, headless: Option<bool>, #[serde(default)] read_only: bool, conta: Option<String>, jev: Option<bool>,
     service_tier: Option<String>, branch: Option<String>, #[serde(default)] new_branch: bool, base: Option<String>,
     codex_account: Option<String>, subagent_model: Option<String>, initial_prompt: Option<String>, engine_account: Option<String>,
@@ -137,6 +138,93 @@ impl NewSession {
         if let Some(headless) = self.headless { body["headless"] = json!(headless); }
         Ok(body)
     }
+
+    /// O corpo do `POST /api/sessions` com o que veio explícito; `inherit`, `link` e `creator` são desta máquina e
+    /// quem chama acrescenta.
+    fn create_body(self, cwd: String) -> Value {
+        let mut body = json!({"name": self.nome, "cwd": cwd});
+        let optional = [("provider", self.provider.map(Value::from)), ("engine", self.engine.map(Value::from)), ("model", self.model.map(Value::from)),
+            ("effort", self.effort.map(Value::from)), ("permission_mode", self.permissao.map(Value::from)), ("headless", self.headless.map(Value::from)),
+            ("config_dir", self.conta.map(Value::from)), ("jev", self.jev.map(Value::from)), ("service_tier", self.service_tier.map(Value::from)),
+            ("branch", self.branch.filter(|b| !b.is_empty()).map(Value::from)), ("base", self.base.filter(|b| !b.is_empty()).map(Value::from)),
+            ("codex_account", self.codex_account.map(Value::from)), ("subagent_model", self.subagent_model.map(Value::from)),
+            ("initial_prompt", self.initial_prompt.map(Value::from)), ("engine_account", self.engine_account.map(Value::from)),
+            ("omp_profile", self.omp_profile.map(Value::from)), ("claude_customizations", self.claude_customizations),
+            ("read_only", self.read_only.then_some(Value::Bool(true))), ("new_branch", self.new_branch.then_some(Value::Bool(true))),
+            ("remember_provider", self.remember_provider.then_some(Value::Bool(true)))];
+        for (key, value) in optional {
+            if let Some(value) = value { body[key] = value; }
+        }
+        body
+    }
+}
+
+/// `servidor::nome` → `Some((servidor, nome))`; nome sem `::` é desta máquina.
+fn remote_target(nome: &str) -> Result<Option<(String, String)>, String> {
+    let Some((server, name)) = nome.split_once("::") else { return Ok(None) };
+    if server.is_empty() || name.is_empty() || name.contains("::") {
+        return Err(format!("nome inválido '{nome}': use servidor::nome (um '::' só)"));
+    }
+    Ok(Some((server.to_owned(), name.to_owned())))
+}
+
+/// A conta de lá pelo caminho, rótulo ou nome da pasta (`work` acha `.claude-work`), como o `hangar-send`.
+fn remote_account(rows: &[Value], conta: &str) -> Option<String> {
+    rows.iter().filter_map(|c| Some((c["path"].as_str()?, c["label"].as_str().unwrap_or_default()))).find(|(path, label)| {
+        let folder = path.replace('\\', "/").rsplit('/').next().unwrap_or_default().to_owned();
+        [*path, *label, folder.as_str()].contains(&conta) || folder == format!(".claude-{conta}")
+    }).map(|(path, _)| path.to_owned())
+}
+
+/// A resposta da criação, igual para esta e para outra máquina.
+fn created(info: &Value, server: Option<&str>) -> Outcome {
+    let mut out = json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"],
+        // Volta na resposta para que herdar errado nunca passe despercebido.
+        "config_dir": info["config_dir"], "account_source": info["account_source"]});
+    if let Some(server) = server { out["server"] = json!(server); }
+    if info["avisos"].as_array().is_some_and(|a| !a.is_empty()) { out["avisos"] = info["avisos"].clone(); }
+    // A sessão abriu: o erro diz isso e leva a resposta inteira, para nada se perder.
+    if let Some(e) = info.get("link_error").filter(|e| !e.is_null()) {
+        return Err(format!("sessão '{}' abriu SEM a ligação: {}: {} — {out}",
+            info["name"].as_str().unwrap_or_default(), e["code"].as_str().unwrap_or_default(), e["detail"].as_str().unwrap_or_default()));
+    }
+    Ok(dict(out))
+}
+
+/// `new_session` com `servidor::nome`: abre lá, pela API de lá (`peers.json`), com as contas e os padrões de lá, como
+/// `hangar-send --new servidor::nome`. Vai só o que veio explícito: nada herda de quem chama noutra máquina.
+async fn remote_session(peers: &PeerClient, server: &str, mut a: NewSession) -> Outcome {
+    if a.link { return Err("erro_link_remoto: a ligação só vale entre sessões desta máquina".into()); }
+    if a.inherit == Some(true) { return Err("inherit não vale noutra máquina: lá nada herda de quem chama".into()); }
+    a.inherit = None;
+    let resume = a.resume.clone().filter(|s| !s.is_empty());
+    // Sem pasta, a home de lá: o servidor de lá expande o `~`.
+    let cwd = a.cwd.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| "~".into());
+    let call = move |method, path: String, body: Option<Value>| async move {
+        peers.call(server, method, &path, body.as_ref()).await.map(|v| v.unwrap_or(Value::Null)).map_err(|e| e.text(server))
+    };
+    if let Some(conta) = a.conta.clone().filter(|c| !c.is_empty()) {
+        let configs = call(reqwest::Method::GET, "/api/claude-configs".into(), None).await?;
+        let rows = configs.as_array().map(Vec::as_slice).unwrap_or_default();
+        let labels: Vec<&str> = rows.iter().filter_map(|c| c["label"].as_str()).collect();
+        a.conta = Some(remote_account(rows, &conta)
+            .ok_or_else(|| format!("conta '{conta}' não existe em '{server}' — lá há: {}", labels.join(", ")))?);
+    }
+    if let Some(sid) = resume {
+        let info = call(reqwest::Method::POST, format!("/api/archive/-/{}/resume", segment(&sid)), Some(a.clone_for_resume()?)).await?;
+        return Ok(resumed(&info, Some(server)));
+    }
+    let info = call(reqwest::Method::POST, "/api/sessions".into(), Some(a.create_body(cwd))).await?;
+    created(&info, Some(server))
+}
+
+/// A resposta da retomada do Arquivo, igual para esta e para outra máquina.
+fn resumed(info: &Value, server: Option<&str>) -> CallToolResult {
+    let mut out = json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"]});
+    if let Some(server) = server { out["server"] = json!(server); }
+    // O aviso de troca de conta por cota é a única notícia de que a sessão nasceu noutra conta.
+    if info["avisos"].as_array().is_some_and(|a| !a.is_empty()) { out["avisos"] = info["avisos"].clone(); }
+    dict(out)
 }
 
 #[derive(Deserialize)]
@@ -352,46 +440,34 @@ impl Tools {
         })
     }
 
-    async fn new_session(&self, headers: &HeaderMap, a: NewSession) -> Outcome {
-        let (me, voice) = self.caller(headers).await?;
+    async fn new_session(&self, headers: &HeaderMap, mut a: NewSession) -> Outcome {
         if a.headless == Some(true) && let Some(provider) = a.provider.as_deref().filter(|p| !matches!(*p, "claude" | "codex")) {
             return Err(format!("headless só vale com provider claude ou codex (veio: {provider})"));
         }
+        // Quem chama precisa ser resolvido também para abrir noutra máquina, mesmo sem herdar nada.
+        let (me, voice) = self.caller(headers).await?;
+        if let Some((server, name)) = remote_target(&a.nome)? {
+            a.nome = name;
+            return remote_session(&self.st.peers, &server, a).await;
+        }
         if let Some(sid) = a.resume.as_deref().filter(|s| !s.is_empty()) { return self.resume_session(sid, a.clone_for_resume()).await; }
-        let mut body = json!({"name": a.nome, "cwd": a.cwd});
-        let optional = [("provider", a.provider.map(Value::from)), ("engine", a.engine.map(Value::from)), ("model", a.model.map(Value::from)),
-            ("effort", a.effort.map(Value::from)), ("permission_mode", a.permissao.map(Value::from)), ("headless", a.headless.map(Value::from)),
-            ("config_dir", a.conta.map(Value::from)), ("jev", a.jev.map(Value::from)), ("service_tier", a.service_tier.map(Value::from)),
-            ("branch", a.branch.filter(|b| !b.is_empty()).map(Value::from)), ("base", a.base.filter(|b| !b.is_empty()).map(Value::from)),
-            ("codex_account", a.codex_account.map(Value::from)), ("subagent_model", a.subagent_model.map(Value::from)),
-            ("initial_prompt", a.initial_prompt.map(Value::from)), ("engine_account", a.engine_account.map(Value::from)),
-            ("omp_profile", a.omp_profile.map(Value::from)), ("claude_customizations", a.claude_customizations),
-            ("inherit", a.inherit.map(Value::from)), ("read_only", a.read_only.then_some(Value::Bool(true))),
-            ("new_branch", a.new_branch.then_some(Value::Bool(true))), ("remember_provider", a.remember_provider.then_some(Value::Bool(true))),
-            ("link", a.link.then_some(Value::Bool(true))),
+        let (inherit, link) = (a.inherit, a.link);
+        let cwd = a.cwd.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| self.home().display().to_string());
+        let mut body = a.create_body(cwd);
+        for (key, value) in [("inherit", inherit.map(Value::from)), ("link", link.then_some(Value::Bool(true))),
             // A voz não tem conta nem modo para herdar: o omitido fica com o padrão do servidor.
-            ("creator", (!voice).then_some(Value::from(me)))];
-        for (key, value) in optional {
+            ("creator", (!voice).then_some(Value::from(me)))] {
             if let Some(value) = value { body[key] = value; }
         }
         let info = self.ok(Method::POST, "/api/sessions", Some(body)).await?;
-        let mut out = json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"],
-            // Volta na resposta para que herdar errado nunca passe despercebido.
-            "config_dir": info["config_dir"], "account_source": info["account_source"]});
-        if info["avisos"].as_array().is_some_and(|a| !a.is_empty()) { out["avisos"] = info["avisos"].clone(); }
-        // A sessão abriu: o erro diz isso e leva a resposta inteira, para nada se perder.
-        if let Some(e) = info.get("link_error").filter(|e| !e.is_null()) {
-            return Err(format!("sessão '{}' abriu SEM a ligação: {}: {} — {out}",
-                info["name"].as_str().unwrap_or_default(), e["code"].as_str().unwrap_or_default(), e["detail"].as_str().unwrap_or_default()));
-        }
-        Ok(dict(out))
+        created(&info, None)
     }
 
     /// `resume`: a conversa volta pela rota do Arquivo (`-` = a pasta que a guarda), com nome e superfície.
     async fn resume_session(&self, sid: &str, a: Result<Value, String>) -> Outcome {
         let body = a?;
         let info = self.ok(Method::POST, &format!("/api/archive/-/{}/resume", segment(sid)), Some(body)).await?;
-        Ok(dict(json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"]})))
+        Ok(resumed(&info, None))
     }
 
     async fn close_session(&self, headers: &HeaderMap, alvo: &str) -> Outcome {
@@ -609,5 +685,96 @@ mod tests {
         assert!(interrupt_caller_refusal("pai", false, "pai").is_some());
         assert!(interrupt_caller_refusal("pai", false, "srv::filha").is_some());
         assert_eq!(interrupt_caller_refusal("pai", false, "filha"), None);
+    }
+
+    fn new_args(v: Value) -> NewSession { serde_json::from_value(v).unwrap() }
+
+    fn peers_with_lab(dir: &Path, base_url: &str) -> PeerClient {
+        let file = dir.join("peers.json");
+        std::fs::write(&file, json!({"lab": {"base_url": base_url, "token": "tok-lab"}}).to_string()).unwrap();
+        PeerClient::new(crate::groups::peers::PeerBook::new(Some(file)))
+    }
+
+    #[test]
+    fn server_prefix_is_split_once() {
+        assert_eq!(remote_target("lab::filha").unwrap(), Some(("lab".into(), "filha".into())));
+        assert_eq!(remote_target("filha").unwrap(), None);
+        for bad in ["::filha", "lab::", "a::b::c"] { assert!(remote_target(bad).is_err(), "{bad}"); }
+    }
+
+    /// Lá recebe só o explícito: nada de `creator`, `inherit` ou conta daqui; a conta e a pasta são resolvidas lá.
+    #[tokio::test]
+    async fn remote_session_posts_to_the_peer_only_what_was_passed() {
+        use axum::routing::{get, post};
+        // O axum do projeto não tem a feature `json`.
+        let reply = |v: Value| ([(axum::http::header::CONTENT_TYPE, "application/json")], v.to_string());
+        let seen: Arc<Mutex<Option<(String, Value)>>> = Arc::default();
+        let sink = seen.clone();
+        let app = Router::new()
+            .route("/api/claude-configs", get(move || async move { reply(json!([
+                {"path": "/home/r/.claude", "label": "default", "active": true},
+                {"path": "/home/r/.claude-work", "label": "trabalho", "active": false}])) }))
+            .route("/api/sessions", post(move |h: HeaderMap, b: String| {
+                let sink = sink.clone();
+                async move {
+                    let auth = h.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or_default().to_owned();
+                    *sink.lock().unwrap() = Some((auth, serde_json::from_str(&b).unwrap()));
+                    reply(json!({"name": "filha", "cwd": "/home/r", "provider": "claude", "headless": true,
+                        "config_dir": "/home/r/.claude-work", "account_source": "explicit"}))
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let peers = peers_with_lab(dir.path(), &format!("http://{addr}"));
+        let a = new_args(json!({"nome": "filha", "conta": "work", "model": "opus", "headless": true, "inherit": false,
+            "initial_prompt": "oi"}));
+        let result = remote_session(&peers, "lab", a).await.unwrap();
+        let (auth, body) = seen.lock().unwrap().take().expect("POST /api/sessions lá");
+        assert_eq!(auth, "Bearer tok-lab");
+        assert_eq!(body, json!({"name": "filha", "cwd": "~", "model": "opus", "headless": true,
+            "config_dir": "/home/r/.claude-work", "initial_prompt": "oi"}));
+        let out = result.structured_content.unwrap();
+        assert_eq!((out["server"].clone(), out["name"].clone(), out["config_dir"].clone()),
+            (json!("lab"), json!("filha"), json!("/home/r/.claude-work")));
+    }
+
+    #[tokio::test]
+    async fn unknown_server_is_an_error_naming_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let peers = peers_with_lab(dir.path(), "http://127.0.0.1:9");
+        let err = remote_session(&peers, "vps", new_args(json!({"nome": "filha", "cwd": "/tmp"}))).await.unwrap_err();
+        assert!(err.contains("'vps'") && err.contains("peers.json"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn link_and_inherit_are_refused_on_another_machine() {
+        let peers = PeerClient::new(crate::groups::peers::PeerBook::new(None));
+        let err = remote_session(&peers, "lab", new_args(json!({"nome": "filha", "cwd": "/tmp", "link": true}))).await.unwrap_err();
+        assert!(err.starts_with("erro_link_remoto:"), "{err}");
+        let err = remote_session(&peers, "lab", new_args(json!({"nome": "filha", "cwd": "/tmp", "inherit": true}))).await.unwrap_err();
+        assert!(err.contains("inherit"), "{err}");
+    }
+
+    #[test]
+    fn remote_account_comes_from_the_peer_configs() {
+        let rows = [json!({"path": "C:\\Users\\r\\.claude", "label": "default"}), json!({"path": "C:\\Users\\r\\.claude-work", "label": "trabalho"})];
+        for conta in ["work", "trabalho", ".claude-work", "C:\\Users\\r\\.claude-work"] {
+            assert_eq!(remote_account(&rows, conta).as_deref(), Some("C:\\Users\\r\\.claude-work"), "{conta}");
+        }
+        assert_eq!(remote_account(&rows, "outra"), None);
+    }
+
+    /// A retomada desta máquina leva os avisos (troca de conta por cota) como a de outra.
+    #[test]
+    fn a_resume_carries_the_warnings_here_and_there() {
+        let info = json!({"name": "s", "cwd": "/w", "provider": "codex", "headless": true, "avisos": ["conta Codex com 99% de uso; a sessão nasceu em b"]});
+        for server in [None, Some("lab")] {
+            let out = resumed(&info, server).structured_content.unwrap();
+            assert_eq!(out["avisos"], info["avisos"], "{server:?}");
+            assert_eq!(out.get("server").and_then(Value::as_str), server);
+        }
+        assert!(resumed(&json!({"name": "s", "avisos": []}), None).structured_content.unwrap().get("avisos").is_none());
     }
 }

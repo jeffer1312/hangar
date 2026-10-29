@@ -47,6 +47,7 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   getPushSettingsForServer: vi.fn(),
   setQuietHours: vi.fn(),
   setQuietHoursForServer: vi.fn(),
+  getTagsForServer: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('../../lib/push', () => ({ enablePush: vi.fn(), pushSupported: () => true }));
 vi.mock('../../lib/peers', () => ({

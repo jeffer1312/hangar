@@ -314,6 +314,8 @@ async fn fake_python(State(f): State<Arc<Fake>>, mut req: Request) -> Response {
 }
 
 pub fn config(upstream: SocketAddr, trusted: &str) -> Config {
+    // A abertura leria a cota pela rede com o token falso das contas de teste.
+    hangar_server::accounts::quotas::disable_open_network_read();
     Config {
         listen: "127.0.0.1:0".parse().unwrap(),
         upstream,
@@ -364,6 +366,7 @@ pub async fn spawn_server(cfg: Config) -> SocketAddr {
 
 /// Servidor com um `AppState` montado pelo teste (para mexer no `Mods` dele por fora).
 pub async fn spawn_state(mut state: hangar_server::routes::AppState) -> SocketAddr {
+    hangar_server::accounts::quotas::disable_open_network_read();
     state.side.locate = fake_locate(state.cfg.upstream);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

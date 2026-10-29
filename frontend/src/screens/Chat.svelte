@@ -56,6 +56,8 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // abre outro modal (o PairSheet de lá abre o dele, mas o `peerChat` é por instância).
   import PairChatModal from '../components/PairChatModal.svelte';
   import LoopSheet from '../components/LoopSheet.svelte';
+  import RenameSuggestionStrip from '../components/RenameSuggestionStrip.svelte';
+  import { requestRenameSuggestionOnce } from '@hangar/core';
   import DesktopSessionContext from '../components/DesktopSessionContext.svelte';
   import FileViewer from '../components/files/FileViewer.svelte';
   import { filesStores } from '../lib/filesStore.svelte';
@@ -1770,6 +1772,19 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   const sessaoAtual = $derived(allSessions.find((s) => s.name === sessionName));
   // Sessão de outra pessoa num par "ver e recado": o servidor dela recusa toda escrita.
   const soLeituraPar = $derived(sessaoAtual?.guest_kind === 'pair');
+
+  // Faixa "Renomear para X?" só na vista celular: o desktop web não ganha recurso novo.
+  const renameServer = $derived(desktop || nested || soLeituraPar ? undefined : listServers().find((s) => s.id === chatServerId));
+  let renameReturned = $state<string | null>(null);
+  let renameHidden = $state(false);
+  const renameSuggestion = $derived(renameHidden || !renameServer ? null : (sessaoAtual?.rename_suggestion || renameReturned));
+  $effect(() => {
+    const server = renameServer;
+    const row = sessaoAtual;
+    if (!server || !row || row.rename_suggestion) return;
+    const hasUserMessage = events.some((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-'));
+    untrack(() => requestRenameSuggestionOnce(server, row, hasUserMessage))?.then((s) => { if (s) renameReturned = s; });
+  });
   const contaPior = $derived.by(() => {
     const conta = sessaoAtual?.conta;
     const minha = conta ? faixaDeCota(quotaFeed.contas)?.find((c) => c.id === conta) : null;
@@ -3466,6 +3481,11 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   <div class="navbar-mount" bind:this={navEl}>
     {#if !splitTab}
     <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} conta={desktop ? null : contaChip} onContaTap={desktop ? undefined : () => (accountsOpen = true)} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} stateLabel={codexWaitKey ? m.chat_codex_opening() : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (ctxPanel.aba = 'atividade') : undefined} {activityBadge} {activityRunning} onOpenTerminal={botaoTerminal ? abrirTerminalReal : undefined} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? alternarNavegador : undefined} onOpenRun={desktop && !orqSession ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    {#if renameSuggestion && renameServer}
+      <RenameSuggestionStrip server={renameServer} {sessionName} suggestion={renameSuggestion}
+        onRenamed={(name) => { if (name !== sessionName) onNavigateToChat(name); }}
+        onDismissed={() => (renameHidden = true)} />
+    {/if}
     {/if}
   </div>
 

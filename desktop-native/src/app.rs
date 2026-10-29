@@ -36,6 +36,8 @@ mod group_sheet;
 mod hangar_live;
 mod harness;
 mod keyring;
+mod rename_suggest;
+mod tags;
 mod viewer;
 mod window_tray;
 mod presence;
@@ -70,6 +72,10 @@ mod pair_accept;
 mod external;
 mod servers;
 pub(crate) use servers::{ServerEntry, new_id as new_server_id};
+// Partes de vista que a miniatura das novidades (`crate::news`) também desenha.
+pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
+pub(crate) use tags::{account_icon, machine_icon};
+pub(crate) use rename_suggest::rename_strip;
 mod shortcuts;
 mod shortcut_transfer;
 mod keyboard;
@@ -259,7 +265,7 @@ fn conversation_metrics(user: bool) -> (f32, f32) { if user { (16., 1.55) } else
 
 /// Texto da conversa com a fonte, o tamanho e a entrelinha escolhidos em Aparência. Em 100% são os do web no desktop:
 /// resposta 17 px/1,7 (`.prose`, AssistantBubble.svelte) e bolha do usuário 16 px/1,55 (`.bubble-text`, UserBubble.svelte).
-fn conversation_text(el: Div, user: bool) -> Div {
+pub(crate) fn conversation_text(el: Div, user: bool) -> Div {
     let a = crate::appearance::get();
     let (size, line) = conversation_metrics(user);
     el.font_family(a.font.family())
@@ -589,6 +595,10 @@ pub struct Hangar {
     /// Máquinas (chave `servers::norm`, ativa e outras) com o chaveiro trancado, pelo evento `keyring` da lista de cada uma.
     /// Só a queda do stream dela limpa: o servidor reenvia o estado ao reconectar.
     keyring: HashMap<String, keyring::Prompt>,
+    rename_suggest: rename_suggest::RenameSuggest,
+    /// Último evento `tags` da lista de cada máquina (chave `servers::norm`); máquina sem ele é servidor antigo.
+    /// Fica na queda do stream: a etiqueta não muda por a máquina estar fora.
+    tags: HashMap<String, tags::Event>,
     /// Cartão da pergunta aberto: (máquina, dono — vazio = No Hangar, terminal) e o diálogo que o mostra.
     question_open: Option<(String, String, String)>,
     question_card: Option<Entity<hangar_live::QuestionCard>>,
@@ -1067,7 +1077,7 @@ impl Hangar {
             history_installed: false, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
-            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), question_open: None, question_card: None,
+            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
@@ -1882,6 +1892,13 @@ impl Hangar {
                     if visible { self.redraw(panes::Area::Nav, cx); }
                     state.is_some()
                 }
+                else if frame.event == "tags" {
+                    let server = self.active_key();
+                    let stored = tags::store(&mut self.tags, &server, &frame.data);
+                    visible = stored == Some(true);
+                    if visible { self.redraw(panes::Area::Nav, cx); }
+                    stored.is_some()
+                }
                 else if frame.event == "shortcut_terminals" {
                     let list = terminal::parse_live_terms(&frame.data);
                     // Lista igual à de antes não redesenha; o tempo de "rodando" anda pelo relógio próprio.
@@ -1925,6 +1942,7 @@ impl Hangar {
                         self.discover_plan();
                         // A primeira conta de subagentes espera a conversa chegar, como o `aoAquecer` do web.
                         if first { self.restart_subagent_count(cx); }
+                        if first { self.request_rename_suggestion(); }
                         // Primeira página cheia: a janela inteira vem por baixo, sem aviso de carregando e sem o
                         // "Carregar anteriores" de uma janela que já está crescendo.
                         if first && limit < HISTORY_PAGE && self.has_older {
@@ -2381,7 +2399,10 @@ impl Hangar {
                         self.delivery.confirm_real(&key, &event.id, text);
                     }
                 }
+                // O primeiro pedido feito com a conversa aberta também vale para a sugestão de nome.
+                let asked = event.kind == "user_msg" && !event.queued();
                 self.chat.apply(event);
+                if asked && self.history_installed { self.request_rename_suggestion(); }
                 if self.chat.preview.text.is_empty() {
                     self.cancel_preview_drop();
                     self.clear_visible_preview();
@@ -5389,8 +5410,8 @@ fn render_history_skeleton() -> Div {
         .child(in_column(div().flex().flex_col().gap(px(28.)).children(turns)))
 }
 
-/// Bolha do usuário, na conversa e no subagente.
-fn user_bubble(content: impl IntoElement) -> Div {
+/// Bolha do usuário, na conversa, no subagente e na miniatura das novidades.
+pub(crate) fn user_bubble(content: impl IntoElement) -> Div {
     div().max_w(relative(0.78)).px(px(14.)).py(px(10.)).rounded(px(18.)).bg(theme::user_bubble()).child(content)
 }
 
@@ -7109,6 +7130,7 @@ impl Hangar {
         } else { None };
         let plan_bar = if readable && !read_only && card.is_none() {
             self.render_plan_bar(busy, cx).or_else(|| self.render_headless_plan(cx)).or_else(|| self.render_plan_preview(cx))
+                .or_else(|| self.render_rename_suggestion(cx))
         } else { None };
         let steer = readable && self.steer_offered();
         let queued = self.queued_count();

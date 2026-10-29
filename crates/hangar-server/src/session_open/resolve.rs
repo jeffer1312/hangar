@@ -61,8 +61,13 @@ pub trait OpenFacts {
     fn saved_defaults(&self, provider: AgentProvider, engine: &str, engine_account: &str) -> Result<Option<crate::session_defaults::Defaults>, String>;
     /// Contas Codex com login conectado.
     fn codex_logins(&self) -> Result<Vec<CodexLogin>, OpenError>;
-    /// Linhas Claude do cache de cotas, sem ler a rede.
-    fn claude_quotas(&self) -> Vec<Value>;
+    /// Linhas de cota das contas Claude e Codex: do cache, ou depois de uma leitura curta da rede
+    /// (`network`, prazo de 5 s; estourado, o que o cache tiver).
+    fn quotas(&self, network: bool) -> Vec<Value>;
+    /// `limit-spent.json`: pasta de conta Claude → até quando o limite que ela bateu vale.
+    fn spent_accounts(&self) -> std::collections::BTreeMap<String, f64>;
+    /// A abertura seguiu sem saber a cota da conta: vai ao log e ao diário, nunca à tela.
+    fn quota_unknown(&self, name: &str, account: &str);
     /// A pasta com `~` expandido, se ela existe.
     fn existing_dir(&self, cwd: &str) -> Option<String>;
     /// Caminhos de conta Claude aceitos (`list_config_dirs`), comparados como texto.
@@ -140,10 +145,11 @@ fn conflict(msg: impl Into<String>) -> OpenError { OpenError::new(409, "erro_cri
 
 pub fn resolve_open(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn OpenFacts) -> Result<Resolved, OpenError> {
     let mut used_saved_choice = false;
-    match resolve_with(request, caller, facts, true, &mut used_saved_choice) {
+    let reads = QuotaReads::default();
+    match resolve_with(request, caller, facts, true, &mut used_saved_choice, &reads) {
         // Modelo ou esforço salvos que deixaram de valer (catálogo mudou) não travam toda abertura.
         Err(error) if used_saved_choice => {
-            let mut resolved = resolve_with(request, caller, facts, false, &mut used_saved_choice)?;
+            let mut resolved = resolve_with(request, caller, facts, false, &mut used_saved_choice, &reads)?;
             resolved.warnings.push(format!("o modelo ou esforço do padrão salvo não vale para esta abertura ({}); ficou sem eles", error.msg));
             Ok(resolved)
         }
@@ -151,8 +157,12 @@ pub fn resolve_open(request: &SessionOpenRequest, caller: &OpenCaller, facts: &d
     }
 }
 
+/// O que a regra de cota leu e registrou numa abertura: a segunda passada sem o padrão salvo reaproveita.
+#[derive(Default)]
+struct QuotaReads { network: std::cell::OnceCell<Vec<Value>>, unknown_reported: std::cell::Cell<bool> }
+
 fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn OpenFacts, saved_choice: bool,
-                used_saved_choice: &mut bool) -> Result<Resolved, OpenError> {
+                used_saved_choice: &mut bool, reads: &QuotaReads) -> Result<Resolved, OpenError> {
     let guest = matches!(caller, OpenCaller::Guest { .. });
     let mut warnings = Vec::new();
     // O omitido vem da criadora; `inherit: false` deixa tudo no padrão da conta. O convidado
@@ -282,14 +292,46 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         }
     }
 
-    // A conta que ninguém escolheu (herdada ou padrão) não recebe sessão acabando.
-    if !explicit_account && provider == AgentProvider::Claude && !truthy(&request.engine)
-        && let Some((switched, warning)) = quota_switch(config_dir.as_deref(), &facts.claude_quotas())
-    {
-        tracing::warn!("create_session {}: {warning}", request.name.as_deref().unwrap_or_default());
-        config_dir = Some(switched);
-        warnings.push(warning);
-        source = AccountSource::Quota;
+    // Conta a 95% ou mais sai da escolha, mesmo a mandada pela tela: a sessão nasce na de mais folga,
+    // sem perguntar, e a tela mostra o aviso.
+    let explicit = if provider == AgentProvider::Codex { request.codex_account.is_some() } else { explicit_account };
+    let quota_rule = match provider {
+        // A conta que o convidado escolheu não troca por outra do dono.
+        AgentProvider::Claude => !truthy(&request.engine) && !(guest && explicit),
+        AgentProvider::Codex => !guest && !request.account_bound,
+        _ => false,
+    };
+    if quota_rule {
+        let name = request.name.as_deref().unwrap_or_default();
+        let current = if provider == AgentProvider::Codex { codex_account.as_deref().or(Some("default")) } else { config_dir.as_deref() };
+        let switch = match quota_check(provider, current, facts, reads) {
+            QuotaCheck::Room => None,
+            // Ninguém escolheu a conta: nascer numa de cota lida evita gastar às cegas uma que pode estar no fim.
+            QuotaCheck::Unknown { current, best: Some(best) } if !explicit =>
+                Some((format!("cota da conta {} não pôde ser lida; a sessão nasceu em {}", current.label, best.label), best)),
+            // A escolhida fica. Nenhuma conta com cota lida: decisão em aberto com o usuário, fica na pedida.
+            QuotaCheck::Unknown { current, .. } => {
+                if !reads.unknown_reported.replace(true) { facts.quota_unknown(name, &current.id); }
+                None
+            }
+            QuotaCheck::Exhausted { current, best: None } => {
+                tracing::warn!(code = "open_quota_no_room", session = name, account = %current.id,
+                    "conta com {:.0}% de uso e nenhuma outra com folga; a sessão segue nela", current.usage.unwrap_or(100.0));
+                None
+            }
+            QuotaCheck::Exhausted { current, best: Some(best) } =>
+                Some((format!("conta {} com {:.0}% de uso; a sessão nasceu em {}", current.label, current.usage.unwrap_or(100.0), best.label), best)),
+        };
+        // A troca nunca faz a abertura falhar: conta Codex que recusa a escolha do pedido é "nenhuma melhor".
+        let switch = switch.filter(|(_, best)| provider != AgentProvider::Codex || codex_fits(request, &best.choice, facts)
+            || { tracing::warn!(code = "open_quota_switch_refused", session = name, account = %best.id,
+                "a conta de mais folga recusa a escolha do pedido; a sessão segue na pedida"); false });
+        if let Some((warning, best)) = switch {
+            tracing::warn!("create_session {name}: {warning}");
+            if provider == AgentProvider::Codex { codex_account = Some(best.choice) } else { config_dir = Some(best.choice) }
+            warnings.push(warning);
+            source = AccountSource::Quota;
+        }
     }
 
     let headless = headless.unwrap_or_else(|| {
@@ -301,6 +343,8 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         None => folder_name(&request.cwd, request.take_reserved_name, facts)?,
     };
     let name = validate_name(&raw, provider, headless, request, facts)?;
+    // As telas mandam o nome da pasta que elas mesmas calculam: vale o formato, não quem mandou.
+    let name_auto = folder_pattern(&name, &request.cwd);
 
     let permission_mode = match provider {
         AgentProvider::Claude => Some(match permission.as_deref() {
@@ -347,6 +391,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         jev: request.jev.unwrap_or_else(|| facts.defaults().jev), read_only: request.read_only,
         worktree: request.branch.clone().map(|branch| WorktreeSpec { branch, new_branch: request.new_branch, base: request.base.clone(), path: None }),
         creator: request.creator.clone(), created_at: facts.now(), conversation: None,
+        name_auto: Some(name_auto), rename_suggestion: None, rename_dismissed: false,
     };
     // Nascer já no plano sem terminal deixaria a sessão sem modo de base. O ilegível vale bypass, como o
     // `modo_da_conta` do Python: o modo pedido já está escolhido, só a volta do plano depende dele.
@@ -408,23 +453,102 @@ fn account_mode(config_dir: Option<&str>, facts: &dyn OpenFacts) -> Result<Permi
     }
 }
 
-/// `cotas.conta_com_cota`: a conta que ninguém escolheu, a 95% ou mais, troca pela de mais folga.
-fn quota_switch(config_dir: Option<&str>, rows: &[Value]) -> Option<(String, String)> {
-    let same = |row: &Value| match config_dir {
-        None => row["ativa"] == true,
-        Some(dir) => row["id"].as_str().and_then(|id| id.strip_prefix("claude:")).is_some_and(|path| same_dir(path, dir)),
+/// Uma conta Claude ou Codex na regra de cota.
+#[derive(Debug)]
+struct QuotaAccount {
+    /// O id da credencial (`claude:<pasta>`, `codex:<pasta>`), o mesmo de `/api/credenciais`.
+    id: String,
+    label: String,
+    usage: Option<f64>,
+    /// Leitura atual (`lida`): só ela serve de destino; a guardada de antes do token vencer, não.
+    read: bool,
+    active: bool,
+    /// O valor do pedido (`config_dir` ou `codex_account`) que abre nesta conta.
+    choice: String,
+}
+
+#[derive(Debug)]
+enum QuotaCheck { Room, Unknown { current: QuotaAccount, best: Option<QuotaAccount> }, Exhausted { current: QuotaAccount, best: Option<QuotaAccount> } }
+
+/// Uso conhecido: a janela mais cheia da leitura (a guardada de antes do token vencer também vale) e
+/// 100% enquanto o limite que a troca automática gravou não volta.
+fn quota_usage(row: Option<&Value>, spent_until: Option<f64>, now: f64) -> Option<f64> {
+    let read = row.filter(|row| row["estado"] == "lida" || row["ts"].is_number())
+        // Janela que já virou (reset no passado) recomeçou do zero; a leitura guardada ficaria 100% para sempre.
+        .and_then(|row| row["janelas"].as_array()?.iter()
+            .filter_map(|w| if w["reset_ts"].as_f64().is_some_and(|r| r <= now) { Some(0.) } else { w["pct"].as_f64() })
+            .reduce(f64::max));
+    read.into_iter().chain(spent_until.filter(|until| *until > now).map(|_| 100.0)).reduce(f64::max)
+}
+
+/// A conta atual e as outras do mesmo provedor; `None` = conta que a regra não alcança (Codex sem pasta).
+fn quota_accounts(provider: AgentProvider, current: Option<&str>, rows: &[Value], spent: &std::collections::BTreeMap<String, f64>,
+                  facts: &dyn OpenFacts) -> Option<(QuotaAccount, Vec<QuotaAccount>)> {
+    let now = facts.now();
+    let read = |row: Option<&Value>| row.is_some_and(|row| row["estado"] == "lida");
+    let label = |row: Option<&Value>, fallback: &str| row.and_then(|row| row["label"].as_str()).map_or_else(|| fallback.to_owned(), str::to_owned);
+    if provider == AgentProvider::Codex {
+        let current = current.unwrap_or("default");
+        let account = |id: &str| -> Option<QuotaAccount> {
+            let home = facts.codex_home(id).ok()?;
+            let row = rows.iter().find(|row| row["provedor"] == "codex"
+                && row["id"].as_str().and_then(|i| i.strip_prefix("codex:")).is_some_and(|path| same_dir(path, &home)));
+            Some(QuotaAccount { id: row.and_then(|r| r["id"].as_str()).map_or_else(|| format!("codex:{home}"), str::to_owned),
+                label: label(row, id), usage: quota_usage(row, None, now), read: read(row), active: false,
+                choice: id.to_owned() })
+        };
+        let others = facts.codex_logins().unwrap_or_default().iter().filter(|login| login.id != current)
+            .filter_map(|login| account(&login.id)).collect();
+        return Some((account(current)?, others));
+    }
+    let spent_until = |path: &str| spent.iter().find(|(dir, _)| same_dir(dir, path)).map(|(_, until)| *until);
+    let account = |row: &Value| -> Option<QuotaAccount> {
+        let path = row["id"].as_str()?.strip_prefix("claude:")?;
+        Some(QuotaAccount { id: row["id"].as_str()?.to_owned(), label: label(Some(row), path), usage: quota_usage(Some(row), spent_until(path), now),
+            read: read(Some(row)), active: row["ativa"] == true, choice: path.to_owned() })
     };
-    let current = rows.iter().find(|row| row["provedor"] == "claude" && same(row))?;
-    let usage = current["janelas"].as_array()?.iter().filter_map(|w| w["pct"].as_f64()).reduce(f64::max)?;
-    if current["estado"] != "lida" || usage < QUOTA_LIMIT {
-        return None;
+    let claude: Vec<QuotaAccount> = rows.iter().filter(|row| row["provedor"] == "claude").filter_map(account).collect();
+    let (mine, others): (Vec<_>, Vec<_>) = claude.into_iter().partition(|a| match current {
+        None => a.active,
+        Some(dir) => same_dir(&a.choice, dir),
+    });
+    let current = mine.into_iter().next().unwrap_or_else(|| {
+        // Sem linha de cota: ainda vale o limite gravado da pasta pedida.
+        let dir = current.unwrap_or_default();
+        let named = if dir.is_empty() { "padrão" } else { dir };
+        QuotaAccount { id: format!("claude:{named}"), label: named.to_owned(),
+            usage: quota_usage(None, current.and_then(spent_until), now), read: false, active: current.is_none(),
+            choice: dir.to_owned() }
+    });
+    Some((current, others))
+}
+
+/// `cotas.conta_com_cota`: a conta a 95% ou mais (ou de cota desconhecida) e a de mais folga que a
+/// substitui (a ativa no empate), desde que tenha mais folga que ela, mesmo acima dos 95%; no lugar
+/// da desconhecida, só uma abaixo dos 95%.
+fn quota_verdict(provider: AgentProvider, current: Option<&str>, rows: &[Value],
+                 spent: &std::collections::BTreeMap<String, f64>, facts: &dyn OpenFacts) -> QuotaCheck {
+    let Some((current, others)) = quota_accounts(provider, current, rows, spent, facts) else { return QuotaCheck::Room };
+    if current.usage.is_some_and(|usage| usage < QUOTA_LIMIT) {
+        return QuotaCheck::Room;
     }
-    let best = crate::accounts::quotas::suggestion(rows)?;
-    if best["id"] == current["id"] || best["folga"].as_f64()? <= 100.0 - usage {
-        return None;
+    // Conta no limite (100% ou `limit-spent`) nunca é destino; com a atual desconhecida, só abaixo dos 95%.
+    let ceiling = current.usage.map_or(QUOTA_LIMIT, |usage| usage.min(100.0));
+    let best = others.into_iter().filter(|a| a.read && a.id != current.id)
+        .filter_map(|a| Some((a.usage?, a)))
+        .filter(|(other, _)| *other < ceiling)
+        .reduce(|best, next| if (-next.0, next.1.active) > (-best.0, best.1.active) { next } else { best })
+        .map(|(_, a)| a);
+    if current.usage.is_none() { QuotaCheck::Unknown { current, best } } else { QuotaCheck::Exhausted { current, best } }
+}
+
+/// A regra pelo cache; sem cota conhecida da conta, uma leitura curta da rede antes de desistir.
+fn quota_check(provider: AgentProvider, current: Option<&str>, facts: &dyn OpenFacts, reads: &QuotaReads) -> QuotaCheck {
+    let spent = if provider == AgentProvider::Claude { facts.spent_accounts() } else { Default::default() };
+    match quota_verdict(provider, current, &facts.quotas(false), &spent, facts) {
+        QuotaCheck::Unknown { .. } => quota_verdict(provider, current, reads.network.get_or_init(|| facts.quotas(true)), &spent, facts),
+        known => known,
     }
-    let label = |row: &Value| row["label"].as_str().unwrap_or_default().to_owned();
-    Some((best["path"].as_str()?.to_owned(), format!("conta {} com {usage:.0}% de uso; a sessão nasceu em {}", label(current), label(&best))))
 }
 
 /// `Path(a).resolve() == Path(b).resolve()`, sem exigir que existam.
@@ -504,21 +628,36 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
         // O nível do Codex varia por modelo: só o catálogo cruza modelo × nível × Fast.
         // Conta nomeada (pedida, herdada ou a conectada no lugar da padrão) lê o catálogo dela.
         let home = codex_home.as_deref().filter(|_| codex_account.is_some());
-        match facts.codex_choice(home, request.model.as_deref(), request.effort.as_deref(), request.service_tier) {
-            Ok(()) => {}
-            Err(CodexCatalogError::Invalid(e)) => return Err(OpenError::new(422, "erro_codex_escolha_invalida", e.clone()).with_params(json!({"erro": e}))),
-            Err(CodexCatalogError::Unavailable(e)) if request.service_tier == Some(ServiceTier::Priority) => {
-                return Err(OpenError::new(502, "erro_codex_catalogo_invalido", format!("Fast não pôde ser conferido: {e}")).with_params(json!({"erro": e})));
-            }
-            // Catálogo fora do ar não impede abrir: a escolha segue e o CLI decide.
-            Err(CodexCatalogError::Unavailable(e)) => tracing::warn!("codex: catalogo indisponivel, escolha nao conferida: {e}"),
-            Err(CodexCatalogError::Refused(e)) => return Err(OpenError::new(502, "erro_codex_catalogo_invalido", e.clone()).with_params(json!({"erro": e}))),
+        if let Some(error) = codex_refusal(facts.codex_choice(home, request.model.as_deref(), request.effort.as_deref(), request.service_tier),
+                                           request.service_tier) {
+            return Err(error);
         }
     }
     if request.new_branch && request.branch.is_none() {
         return Err(OpenError::new(400, "erro_criacao_sessao", "branch nova sem nome"));
     }
     Ok(model)
+}
+
+/// Como cada resposta do catálogo do Codex recusa a abertura; `None` = segue.
+fn codex_refusal(result: Result<(), CodexCatalogError>, tier: Option<ServiceTier>) -> Option<OpenError> {
+    match result {
+        Ok(()) => None,
+        Err(CodexCatalogError::Invalid(e)) => Some(OpenError::new(422, "erro_codex_escolha_invalida", e.clone()).with_params(json!({"erro": e}))),
+        Err(CodexCatalogError::Unavailable(e)) if tier == Some(ServiceTier::Priority) =>
+            Some(OpenError::new(502, "erro_codex_catalogo_invalido", format!("Fast não pôde ser conferido: {e}")).with_params(json!({"erro": e}))),
+        // Catálogo fora do ar não impede abrir: a escolha segue e o CLI decide.
+        Err(CodexCatalogError::Unavailable(e)) => { tracing::warn!("codex: catalogo indisponivel, escolha nao conferida: {e}"); None }
+        Err(CodexCatalogError::Refused(e)) => Some(OpenError::new(502, "erro_codex_catalogo_invalido", e.clone()).with_params(json!({"erro": e}))),
+    }
+}
+
+/// A conta Codex de destino da troca por cota aceita o modelo, o esforço e o Fast do pedido.
+fn codex_fits(request: &SessionOpenRequest, account: &str, facts: &dyn OpenFacts) -> bool {
+    if !(truthy(&request.model) || truthy(&request.effort) || request.service_tier.is_some()) { return true; }
+    let Ok(home) = facts.codex_home(account) else { return false };
+    codex_refusal(facts.codex_choice(Some(&home), request.model.as_deref(), request.effort.as_deref(), request.service_tier),
+        request.service_tier).is_none()
 }
 
 /// `model_args.validar`: a regex é a barreira do shell, e cada binário tem a própria flag de esforço.
@@ -590,13 +729,30 @@ fn validate_name(raw: &str, provider: AgentProvider, headless: bool, request: &S
     Ok(name)
 }
 
+/// A base do nome que ninguém escolheu: a pasta saneada, ou `sessao`.
+pub(crate) fn folder_base(cwd: &str) -> String {
+    let folder = cwd.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or_default();
+    Some(crate::list::discover_other::sanitize_session_name(folder)).filter(|n| !n.is_empty()).unwrap_or_else(|| "sessao".into())
+}
+
+/// A base (ASCII, já saneada) cede espaço ao sufixo para o nome caber no teto.
+pub(crate) fn fit_name(base: &str, suffix: &str) -> String {
+    format!("{}{suffix}", base[..base.len().min(NAME_MAX - suffix.len())].trim_end_matches('-'))
+}
+
+/// O nome tem a forma do que a pasta dá: a base dela ou `sessao`, com ou sem `-N`.
+pub(crate) fn folder_pattern(name: &str, cwd: &str) -> bool {
+    let from = |base: &str| name == fit_name(base, "") || name.rsplit_once('-').is_some_and(|(_, n)|
+        (1..8).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()) && name == fit_name(base, &format!("-{n}")));
+    from(folder_base(cwd).as_str()) || from("sessao")
+}
+
 /// O nome que ninguém escolheu, pela regra do `uniqueSessionName` das telas. Com `take_reserved`, o
 /// nome que só uma reserva pré-aquecida segura conta como livre: a pessoa não a vê, e a abertura a descarta.
 fn folder_name(cwd: &str, take_reserved: bool, facts: &dyn OpenFacts) -> Result<String, OpenError> {
-    let folder = cwd.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or_default();
-    let base = Some(crate::list::discover_other::sanitize_session_name(folder)).filter(|n| !n.is_empty()).unwrap_or_else(|| "sessao".into());
-    // A base cede espaço ao sufixo para o nome caber no teto; quem está abrindo agora também ocupa.
-    let fit = |suffix: &str| format!("{}{suffix}", base[..base.len().min(NAME_MAX - suffix.len())].trim_end_matches('-'));
+    let base = folder_base(cwd);
+    // Quem está abrindo agora também ocupa.
+    let fit = |suffix: &str| fit_name(&base, suffix);
     let held = |name: &str| if take_reserved { super::open::NameClaim::opening_without_reserves(name) } else { super::open::NameClaim::opening(name) };
     let mut name = fit("");
     for n in 2.. {
@@ -608,3 +764,17 @@ fn folder_name(cwd: &str, take_reserved: bool, facts: &dyn OpenFacts) -> Result<
 
 /// O Codex nunca herda o modo da criadora: só o pedido conta.
 fn request_permission(request: &SessionOpenRequest) -> Option<&str> { request.permission_mode.as_deref() }
+
+#[cfg(test)]
+mod quota_usage_tests {
+    use super::*;
+
+    #[test]
+    fn a_window_past_its_reset_no_longer_counts() {
+        let row = json!({"estado": "expirada", "ts": 1.0, "janelas": [{"pct": 100.0, "reset_ts": 500.0}, {"pct": 30.0, "reset_ts": 9000.0}]});
+        assert_eq!(quota_usage(Some(&row), None, 1000.), Some(30.));
+        assert_eq!(quota_usage(Some(&row), None, 100.), Some(100.));
+        let renewed = json!({"estado": "lida", "janelas": [{"pct": 100.0, "reset_ts": 500.0}]});
+        assert_eq!(quota_usage(Some(&renewed), None, 1000.), Some(0.));
+    }
+}

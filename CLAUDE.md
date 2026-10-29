@@ -571,6 +571,15 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   aviso de grupo atravessa o par com um salto só. Sessão de fora aparece dentro do grupo, nunca em
   seção própria. Motivo em
   [plataforma.md](docs/decisoes/plataforma.md#par-externo-sessões-de-pessoas-diferentes).
+- **Sugestão de nome só para o nome que a pasta deu, e nunca aplicada sozinha.** `name_auto` no
+  `SessionSpec` marca o nome genérico; o executor da organização do ditado gera a sugestão a pedido
+  do cliente do dono; a faixa aplica a rota de renomear. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#sugestão-de-nome-para-sessão-com-nome-genérico-28102026).
+- **Etiqueta de máquina e conta mora no servidor da máquina** (`/api/tags`, `~/.hangar/tags.json`,
+  Rust) e chega aos clientes pelo evento `tags` da lista do dono, já resolvida por `conta` da linha.
+  A `conta` da linha e o `id` de `/api/credenciais` saem de `accounts::catalog::resolved`; não crie
+  outra canonização de caminho de conta. Cor e ícone são chave, nunca valor de cor. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#etiquetas-de-máquina-e-conta-moram-no-servidor-da-máquina-28102026).
 - **Logs pertencem ao Hangar, não à conta.** Use `log_paths.base()`; diário exportável registra
   etapas, códigos e origem da falha. Texto de conversa, credenciais e saídas brutas ficam fora
   dele. O shell Electron também escreve lá (`privado/shell.log`): lançado pelo `.desktop`, o

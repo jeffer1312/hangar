@@ -111,7 +111,7 @@ struct MenuRead { target: Target, seq: u64, mute: Mute, branches: Option<Branche
 
 #[derive(Clone, Debug)]
 /// O renomear leva o número do pedido: resposta de um diálogo cancelado não fecha a tentativa seguinte na mesma sessão.
-pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> } }
+pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, DismissRename }
 
 /// Gravações de git e o remover vínculo: o resultado é a notificação da sessão, já em texto.
 enum GitWrite { Pull, Checkout(String), StashCheckout(String), Unlink }
@@ -915,6 +915,22 @@ impl Hangar {
         self.write(old, Write::Rename(new, self.sidebar.rename_seq), cx);
     }
 
+    /// Renomear sem diálogo (faixa de sugestão): mesma gravação e mesma resposta do renomear da linha.
+    pub(super) fn rename_session_to(&mut self, target: Target, new: String, cx: &mut Context<Self>) {
+        if self.sidebar.renaming.contains(&target) { return; }
+        self.sidebar.rename_seq += 1;
+        self.sidebar.renaming.insert(target.clone());
+        self.write(target, Write::Rename(new, self.sidebar.rename_seq), cx);
+    }
+
+    pub(super) fn is_renaming(&self, target: &Target) -> bool { self.sidebar.renaming.contains(target) }
+
+    /// "Agora não" da sugestão de nome: some na hora; se o servidor não guardar a recusa, volta com o motivo.
+    pub(super) fn dismiss_rename_suggestion(&mut self, target: Target, cx: &mut Context<Self>) {
+        self.rename_suggest.dismissed.insert(target.clone());
+        self.write(target, Write::DismissRename, cx);
+    }
+
     /// Grava na máquina da linha; sem a conexão dela a falha volta pelo mesmo caminho da resposta, nunca calada.
     /// Fechar: a linha some na hora e volta se o servidor recusar (`Wrote`).
     pub(super) fn delete_target(&mut self, target: Target, cx: &mut Context<Self>) {
@@ -937,6 +953,8 @@ impl Hangar {
                 Write::Editor => match editor { Some(open) => open.await, None => api.act(name, &["open-editor"], None, false, 15).await },
                 Write::Delete => api.act(name, &[], None, true, 30).await,
                 Write::Rename(new, _) => api.act(name, &["rename"], Some(json!({"new": new})), false, 30).await,
+                // 204 sem corpo: o `act` tentaria ler JSON.
+                Write::DismissRename => api.server_send(reqwest::Method::DELETE, &["sessions", name.as_str(), "rename-suggestion"], None, 15).await,
                 Write::Mode(terminal) => api.act(name, &["modo-execucao"], Some(json!({"terminal": terminal})), false, crate::api::REOPEN_SECONDS).await,
                 Write::Reload => api.act(name, &["recarregar"], None, false, crate::api::REOPEN_SECONDS).await,
                 Write::Account { path, engine_account, .. } => api.act(name, &["conta"], Some(account_body(path, engine_account.as_deref())), false, crate::api::REOPEN_SECONDS).await,
@@ -1289,6 +1307,11 @@ impl Hangar {
                     (Write::Reload, Err(error)) => Some(Notification::error(failed("sidebar_reload_failed", &error))),
                     (Write::Account { label, .. }, Ok(_)) => Some(Notification::success(tr("sidebar_same_moved").replace("{n}", label))),
                     (Write::Account { .. }, Err(error)) => Some(Notification::error(failed("sidebar_same_failed", &error))),
+                    (Write::DismissRename, Ok(_)) => None,
+                    (Write::DismissRename, Err(error)) => {
+                        self.rename_suggest.dismissed.remove(&target);
+                        Some(Notification::error(Self::fetch_failure(&error)))
+                    }
                     (Write::Delete, Ok(value)) => {
                         // Fechou, mas um par do grupo não foi avisado: o motivo aparece em vez de fechar mudo.
                         value.get("warning").filter(|w| !w.is_null()).map(|w| Notification::warning(crate::api::warning_text(w)))

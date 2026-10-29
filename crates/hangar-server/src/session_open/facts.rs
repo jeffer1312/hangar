@@ -32,7 +32,16 @@ pub struct LocalFacts {
 
 impl LocalFacts {
     pub fn new(env: AccountEnvironment, runtime: tokio::runtime::Handle) -> Self {
-        Self { accounts: AccountService::new(env), runtime, models: Default::default(), slots: tokio::sync::Semaphore::new(4),
+        Self::with_service(AccountService::new(env), runtime)
+    }
+
+    /// Com o serviço de contas do servidor: a leitura de cota da abertura divide cache, fila e espera do 429 com ele.
+    pub fn shared(env: AccountEnvironment, accounts: &AccountService, runtime: tokio::runtime::Handle) -> Self {
+        Self::with_service(AccountService { env, ..accounts.clone() }, runtime)
+    }
+
+    fn with_service(accounts: AccountService, runtime: tokio::runtime::Handle) -> Self {
+        Self { accounts, runtime, models: Default::default(), slots: tokio::sync::Semaphore::new(4),
             mux: Default::default(), procs: std::sync::Arc::new(SystemProcs::default()), serverless: false }
     }
 
@@ -214,7 +223,9 @@ pub fn fixed_account(accounts: &AccountService, engine: &str, account: &str) -> 
     let (id, home, prefix, _) = entries.into_iter().find(|e| e.0 == account)
         .ok_or_else(|| cliproxy(format!("CLIProxyAPI: conta {account} desconhecida, desconectada ou desativada")))?;
     let prefix = prefix.ok_or_else(|| cliproxy("CLIProxyAPI: conta sem prefixo; prepare as contas primeiro"))?;
-    Ok(super::claude::EngineRoute { account: id, credential_id: format!("codex:{home}"), home, base_url: local, prefix })
+    // O id na forma dos ids de conta (cota, tela de Contas, etiquetas): sem o `\\?\` do Windows.
+    let credential_id = format!("codex:{}", crate::accounts::catalog::resolved(std::path::Path::new(&home)).to_string_lossy());
+    Ok(super::claude::EngineRoute { account: id, credential_id, home, base_url: local, prefix })
 }
 
 /// `cliproxy_accounts.prefix_model` sem o prefixo: o modelo como a conta o expõe.
@@ -450,10 +461,37 @@ impl OpenFacts for LocalFacts {
             .map(|(account, _)| CodexLogin { id: account.id, is_default: account.is_default }).collect())
     }
 
-    fn claude_quotas(&self) -> Vec<Value> {
-        // Sem leitura, nada muda: a conta fica como estava (como o Python sem o Rust).
-        let rows = self.runtime.block_on(self.accounts.quotas(None, false, true)).unwrap_or(Value::Null);
-        rows.as_array().into_iter().flatten().filter(|row| row["provedor"] == "claude").cloned().collect()
+    fn quotas(&self, network: bool) -> Vec<Value> {
+        // Nos testes a rede iria à Anthropic com o token falso das fixtures; o comando `open` dos testes
+        // de integração é outro processo e desliga pelo ambiente.
+        let offline = cfg!(test) || !crate::accounts::quotas::open_network_read()
+            || self.env().base.get("HANGAR_QUOTA_NETWORK").is_some_and(|v| v == "0");
+        let (rows, timed_out) = if network && !offline {
+            self.runtime.block_on(self.accounts.quotas_within(None, false, std::time::Duration::from_secs(5), None))
+        } else {
+            (self.runtime.block_on(self.accounts.quotas(None, false, true)), false)
+        };
+        // A conta sem cota conhecida é registrada por quem chama; aqui fica a causa.
+        if timed_out { tracing::warn!(code = "open_quota_read_timeout", "cota não respondeu em 5 s na abertura; valeu o cache"); }
+        let rows = rows.unwrap_or_else(|e| {
+            tracing::warn!(code = "open_quota_read_failed", cause = e.code, message = %e.message, "leitura de cota falhou na abertura");
+            Value::Null
+        });
+        rows.as_array().into_iter().flatten()
+            .filter(|row| matches!(row["provedor"].as_str(), Some("claude" | "codex"))).cloned().collect()
+    }
+
+    fn spent_accounts(&self) -> BTreeMap<String, f64> {
+        // O mesmo arquivo da troca automática por limite (`limit_switch::Spent`); ilegível = nenhuma.
+        std::fs::read(self.accounts.quota_path().with_file_name("limit-spent.json")).ok()
+            .and_then(|raw| serde_json::from_slice(&raw).ok()).unwrap_or_default()
+    }
+
+    fn quota_unknown(&self, name: &str, account: &str) {
+        tracing::warn!(code = "open_quota_unknown", session = name, account, "cota da conta desconhecida na abertura; a sessão segue nela");
+        crate::diag::record_blocking(crate::diag::diary_dir_in(self.env()).as_deref(),
+            &[json!({"evento": "rust.open_quota_unknown", "nivel": "aviso", "sessao": name, "conta": account, "codigo": "open_quota_unknown"})],
+            "cota desconhecida na abertura");
     }
 
     fn existing_dir(&self, cwd: &str) -> Option<String> {
@@ -606,4 +644,22 @@ impl OpenFacts for LocalFacts {
     fn new_key(&self) -> String { crate::mods::state::random_hex(16) }
 
     fn now(&self) -> f64 { crate::accounts::quotas::now() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cota da abertura usa o cache, a fila de leitura e a espera do 429 do serviço do servidor, com o
+    /// ambiente da abertura.
+    #[test]
+    fn shared_facts_read_quotas_through_the_server_service() {
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let env = |home: &str| AccountEnvironment::from_map([("HOME".to_owned(), home.to_owned())].into());
+        let server = AccountService::new(env("/srv"));
+        let facts = LocalFacts::shared(env("/abertura"), &server, runtime.handle().clone());
+        assert!(std::sync::Arc::ptr_eq(&facts.accounts.quotas.cache, &server.quotas.cache));
+        assert!(std::sync::Arc::ptr_eq(&facts.accounts.quotas.refresh, &server.quotas.refresh));
+        assert_eq!(facts.env().home, PathBuf::from("/abertura"));
+    }
 }

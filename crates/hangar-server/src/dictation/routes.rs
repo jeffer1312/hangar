@@ -25,7 +25,7 @@ fn failure(status: u16, code: &str, detail: &str) -> Response {
 }
 
 /// A causa vai ao diário (nunca o corpo, que leva chaves); quem chama só preserva o cru.
-async fn configuration(state: &AppState) -> Result<OrganizationConfig, ()> {
+pub(crate) async fn configuration(state: &AppState) -> Result<OrganizationConfig, ()> {
     let failed = |cause: &str, status: Option<u16>| {
         tracing::warn!(
             code = "dictation_rust_unavailable",

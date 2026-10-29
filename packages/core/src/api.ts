@@ -13,6 +13,7 @@ import {
   inviteAllows, parsePairLink, SharePrerequisiteError, ShareReachError, tailscaleEnableUrl, type ShareCreated, type ShareInfo, type SharePrereqs,
 } from './share';
 import type { ExternalPair } from './externalPairs';
+import type { TagsChange, TagsDoc } from './tags';
 import type { PairLevel } from './types';
 import type { CotaContaResumo } from './cotaResumo';
 import type { Shortcut, ProjectShortcut, ProjectShortcuts } from './shortcuts';
@@ -897,6 +898,46 @@ export function uniqueSessionName(base: string, taken: Set<string>): string {
   return `${clean}-${i}`;
 }
 
+/** Nome que o Hangar inventou a partir da pasta (`uniqueSessionName`): só filtra chamadas, quem
+ *  decide é o servidor (409 `erro_nome_nao_generico`). */
+export function looksGenericName(name: string, cwd: string | null | undefined): boolean {
+  const stem = name.replace(/-\d{1,7}$/, '');
+  return [name, stem].some((n) => n === 'sessao' || (!!cwd && n === (sanitizeSessionName(basename(cwd)) || 'sessao')));
+}
+
+const renameSuggestionPath = (name: string) => `/api/sessions/${encodeURIComponent(name)}/rename-suggestion`;
+
+/** Pede o nome sugerido para a sessão genérica. Nunca lança: sem sugestão (204), nome escolhido
+ *  (409), servidor antigo (404) ou falha dão `null`, e a tela não avisa nada. */
+export async function requestRenameSuggestion(server: Server, name: string): Promise<string | null> {
+  try {
+    // O servidor espera o executor do ditado (até 60 s).
+    const res = await apiFetchRes(renameSuggestionPath(name), { method: 'POST', signal: AbortSignal.timeout(75_000) }, server);
+    if (res.status !== 200) return null;
+    const body = await res.json() as { suggestion?: unknown };
+    return typeof body.suggestion === 'string' && body.suggestion ? body.suggestion : null;
+  } catch {
+    return null;
+  }
+}
+
+// Uma vez por sessão e por vida do cliente: o executor é caro e a resposta fica guardada no spec.
+const renameSuggestionAsked = new Set<string>();
+
+/** Gatilho da faixa "Renomear para X?" ao abrir a conversa; `null` = não pediu. */
+export function requestRenameSuggestionOnce(server: Server, row: SessionInfo, hasUserMessage: boolean): Promise<string | null> | null {
+  const key = `${server.id}::${row.name}`;
+  if (server.invite || !hasUserMessage || row.rename_suggestion || renameSuggestionAsked.has(key) || !looksGenericName(row.name, row.cwd)) return null;
+  renameSuggestionAsked.add(key);
+  return requestRenameSuggestion(server, row.name);
+}
+
+/** "Agora não": o servidor guarda a recusa e a linha da lista deixa de trazer a sugestão. */
+export async function dismissRenameSuggestion(server: Server, name: string): Promise<void> {
+  const res = await apiFetchRes(renameSuggestionPath(name), { method: 'DELETE', signal: AbortSignal.timeout(8000) }, server);
+  await ensureOk(res, server);
+}
+
 // Abrir ou retomar sessão leva bem mais que o prazo padrão: estourar antes faz a tela acusar erro
 // com a sessão nascendo e o reenvio duplicá-la.
 const SESSION_BIRTH_MS = 120_000;
@@ -931,6 +972,26 @@ export async function getSessionDefaultsForServer(server: Server, provider: Prov
   const result = await apiFetchForServer<{ defaults: SessionDefaults | null }>(server,
     `/api/session-defaults?${query}`, { signal: comTeto(signal, 8000) });
   return result.defaults;
+}
+
+// 404 = servidor antigo, sem a rota: `null`, sem erro na tela.
+async function nullOn404<T>(request: Promise<T>): Promise<T | null> {
+  try {
+    return await request;
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) return null;
+    throw e;
+  }
+}
+
+/** Etiquetas da máquina e das contas; `null` = servidor antigo. */
+export function getTagsForServer(server: Server): Promise<TagsDoc | null> {
+  return nullOn404(apiFetchForServer<TagsDoc>(server, '/api/tags'));
+}
+
+/** Devolve o documento inteiro já gravado; `null` = servidor antigo. */
+export function putTagsForServer(server: Server, change: TagsChange): Promise<TagsDoc | null> {
+  return nullOn404(apiFetchForServer<TagsDoc>(server, '/api/tags', { method: 'PUT', body: JSON.stringify(change) }));
 }
 
 // A senha só viaja no corpo, nunca na URL. Prazo largo: o servidor pode reiniciar o daemon do chaveiro.
@@ -1642,8 +1703,8 @@ export async function deleteSession(name: string): Promise<{ ok: boolean; warnin
 }
 
 // Renomeia a sessao do tmux. Devolve o nome final (sanitizado pelo backend).
-export async function renameSession(name: string, newName: string): Promise<{ ok: boolean; name: string }> {
-  return apiFetch<{ ok: boolean; name: string }>(`/api/sessions/${encodeURIComponent(name)}/rename`, {
+export async function renameSession(name: string, newName: string, server?: Server | null): Promise<{ ok: boolean; name: string }> {
+  return sessionFetch<{ ok: boolean; name: string }>(server, `/api/sessions/${encodeURIComponent(name)}/rename`, {
     method: 'POST',
     body: JSON.stringify({ new: newName }),
   });

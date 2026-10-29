@@ -8,7 +8,7 @@ import { MachinePage } from '../../src/features/machines/MachinePage';
 import { Notice } from '../../src/features/machines/parts';
 import * as m from '../../src/paraglide/messages';
 
-const views: MachineView[] = ['edit', 'connection', 'discover', 'remote', 'advanced', 'identity', 'terminal', 'diagnostics', 'peers', 'maintenance'];
+const views: MachineView[] = ['edit', 'connection', 'discover', 'remote', 'advanced', 'identity', 'terminal', 'diagnostics', 'peers', 'maintenance', 'tag'];
 
 export default function MachineRoute() {
   const params = useLocalSearchParams<{ id?: string; view?: string }>();

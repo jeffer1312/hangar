@@ -132,7 +132,8 @@ fn install(root: &Path, env_file: &str) -> std::path::PathBuf {
 
 /// Ambiente vazio; no Windows o `SystemRoot` fica, porque sem ele o Winsock não sobe e nenhuma conexão sai.
 fn clean_env(command: &mut Command) -> &mut Command {
-    command.env_clear();
+    // Outro processo: a leitura de cota pela rede da abertura sai pelo ambiente, não pelo interruptor deste.
+    command.env_clear().env("HANGAR_QUOTA_NETWORK", "0");
     if let Some(system_root) = std::env::var_os("SystemRoot") { command.env("SystemRoot", system_root); }
     command
 }

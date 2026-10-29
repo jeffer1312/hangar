@@ -1244,6 +1244,20 @@ impl Hangar {
         // Uma escrita em voo (nome, saída, remoção, login) segura as outras em toda linha.
         let busy = self.accounts_busy();
         let menu_title = row.name.clone();
+        // A etiqueta da conta mora na máquina dela, a desta lista.
+        let tag_item = {
+            let (this, subject, title) = (this.clone(), super::tags::Subject::Account { id: row.id.clone(), provider: row.glyph.0.to_owned() },
+                format!("{} · {}", tr_shared("tags_account_title", &[]), row.name));
+            move || {
+                let (this, subject, title) = (this.clone(), subject.clone(), title.clone());
+                PopupMenuItem::new(tr_shared("tags_account_title", &[])).on_click(move |_, window, cx| {
+                    let _ = this.update(cx, |this, cx| {
+                        let Some(api) = this.api.clone() else { return };
+                        this.open_tag_editor(api, subject.clone(), title.clone(), window, cx);
+                    });
+                })
+            }
+        };
         let menu = Button::new(SharedString::from(format!("accounts-menu-{}", row.id))).ghost().small().icon(IconName::Ellipsis)
             .accessibility_label(tr("accounts_more").replace("{name}", &row.name))
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
@@ -1257,6 +1271,7 @@ impl Hangar {
                     })
                 };
                 sidebar::menu_style(menu).min_w(px(220.)).label(menu_title.clone()).item(item("accounts_rename", |this, id, window, cx| this.start_rename(id, window, cx)))
+                    .item(tag_item())
                     .when(sign_out || cookie_set || remove, |m| m.separator())
                     .when(sign_out, |m| m.item(item("accounts_sign_out", |this, id, window, cx| this.confirm_change(id, ChangeKind::SignOut, window, cx))))
                     .when(cookie_set, |m| m.item(item("accounts_cookie_clear", |this, id, window, cx| this.confirm_clear_cookie(id, window, cx))))

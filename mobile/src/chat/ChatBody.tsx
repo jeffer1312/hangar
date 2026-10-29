@@ -10,6 +10,7 @@ import { useSessions } from '../stores/sessions';
 import { confirmFirstInput, readFirstInput, useNewConversation } from '../stores/newConversation';
 import { ChatHeader } from './ChatHeader';
 import { LoopChip } from './LoopChip';
+import { RenameSuggestion } from './RenameSuggestion';
 import { CodexCommandsChip } from './LiveWork';
 import { useActivity } from '../features/activity/useActivity';
 import { useAgentSubagents } from '../features/activity/useAgentSubagents';
@@ -127,6 +128,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
 
   const { events, eventsRevision } = chat.use(useShallow((s) => ({ events: s.events, eventsRevision: s.eventsRevision })));
   const projectEvents = useMemo(() => createEventProjection(), [chat]);
+  const hasUserMessage = useMemo(() => events.some((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-')), [events]);
   const stateEvent = chat.use((s) => s.stateEvent);
   const bufferingAnnounced = useRef(false);
   useEffect(() => {
@@ -520,6 +522,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
         onTogglePanel={onTogglePanel}
         panelOpen={panelOpen}
       />
+      <RenameSuggestion serverId={serverId} name={name} hasUserMessage={hasUserMessage} />
       <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} serverId={serverId} name={name} orq={orq}
                  provider={provider} semTerminal={semTerminal} temPergunta={!!askPayload}
                  recarregar={recarregavel ? { bloqueado: recarregarBloqueado, onPress: recarregar } : undefined} />

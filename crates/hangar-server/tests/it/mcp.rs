@@ -181,7 +181,8 @@ async fn catalog_is_the_python_one_with_the_whole_open_request() {
         }
         // A herança do modo mudou depois do Python (o padrão salvo vem antes): só a abertura do texto segue igual.
         let (rust_text, python_text) = (rust["description"].as_str().unwrap(), python["description"].as_str().unwrap());
-        assert!(rust_text.starts_with(python_text.split(" O que for omitido").next().unwrap()), "{rust_text}");
+        // "nesta máquina" saiu com o `servidor::nome`.
+        assert!(rust_text.starts_with(python_text.replacen(" nesta máquina", "", 1).split(" O que for omitido").next().unwrap()), "{rust_text}");
         assert!(rust_text.contains("padrão salvo no servidor"), "{rust_text}");
         assert_eq!(rust["outputSchema"], python["outputSchema"]);
         assert_eq!(rust["inputSchema"]["required"], python["inputSchema"]["required"]);

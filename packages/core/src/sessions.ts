@@ -5,13 +5,24 @@
 import type { SessionInfo, AggSession } from './types';
 import type { Server } from './servers';
 import { serverColor } from './servers';
+import { machineLabel, tagHex, type TagsEvent } from './tags';
 
 export type KeyringState = 'unlocked' | 'locked' | 'absent';
 
-export interface Slot { sessions: SessionInfo[] | null; error: string | null; keyring?: KeyringState | null }
+// `tags`: último evento `tags` do servidor; ausente = versão antiga, valem o nome e a cor locais.
+// `tagsRaw`: o `data` cru dele, para a reconexão que repete o mesmo evento não refazer as linhas.
+export interface Slot { sessions: SessionInfo[] | null; error: string | null; keyring?: KeyringState | null; tags?: TagsEvent | null; tagsRaw?: string }
+
+/** Slot novo com o `patch` por cima do anterior: o que ele não cita (etiquetas, chaveiro) segue igual. */
+export function patchSlot(slots: ReadonlyMap<string, Slot>, id: string, patch: Partial<Slot>): Slot {
+  return { sessions: null, error: null, ...slots.get(id), ...patch };
+}
 
 export interface ServerBucket {
   server: Server;
+  // Nome e cor da máquina já resolvidos pela etiqueta; ausentes = valem `server.label` e `serverColor`.
+  label?: string;
+  color?: string;
   sessions: AggSession[];   // já deduplicadas e enriquecidas
   error: string | null;     // 'offline' quando o stream caiu ou veio frame malformado
   loaded: boolean;          // já recebeu ao menos uma lista boa (pode coexistir com error = stale)
@@ -29,7 +40,7 @@ export interface Aggregate {
 // Sem isto, todo evento recriava {...s} pra TODAS as rows -> o keyed each das 4 views via prop nova
 // em 50+ cards e re-renderizava tudo ~3-4x/s com 5 servidores ativos. WeakMap: o array velho morre,
 // a entrada vai junto. label/color validados porque o usuário pode editar o servidor sem o slot mudar.
-const _rowCache = new WeakMap<object, { label: string; color: string; invite: boolean; byKey: Map<string, AggSession> }>();
+const _rowCache = new WeakMap<object, { label: string; color: string; invite: boolean; tags: TagsEvent | null; byKey: Map<string, AggSession> }>();
 
 // `hidden` = exclusão OTIMISTA: chaves `serverId::name` marcadas pelo doDelete das views somem da
 // lista na hora, sem esperar o SSE re-emitir (~1-2s). Se o delete falhar, a view desmarca e a linha
@@ -55,11 +66,15 @@ export function aggregateSessions(
       keyringLocked: slot?.keyring === 'locked' && slot.error !== 'offline',
     };
     if (slot?.sessions && slot.error !== 'offline') {
-      const color = serverColor(srv.id);
+      const tags = slot.tags ?? null;
+      const color = tagHex(tags?.machine?.color) ?? serverColor(srv.id);
+      const label = machineLabel(srv, tags);
+      bucket.label = label;
+      bucket.color = color;
       const invite = srv.invite === true;
       let cache = _rowCache.get(slot.sessions);
-      if (!cache || cache.label !== srv.label || cache.color !== color || cache.invite !== invite) {
-        cache = { label: srv.label, color, invite, byKey: new Map() };
+      if (!cache || cache.label !== label || cache.color !== color || cache.invite !== invite || cache.tags !== tags) {
+        cache = { label, color, invite, tags, byKey: new Map() };
         _rowCache.set(slot.sessions, cache);
       }
       for (const s of slot.sessions) {
@@ -69,7 +84,8 @@ export function aggregateSessions(
         seen.add(key);
         let row = cache.byKey.get(key);
         if (!row) {
-          row = { ...s, serverId: srv.id, serverLabel: srv.label, serverColor: color, serverInvite: invite };
+          row = { ...s, serverId: srv.id, serverLabel: label, serverColor: color, serverInvite: invite,
+            machineTag: tags?.machine ?? null, accountTag: (s.conta && tags?.accounts[s.conta]) || null };
           cache.byKey.set(key, row);
         }
         bucket.sessions.push(row);

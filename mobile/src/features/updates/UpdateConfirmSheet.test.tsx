@@ -17,6 +17,9 @@ vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({
 vi.mock('../../chat/AssistantBubble', () => ({ mkMarkdownStyle: () => ({}) }));
 vi.mock('react-native-enriched-markdown', () => ({ EnrichedMarkdownText: ({ markdown }: { markdown: string }) => React.createElement('article', null, markdown) }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
+// As animações das etiquetas e do nome usam linhas e bolhas reais, que puxam módulos nativos; aqui não importam.
+vi.mock('./TagsPlateAnimation', () => ({ TagsPlateAnimation: () => null }));
+vi.mock('./RenameSuggestionAnimation', () => ({ RenameSuggestionAnimation: () => null }));
 // O `Notice` vem de machines/parts, que importa a folha e o teclado nativos.
 vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: React.ReactNode }) => children }));
 vi.mock('../../ui/Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => children }));

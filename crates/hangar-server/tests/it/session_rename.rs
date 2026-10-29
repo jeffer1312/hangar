@@ -261,3 +261,63 @@ async fn transfer_in_progress_refuses() {
     assert_eq!((status, body["detail"]["code"].clone()), (409, json!("session_transfer_busy")));
     assert_eq!(srv.names(), ["velho"]);
 }
+
+fn naming_spec(key: &str, name: &str, cwd: &str, extra: Value) -> Value {
+    let mut spec = json!({"version": 1, "key": key, "name": name, "cwd": cwd, "provider": "claude", "surface": "headless",
+        "account": {"kind": "default"}, "account_source": "default", "jev": false, "read_only": false, "created_at": 1.0});
+    spec.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    spec
+}
+
+impl Srv {
+    fn headless(&self, name: &str, key: &str, spec: Value) {
+        let cwd = self.root.join("hangar");
+        std::fs::create_dir_all(&cwd).unwrap();
+        self.write(self.home.join(format!(".hangar/claude-headless/{name}.json")),
+            json!({"name": name, "key": key, "session_id": "11111111-2222-4333-8444-555555555555", "cwd": cwd}));
+        self.write(self.home.join(format!(".hangar/session-specs/{key}.json")), spec);
+    }
+    async fn suggestion(&self, method: reqwest::Method, name: &str, token: &str) -> (u16, Value) {
+        let resp = client().request(method, format!("http://{}/api/sessions/{name}/rename-suggestion", self.addr)).bearer_auth(token)
+            .send().await.unwrap();
+        let status = resp.status().as_u16();
+        (status, serde_json::from_str(&resp.text().await.unwrap()).unwrap_or(Value::Null))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_named_session_gets_no_rename_suggestion() {
+    let srv = server().await;
+    let key = "a".repeat(32);
+    let cwd = srv.root.join("hangar").display().to_string();
+    srv.headless("feat-x", &key, naming_spec(&key, "feat-x", &cwd, json!({"name_auto": false})));
+    let (status, body) = srv.suggestion(reqwest::Method::POST, "feat-x", OWNER).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (409, json!("erro_nome_nao_generico")));
+    assert_eq!(srv.suggestion(reqwest::Method::POST, "feat-x", "outro").await.0, 403, "só o dono");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn not_now_is_kept_and_hides_the_suggestion() {
+    let srv = server().await;
+    let key = "b".repeat(32);
+    let cwd = srv.root.join("hangar").display().to_string();
+    srv.headless("hangar", &key, naming_spec(&key, "hangar", &cwd, json!({"name_auto": true, "rename_suggestion": "etiquetas"})));
+    assert_eq!(srv.suggestion(reqwest::Method::POST, "hangar", OWNER).await, (200, json!({"suggestion": "etiquetas"})), "a guardada volta sem rodar o executor");
+    assert_eq!(srv.suggestion(reqwest::Method::DELETE, "hangar", OWNER).await.0, 204);
+    let spec = srv.read(srv.home.join(format!(".hangar/session-specs/{key}.json"))).unwrap();
+    assert_eq!((spec["rename_dismissed"].clone(), spec.get("rename_suggestion")), (json!(true), None));
+    assert_eq!(srv.suggestion(reqwest::Method::POST, "hangar", OWNER).await.0, 204, "recusada não volta");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rename_clears_the_generic_mark_and_the_suggestion() {
+    let srv = server().await;
+    let key = "c".repeat(32);
+    let cwd = srv.root.join("hangar").display().to_string();
+    srv.headless("hangar-2", &key, naming_spec(&key, "hangar-2", &cwd, json!({"name_auto": true, "rename_suggestion": "etiquetas"})));
+    assert_eq!(srv.rename("hangar-2", json!({"new": "etiquetas"})).await.0, 200);
+    let spec = srv.read(srv.home.join(format!(".hangar/session-specs/{key}.json"))).unwrap();
+    assert_eq!((spec["name_auto"].clone(), spec.get("rename_suggestion")), (json!(false), None));
+    let (status, body) = srv.suggestion(reqwest::Method::POST, "etiquetas", OWNER).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (409, json!("erro_nome_nao_generico")));
+}

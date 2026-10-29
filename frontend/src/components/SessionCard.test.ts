@@ -281,3 +281,64 @@ describe('SessionCard: par externo', () => {
     document.body.innerHTML = '';
   });
 });
+
+describe('SessionCard: placa da máquina e da conta, anel de contexto', () => {
+  const linha = (over: Partial<AggSession>) => ({
+    name: 's1', state: 'idle', serverId: 'casa', serverLabel: 'Casa', serverColor: '#f59e0b', ...over,
+  }) as AggSession;
+
+  it('etiqueta da conta vira a placa no lugar do chip antigo, com o nome do servidor', () => {
+    const { el, comp } = montar(linha({
+      conta: 'codex:/h/.codex-work', provider: 'codex',
+      accountTag: { name: 'ana', icon: 'credit-card', color: 'blue' },
+    }));
+    const conta = el.querySelector('.plate-account');
+    expect(conta?.textContent).toContain('ana');
+    expect(conta?.getAttribute('title')).toBe(m.tags_plate_account({ name: 'ana' }));
+    expect(el.querySelector('.conta-chip')).toBeNull();
+    // A máquina só entra quando a lista pede.
+    expect(el.querySelector('.plate-machine')).toBeNull();
+    unmount(comp);
+  });
+
+  it('servidor antigo (sem etiqueta da conta) mantém o chip calculado do id', () => {
+    const { el, comp } = montar(linha({ conta: 'claude:/h/.claude-work', accountTag: null }));
+    expect(el.querySelector('.plate')).toBeNull();
+    expect(el.querySelector('.conta-chip')?.textContent).toBe('work');
+    unmount(comp);
+  });
+
+  it('sem conta conhecida, sem pedaço de conta', () => {
+    const { el, comp } = montar(linha({ conta: null, accountTag: null }));
+    expect(el.querySelector('.plate-account')).toBeNull();
+    expect(el.querySelector('.conta-chip')).toBeNull();
+    unmount(comp);
+  });
+
+  it('showMachine põe a máquina na placa com o nome da etiqueta', () => {
+    const { el, comp } = montar(linha({
+      machineTag: { name: 'Casa', icon: 'house', color: 'amber' },
+      accountTag: { name: 'claude-200-2', icon: 'credit-card', color: null },
+    }), { showMachine: true });
+    const segs = [...el.querySelectorAll('.plate .plate-seg')];
+    expect(segs.map((s) => s.classList.contains('plate-machine'))).toEqual([true, false]);
+    expect(segs[0].textContent).toContain('Casa');
+    expect(segs[1].textContent).toContain('claude-200-2');
+    unmount(comp);
+  });
+
+  it('anel de contexto: âmbar a partir de 70, vermelho a partir de 90, ausente sem dado', () => {
+    const ctx = (used: number): Partial<AggSession> => ({ context: { used, window: 100 } });
+    const warn = montar(linha(ctx(75)));
+    expect(warn.el.querySelector('.lead .ring')?.classList.contains('tone-warn')).toBe(true);
+    const err = montar(linha(ctx(95)));
+    expect(err.el.querySelector('.lead .ring')?.classList.contains('tone-error')).toBe(true);
+    const ok = montar(linha(ctx(20)));
+    expect(ok.el.querySelector('.lead .ring')?.classList.contains('tone-ok')).toBe(true);
+    const none = montar(linha({}));
+    expect(none.el.querySelector('.lead .ring')).toBeNull();
+    // Com o anel, o ponto do estado continua dentro dele.
+    expect(warn.el.querySelector('.lead .ring .state-dot')).not.toBeNull();
+    for (const t of [warn, err, ok, none]) unmount(t.comp);
+  });
+});

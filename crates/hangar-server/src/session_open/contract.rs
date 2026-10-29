@@ -161,10 +161,16 @@ impl OpenFacts for Facts {
         self.local.saved_defaults(provider, engine, engine_account)
     }
     fn codex_logins(&self) -> Result<Vec<CodexLogin>, OpenError> { self.local.codex_logins() }
-    fn claude_quotas(&self) -> Vec<Value> {
-        self.record.lock().unwrap().rust_bridge.push(json!({"bridge": "accounts", "op": "quotas", "args": {"cached_only": true}}));
-        self.quotas.iter().filter(|row| row["provedor"] == "claude").cloned().collect()
+    fn quotas(&self, network: bool) -> Vec<Value> {
+        // O Python só lia o cache: a leitura de rede, que ele não fazia, devolve as mesmas linhas e não entra no registro.
+        if !network {
+            self.record.lock().unwrap().rust_bridge.push(json!({"bridge": "accounts", "op": "quotas", "args": {"cached_only": true}}));
+        }
+        self.quotas.iter().filter(|row| matches!(row["provedor"].as_str(), Some("claude" | "codex"))).cloned().collect()
     }
+    fn spent_accounts(&self) -> BTreeMap<String, f64> { BTreeMap::new() }
+    // O Python não registrava cota desconhecida; o diário do harness segue o dele.
+    fn quota_unknown(&self, _name: &str, _account: &str) {}
     fn existing_dir(&self, cwd: &str) -> Option<String> { self.local.existing_dir(cwd) }
     fn config_dirs(&self) -> Result<Vec<String>, OpenError> { self.local.config_dirs() }
     fn engines(&self) -> Vec<String> { self.local.engines() }
