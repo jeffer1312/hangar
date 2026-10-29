@@ -398,6 +398,31 @@ describe('LiveVoiceSheet', () => {
     expect(button(m.live_voice_mode_plan()).getAttribute('aria-selected')).toBe('true');
   });
 
+  it('bastidores mostram quem falou, a hora e todas as linhas na ordem', async () => {
+    const at = (h: number, min: number, s: number) => new Date(2026, 9, 28, h, min, s).getTime();
+    const older = Array.from({ length: 8 }, (_, n) => ({ kind: 'answer' as const, text: `old-${n}`, at: at(16, 0, n), live: false }));
+    view.phase = 'live';
+    view.state = { ...liveState(), backstage: [...older,
+      { kind: 'you', text: 'you-fixture', at: at(16, 12, 6), live: false },
+      { kind: 'voice', text: 'voice-fixture', at: at(16, 12, 32), live: false },
+      { kind: 'heard', text: 'heard-fixture', at: at(16, 12, 39), live: false },
+      { kind: 'result', text: 'session-fixture', at: at(16, 13, 1), live: false },
+      { kind: 'answer', text: 'answer-fixture', at: at(16, 13, 18), live: false },
+      { kind: 'you', text: 'live-fixture', at: at(16, 14, 14), live: true }] };
+    await render();
+    await click(m.native_live_voice_details());
+    const text = container.textContent ?? '';
+    expect(text).toContain('old-0');
+    // Cada linha: rótulo, hora, texto.
+    const order = ['16:12:06', 'you-fixture', '16:12:32', 'voice-fixture', '16:12:39', 'heard-fixture',
+      m.native_voice_backstage_result({ session: 'session-fixture' }), '16:13:01', '16:13:18', 'answer-fixture', '16:14:14', 'live-fixture'];
+    const positions = order.map(piece => text.indexOf(piece));
+    expect(positions.every(p => p >= 0), JSON.stringify(positions)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+    for (const label of [m.native_voice_backstage_you(), m.native_voice_backstage_voice(), m.native_voice_backstage_heard(),
+      m.native_voice_backstage_answer(), m.native_voice_backstage_live()]) expect(text).toContain(label);
+  });
+
   it('conserva os textos de ação e bastidores sem exigir categoria reconhecida', async () => {
     const message = parseLiveVoiceMessage(JSON.stringify({ type: 'state', state: { ...liveState(), activity: 'working',
       backstage: [{ kind: 'future-backstage', text: 'backstage-fixture' }], action: { kind: 'future-action', text: 'action-fixture' } } }));

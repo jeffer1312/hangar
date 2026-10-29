@@ -785,12 +785,15 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   conversa em curso também volta como aviso, sem ser falada. O resumo de outra sessão abre com
   "Chegou um resultado da X, não da Y". Sem `delegationAckFiller` ("um segundo" a cada delegação). Medição
   em "Voz: resultado de outra sessão tomando a vez (14/10/2026)".
+- **Voz: sem sessão local na tela, o organizador continua com o computador inteiro.** A nota de código
+  (`code_note`) sem pasta de sessão diz que ele roda nesta máquina e lê por caminho completo, editando quando
+  pedido; nunca proíbe ler código. Medição em "Voz: barulho segurando a resposta e leitura proibida (28/10/2026)".
 - **Voz: quem fala o organizador é o Hangar, nunca o repasse do Codex.** `clientManagedHandoffs: true`: o
   Codex não repassa mais as mensagens do organizador à voz. Toda mensagem dele (as do meio do turno
   também) entra no `SpeechHold`, como resumo, aviso e confirmação: sai em pedaços de até `SPEECH_CHUNK`
   (3.200 bytes, porque o Codex corta em ~1.000 tokens o que entrega de uma vez), um por vez, só depois de a
   voz fechar a fala anterior e com ele calado (microfone por `SILENCE`, transcrição por `TALK_SILENCE`,
-  2 s). O teto `MAX_HOLD` só vence ruído de microfone, nunca transcrição dele. Fala dele de três palavras
+  2 s). O teto `MAX_HOLD` (4 s, como o `MAX_WAIT` do envio) só vence ruído de microfone, nunca transcrição dele. Fala dele de três palavras
   ou mais durante uma leitura em partes corta o resto, que vai ao organizador numa nota para continuar só
   se ele pedir; "uhum" só segura. Medição em "Voz: o Hangar fala o organizador (19/10/2026)".
 - **Voz: a queda não apaga a conversa.** Na reabertura (`thread/realtime/start` de novo), a voz nova recebe
@@ -4158,6 +4161,23 @@ embrulham tudo em `except` e saem com 0). O aviso cobre script sumido, Python su
 - **Não verificado em chamada real:** se a voz agora mantém a abertura "Chegou um resultado da X" ao
   parafrasear, e se o `turn/interrupt` sempre chega antes de a mensagem ficar pronta (a mensagem pronta antes
   da fala dele já foi à voz e não é cortada).
+
+## Voz: barulho segurando a resposta e leitura proibida (28/10/2026)
+
+(`organizer.rs` `SpeechHold`/`SendGate`/`code_note`, `call.rs`.) Chamada de 28/10 16:11 pelo app mobile, na rua
+(`~/.hangar/voz/conversas/2026-10-28_16-11-57.md` e o `hangar-server.log`, UTC).
+
+- **Teto batido sem fala.** 19:15:07 o envio esperou 8,0 s (`MAX_WAIT`); 19:15:17 a resposta do organizador
+  esperou 20,1 s e 19:16:07 o aviso de espera 20,0 s (`MAX_HOLD`), com a resposta pronta das 19:16:12 atrás
+  dele. Nenhuma transcrição dele nesses intervalos e a voz calada: só o microfone acima de 0,02 segurava.
+  Nas chamadas anteriores as esperas iam de 0,5 a 3 s. A transcrição dele chega de 1,3 a 2,7 s depois de a
+  voz parar (reação inclusa), por isso o teto de ruído caiu para 4 s nos dois. Não medido: o nível do
+  microfone (o servidor não o grava); o log passa a marcar `noise_ceiling`/`held by noise ceiling` e o
+  `after_user_ms` da delegação.
+- **Leitura proibida.** A chamada nasce com `cwd: None` (`hub.rs`) e sem `retarget` a nota inicial dizia "O
+  código da sessão atual não está disponível nesta máquina; não leia código." Às 16:41 o organizador
+  recusou ler um repositório que está neste disco, citando a nota; o prompt dele já mandava ler código e
+  rodar o shell com acesso completo. A nota fica nas instruções da thread: só vale na conversa seguinte.
 
 ## Voz: o Hangar fala o organizador (19/10/2026)
 

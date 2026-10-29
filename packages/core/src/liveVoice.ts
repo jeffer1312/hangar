@@ -32,6 +32,9 @@ export interface VoiceMemory {
   learned: string;
   confirmed: string;
 }
+/** Quem fala cada linha dos bastidores: ele, a voz, o que foi repassado ao organizador, resultado de sessão, resposta dele. */
+export const BACKSTAGE_KINDS = ['you', 'voice', 'heard', 'result', 'answer'] as const;
+export type LiveVoiceBackstageKind = typeof BACKSTAGE_KINDS[number];
 export interface LiveVoiceState {
   phase: string;
   mode: 'direct' | 'plan' | null;
@@ -42,7 +45,8 @@ export interface LiveVoiceState {
   effective: { model: string | null; effort: string | null; tier: string | null } | null;
   context: { used: number; 'window': number | null } | null;
   limits: { five_hour: LiveVoiceRateWindow; seven_day: LiveVoiceRateWindow };
-  backstage: { kind: 'heard' | 'result' | 'answer' | null; text: string }[];
+  /** `at`: ms em que a fala começou; `live`: ainda chegando. Servidor antigo não manda os dois. */
+  backstage: { kind: LiveVoiceBackstageKind | null; text: string; at?: number; live?: boolean }[];
   thought: string;
   action: { kind: 'tool' | 'search' | 'command' | null; text: string } | null;
   progress?: string | null;
@@ -119,7 +123,9 @@ export function isLiveVoiceState(value: unknown): value is LiveVoiceState {
     && (value.effective === null || object(value.effective) && nullableString(value.effective.model) && nullableString(value.effective.effort) && nullableString(value.effective.tier))
     && (value.context === null || object(value.context) && finite(value.context.used) && nullableNumber(value.context['window']))
     && object(value.limits) && rateWindow(value.limits.five_hour) && rateWindow(value.limits.seven_day)
-    && Array.isArray(value.backstage) && value.backstage.every(v => object(v) && typeof v.text === 'string' && (v.kind === null || v.kind === 'heard' || v.kind === 'result' || v.kind === 'answer'))
+    && Array.isArray(value.backstage) && value.backstage.every(v => object(v) && typeof v.text === 'string'
+      && (v.kind === null || BACKSTAGE_KINDS.includes(v.kind as LiveVoiceBackstageKind))
+      && (v.at === undefined || finite(v.at)) && (v.live === undefined || typeof v.live === 'boolean'))
     && typeof value.thought === 'string'
     && (value.action === null || object(value.action) && typeof value.action.text === 'string' && (value.action.kind === null || value.action.kind === 'tool' || value.action.kind === 'search' || value.action.kind === 'command'))
     && (value.progress === undefined || nullableString(value.progress))
@@ -139,7 +145,7 @@ function parseLiveVoiceState(value: unknown): LiveVoiceState | null {
     mode: neutralEnum(value.mode, ['direct', 'plan']),
     activity: neutralEnum(value.activity, ['idle', 'thinking', 'searching', 'working']),
     backstage: Array.isArray(value.backstage) ? value.backstage.map(item => object(item)
-      ? { ...item, kind: neutralEnum(item.kind, ['heard', 'result', 'answer']) } : item) : value.backstage,
+      ? { ...item, kind: neutralEnum(item.kind, BACKSTAGE_KINDS) } : item) : value.backstage,
     action: object(value.action) ? { ...value.action, kind: neutralEnum(value.action.kind, ['tool', 'search', 'command']) } : value.action,
   };
   return isLiveVoiceState(state) ? state : null;
@@ -243,6 +249,11 @@ export function liveVoiceStatus(live: boolean, who: LiveVoiceSpeaker, muted: boo
   if (muted) return 'muted';
   if (who === 'you') return 'you';
   return activity && activity !== 'idle' ? activity : 'listening';
+}
+/** Hora local HH:MM:SS de uma linha dos bastidores. */
+export function liveVoiceClock(at: number): string {
+  const d = new Date(at);
+  return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, '0')).join(':');
 }
 export function liveVoiceThoughtTail(thought: string, lines = 3): string[] {
   return thought.split('\n').map(line => line.trim().replace(/^\*+|\*+$/g, '').trim()).filter(Boolean).slice(-lines);

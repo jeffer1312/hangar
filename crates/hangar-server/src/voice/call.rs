@@ -48,8 +48,10 @@ pub enum VoiceEvent {
     Assist { call: CallId, assist: organizer::Assist, turn: String },
     /// Modelo, esforço e velocidade que a thread do organizador usa de fato.
     Organizer(Effective),
-    /// Uma linha dos bastidores: o que chegou ao organizador e o que ele respondeu (só tela, nunca diário).
-    Backstage(Backstage),
+    /// Uma linha dos bastidores (só tela, nunca diário), com a hora em ms em que aquela fala começou.
+    Backstage(Backstage, i64),
+    /// Fala dele ou da voz ainda chegando (`You`/`Voice`): substitui a parcial anterior do mesmo lado.
+    Speaking(Backstage, i64),
     /// Fala nova do usuário no turno `turn`: a tela pergunta ao Jev o que ela pede, em paralelo ao organizador. `recent`: a
     /// transcrição que veio com ela (falas da voz e do usuário desde a anterior).
     Heard { turn: String, speech: String, recent: String },
@@ -62,7 +64,23 @@ pub enum VoiceEvent {
     MemoryChanged,
 }
 #[derive(Debug, Clone, PartialEq)]
-pub enum Backstage { Heard(String), Result(String), Answer(String) }
+pub enum Backstage { Heard(String), Result(String), Answer(String), You(String), Voice(String) }
+
+/// Fala de um lado enquanto a transcrição chega: o texto acumulado e a hora (ms) do primeiro pedaço.
+#[derive(Default)]
+struct LiveSpeech { text: String, at: Option<i64> }
+
+impl LiveSpeech {
+    fn delta(&mut self, delta: &str, now: i64) -> (String, i64) {
+        self.text.push_str(delta);
+        (self.text.clone(), *self.at.get_or_insert(now))
+    }
+    /// A final vale pelo texto dela; a hora continua a do começo da fala.
+    fn done(&mut self, text: &str, now: i64) -> (String, i64) {
+        let live = std::mem::take(self);
+        (if text.trim().is_empty() { live.text } else { text.to_owned() }, live.at.unwrap_or(now))
+    }
+}
 
 /// O que entra no organizador vira linha dos bastidores: a fala repassada ou o resultado de uma sessão.
 fn backstage_input(text: &str) -> Backstage {
@@ -356,6 +374,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
     let mut last_user_voice: Option<Instant> = None;
     // Último pedaço de fala dele: a final só conta como fala se veio logo depois de um.
     let mut last_user_delta: Option<Instant> = None;
+    let (mut live_you, mut live_voice) = (LiveSpeech::default(), LiveSpeech::default());
     let mut was_talking = false;
     // O aviso de resultados guardados, para o organizador saber o que o "quero ouvir" responde.
     let mut offer_note: Option<String> = None;
@@ -428,7 +447,10 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                 for (t, at) in running_commands.values_mut() { if *t == turn { *at = now + COMMAND_RETRY; } }
             }
         }
-        if !out.away && let Some(text) = out.hold.due(Instant::now()) { append_speech(&rpc, &thread, &text, "held").await; }
+        let noisy = !out.hold.quiet(Instant::now());
+        if !out.away && let Some(text) = out.hold.due(Instant::now()) {
+            append_speech(&rpc, &thread, &text, if noisy { "held by noise ceiling" } else { "held" }).await;
+        }
         // Conversa em curso: fala dele dentro da janela, turno do organizador para a fala dele, ou nenhum aparelho ouvindo.
         // Só a transcrição conta como fala: ruído no microfone seguraria os avisos para sempre.
         // O turno da fala dele conta com teto: sem o `turn/completed` dele, os resultados ficariam presos para sempre.
@@ -460,8 +482,9 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
         // No Planejar nada sai pelo gate; ao entrar nele o envio pendente já foi cancelado.
         let held = speaking.as_ref().filter(|(_, since)| since.elapsed() < organizer::STILL_SPEAKING_CAP).map(|(t, _)| t.clone());
         if planner.mode == Mode::Direct
+            && let noisy = !gate.quiet(Instant::now())
             && let Some(((id, session, turn), request)) = gate.due_except(Instant::now(), |(_, _, t)| held.as_ref() == Some(t)) {
-            log(format!("gate sent words={} named={}", request.split_whitespace().count(), session.is_some()));
+            log(format!("gate sent words={} named={} noise_ceiling={noisy}", request.split_whitespace().count(), session.is_some()));
             let _ = events.send(VoiceEvent::Draft(None)).await;
             let _ = events.send(VoiceEvent::Send { call: CallId(id), request, session, turn }).await;
         }
@@ -984,7 +1007,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                         if seen_items.len() >= 256 { seen_items.clear(); }
                         seen_items.insert(item_key);
                         let now = Instant::now();
-                        let _ = events.send(VoiceEvent::Backstage(backstage_input(&text))).await;
+                        let _ = events.send(VoiceEvent::Backstage(backstage_input(&text), chrono::Local::now().timestamp_millis())).await;
                         let input = spoken_input(&text).to_owned();
                         // A voz encaminha a mesma fala de novo quando a transcrição final fecha: não é o usuário continuando.
                         let repeat = last_input.as_ref().is_some_and(|(prev, at, turn)| {
@@ -992,7 +1015,8 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             let did = turn.as_ref().is_some_and(|t| acted.get(t).is_some_and(|n| *n > 0));
                             organizer::treat_as_repeat(prev, &input, now.saturating_duration_since(*at), running, did)
                         });
-                        log(format!("handoff repeat={repeat}"));
+                        // Silêncio da transcrição dele até a voz repassar: o quanto o fim de fala do Realtime demorou.
+                        log(format!("handoff repeat={repeat} after_user_ms={}", last_user_delta.map_or(-1, |at| at.elapsed().as_millis() as i64)));
                         if repeat {
                             // No mesmo turno da original não há o que marcar; noutro, nada que age sai dele se a original agiu.
                             if let Some(turn) = params["turnId"].as_str() && delegated.as_ref().is_none_or(|(d, _)| d != turn) {
@@ -1075,11 +1099,11 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                         }
                     } else if let Some(text) = text
                         && method == "item/completed" && organizer::from_hangar(&text) && !text.trim_start().starts_with("[NOTA DO HANGAR]") {
-                        let _ = events.send(VoiceEvent::Backstage(backstage_input(&text))).await;
+                        let _ = events.send(VoiceEvent::Backstage(backstage_input(&text), chrono::Local::now().timestamp_millis())).await;
                     }
                     if method == "item/completed" && params["item"]["type"] == "agentMessage"
                         && let Some(text) = params["item"]["text"].as_str().filter(|t| !t.trim().is_empty()) {
-                        let _ = events.send(VoiceEvent::Backstage(Backstage::Answer(text.to_owned()))).await;
+                        let _ = events.send(VoiceEvent::Backstage(Backstage::Answer(text.to_owned()), chrono::Local::now().timestamp_millis())).await;
                     }
                     if let Some(action) = organizer::organizer_action(&method, &params["item"]) { let _ = events.send(VoiceEvent::Action(action)).await; }
                     if let Some(delta) = organizer::reasoning_delta(&method, &params) { let _ = events.send(VoiceEvent::Thought(delta)).await; }
@@ -1110,6 +1134,22 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                         activity = next;
                         log(format!("activity {activity:?}"));
                         let _ = events.send(VoiceEvent::Activity(activity)).await;
+                    }
+                    if method.starts_with("thread/realtime/transcript/")
+                        && let Some((live, line)) = match params["role"].as_str() {
+                            Some("user") => Some((&mut live_you, Backstage::You as fn(String) -> Backstage)),
+                            Some("assistant") => Some((&mut live_voice, Backstage::Voice as fn(String) -> Backstage)),
+                            _ => None,
+                        } {
+                        let now = chrono::Local::now().timestamp_millis();
+                        let event = if method.ends_with("/delta") {
+                            let (text, at) = live.delta(params["delta"].as_str().unwrap_or_default(), now);
+                            Some(VoiceEvent::Speaking(line(text), at))
+                        } else if method.ends_with("/done") {
+                            let (text, at) = live.done(params["text"].as_str().unwrap_or_default(), now);
+                            Some(VoiceEvent::Backstage(line(text), at))
+                        } else { None };
+                        if let Some(event) = event { let _ = events.send(event).await; }
                     }
                     match method.as_str() {
                         "turn/started" => { organizer_busy = true; results.turn_started(); }
@@ -1378,6 +1418,17 @@ mod tests {
     use super::*;
     use crate::voice::test_support::fake_app_server;
     use serde_json::json;
+
+    #[test]
+    fn backstage_speech_keeps_the_time_it_started() {
+        let mut live = LiveSpeech::default();
+        assert_eq!(live.delta("Tá, ", 1_000), ("Tá, ".to_owned(), 1_000));
+        assert_eq!(live.delta("eu preciso", 4_000), ("Tá, eu preciso".to_owned(), 1_000), "a parcial cresce sem mudar a hora");
+        assert_eq!(live.done("Tá, eu preciso de ajuda.", 30_000), ("Tá, eu preciso de ajuda.".to_owned(), 1_000), "final chega tarde, hora do começo");
+        assert_eq!(live.done("", 31_000), (String::new(), 31_000), "a próxima fala começa do zero");
+        live.delta("sim", 40_000);
+        assert_eq!(live.done(" ", 41_000), ("sim".to_owned(), 40_000), "final vazia fica com o que chegou");
+    }
 
     fn options(tools: Value) -> CallOptions {
         // Nunca o HOME real: a chamada cria a pasta própria e os planos aqui.

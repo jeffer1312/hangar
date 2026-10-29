@@ -7,8 +7,9 @@ use std::{collections::{HashMap, HashSet, VecDeque}, path::{Path, PathBuf}, time
 pub const SETTLE: Duration = Duration::from_millis(1500);
 /// Silêncio do microfone exigido antes de soltar o envio.
 pub const SILENCE: Duration = Duration::from_millis(1200);
-/// Teto: ruído acima do limiar não pode segurar o envio para sempre.
-pub const MAX_WAIT: Duration = Duration::from_secs(8);
+/// Teto: ruído acima do limiar não pode segurar o envio. Fala de verdade vira transcrição em menos que isso; na rua o
+/// microfone fica acima do limiar sem parar.
+pub const MAX_WAIT: Duration = Duration::from_secs(4);
 /// RMS cru do microfone (depois do AEC/AGC) a partir do qual há voz.
 pub const MIC_VOICE_LEVEL: f32 = 0.02;
 pub const MIN_WORDS: usize = 3;
@@ -965,7 +966,9 @@ pub fn code_note(session: Option<&Path>, own: &Path) -> String {
     let own = format!("Sua pasta de trabalho é {}.", own.display());
     match session {
         Some(path) => format!("O código da sessão está em {}; leia e edite por caminho completo. {own}", path.display()),
-        None => format!("O código da sessão atual não está disponível nesta máquina; não leia código. {own}"),
+        None => format!("Nenhuma sessão desta máquina está na tela, então não há pasta de sessão definida. Você roda nesta máquina \
+            com acesso aos arquivos dela: para ler ou analisar um projeto, ache a pasta (pelas sessões ou pelo shell) e leia por \
+            caminho completo; edite quando ele pedir. {own}"),
     }
 }
 
@@ -1392,6 +1395,7 @@ impl<T> Default for SendGate<T> { fn default() -> Self { Self { pending: Vec::ne
 
 impl<T> SendGate<T> {
     pub fn heard_voice(&mut self, now: Instant) { self.last_voice = Some(now); }
+    pub fn quiet(&self, now: Instant) -> bool { self.last_voice.is_none_or(|at| now.saturating_duration_since(at) >= SILENCE) }
     pub fn offer(&mut self, call: T, to: &str, request: String, now: Instant) -> Result<Option<(T, String)>, (T, &'static str)> {
         if request.split_whitespace().count() < MIN_WORDS { return Err((call, "pedido curto demais; espere o usuário completar a ideia")); }
         let to = squash(to);
@@ -1418,7 +1422,7 @@ impl<T> SendGate<T> {
     pub fn due(&mut self, now: Instant) -> Option<(T, String)> { self.due_except(now, |_| false) }
     /// Como `due`, sem soltar os pedidos que `held` segura (o usuário ainda fala no turno deles).
     pub fn due_except(&mut self, now: Instant, held: impl Fn(&T) -> bool) -> Option<(T, String)> {
-        let quiet = self.last_voice.is_none_or(|at| now.saturating_duration_since(at) >= SILENCE);
+        let quiet = self.quiet(now);
         let waited = |at: &Instant| { let w = now.duration_since(*at); w >= SETTLE && (quiet || w >= MAX_WAIT) };
         let at = self.pending.iter().position(|(_, call, _, at)| waited(at) && !held(call))?;
         let (_, call, request, _) = self.pending.remove(at);
@@ -1437,7 +1441,8 @@ pub struct SpeechHold { queue: VecDeque<(u64, String)>, since: Option<Instant>, 
     /// O pedaço entregue: grupo, quando, e se a voz já começou a falá-lo.
     playing: Option<(u64, Instant, bool)>, started: Option<u64>, groups: u64 }
 
-pub const MAX_HOLD: Duration = Duration::from_secs(20);
+/// Mesmo motivo de `MAX_WAIT`: só vale para microfone sem transcrição.
+pub const MAX_HOLD: Duration = Duration::from_secs(4);
 /// Maior pedaço entregue à voz de uma vez: o Codex corta no meio o que passa de ~1.000 tokens (~4 KB).
 pub const SPEECH_CHUNK: usize = 3200;
 /// Silêncio da transcrição dele que encerra a fala para o que o Hangar fala: 77% das retomadas vêm em menos de 2 s.
@@ -1479,7 +1484,7 @@ impl SpeechHold {
         let speaking = self.voice_open && self.voice_at.is_some_and(|at| now.saturating_duration_since(at) < VOICE_GAP);
         speaking || self.playing.is_some_and(|(_, at, heard)| !heard && now.saturating_duration_since(at) < SPEECH_START_WAIT)
     }
-    fn quiet(&self, now: Instant) -> bool {
+    pub fn quiet(&self, now: Instant) -> bool {
         self.last_voice.is_none_or(|at| now.saturating_duration_since(at) >= SILENCE)
             && self.last_speech.is_none_or(|at| now.saturating_duration_since(at) >= TALK_SILENCE)
     }
@@ -2245,7 +2250,8 @@ mod tests {
         let note = code_note(Some(session), own);
         assert!(note.contains("/p/a") && note.contains("/h/.hangar/voz/arquivos"));
         let none = code_note(None, own);
-        assert!(none.contains("não está disponível") && none.contains("/h/.hangar/voz/arquivos"));
+        assert!(!none.contains("não leia código") && !none.contains("não está disponível"), "sem sessão na tela não proíbe ler: {none}");
+        assert!(none.contains("caminho completo") && none.contains("/h/.hangar/voz/arquivos"), "{none}");
     }
 
     #[test]
@@ -2367,8 +2373,8 @@ mod tests {
         let t0 = Instant::now();
         gate.offer(1, "", "Criar um botão azul de ajuda".into(), t0).unwrap();
         for ms in (0..=9000).step_by(500) { gate.heard_voice(t0 + Duration::from_millis(ms)); }
-        assert!(gate.due(t0 + Duration::from_secs(7)).is_none());
-        assert_eq!(gate.due(t0 + Duration::from_secs(8)).map(|(id, _)| id), Some(1));
+        assert!(gate.due(t0 + Duration::from_millis(3500)).is_none());
+        assert_eq!(gate.due(t0 + Duration::from_secs(4)).map(|(id, _)| id), Some(1), "barulho da rua não prende o envio 8 s");
     }
 
     #[test]
@@ -2699,14 +2705,15 @@ mod tests {
         let mut hold = SpeechHold::default();
         hold.heard_voice(now);
         hold.push("resultado", now);
+        let ceiling = Duration::from_secs(4);
         let mut at = now;
-        while at < now + MAX_HOLD - Duration::from_millis(500) {
+        while at < now + ceiling - Duration::from_millis(500) {
             at += Duration::from_millis(500);
             hold.heard_voice(at);
             assert!(hold.due(at).is_none(), "voz contínua segura até o teto");
         }
-        hold.heard_voice(now + MAX_HOLD);
-        assert_eq!(hold.due(now + MAX_HOLD).as_deref(), Some("resultado"), "só microfone: passou do teto, sai");
+        hold.heard_voice(now + ceiling);
+        assert_eq!(hold.due(now + ceiling).as_deref(), Some("resultado"), "só microfone: passou de 4 s, sai (não 20 s)");
         let mut talking = SpeechHold::default();
         talking.push("resposta", now);
         talking.heard_speech(now + MAX_HOLD);
