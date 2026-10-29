@@ -245,6 +245,9 @@ async fn speech_public_matches_the_frozen_python_http_contract() {
             assert!(!headers.contains_key("content-range"));
             assert_eq!(headers["content-length"], "16");
             assert_eq!(headers["etag"].to_str().unwrap(), case["response_headers"]["etag"].as_str().unwrap());
+            for name in ["last-modified", "accept-ranges", "content-type"] {
+                assert_eq!(headers[name].to_str().unwrap(), case["response_headers"][name].as_str().unwrap());
+            }
             continue;
         }
         if case["response_headers"]["content-type"]
@@ -325,6 +328,23 @@ async fn speech_if_range_never_combines_versions_changed_in_the_same_second() {
         assert!(!response.headers().contains_key("content-range"));
         assert_eq!(response.bytes().await.unwrap().as_ref(), replacement);
     }
+}
+
+#[tokio::test]
+async fn speech_accepts_json_media_type_with_optional_parameter_spacing() {
+    let server = Server::start().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for content_type in ["application/json ; charset=utf-8", "application/vendor+json\t; charset=utf-8", "APPLICATION/JSON ; charset=UTF-8"] {
+        let response = client.post(format!("{}/api/tts", server.base))
+            .bearer_auth("fixture-owner").header("content-type", content_type)
+            .body(r#"{"text":"oi","provider":"other"}"#).send().await.unwrap();
+        assert_eq!(response.status(), 400, "{content_type}");
+        assert_eq!(response.json::<Value>().await.unwrap(), json!({"detail":"Provedor desconhecido: other"}));
+    }
+    let response = client.post(format!("{}/api/tts", server.base))
+        .bearer_auth("fixture-owner").header("content-type", "text/plain")
+        .body(r#"{"text":"oi","provider":"other"}"#).send().await.unwrap();
+    assert_eq!(response.status(), 422);
 }
 
 #[tokio::test]

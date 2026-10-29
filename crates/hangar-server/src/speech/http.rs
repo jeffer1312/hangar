@@ -252,6 +252,7 @@ async fn body(req: Request, schema: Schema) -> Result<Value, Response> {
         .map_err(|_| crate::session_write::too_large(&headers))?;
     let json = content_type.is_empty()
         || content_type.split(';').next().is_some_and(|v| {
+            let v = v.trim();
             v == "application/json" || v.starts_with("application/") && v.ends_with("+json")
         });
     let value = if json || bytes.is_empty() {
@@ -857,6 +858,10 @@ mod tests {
                 };
                 let limit = case["limit"].as_u64().unwrap() as usize;
                 let events = super::super::history::read(&info, limit).unwrap();
+                let expected = case["events"].as_array().unwrap();
+                if expected.len() < limit {
+                    assert_eq!(events.len(), expected.len(), "eventos extras: {}", case["name"]);
+                }
                 let projection: Vec<_> = events
                     .iter()
                     .skip(
