@@ -1239,6 +1239,15 @@ impl RuntimeRegistry {
             .map_err(|_|RuntimeError::new("session_transfer_busy","a sessão está trocando de agente"))?;
         watcher.adopt_claude(self,name).await.unwrap_or(Ok(()))
     }
+    /// O plugin do Claude com terminal sem ator pede (`/pull`) com a conversa dele: sem o registro nativo, é
+    /// ela que prova a vida na adoção. Pela porta, como as escritas. `Ok(false)`: não há Claude no pane.
+    pub async fn adopt_claude_by_plugin(&self,name:&str,claim:super::claude_terminal::PluginClaim)->Result<bool,RuntimeError> {
+        if self.has_entry(None,name).await {return Ok(true);}
+        let watcher=self.watcher.get().cloned().ok_or_else(||failure("runtime_binding"))?;
+        let _pass=self.ingress.enter(name,Duration::ZERO).await
+            .map_err(|_|RuntimeError::new("session_transfer_busy","a sessão está trocando de agente"))?;
+        watcher.adopt_claude_claimed(self,name,Some(claim)).await.map_or(Ok(false),|adopted|adopted.map(|()|true))
+    }
     /// O alvo do Claude com terminal para conferir o limite de uso no fim do turno; `None`: a sessão é sem
     /// terminal, e quem vê o limite é o ator dela.
     /// Sem alvo, o `limit_switch_no_target` aparece na linha (o canal do nome existe sem ator) até o alvo voltar.

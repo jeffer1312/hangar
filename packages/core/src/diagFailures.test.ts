@@ -178,12 +178,19 @@ describe('sendDiagReportAll', () => {
     expect(res.results[1].result).toMatchObject({ ok: false, kind: 'unsupported' });
   });
 
-  it('sem assinatura do primeiro as outras não vão avulsas', async () => {
+  it('servidor atual com group null: foi o receptor que não juntou, não o servidor', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(lead('aaaa2222'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'bbbb3333', diary: 'sent', group: null, group_token: null }), { status: 201 }));
+    const res = await sendDiagReportAll([serverA, serverB], { client: 'pwa 1.0' });
+    expect(res.results[1].result).toMatchObject({ ok: false, kind: 'ungrouped' });
+  });
+
+  it('sem assinatura do primeiro as outras não vão avulsas e ficam como não juntadas pelo receptor', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({ code: 'aaaa2222', diary: 'sent' }), { status: 201 }));
     const res = await sendDiagReportAll([serverA, serverB], { client: 'pwa 1.0' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(res.code).toBe('aaaa2222');
-    expect(res.results[1].result).toMatchObject({ ok: false, kind: 'unsupported' });
+    expect(res.results[1].result).toMatchObject({ ok: false, kind: 'ungrouped' });
   });
 
   it('reenvio só das que falharam, no código e na assinatura do envio anterior', async () => {
@@ -214,14 +221,14 @@ describe('sendDiagReportAll', () => {
     expect(diagReportTargets(diagReportMachines([off, serverB, serverC], off), off, 'this', {})).toEqual([]);
   });
 
-  it('reenvio sem a assinatura do envio anterior não manda avulso: as que faltam ficam sem suporte', async () => {
+  it('reenvio sem a assinatura do envio anterior não manda avulso: as que faltam ficam não juntadas', async () => {
     const before = { code: 'aaaa2222', group: null, results: [
       { server: serverA, result: { ok: true as const, code: 'aaaa2222', diary: 'sent' as const } },
       { server: serverC, result: { ok: false as const, code: 'network', status: 0, kind: 'unreachable' as const } }] };
     const fetchMock = vi.spyOn(globalThis, 'fetch');
     const res = await resendDiagReportMissed(before, { client: 'pwa 1.0' });
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(res.results[1].result).toMatchObject({ ok: false, kind: 'unsupported' });
+    expect(res.results[1].result).toMatchObject({ ok: false, kind: 'ungrouped' });
   });
 
   it('reenvio sem código ainda: só as que falharam e podem dar certo, e a primeira vira o código', async () => {
@@ -246,6 +253,8 @@ describe('sendDiagReportAll', () => {
     const signed = { code: 'aaaa2222', group: { code: 'aaaa2222', token: TOKEN }, results: [okA, { server: serverB, result: fail('unreachable') }] };
     expect(diagReportNext(signed, [serverA, serverB])).toBe('resend');
     expect(diagReportNext({ ...signed, group: null }, [serverA, serverB]), 'com código e sem assinatura').toBe('none');
+    const ungrouped = { ...signed, group: null, results: [okA, { server: serverB, result: { ok: false as const, code: 'diag_report_ungrouped', status: 0, kind: 'ungrouped' as const } }] };
+    expect(diagReportNext(ungrouped, [serverA, serverB]), 'o receptor não juntou: outro envio também não juntaria').toBe('none');
     const expired = { ...signed, results: [okA, { server: serverB, result: fail('expired') }] };
     expect(diagReportNext(expired, [serverA, serverB])).toBe('send');
     const unsupported = { code: null, group: null, results: [{ server: serverA, result: fail('unsupported') }] };

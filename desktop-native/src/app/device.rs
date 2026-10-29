@@ -108,6 +108,13 @@ enum Run { Starting, Uncertain, Running { step: u64, total: u64, text: String },
 
 /// Teto do texto da pessoa no relatório; acima disso o servidor recusa o relatório inteiro.
 const REPORT_TEXT_MAX: usize = 2000;
+/// Altura da lista "Últimos eventos": a mesma no PWA e no Expo.
+const DIARY_LINES_MAX: f32 = 420.;
+
+/// A roda fica na lista quando ela transborda e ainda rola nessa direção (deslocamento entre `-max` e 0).
+fn lines_take_wheel(before: f32, delta: f32, max: f32) -> bool {
+    max > 0. && (delta > 0. && before < 0. || delta < 0. && before > -max)
+}
 
 /// Relatório de diagnóstico (`POST /api/diag/report`), um por máquina: o envio em curso ou o desfecho do último.
 /// `code`: o da primeira máquina que deu certo, que junta as outras; `missed`: as que não foram, com o rótulo.
@@ -126,10 +133,15 @@ fn report_next(report: Option<&Report>, targets: &[String]) -> Next {
     let Some(Report::Done { code, missed, ids, token, .. }) = report else { return Next::Send };
     if ids.len() != targets.len() || targets.iter().any(|t| !ids.contains(t)) { return Next::Send; }
     if missed.iter().any(|(_, _, o)| matches!(o, Outcome::Failed { retry: true, .. })) {
+        // Com código e sem assinatura, as que faltam não entram nele, e outro envio também não as juntaria.
         return if code.is_some() && token.is_none() { Next::Nothing } else { Next::Resend };
     }
+    // Expirado: um envio novo junta.
     if missed.iter().any(|(_, _, o)| matches!(o, Outcome::Failed { code, .. } if code == "diag_report_group_unknown")) { Next::Send } else { Next::Nothing }
 }
+
+/// O receptor não juntou a máquina ao código do envio; o servidor dela está bem.
+const UNGROUPED: &str = "diag_report_ungrouped";
 
 /// Máquina que não foi: id da entrada (para o reenvio), rótulo e desfecho.
 type Missed = (String, String, Outcome);
@@ -156,8 +168,9 @@ type Base = (Option<String>, bool, Vec<String>);
 fn report_outcome(result: Result<Value, Failure>, group: Option<&str>) -> Outcome {
     let failed = |code: &str| Outcome::Failed { code: code.to_owned(), retry: true };
     match result {
+        // Servidor antigo nem devolve o campo; o atual devolve `group: null` quando foi o receptor que não agrupou.
         Ok(value) if group.is_some() && value.get("group").and_then(Value::as_str) != group =>
-            Outcome::Failed { code: "group_unsupported".into(), retry: false },
+            Outcome::Failed { code: if value.get("group").is_some() { UNGROUPED } else { "group_unsupported" }.into(), retry: false },
         Ok(value) => match value.get("code").and_then(Value::as_str).filter(|code| !code.is_empty()) {
             Some(code) => Outcome::Sent { code: code.to_owned(), diary_sent: value.get("diary").and_then(Value::as_str) == Some("sent") },
             None => failed("unexpected"),
@@ -179,6 +192,7 @@ fn report_outcome(result: Result<Value, Failure>, group: Option<&str>) -> Outcom
 fn report_failure_text(code: &str, retry: bool) -> String {
     match code {
         "diag_report_group_unknown" => tr("settings_diary_report_expired"),
+        UNGROUPED => tr("settings_diary_report_ungrouped"),
         _ if !retry => tr("settings_diary_report_unsupported"),
         "diag_report_rate_limited" => tr("settings_diary_report_rate_limited"),
         "diag_report_unreachable" => tr("settings_diary_report_unreachable"),
@@ -456,7 +470,7 @@ impl Hangar {
                 let group = lead.clone().zip(token.clone());
                 let outcome = match api {
                     // Sem a assinatura do primeiro (worker ou servidor antigo) as outras iriam avulsas, fora do código.
-                    Ok(_) if lead.is_some() && group.is_none() => Outcome::Failed { code: "group_unsupported".into(), retry: false },
+                    Ok(_) if lead.is_some() && group.is_none() => Outcome::Failed { code: UNGROUPED.into(), retry: false },
                     Ok(api) => {
                         let mut body = json!({"client": client, "failures": api.recent_failures()});
                         if !text.is_empty() { body["text"] = Value::String(text.clone()); }
@@ -928,7 +942,19 @@ impl Hangar {
         let note = |text: String, color: Hsla| div().px_4().py(px(18.)).text_size(px(13.)).text_color(color).child(text);
         let list = match (&diary.value, diary.loading) {
             (_, _) if self.api.is_none() => note(tr("settings_offline"), theme::muted()).into_any_element(),
-            (Some(Ok(d)), _) if !d.lines.is_empty() => div().id("diary-lines").max_h(px(340.)).overflow_y_scroll().track_scroll(&self.device.diary_scroll)
+            // A rolagem da GPUI não para a roda: sem o stop, a página rolava junto e a lista fugia do cursor.
+            // O ouvinte roda depois da rolagem da própria lista e antes da página.
+            (Some(Ok(d)), _) if !d.lines.is_empty() => div().id("diary-lines").max_h(px(DIARY_LINES_MAX)).overflow_y_scroll().track_scroll(&self.device.diary_scroll)
+                .on_scroll_wheel({
+                    let handle = self.device.diary_scroll.clone();
+                    move |event, window, cx| {
+                        // A lista já somou a roda ao deslocamento (sem limite); a página só fica parada quando a
+                        // lista tinha para onde ir nessa direção.
+                        let delta = event.delta.pixel_delta(window.line_height()).y;
+                        let before = handle.offset().y - delta;
+                        if lines_take_wheel(f32::from(before), f32::from(delta), f32::from(handle.max_offset().y)) { cx.stop_propagation(); }
+                    }
+                })
                 .py(px(4.)).font_family(theme::MONO).text_size(px(12.))
                 .children(d.lines.iter().enumerate().map(|(n, line)| div().mt(px(if n == 0 { 0. } else { -1. })).border_t_1().border_color(theme::border())
                     .px_3().py(px(5.)).flex().gap(px(10.)).items_start()
@@ -1367,6 +1393,9 @@ mod tests {
             Outcome::Sent { code: "AB12CD34".into(), diary_sent: true }, "o grupo confirmado");
         assert_eq!(report_outcome(Ok(serde_json::json!({"code": "AB12CD34", "diary": "sent"})), Some("aaaa2222")),
             Outcome::Failed { code: "group_unsupported".into(), retry: false }, "servidor antigo gravou avulso");
+        assert_eq!(report_outcome(Ok(serde_json::json!({"code": "AB12CD34", "diary": "sent", "group": null})), Some("aaaa2222")),
+            Outcome::Failed { code: "diag_report_ungrouped".into(), retry: false }, "o receptor não agrupou; o servidor está bem");
+        assert_eq!(report_failure_text("diag_report_ungrouped", false), tr("settings_diary_report_ungrouped"));
         assert_eq!(report_outcome(Err(Failure { status: Some(404), ..Failure::local("x") }), None),
             Outcome::Failed { code: "HTTP 404".into(), retry: false });
         assert_eq!(refused(Some(404), None), tr("settings_diary_report_unsupported"));
@@ -1396,6 +1425,16 @@ mod tests {
     }
 
     #[test]
+    fn the_diary_list_keeps_the_wheel_only_while_it_can_scroll() {
+        use super::lines_take_wheel;
+        assert!(!lines_take_wheel(0., -40., 0.), "lista que não transborda solta a roda para a página");
+        assert!(lines_take_wheel(0., -40., 300.), "no topo, descendo: rola a lista");
+        assert!(!lines_take_wheel(0., 40., 300.), "no topo, subindo: a página sobe");
+        assert!(lines_take_wheel(-300., 40., 300.), "no fim, subindo: rola a lista");
+        assert!(!lines_take_wheel(-300., -40., 300.), "no fim, descendo: a página desce");
+    }
+
+    #[test]
     fn the_button_follows_the_choice_and_the_signature_like_the_core() {
         use super::{Next, Outcome, Report, report_next};
         let ids = |list: &[&str]| list.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
@@ -1409,6 +1448,7 @@ mod tests {
         assert_eq!(report_next(Some(&only_pc), &ids(&["pc", "vm"])), Next::Send, "\"só esta\" falhou e a pessoa marcou todas");
         assert_eq!(report_next(Some(&done(Some("aaaa2222"), vec![fail("network", true)], Some("t"))), &ids(&["pc", "vm"])), Next::Resend);
         assert_eq!(report_next(Some(&done(Some("aaaa2222"), vec![fail("network", true)], None)), &ids(&["pc", "vm"])), Next::Nothing, "sem assinatura");
+        assert_eq!(report_next(Some(&done(Some("aaaa2222"), vec![fail("diag_report_ungrouped", false)], None)), &ids(&["pc", "vm"])), Next::Nothing, "o receptor não juntou");
         assert_eq!(report_next(Some(&done(Some("aaaa2222"), vec![fail("diag_report_group_unknown", false)], Some("t"))), &ids(&["pc", "vm"])), Next::Send);
         assert_eq!(report_next(Some(&done(None, vec![fail("HTTP 404", false)], None)), &ids(&["pc", "vm"])), Next::Nothing);
     }

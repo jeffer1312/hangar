@@ -54,6 +54,7 @@ const CLIENT = `expo ${runtimeVersion ?? 'dev'} ${Platform.OS}`;
 function failureText({ code, kind }: Failure): string {
   if (kind === 'unsupported') return m.native_settings_diary_report_unsupported();
   if (kind === 'expired') return m.native_settings_diary_report_expired();
+  if (kind === 'ungrouped') return m.native_settings_diary_report_ungrouped();
   if (kind === 'rate_limited') return m.native_settings_diary_report_rate_limited();
   if (kind === 'unreachable') return m.native_settings_diary_report_unreachable();
   return m.native_settings_diary_report_failed({ code });

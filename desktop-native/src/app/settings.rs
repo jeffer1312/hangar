@@ -18,8 +18,9 @@ pub(super) enum Page {
 }
 
 impl Page {
-    const DEVICE: [Page; 4] = [Page::General, Page::Appearance, Page::Diary, Page::About];
-    const SERVER: [Page; 16] = [Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Orchestration, Page::Harnesses,
+    const DEVICE: [Page; 3] = [Page::General, Page::Appearance, Page::About];
+    // O diário é do servidor escolhido no seletor ("O registro de uso de <servidor>"), não do aparelho.
+    const SERVER: [Page; 17] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Orchestration, Page::Harnesses,
         Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Advanced];
 
     /// As seções da navegação, na ordem dela; a voz abre uma pelo `key`.
