@@ -53,11 +53,12 @@ impl Store {
         list(&self.tolerant())
     }
     pub fn put(&self, body: &Value) -> Result<Value, Error> {
-        let id = body.get("id").filter(|v|truthy(v)).unwrap_or(&Value::Null);
+        let empty=Value::String(String::new());
+        let id = body.get("id").filter(|v|truthy(v)).unwrap_or(&empty);
         valid_id(&id)?;
         let id = id.as_str().unwrap();
-        let base = body.get("base_url").filter(|v|truthy(v)).unwrap_or(&Value::Null);
-        let token = body.get("token").filter(|v|truthy(v)).unwrap_or(&Value::Null);
+        let base = body.get("base_url").filter(|v|truthy(v)).unwrap_or(&empty);
+        let token = body.get("token").filter(|v|truthy(v)).unwrap_or(&empty);
         let (Some(base), Some(token)) = (text(base), text(token)) else {
             return Err(Error::invalid("endereço e token precisam ser texto"));
         };
