@@ -194,3 +194,58 @@ proptest::proptest! {
         for relative in paths {proptest::prop_assert!(std::fs::read(home.path().join(relative)).unwrap()==raw);}
     }
 }
+
+#[test]
+fn harness_health_read_types_match_python() {
+    use hangar_server::orchestration::codec;
+    let fixture = codec::loads(include_str!(
+        "../../../../backend/tests/fixtures/contract/harness-health/read-types.json"
+    ))
+    .unwrap();
+    let mut failures = Vec::new();
+    for case in fixture["cases"].as_array().unwrap() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().to_string_lossy().into_owned();
+        let env = AccountEnvironment::from_pairs([
+            ("HOME", root.as_str()),
+            ("USERPROFILE", root.as_str()),
+        ]);
+        for (relative, text) in case["files"].as_object().unwrap() {
+            let path = home.path().join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let bytes = case["files_hex"]
+                .get(relative)
+                .and_then(Value::as_str)
+                .map(|hex| {
+                    hex.as_bytes()
+                        .chunks_exact(2)
+                        .map(|pair| {
+                            u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| text.as_str().unwrap().as_bytes().to_vec());
+            std::fs::write(path, bytes).unwrap();
+        }
+        let result = if case["kind"] == "_mcp" {
+            health::mcp(&env, case["cli"].as_str().unwrap())
+        } else {
+            health::default_model(&env, case["cli"].as_str().unwrap())
+        };
+        match result {
+            Ok(value)
+                if case["expected"].get("error").is_none() && value == case["expected"]["ok"] =>
+            {
+                ()
+            }
+            Err(_) if case["expected"].get("error").is_some() => (),
+            other => failures.push(format!(
+                "{}: {:?} != {}",
+                case["name"],
+                other,
+                codec::dumps(&case["expected"], false)
+            )),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

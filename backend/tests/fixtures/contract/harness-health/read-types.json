@@ -1,0 +1,3582 @@
+{
+  "source_commit": "ea421257cfc0d090612dd65442d9441f3c4dbb62",
+  "command": "cd backend && uv run python tests/fixtures/contract/harness-health/generate_read_types.py",
+  "cases": [
+    {
+      "name": "codex-model-07:32",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=07:32"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[07:32]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[07:32]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{date=07:32}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={date=07:32}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp_servers-07:32",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "mcp_servers=07:32"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-07:32:60",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=07:32:60"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[07:32:60]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[07:32:60]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{date=07:32:60}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={date=07:32:60}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp_servers-07:32:60",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "mcp_servers=07:32:60"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-0000-01-01",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=0000-01-01"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[0000-01-01]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[0000-01-01]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{date=0000-01-01}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={date=0000-01-01}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp_servers-0000-01-01",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "mcp_servers=0000-01-01"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-2025-02-29",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=2025-02-29"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[2025-02-29]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[2025-02-29]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{date=2025-02-29}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={date=2025-02-29}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp_servers-2025-02-29",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "mcp_servers=2025-02-29"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-2024-02-30",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=2024-02-30"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[2024-02-30]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[2024-02-30]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{date=2024-02-30}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={date=2024-02-30}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp_servers-2024-02-30",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "mcp_servers=2024-02-30"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-1979-05-27",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=1979-05-27"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "1979-05-27"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[1979-05-27]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[1979-05-27]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.date(1979, 5, 27)]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{date=1979-05-27}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={date=1979-05-27}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.date(1979, 5, 27)}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp_servers-1979-05-27",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "mcp_servers=1979-05-27"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.date' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "codex-model-00:00:01",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=00:00:01"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "00:00:01"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[00:00:01]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[00:00:01]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.time(0, 0, 1)]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{date=00:00:01}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={date=00:00:01}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.time(0, 0, 1)}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp_servers-00:00:01",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "mcp_servers=00:00:01"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.time' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "codex-model-00:00:00.000001",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=00:00:00.000001"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "00:00:00.000001"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[00:00:00.000001]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[00:00:00.000001]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.time(0, 0, 0, 1)]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{date=00:00:00.000001}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={date=00:00:00.000001}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.time(0, 0, 0, 1)}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp_servers-00:00:00.000001",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "mcp_servers=00:00:00.000001"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.time' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "codex-model-07:32:00",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=07:32:00"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "07:32:00"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[07:32:00]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[07:32:00]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.time(7, 32)]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{date=07:32:00}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={date=07:32:00}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.time(7, 32)}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp_servers-07:32:00",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "mcp_servers=07:32:00"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.time' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "codex-model-07:32:00.123",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=07:32:00.123"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "07:32:00.123000"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[07:32:00.123]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[07:32:00.123]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.time(7, 32, 0, 123000)]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{date=07:32:00.123}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={date=07:32:00.123}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.time(7, 32, 0, 123000)}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp_servers-07:32:00.123",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "mcp_servers=07:32:00.123"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.time' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "codex-model-1979-05-27T07:32:00",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=1979-05-27T07:32:00"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "1979-05-27 07:32:00"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[1979-05-27T07:32:00]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[1979-05-27T07:32:00]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.datetime(1979, 5, 27, 7, 32)]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{date=1979-05-27T07:32:00}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={date=1979-05-27T07:32:00}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.datetime(1979, 5, 27, 7, 32)}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp_servers-1979-05-27T07:32:00",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "mcp_servers=1979-05-27T07:32:00"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.datetime' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "codex-model-1979-05-27T07:32:00.123456789Z",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=1979-05-27T07:32:00.123456789Z"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "1979-05-27 07:32:00.123456+00:00"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[1979-05-27T07:32:00.123456789Z]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[1979-05-27T07:32:00.123456789Z]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.datetime(1979, 5, 27, 7, 32, 0, 123456, tzinfo=datetime.timezone.utc)]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{date=1979-05-27T07:32:00.123456789Z}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={date=1979-05-27T07:32:00.123456789Z}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.datetime(1979, 5, 27, 7, 32, 0, 123456, tzinfo=datetime.timezone.utc)}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp_servers-1979-05-27T07:32:00.123456789Z",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "mcp_servers=1979-05-27T07:32:00.123456789Z"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.datetime' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "codex-model-1979-05-27T07:32:00-07:30",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=1979-05-27T07:32:00-07:30"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "1979-05-27 07:32:00-07:30"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[1979-05-27T07:32:00-07:30]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[1979-05-27T07:32:00-07:30]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.datetime(1979, 5, 27, 7, 32, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=59400)))]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{date=1979-05-27T07:32:00-07:30}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={date=1979-05-27T07:32:00-07:30}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.datetime(1979, 5, 27, 7, 32, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=59400)))}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp_servers-1979-05-27T07:32:00-07:30",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "mcp_servers=1979-05-27T07:32:00-07:30"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.datetime' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "codex-model-1979-05-27T07:32:00+02:15",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=1979-05-27T07:32:00+02:15"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "1979-05-27 07:32:00+02:15"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[1979-05-27T07:32:00+02:15]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[1979-05-27T07:32:00+02:15]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.datetime(1979, 5, 27, 7, 32, tzinfo=datetime.timezone(datetime.timedelta(seconds=8100)))]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{date=1979-05-27T07:32:00+02:15}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={date=1979-05-27T07:32:00+02:15}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.datetime(1979, 5, 27, 7, 32, tzinfo=datetime.timezone(datetime.timedelta(seconds=8100)))}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp_servers-1979-05-27T07:32:00+02:15",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "mcp_servers=1979-05-27T07:32:00+02:15"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.datetime' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-model-07:32",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=07:32"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[07:32]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[07:32]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{date=07:32}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={date=07:32}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp_servers-07:32",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp_servers=07:32"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp-07:32",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp=07:32"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-07:32:60",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=07:32:60"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[07:32:60]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[07:32:60]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{date=07:32:60}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={date=07:32:60}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp_servers-07:32:60",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp_servers=07:32:60"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp-07:32:60",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp=07:32:60"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-0000-01-01",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=0000-01-01"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[0000-01-01]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[0000-01-01]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{date=0000-01-01}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={date=0000-01-01}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp_servers-0000-01-01",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp_servers=0000-01-01"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp-0000-01-01",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp=0000-01-01"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-2025-02-29",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=2025-02-29"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[2025-02-29]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[2025-02-29]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{date=2025-02-29}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={date=2025-02-29}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp_servers-2025-02-29",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp_servers=2025-02-29"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp-2025-02-29",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp=2025-02-29"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-2024-02-30",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=2024-02-30"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[2024-02-30]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[2024-02-30]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{date=2024-02-30}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={date=2024-02-30}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp_servers-2024-02-30",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp_servers=2024-02-30"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp-2024-02-30",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp=2024-02-30"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-1979-05-27",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=1979-05-27"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "1979-05-27"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[1979-05-27]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[1979-05-27]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.date(1979, 5, 27)]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{date=1979-05-27}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={date=1979-05-27}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.date(1979, 5, 27)}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp_servers-1979-05-27",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp_servers=1979-05-27"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.date' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-mcp-1979-05-27",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp=1979-05-27"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.date' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-model-00:00:01",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=00:00:01"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "00:00:01"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[00:00:01]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[00:00:01]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.time(0, 0, 1)]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{date=00:00:01}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={date=00:00:01}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.time(0, 0, 1)}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp_servers-00:00:01",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp_servers=00:00:01"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.time' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-mcp-00:00:01",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp=00:00:01"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.time' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-model-00:00:00.000001",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=00:00:00.000001"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "00:00:00.000001"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[00:00:00.000001]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[00:00:00.000001]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.time(0, 0, 0, 1)]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{date=00:00:00.000001}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={date=00:00:00.000001}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.time(0, 0, 0, 1)}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp_servers-00:00:00.000001",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp_servers=00:00:00.000001"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.time' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-mcp-00:00:00.000001",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp=00:00:00.000001"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.time' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-model-07:32:00",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=07:32:00"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "07:32:00"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[07:32:00]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[07:32:00]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.time(7, 32)]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{date=07:32:00}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={date=07:32:00}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.time(7, 32)}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp_servers-07:32:00",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp_servers=07:32:00"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.time' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-mcp-07:32:00",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp=07:32:00"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.time' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-model-07:32:00.123",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=07:32:00.123"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "07:32:00.123000"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[07:32:00.123]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[07:32:00.123]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.time(7, 32, 0, 123000)]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{date=07:32:00.123}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={date=07:32:00.123}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.time(7, 32, 0, 123000)}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp_servers-07:32:00.123",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp_servers=07:32:00.123"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.time' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-mcp-07:32:00.123",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp=07:32:00.123"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.time' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-model-1979-05-27T07:32:00",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=1979-05-27T07:32:00"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "1979-05-27 07:32:00"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[1979-05-27T07:32:00]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[1979-05-27T07:32:00]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.datetime(1979, 5, 27, 7, 32)]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{date=1979-05-27T07:32:00}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={date=1979-05-27T07:32:00}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.datetime(1979, 5, 27, 7, 32)}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp_servers-1979-05-27T07:32:00",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp_servers=1979-05-27T07:32:00"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.datetime' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-mcp-1979-05-27T07:32:00",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp=1979-05-27T07:32:00"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.datetime' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-model-1979-05-27T07:32:00.123456789Z",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=1979-05-27T07:32:00.123456789Z"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "1979-05-27 07:32:00.123456+00:00"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[1979-05-27T07:32:00.123456789Z]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[1979-05-27T07:32:00.123456789Z]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.datetime(1979, 5, 27, 7, 32, 0, 123456, tzinfo=datetime.timezone.utc)]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{date=1979-05-27T07:32:00.123456789Z}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={date=1979-05-27T07:32:00.123456789Z}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.datetime(1979, 5, 27, 7, 32, 0, 123456, tzinfo=datetime.timezone.utc)}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp_servers-1979-05-27T07:32:00.123456789Z",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp_servers=1979-05-27T07:32:00.123456789Z"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.datetime' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-mcp-1979-05-27T07:32:00.123456789Z",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp=1979-05-27T07:32:00.123456789Z"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.datetime' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-model-1979-05-27T07:32:00-07:30",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=1979-05-27T07:32:00-07:30"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "1979-05-27 07:32:00-07:30"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[1979-05-27T07:32:00-07:30]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[1979-05-27T07:32:00-07:30]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.datetime(1979, 5, 27, 7, 32, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=59400)))]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{date=1979-05-27T07:32:00-07:30}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={date=1979-05-27T07:32:00-07:30}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.datetime(1979, 5, 27, 7, 32, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=59400)))}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp_servers-1979-05-27T07:32:00-07:30",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp_servers=1979-05-27T07:32:00-07:30"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.datetime' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-mcp-1979-05-27T07:32:00-07:30",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp=1979-05-27T07:32:00-07:30"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.datetime' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-model-1979-05-27T07:32:00+02:15",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=1979-05-27T07:32:00+02:15"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "1979-05-27 07:32:00+02:15"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[1979-05-27T07:32:00+02:15]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[1979-05-27T07:32:00+02:15]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "[datetime.datetime(1979, 5, 27, 7, 32, tzinfo=datetime.timezone(datetime.timedelta(seconds=8100)))]"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{date=1979-05-27T07:32:00+02:15}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={date=1979-05-27T07:32:00+02:15}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'date': datetime.datetime(1979, 5, 27, 7, 32, tzinfo=datetime.timezone(datetime.timedelta(seconds=8100)))}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp_servers-1979-05-27T07:32:00+02:15",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp_servers=1979-05-27T07:32:00+02:15"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.datetime' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "kimi-mcp-1979-05-27T07:32:00+02:15",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "mcp=1979-05-27T07:32:00+02:15"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'datetime.datetime' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "codex-_mcp-ff",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "UnicodeDecodeError",
+        "message": "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+      },
+      "files_hex": {
+        ".codex/config.toml": "ff"
+      }
+    },
+    {
+      "name": "codex-_mcp-c3",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "UnicodeDecodeError",
+        "message": "'utf-8' codec can't decode byte 0xc3 in position 0: unexpected end of data"
+      },
+      "files_hex": {
+        ".codex/config.toml": "c3"
+      }
+    },
+    {
+      "name": "codex-_mcp-efbbbf7b7d",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".codex/config.toml": "efbbbf7b7d"
+      }
+    },
+    {
+      "name": "codex-_modelo_padrao-ff",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "UnicodeDecodeError",
+        "message": "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+      },
+      "files_hex": {
+        ".codex/config.toml": "ff"
+      }
+    },
+    {
+      "name": "codex-_modelo_padrao-c3",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "UnicodeDecodeError",
+        "message": "'utf-8' codec can't decode byte 0xc3 in position 0: unexpected end of data"
+      },
+      "files_hex": {
+        ".codex/config.toml": "c3"
+      }
+    },
+    {
+      "name": "codex-_modelo_padrao-efbbbf7b7d",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".codex/config.toml": "efbbbf7b7d"
+      }
+    },
+    {
+      "name": "kimi-_mcp-ff",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "UnicodeDecodeError",
+        "message": "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+      },
+      "files_hex": {
+        ".kimi-code/config.toml": "ff"
+      }
+    },
+    {
+      "name": "kimi-_mcp-c3",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "UnicodeDecodeError",
+        "message": "'utf-8' codec can't decode byte 0xc3 in position 0: unexpected end of data"
+      },
+      "files_hex": {
+        ".kimi-code/config.toml": "c3"
+      }
+    },
+    {
+      "name": "kimi-_mcp-efbbbf7b7d",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".kimi-code/config.toml": "efbbbf7b7d"
+      }
+    },
+    {
+      "name": "kimi-_modelo_padrao-ff",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "UnicodeDecodeError",
+        "message": "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+      },
+      "files_hex": {
+        ".kimi-code/config.toml": "ff"
+      }
+    },
+    {
+      "name": "kimi-_modelo_padrao-c3",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "UnicodeDecodeError",
+        "message": "'utf-8' codec can't decode byte 0xc3 in position 0: unexpected end of data"
+      },
+      "files_hex": {
+        ".kimi-code/config.toml": "c3"
+      }
+    },
+    {
+      "name": "kimi-_modelo_padrao-efbbbf7b7d",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".kimi-code/config.toml": "efbbbf7b7d"
+      }
+    },
+    {
+      "name": "claude-_mcp-ff",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".claude.json": "ff"
+      }
+    },
+    {
+      "name": "claude-_mcp-c3",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".claude.json": "c3"
+      }
+    },
+    {
+      "name": "claude-_mcp-efbbbf7b7d",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".claude.json": "efbbbf7b7d"
+      }
+    },
+    {
+      "name": "claude-_modelo_padrao-ff",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".claude/settings.json": "ff"
+      }
+    },
+    {
+      "name": "claude-_modelo_padrao-c3",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".claude/settings.json": "c3"
+      }
+    },
+    {
+      "name": "claude-_modelo_padrao-efbbbf7b7d",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".claude/settings.json": "efbbbf7b7d"
+      }
+    },
+    {
+      "name": "pi-_mcp-ff",
+      "kind": "_mcp",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/mcp.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".pi/agent/mcp.json": "ff"
+      }
+    },
+    {
+      "name": "pi-_mcp-c3",
+      "kind": "_mcp",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/mcp.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".pi/agent/mcp.json": "c3"
+      }
+    },
+    {
+      "name": "pi-_mcp-efbbbf7b7d",
+      "kind": "_mcp",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/mcp.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".pi/agent/mcp.json": "efbbbf7b7d"
+      }
+    },
+    {
+      "name": "pi-_modelo_padrao-ff",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".pi/agent/settings.json": "ff"
+      }
+    },
+    {
+      "name": "pi-_modelo_padrao-c3",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".pi/agent/settings.json": "c3"
+      }
+    },
+    {
+      "name": "pi-_modelo_padrao-efbbbf7b7d",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".pi/agent/settings.json": "efbbbf7b7d"
+      }
+    },
+    {
+      "name": "omp-_mcp-ff",
+      "kind": "_mcp",
+      "cli": "omp",
+      "files": {
+        ".omp/agent/mcp.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".omp/agent/mcp.json": "ff"
+      }
+    },
+    {
+      "name": "omp-_mcp-c3",
+      "kind": "_mcp",
+      "cli": "omp",
+      "files": {
+        ".omp/agent/mcp.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".omp/agent/mcp.json": "c3"
+      }
+    },
+    {
+      "name": "omp-_mcp-efbbbf7b7d",
+      "kind": "_mcp",
+      "cli": "omp",
+      "files": {
+        ".omp/agent/mcp.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".omp/agent/mcp.json": "efbbbf7b7d"
+      }
+    },
+    {
+      "name": "omp-_modelo_padrao-ff",
+      "kind": "_modelo_padrao",
+      "cli": "omp",
+      "files": {
+        ".omp/agent/settings.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".omp/agent/settings.json": "ff"
+      }
+    },
+    {
+      "name": "omp-_modelo_padrao-c3",
+      "kind": "_modelo_padrao",
+      "cli": "omp",
+      "files": {
+        ".omp/agent/settings.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".omp/agent/settings.json": "c3"
+      }
+    },
+    {
+      "name": "omp-_modelo_padrao-efbbbf7b7d",
+      "kind": "_modelo_padrao",
+      "cli": "omp",
+      "files": {
+        ".omp/agent/settings.json": "FIXTURE_BYTES"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      },
+      "files_hex": {
+        ".omp/agent/settings.json": "efbbbf7b7d"
+      }
+    }
+  ]
+}

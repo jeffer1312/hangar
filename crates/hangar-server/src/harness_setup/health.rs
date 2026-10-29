@@ -32,6 +32,7 @@ fn toml_value(value: toml::Value) -> Value {
             "Infinity"
         })
         .expect("constante JSON conhecida"),
+        toml::Value::Datetime(value) => Value::String(value.to_string()),
         toml::Value::Array(values) => Value::Array(values.into_iter().map(toml_value).collect()),
         toml::Value::Table(values) => Value::Object(
             values
@@ -43,20 +44,153 @@ fn toml_value(value: toml::Value) -> Value {
     }
 }
 
-fn read(path: &Path, toml: bool) -> Document {
-    if toml {
-        let value = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
-            .map(toml_value)
-            .unwrap_or_else(|| json!({}));
-        Document(value)
+fn read_toml(path: &Path) -> Result<toml::Value, String> {
+    let empty = || toml::Value::Table(Default::default());
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(empty()),
+    };
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| "configuração TOML não está em UTF-8".to_owned())?;
+    let value = toml::from_str::<toml::Value>(text).unwrap_or_else(|_| empty());
+    let mut pending = vec![&value];
+    while let Some(item) = pending.pop() {
+        match item {
+            toml::Value::Datetime(datetime) => {
+                if datetime.date.is_some_and(|date| {
+                    date.year == 0
+                        || chrono::NaiveDate::from_ymd_opt(
+                            i32::from(date.year),
+                            u32::from(date.month),
+                            u32::from(date.day),
+                        )
+                        .is_none()
+                }) || datetime
+                    .time
+                    .is_some_and(|time| time.second.is_none_or(|second| second >= 60))
+                {
+                    return Ok(empty());
+                }
+            }
+            toml::Value::Array(values) => pending.extend(values),
+            toml::Value::Table(values) => pending.extend(values.values()),
+            _ => (),
+        }
+    }
+    Ok(value)
+}
+fn read(path: &Path) -> Document {
+    let value = read_json(path).unwrap_or_else(|| Document(json!({})));
+    if value.is_object() {
+        value
     } else {
-        let value = read_json(path).unwrap_or_else(|| Document(json!({})));
-        if value.is_object() {
-            value
+        Document(json!({}))
+    }
+}
+fn temporal_text(datetime: &toml::value::Datetime, nested: bool) -> String {
+    let mut args = Vec::new();
+    let mut text = String::new();
+    if let Some(date) = datetime.date {
+        args.extend([
+            u32::from(date.year),
+            u32::from(date.month),
+            u32::from(date.day),
+        ]);
+        text = format!("{:04}-{:02}-{:02}", date.year, date.month, date.day);
+    }
+    if let Some(time) = datetime.time {
+        let second = time.second.unwrap_or(0);
+        let micros = time.nanosecond.unwrap_or(0) / 1000;
+        args.extend([u32::from(time.hour), u32::from(time.minute)]);
+        if second != 0 || micros != 0 {
+            args.push(u32::from(second));
+        }
+        if micros != 0 {
+            args.push(micros);
+        }
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(&format!(
+            "{:02}:{:02}:{:02}",
+            time.hour, time.minute, second
+        ));
+        if micros != 0 {
+            text.push_str(&format!(".{micros:06}"));
+        }
+    }
+    let mut timezone = String::new();
+    if let Some(offset) = datetime.offset {
+        let minutes = match offset {
+            toml::value::Offset::Z => 0,
+            toml::value::Offset::Custom { minutes } => i32::from(minutes),
+        };
+        text.push_str(&format!(
+            "{}{:02}:{:02}",
+            if minutes < 0 { '-' } else { '+' },
+            minutes.abs() / 60,
+            minutes.abs() % 60
+        ));
+        timezone = if minutes == 0 {
+            ", tzinfo=datetime.timezone.utc".into()
         } else {
-            Document(json!({}))
+            let seconds = minutes * 60;
+            let delta = if seconds < 0 {
+                format!("days=-1, seconds={}", seconds.rem_euclid(86400))
+            } else {
+                format!("seconds={seconds}")
+            };
+            format!(", tzinfo=datetime.timezone(datetime.timedelta({delta}))")
+        };
+    }
+    if nested {
+        let kind = match (datetime.date.is_some(), datetime.time.is_some()) {
+            (true, true) => "datetime",
+            (true, false) => "date",
+            _ => "time",
+        };
+        format!(
+            "datetime.{kind}({}{timezone})",
+            args.iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    } else {
+        text
+    }
+}
+fn toml_text(value: &toml::Value, nested: bool) -> String {
+    match value {
+        toml::Value::Datetime(datetime) => temporal_text(datetime, nested),
+        toml::Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(|value| toml_text(value, true))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        toml::Value::Table(values) => format!(
+            "{{{}}}",
+            values
+                .iter()
+                .map(|(key, value)| format!(
+                    "{}: {}",
+                    toml_text(&toml::Value::String(key.clone()), true),
+                    toml_text(value, true)
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        _ => {
+            let value = toml_value(value.clone());
+            if nested && value.is_string() && !codec::contains_nonfinite(&value) {
+                let wrapped = codec::python_string(&Value::Array(vec![value]));
+                wrapped[1..wrapped.len() - 1].to_owned()
+            } else {
+                codec::python_string(&value)
+            }
         }
     }
 }
@@ -85,18 +219,15 @@ fn agent_dir(env: &AccountEnvironment, cli: &str) -> Result<PathBuf, String> {
 }
 fn config(env: &AccountEnvironment, cli: &str, json_name: &str) -> Result<Document, String> {
     let dir = agent_dir(env, cli)?;
-    Ok(read(
-        &dir.join(if matches!(cli, "codex" | "kimi") {
-            "config.toml"
-        } else {
-            json_name
-        }),
-        matches!(cli, "codex" | "kimi"),
-    ))
+    if matches!(cli, "codex" | "kimi") {
+        Ok(Document(toml_value(read_toml(&dir.join("config.toml"))?)))
+    } else {
+        Ok(read(&dir.join(json_name)))
+    }
 }
 pub fn mcp(env: &AccountEnvironment, cli: &str) -> Result<Value, String> {
     let doc = if cli == "claude" {
-        read(&env.home.join(".claude.json"), false)
+        read(&env.home.join(".claude.json"))
     } else {
         config(env, cli, "mcp.json")?
     };
@@ -125,8 +256,22 @@ pub fn mcp(env: &AccountEnvironment, cli: &str) -> Result<Value, String> {
     ))
 }
 pub fn default_model(env: &AccountEnvironment, cli: &str) -> Result<Value, String> {
+    if matches!(cli, "codex" | "kimi") {
+        let document = read_toml(&agent_dir(env, cli)?.join("config.toml"))?;
+        let field = if cli == "kimi" {
+            "default_model"
+        } else {
+            "model"
+        };
+        let model = document
+            .get(field)
+            .filter(|value| truthy(&toml_value((*value).clone())))
+            .map(|value| toml_text(value, false))
+            .unwrap_or_default();
+        return Ok(model_item(model));
+    }
     let doc = if cli == "claude" {
-        read(&env.home.join(".claude/settings.json"), false)
+        read(&env.home.join(".claude/settings.json"))
     } else {
         config(env, cli, "settings.json")?
     };
@@ -153,7 +298,10 @@ pub fn default_model(env: &AccountEnvironment, cli: &str) -> Result<Value, Strin
             String::new()
         }
     };
-    Ok(if model.is_empty() {
+    Ok(model_item(model))
+}
+fn model_item(model: String) -> Value {
+    if model.is_empty() {
         item(
             "modelo",
             Some(true),
@@ -171,10 +319,10 @@ pub fn default_model(env: &AccountEnvironment, cli: &str) -> Result<Value, Strin
             true,
             &[("modelo", model)],
         )
-    })
+    }
 }
 pub fn codex_hooks(env: &AccountEnvironment) -> Value {
-    let doc = read(&env.codex_default.join("hooks.json"), false);
+    let doc = read(&env.codex_default.join("hooks.json"));
     let Some(hooks) = doc["hooks"].as_object().filter(|h| !h.is_empty()) else {
         return item("hooks", Some(true), "hooks_nenhum", None, true, &[]);
     };
@@ -200,7 +348,7 @@ pub fn fullscreen(env: &AccountEnvironment, cli: &str) -> Value {
         if !path.is_file() {
             return item("fullscreen", None, "config_ilegivel", None, false, &[]);
         }
-        let doc = read(&path, false);
+        let doc = read(&path);
         let enabled = doc["tui"].as_str() == Some("fullscreen");
         return item(
             "fullscreen",
