@@ -93,7 +93,6 @@ def setup(monkeypatch, tmp_path, gateway):
         'jsonl': str(tmp_path / ('sid.jsonl' if name == 'session' else 'other-sid.jsonl')),
     })
     effects, records = [], []
-    monkeypatch.setattr(terminal, '_plugin_current', lambda binding: False)
     monkeypatch.setattr(terminal_input.TerminalInput, 'send_prompt',
         lambda self, name, text: effects.append((name, text)) or 'sent')
     monkeypatch.setattr(diag, 'registrar', lambda event, level='info', **fields:

@@ -516,8 +516,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   nome, pane ambíguo não resolve, nada resolvido é erro (nunca `cli`). O bearer do dono é conferido
   antes do servidor MCP e nunca entra no ambiente do pane: Claude via `headersHelper`, Codex via
   `http_headers`. Tool mapeia 1:1 numa rota que já existe, chamada dentro do processo; o CLI continua
-  como fallback e resolve identidade sozinho. No modo `python`, `/mcp` responde 503
-  `mcp_needs_rust_server`, sem reserva Python.
+  como fallback e resolve identidade sozinho. O Python não tem rota `/mcp`.
 - **O git da sessão é o da worktree onde o agente trabalha (`git_cwd`), não o da pasta de
   abertura.** O Claude Code não grava a worktree irmã no `cwd` do transcript: o sinal são as
   chamadas recentes (`cd`, `git -C`, arquivo editado). Nada na principal tira a sessão da

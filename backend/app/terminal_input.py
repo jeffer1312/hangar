@@ -13,7 +13,6 @@ from app import codex_permissions as cxperm
 from app.askquestion import pergunta_aberta
 from app import model_picker as mp
 from app import providers_bridge
-from app import plugin_bridge
 from app import tmux
 from app.models import scrub_surrogates
 from app.pqueue import PromptQueue, _transcript_start_ts
@@ -747,38 +746,6 @@ def _send_lock(name: str) -> _SharedSendLock:
     return _send_locks.setdefault((home, name), _SharedSendLock(path))
 
 
-def _drain_pelo_plugin(name: str, q: PromptQueue, start_ts: float, jsonl: str | None = None) -> int:
-    """Entrega a fila pelo function-hook, enquanto houver long-poll ouvindo.
-
-    Uma entrada por volta: o plugin some da escuta ao processar, e insistir com
-    a segunda faria a entrega falhar no meio do lote. A próxima sai no drain
-    seguinte, quando o poll voltar.
-    """
-    # `deliverable` pelo mesmo motivo do `/input`: o rascunho entra pela API do engine, mas o Enter
-    # é tecla, e tecla em overlay navega o menu em vez de submeter.
-    if not plugin_bridge.aguardando(name) or not deliverable(name):
-        return 0
-    entregues = 0
-    while plugin_bridge.aguardando(name):
-        claimed = q.claim_undelivered(min_ts=start_ts, limit=1)
-        if not claimed:
-            break
-        entry = claimed[0]
-        modo = plugin_bridge.choose_mode(name, entry["text"])
-        entregue = plugin_bridge.entregar(name, entry["text"], modo, jsonl)
-        # INCERTO fica como entregue: pode ter entrado, e digitar por cima duplicaria.
-        if entregue is True or entregue == plugin_bridge.INCERTO:
-            entregues += 1
-            _log.info("drain name=%s: entrada %s entregue pelo plugin (sem tecla) modo=%s resultado=%s",
-                      name, entry.get("id"), modo, entregue)
-            continue
-        # Ninguém ouvindo entre o gate e a entrega: NADA foi digitado, então a
-        # entrada volta pra fila inteira e o caminho de tecla assume.
-        q.set_delivered(entry["id"], False)
-        break
-    return entregues
-
-
 def drain(name: str, jsonl: str, provider: str = "claude") -> int:
     """Entrega ao tty as entradas pendentes (delivered=False) quando o pane volta a aceitar texto.
     Retorna quantas entregou. claim-1-envia-1: um crash entre o claim e o envio deixa NO MAXIMO 1
@@ -820,12 +787,7 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
     if podadas:
         _log.info("poda name=%s: %d entrada(s) de vida anterior descartada(s) (corte=%.0f)",
                   name, podadas, start_ts)
-    # Caminho NATIVO: com o function-hook da sessão ouvindo, a entrega é por
-    # `$.prompt.submit` e nenhuma tecla é emitida. Sem long-poll aberto, cai no
-    # de sempre logo abaixo — o fallback é ausência, não erro.
-    sent = _drain_pelo_plugin(name, q, start_ts, jsonl)
-    if sent:
-        return sent
+    sent = 0
     ti = TerminalInput()
     while True:
         claimed = q.claim_undelivered(min_ts=start_ts, limit=1)

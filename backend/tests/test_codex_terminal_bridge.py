@@ -460,8 +460,6 @@ def test_claude_bridge_down_is_a_visible_503_without_local_answer(monkeypatch):
     _owner(monkeypatch)
     _provider(monkeypatch, ct="claude")
     monkeypatch.setattr(runtime_coordinator, "rust_codex_terminal", lambda *args: None)
-    monkeypatch.setattr(api_mod.plugin_bridge, "responder_pergunta",
-                        lambda *args: (_ for _ in ()).throw(AssertionError("o Python respondeu a pergunta")))
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         closed = probe.getsockname()[1]

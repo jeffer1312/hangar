@@ -727,12 +727,9 @@ async def _correlaciona_diag(request: Request, call_next):
         status = response.status_code if response is not None else 500
         # O template da rota não contém query, caminho de arquivo nem corpo do pedido.
         route = getattr(request.scope.get("route"), "path", "(rota desconhecida)")
-        # O long-poll do plugin espera de propósito: sucesso dele seria uma linha "lenta" a cada
-        # janela, e enchia o teto do dia.
-        long_poll_ok = route == "/api/plugin/pull" and status < 400 and not failure
         # O Rust chama `/internal/*` a cada tique: o POST que deu certo e rápido enchia o teto do dia de madrugada.
         internal_ok = request.url.path.startswith("/internal/") and status < 400 and not failure and elapsed < 1000
-        if (response is not None or failure) and not long_poll_ok and not internal_ok and not request.url.path.startswith("/api/diag") and (
+        if (response is not None or failure) and not internal_ok and not request.url.path.startswith("/api/diag") and (
                 failure or status >= 400 or elapsed >= 1000 or request.method in ("POST", "PUT", "PATCH", "DELETE")):
             diag.registrar("api.servidor", "erro" if status >= 500 else "aviso" if status >= 400 else "ok",
                            detalhe=f"{request.method} {route}", codigo=str(status), ms=elapsed,
@@ -3315,30 +3312,13 @@ def _send_one_available(name: str, text: str, track_entry: bool = False) -> dict
     # um "partial" que um dia devolvesse sem passar por `_partial()` leria a sobra de outro envio.
     if hasattr(terminal_input._ULTIMA_LIMPEZA, "limpou"):
         del terminal_input._ULTIMA_LIMPEZA.limpou
-    # Caminho NATIVO: sessão Claude com o function-hook ouvindo recebe por
-    # `$.prompt.submit` e nenhuma tecla é emitida. Slash-command fica de fora — é
-    # meta, e depende do menu que só existe na TUI. Ninguém ouvindo = pane, como sempre.
-    # `deliverable` antes de tudo: o rascunho entra pela API do engine, mas o Enter é tecla, e
-    # tecla em overlay navega o menu em vez de submeter. Mesmo gate do caminho de sempre.
     # Escada de entrega, um degrau só depois que o anterior não deu: socket nativo do Claude
-    # (recado de sessão-irmã, entra no meio do turno) → plugin sem tecla → tmux → fila.
+    # (recado de sessão-irmã, entra no meio do turno) → tmux → fila.
     nativo = _enviar_nativo(name, text) if provider == "claude" and not stripped.startswith("/") else None
     if nativo:
         _log.info("SEND name=%s pelo socket nativo msg_id=%s text=%r", name, nativo, text[:80])
-    entrega_plugin = False
-    if (not nativo and provider == "claude" and not stripped.startswith("/")
-            and plugin_bridge.aguardando(name)
-            and terminal_input.deliverable(name)):
-        modo = plugin_bridge.choose_mode(name, text)
-        entrega_plugin = plugin_bridge.entregar(name, text, modo,
-                                                _jsonl_atual(name) if modo == "user" else None)
-    # INCERTO conta como entregue para não digitar por cima; a reconciliação decide depois.
-    pelo_plugin = entrega_plugin is True or entrega_plugin == plugin_bridge.INCERTO
-    if pelo_plugin:
-        _log.info("SEND name=%s pelo plugin (sem tecla) modo=%s resultado=%s text=%r",
-                  name, modo, entrega_plugin, text[:80])
     try:
-        result = "sent" if (nativo or pelo_plugin) else terminal.send_prompt(
+        result = "sent" if nativo else terminal.send_prompt(
             name, text, provider, pane_id=pane_id,
             **({"msg_id": entry["id"]} if entry is not None else {}))
         if result != "sent" and (error := _transfer_send_error(name)):
@@ -4288,17 +4268,8 @@ def select(name: str, body: SelectBody):
     # A rota do terminal só conhece o vínculo Claude: para outro provedor (Codex sem terminal
     # incluído) ela suspendia a escrita antes de chegar ao ramo dele.
     if getattr(info, "provider", "claude") == "claude":
-        pending = plugin_bridge.pergunta_pendente(name)
         payload = {"option":body.option}
-        if pending is not None:
-            payload["request_id"] = pending["id"]
-            if str(pending["id"]).startswith("perm:") and body.option not in (1, 2):
-                raise HTTPException(409, detail=erro("erro_opcao_nao_convergiu", "opção fora do pedido de permissão"))
-        if pending is None or not str(pending["id"]).startswith("perm:"):
-            # Pergunta `ask:` pode acabar no teclado da TUI: aí vale a trava do painel e o cursor tem de ser lido.
-            _recusa_se_painel_aberto(name)
-            if pending is not None:
-                payload["require_cursor"] = True
+        _recusa_se_painel_aberto(name)
         try:
             routed = route_sync(name, {"kind":"control", "control":"select", "payload":payload})
         except TerminalControlError as e:
@@ -4328,18 +4299,6 @@ def select(name: str, body: SelectBody):
     # uma opção de sessão morta digitava no vazio e a resposta era {"ok": true} — o catch do card
     # nunca disparava. (O fix de raiz em send_keys/_run é outro diff: interrupt/model_picker/
     # TerminalMirror também passam por lá.)
-    # Pedido de permissão que o plugin segura: o card do app é o de DUAS opções montado em
-    # state.py (1 = Yes, 2 = No), e a resposta entra sem tecla. Não cai na tecla se o plugin não
-    # pegar: segurado, o terminal não tem menu nenhum para dirigir.
-    pend = plugin_bridge.pergunta_pendente(name)
-    if pend is not None and str(pend["id"]).startswith("perm:"):
-        if body.option not in (1, 2):
-            raise HTTPException(409, detail=erro("erro_opcao_nao_convergiu", "opção fora do pedido de permissão"))
-        if plugin_bridge.responder_pergunta(name, {"permitir": body.option == 1}, pend["id"]):
-            _log.info("SELECT name=%s permissão pelo plugin (sem tecla) opcao=%d", name, body.option)
-            return {"ok": True}
-        raise HTTPException(409, detail=erro("erro_opcao_nao_convergiu",
-                                             "o pedido de permissão não está mais aberto — confira a sessão"))
     _recusa_se_painel_aberto(name)
     if not _session_exists(name):
         raise HTTPException(404, detail=erro("erro_sessao_opcao_nao_enviada", "sessão não encontrada — opção NÃO enviada"))
@@ -4526,14 +4485,12 @@ async def interrupt(name: str, clear: bool = False):
     # clear=True: alem de interromper, limpa o input (2o Esc). So o front com msg pendente passa isso —
     # garante input nao-vazio, evitando que o Esc-Esc abra o menu de rewind num input ja vazio.
     # terminal.interrupt e SYNC (tmux) -> threadpool pra nao bloquear o event loop (handler async agora).
-    pergunta = (plugin_bridge.pergunta_pendente(name) or {}).get("id")
     try:
         await asyncio.to_thread(terminal.interrupt, name, clear=clear)
     except (TerminalControlError, TransferInProgress):
         raise
     except RuntimeError as e:
         raise _falha_do_runtime(e) from None
-    plugin_bridge.interrompeu(name, pergunta)
     return {"ok": True}
 
 
@@ -6989,12 +6946,9 @@ def answer(name: str, body: AnswerBody):
     info = _cached_info_sync(name)
     if getattr(info, "provider", "claude") == "claude" and not _headless(name):
         from app.runtime_terminal import answer_sync
-        pending = plugin_bridge.pergunta_pendente(name)
-        if pending is None:
-            _recusa_se_painel_aberto(name)
+        _recusa_se_painel_aberto(name)
         try:
-            result = answer_sync(name, answers, body.request_id or (pending or {}).get("id"),
-                getattr(info, "jsonl", None))
+            result = answer_sync(name, answers, body.request_id, getattr(info, "jsonl", None))
         except ValueError as exc:
             raise HTTPException(409, detail=erro("erro_sem_resposta", str(exc))) from exc
         except (TerminalControlError, TransferInProgress):
@@ -7037,25 +6991,6 @@ def answer(name: str, body: AnswerBody):
             _log.warning("resposta ao Claude sem terminal falhou: %s", type(exc).__name__)
             raise HTTPException(503, detail=erro("erro_codex_resposta_envio", "Não foi possível enviar a resposta.")) from exc
         return {"ok": True, "fallback": False}
-    # Function hook do plugin segurando a pergunta: a resposta entra sem tecla. Se ele não pegar
-    # (hook morto, pergunta já fechada no terminal), o caminho de tecla abaixo assume.
-    if getattr(info, "provider", "claude") == "claude":
-        pend = plugin_bridge.pergunta_pendente(name)
-        # Só PERGUNTA: o mesmo canal segura pedido de permissão (`perm:`), que é do /select.
-        if pend is not None and pend["questions"] and not str(pend["id"]).startswith("perm:"):
-            from app.adapters.claude_headless.adapter import _mensagem_conversar, respostas_do_app
-            try:
-                respostas, conversar = respostas_do_app(pend["questions"], answers)
-            except ValueError as exc:
-                raise HTTPException(409, detail=erro("erro_sem_resposta", str(exc))) from exc
-            corpo = ({"deny": _mensagem_conversar(respostas, conversar)} if conversar
-                     else {"answers": respostas})
-            if plugin_bridge.responder_pergunta(name, corpo, pend["id"]):
-                _log.info("ANSWER name=%s pelo plugin (sem tecla)", name)
-                if info and info.jsonl:
-                    clear_pending_askq(info.jsonl)
-                return {"ok": True, "fallback": False}
-            _log.warning("ANSWER name=%s: plugin não pegou a resposta — indo pela tecla", name)
     _recusa_se_painel_aberto(name)
     jsonl = info.jsonl if info else None
     fallback = False
@@ -8220,10 +8155,3 @@ async def tts_audio(h: str):
     # (ver tts.extensao_de) — servir isso como audio/mpeg quebra o <audio> no WebKit.
     media_type = "audio/wav" if caminho.suffix == ".wav" else "audio/mpeg"
     return FileResponse(caminho, media_type=media_type)
-
-
-# O MCP `hangar` é do Rust; sem ele, o código próprio. Antes do estático em "/", que responderia 405.
-@app.api_route("/mcp", methods=["GET", "POST", "DELETE"], dependencies=[Depends(require_auth)])
-@app.api_route("/mcp/", methods=["GET", "POST", "DELETE"], dependencies=[Depends(require_auth)])
-async def mcp_needs_rust():
-    raise HTTPException(503, detail=erro("mcp_needs_rust_server", "o MCP do Hangar precisa do servidor Rust"))
