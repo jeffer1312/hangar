@@ -151,7 +151,7 @@ impl Sync {
             }
             ("POST", "register") => self.register(body, entropy),
             ("GET", "prelogin") => self.prelogin(user.unwrap_or_default()),
-            ("POST", "login") => self.login(body, now, ip),
+            ("POST", "login") => self.login(body, now, ip).map(|(value, _)| value),
             ("POST", "logout") => Ok(json!({"ok":true})),
             ("GET", "vault") => {
                 let Some(vault) = self.load()?.filter(|value|truthy(value)) else {
@@ -327,7 +327,7 @@ impl Sync {
         } else { json!(STANDARD.encode(b"unregistered----")) };
         Ok(json!({"salt":salt,"iterations":600000}))
     }
-    fn login(&self, b: &Value, now: f64, ip: &str) -> Result<Value> {
+    pub(super) fn login(&self, b: &Value, now: f64, ip: &str) -> Result<(Value, String)> {
         let user = v::text(b, "user", 0, usize::MAX)?;
         let auth = v::text(b, "auth_hash", 0, usize::MAX)?;
         {
@@ -349,6 +349,8 @@ impl Sync {
                 ));
             }
         }
+        // A geração do cookie precisa pertencer à credencial que acabou de ser validada.
+        let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let vault = self.load()?;
         let acc = match &vault { Some(vault) => account(vault, &user)?, None => None };
         let valid = if let Some(acc) = acc.filter(|v| truthy(v)) {
@@ -368,11 +370,7 @@ impl Sync {
                 .push(now);
             return Err(unauthorized());
         }
-        Ok(json!({"ok":true}))
-    }
-    pub fn generation(&self, user: &str) -> Result<String> {
-        let vault = self.load()?.ok_or_else(unreadable)?;
-        generation_of(account(&vault, user)?.ok_or_else(unreadable)?)
+        Ok((json!({"ok":true}), generation_of(acc.ok_or_else(unreadable)?)?))
     }
     fn put_vault(&self, b: &Value, user: &str) -> Result<Value> {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());

@@ -76,6 +76,8 @@ pub struct Service {
     pub entropy: fn(usize) -> Vec<u8>,
     pub id: fn() -> String,
     pub token: fn() -> String,
+    #[cfg(test)]
+    login_barriers: std::sync::Mutex<Option<Arc<(std::sync::Barrier, std::sync::Barrier)>>>,
 }
 impl Service {
     pub async fn from_state(state: &AppState) -> Self {
@@ -128,6 +130,8 @@ impl Service {
             entropy: store::random,
             id: store::id,
             token: store::token,
+            #[cfg(test)]
+            login_barriers: std::sync::Mutex::new(None),
         }
     }
     /// A mesma função atende a porta pública e as provas HTTP, sem depender do Python.
@@ -282,21 +286,28 @@ impl Service {
                 .map(|model| super::schema::validate(model, body).map(super::Tree))
                 .transpose()?;
             let body = normalized.as_deref().unwrap_or(body);
-            let value = self.sync.handle(
-                method.as_str(),
-                path,
-                body,
-                user.as_deref(),
-                (self.rate_now)(),
-                ip,
-                self.entropy,
-            )?;
+            let (value, login_generation) = if path == "login" && method == Method::POST {
+                let (value, generation) = self.sync.login(body, (self.rate_now)(), ip)?;
+                (value, Some(generation))
+            } else {
+                (self.sync.handle(
+                    method.as_str(), path, body, user.as_deref(),
+                    (self.rate_now)(), ip, self.entropy,
+                )?, None)
+            };
+            #[cfg(test)]
+            if path == "login" && method == Method::POST {
+                if let Some(barriers) = { let mut hook = self.login_barriers.lock().unwrap(); hook.take() } {
+                    barriers.0.wait();
+                    barriers.1.wait();
+                }
+            }
             let mut set_cookie = None;
             if path == "login" && method == Method::POST {
                 let u = body["user"].as_str().unwrap_or_default();
-                let g = self.sync.generation(u)?;
+                let g = login_generation.as_deref().expect("login validado com geração");
                 set_cookie =
-                    Some(self.cookie_header(&self.sync.cookie(u, Some(&g), now), https)?);
+                    Some(self.cookie_header(&self.sync.cookie(u, Some(g), now), https)?);
             } else if authenticated {
                 set_cookie = Some(self.cookie_header(
                     &self.sync.cookie(
@@ -524,4 +535,60 @@ pub async fn public_contract(request:Request,next:axum::middleware::Next)->Respo
     crate::http_cors::apply(&headers,&mut response);
     crate::http_route_response::suppress_head(&method,&mut response);
     response
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    use axum::http::StatusCode;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn login_guests_review_recreation_revokes_inflight_login() {
+        let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/http.json")).unwrap();
+        let rows = fixture["rows"].as_array().unwrap();
+        let guest = rows.iter().find(|row| row["name"] == "guest_hub").unwrap();
+        let login = rows.iter().find(|row| row["name"] == "login_guest").unwrap();
+        for same_password in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut service = Service::new(Settings {
+                guests: dir.path().join("guests.json"), vault: dir.path().join("vault.json"),
+                runtime_config: dir.path().join("config.json"), sync_enabled: true,
+                bootstrap: "bootstrap".into(), secret: b"fixture-secret".to_vec(), secure: false,
+                rate_max: 10.into(), rate_window: 300.into(),
+            });
+            service.now = || 2000000000;
+            store::write(&service.sync.path, &guest["vault"]).unwrap();
+            let barriers = Arc::new((std::sync::Barrier::new(2), std::sync::Barrier::new(2)));
+            *service.login_barriers.lock().unwrap() = Some(barriers.clone());
+            let service = Arc::new(service);
+            let request = Request::builder().method("POST").uri("/api/sync/login")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(login["body"].to_string())).unwrap();
+            let pending = { let service = service.clone(); tokio::spawn(async move {
+                service.respond(false, "127.0.0.1".into(), false, request).await
+            }) };
+            barriers.0.wait();
+            let mut replacement = guest["body"].clone();
+            if !same_password {
+                replacement["auth_hash"] = json!("YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=");
+            }
+            service.sync.handle("POST", "guests", &replacement, Some("owner"), 0.0, "fixture", |n| vec![b'y';n]).unwrap();
+            barriers.1.wait();
+            let response = pending.await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let cookie = response.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap();
+            let request = Request::builder().uri("/api/sync/vault").header("cookie", cookie)
+                .body(axum::body::Body::empty()).unwrap();
+            let response = service.respond(false, "127.0.0.1".into(), false, request).await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "D33: recriação não autoriza cookie com credencial da geração anterior; mesma senha={same_password}");
+            let request = Request::builder().method("POST").uri("/api/sync/login")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(json!({"user":"ana","auth_hash":replacement["auth_hash"]}).to_string())).unwrap();
+            let response = service.respond(false, "127.0.0.1".into(), false, request).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let cookie = response.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap();
+            let request = Request::builder().uri("/api/sync/vault").header("cookie", cookie)
+                .body(axum::body::Body::empty()).unwrap();
+            assert_eq!(service.respond(false, "127.0.0.1".into(), false, request).await.status(), StatusCode::OK, "D33: nova credencial continua utilizável");
+        }
+    }
 }
