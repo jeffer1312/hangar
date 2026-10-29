@@ -837,9 +837,39 @@ async fn elevenlabs_receives_the_effective_voice_normalization_and_adjustments()
     );
     assert_eq!(records[0].1, "fixture");
     assert_eq!(
+        records[1].0,
+        "/text-to-speech/other?output_format=mp3_44100_128"
+    );
+    assert_eq!(
         records[0].2,
         json!({"text":"oi","model_id":"eleven_multilingual_v2","apply_text_normalization":"on","voice_settings":{"stability":0.3}})
     );
+}
+
+#[tokio::test]
+async fn a_refused_remote_connection_is_visible_without_cache_or_local_fallback() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let dir = tempfile::tempdir().unwrap();
+    let count = dir.path().join("local-calls");
+    let mut c = config(dir.path());
+    c.values = json!({"elevenlabs_api_key":"fixture"});
+    c.values["tts_local_cmd"] = json!(command(dir.path(), "wav", &[&count]));
+    let service = Service::at(format!("http://{address}"));
+    let error = tokio::time::timeout(
+        Duration::from_secs(10),
+        service.synthesize(&c, "oi", "", "elevenlabs", ""),
+    ).await.unwrap().unwrap_err();
+    assert_eq!(error.status, 502);
+    assert_eq!(error.detail, "Falha ao contatar a ElevenLabs.");
+    for result in [service.voices(&c).await, service.balance(&c).await] {
+        let error = result.unwrap_err();
+        assert_eq!(error.status, 502);
+        assert_eq!(error.detail, "Falha ao contatar a ElevenLabs.");
+    }
+    empty_cache(&c.cache_dir).await;
+    assert!(!count.exists());
 }
 
 #[tokio::test]

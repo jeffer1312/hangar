@@ -122,6 +122,12 @@ fn parse_content(bytes: &[u8]) -> Result<String, SpeechError> {
         .map_err(|_| SpeechError::new(502, "A resposta do provedor não é UTF-8 válido."))?;
     let value: Value = serde_json::from_str(text)
         .map_err(|_| SpeechError::new(502, "A resposta do provedor não é um JSON válido."))?;
+    if value["choices"][0]["finish_reason"].as_str() == Some("length") {
+        return Err(SpeechError::new(
+            502,
+            "A resposta do provedor foi interrompida pelo limite de tokens.",
+        ));
+    }
     let text = value["choices"]
         .get(0)
         .and_then(|v| v["message"]["content"].as_str())
@@ -147,7 +153,7 @@ pub(super) fn profile(config: &SpeechConfig) -> String {
     let (endpoint, key, model) = config.text_provider();
     digest(&format!(
         "{endpoint}\0{key}\0{model}\0{}",
-        config.string("llm_reasoning_effort")
+        trim(&config.string("llm_reasoning_effort"))
     ))
 }
 
@@ -459,6 +465,22 @@ mod tests {
             .unwrap_err();
         assert!(error.detail.contains("limite de leitura"));
         assert_eq!(parse_content(b"not JSON").unwrap_err().status, 502);
+    }
+
+    #[tokio::test]
+    async fn truncated_success_is_a_visible_provider_error() {
+        let server = fake(vec![(200, json!({"choices":[{
+            "finish_reason":"length", "message":{"content":"texto interrompido"}
+        }]}))]).await;
+        let error = chat(&server.config, "s", "p", 0.0, Duration::from_secs(2))
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, 502);
+        assert_eq!(error.detail, "A resposta do provedor foi interrompida pelo limite de tokens.");
+        for reason in [Value::Null, json!("stop")] {
+            let value = json!({"choices":[{"finish_reason":reason,"message":{"content":"texto completo"}}]});
+            assert_eq!(parse_content(value.to_string().as_bytes()).unwrap(), "texto completo");
+        }
     }
 
     #[tokio::test]

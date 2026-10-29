@@ -3650,9 +3650,11 @@ nome de hash e extensão MP3/WAV. A seleção protege o último uso mesmo quando
 arquivo somente leitura não pode ser renovado; arquivos alheios e links ficam intactos.
 
 O cliente de texto reaproveita conexões, recusa UTF-8 inválido em resposta de sucesso e
-redirecionamento de credenciais, sem usar assinatura como reserva. Cache e pausa de pensamento
-distinguem a configuração do provedor;
-trocar de chave não deixa uma falha antiga bloqueando a tradução nova. O prazo do lote inclui
+resposta interrompida por limite de tokens, além de redirecionamento de credenciais, sem usar
+assinatura como reserva. Cache e pausa de pensamento distinguem a configuração do provedor;
+o esforço usa o mesmo valor normalizado enviado ao provedor, evitando repetir chamadas por
+espaços externos. Trocar de chave não deixa uma falha antiga bloqueando a tradução nova.
+O prazo do lote inclui
 o item em curso; cancelá-lo conserva o original sem contaminar pausa ou cache. Tradução de
 descrições conserva lotes, resultado parcial e cache persistente; só limite HTTP real provoca repetição.
 Cache ilegível ou corrompido conserva o arquivo e expõe a causa, sem apagar entradas anteriores.

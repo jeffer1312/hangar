@@ -462,8 +462,13 @@ mod tests {
         let header_error = header(&child).err();
         let discovery = get_checked(&parent, "mine", 0);
         std::fs::set_permissions(&dir, permissions).unwrap();
-        assert_eq!(header_error.unwrap().kind(), std::io::ErrorKind::PermissionDenied);
-        assert_eq!(discovery.unwrap_err(), "codex_subagents_source_unavailable");
+        if let Some(error) = header_error {
+            assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+            assert_eq!(discovery.unwrap_err(), "codex_subagents_source_unavailable");
+        } else {
+            // Processos privilegiados podem ler mesmo quando os bits de permissão estão zerados.
+            assert!(discovery.unwrap().is_some());
+        }
         assert!(Arc::ptr_eq(&cached, &directory(&dir).unwrap()));
     }
 

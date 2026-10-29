@@ -135,6 +135,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn truncated_output_keeps_the_original_and_is_not_cached() {
+        let server = fake(vec![
+            (200, serde_json::json!({"choices":[{"finish_reason":"length",
+                "message":{"content":"tradução interrompida"}}]})),
+            content("Tradução completa."),
+        ]).await;
+        let service = Service::default();
+        let texts = vec!["Checking code".to_owned()];
+        assert_eq!(service.translate(&server.config, &texts).await, texts);
+        assert_eq!(service.translate(&server.config, &texts).await, texts);
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        service.cache.lock().unwrap().paused.clear();
+        assert_eq!(service.translate(&server.config, &texts).await, vec!["Tradução completa."]);
+        assert_eq!(service.translate(&server.config, &texts).await, vec!["Tradução completa."]);
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn whitespace_around_the_same_effective_effort_reuses_the_translation() {
+        let server = fake(vec![content("Tradução única."), content("Tradução repetida.")]).await;
+        let service = Service::default();
+        let texts = vec!["Checking code".to_owned()];
+        let mut config = server.config.clone();
+        config.values["llm_reasoning_effort"] = serde_json::json!("low");
+        assert_eq!(service.translate(&config, &texts).await, vec!["Tradução única."]);
+        config.values["llm_reasoning_effort"] = serde_json::json!(" \tlow\n ");
+        assert_eq!(service.translate(&config, &texts).await, vec!["Tradução única."]);
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(server.bodies.lock().unwrap()[0]["reasoning_effort"], "low");
+    }
+
+    #[tokio::test]
     async fn provider_failure_pauses_calls_but_a_changed_provider_can_work() {
         let server = fake(vec![
             (500, serde_json::json!({"error":"indisponível"})),
