@@ -13,22 +13,28 @@ use subtle::ConstantTimeEq;
 
 #[derive(Debug, Clone)]
 pub struct Failure {
+    pub os_error: Option<i32>,
     pub status: u16,
     pub body: Value,
 }
 impl Failure {
     pub fn code(status: u16, code: &str, message: &str) -> Self {
         Self {
+            os_error: None,
             status,
             body: json!({"detail":{"code":code,"params":{},"msg":message}}),
         }
     }
-    pub fn io(_: io::Error) -> Self {
+    pub fn with_io(mut self, error: &io::Error) -> Self {
+        self.os_error = error.raw_os_error();
+        self
+    }
+    pub fn io(error: io::Error) -> Self {
         Self::code(
             500,
             "erro_convidados_ilegivel",
             "o arquivo de convidados está ilegível; corrija-o antes de mudar convidados",
-        )
+        ).with_io(&error)
     }
 }
 pub type Result<T> = std::result::Result<T, Failure>;

@@ -325,6 +325,7 @@ pub fn validate(name: &str, body: &Value) -> Result<Value> {
     let mut errors = vec![];
     if body.is_null() {
         return Err(Failure {
+            os_error: None,
             status: 422,
             body: json!({"detail":[issue(vec![json!("body")],"missing","Field required",body,None)]}),
         });
@@ -335,6 +336,7 @@ pub fn validate(name: &str, body: &Value) -> Result<Value> {
     } else {
         crate::orchestration::codec::discard(normalized);
         Err(Failure {
+            os_error: None,
             status: 422,
             body: super::object([("detail", Value::Array(errors))]),
         })

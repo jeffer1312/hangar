@@ -15,6 +15,7 @@ pub fn invalid(
         error["ctx"] = ctx;
     }
     Failure {
+        os_error: None,
         status: 422,
         body: super::object([("detail",Value::Array(vec![error]))]),
     }

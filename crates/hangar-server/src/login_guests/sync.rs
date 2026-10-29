@@ -52,21 +52,21 @@ impl Sync {
             Ok(bytes) => std::str::from_utf8(&bytes).ok().and_then(crate::orchestration::codec::loads)
                 .map(|value| if value.is_null() { None } else { Some(super::Tree(value)) }).ok_or_else(unreadable),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(_) => Err(unreadable()),
+            Err(error) => Err(unreadable().with_io(&error)),
         }
     }
     fn save(&self, value: &Value) -> Result<()> {
-        store::write_bytes(&self.path, crate::orchestration::codec::dumps(value, false).as_bytes()).map_err(|_| {
+        store::write_bytes(&self.path, crate::orchestration::codec::dumps(value, false).as_bytes()).map_err(|error| {
             Failure::code(
                 500,
                 "sync_vault_write_failed",
                 "não foi possível gravar o cofre",
-            )
+            ).with_io(&error)
         })
     }
     fn config(&self, on: bool) -> Result<()> {
         let mut value = store::read(&self.config_path)
-            .map_err(|_| Failure::code(500, "sync_config_unreadable", "configuração ilegível"))?
+            .map_err(|error| Failure::code(500, "sync_config_unreadable", "configuração ilegível").with_io(&error))?
             .unwrap_or_else(|| json!({}));
         if !value.is_object() {
             return Err(Failure::code(
@@ -76,12 +76,12 @@ impl Sync {
             ));
         }
         value["sync"] = json!(on);
-        store::write(&self.config_path, &value).map_err(|_| {
+        store::write(&self.config_path, &value).map_err(|error| {
             Failure::code(
                 500,
                 "sync_config_write_failed",
                 "não foi possível gravar a configuração",
-            )
+            ).with_io(&error)
         })
     }
     pub fn cookie(&self, user: &str, generation: Option<&str>, now: u64) -> String {
@@ -192,6 +192,7 @@ impl Sync {
                 Ok(json!({"ok":true}))
             }
             _ => Err(Failure {
+                os_error: None,
                 status: 404,
                 body: json!({"detail":"Not Found"}),
             }),
@@ -311,6 +312,7 @@ impl Sync {
         if vault.is_none() {
             if !populated {
                 return Err(Failure {
+                    os_error: None,
                     status: 422,
                     body: json!({"detail":"Informe os dados da conta"}),
                 });
@@ -392,6 +394,7 @@ impl Sync {
         let Some(mut vault) = self.load()?.filter(|value|truthy(value)) else {
             self.diary.refused("sync.gravacao_recusada", "cadastro_ausente", "409");
             return Err(Failure {
+                os_error: None,
                 status: 409,
                 body: json!({"detail":{"enc_blob":null,"rev":0}}),
             });
@@ -402,6 +405,7 @@ impl Sync {
         if b["base_rev"] != revision {
             self.diary.refused("sync.gravacao_recusada", "revisao_desatualizada", "409");
             return Err(Failure {
+                os_error: None,
                 status: 409,
                 body: super::object([("detail",super::object([("enc_blob",crate::orchestration::codec::clone_value(acc.get("enc_blob").ok_or_else(unreadable)?)),("rev",revision)]))]),
             });
@@ -617,4 +621,45 @@ fn increment_revision(value: &Value) -> Result<Value> {
     }
     serde_json::from_slice(&digits)
         .map_err(|_| Failure::code(500, "sync_revision_invalid", "revisão inválida"))
+}
+
+#[cfg(all(test, unix))]
+mod diary_io_tests {
+    use super::*;
+    fn finish(dir: &std::path::Path) -> Value {
+        std::fs::read_dir(dir).unwrap().flat_map(|entry| {
+            std::fs::read_to_string(entry.unwrap().path()).unwrap().lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>()
+        }).find(|event|event["evento"]=="sync.prova.fim").unwrap()
+    }
+    #[test]
+    fn sync_diary_io_preserves_original_codes() {
+        let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/diary-io.json")).unwrap();
+        for row in fixture["rows"].as_array().unwrap() {
+            let tmp=tempfile::tempdir().unwrap();
+            let mut diary=super::super::diary::Diary::default();diary.directory=Some(tmp.path().to_owned());
+            let failure=Failure::io(std::io::Error::from_raw_os_error(row["os_code"].as_i64().unwrap() as i32));
+            let result:Result<()>=diary.trace("sync.prova",||Err(failure));
+            assert_eq!(result.unwrap_err().body.get("errno"),None,"código SO não entra na resposta HTTP");
+            let event=finish(tmp.path());
+            assert_eq!(event["errno"],row["events"][1]["errno"],"{}",row["operation"]);
+            assert!(event.get("winerror").is_none());
+            assert!(!event.to_string().contains("arquivo-privado"));
+        }
+    }
+    #[test]
+    fn sync_diary_io_preserves_load_and_save_failures() {
+        for operation in ["load","save","config"] {
+            let tmp=tempfile::tempdir().unwrap();
+            let path=tmp.path().join("vault");std::fs::create_dir(&path).unwrap();
+            let mut sync=Sync::new(path,tmp.path().join("config.json"),b"fixture".to_vec());
+            if operation=="config" { sync.config_path=sync.path.clone(); }
+            let diary=tmp.path().join("diary");sync.diary.directory=Some(diary.clone());
+            let result=sync.diary.trace("sync.prova",||match operation {"load"=>sync.load().map(|_|()),"save"=>sync.save(&json!({})),_=>sync.config(true)});
+            assert_eq!(result.unwrap_err().status,500);
+            let event=finish(&diary);
+            assert_eq!(event["errno"],21,"{operation}");
+            assert_eq!(event["erro_tipo"],match operation {"load"=>"sync_vault_unreadable","save"=>"sync_vault_write_failed",_=>"sync_config_unreadable"});
+        }
+    }
 }

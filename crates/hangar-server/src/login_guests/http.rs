@@ -187,6 +187,7 @@ impl Service {
             Err((status, body)) => {
                 return reply(
                     Failure {
+                        os_error: None,
                         status: status.as_u16(),
                         body,
                     },
@@ -251,6 +252,7 @@ impl Service {
             }
             if !setup && !self.sync.enabled() {
                 return Err(Failure {
+                    os_error: None,
                     status: 404,
                     body: json!({"detail":"Not Found"}),
                 });
@@ -387,6 +389,7 @@ impl Service {
             }
         } else {
             return Err(Failure {
+                os_error: None,
                 status: 405,
                 body: json!({"detail":"Method Not Allowed"}),
             });
@@ -414,7 +417,7 @@ fn cookie(headers: &HeaderMap, key: &str) -> Option<String> {
 }
 fn quote_cookie(value: &str) -> super::store::Result<String> {
     if value.chars().any(|c| c <= '\u{1f}' || c == '\u{7f}' || c > '\u{ff}') {
-        return Err(Failure { status:500, body:Value::String("Internal Server Error".into()) });
+        return Err(Failure { os_error: None, status:500, body:Value::String("Internal Server Error".into()) });
     }
     let legal=|c:char| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~:".contains(c);
     if value.chars().all(legal) { return Ok(value.into()); }

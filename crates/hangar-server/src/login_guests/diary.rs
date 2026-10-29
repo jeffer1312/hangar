@@ -50,6 +50,9 @@ impl Diary {
         let mut end = json!({"evento":format!("{name}.fim"),"nivel":if result.is_ok(){"ok"}else{"erro"},
             "codigo":if result.is_ok(){"retornou"}else{"excecao"},"ms":started.elapsed().as_millis() as u64});
         if let Err(error) = &result {
+            if let Some(code) = error.os_error {
+                end[if cfg!(windows) { "winerror" } else { "errno" }] = json!(code);
+            }
             end["erro_tipo"] = json!(if error.status < 500 { "HTTPException" } else {
                 error.body["detail"]["code"].as_str().filter(|code|code.starts_with("sync_")).unwrap_or("sync_operation_failed")
             });
