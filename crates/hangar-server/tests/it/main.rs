@@ -9,6 +9,7 @@ mod remote_browser;
 mod cli_probe;
 mod provider_discovery;
 mod json_body;
+mod json_scrub;
 mod json_numbers;
 mod json_large_input;
 mod login_guests;
