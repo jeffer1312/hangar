@@ -449,7 +449,11 @@ export { recentFailures, type RecentFailure };
 export const DIAG_REPORT_TEXT_MAX = 2000;
 
 /** O que a tela diz da falha; só `unsupported` não deixa tentar de novo. */
-export type DiagReportFailureKind = 'unsupported' | 'rate_limited' | 'unreachable' | 'failed';
+/** `expired`: a assinatura do envio venceu; repetir nele não adianta, só um envio novo. */
+export type DiagReportFailureKind = 'unsupported' | 'expired' | 'rate_limited' | 'unreachable' | 'failed';
+
+/** A máquina que falhou e que repetir no mesmo envio pode resolver. */
+export const diagReportRetryable = (r: DiagReportResult): boolean => !r.ok && r.kind !== 'unsupported' && r.kind !== 'expired';
 
 export type DiagReportResult =
   /** `groupToken`: a assinatura que o primeiro relatório recebe para as outras máquinas entrarem no código dele. */
@@ -460,6 +464,7 @@ export type DiagReportResult =
 
 function diagReportFailure(code: string, status: number): DiagReportResult {
   const kind: DiagReportFailureKind = code === 'unsupported' ? 'unsupported'
+    : code === 'diag_report_group_unknown' ? 'expired'
     : code === 'diag_report_rate_limited' ? 'rate_limited'
     : code === 'diag_report_unreachable' || code === 'network' ? 'unreachable'
     : 'failed';
@@ -538,7 +543,7 @@ export async function sendDiagReportAll(servers: Server[], input: { text?: strin
 
 /** Reenvia só às máquinas que falharam num envio, no mesmo código, e junta ao resultado dele. */
 export async function resendDiagReportMissed(previous: DiagReportAllResult, input: { text?: string; client: string }): Promise<DiagReportAllResult> {
-  const missed = previous.results.filter((r) => !r.result.ok && r.result.kind !== 'unsupported').map((r) => r.server);
+  const missed = previous.results.filter((r) => diagReportRetryable(r.result)).map((r) => r.server);
   const again = await sendDiagReportAll(missed, input, previous.group ?? undefined);
   const resent = new Set(missed.map((s) => s.id));
   return { code: previous.code ?? again.code, group: previous.group ?? again.group,

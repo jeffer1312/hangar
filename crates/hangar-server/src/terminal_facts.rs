@@ -297,8 +297,12 @@ fn current_transcript(procs: &dyn ProcessView, metadata: &TerminalMetadata, conv
     let Ok(fds) = procs.fds_checked(i64::from(metadata.agent_pid)) else { return missing() };
     let mut current = std::collections::BTreeSet::new();
     for path in fds.into_iter().filter(|path| path.extension().is_some_and(|extension| extension == "jsonl")) {
-        // Arquivo apagado ainda aberto não é conversa de ninguém.
-        let Ok(path) = path.canonicalize() else { continue };
+        // Arquivo apagado ainda aberto não é conversa de ninguém; outra falha deixa a leitura sem prova.
+        let path = match path.canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return missing(),
+        };
         if path.starts_with(&projects) { current.insert(path); }
     }
     // O argv conserva o SID de abertura depois do /clear; só arquivo aberto prova a conversa atual.

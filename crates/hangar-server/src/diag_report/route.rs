@@ -130,7 +130,10 @@ pub async fn report_route(
                     Some(upload) if !bundle.diary_gz.is_empty() => send_diary(&st.diag_report_base, &stamp, &sent.code, &upload, bundle.diary_gz).await,
                     _ => false,
                 };
-                // O cliente confere `group`: worker antigo grava a máquina avulsa e não o devolve.
+                // O cliente confere `group`: worker antigo grava a máquina avulsa e não o devolve. Sem a assinatura
+                // (segredo do worker ausente, worker antigo) as outras máquinas não entram: o motivo vai ao diário.
+                let unjoined = match &group { Some((group, _)) => sent.group.as_deref() != Some(group.as_str()), None => sent.group_token.is_none() };
+                if unjoined { st.diag.report("rust.diag_report", "", "diag_report_group_unsigned", "o servidor de relatórios não agrupou o envio"); }
                 json_response(StatusCode::CREATED, json!({"code": sent.code, "diary": if diary { "sent" } else { "failed" },
                     "group": sent.group, "group_token": sent.group_token}))
             }

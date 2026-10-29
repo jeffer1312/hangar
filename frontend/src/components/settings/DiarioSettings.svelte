@@ -6,7 +6,7 @@
   // O que o arquivo contém e o que NÃO contém está em backend/app/diag.py e em lib/diag.ts. O texto
   // aqui repete a parte que importa pra quem vai enviar: fica na máquina, e não guarda conversa.
   import { getDiagResumo, baixarDiag, type ResumoDiag, type LinhaDiag } from '@hangar/core';
-  import { fmtBytes, sendDiagReportAll, resendDiagReportMissed, diagReportMachines, diagReportTargets, DIAG_REPORT_TEXT_MAX,
+  import { fmtBytes, sendDiagReportAll, resendDiagReportMissed, diagReportMachines, diagReportRetryable, diagReportTargets, DIAG_REPORT_TEXT_MAX,
     type DiagReportAllResult, type DiagReportResult, type DiagReportScope } from '@hangar/core';
   import { findServer, getActiveId, listServers, onServersChanged } from '../../lib/auth';
   import { papelDo } from '../../lib/papel.svelte';
@@ -50,6 +50,7 @@
 
   function reason(r: DiagReportResult): string {
     return r.ok ? '' : r.kind === 'unsupported' ? m.config_diag_report_unsupported()
+      : r.kind === 'expired' ? m.config_diag_report_expired()
       : r.kind === 'rate_limited' ? m.config_diag_report_rate_limited()
       : r.kind === 'unreachable' ? m.config_diag_report_unreachable()
       : m.config_diag_report_failed({ code: r.code });
@@ -57,7 +58,7 @@
   const missed = $derived(resultado?.results.filter((r) => !r.result.ok) ?? []);
   const diaryFailed = $derived(resultado?.results.some((r) => r.result.ok && r.result.diary === 'failed') ?? false);
   const onlyUnsupported = $derived(!!resultado && resultado.code === null && missed.every((r) => !r.result.ok && r.result.kind === 'unsupported'));
-  const retryable = $derived(missed.some((r) => !r.result.ok && r.result.kind !== 'unsupported'));
+  const retryable = $derived(missed.some((r) => diagReportRetryable(r.result)));
   // Quantas máquinas o envio teve, não a escolha de agora: trocar a escolha depois não muda o texto do erro.
   const several = $derived((resultado?.results.length ?? 0) > 1);
 

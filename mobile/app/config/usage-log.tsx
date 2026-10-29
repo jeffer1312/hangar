@@ -6,7 +6,7 @@ import { Directory } from 'expo-file-system';
 import * as Clipboard from 'expo-clipboard';
 import { runtimeVersion } from 'expo-updates';
 import {
-  DIAG_REPORT_TEXT_MAX, diagReportMachines, diagReportTargets, getDiagFileForServer, getDiagSummaryForServer,
+  DIAG_REPORT_TEXT_MAX, diagReportMachines, diagReportRetryable, diagReportTargets, getDiagFileForServer, getDiagSummaryForServer,
   resendDiagReportMissed, sendDiagReportAll,
   type DiagReportAllResult, type DiagReportFailureKind, type DiagReportScope, type LinhaDiag, type ResumoDiag, type Server,
 } from '@hangar/core';
@@ -53,6 +53,7 @@ const CLIENT = `expo ${runtimeVersion ?? 'dev'} ${Platform.OS}`;
 
 function failureText({ code, kind }: Failure): string {
   if (kind === 'unsupported') return m.native_settings_diary_report_unsupported();
+  if (kind === 'expired') return m.native_settings_diary_report_expired();
   if (kind === 'rate_limited') return m.native_settings_diary_report_rate_limited();
   if (kind === 'unreachable') return m.native_settings_diary_report_unreachable();
   return m.native_settings_diary_report_failed({ code });
@@ -85,7 +86,8 @@ function ReportSection({ server }: { server: Server }) {
   const send = async () => {
     if (report?.state === 'sending') return;
     // Envio com código e máquinas que não foram: o reenvio vai só a elas, no mesmo código.
-    const prev = report?.state === 'done' && report.result.code ? report.result : null;
+    const prev = report?.state === 'done' && report.result.code
+      && report.result.results.some(({ result: r }) => diagReportRetryable(r)) ? report.result : null;
     if (!prev && !targets.length) return;
     const now = ++generation.current;
     setReport({ state: 'sending' });
@@ -118,7 +120,7 @@ function ReportSection({ server }: { server: Server }) {
   const unsupported = !!done && !done.code && missed.every((x) => x.failure.kind === 'unsupported');
   // Quantas máquinas o envio teve, não a escolha de agora: trocar a escolha depois não muda o texto do erro.
   const several = (done?.results.length ?? 0) > 1;
-  const retryMissed = !!sentCode && missed.some((x) => x.failure.kind !== 'unsupported');
+  const retryMissed = !!sentCode && !!done?.results.some(({ result: r }) => diagReportRetryable(r));
   return (
     <SectionCard icon="LifeBuoy" title={m.native_settings_diary_report_title()}>
       {many ? (

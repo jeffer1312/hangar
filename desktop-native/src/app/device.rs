@@ -150,6 +150,8 @@ fn report_outcome(result: Result<Value, Failure>, group: Option<&str>) -> Outcom
         // Servidor anterior à rota: repetir não muda nada, o caminho é baixar o diário.
         Err(error) if error.status == Some(404) => Outcome::Failed { code: "HTTP 404".into(), retry: false },
         Err(error) if error.status == Some(429) => failed("diag_report_rate_limited"),
+        // A assinatura do envio venceu: repetir nele não adianta.
+        Err(error) if error.code.as_deref() == Some("diag_report_group_unknown") => Outcome::Failed { code: "diag_report_group_unknown".into(), retry: false },
         Err(error) => match (error.code, error.status) {
             (Some(code), _) => failed(&code),
             (None, Some(status)) => failed(&format!("HTTP {status}")),
@@ -161,6 +163,7 @@ fn report_outcome(result: Result<Value, Failure>, group: Option<&str>) -> Outcom
 /// Texto da falha, no idioma de agora; sem repetição é o servidor anterior à rota.
 fn report_failure_text(code: &str, retry: bool) -> String {
     match code {
+        "diag_report_group_unknown" => tr("settings_diary_report_expired"),
         _ if !retry => tr("settings_diary_report_unsupported"),
         "diag_report_rate_limited" => tr("settings_diary_report_rate_limited"),
         "diag_report_unreachable" => tr("settings_diary_report_unreachable"),

@@ -1811,10 +1811,16 @@ impl RuntimeRegistry {
                     store.exec(generation,&format!("close-record:{key}:{generation}"),clock,Action::AdvanceLifecycle {generation,state:json!({"terminal_lifecycle":{"closed":true,"conversation":closed.binding.conversation},"view":{"alive":false,"conversation":closed.binding.conversation}})})?;
                     Ok(Some(store))
                 })();
-                // Fila de outro dono (ou ilegível) não é falha de disco: não se libera a entrada.
+                // Recusa da própria fila (outro dono, outra geração) não é falha de disco: não se libera a entrada.
+                // Arquivo ilegível é falha como as outras: segurar a sessão não o conserta.
+                let refused=|error:&std::io::Error| error.get_ref().is_some_and(|inner|inner.is::<super::queue::QueueRefusal>());
                 let store=match recorded {
                     Ok(None)=>return Err(failure("runtime_generation")),
-                    Err(error) if error.kind()==std::io::ErrorKind::InvalidData=>return Err(failure("runtime_generation")),
+                    Err(error) if refused(&error)=>{
+                        tracing::warn!(key,session=%name,refusal=%error,"fechamento recusado pela fila");
+                        self.diag.report("rust.close_queue_refused",&name,"runtime_generation","fila de outro dono recusou o fechamento");
+                        return Err(failure("runtime_generation"));
+                    },
                     Ok(Some(store))=>Some(store),
                     Err(error)=>{
                         tracing::warn!(key,session=%name,kind=?error.kind(),"fechamento não gravado na fila; sessão liberada mesmo assim");
