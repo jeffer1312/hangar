@@ -408,7 +408,6 @@ async def test_ingress_and_controls_are_temporarily_unavailable(scenario, monkey
     assert (await api._enviar("s", "guardar"))["error"]["code"] == "session_transfer_busy"
     assert api._enviar_nativo("s", "[de: peer] guardar") is None
     assert api.terminal.send_prompt("s", "guardar") == "deferred"
-    assert not api.plugin_bridge.entregar("s", "guardar")
     assert pqueue.PromptQueue("s").load() == []
     client = TestClient(api.app)
     for method, path, body in [("delete", "/api/sessions/s", None),
@@ -545,7 +544,6 @@ def terminal_ingress(scenario, monkeypatch):
     monkeypatch.setattr(api, "_headless", lambda name: False)
     monkeypatch.setattr(api, "_pane_info", lambda name: ("claude", None))
     monkeypatch.setattr(api, "_enviar_nativo", lambda *args: None)
-    monkeypatch.setattr(api.plugin_bridge, "aguardando", lambda name: False)
     monkeypatch.setattr(api, "_session_exists", lambda name: True)
     monkeypatch.setattr(api, "_agendar_confirmacao", Mock())
     monkeypatch.setattr(api, "_drain_session", Mock())

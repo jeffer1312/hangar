@@ -274,27 +274,6 @@ def test_clear_with_arguments_passes_terminal_write_barrier_like_rust(tmp_path, 
     asyncio.run(flow())
 
 
-@pytest.mark.parametrize('request_id,control,modes,expected', [
-    ('ask:t1', 'select', {'fill', 'receipt_v2'}, 'unavailable'),
-    ('ask:t1', 'answer_questions', {'fill'}, 'unavailable'),
-    ('perm:t1', 'select', {'fill'}, 'rejected'),
-    ('ask:old', 'select', {'fill', 'receipt_v2'}, 'rejected'),
-])
-def test_plugin_control_hands_ask_choices_to_the_tui_keyboard(monkeypatch, request_id, control, modes, expected):
-    from types import SimpleNamespace
-    from app import plugin_bridge as pb, runtime_terminal as terminal
-    current = SimpleNamespace(name='ask-fallback', generation=1, meta={'terminal': 'b', 'session_id': 'A'})
-    monkeypatch.setattr(terminal, 'validate_binding', lambda descriptor: current)
-    monkeypatch.setattr(terminal, '_plugin_current', lambda current: True)
-    pending_id = 'perm:t1' if request_id.startswith('perm:') else 'ask:t1'
-    monkeypatch.setattr(pb, 'pergunta_pendente', lambda name: {'id': pending_id, 'questions': [{'question': 'q'}]})
-    monkeypatch.setattr(pb, 'declared_modes', lambda name: modes)
-    monkeypatch.setattr(pb, 'responder_pergunta', lambda *a: pytest.fail('o plugin não pode responder aqui'))
-    body = {'request_id': request_id, 'option': 2, 'answers': []}
-    payload = {'binding': 'b', 'generation': 1, 'control': control, 'payload': body, 'publication_id': 'p'}
-    assert terminal.plugin_control(payload, {'validate': lambda: None, 'descriptor': {}}) == {'disposition': expected}
-
-
 def test_uncertain_input_of_a_second_conversation_blocks_writes_while_old_barrier_stays(tmp_path):
     store, _ = _uncertain_terminal_inputs(tmp_path, ['A'])
     cursor = ReceiptIndex('claude', 'new-sid').capture(tmp_path / 'new-sid.jsonl')
@@ -441,18 +420,15 @@ def test_kill_after_the_binding_changed_before_closing_still_kills(tmp_path, mon
     assert killed and not owner.managed_queue('session')
 
 
-@pytest.mark.parametrize('pending,expect_panel_check,expect_cursor', [
-    ({'id': 'ask:t1'}, True, True), (None, True, False), ({'id': 'perm:t1'}, False, False)])
-def test_select_on_question_respects_open_panel_and_requires_cursor(monkeypatch, pending, expect_panel_check, expect_cursor):
-    from app import api, plugin_bridge as pb, runtime_terminal
+def test_select_respects_open_panel(monkeypatch):
+    from app import api, runtime_terminal
     checked, routed = [], []
-    monkeypatch.setattr(pb, 'pergunta_pendente', lambda name: pending)
     monkeypatch.setattr(api, '_cached_info_sync', lambda name: None)
     monkeypatch.setattr(api, '_recusa_se_painel_aberto', lambda name: checked.append(name))
     monkeypatch.setattr(runtime_terminal, 'route_sync', lambda name, command: routed.append(command) or {'ok': True})
     assert api.select('s', api.SelectBody(option=1)) == {'ok': True}
-    assert bool(checked) == expect_panel_check
-    assert routed[0]['payload'].get('require_cursor', False) == expect_cursor
+    assert checked == ['s']
+    assert routed[0]['payload'] == {'option': 1}
 
 
 @pytest.mark.parametrize('error,status,code', [
@@ -462,12 +438,11 @@ def test_select_on_question_respects_open_panel_and_requires_cursor(monkeypatch,
     ('control_error', None, None), ('transfer', None, None)])
 def test_select_terminal_route_failure_is_a_coded_error_not_a_bare_500(monkeypatch, error, status, code):
     from fastapi import HTTPException
-    from app import api, plugin_bridge as pb, runtime_terminal
+    from app import api, runtime_terminal
     from app.runtime_coordinator import TransferInProgress
     error = {'outcome_unknown': runtime_terminal.TerminalOutcomeUnknown('resultado terminal incerto'),
              'control_error': runtime_terminal.TerminalControlError('select', 'deferred', None),
              'transfer': TransferInProgress('posse em troca')}.get(error, error)
-    monkeypatch.setattr(pb, 'pergunta_pendente', lambda name: None)
     monkeypatch.setattr(api, '_cached_info_sync', lambda name: None)
     monkeypatch.setattr(api, '_recusa_se_painel_aberto', lambda name: None)
     def failing(name, command):
@@ -513,7 +488,7 @@ def test_select_on_headless_codex_answers_the_approval_without_the_claude_termin
     # Codex sem terminal não tem vínculo Claude: a rota do terminal suspendia a escrita e o cartão
     # de aprovação não se respondia (500).
     from types import SimpleNamespace
-    from app import api, plugin_bridge as pb, runtime_coordinator as rc, runtime_terminal
+    from app import api, runtime_coordinator as rc, runtime_terminal
     owner = rc.RuntimeCoordinator()
     owner.mode = 'python'
     owner.legacy = SimpleNamespace(binding=lambda *args: None)
@@ -521,7 +496,6 @@ def test_select_on_headless_codex_answers_the_approval_without_the_claude_termin
     monkeypatch.setattr(rc, 'current', lambda: owner)
     monkeypatch.setattr(runtime_terminal, 'being_born', lambda name, after=0: False)
     monkeypatch.setattr(runtime_terminal, 'outside_scope', lambda name: False)
-    monkeypatch.setattr(pb, 'pergunta_pendente', lambda name: None)
     monkeypatch.setattr(api, '_recusa_se_painel_aberto', lambda name: None)
     monkeypatch.setattr(api, '_session_exists', lambda name: True)
     monkeypatch.setattr(api, '_headless', lambda name: False)

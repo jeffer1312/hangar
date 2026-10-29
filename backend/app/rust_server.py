@@ -52,14 +52,12 @@ GRACEFUL_SHUTDOWN_S = 5
 
 
 class Server(uvicorn.Server):
-    """Uvicorn que solta as esperas longas do plugin assim que o sinal de parada chega."""
+    """Uvicorn que fecha os SSE assim que o sinal de parada chega."""
 
     def handle_exit(self, sig, frame) -> None:
         try:
             from sse_starlette.sse import AppStatus
             AppStatus.should_exit = True        # só o sinal fecha os SSE; soltar a porta pública, não
-            from app import plugin_bridge
-            plugin_bridge.stop_waits()
         finally:
             super().handle_exit(sig, frame)     # falha no gancho não pode impedir a parada
 

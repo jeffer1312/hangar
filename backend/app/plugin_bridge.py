@@ -1,14 +1,8 @@
-"""Caminho NATIVO de entrada nas sessões Claude: o function-hook do plugin `hangar`.
+"""Plugin `hangar` do Claude: instalação, token por sessão e a faixa/avisos dos mods.
 
-O que muda em relação ao pane: o texto não é digitado. O plugin mantém um
-long-poll aberto aqui e entrega por `$.prompt.submit`, a mesma chamada que o
-engine faz para um prompt digitado. A fila durável, a poda e o claim continuam
-sendo do `pqueue`/`terminal_input.drain` — aqui é só o transporte.
-
-Fallback é por AUSÊNCIA, não por erro: sem um long-poll vivo para a sessão,
-`aguardando()` é falso e o `drain` segue pelo caminho de tecla de sempre. Vale
-para toda sessão que não é Claude, para a que nasceu antes do flag e para a
-que carregou o plugin e ele morreu.
+Entrega de texto, estado, pergunta e sugestão do plugin são do Rust (`plugin::routes`); aqui
+ficam a faixa (`/ui`), os avisos (`/toast`) e as confirmações de clique que o repasse dos mods
+ainda manda ao Python.
 
 A identidade é o `CP_SESSION_NAME` que o pane já carrega, e o segredo é um
 token por sessão cunhado no nascimento — o bearer do app NUNCA entra no
@@ -36,104 +30,7 @@ _log = logging.getLogger("hangar.plugin_bridge")
 
 plugin_router = APIRouter(prefix="/api/plugin")
 
-# Quanto o backend segura o long-poll antes de responder 204. Curto o bastante
-# para a morte da sessão aparecer, longo o bastante para a espera não virar poll.
-ESPERA_S = 25.0
-# Entre dois long-polls o hook volta em milissegundos (2 s se o backend falhar). Sem long-poll aberto
-# por mais que isto, o hook morreu: o Esc no terminal interrompe a ferramenta sem o `/ask-fim`.
-SEM_POLL_S = 5.0
-# O hook que ainda faz long-poll depois disso sobreviveu ao Esc do app (o diálogo ficou).
-HOOK_VIVO_S = 2.0
-
 _lock = threading.Lock()
-_waiters: dict[str, asyncio.Queue] = {}
-_loop: asyncio.AbstractEventLoop | None = None
-# Backend parando: o uvicorn espera cada pedido aberto antes do lifespan, e uma espera de 25 s
-# passava do teto do systemd (SIGKILL). As esperas respondem vazio, como na janela que fecha.
-_stopping = False
-_STOP = object()
-
-
-def stop_waits() -> None:
-    """Chamado do tratador de sinal: só agenda, porque o sinal pode chegar com `_lock` tomado."""
-    global _stopping
-    _stopping = True        # já aqui: entrega nova cai no pane em vez de numa espera que vai fechar
-    loop = _loop
-    if loop is not None:
-        try:
-            loop.call_soon_threadsafe(_release_waits)
-        except RuntimeError:
-            pass        # loop já fechado: não há espera viva
-
-
-def _release_waits() -> None:
-    with _lock:
-        queues = [*_waiters.values(), *(p["fila"] for p in _perguntas.values() if p.get("fila"))]
-    for queue in queues:
-        queue.put_nowait(_STOP)
-
-# Dono do long-poll por sessão: (instância, modos declarados, última batida). Um segundo `claude` com
-# o mesmo nome ou pane não pode tomar a fila do primeiro.
-_donos: dict[str, tuple[str, set[str], float]] = {}
-_publications: dict[str, dict] = {}
-
-
-def publish_terminal(name, conversation, generation, publication, validate):
-    """Publica uma vez; aviso perdido conserva a possibilidade de escrita."""
-    if publication.get("mode") not in {"fill", "user", "focus"} or not isinstance(publication.get("text"), str):
-        raise ValueError("publicação inválida")
-    validate()
-    if tracked_session_id(name) != conversation:
-        return "not_written"
-    with _lock:
-        queue, loop = _waiters.get(name), _loop
-        modes = (_donos.get(name) or (None, set(), 0))[1]
-        if queue is not None and ("receipt_v2" not in modes or publication["mode"] == "focus" and "focus" not in modes):
-            return "not_written"
-        if queue is None or loop is None:
-            return "unavailable"
-        if name in _publications:
-            if _publications[name]['conversation'] == conversation:
-                return "unknown"
-            del _publications[name]
-        pending = {"id":publication["id"], "conversation":conversation, "generation":generation,
-            "mode":publication["mode"], "event":threading.Event(), "result":"unknown"}
-        _publications[name] = pending
-    def enqueue():
-        try:
-            validate()
-            if tracked_session_id(name) != conversation:
-                raise RuntimeError("conversa mudou antes da publicação")
-            with _lock:
-                if _waiters.get(name) is not queue:
-                    # A espera saiu (queda de quem a repassava, ou o prazo) entre a escolha e agora.
-                    raise RuntimeError("espera do plugin encerrada antes da publicação")
-            queue.put_nowait({"text":publication["text"], "modo":publication["mode"],
-                "publication_id":publication["id"], "generation":generation, "session_id":conversation})
-        except Exception:
-            pending["result"] = "not_written"
-            pending["event"].set()
-    try:
-        try:
-            loop.call_soon_threadsafe(enqueue)
-        except RuntimeError:
-            return "not_written"
-        pending["event"].wait(PUBLICA_FOCO_S if publication["mode"] == "focus" else PUBLICA_S)
-        return pending["result"]
-    finally:
-        with _lock:
-            if _publications.get(name) is pending:
-                # Foco devolvido tarde não deixa entrada incerta: não segura a publicação seguinte.
-                if pending["result"] != "unknown" or pending["mode"] == "focus":
-                    del _publications[name]
-                else:
-                    pending["returned"] = True
-
-
-def declared_modes(name: str) -> set[str]:
-    with _lock:
-        dono = _donos.get(name)
-    return set(dono[1]) if dono else set()
 
 
 # Capacidade do CLI, não versão: o número seria um palpite sobre qual release ganhou a flag, e
@@ -330,18 +227,8 @@ publish_address = _publish_for_machine
 
 def esquecer(name: str) -> None:
     with _lock:
-        _waiters.pop(name, None)
-        _donos.pop(name, None)
-        _estados.pop(name, None)
-        _perguntas.pop(name, None)
-        _batidas.pop(name, None)
-        _fechadas.pop(name, None)
-        _sugestoes.pop(name, None)
         _bands.pop(name, None)
         _toasts.pop(name, None)
-        _confirmacoes.pop(name, None)
-        _preenchido.pop(name, None)
-    _eventos.pop(name, None)
     _band_wakers.pop(name, None)
     _toast_wakers.pop(name, None)
     state_facts.notify(name)
@@ -366,7 +253,7 @@ def _entra(body) -> None:
     if nome:
         body.sessao = nome
     elif key not in _chaves_sem_sessao:
-        # Uma vez por chave: o `/pull` volta a cada 25 s. Sessão fora do runtime cai aqui também.
+        # Uma vez por chave: a faixa e os avisos voltam a cada mudança. Sessão fora do runtime cai aqui também.
         _chaves_sem_sessao.add(key)     # ponytail: cresce uma entrada por lançamento sem runtime
         _log.info("plugin: chave sem sessão no runtime; segue pelo nome sessao=%s", body.sessao)
 
@@ -386,111 +273,6 @@ def _nome_da_chave(key: str) -> str | None:
         if slot_key == key or slot is not None and slot.binding.meta.get("plugin_key") == key:
             return name
     return None
-
-
-def aguardando(name: str) -> bool:
-    """Há um long-poll ABERTO para esta sessão agora?
-
-    É o gate do caminho feliz. Falso enquanto o plugin processa uma entrega
-    anterior — e isso é de propósito: nesse instante ele não pode receber outra,
-    e a fila espera o próximo poll em vez de cair para a tecla no meio do caminho.
-    """
-    with _lock:
-        return name in _waiters
-
-
-# Como o texto entra na sessão:
-#  - `submit`: `$.prompt.submit`, sem tecla nenhuma. O engine carimba a origem
-#    `plugin` e ENVOLVE a mensagem numa moldura ("The hangar plugin sent a
-#    message: …") que nenhum hook consegue tirar — medido, o engine recusa.
-#  - `fill`: `$.prompt.fill` põe o rascunho no composer e o Hangar manda SÓ o
-#    Enter pelo tmux. A origem vira a do usuário, sem moldura, e o `send-keys`
-#    deixa de digitar o texto — a parte que hoje fatia, espera e às vezes corta.
-MODO_PADRAO = "fill"
-
-# `user`: `$.prompt.submit({text, asUser: true})` entra como fala da pessoa, sem tecla nenhuma. Só com
-# a sessão parada (no turno a promessa espera o fim), só se o plugin dono declarou o modo (plugin
-# velho trataria como `submit` com moldura) e só com texto que o modo não estraga: `@arquivo` não é
-# expandido, `!` é modo bash digitado e `/` é menu da TUI.
-_MENCAO = re.compile(r"(^|\s)@\S")
-PROVA_TRANSCRIPT_S = 10.0
-# Sem confirmação nem prova (transcript ilegível ou texto repetido): nem entregue, nem livre p/ tecla.
-INCERTO = "incerto"
-
-
-def choose_mode(name: str, text: str) -> str:
-    recente = estado_recente(name)
-    if (mods_by_default() and "user" in declared_modes(name) and recente is not None
-            and recente[0] == "idle" and not _MENCAO.search(text)
-            and not text.lstrip().startswith(("!", "/"))):
-        return "user"
-    return MODO_PADRAO
-
-
-def _linhas_do_usuario(jsonl: str | None) -> set[str] | None:
-    if not jsonl:
-        return None
-    from app import pqueue
-    return pqueue.committed_user_lines(jsonl)
-
-
-def _prova_user(aviso: threading.Event, texto: str, jsonl: str | None, antes: set[str] | None):
-    """Entrega `user`: vale o que vier primeiro, o aviso do plugin (que só chega depois dos hooks
-    do UserPromptSubmit) ou o texto no transcript. Devolve "aviso", True (transcript), False ou
-    `INCERTO`."""
-    alvo = texto.strip()
-    inicio = time.monotonic()
-    limite = inicio + CONFIRMA_S + PROVA_TRANSCRIPT_S
-    # A conferência é por conjunto: texto que já estava lá não prova esta entrega. Sem a foto de
-    # antes, o transcript só vale depois do prazo do aviso, como era.
-    repetido = antes is not None and alvo in antes
-    transcript_desde = inicio + (CONFIRMA_S if antes is None else 0.0)
-    lido: set[str] | None = None
-    while True:
-        agora = time.monotonic()
-        if not repetido and agora >= transcript_desde:
-            lido = _linhas_do_usuario(jsonl)
-            if lido is not None and alvo in lido:
-                return True
-        if aviso.wait(max(0.0, min(0.15, limite - agora))):
-            return "aviso"
-        if time.monotonic() >= limite:
-            # Repetido e legível também é incerto: o texto está lá, mas pode ser o de antes.
-            if repetido or lido is None:
-                return INCERTO
-            # O texto pode ter chegado durante a última espera: sem reler, seria digitado de novo.
-            lido = _linhas_do_usuario(jsonl)
-            if lido is None:
-                return INCERTO
-            return alvo in lido
-
-# Teto da espera pelo aviso de que o rascunho entrou. Passou disso, o Enter NÃO
-# é enviado: apertar Enter num composer que não recebeu o texto submete o que
-# estiver lá — ou nada.
-CONFIRMA_S = 5.0
-# Espera do aviso de uma publicação do Rust no terminal. No modo `user` o aviso só sai depois dos
-# hooks do UserPromptSubmit, que com a máquina ocupada passam de 5 s. Fica abaixo do teto da
-# política `terminal_publish` no Rust (`PUBLISH_POLICY_TIMEOUT`).
-PUBLICA_S = 30.0
-# A devolução do foco é um `fill` do plugin, de milissegundos; acima disso o clique e a fila seguem pelo
-# `ctrl+x tab`, e a limpeza do clique tem 2 s ao todo.
-PUBLICA_FOCO_S = 1.0
-
-_confirmacoes: dict[str, threading.Event] = {}
-_preenchido: dict[str, bool] = {}
-
-# Último estado que o plugin anunciou, por sessão: (momento, estado, motivo).
-_estados: dict[str, tuple[float, str, str | None]] = {}
-
-# A frase que a TUI propõe depois do turno. Não há evento de DESCARTE — se a pessoa digita por
-# cima, nada avisa —, então quem a apaga é o começo do turno seguinte.
-_sugestoes: dict[str, str] = {}
-
-
-def sugestao(name: str) -> str:
-    """A sugestão viva desta sessão, ou string vazia."""
-    with _lock:
-        return _sugestoes.get(name, "")
 
 
 # Faixa e painéis que os mods desenham: (versão, {"above", "columns", "panes"}, JSON do app). A
@@ -651,183 +433,12 @@ def band_anchor(name: str) -> str | None:
                 pilha.append(rotulo)
     return None
 
-# Depois disso a leitura do pane volta a mandar sozinha. O plugin não repete estado — ele avisa
-# transição —, então o prazo cobre uma sessão parada em `idle` por horas: o que expira aqui é a
-# CONFIANÇA de que o plugin ainda está vivo, e quem a renova é a batida do long-poll.
-VALIDADE_ESTADO_S = 90.0
-
-
-# Quantos SSE do app (lista ou conversa) estão abertos agora. Pedido de permissão só é segurado
-# pelo plugin com alguém no app para responder.
-_apps_abertos = 0
-
-
-def app_entrou() -> None:
-    global _apps_abertos
-    with _lock:
-        _apps_abertos += 1
-
-
-def app_saiu() -> None:
-    global _apps_abertos
-    with _lock:
-        _apps_abertos = max(0, _apps_abertos - 1)
-
-
-def app_presente() -> bool:
-    with _lock:
-        return _apps_abertos > 0
-
-
-# Última batida do long-poll de entrada, por sessão: é o pulso que diz que o plugin está vivo.
-_batidas: dict[str, float] = {}
-# Um por sessão, criado por quem espera (o monitor de estado). Aviso do plugin acorda o monitor na
-# hora, em vez de a transição esperar o próximo tique do pane.
-_eventos: dict[str, asyncio.Event] = {}
-
-
-def vivo(name: str) -> bool:
-    """O plugin desta sessão bateu aqui há pouco?"""
-    with _lock:
-        if name in _waiters:
-            return True
-        quando = _batidas.get(name)
-    return quando is not None and time.monotonic() - quando < ESPERA_S + 10
-
-
-async def esperar_evento(name: str, timeout: float) -> None:
-    """Dorme até o plugin avisar algo desta sessão, ou até `timeout`. Só no loop do servidor."""
-    ev = _eventos.setdefault(name, asyncio.Event())
-    try:
-        await asyncio.wait_for(ev.wait(), timeout)
-    except asyncio.TimeoutError:
-        pass
-    ev.clear()
-
-
-def _acordar(name: str) -> None:
-    ev = _eventos.get(name)
-    if ev is not None:
-        ev.set()
-
 
 def plugin_facts(name: str) -> dict:
-    """O que o plugin disse desta sessão, para o `Monitor` do Rust, sem as validades: elas vão como
-    idade em ms e o Rust as aplica com o relógio dele (`state_facts`)."""
-    agora = time.monotonic()
-
-    def idade(quando: float) -> int:
-        return max(0, round((agora - quando) * 1000))
-
-    with _lock:
-        hit = _estados.get(name)
-        batida = _batidas.get(name)
-        p = _perguntas.get(name)
-        out = {
-            "plugin_state": None if hit is None else {"state": hit[1], "reason": hit[2], "age_ms": idade(hit[0])},
-            "waiter_open": name in _waiters,
-            "heartbeat_age_ms": None if batida is None else idade(batida),
-            "question": None if p is None else {"id": p["id"], "questions": p["questions"], "tool": p.get("tool"),
-                                                "resumo": p.get("resumo"), "seen_age_ms": idade(p["visto"])},
-            "suggestion": _sugestoes.get(name, ""),
-        }
-    out["body_columns"] = transcript_columns(name)
-    out["band_anchor"] = band_anchor(name)
-    return out
-
-
-def estado_recente(name: str) -> tuple[str, str | None] | None:
-    """O estado anunciado pelo plugin, se ainda válido. None = o pane que decida."""
-    with _lock:
-        hit = _estados.get(name)
-        vivo = name in _waiters
-    if hit is None:
-        return None
-    quando, estado, motivo = hit
-    if not vivo and time.monotonic() - quando > VALIDADE_ESTADO_S:
-        return None
-    return estado, motivo
-
-
-def entregar(name: str, texto: str, modo: str = MODO_PADRAO, jsonl: str | None = None):
-    """Passa o texto ao long-poll da sessão. True = entregue; False = ninguém entregou (use o pane);
-    `INCERTO` = pode ter entrado e não dá para provar (não digite; a reconciliação decide).
-
-    Chamado de dentro do `drain`/`_send_one`, que rodam em thread: o Queue é do
-    loop do FastAPI, então a entrega atravessa por `call_soon_threadsafe`.
-
-    Roda inteiro sob o `_send_lock` da sessão: o Enter, a conferência e a limpeza tocam o mesmo
-    composer que o `send_prompt`, e a confirmação do rascunho é UMA por sessão — duas entregas
-    juntas roubariam o aviso uma da outra.
-    """
-    from app import terminal_input
-    from app.conversation_transfer import transfer_active
-    if transfer_active(name):
-        return False
-    from app.runtime_terminal import assert_writer
-    assert_writer(name)
-    with terminal_input._send_lock(name):
-        if transfer_active(name):
-            return False
-        return _entregar(name, texto, modo, jsonl)
-
-
-def _entregar(name: str, texto: str, modo: str, jsonl: str | None = None):
-    with _lock:
-        fila = _waiters.get(name)
-        loop = _loop
-    if fila is None or loop is None or _stopping:
-        return False
-    aviso = threading.Event()
-    if modo in ("fill", "user"):
-        with _lock:
-            _confirmacoes[name] = aviso
-            _preenchido.pop(name, None)
-    # A foto sai ANTES de o plugin receber o texto: depois, não dá para separar o novo do repetido.
-    antes = _linhas_do_usuario(jsonl) if modo == "user" else None
-    try:
-        loop.call_soon_threadsafe(fila.put_nowait, {"text": texto, "modo": modo})
-    except RuntimeError:
-        # Loop morrendo (shutdown): não é entrega, e o caller tem o pane.
-        return False
-    if modo not in ("fill", "user"):
-        return True
-    if modo == "user":
-        prova = _prova_user(aviso, texto, jsonl, antes)
-        with _lock:
-            ok = _preenchido.pop(name, False)
-            _confirmacoes.pop(name, None)
-        if prova == "aviso":
-            return ok
-        if prova is not True:
-            _log.warning("plugin %s: envio sem confirmação nem prova no transcript — resultado=%s",
-                         name, prova)
-        return prova
-    confirmou = aviso.wait(CONFIRMA_S)
-    with _lock:
-        ok = _preenchido.pop(name, False)
-        _confirmacoes.pop(name, None)
-    if not confirmou:
-        _log.warning("plugin %s: rascunho sem confirmação em %.0fs — sem Enter", name, CONFIRMA_S)
-    from app import terminal_input, tmux
-    if not confirmou or not ok:
-        # O rascunho pode ter entrado mesmo sem o aviso chegar. Quem assume daqui é o caminho de
-        # tecla, que digitaria EM CIMA do resíduo e concatenaria as duas coisas — o mesmo estrago
-        # que o tratamento de envio parcial existe pra evitar. Limpa antes de devolver.
-        terminal_input._limpar_composer(name, texto, None)
-        return False
-    if not tmux.send_keys(name, "Enter"):
-        terminal_input._limpar_composer(name, texto, None)
-        return False
-    # O Enter SAIR não é o mesmo que a mensagem ENTRAR: o composer pode ter perdido o foco, ou um
-    # overlay pode ter subido entre o rascunho e a tecla. Sem esta conferência a entrada era marcada
-    # como entregue com o texto parado no campo — mensagem perdida do ponto de vista da fila, que é
-    # o pior defeito possível aqui. Mesma prova que o caminho de tecla já usava.
-    if not terminal_input._submeteu(name, texto):
-        _log.warning("plugin %s: Enter não submeteu — devolvendo pro caminho de tecla", name)
-        terminal_input._limpar_composer(name, texto, None)
-        return False
-    return True
+    """Os fatos desta sessão para o `state_facts`: o Python não recebe mais estado, pergunta nem
+    sugestão do plugin (são do Rust); só a faixa dos mods ainda passa por aqui."""
+    return {"plugin_state": None, "waiter_open": False, "heartbeat_age_ms": None, "question": None,
+            "suggestion": "", "body_columns": transcript_columns(name), "band_anchor": band_anchor(name)}
 
 
 def tracked_session_id(name: str) -> str | None:
@@ -952,80 +563,3 @@ async def opened(body: OpenedBody):
     if not re.match(r"^https?://", body.url, re.IGNORECASE):
         raise HTTPException(400, detail="só http(s)")
     raise HTTPException(409, detail="clique do app já respondido")
-
-
-# Pergunta de múltipla escolha que o hook de `tool.call` segura: o diálogo do terminal e o app
-# correm juntos, e a entrada sobrevive ao intervalo entre dois long-polls (só a fila troca).
-_perguntas: dict[str, dict] = {}
-
-
-def interrompeu(name: str, id: str | None) -> None:
-    """O Esc do app fecha o diálogo `id` (lido antes do Esc) no terminal, e o hook morre sem
-    `/ask-fim` deixando o long-poll aberto até a janela fechar. A pergunta interrompida deixa de
-    contar na hora e o long-poll é acordado para terminar; hook que ainda pergunta depois de
-    `HOOK_VIVO_S` sobreviveu ao Esc e a pergunta volta a contar."""
-    with _lock:
-        p = _perguntas.get(name)
-        if p is None or id is None or p["id"] != id:
-            return
-        p["interrompida"] = time.monotonic()
-        fila = p.get("fila")
-    if fila is not None:
-        fila.put_nowait({"answers": None})
-
-
-def pergunta_pendente(name: str) -> dict | None:
-    """A pergunta que o plugin segura agora (`id`, `questions`), ou None.
-
-    Só vale com o long-poll batendo: hook que morreu não pode segurar a resposta do app."""
-    with _lock:
-        p = _perguntas.get(name)
-        idade = time.monotonic() - p["visto"] if p is not None else 0
-        if p is None or p.get("interrompida") or idade > ESPERA_S + 10 or not p.get("fila") and idade > SEM_POLL_S:
-            return None
-        return {"id": p["id"], "questions": p["questions"], "tool": p.get("tool"),
-                "resumo": p.get("resumo")}
-
-
-# Última pergunta fechada por sessão: (id, quem fechou). Resposta repetida (toque duplo, retry do
-# cliente) para uma pergunta que o APP já fechou é entrega feita — cair na tecla a mandaria de novo.
-_fechadas: dict[str, tuple[str, str]] = {}
-
-
-def responder_pergunta(name: str, corpo: dict, id: str | None = None, receipt: dict | None = None) -> bool:
-    """Entrega a resposta do app ao hook. False = ele não pegou; quem chama cai na tecla.
-
-    `id` é a pergunta que quem chama leu em `pergunta_pendente`: outra pergunta no lugar não recebe
-    esta resposta."""
-    with _lock:
-        p = _perguntas.get(name)
-        loop = _loop
-        if p is None or loop is None or (id is not None and p["id"] != id):
-            return receipt is None and id is not None and _fechadas.get(name) == (id, "app")
-        if receipt is not None:
-            if p.get("publication") is not None and p["publication"] != receipt:
-                return False
-            p["publication"] = dict(receipt)
-            corpo = {**corpo, **receipt}
-        aviso = p.get("aviso")
-        primeiro = aviso is None
-        fila = None
-        if primeiro:
-            aviso = p["aviso"] = threading.Event()
-            fila = p.get("fila")
-            if fila is None:
-                p["resposta"] = corpo
-    if fila is not None:
-        try:
-            loop.call_soon_threadsafe(fila.put_nowait, corpo)
-        except RuntimeError:
-            return False
-    # Segunda resposta com a primeira em voo espera o MESMO aviso: uma pergunta, um veredito.
-    pegou = aviso.wait(CONFIRMA_S)
-    if primeiro:
-        with _lock:
-            p = _perguntas.get(name)
-            if p is not None and p.get("aviso") is aviso:
-                p.pop("aviso", None)
-                p.pop("resposta", None)
-    return pegou

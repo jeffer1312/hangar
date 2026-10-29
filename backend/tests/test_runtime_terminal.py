@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app import runtime_coordinator as rc, runtime_adapter as ra, plugin_bridge as pb
+from app import runtime_coordinator as rc, runtime_adapter as ra
 from app.runtime_coordinator import Binding, RuntimeCoordinator, Phase, WriterLease
 
 
@@ -104,18 +104,6 @@ def test_terminal_native_slot_never_replaces_2c_observation(tmp_path):
     assert ra.native_slot('session') is None
 
 
-def test_plugin_old_capability_refuses_before_enqueue(monkeypatch):
-    pb._waiters['session'] = asyncio.Queue()
-    pb._donos['session'] = ('i', {'fill','user'}, time.monotonic())
-    monkeypatch.setattr(pb, 'tracked_session_id', lambda name:'sid')
-    try:
-        assert pb.publish_terminal('session', 'sid', 1, {'id':'pub', 'text':'hello','mode':'fill'}, lambda:None) == 'not_written'
-        assert pb._waiters['session'].empty()
-    finally:
-        pb._waiters.clear()
-        pb._donos.clear()
-
-
 def test_rust_alive_or_missing_descendant_proof_never_recovers_terminal(tmp_path):
     async def flow():
         owner = RuntimeCoordinator()
@@ -158,7 +146,6 @@ def live_owner(monkeypatch, tmp_path, *, gateway=None):
     monkeypatch.setattr(ti,'_capture',lambda name:'─'*30+'\n❯ \n'+'─'*30+'\n')
     monkeypatch.setattr(ti,'classify',lambda pane:('idle',None,None,None))
     monkeypatch.setattr(ti,'is_overlay',lambda pane:False)
-    monkeypatch.setattr(pb,'pergunta_pendente',lambda name:None)
     owner = RuntimeCoordinator(gateway)
     owner.legacy = LegacyBridge(owner, {'claude':object()})
     target = terminal.resolve_binding('session')
@@ -688,7 +675,7 @@ def test_clear_serialized_and_clears_old_queue(monkeypatch,tmp_path):
     asyncio.run(flow())
 
 
-@pytest.mark.parametrize('kind', ['option','text','chat'])
+@pytest.mark.parametrize('kind', ['option','text'])
 def test_answer_model_dump_reaches_terminal_contract(monkeypatch,tmp_path,kind):
     from app import api
     from app.runtime_terminal import answer_sync
@@ -697,7 +684,6 @@ def test_answer_model_dump_reaches_terminal_contract(monkeypatch,tmp_path,kind):
     item=api.AnswerItem(kind=kind,question_id='question-a',indices=[0] if kind=='option' else None,
         labels=['A'] if kind=='option' else [],value='texto' if kind=='text' else None,
         type_index=1 if kind=='text' else None,chat_index=1 if kind=='chat' else None)
-    monkeypatch.setattr(pb,'pergunta_pendente',lambda name:{'id':'ask:tui-request','questions':[{'id':'question-a'}]})
     observed=[]
     original=gateway.op
     async def op(target,command,operation,clock):
@@ -846,21 +832,6 @@ def test_terminal_native_socket_belongs_to_current_agent_not_reused_sid(monkeypa
     assert terminal._native_socket(current)==str(own)
 
 
-def test_plugin_instance_from_old_life_not_published(monkeypatch,tmp_path):
-    from app import runtime_terminal as terminal
-    current=terminal_binding(tmp_path)
-    current.meta['created']=123.5
-    pb._donos['session']=('1-test',{'receipt_v2','user'},time.monotonic())
-    monkeypatch.setattr(terminal,'validate_binding',lambda descriptor:current)
-    monkeypatch.setattr(pb,'publish_terminal',lambda *args:pytest.fail('publicação na vida antiga'))
-    try:
-        assert terminal.publish({'binding':current.meta['terminal'],'generation':1,
-            'publication':{'id':'new','text':'text','mode':'fill'}},
-            {'descriptor':current.descriptor(),'validate':lambda:None})=='not_written'
-    finally:
-        pb._donos.clear()
-
-
 def test_headless_to_terminal_pending_binding_keeps_key_and_old_queue(monkeypatch,tmp_path):
     from app import runtime_terminal as terminal, terminal_input as ti
     from app.runtime_adapter import LegacyBridge
@@ -894,7 +865,6 @@ def test_headless_to_terminal_pending_binding_keeps_key_and_old_queue(monkeypatc
         monkeypatch.setattr(ti,'_capture',lambda name:'─'*30+'\n❯ \n'+'─'*30+'\n')
         monkeypatch.setattr(ti,'classify',lambda pane:('idle',None,None,None))
         monkeypatch.setattr(ti,'is_overlay',lambda pane:False)
-        monkeypatch.setattr(pb,'pergunta_pendente',lambda name:None)
         monkeypatch.setattr(ti.TerminalInput,'send_prompt',lambda *args:'sent')
         owner.legacy=LegacyBridge(owner,{'claude':object()})
         assert await owner.prepare_session('session','claude')

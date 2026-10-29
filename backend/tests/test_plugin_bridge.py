@@ -1,5 +1,4 @@
-"""Ponte do plugin de function hooks: a regra de quem fica com o pedido de permissão e a ida e volta
-da resposta do app. O resto (envio por `fill`) depende de tmux e é conferido no uso real."""
+"""Ponte do plugin de function hooks: token, instalação, faixa e avisos dos mods."""
 import asyncio
 import json
 from pathlib import Path
@@ -18,11 +17,6 @@ _REAL_TRACKED = pb.tracked_session_id
 @pytest.fixture(autouse=True)
 def _limpa(monkeypatch):
     monkeypatch.setattr(pb, "tracked_session_id", lambda name: UUID)
-    yield
-    for d in (pb._perguntas, pb._waiters, pb._estados, pb._batidas, pb._eventos, pb._fechadas,
-              pb._donos):
-        d.clear()
-    pb._apps_abertos = 0
 
 
 def test_token_com_chave_separa_processos_do_mesmo_nome_e_confere_pelo_nome():
@@ -72,31 +66,6 @@ def test_portao_desligado_nao_poe_nada_na_sessao_e_ligado_poe_o_plugin(monkeypat
         "claude", "--session-id", "sid", "--plugin-dir", raiz]
     env = pb.env_da_sessao("s1", "k1")
     assert env["HANGAR_PLUGIN_TOKEN"] == pb.mint("s1", "k1") and env["HANGAR_PLUGIN_URL"].endswith("/api/plugin")
-
-
-def test_resposta_sem_ninguem_segurando_nao_e_entrega():
-    assert pb.responder_pergunta("s1", {"permitir": True}) is False
-
-
-def test_resposta_repetida_de_pergunta_que_o_app_ja_fechou_conta_como_entregue():
-    # Toque duplo no app: a segunda chega com a pergunta já fechada. Devolver False a mandaria de
-    # novo pela tecla — a mesma resposta duas vezes.
-    pb._fechadas["s1"] = ("toolu_1", "app")
-    assert pb.responder_pergunta("s1", {"answers": {}}, "toolu_1") is True
-    assert pb.responder_pergunta("s1", {"answers": {}}, "toolu_2") is False
-    pb._fechadas["s1"] = ("toolu_1", "terminal")
-    assert pb.responder_pergunta("s1", {"answers": {}}, "toolu_1") is False
-
-
-def test_entrega_roda_sob_a_trava_de_envio_da_sessao(monkeypatch):
-    # O Enter, a conferência e a limpeza tocam o mesmo composer do `send_prompt`.
-    from app import terminal_input
-    visto: dict = {}
-    monkeypatch.setattr(pb, "_entregar",
-                        lambda n, t, m, j: visto.update(travada=terminal_input._send_lock(n).locked()))
-    pb.entregar("s1", "oi")
-    assert visto["travada"] is True
-    assert terminal_input._send_lock("s1").locked() is False
 
 
 class _Saida:
@@ -183,24 +152,6 @@ def test_plugin_dir_file_is_removed_when_mods_are_off(tmp_path, monkeypatch):
     monkeypatch.setattr(pb, "raizes_dos_plugins", lambda: [])
     pb._publish_plugin_dir(tmp_path)
     assert not pb.plugin_dir_file(tmp_path).exists()
-
-
-def test_modo_user_so_com_dono_que_declarou_sessao_parada_e_texto_simples(monkeypatch):
-    monkeypatch.setattr(pb, "mods_by_default", lambda: True)
-    monkeypatch.setattr(pb, "declared_modes", lambda name: {"fill", "user"})
-    monkeypatch.setattr(pb, "estado_recente", lambda name: ("idle", None))
-    assert pb.choose_mode("s1", "roda os testes\ne commita") == "user"
-    assert pb.choose_mode("s1", "manda pro a@b.com") == "user"
-    for texto in ("olha @src/app.py", "@README.md resume", "!ls", "/model"):
-        assert pb.choose_mode("s1", texto) == "fill", texto
-    monkeypatch.setattr(pb, "estado_recente", lambda name: ("working", None))
-    assert pb.choose_mode("s1", "oi") == "fill"
-    monkeypatch.setattr(pb, "estado_recente", lambda name: ("idle", None))
-    monkeypatch.setattr(pb, "declared_modes", lambda name: {"fill"})
-    assert pb.choose_mode("s1", "oi") == "fill"
-    monkeypatch.setattr(pb, "declared_modes", lambda name: {"fill", "user"})
-    monkeypatch.setattr(pb, "mods_by_default", lambda: False)
-    assert pb.choose_mode("s1", "oi") == "fill"
 
 
 def test_conversa_acompanhada_so_vale_com_vinculo_certo(monkeypatch):
@@ -385,22 +336,3 @@ def test_um_efeito_de_mod_sempre_volta_para_o_terminal():
         assert c.post("/api/plugin/opened", json=_ponte("pane-i", attempt="a", url="https://x.exemplo")).status_code == 409
     finally:
         pb.esquecer("pane-i")
-
-
-def test_sinal_de_parada_avisa_as_esperas(monkeypatch):
-    import uvicorn
-    from app import rust_server
-    chamadas = []
-    monkeypatch.setattr(pb, "stop_waits", lambda: chamadas.append("stop"))
-    # A classe-mãe de verdade ligaria a parada global do sse-starlette para os testes seguintes.
-    monkeypatch.setattr(uvicorn.Server, "handle_exit", lambda self, sig, frame: chamadas.append("uvicorn"))
-    rust_server.Server(uvicorn.Config(lambda *a: None)).handle_exit(15, None)
-    assert chamadas == ["stop", "uvicorn"]
-
-
-def test_publication_waits_fit_inside_the_rust_op():
-    # A confirmação cabe na publicação, e o `op` do Python espera a entrada inteira no Rust: fatos
-    # (15 s) mais a publicação.
-    assert pb.CONFIRMA_S < pb.PUBLICA_S
-    from app import rust_server
-    assert rust_server.OP_TIMEOUT_S > pb.PUBLICA_S + 15
