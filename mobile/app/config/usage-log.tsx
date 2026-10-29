@@ -117,7 +117,9 @@ function ReportSection({ server }: { server: Server }) {
   const sentCode = done?.code ?? null;
   const diaryFailed = !!done?.results.some(({ result: r }) => r.ok && r.diary === 'failed');
   const missed = done?.results.flatMap(({ server: s, result: r }) => r.ok ? [] : [{ server: s, failure: { code: r.code, kind: r.kind } }]) ?? [];
-  const unsupported = !!done && !done.code && missed.every((x) => x.failure.kind === 'unsupported');
+  // Pela escolha de agora: outra máquina marcada depois de um envio sem suporte pode ser enviada.
+  const unsupported = !!done && !done.code
+    && targets.every((t) => missed.some((x) => x.server.id === t.id && x.failure.kind === 'unsupported'));
   // Quantas máquinas o envio teve, não a escolha de agora: trocar a escolha depois não muda o texto do erro.
   const several = (done?.results.length ?? 0) > 1;
   const retryMissed = !!done?.results.some(({ result: r }) => diagReportRetryable(r));

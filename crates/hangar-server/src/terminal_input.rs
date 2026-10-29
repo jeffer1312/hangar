@@ -997,6 +997,7 @@ impl TerminalDriver {
             if !self.ours(&after, text, before) || after.content.chars().count() >= now.content.chars().count() { return false; }
             now = after;
         }
+        tracing::warn!(pane = %self.binding.pane, attempts = self.limits.cleanup_attempts, "limpeza do campo parou no orçamento; o resto do nosso texto fica e a entrega segue incerta");
         false
     }
     /// O campo tem o nosso texto inteiro ou o começo dele (a parte que a limpeza ainda não tirou). Com texto
