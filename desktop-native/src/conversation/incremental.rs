@@ -211,6 +211,8 @@ struct ActivityFold {
     finished_early: HashMap<String, Option<f64>>,
     // Colega de equipe -> hora do último SendMessage para ele; aviso de ocioso anterior chegou atrasado.
     woken: HashMap<String, f64>,
+    // agentId parado esperando o próprio trabalho de fundo; sai no fim ou na retomada.
+    waiting: HashSet<String>,
     shell_pending: HashSet<String>,
     shell_calls: HashSet<String>,
     agent_calls: HashSet<String>,
@@ -226,8 +228,9 @@ struct ActivityFold {
 
 impl ActivityFold {
     fn finish(&mut self, id: &str, at: Option<f64>) -> bool {
+        let waited = self.waiting.remove(id);
         if let Some(call) = self.background.get(id) {
-            super::record_completion(&mut self.resulted, call.clone(), at)
+            super::record_completion(&mut self.resulted, call.clone(), at) || waited
         } else { super::record_completion(&mut self.finished_early, id.to_owned(), at); false }
     }
 
@@ -245,6 +248,10 @@ impl ActivityFold {
                     let open = self.agents.iter().map(|a| a.id.clone()).find(|call| self.agent_descs.get(call).is_some_and(|d| d == stopped)
                         && self.background.values().any(|c| c == call) && !self.resulted.contains_key(call));
                     return open.is_some_and(|call| super::record_completion(&mut self.resulted, call, event.ts));
+                }
+                if let Some(task) = id.strip_prefix("task:waiting:") {
+                    if matches!((self.woken.get(task), event.ts), (Some(&since), Some(at)) if at < since) { return false; }
+                    return self.waiting.insert(task.to_owned());
                 }
                 if let Some(task) = id.strip_prefix("task:") {
                     if matches!((self.woken.get(task), event.ts), (Some(&since), Some(at)) if at < since) { return false; }
@@ -326,7 +333,7 @@ impl ActivityFold {
                         let mut changed = false;
                         for (key, call) in &self.background {
                             if !super::wakes(input, key) { continue; }
-                            changed |= self.resulted.remove(call).is_some();
+                            changed |= self.resulted.remove(call).is_some() | self.waiting.remove(key);
                             if let Some(at) = event.ts { self.woken.insert(key.clone(), at); }
                         }
                         return changed;
@@ -377,8 +384,10 @@ impl ActivityFold {
     fn snapshot(&self) -> Activity {
         let mut agents = self.agents.clone();
         let mut shells = self.shells.clone();
+        let waiting: HashSet<&str> = self.waiting.iter().filter_map(|id| self.background.get(id).map(String::as_str)).collect();
         for agent in &mut agents {
             agent.running = !self.resulted.contains_key(&agent.id);
+            agent.waiting = agent.running && waiting.contains(agent.id.as_str());
             agent.finished_at = self.resulted.get(&agent.id).copied().flatten();
             if let Some(id) = self.agent_ids.get(&agent.id) { agent.agent_id = Some(id.clone()); }
         }

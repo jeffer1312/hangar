@@ -20,6 +20,8 @@ export interface AgentRun {
   kind: 'agent' | 'workflow';
   description: string;
   running: boolean; // Agent é bloqueante: sem tool_result = ainda rodando
+  // Rodando, mas parado esperando o próprio trabalho de fundo (`task:waiting:<id>`): sem relógio de execução.
+  waiting?: boolean;
   // O que o subagente foi mandado FAZER. A linha "Rodando agora" mostrava só o `description` (3-5
   // palavras) e não dava pra saber o que ele está tocando. O tool_use já traz tudo isto no input —
   // era só não jogar fora. O transcript PRÓPRIO do subagente não vem no jsonl do pai, então isto é
@@ -187,8 +189,11 @@ export function createActivityFolder(): ActivityFolder {
   // resultado vem sem erro (recado recusado não reabre nada).
   let retomada = new Map<string, string>();
   let codexCalls = new Set<string>();
+  // agentId parado esperando o próprio trabalho de fundo; sai no fim ou quando é retomado.
+  let waiting = new Set<string>();
   // Marca um agente background como terminado pelo agentId, com o launch vindo ANTES ou DEPOIS do fim.
   function completeAgent(agentId: string): void {
+    waiting.delete(agentId);
     const tuid = bgAgent.get(agentId);
     if (tuid) resulted.add(tuid);
     else completedIds.add(agentId);   // launch ainda nao visto -> resolvido quando ele chegar
@@ -209,11 +214,18 @@ export function createActivityFolder(): ActivityFolder {
         const tuid = bgAgent.get(alvo);
         if (!e.is_error && tuid) {
           resulted.delete(tuid);
+          waiting.delete(alvo);
           if (typeof e.ts === 'number') acordado.set(alvo, e.ts);
         }
       }
       // tool_result sintetico do backend (transcript.py): <task-notification> virou "task:<id>".
       // Resolve o launch background correspondente e marca como terminado.
+      if (e.tool_use_id.startsWith('task:waiting:')) {
+        const id = e.tool_use_id.slice(13);
+        const desde = acordado.get(id);
+        if (desde === undefined || typeof e.ts !== 'number' || e.ts >= desde) waiting.add(id);
+        return;
+      }
       if (e.tool_use_id.startsWith('task:')) {
         const desde = acordado.get(e.tool_use_id.slice(5));
         if (desde !== undefined && typeof e.ts === 'number' && e.ts < desde) return;
@@ -310,6 +322,7 @@ export function createActivityFolder(): ActivityFolder {
         for (const [alvo, tuid] of bgAgent) {
           if (alvo !== `teammate:${para}` && !(para === '*' && alvo.startsWith('teammate:'))) continue;
           resulted.delete(tuid);
+          waiting.delete(alvo);
           if (typeof e.ts === 'number') acordado.set(alvo, e.ts);
         }
         break;
@@ -437,6 +450,7 @@ export function createActivityFolder(): ActivityFolder {
     acordado = new Map();
     retomada = new Map();
     codexCalls = new Set();
+    waiting = new Set();
     shells = [];
     bgPendente = new Set();
     for (const e of events) push(e);
@@ -450,10 +464,11 @@ export function createActivityFolder(): ActivityFolder {
     const tasks = all.filter((t) => t.status !== 'deleted');
     // running calculado AQUI (não no push): o tool_result do agente chega DEPOIS do tool_use.
     // Agent é bloqueante (sem result = rodando); Workflow devolve result imediato -> nunca "rodando".
-    const runs: AgentRun[] = agents.map((a) => ({
-      ...a,
-      running: a.kind === 'agent' && !resulted.has(a.id),
-    }));
+    const waitingCalls = new Set([...waiting].map((id) => bgAgent.get(id)));
+    const runs: AgentRun[] = agents.map((a) => {
+      const running = a.kind === 'agent' && !resulted.has(a.id);
+      return { ...a, running, ...(running && waitingCalls.has(a.id) ? { waiting: true } : {}) };
+    });
     runs.sort((a, b) => Number(b.running) - Number(a.running));
     // Shell de fundo: enquanto o tool_use nao tiver a notificacao de fim, esta rodando. Mesmo
     // criterio do Agent em background, e pelo mesmo caminho (`resulted`).

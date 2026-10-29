@@ -237,6 +237,8 @@ pub fn fold_tasks(events: &[ChatEvent], paired: &HashMap<usize, usize>) -> Vec<T
 pub struct AgentRun {
     pub call: usize, pub id: String, pub description: String,
     pub subagent_type: Option<String>, pub model: Option<String>, pub prompt: Option<String>, pub running: bool,
+    /// Rodando, mas parado esperando o próprio trabalho de fundo (`task:waiting:<id>`).
+    pub waiting: bool,
     /// O `agentId` que o resultado do Agent traz: o nome do arquivo do subagente no disco.
     pub agent_id: Option<String>,
     pub agent_path: Option<String>,
@@ -266,7 +268,7 @@ fn agent_run(event: &ChatEvent, call: usize, id: &str) -> AgentRun {
     let prompt = text(if codex { "message" } else { "prompt" })
         .filter(|prompt| !codex || !prompt.starts_with("gAAAA"));
     AgentRun { call, id: id.to_owned(), description, subagent_type: text(if codex { "agent_type" } else { "subagent_type" }),
-        model: text("model"), prompt, running: false, agent_id: None, agent_path: None, started_at: event.ts, finished_at: None }
+        model: text("model"), prompt, running: false, waiting: false, agent_id: None, agent_path: None, started_at: event.ts, finished_at: None }
 }
 
 impl AgentRun {
@@ -362,6 +364,8 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
     let mut woken: HashMap<String, f64> = HashMap::new();
     // SendMessage a um agentId esperando o resultado: tool_use_id -> (agentId, hora do envio). Recusado não retoma.
     let mut resume_pending: HashMap<&str, Vec<(String, Option<f64>)>> = HashMap::new();
+    // agentId parado esperando o próprio trabalho de fundo; sai no fim ou na retomada.
+    let mut waiting: HashSet<String> = HashSet::new();
     let mut agent_calls: HashSet<&str> = HashSet::new();
     let mut codex_calls: HashSet<&str> = HashSet::new();
     let mut agent_ids: HashMap<&str, &str> = HashMap::new();
@@ -382,6 +386,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                     if event.is_error != Some(true) {
                         for (key, at) in keys {
                             if let Some(&call) = background.get(&key) { resulted.remove(call); }
+                            waiting.remove(&key);
                             if let Some(at) = at { woken.insert(key, at); }
                         }
                     }
@@ -397,8 +402,13 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                     }
                     continue;
                 }
+                if let Some(task) = id.strip_prefix("task:waiting:") {
+                    if !matches!((woken.get(task), event.ts), (Some(&since), Some(at)) if at < since) { waiting.insert(task.to_owned()); }
+                    continue;
+                }
                 if let Some(task) = id.strip_prefix("task:") {
                     if matches!((woken.get(task), event.ts), (Some(&since), Some(at)) if at < since) { continue; }
+                    waiting.remove(task);
                     finish(task.to_owned(), event.ts, &background, &mut resulted, &mut finished_early);
                     continue;
                 }
@@ -453,6 +463,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                 if !text.contains("<task-notification>") { continue; }
                 if interim_notification(text) { continue; }
                 let Some(task) = text.split_once("<task-id>").and_then(|(_, rest)| rest.split_once("</task-id>")).map(|(id, _)| id.trim()) else { continue };
+                waiting.remove(task);
                 finish(task.to_owned(), event.ts, &background, &mut resulted, &mut finished_early);
             }
             "tool_use" => {
@@ -478,6 +489,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                                 continue;
                             }
                             resulted.remove(call);
+                            waiting.remove(key);
                             if let Some(at) = event.ts { woken.insert(key.clone(), at); }
                         }
                         continue;
@@ -521,8 +533,10 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
             _ => {}
         }
     }
+    let waiting_calls: HashSet<&str> = waiting.iter().filter_map(|id| background.get(id).copied()).collect();
     for agent in &mut agents {
         agent.running = !resulted.contains_key(agent.id.as_str());
+        agent.waiting = agent.running && waiting_calls.contains(agent.id.as_str());
         agent.finished_at = resulted.get(agent.id.as_str()).copied().flatten();
         if let Some(id) = agent_ids.get(agent.id.as_str()) { agent.agent_id = Some((*id).to_owned()); }
     }

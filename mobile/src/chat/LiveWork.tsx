@@ -110,7 +110,7 @@ export const AgentesRodando = memo(function AgentesRodando({ agentes, inicio, on
       {agentes.map((a) => {
         const model = agentModel(a, matchAgentSubagent(subs, a, ids));
         const t0 = inicio(a.id);
-        const tempo = t0 !== null ? m.tool_executando_ha({ tempo: formatElapsed(Math.max(0, agora - t0) / 1000) }) : m.estado_em_execucao();
+        const tempo = a.waiting ? m.tool_agente_esperando() : t0 !== null ? m.tool_executando_ha({ tempo: formatElapsed(Math.max(0, agora - t0) / 1000) }) : m.estado_em_execucao();
         return (
           <Pressable
             key={a.id}
@@ -121,7 +121,7 @@ export const AgentesRodando = memo(function AgentesRodando({ agentes, inicio, on
             accessibilityLabel={[a.description, a.subagentType, model, tempo].filter(Boolean).join(', ')}
             accessibilityHint={onAbrir ? m.tool_abrir_agente() : undefined}
           >
-            <ActivityIndicator size="small" color={theme.tokens.accent.base} />
+            {a.waiting ? <Icon name="Hourglass" size={16} color={theme.tokens.text.muted} /> : <ActivityIndicator size="small" color={theme.tokens.accent.base} />}
             <View style={styles.agenteCorpo}>
               <View style={styles.agenteCab}>
                 <Text style={[styles.agenteDesc, { color: theme.tokens.text.primary }]} numberOfLines={1}>
@@ -134,7 +134,7 @@ export const AgentesRodando = memo(function AgentesRodando({ agentes, inicio, on
                 ) : null}
               </View>
               {model ? <Text style={[styles.model, { color: theme.tokens.text.muted }]} numberOfLines={1}>{model}</Text> : null}
-              <Text style={[styles.tempo, { color: theme.tokens.accent.base }]} numberOfLines={1}>{tempo}</Text>
+              <Text style={[styles.tempo, { color: a.waiting ? theme.tokens.text.muted : theme.tokens.accent.base }]} numberOfLines={1}>{tempo}</Text>
             </View>
             {onAbrir ? <Icon name="ChevronRight" size={16} color={theme.tokens.text.muted} /> : null}
           </Pressable>
