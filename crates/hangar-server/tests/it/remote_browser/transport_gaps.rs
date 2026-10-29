@@ -191,6 +191,35 @@ async fn cdp(stream: tokio::net::TcpStream, context: Context, mut closing: watch
                         assert_eq!(response.to_string().len(), size as usize);
                     }
                 }
+                if context.inputs["response_bytes"].as_u64().is_some_and(|size| size > 32 * 1024 * 1024) {
+                    let (mut outgoing, mut incoming) = socket.split();
+                    let sending = outgoing.send(Message::Text(response.to_string().into()));
+                    tokio::pin!(sending);
+                    let sent = tokio::select! {
+                        result = &mut sending => {
+                            if result.is_err() { false } else {
+                                while let Some(Ok(message)) = incoming.next().await {
+                                    if let Message::Close(frame) = message {
+                                        context.seen.lock().unwrap().cdp_closes[peer] = close_value(frame.as_ref());
+                                        break;
+                                    }
+                                }
+                                true
+                            }
+                        }
+                        message = incoming.next() => {
+                            if let Some(Ok(Message::Close(frame))) = message {
+                                context.seen.lock().unwrap().cdp_closes[peer] = close_value(frame.as_ref());
+                            }
+                            false
+                        }
+                        _ = closing.changed() => false,
+                    };
+                    let _ = sent;
+                    context.seen.lock().unwrap().closed += 1;
+                    context.changed.notify_waiters();
+                    return;
+                }
                 if socket.send(Message::Text(response.to_string().into())).await.is_err() { break; }
                 let url = if method == "Page.startScreencast" { Some("http://contract.test/ready") }
                     else if method == "Input.insertText" && message["params"]["text"] == BARRIER { Some("http://contract.test/barrier") }

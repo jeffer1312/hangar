@@ -1,0 +1,2027 @@
+{
+  "source_commit": "ba2db1021ab7fb801eca50a50f9509dcb825ac7e",
+  "generator": "backend/.venv/bin/python backend/tests/fixtures/contract/remote-browser/generate_url_gaps.py --output backend/tests/fixtures/contract/remote-browser/url-gaps.json",
+  "source_sha256": {
+    "api.py": "f5c33eaec520029b5e9fdb8c1408503c16a91204f95ce16b033bea376cf3c384",
+    "navsock.py": "76dc90655e1aa7371a8c4ee5a83dd2abf6cf7bd3606929d9a93daf70915b7dc2",
+    "navshell.py": "f9dc19c79208868f469ff8cc0384be3a2a83fd1472e55f85d3f3a069641c57fc"
+  },
+  "measured_sha256": "94d1928c2f0dce9c0275d01820c94c7b2b770392b1c6f170ff5662615154da2a",
+  "platform": "linux",
+  "python_version": "3.14.8",
+  "isolation": {
+    "path": "$ROOT/bin (vazio)",
+    "processes": "todos recusados no filho antes dos imports originais",
+    "network": "somente sockets/portas explicitamente reservados pelo ensaio",
+    "blocked_attempts": [
+      {
+        "event": "subprocess.Popen",
+        "details": "{'program': 'git', 'argv': ['git', 'describe', '--tags', '--match', 'dist-latest', '--long', '--always', '--dirty']}"
+      },
+      {
+        "event": "subprocess.Popen",
+        "details": "{'program': 'git', 'argv': ['git', 'rev-list', '--count', 'HEAD']}"
+      }
+    ]
+  },
+  "normalization": {
+    "$ROOT": "prefixo do temporário em logs, como nos corpora existentes",
+    "$CONTROLLER_PORT": "porta própria injetada apenas nos arquivos de entrada"
+  },
+  "limits": [
+    "HOME/config/cwd/TMPDIR isolados; fonte integral exportada da base e _session_exists original por AST com leitores reais de sidecar sem terminal.",
+    "Porta Electron 9223 só após bind exclusivo próprio; uma porta ocupada impede a captura, sem reutilizar navegador existente.",
+    "Ordem de diretório registrada sem ordenar. A rodada Rust precisa reproduzir a enumeração; condição diferente é falha de ambiente.",
+    "Python usa prazo de leitura real e elapsed_seconds cru; Rust controla somente seu relógio de teste, sem equivalência de desempenho.",
+    "Warning integral conservado e comparado no Rust após somente $ROOT; texto diferente de parser/SO precisa ser classificado, sem normalização adicional.",
+    "Sem desktop, sessão, conta, tmux, instalação ou serviço reais; JPEG vem da captura Chromium já congelada."
+  ],
+  "cases": [
+    {
+      "name": "ws_directory_absent",
+      "ids": [
+        "NS002"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "nav-contract",
+            "files": null,
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": "http://electron.test/current"
+                }
+              }
+            },
+            "directory_order": null
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 403,
+            "body_hex": "",
+            "events": [],
+            "handshakes": [],
+            "requests": [],
+            "native_cdp": [],
+            "electron_cdp": [],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_underscore_match_is_ignored",
+      "ids": [
+        "NS003"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "nav-contract",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "_matching.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://underscore.test/ignored\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              }
+            ],
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": "http://electron.test/current"
+                }
+              }
+            },
+            "directory_order": [
+              "_srv.json",
+              "_matching.json",
+              "browser.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 101,
+            "body_hex": null,
+            "events": [
+              {
+                "t": "url",
+                "url": "http://native.test/original"
+              },
+              {
+                "t": "q",
+                "d": "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",
+                "w": 800,
+                "h": 600
+              },
+              {
+                "t": "url",
+                "url": "http://contract.test/ready"
+              }
+            ],
+            "handshakes": [
+              {
+                "transport": "native",
+                "path": "/cdp",
+                "authorization": "Bearer remote-browser-contract-desktop",
+                "key": "contract::nav-contract"
+              }
+            ],
+            "requests": [],
+            "native_cdp": [
+              {
+                "peer": 0,
+                "message": {
+                  "id": 1,
+                  "method": "Page.enable",
+                  "params": {}
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 2,
+                  "method": "Page.startScreencast",
+                  "params": {
+                    "format": "jpeg",
+                    "quality": 45,
+                    "maxWidth": 1400,
+                    "maxHeight": 1400,
+                    "everyNthFrame": 5
+                  }
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 3,
+                  "method": "Page.screencastFrameAck",
+                  "params": {
+                    "sessionId": 1
+                  }
+                }
+              }
+            ],
+            "electron_cdp": [],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_unreadable_and_non_objects_before_valid",
+      "ids": [
+        "NS004"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "nav-contract",
+            "files": [
+              {
+                "name": "array.json",
+                "text": "[]"
+              },
+              {
+                "name": "null.json",
+                "text": "null"
+              },
+              {
+                "name": "scalar.json",
+                "text": "7"
+              },
+              {
+                "name": "broken.json",
+                "text": "{"
+              },
+              {
+                "name": "bytes.json",
+                "bytes_hex": "ff"
+              },
+              {
+                "name": "directory.json",
+                "directory": true
+              },
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              }
+            ],
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": "http://electron.test/current"
+                }
+              }
+            },
+            "directory_order": [
+              "array.json",
+              "null.json",
+              "scalar.json",
+              "broken.json",
+              "bytes.json",
+              "directory.json",
+              "_srv.json",
+              "browser.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 101,
+            "body_hex": null,
+            "events": [
+              {
+                "t": "url",
+                "url": "http://native.test/original"
+              },
+              {
+                "t": "q",
+                "d": "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",
+                "w": 800,
+                "h": 600
+              },
+              {
+                "t": "url",
+                "url": "http://contract.test/ready"
+              }
+            ],
+            "handshakes": [
+              {
+                "transport": "native",
+                "path": "/cdp",
+                "authorization": "Bearer remote-browser-contract-desktop",
+                "key": "contract::nav-contract"
+              }
+            ],
+            "requests": [],
+            "native_cdp": [
+              {
+                "peer": 0,
+                "message": {
+                  "id": 1,
+                  "method": "Page.enable",
+                  "params": {}
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 2,
+                  "method": "Page.startScreencast",
+                  "params": {
+                    "format": "jpeg",
+                    "quality": 45,
+                    "maxWidth": 1400,
+                    "maxHeight": 1400,
+                    "everyNthFrame": 5
+                  }
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 3,
+                  "method": "Page.screencastFrameAck",
+                  "params": {
+                    "sessionId": 1
+                  }
+                }
+              }
+            ],
+            "electron_cdp": [],
+            "warnings": [
+              {
+                "level": "WARNING",
+                "message": "sidecar de navegador ilegivel $ROOT/home/.hangar/nav/broken.json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+              },
+              {
+                "level": "WARNING",
+                "message": "sidecar de navegador ilegivel $ROOT/home/.hangar/nav/bytes.json: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+              },
+              {
+                "level": "WARNING",
+                "message": "sidecar de navegador ilegivel $ROOT/home/.hangar/nav/directory.json: [Errno 21] Is a directory: '$ROOT/home/.hangar/nav/directory.json'"
+              },
+              {
+                "level": "WARNING",
+                "message": "sidecar de navegador ilegivel $ROOT/home/.hangar/nav/broken.json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+              },
+              {
+                "level": "WARNING",
+                "message": "sidecar de navegador ilegivel $ROOT/home/.hangar/nav/bytes.json: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+              },
+              {
+                "level": "WARNING",
+                "message": "sidecar de navegador ilegivel $ROOT/home/.hangar/nav/directory.json: [Errno 21] Is a directory: '$ROOT/home/.hangar/nav/directory.json'"
+              }
+            ],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_first_match_creation_order_a_b",
+      "ids": [
+        "NS005"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "nav-contract",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "a.json",
+                "text": "{\"chave\": \"nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://first.test/exact\"}"
+              },
+              {
+                "name": "b.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://second.test/suffix\"}"
+              }
+            ],
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": "http://electron.test/current"
+                }
+              }
+            },
+            "directory_order": [
+              "_srv.json",
+              "a.json",
+              "b.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 101,
+            "body_hex": null,
+            "events": [
+              {
+                "t": "url",
+                "url": "http://first.test/exact"
+              },
+              {
+                "t": "q",
+                "d": "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",
+                "w": 800,
+                "h": 600
+              },
+              {
+                "t": "url",
+                "url": "http://contract.test/ready"
+              }
+            ],
+            "handshakes": [
+              {
+                "transport": "native",
+                "path": "/cdp",
+                "authorization": "Bearer remote-browser-contract-desktop",
+                "key": "nav-contract"
+              }
+            ],
+            "requests": [],
+            "native_cdp": [
+              {
+                "peer": 0,
+                "message": {
+                  "id": 1,
+                  "method": "Page.enable",
+                  "params": {}
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 2,
+                  "method": "Page.startScreencast",
+                  "params": {
+                    "format": "jpeg",
+                    "quality": 45,
+                    "maxWidth": 1400,
+                    "maxHeight": 1400,
+                    "everyNthFrame": 5
+                  }
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 3,
+                  "method": "Page.screencastFrameAck",
+                  "params": {
+                    "sessionId": 1
+                  }
+                }
+              }
+            ],
+            "electron_cdp": [],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_first_match_creation_order_b_a",
+      "ids": [
+        "NS005"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "nav-contract",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "b.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://second.test/suffix\"}"
+              },
+              {
+                "name": "a.json",
+                "text": "{\"chave\": \"nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://first.test/exact\"}"
+              }
+            ],
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": "http://electron.test/current"
+                }
+              }
+            },
+            "directory_order": [
+              "_srv.json",
+              "b.json",
+              "a.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 101,
+            "body_hex": null,
+            "events": [
+              {
+                "t": "url",
+                "url": "http://second.test/suffix"
+              },
+              {
+                "t": "q",
+                "d": "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",
+                "w": 800,
+                "h": 600
+              },
+              {
+                "t": "url",
+                "url": "http://contract.test/ready"
+              }
+            ],
+            "handshakes": [
+              {
+                "transport": "native",
+                "path": "/cdp",
+                "authorization": "Bearer remote-browser-contract-desktop",
+                "key": "contract::nav-contract"
+              }
+            ],
+            "requests": [],
+            "native_cdp": [
+              {
+                "peer": 0,
+                "message": {
+                  "id": 1,
+                  "method": "Page.enable",
+                  "params": {}
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 2,
+                  "method": "Page.startScreencast",
+                  "params": {
+                    "format": "jpeg",
+                    "quality": 45,
+                    "maxWidth": 1400,
+                    "maxHeight": 1400,
+                    "everyNthFrame": 5
+                  }
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 3,
+                  "method": "Page.screencastFrameAck",
+                  "params": {
+                    "sessionId": 1
+                  }
+                }
+              }
+            ],
+            "electron_cdp": [],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_number_key",
+      "ids": [
+        "NS005",
+        "NS008"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "17",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": 17, \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              }
+            ],
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": "http://electron.test/current"
+                }
+              }
+            },
+            "directory_order": [
+              "_srv.json",
+              "browser.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 101,
+            "body_hex": null,
+            "events": [
+              {
+                "t": "url",
+                "url": "http://native.test/original"
+              },
+              {
+                "t": "q",
+                "d": "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",
+                "w": 800,
+                "h": 600
+              },
+              {
+                "t": "url",
+                "url": "http://contract.test/ready"
+              }
+            ],
+            "handshakes": [
+              {
+                "transport": "native",
+                "path": "/cdp",
+                "authorization": "Bearer remote-browser-contract-desktop",
+                "key": "17"
+              }
+            ],
+            "requests": [],
+            "native_cdp": [
+              {
+                "peer": 0,
+                "message": {
+                  "id": 1,
+                  "method": "Page.enable",
+                  "params": {}
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 2,
+                  "method": "Page.startScreencast",
+                  "params": {
+                    "format": "jpeg",
+                    "quality": 45,
+                    "maxWidth": 1400,
+                    "maxHeight": 1400,
+                    "everyNthFrame": 5
+                  }
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 3,
+                  "method": "Page.screencastFrameAck",
+                  "params": {
+                    "sessionId": 1
+                  }
+                }
+              }
+            ],
+            "electron_cdp": [],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_boolean_key",
+      "ids": [
+        "NS005",
+        "NS008"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "True",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": true, \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              }
+            ],
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": "http://electron.test/current"
+                }
+              }
+            },
+            "directory_order": [
+              "_srv.json",
+              "browser.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 101,
+            "body_hex": null,
+            "events": [
+              {
+                "t": "url",
+                "url": "http://native.test/original"
+              },
+              {
+                "t": "q",
+                "d": "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",
+                "w": 800,
+                "h": 600
+              },
+              {
+                "t": "url",
+                "url": "http://contract.test/ready"
+              }
+            ],
+            "handshakes": [
+              {
+                "transport": "native",
+                "path": "/cdp",
+                "authorization": "Bearer remote-browser-contract-desktop",
+                "key": "True"
+              }
+            ],
+            "requests": [],
+            "native_cdp": [
+              {
+                "peer": 0,
+                "message": {
+                  "id": 1,
+                  "method": "Page.enable",
+                  "params": {}
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 2,
+                  "method": "Page.startScreencast",
+                  "params": {
+                    "format": "jpeg",
+                    "quality": 45,
+                    "maxWidth": 1400,
+                    "maxHeight": 1400,
+                    "everyNthFrame": 5
+                  }
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 3,
+                  "method": "Page.screencastFrameAck",
+                  "params": {
+                    "sessionId": 1
+                  }
+                }
+              }
+            ],
+            "electron_cdp": [],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_null_key",
+      "ids": [
+        "NS005",
+        "NS008"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "None",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": null, \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              }
+            ],
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": "http://electron.test/current"
+                }
+              }
+            },
+            "directory_order": [
+              "_srv.json",
+              "browser.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 403,
+            "body_hex": "",
+            "events": [],
+            "handshakes": [],
+            "requests": [],
+            "native_cdp": [],
+            "electron_cdp": [],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_array_key_before_valid",
+      "ids": [
+        "NS005"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "nav-contract",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "nontext.json",
+                "text": "{\"chave\": [], \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              }
+            ],
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": "http://electron.test/current"
+                }
+              }
+            },
+            "directory_order": [
+              "_srv.json",
+              "nontext.json",
+              "browser.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 101,
+            "body_hex": null,
+            "events": [
+              {
+                "t": "url",
+                "url": "http://native.test/original"
+              },
+              {
+                "t": "q",
+                "d": "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",
+                "w": 800,
+                "h": 600
+              },
+              {
+                "t": "url",
+                "url": "http://contract.test/ready"
+              }
+            ],
+            "handshakes": [
+              {
+                "transport": "native",
+                "path": "/cdp",
+                "authorization": "Bearer remote-browser-contract-desktop",
+                "key": "contract::nav-contract"
+              }
+            ],
+            "requests": [],
+            "native_cdp": [
+              {
+                "peer": 0,
+                "message": {
+                  "id": 1,
+                  "method": "Page.enable",
+                  "params": {}
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 2,
+                  "method": "Page.startScreencast",
+                  "params": {
+                    "format": "jpeg",
+                    "quality": 45,
+                    "maxWidth": 1400,
+                    "maxHeight": 1400,
+                    "everyNthFrame": 5
+                  }
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 3,
+                  "method": "Page.screencastFrameAck",
+                  "params": {
+                    "sessionId": 1
+                  }
+                }
+              }
+            ],
+            "electron_cdp": [],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_object_key_before_valid",
+      "ids": [
+        "NS005"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "nav-contract",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "nontext.json",
+                "text": "{\"chave\": {}, \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              }
+            ],
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": "http://electron.test/current"
+                }
+              }
+            },
+            "directory_order": [
+              "_srv.json",
+              "nontext.json",
+              "browser.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 101,
+            "body_hex": null,
+            "events": [
+              {
+                "t": "url",
+                "url": "http://native.test/original"
+              },
+              {
+                "t": "q",
+                "d": "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",
+                "w": 800,
+                "h": 600
+              },
+              {
+                "t": "url",
+                "url": "http://contract.test/ready"
+              }
+            ],
+            "handshakes": [
+              {
+                "transport": "native",
+                "path": "/cdp",
+                "authorization": "Bearer remote-browser-contract-desktop",
+                "key": "contract::nav-contract"
+              }
+            ],
+            "requests": [],
+            "native_cdp": [
+              {
+                "peer": 0,
+                "message": {
+                  "id": 1,
+                  "method": "Page.enable",
+                  "params": {}
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 2,
+                  "method": "Page.startScreencast",
+                  "params": {
+                    "format": "jpeg",
+                    "quality": 45,
+                    "maxWidth": 1400,
+                    "maxHeight": 1400,
+                    "everyNthFrame": 5
+                  }
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 3,
+                  "method": "Page.screencastFrameAck",
+                  "params": {
+                    "sessionId": 1
+                  }
+                }
+              }
+            ],
+            "electron_cdp": [],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_false_key_before_valid",
+      "ids": [
+        "NS005"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "nav-contract",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "nontext.json",
+                "text": "{\"chave\": false, \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              }
+            ],
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": "http://electron.test/current"
+                }
+              }
+            },
+            "directory_order": [
+              "_srv.json",
+              "nontext.json",
+              "browser.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 101,
+            "body_hex": null,
+            "events": [
+              {
+                "t": "url",
+                "url": "http://native.test/original"
+              },
+              {
+                "t": "q",
+                "d": "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",
+                "w": 800,
+                "h": 600
+              },
+              {
+                "t": "url",
+                "url": "http://contract.test/ready"
+              }
+            ],
+            "handshakes": [
+              {
+                "transport": "native",
+                "path": "/cdp",
+                "authorization": "Bearer remote-browser-contract-desktop",
+                "key": "contract::nav-contract"
+              }
+            ],
+            "requests": [],
+            "native_cdp": [
+              {
+                "peer": 0,
+                "message": {
+                  "id": 1,
+                  "method": "Page.enable",
+                  "params": {}
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 2,
+                  "method": "Page.startScreencast",
+                  "params": {
+                    "format": "jpeg",
+                    "quality": 45,
+                    "maxWidth": 1400,
+                    "maxHeight": 1400,
+                    "everyNthFrame": 5
+                  }
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 3,
+                  "method": "Page.screencastFrameAck",
+                  "params": {
+                    "sessionId": 1
+                  }
+                }
+              }
+            ],
+            "electron_cdp": [],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_native_missing_only_key",
+      "ids": [
+        "NS008"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "nav-contract",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              }
+            ],
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": "http://electron.test/current"
+                }
+              }
+            },
+            "directory_order": [
+              "_srv.json",
+              "browser.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 403,
+            "body_hex": "",
+            "events": [],
+            "handshakes": [],
+            "requests": [],
+            "native_cdp": [],
+            "electron_cdp": [],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_electron_precedes_usable_native",
+      "ids": [
+        "NS006",
+        "NR016"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "nav-contract",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              }
+            ],
+            "evaluate": {},
+            "directory_order": [
+              "_srv.json",
+              "browser.json"
+            ]
+          },
+          {
+            "session": "nav-contract",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              },
+              {
+                "name": "electron.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": \"GAP-TARGET\", \"url\": \"http://electron.test/stale\"}"
+              }
+            ],
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": "http://electron.test/current"
+                }
+              }
+            },
+            "directory_order": [
+              "_srv.json",
+              "browser.json",
+              "electron.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 101,
+            "body_hex": null,
+            "events": [
+              {
+                "t": "url",
+                "url": "http://native.test/original"
+              },
+              {
+                "t": "q",
+                "d": "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",
+                "w": 800,
+                "h": 600
+              },
+              {
+                "t": "url",
+                "url": "http://contract.test/ready"
+              }
+            ],
+            "handshakes": [
+              {
+                "transport": "native",
+                "path": "/cdp",
+                "authorization": "Bearer remote-browser-contract-desktop",
+                "key": "contract::nav-contract"
+              }
+            ],
+            "requests": [],
+            "native_cdp": [
+              {
+                "peer": 0,
+                "message": {
+                  "id": 1,
+                  "method": "Page.enable",
+                  "params": {}
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 2,
+                  "method": "Page.startScreencast",
+                  "params": {
+                    "format": "jpeg",
+                    "quality": 45,
+                    "maxWidth": 1400,
+                    "maxHeight": 1400,
+                    "everyNthFrame": 5
+                  }
+                }
+              },
+              {
+                "peer": 0,
+                "message": {
+                  "id": 3,
+                  "method": "Page.screencastFrameAck",
+                  "params": {
+                    "sessionId": 1
+                  }
+                }
+              }
+            ],
+            "electron_cdp": [],
+            "warnings": [],
+            "files_unchanged": true
+          },
+          {
+            "status": 101,
+            "body_hex": null,
+            "events": [
+              {
+                "t": "url",
+                "url": "http://electron.test/current"
+              },
+              {
+                "t": "q",
+                "d": "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",
+                "w": 800,
+                "h": 600
+              },
+              {
+                "t": "url",
+                "url": "http://contract.test/ready"
+              }
+            ],
+            "handshakes": [
+              {
+                "transport": "electron",
+                "path": "/devtools/page/GAP-TARGET",
+                "authorization": null,
+                "key": null
+              }
+            ],
+            "requests": [],
+            "native_cdp": [],
+            "electron_cdp": [
+              {
+                "id": 1,
+                "method": "Runtime.evaluate",
+                "params": {
+                  "expression": "location.href",
+                  "returnByValue": true
+                }
+              },
+              {
+                "id": 2,
+                "method": "Page.enable",
+                "params": {}
+              },
+              {
+                "id": 3,
+                "method": "Page.startScreencast",
+                "params": {
+                  "format": "jpeg",
+                  "quality": 45,
+                  "maxWidth": 1400,
+                  "maxHeight": 1400,
+                  "everyNthFrame": 5
+                }
+              },
+              {
+                "id": 4,
+                "method": "Page.screencastFrameAck",
+                "params": {
+                  "sessionId": 1
+                }
+              }
+            ],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_evaluate_error_keeps_sidecar_url",
+      "ids": [
+        "NS027"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "nav-contract",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              },
+              {
+                "name": "electron.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": \"GAP-TARGET\", \"url\": \"http://electron.test/stale\"}"
+              }
+            ],
+            "evaluate": {
+              "error": {
+                "code": -32000,
+                "message": "evaluate refused by fixture"
+              }
+            },
+            "directory_order": [
+              "_srv.json",
+              "browser.json",
+              "electron.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 101,
+            "body_hex": null,
+            "events": [
+              {
+                "t": "url",
+                "url": "http://electron.test/stale"
+              },
+              {
+                "t": "q",
+                "d": "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",
+                "w": 800,
+                "h": 600
+              },
+              {
+                "t": "url",
+                "url": "http://contract.test/ready"
+              }
+            ],
+            "handshakes": [
+              {
+                "transport": "electron",
+                "path": "/devtools/page/GAP-TARGET",
+                "authorization": null,
+                "key": null
+              }
+            ],
+            "requests": [],
+            "native_cdp": [],
+            "electron_cdp": [
+              {
+                "id": 1,
+                "method": "Runtime.evaluate",
+                "params": {
+                  "expression": "location.href",
+                  "returnByValue": true
+                }
+              },
+              {
+                "id": 2,
+                "method": "Page.enable",
+                "params": {}
+              },
+              {
+                "id": 3,
+                "method": "Page.startScreencast",
+                "params": {
+                  "format": "jpeg",
+                  "quality": 45,
+                  "maxWidth": 1400,
+                  "maxHeight": 1400,
+                  "everyNthFrame": 5
+                }
+              },
+              {
+                "id": 4,
+                "method": "Page.screencastFrameAck",
+                "params": {
+                  "sessionId": 1
+                }
+              }
+            ],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_evaluate_number_keeps_sidecar_url",
+      "ids": [
+        "NS027"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "nav-contract",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              },
+              {
+                "name": "electron.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": \"GAP-TARGET\", \"url\": \"http://electron.test/stale\"}"
+              }
+            ],
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": 17
+                }
+              }
+            },
+            "directory_order": [
+              "_srv.json",
+              "browser.json",
+              "electron.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 101,
+            "body_hex": null,
+            "events": [
+              {
+                "t": "url",
+                "url": "http://electron.test/stale"
+              },
+              {
+                "t": "q",
+                "d": "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",
+                "w": 800,
+                "h": 600
+              },
+              {
+                "t": "url",
+                "url": "http://contract.test/ready"
+              }
+            ],
+            "handshakes": [
+              {
+                "transport": "electron",
+                "path": "/devtools/page/GAP-TARGET",
+                "authorization": null,
+                "key": null
+              }
+            ],
+            "requests": [],
+            "native_cdp": [],
+            "electron_cdp": [
+              {
+                "id": 1,
+                "method": "Runtime.evaluate",
+                "params": {
+                  "expression": "location.href",
+                  "returnByValue": true
+                }
+              },
+              {
+                "id": 2,
+                "method": "Page.enable",
+                "params": {}
+              },
+              {
+                "id": 3,
+                "method": "Page.startScreencast",
+                "params": {
+                  "format": "jpeg",
+                  "quality": 45,
+                  "maxWidth": 1400,
+                  "maxHeight": 1400,
+                  "everyNthFrame": 5
+                }
+              },
+              {
+                "id": 4,
+                "method": "Page.screencastFrameAck",
+                "params": {
+                  "sessionId": 1
+                }
+              }
+            ],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ws_evaluate_empty_keeps_sidecar_url",
+      "ids": [
+        "NS027"
+      ],
+      "kind": "selection",
+      "inputs": {
+        "phases": [
+          {
+            "session": "nav-contract",
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              },
+              {
+                "name": "electron.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": \"GAP-TARGET\", \"url\": \"http://electron.test/stale\"}"
+              }
+            ],
+            "evaluate": {
+              "result": {
+                "result": {
+                  "value": ""
+                }
+              }
+            },
+            "directory_order": [
+              "_srv.json",
+              "browser.json",
+              "electron.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "phases": [
+          {
+            "status": 101,
+            "body_hex": null,
+            "events": [
+              {
+                "t": "url",
+                "url": "http://electron.test/stale"
+              },
+              {
+                "t": "q",
+                "d": "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",
+                "w": 800,
+                "h": 600
+              },
+              {
+                "t": "url",
+                "url": "http://contract.test/ready"
+              }
+            ],
+            "handshakes": [
+              {
+                "transport": "electron",
+                "path": "/devtools/page/GAP-TARGET",
+                "authorization": null,
+                "key": null
+              }
+            ],
+            "requests": [],
+            "native_cdp": [],
+            "electron_cdp": [
+              {
+                "id": 1,
+                "method": "Runtime.evaluate",
+                "params": {
+                  "expression": "location.href",
+                  "returnByValue": true
+                }
+              },
+              {
+                "id": 2,
+                "method": "Page.enable",
+                "params": {}
+              },
+              {
+                "id": 3,
+                "method": "Page.startScreencast",
+                "params": {
+                  "format": "jpeg",
+                  "quality": 45,
+                  "maxWidth": 1400,
+                  "maxHeight": 1400,
+                  "everyNthFrame": 5
+                }
+              },
+              {
+                "id": 4,
+                "method": "Page.screencastFrameAck",
+                "params": {
+                  "sessionId": 1
+                }
+              }
+            ],
+            "warnings": [],
+            "files_unchanged": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "cmd_warning_and_non_objects_before_valid",
+      "ids": [
+        "NB005"
+      ],
+      "kind": "commands",
+      "inputs": {
+        "initial_files": [
+          {
+            "name": "_srv.json",
+            "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+          },
+          {
+            "name": "browser.json",
+            "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+          }
+        ],
+        "initial_directory_order": [
+          "_srv.json",
+          "browser.json"
+        ],
+        "stages": [
+          {
+            "files": [
+              {
+                "name": "array.json",
+                "text": "[]"
+              },
+              {
+                "name": "null.json",
+                "text": "null"
+              },
+              {
+                "name": "scalar.json",
+                "text": "7"
+              },
+              {
+                "name": "broken.json",
+                "text": "{"
+              },
+              {
+                "name": "bytes.json",
+                "bytes_hex": "ff"
+              },
+              {
+                "name": "directory.json",
+                "directory": true
+              },
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              }
+            ],
+            "directory_order": [
+              "array.json",
+              "null.json",
+              "scalar.json",
+              "broken.json",
+              "bytes.json",
+              "directory.json",
+              "_srv.json",
+              "browser.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "outcomes": [
+          {
+            "t": "layout",
+            "modo": "mobile",
+            "resposta": "layout: mobile"
+          }
+        ],
+        "requests": [
+          {
+            "method": "POST",
+            "path": "/cmd",
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "content_type": "application/json",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": [
+                "mobile"
+              ]
+            }
+          }
+        ],
+        "warnings": [
+          {
+            "level": "WARNING",
+            "message": "sidecar de navegador ilegivel $ROOT/home/.hangar/nav/broken.json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+          },
+          {
+            "level": "WARNING",
+            "message": "sidecar de navegador ilegivel $ROOT/home/.hangar/nav/bytes.json: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+          },
+          {
+            "level": "WARNING",
+            "message": "sidecar de navegador ilegivel $ROOT/home/.hangar/nav/directory.json: [Errno 21] Is a directory: '$ROOT/home/.hangar/nav/directory.json'"
+          }
+        ]
+      }
+    },
+    {
+      "name": "cmd_reloads_changed_removed_and_exact_key",
+      "ids": [
+        "NR013"
+      ],
+      "kind": "commands",
+      "inputs": {
+        "initial_files": [
+          {
+            "name": "_srv.json",
+            "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+          },
+          {
+            "name": "browser.json",
+            "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+          }
+        ],
+        "initial_directory_order": [
+          "_srv.json",
+          "browser.json"
+        ],
+        "stages": [
+          {
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": \"updated::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              }
+            ],
+            "directory_order": [
+              "_srv.json",
+              "browser.json"
+            ]
+          },
+          {
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"pid\": 123}"
+              }
+            ],
+            "directory_order": [
+              "_srv.json",
+              "browser.json"
+            ]
+          },
+          {
+            "files": [
+              {
+                "name": "_srv.json",
+                "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+              },
+              {
+                "name": "browser.json",
+                "text": "{\"chave\": \"nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+              }
+            ],
+            "directory_order": [
+              "_srv.json",
+              "browser.json"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "outcomes": [
+          {
+            "t": "layout",
+            "modo": "mobile",
+            "resposta": "layout: mobile"
+          },
+          {
+            "t": "erro",
+            "m": "esta sessão não tem navegador aberto"
+          },
+          {
+            "t": "layout",
+            "modo": "mobile",
+            "resposta": "layout: mobile"
+          }
+        ],
+        "requests": [
+          {
+            "method": "POST",
+            "path": "/cmd",
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "content_type": "application/json",
+            "body": {
+              "chave": "updated::nav-contract",
+              "verbo": "layout",
+              "args": [
+                "mobile"
+              ]
+            }
+          },
+          {
+            "method": "POST",
+            "path": "/cmd",
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "content_type": "application/json",
+            "body": {
+              "chave": "nav-contract",
+              "verbo": "layout",
+              "args": [
+                "mobile"
+              ]
+            }
+          }
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "name": "cmd_default_read_timeout_45_seconds",
+      "ids": [
+        "NB010",
+        "NB013",
+        "NR015"
+      ],
+      "kind": "timeout",
+      "inputs": {
+        "initial_files": [
+          {
+            "name": "_srv.json",
+            "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+          },
+          {
+            "name": "browser.json",
+            "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+          }
+        ],
+        "initial_directory_order": [
+          "_srv.json",
+          "browser.json"
+        ],
+        "files": [
+          {
+            "name": "_srv.json",
+            "text": "{\"porta\": \"$CONTROLLER_PORT\", \"pid\": 123, \"token\": \"remote-browser-contract-desktop\"}"
+          },
+          {
+            "name": "browser.json",
+            "text": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://native.test/original\"}"
+          }
+        ],
+        "directory_order": [
+          "_srv.json",
+          "browser.json"
+        ],
+        "deadline_seconds": 45.0
+      },
+      "expected": {
+        "outcomes": [
+          {
+            "t": "erro",
+            "m": "o app desktop não respondeu: timed out"
+          }
+        ],
+        "requests": [
+          {
+            "method": "POST",
+            "path": "/cmd",
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "content_type": "application/json",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": [
+                "mobile"
+              ]
+            }
+          }
+        ],
+        "accepted_connections": 1,
+        "elapsed_seconds": 45.00450058301794,
+        "warnings": []
+      }
+    }
+  ]
+}

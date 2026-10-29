@@ -48,11 +48,11 @@ def ordinary_files(value=None):
 
 def warning_files():
     # A ordem faz parte da entrada; outra enumeração deve interromper a prova.
-    return ordinary_files() + [
+    return [
         text_file("array.json", []), text_file("null.json", None), text_file("scalar.json", 7),
         {"name": "broken.json", "text": "{"}, {"name": "bytes.json", "bytes_hex": "ff"},
         {"name": "directory.json", "directory": True},
-    ]
+    ] + ordinary_files()
 
 
 def selection_cases():
@@ -63,8 +63,9 @@ def selection_cases():
         cases.append({"name": name, "ids": ids, "kind": "selection", "inputs": {"phases": phases or [phase]}})
 
     add("ws_directory_absent", ["NS002"], None)
-    add("ws_underscore_match_is_ignored", ["NS003"], ordinary_files() + [
+    add("ws_underscore_match_is_ignored", ["NS003"], [server_file(),
         text_file("_matching.json", browser(url="http://underscore.test/ignored")),
+        text_file("browser.json", browser()),
     ])
     add("ws_unreadable_and_non_objects_before_valid", ["NS004"], warning_files())
     for order in ("a_b", "b_a"):
@@ -75,8 +76,9 @@ def selection_cases():
     for label, key, session in [("number", 17, "17"), ("boolean", True, "True"), ("null", None, "None")]:
         add("ws_" + label + "_key", ["NS005", "NS008"], ordinary_files(browser(key)), session=session)
     for label, key in [("array", []), ("object", {}), ("false", False)]:
-        add("ws_" + label + "_key_before_valid", ["NS005"], ordinary_files() + [
+        add("ws_" + label + "_key_before_valid", ["NS005"], [server_file(),
             text_file("nontext.json", browser(key)),
+            text_file("browser.json", browser()),
         ])
     missing_key = browser()
     del missing_key["chave"]
@@ -237,6 +239,7 @@ async def capture(root):
     isolation = Isolation(root)
     sys.path.insert(0, str(root / "reference/backend"))
     from fastapi import FastAPI, Request, WebSocket
+    globals().update(Request=Request, WebSocket=WebSocket)
     from starlette.websockets import WebSocketDisconnect
     import websockets
     from app import auth, navshell, navsock
@@ -323,6 +326,9 @@ async def capture(root):
     async def command(request: Request):
         return await current.command(request)
 
+    assert all(route.dependant.websocket_param_name == "ws" for route in app.routes
+               if hasattr(route, "dependant") and "nav-remoto" in route.path), "a rota precisa receber o WebSocket real"
+
     def seed(name):
         path = root / "home/.hangar/claude-headless" / (name + ".json")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -364,7 +370,8 @@ async def capture(root):
                         ws, events = await open_ready(port, phase["session"])
                     except websockets.exceptions.InvalidStatus as error:
                         observed = {"status": error.response.status_code, "body_hex": bytes(error.response.body).hex(), "events": []}
-                        await current.finish(0)
+                        if current.finished:
+                            await current.finish(0)
                     else:
                         await finish(ws, current)
                         observed = {"status": ws.response.status_code, "body_hex": None, "events": events}
@@ -383,6 +390,11 @@ async def capture(root):
                 initial_files = ordinary_files()
                 write_files(nav, initial_files, port)
                 initial_order = directory_order(nav)
+                assert navsock.settings.auth_token == TOKEN, "token sintético divergente no original"
+                assert scope["_session_exists"](NAME), "a sessão de ensaio desapareceu antes do comando"
+                selected = navsock.alvo_da_sessao(NAME, exige_alvo=False)
+                assert selected is not None, ("o sidecar normal não foi encontrado", snapshot(nav))
+                assert navsock._conexao(selected) is not None, ("controlador normal indisponível", snapshot(nav))
                 ws, events = await open_ready(port)
                 outcomes = []
                 inputs = []
@@ -476,7 +488,7 @@ def main():
         return
     if args.output is None:
         parser.error("--output é obrigatório; nenhuma referência é substituída implicitamente")
-    with tempfile.TemporaryDirectory(prefix="hangar-url-gaps-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="hangar-url-gaps-") as temporary:
         root = Path(temporary)
         for name in ("home", "workspace", "reference", "tmp", "bin"):
             (root / name).mkdir()
@@ -486,6 +498,7 @@ def main():
             bundle.extractall(root / "reference", filter="data")
         env = clean_environment(root)
         env.update(CP_AUTH_TOKEN="remote-browser-contract-owner", TMPDIR=str(root / "tmp"), PATH=str(root / "bin"))
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, os.environ.get("PYTHONPATH", "").split(os.pathsep)))
         child = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--capture", str(root)],
                                cwd=root / "workspace", env=env, capture_output=True, timeout=240)
         blocked_path = root / "blocked-attempts.jsonl"

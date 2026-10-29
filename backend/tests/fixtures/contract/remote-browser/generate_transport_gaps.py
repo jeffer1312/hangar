@@ -19,6 +19,7 @@ import tarfile
 import tempfile
 import threading
 import time
+import traceback
 import weakref
 from urllib.parse import parse_qs, urlsplit
 
@@ -153,6 +154,15 @@ async def wait_events(events):
     results = await asyncio.gather(*(asyncio.wait_for(event.wait(), 5) for event in events), return_exceptions=True)
     errors = [result for result in results if isinstance(result, BaseException)]
     if errors:
+        for task in asyncio.all_tasks():
+            if not task.done():
+                print(f"tarefa pendente: {task.get_name()} {task.get_coro()}", file=sys.stderr)
+                current = task.get_coro()
+                while current is not None:
+                    frame = getattr(current, "cr_frame", None) or getattr(current, "gi_frame", None)
+                    if frame is not None:
+                        print(f"  aguardando {frame.f_code.co_filename}:{frame.f_lineno} {frame.f_code.co_name}", file=sys.stderr)
+                    current = getattr(current, "cr_await", None) or getattr(current, "gi_yieldfrom", None)
         raise BaseExceptionGroup("receptores CDP não terminaram", errors)
 
 
@@ -213,6 +223,7 @@ class Desktop:
         self.closed.append(asyncio.Event())
         self.cdp_closes.append(None)
         self.keys.append(ws.query_params.get("chave"))
+        pending_writes = set()
         try:
             while True:
                 message = json.loads(await ws.receive_text())
@@ -231,7 +242,10 @@ class Desktop:
                     response = json.dumps({"id": message["id"], "result": {}, "padding": ""}, separators=(",", ":"))
                     response = response[:-2] + "x" * (self.inputs["response_bytes"] - len(response)) + '"}'
                     assert len(response.encode()) == self.inputs["response_bytes"]
-                    await ws.send_text(response)
+                    if self.inputs["response_bytes"] > LIMIT:
+                        pending_writes.add(asyncio.create_task(ws.send_text(response)))
+                    else:
+                        await ws.send_text(response)
                 else:
                     await ws.send_text(json.dumps({"id": message["id"], "result": result}))
                 if method == "Page.startScreencast":
@@ -244,6 +258,16 @@ class Desktop:
                 raise
             self.cdp_closes[peer] = {"code": error.code, "reason": error.reason or ""}
         finally:
+            for task in pending_writes:
+                if not task.done():
+                    task.cancel()
+            if pending_writes:
+                results = await asyncio.gather(*pending_writes, return_exceptions=True)
+                errors = [error for error in results if isinstance(error, BaseException)
+                          and not isinstance(error, (asyncio.CancelledError, ConnectionError))]
+                if errors:
+                    self.closed[peer].set()
+                    raise BaseExceptionGroup("envio CDP de ensaio falhou", errors)
             self.closed[peer].set()
             await self.notify()
 
@@ -425,11 +449,13 @@ async def public_cases_owned(root, measured, resources):
     @app.websocket("/api/sessions/{name}/nav-remoto")
     async def remote(ws: WebSocket, name: str):
         task = asyncio.current_task()
+        task.set_name("original-viewer-handler")
         handlers.append(task)
         await navsock.nav_ws(ws, name, lambda candidate: candidate == NAME)
 
     @app.websocket("/cdp")
     async def cdp(ws: WebSocket):
+        asyncio.current_task().set_name("owned-cdp-handler")
         await current.cdp(ws)
 
     started = asyncio.Event()
@@ -443,7 +469,8 @@ async def public_cases_owned(root, measured, resources):
     resources.add("socket HTTP público", listener.close, 40)
     listener.bind(("127.0.0.1", 0))
     port = listener.getsockname()[1]
-    probe = Probe(uvicorn.Config(app, log_level="critical", lifespan="off", ws="websockets-sansio", timeout_graceful_shutdown=3))
+    probe = Probe(uvicorn.Config(app, log_level="critical", lifespan="off", ws="websockets-sansio",
+                                 ws_per_message_deflate=False, timeout_graceful_shutdown=3))
     serving = asyncio.create_task(probe.serve(sockets=[listener]))
     resources.add("sinal de parada HTTP", lambda: setattr(probe, "should_exit", True), 0)
     resources.add("tarefa HTTP pública", lambda: finish_tasks([serving], 5), 20)
@@ -471,8 +498,13 @@ async def public_cases_owned(root, measured, resources):
         ("cdp_response_exactly_32mib", {"response_bytes": LIMIT}),
         ("cdp_response_over_32mib", {"response_bytes": LIMIT + 1}),
     ] + special_inputs() + [("registered_restore_continues_after_viewer_exit", {"gate_at": 4})]
+    selected = json.loads(os.environ.get("HANGAR_GAP_CASES", "[]"))
+    if selected:
+        plans = [(name, inputs) for name, inputs in plans if name in selected]
+        assert {name for name, _ in plans} == set(selected), "caso de captura não encontrado"
     try:
         for name, inputs in plans:
+            print(f"capturando {name}", file=sys.stderr, flush=True)
             navsock._imposto.clear()
             navsock._travas.clear()
             logs.rows.clear()
@@ -651,6 +683,7 @@ async def public_cases_owned(root, measured, resources):
             observed = copy.deepcopy(desktop.result(events, logs, clients))
             result.append({"name": name, "inputs": inputs, "expected_encoded" if inputs.get("encoded") else "expected": encoded(observed) if inputs.get("encoded") else observed,
                            "observations": encoded(observations) if inputs.get("encoded") else observations})
+            print(f"concluído {name}", file=sys.stderr, flush=True)
     finally:
         await resources.finish(sys.exception())
     return result
@@ -804,19 +837,21 @@ async def slow_discovery_owned(resources):
 async def capture(root):
     measured = json.loads((HERE / "chromium.json").read_text())
     public = await public_cases(root, measured)
-    cdp = await cdp_cases()
-    discovery = await slow_discovery()
+    partial = json.loads(os.environ.get("HANGAR_GAP_CASES", "[]"))
+    cdp = {} if partial else await cdp_cases()
+    discovery = {} if partial else await slow_discovery()
     await asyncio.sleep(0)
     remaining = [task for task in asyncio.all_tasks() if task is not asyncio.current_task() and not task.done()]
     if remaining:
         raise AssertionError(f"tarefas sobreviventes: {[task.get_name() for task in remaining]}")
-    return {"public": public, "cdp": cdp, "slow_discovery": discovery}
+    return {"public": public, "cdp": cdp, "slow_discovery": discovery, "partial_cases": partial}
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--child", type=Path)
     parser.add_argument("--output", type=Path, default=HERE / "transport-gaps.json")
+    parser.add_argument("--case", action="append", default=[])
     args = parser.parse_args()
     if args.child:
         assert Path.home() == args.child / "home"
@@ -856,6 +891,7 @@ def main():
                "PYTHONPATH": os.pathsep.join([str(root / "backend"), *filter(None, os.environ.get("PYTHONPATH", "").split(os.pathsep))]),
                "TMPDIR": str(root / "tmp"), "PYTHONDONTWRITEBYTECODE": "1",
                "NO_PROXY": "127.0.0.1,localhost", "PYTHONNOUSERSITE": "1"}
+        env["HANGAR_GAP_CASES"] = json.dumps(args.case)
         subprocess.run([sys.executable, str(Path(__file__).resolve()), "--child", str(root)],
                        cwd=root, env=env, timeout=180, check=True)
         observed = json.loads((root / "result.json").read_text())
@@ -865,6 +901,7 @@ def main():
               "generator": "backend/.venv/bin/python backend/tests/fixtures/contract/remote-browser/generate_transport_gaps.py",
               "python_version": sys.version.split()[0], "websockets_version": __import__("websockets").__version__,
               "platform": sys.platform, "isolation": observed.pop("isolation_evidence"),
+              "cdp_peer_extensions": [],
               "comparison": {"complete_fields": ["expected", "expected_encoded"],
                              "measured_fields": ["public[].observations.burst_seconds", "public[].observations.before_rate_boundary_seconds", "public[].observations.after_rate_boundary_seconds", "public[].observations.after_screencast_seconds", "cdp.closed_waiters.elapsed_seconds"],
                              "burst_seconds": [0, 1 / 24], "after_screencast_seconds": [1.4, 2.5],
