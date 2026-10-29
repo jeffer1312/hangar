@@ -111,6 +111,11 @@ const REPORT_TEXT_MAX: usize = 2000;
 /// Altura da lista "Últimos eventos": a mesma no PWA e no Expo.
 const DIARY_LINES_MAX: f32 = 420.;
 
+/// A roda fica na lista quando ela transborda e ainda rola nessa direção (deslocamento entre `-max` e 0).
+fn lines_take_wheel(before: f32, delta: f32, max: f32) -> bool {
+    max > 0. && (delta > 0. && before < 0. || delta < 0. && before > -max)
+}
+
 /// Relatório de diagnóstico (`POST /api/diag/report`), um por máquina: o envio em curso ou o desfecho do último.
 /// `code`: o da primeira máquina que deu certo, que junta as outras; `missed`: as que não foram, com o rótulo.
 #[derive(Clone, Debug, PartialEq)]
@@ -128,11 +133,11 @@ fn report_next(report: Option<&Report>, targets: &[String]) -> Next {
     let Some(Report::Done { code, missed, ids, token, .. }) = report else { return Next::Send };
     if ids.len() != targets.len() || targets.iter().any(|t| !ids.contains(t)) { return Next::Send; }
     if missed.iter().any(|(_, _, o)| matches!(o, Outcome::Failed { retry: true, .. })) {
-        // Com código e sem assinatura, as que faltam não entram nele: só um envio novo.
-        return if code.is_some() && token.is_none() { Next::Send } else { Next::Resend };
+        // Com código e sem assinatura, as que faltam não entram nele, e outro envio também não as juntaria.
+        return if code.is_some() && token.is_none() { Next::Nothing } else { Next::Resend };
     }
-    // Expirado ou não juntado pelo receptor: um envio novo pode juntar.
-    if missed.iter().any(|(_, _, o)| matches!(o, Outcome::Failed { code, .. } if code == "diag_report_group_unknown" || code == UNGROUPED)) { Next::Send } else { Next::Nothing }
+    // Expirado: um envio novo junta.
+    if missed.iter().any(|(_, _, o)| matches!(o, Outcome::Failed { code, .. } if code == "diag_report_group_unknown")) { Next::Send } else { Next::Nothing }
 }
 
 /// O receptor não juntou a máquina ao código do envio; o servidor dela está bem.
@@ -940,7 +945,16 @@ impl Hangar {
             // A rolagem da GPUI não para a roda: sem o stop, a página rolava junto e a lista fugia do cursor.
             // O ouvinte roda depois da rolagem da própria lista e antes da página.
             (Some(Ok(d)), _) if !d.lines.is_empty() => div().id("diary-lines").max_h(px(DIARY_LINES_MAX)).overflow_y_scroll().track_scroll(&self.device.diary_scroll)
-                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                .on_scroll_wheel({
+                    let handle = self.device.diary_scroll.clone();
+                    move |event, window, cx| {
+                        // A lista já somou a roda ao deslocamento (sem limite); a página só fica parada quando a
+                        // lista tinha para onde ir nessa direção.
+                        let delta = event.delta.pixel_delta(window.line_height()).y;
+                        let before = handle.offset().y - delta;
+                        if lines_take_wheel(f32::from(before), f32::from(delta), f32::from(handle.max_offset().y)) { cx.stop_propagation(); }
+                    }
+                })
                 .py(px(4.)).font_family(theme::MONO).text_size(px(12.))
                 .children(d.lines.iter().enumerate().map(|(n, line)| div().mt(px(if n == 0 { 0. } else { -1. })).border_t_1().border_color(theme::border())
                     .px_3().py(px(5.)).flex().gap(px(10.)).items_start()
@@ -1411,6 +1425,16 @@ mod tests {
     }
 
     #[test]
+    fn the_diary_list_keeps_the_wheel_only_while_it_can_scroll() {
+        use super::lines_take_wheel;
+        assert!(!lines_take_wheel(0., -40., 0.), "lista que não transborda solta a roda para a página");
+        assert!(lines_take_wheel(0., -40., 300.), "no topo, descendo: rola a lista");
+        assert!(!lines_take_wheel(0., 40., 300.), "no topo, subindo: a página sobe");
+        assert!(lines_take_wheel(-300., 40., 300.), "no fim, subindo: rola a lista");
+        assert!(!lines_take_wheel(-300., -40., 300.), "no fim, descendo: a página desce");
+    }
+
+    #[test]
     fn the_button_follows_the_choice_and_the_signature_like_the_core() {
         use super::{Next, Outcome, Report, report_next};
         let ids = |list: &[&str]| list.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
@@ -1423,8 +1447,8 @@ mod tests {
         assert_eq!(report_next(Some(&only_pc), &ids(&["pc"])), Next::Resend, "sem código, repete as que falharam");
         assert_eq!(report_next(Some(&only_pc), &ids(&["pc", "vm"])), Next::Send, "\"só esta\" falhou e a pessoa marcou todas");
         assert_eq!(report_next(Some(&done(Some("aaaa2222"), vec![fail("network", true)], Some("t"))), &ids(&["pc", "vm"])), Next::Resend);
-        assert_eq!(report_next(Some(&done(Some("aaaa2222"), vec![fail("network", true)], None)), &ids(&["pc", "vm"])), Next::Send, "sem assinatura: envio novo");
-        assert_eq!(report_next(Some(&done(Some("aaaa2222"), vec![fail("diag_report_ungrouped", false)], None)), &ids(&["pc", "vm"])), Next::Send, "o receptor não juntou");
+        assert_eq!(report_next(Some(&done(Some("aaaa2222"), vec![fail("network", true)], None)), &ids(&["pc", "vm"])), Next::Nothing, "sem assinatura");
+        assert_eq!(report_next(Some(&done(Some("aaaa2222"), vec![fail("diag_report_ungrouped", false)], None)), &ids(&["pc", "vm"])), Next::Nothing, "o receptor não juntou");
         assert_eq!(report_next(Some(&done(Some("aaaa2222"), vec![fail("diag_report_group_unknown", false)], Some("t"))), &ids(&["pc", "vm"])), Next::Send);
         assert_eq!(report_next(Some(&done(None, vec![fail("HTTP 404", false)], None)), &ids(&["pc", "vm"])), Next::Nothing);
     }

@@ -562,10 +562,11 @@ export function diagReportNext(previous: DiagReportAllResult | null, targets: Se
   // A escolha mudou depois do envio: repetir mandaria só às antigas.
   if (targets.length !== sent.size || targets.some((t) => !sent.has(t.id))) return 'send';
   const missed = previous.results.filter((r) => !r.result.ok);
-  // Com código e sem assinatura, as que faltam não entram nele: só um envio novo.
-  if (missed.some((r) => diagReportRetryable(r.result))) return previous.code !== null && previous.group === null ? 'send' : 'resend';
-  // Expirado ou não juntado pelo receptor: repetir no mesmo envio não adianta, um envio novo pode juntar.
-  return missed.some((r) => !r.result.ok && (r.result.kind === 'expired' || r.result.kind === 'ungrouped')) ? 'send' : 'none';
+  // Com código e sem assinatura, as que faltam não entram nele; outro envio também não as juntaria (o receptor
+  // sem assinatura é permanente) e só subiria outro relatório do mesmo aparelho.
+  if (missed.some((r) => diagReportRetryable(r.result))) return previous.code !== null && previous.group === null ? 'none' : 'resend';
+  // Expirado: repetir no mesmo envio não adianta, um envio novo junta.
+  return missed.some((r) => !r.result.ok && r.result.kind === 'expired') ? 'send' : 'none';
 }
 
 /** Reenvia só às máquinas que falharam num envio, no mesmo código, e junta ao resultado dele. */
@@ -3687,7 +3688,13 @@ export function getDiagResumo(): Promise<ResumoDiag> {
 }
 
 /** Baixa o diário como arquivo. Sai da máquina só aqui, e por ação de quem usa. */
-export async function baixarDiag(): Promise<Blob> {
+/** Sem prazo fixo: o diário inteiro pode ter vários MB e vir devagar pela VPN. `server`: o do seletor; sem ele, o ativo. */
+export async function baixarDiag(server?: Server): Promise<Blob> {
+  if (server) {
+    const res = await apiFetchRes('/api/diag/arquivo', {}, server);
+    if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
+    return res.blob();
+  }
   const res = await fetch(`${apiEnv().getBaseUrl()}/api/diag/arquivo`, { headers: authHeaders() });
   if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
   return res.blob();

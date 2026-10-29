@@ -128,22 +128,20 @@ fn make_symlink(target: &Path, link: &Path) -> io::Result<()> {
     }
 }
 
-/// O processo `pid` vivo, e se ele roda nesta conta (`CLAUDE_CONFIG_DIR`). `Err`: não deu para saber.
-fn account_process(pid: i64, dir: &Path) -> std::result::Result<Option<bool>, ()> {
-    use crate::list::procs::ProcessView;
-    // Só `NotFound` é processo encerrado: leitura que falha por outro motivo pode ser um vivo, e adia.
-    match crate::list::procs::SystemProcs::default().env_var(pid, "CLAUDE_CONFIG_DIR") {
-        Ok(config) => Ok(Some(config.is_some_and(|config| same_dir(Path::new(&config), dir)))),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(_) => Err(()),
-    }
-}
+/// De quem é o processo dono de um registro em `sessions`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Owner { Mine, Other, Gone, Unknown }
 
-fn same_dir(a: &Path, b: &Path) -> bool {
-    match (fs::canonicalize(a), fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ if cfg!(windows) => a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()),
-        _ => a == b,
+/// A conta do processo pelo `CLAUDE_CONFIG_DIR` dele, numa leitura dos processos só (`procs`). Processo de
+/// outro dono (ambiente negado) não é o Claude desta conta; só a falha sem motivo conhecido fica em dúvida.
+fn account_process(procs: &dyn crate::list::procs::ProcessView, pid: i64, dir: &Path) -> Owner {
+    let mine = super::catalog::resolved(dir);
+    match procs.env_var(pid, "CLAUDE_CONFIG_DIR") {
+        Ok(Some(config)) if super::catalog::resolved(Path::new(&config)) == mine => Owner::Mine,
+        Ok(_) => Owner::Other,
+        Err(error) if crate::list::procs::vanished(&error) => Owner::Gone,
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => Owner::Other,
+        Err(_) => Owner::Unknown,
     }
 }
 
@@ -153,62 +151,97 @@ fn record_pid(name: &str) -> Option<i64> {
     (rest == "json" || rest.ends_with(".key")).then(|| pid.parse().ok()).flatten()
 }
 
-/// Troca o atalho antigo `sessions` -> compartilhado por uma pasta da conta sem tirar o registro do Claude que
-/// já roda nela: o Claude só atualiza o registro que existe e não o recria. A pasta nova nasce ao lado com os
-/// registros dos processos vivos desta conta, e só então o atalho sai. Processo vivo cuja conta não se lê
-/// adia a troca (fica o atalho). Nada do compartilhado é apagado.
-fn unlink_sessions(link: &Path, shared: &Path, owner: &dyn Fn(i64) -> std::result::Result<Option<bool>, ()>, event: &mut Value) -> Result<()> {
-    // No diário só o pid e o motivo: o nome do `.key` deriva da senha do canal do Claude.
-    let records = |copied: &mut Vec<i64>, skipped: &mut Vec<String>, into: &Path| -> Result<bool> {
+/// O que a troca do atalho `sessions` copiou e pulou (pid e motivo; o nome do `.key` deriva da senha do canal
+/// do Claude e não vai ao diário).
+#[derive(Default)]
+struct Moved { copied: Vec<i64>, skipped: Vec<String> }
+
+impl Moved {
+    fn skip(&mut self, pid: i64, reason: &str) {
+        let line = format!("{pid}: {reason}");
+        if !self.skipped.contains(&line) { self.skipped.push(line); }
+    }
+    /// Copia para `into` os registros dos processos vivos desta conta. `strict` (antes da troca): processo em
+    /// dúvida ou cópia que falha param tudo, sem nada perdido. Depois da troca, copia o que der e anota o resto.
+    fn copy(&mut self, shared: &Path, into: &Path, owner: &dyn Fn(i64) -> Owner, strict: bool) -> std::result::Result<bool, ConfigError> {
         for entry in fs::read_dir(shared).at(shared)? {
             let entry = entry.at(shared)?;
             let name = entry.file_name().to_string_lossy().into_owned();
             let Some(pid) = record_pid(&name) else { continue };
-            let mut skip = |reason: &str| { let line = format!("{pid}: {reason}"); if !skipped.contains(&line) { skipped.push(line); } };
             match owner(pid) {
-                Ok(Some(true)) if fs::symlink_metadata(into.join(&name)).is_err() => {
-                    copy_file(&entry.path(), &into.join(&name))?;
-                    if !copied.contains(&pid) { copied.push(pid); }
-                }
-                Ok(Some(true)) => {}
-                Ok(Some(false)) => skip("outra conta"),
-                Ok(None) => skip("processo encerrado"),
-                Err(()) => { skip("conta do processo ilegível"); return Ok(false); }
+                Owner::Mine if fs::symlink_metadata(into.join(&name)).is_ok() => {}
+                // `fs::copy` leva o modo da origem: o `.key` do canal fica 0600 como o Claude o gravou.
+                Owner::Mine => match fs::copy(entry.path(), into.join(&name)) {
+                    Ok(_) => if !self.copied.contains(&pid) { self.copied.push(pid) },
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => self.skip(pid, "encerrado durante a cópia"),
+                    Err(error) if strict => return Err(error).between(&entry.path(), &into.join(&name)),
+                    Err(error) => self.skip(pid, &format!("cópia falhou: {:?}", error.kind())),
+                },
+                Owner::Other => self.skip(pid, "outra conta"),
+                Owner::Gone => self.skip(pid, "processo encerrado"),
+                Owner::Unknown => { self.skip(pid, "conta do processo ilegível"); if strict { return Ok(false); } }
             }
         }
         Ok(true)
+    }
+}
+
+/// Troca o atalho antigo `sessions` -> compartilhado por uma pasta da conta sem tirar o registro do Claude que
+/// já roda nela: o Claude só atualiza o registro que existe e não o recria. A pasta nova nasce ao lado (com o
+/// modo da compartilhada) e recebe os registros dos processos vivos desta conta; o atalho sai de lado e a pasta
+/// entra no lugar, e só então o atalho é apagado. Processo vivo em dúvida adia. Nada do compartilhado é apagado,
+/// e a cópia só sai depois de o caminho estar certo.
+fn unlink_sessions(link: &Path, shared: &Path, owner: &dyn Fn(i64) -> Owner, event: &mut Value) -> Result<()> {
+    let mut moved = Moved::default();
+    let finish = |event: &mut Value, moved: &mut Moved, state: &str| {
+        moved.skipped.sort();
+        event["nivel"] = json!(match state { "swapped" => "ok", "no_link" => "erro", _ => "aviso" });
+        event["state"] = json!(state);
+        event["copied"] = json!(moved.copied);
+        event["skipped"] = json!(moved.skipped);
+        tracing::info!(link = %link.display(), state, copied = ?moved.copied, skipped = ?moved.skipped, "conta: atalho runtime 'sessions'");
     };
-    let (mut copied, mut skipped) = (Vec::new(), Vec::new());
     let staging = sibling(link);
     fs::create_dir(&staging).at(&staging)?;
-    let finish = |event: &mut Value, copied: &[i64], skipped: &[String], state: &str| {
-        event["estado"] = json!(state);
-        event["copiados"] = json!(copied);
-        event["pulados"] = json!(skipped);
-        tracing::info!(link = %link.display(), state, ?copied, ?skipped, "conta: atalho runtime 'sessions'");
-    };
-    let ready = records(&mut copied, &mut skipped, &staging);
+    if let Ok(meta) = fs::metadata(shared) { let _ = fs::set_permissions(&staging, meta.permissions()); }
+    let ready = moved.copy(shared, &staging, owner, true);
     if !matches!(ready, Ok(true)) {
         let _ = fs::remove_dir_all(&staging);
-        finish(event, &copied, &skipped, "adiado");
+        finish(event, &mut moved, "deferred");
         return ready.map(|_| ());
     }
-    if let Err(error) = unlink(link) {
+    // O atalho sai de lado (o alvo dele fica intocado) e a pasta entra: dois renomes, sem cópia no meio.
+    let parked = sibling(link);
+    if let Err(error) = fs::rename(link, &parked) {
         let _ = fs::remove_dir_all(&staging);
-        finish(event, &copied, &skipped, "adiado");
-        return Err(error).at(link);
+        finish(event, &mut moved, "deferred");
+        return Err(error).between(link, &parked);
     }
     if let Err(error) = fs::rename(&staging, link) {
-        // Sem a pasta no lugar, o atalho volta: o Claude vivo segue achando o registro do outro lado.
-        let restored = make_symlink(shared, link);
+        if fs::rename(&parked, link).is_ok() {
+            // O atalho voltou; as cópias eram só cópias.
+            let _ = fs::remove_dir_all(&staging);
+            finish(event, &mut moved, "undone");
+            return Err(error).between(&staging, link);
+        }
+        if !is_dir(link) || is_symlink(link) {
+            // Nem pasta nem atalho no lugar: cópias e atalho ficam ao lado para conferir à mão.
+            finish(event, &mut moved, "no_link");
+            return Err(error).between(&staging, link);
+        }
+        // Um Claude que nasceu no intervalo criou a pasta: as cópias entram nela.
+        moved.copy(&staging, link, &|_| Owner::Mine, false)?;
         let _ = fs::remove_dir_all(&staging);
-        finish(event, &copied, &skipped, if restored.is_ok() { "desfeito" } else { "sem_atalho" });
-        return Err(error).between(&staging, link);
     }
-    // Quem nasceu durante a cópia gravou pelo atalho: entra agora.
-    let late = records(&mut copied, &mut skipped, link);
-    finish(event, &copied, &skipped, "trocado");
-    late.map(|_| ())
+    if let Err(error) = unlink(&parked) {
+        tracing::warn!(link = %parked.display(), kind = ?error.kind(), "conta: o atalho antigo 'sessions' ficou ao lado");
+    }
+    // Quem nasceu durante a cópia gravou pelo atalho: entra agora, sem desfazer a troca.
+    if let Err(error) = moved.copy(shared, link, owner, false) {
+        tracing::warn!(link = %link.display(), %error, "conta: registros novos não copiados depois da troca");
+    }
+    finish(event, &mut moved, "swapped");
+    Ok(())
 }
 
 /// `shutil.copyfile`: os bytes, sem o modo de origem; destino que é link é seguido.
@@ -546,8 +579,10 @@ fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut V
             // Atalho de runtime de versão antiga: senão a conta segue gravando o runtime dela no compartilhado.
             if !points_to(&destination, &target) { continue; }
             if text == "sessions" {
-                let mut event = event("conta.reconciliar.sessoes", "ok", op);
-                let swapped = unlink_sessions(&destination, &target, &|pid| account_process(pid, dir), &mut event);
+                let mut event = event("conta.reconciliar.sessions_link", "ok", op);
+                // Uma leitura dos processos para a troca inteira: no Windows cada leitura nova é uma captura.
+                let procs = crate::list::procs::SystemProcs::default();
+                let swapped = unlink_sessions(&destination, &target, &|pid| account_process(&procs, pid, dir), &mut event);
                 diary.push(event);
                 swapped?;
             } else {
@@ -1113,34 +1148,58 @@ mod sessions_link {
         (root, shared, account.join("sessions"))
     }
 
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<_> = fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        names.sort();
+        names
+    }
+
     #[test]
     fn the_live_claude_of_the_account_keeps_its_record_when_the_old_link_goes() {
         let (_root, shared, link) = layout();
-        let owner = |pid: i64| Ok(match pid { 10 => Some(true), 20 => Some(false), _ => None });
+        #[cfg(unix)]
+        { use std::os::unix::fs::PermissionsExt;
+          fs::set_permissions(&shared, fs::Permissions::from_mode(0o700)).unwrap();
+          fs::set_permissions(shared.join("10.abc.key"), fs::Permissions::from_mode(0o600)).unwrap(); }
+        let owner = |pid: i64| match pid { 10 => Owner::Mine, 20 => Owner::Other, _ => Owner::Gone };
         let mut event = json!({});
         unlink_sessions(&link, &shared, &owner, &mut event).unwrap();
         assert!(!is_symlink(&link) && is_dir(&link), "a conta tem pasta própria");
-        let mut names: Vec<_> = fs::read_dir(&link).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
-        names.sort();
-        assert_eq!(names, ["10.abc.key", "10.json"], "só os registros do processo vivo desta conta");
+        assert_eq!(names(&link), ["10.abc.key", "10.json"], "só os registros do processo vivo desta conta");
         assert_eq!(fs::read_dir(&shared).unwrap().count(), 5, "nada do compartilhado sai");
+        assert_eq!(names(link.parent().unwrap()), ["sessions"], "nem atalho antigo nem pasta provisória ficam ao lado");
+        #[cfg(unix)]
+        { use std::os::unix::fs::PermissionsExt;
+          let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+          assert_eq!((mode(&link), mode(&link.join("10.abc.key"))), (0o700, 0o600), "a chave do canal não fica legível a outro usuário"); }
         // O Claude vivo atualiza o registro no mesmo caminho de sempre.
         fs::write(link.join("10.json"), "busy").unwrap();
         assert_eq!(fs::read_to_string(link.join("10.json")).unwrap(), "busy");
-        assert_eq!((event["estado"].clone(), event["copiados"].clone()), (json!("trocado"), json!([10])));
-        assert_eq!(event["pulados"], json!(["20: outra conta", "30: processo encerrado"]));
+        assert_eq!((event["state"].clone(), event["nivel"].clone(), event["copied"].clone()), (json!("swapped"), json!("ok"), json!([10])));
+        assert_eq!(event["skipped"], json!(["20: outra conta", "30: processo encerrado"]));
     }
 
     #[test]
     fn an_unreadable_live_process_keeps_the_link() {
         let (_root, shared, link) = layout();
-        let owner = |pid: i64| if pid == 20 { Err(()) } else { Ok(Some(pid == 10)) };
+        let owner = |pid: i64| match pid { 20 => Owner::Unknown, 10 => Owner::Mine, _ => Owner::Gone };
         let mut event = json!({});
         unlink_sessions(&link, &shared, &owner, &mut event).unwrap();
         assert!(points_to(&link, &shared), "sem saber de quem é o processo, o atalho fica");
-        assert_eq!(event["estado"], json!("adiado"));
-        let parent = link.parent().unwrap();
-        assert_eq!(fs::read_dir(parent).unwrap().count(), 1, "a pasta provisória sai");
+        assert_eq!((event["state"].clone(), event["nivel"].clone()), (json!("deferred"), json!("aviso")));
+        assert_eq!(names(link.parent().unwrap()), ["sessions"], "a pasta provisória sai");
+    }
+
+    #[test]
+    fn a_record_gone_while_copying_is_skipped_and_the_swap_goes_on() {
+        let (_root, shared, link) = layout();
+        fs::remove_file(shared.join("10.abc.key")).unwrap();
+        // O dono 10 é desta conta, mas o Claude dele fechou e apagou o registro entre a leitura e a cópia.
+        let owner = |pid: i64| { if pid == 10 { let _ = fs::remove_file(shared.join("10.json")); } if pid == 10 { Owner::Mine } else { Owner::Gone } };
+        let mut event = json!({});
+        unlink_sessions(&link, &shared, &owner, &mut event).unwrap();
+        assert_eq!(event["state"], json!("swapped"));
+        assert!(event["skipped"].as_array().unwrap().contains(&json!("10: encerrado durante a cópia")), "{event}");
     }
 }
 

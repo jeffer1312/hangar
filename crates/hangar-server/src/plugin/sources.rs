@@ -88,7 +88,11 @@ pub fn permission_gate(app_present: bool, terminal_attached: Option<bool>, mode:
     PermissionGate { app_present, terminal_attached: terminal_attached.unwrap_or(true), mode_without_dialog }
 }
 
-pub struct NativeSources { state: Weak<AppState>, io: Arc<dyn TerminalIo> }
+pub struct NativeSources { state: Weak<AppState>, io: Arc<dyn TerminalIo>, refused_adoption: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> }
+
+/// O plugin repete o `/pull` a cada poucos segundos: a adoção que falhou não varre processos e pane de novo
+/// antes disto.
+const ADOPTION_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Sessão aberta fora do app não traz a chave do lançamento: o `whoami` entrega a chave do terminal, como na sem terminal.
 fn terminal_plugin_key(launched: Option<String>, terminal_key: &str) -> String {
@@ -96,7 +100,9 @@ fn terminal_plugin_key(launched: Option<String>, terminal_key: &str) -> String {
 }
 
 impl NativeSources {
-    pub fn new(state: &Arc<AppState>) -> Self { Self { state: Arc::downgrade(state), io: Arc::new(ProcessIo::default()) } }
+    pub fn new(state: &Arc<AppState>) -> Self {
+        Self { state: Arc::downgrade(state), io: Arc::new(ProcessIo::default()), refused_adoption: Default::default() }
+    }
     fn state(&self) -> Result<Arc<AppState>, ServiceError> { self.state.upgrade().ok_or(ServiceError("plugin_source_unbound")) }
 
     async fn identity(&self, name: &str) -> Result<Identity, ServiceError> {
@@ -174,21 +180,32 @@ impl Sources for NativeSources {
     }
     fn adopt<'a>(&'a self, name: &'a str, key: &'a str, conversation: &'a str) -> SourceFuture<'a, bool> {
         Box::pin(async move {
+            let now = std::time::Instant::now();
+            {
+                let mut refused = self.refused_adoption.lock().map_err(|_| ServiceError("plugin_source_unbound"))?;
+                refused.retain(|_, at| now.duration_since(*at) < ADOPTION_RETRY);
+                if refused.contains_key(name) { return Ok(false); }
+            }
             let state = self.state()?;
             let registry = state.state.runtime.get().ok_or(ServiceError("plugin_runtime_absent"))?;
             let claim = crate::runtime::claude_terminal::PluginClaim { key: key.to_owned(), conversation: conversation.to_owned() };
-            match registry.adopt_claude_by_plugin(name, claim).await {
-                Ok(adopted) => {
-                    if adopted { tracing::info!(session = %name, code = "plugin_adopted", "Claude com terminal adotado pela conversa do /pull do plugin"); }
-                    Ok(adopted)
-                }
+            let adopted = match registry.adopt_claude_by_plugin(name, claim).await {
+                Ok(adopted) => adopted,
                 Err(error) => {
                     if crate::warn_limit::allow(Some(name), &format!("plugin_adopt:{}", error.code)) {
                         tracing::warn!(session = %name, code = %error.code, "o /pull do plugin não adotou o Claude com terminal");
                     }
-                    Ok(false)
+                    false
                 }
+            };
+            let mut refused = self.refused_adoption.lock().map_err(|_| ServiceError("plugin_source_unbound"))?;
+            if adopted {
+                refused.remove(name);
+                tracing::info!(session = %name, code = "plugin_adopted", "Claude com terminal adotado pela conversa do /pull do plugin");
+            } else {
+                refused.insert(name.to_owned(), now);
             }
+            Ok(adopted)
         })
     }
     fn discovery(&self) -> SourceFuture<'_, Vec<Discovery>> {

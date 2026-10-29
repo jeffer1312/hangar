@@ -5,7 +5,7 @@
   //
   // O que o arquivo contém e o que NÃO contém está em backend/app/diag.py e em lib/diag.ts. O texto
   // aqui repete a parte que importa pra quem vai enviar: fica na máquina, e não guarda conversa.
-  import { getDiagSummaryForServer, getDiagFileForServer, type ResumoDiag, type LinhaDiag, type Server } from '@hangar/core';
+  import { getDiagSummaryForServer, baixarDiag, type ResumoDiag, type LinhaDiag, type Server } from '@hangar/core';
   import { fmtBytes, sendDiagReportAll, resendDiagReportMissed, diagReportMachines, diagReportNext, diagReportTargets, DIAG_REPORT_TEXT_MAX,
     type DiagReportAllResult, type DiagReportResult, type DiagReportScope } from '@hangar/core';
   import { listServers, onServersChanged } from '../../lib/auth';
@@ -98,10 +98,10 @@
             l.ms !== undefined && `${l.ms}ms`].filter(Boolean).join(' · ');
   }
 
-  async function carregar(alvo: Server) {
+  async function carregar(target: Server) {
     recarregando = true;
     try {
-      resumo = await getDiagSummaryForServer(alvo);
+      resumo = await getDiagSummaryForServer(target);
       erro = '';
     } catch (e) {
       // Backend mais velho que o app (rota ainda não existe) NÃO é erro pra quem lê: some o número
@@ -118,7 +118,7 @@
   async function baixar() {
     baixando = true; erro = '';
     try {
-      const blob = new Blob([await getDiagFileForServer(servidor)], { type: 'application/x-ndjson' });
+      const blob = await baixarDiag(servidor);
       // Download do próprio navegador, a partir de um Blob local — nada é enviado a lugar nenhum.
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

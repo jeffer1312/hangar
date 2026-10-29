@@ -71,10 +71,12 @@ struct Proven { agent: u32, config_dir: PathBuf, conversation: String, transcrip
 /// A conversa que o `/pull` do plugin informou, com a chave do token que o assina.
 pub struct PluginClaim { pub key: String, pub conversation: String }
 
-fn claim_holds(claim: &PluginClaim, plugin_key: Option<&str>, repl_sid: Option<&str>, transcript_exists: &dyn Fn(&str) -> bool) -> bool {
+/// A chave do token amarra o pedido ao processo do pane; o `--session-id` do argv é só a conversa com que ele
+/// nasceu, e depois de um `/clear` ou `/resume` é outra. Vale a do `/pull` com o transcript dela no projeto.
+fn claim_holds(claim: &PluginClaim, plugin_key: Option<&str>, transcript_exists: &dyn Fn(&str) -> bool) -> bool {
     let sid = claim.conversation.as_str();
     plugin_key == Some(claim.key.as_str()) && !sid.is_empty() && sid.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
-        && repl_sid.is_none_or(|repl| repl == sid) && transcript_exists(sid)
+        && transcript_exists(sid)
 }
 
 /// O agente Claude do pane e a conversa que ele roda. `Ok(None)`: o pane não é de uma conversa Claude
@@ -114,7 +116,7 @@ fn prove(panes: &[Pane], name: &str, claude_base: &Path, claim: Option<&PluginCl
     // Sem o registro nativo (o Claude não o recria), o `/pull` do plugin deste processo diz a conversa: a chave
     // do token é a do ambiente do agente, o transcript dela existe e o argumento do processo não a contradiz.
     let claimed = claim.filter(|claim| native.is_none()
-        && claim_holds(claim, plugin_key.as_deref(), row.repl_sid.as_deref(), &|sid| transcript_of(sid).is_file()));
+        && claim_holds(claim, plugin_key.as_deref(), &|sid| transcript_of(sid).is_file()));
     let (conversation, transcript) = match native.or_else(|| claimed.map(|claim| claim.conversation.clone())) {
         Some(sid) => {
             let transcript = transcript_of(&sid);
@@ -311,16 +313,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_plugin_claim_needs_the_agent_key_its_transcript_and_no_contradicting_argument() {
+    fn the_plugin_claim_needs_the_agent_key_and_its_transcript() {
         let claim = PluginClaim { key: "k".into(), conversation: "sid-1".into() };
         let exists = |sid: &str| sid == "sid-1";
-        assert!(claim_holds(&claim, Some("k"), None, &exists));
-        assert!(claim_holds(&claim, Some("k"), Some("sid-1"), &exists));
-        assert!(!claim_holds(&claim, Some("outra"), None, &exists), "token de outro processo");
-        assert!(!claim_holds(&claim, None, None, &exists), "Claude aberto sem a chave do Hangar");
-        assert!(!claim_holds(&claim, Some("k"), Some("sid-2"), &exists), "o --session-id diz outra conversa");
-        assert!(!claim_holds(&claim, Some("k"), None, &|_| false), "sem o transcript dela");
-        assert!(!claim_holds(&PluginClaim { key: "k".into(), conversation: "../x".into() }, Some("k"), None, &|_| true));
+        assert!(claim_holds(&claim, Some("k"), &exists));
+        // Nasceu com --session-id sid-0 e fez /clear: a conversa do /pull é a nova, com o transcript dela.
+        let cleared = PluginClaim { key: "k".into(), conversation: "sid-depois-do-clear".into() };
+        assert!(claim_holds(&cleared, Some("k"), &|sid| sid == "sid-depois-do-clear"));
+        assert!(!claim_holds(&claim, Some("outra"), &exists), "token de outro processo");
+        assert!(!claim_holds(&claim, None, &exists), "Claude aberto sem a chave do Hangar");
+        assert!(!claim_holds(&claim, Some("k"), &|_| false), "sem o transcript dela");
+        assert!(!claim_holds(&PluginClaim { key: "k".into(), conversation: "../x".into() }, Some("k"), &|_| true));
     }
 
     #[test]

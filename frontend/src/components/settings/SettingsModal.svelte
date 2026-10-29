@@ -19,7 +19,7 @@
   import ConfigIcone from './ConfigIcone.svelte';
   import BuscaConfig, { TITULO_TELA } from './BuscaConfig.svelte';
   import { criarConfigServidor } from '../../lib/serverConfig.svelte';
-  import { TELAS_DE_SERVIDOR, type TelaConfig } from '../../lib/configRoute';
+  import { TELAS_DE_SERVIDOR, convidadoLe, type TelaConfig } from '../../lib/configRoute';
   import { papelDo } from '../../lib/papel.svelte';
   import { fly, fade } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
@@ -130,7 +130,7 @@
   const convidado = $derived(papelDo(resolvedServer) === 'guest');
   const linhasVisiveis = $derived(convidado ? LINHAS.filter((l) => !l.servidor) : LINHAS);
   // Link direto para tela de servidor não pode abrir o que o backend recusa.
-  $effect(() => { if (convidado && (TELAS_DE_SERVIDOR.includes(tela) || tela === 'migration')) onIrPara('root'); });
+  $effect(() => { if (convidado && ((TELAS_DE_SERVIDOR.includes(tela) && !convidadoLe(tela)) || tela === 'migration')) onIrPara('root'); });
 
   // Troca de tela do modal: fly curto na direção da navegação (180ms ease-out, uso ocasional).
   // Entrar numa sub-tela vem da direita; voltar pra raiz vem da esquerda. Com reduced-motion

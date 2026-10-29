@@ -190,7 +190,7 @@
 </script>
 
 <script lang="ts">
-  import { TELAS_DE_SERVIDOR } from '../../lib/configRoute';
+  import { TELAS_DE_SERVIDOR, convidadoLe } from '../../lib/configRoute';
 
   interface Props {
     onIrPara: (t: TelaConfig) => void;
@@ -205,7 +205,7 @@
   let { onIrPara, semServidor = false, convidado = false, compacta = false }: Props = $props();
 
   let termo = $state('');
-  const achados = $derived(filtrar(termo).filter((a) => !convidado || !TELAS_DE_SERVIDOR.includes(a.entrada.tela)));
+  const achados = $derived(filtrar(termo).filter((a) => !convidado || !TELAS_DE_SERVIDOR.includes(a.entrada.tela) || convidadoLe(a.entrada.tela)));
 
   function abrir(tela: TelaConfig) {
     termo = '';

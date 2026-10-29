@@ -11,7 +11,10 @@ export const TELAS_CONFIG: readonly TelaConfig[] = ['root', 'geral', 'aparencia'
 const RENOMEADAS: Record<string, TelaConfig> = { ditado: 'voz', servidores: 'maquinas', acesso: 'maquinas', motores: 'contas' };
 
 /** Telas que mexem NUM servidor — sem alvo resolvido elas nao podem abrir (ver App.svelte). */
-export const TELAS_DE_SERVIDOR: readonly TelaConfig[] = ['contas', 'notificacoes', 'anexos', 'atalhos', 'avancado', 'orquestracao', 'voz', 'harnesses', 'sincronizacao', 'shared-config', 'jev', 'computer'];
+export const TELAS_DE_SERVIDOR: readonly TelaConfig[] = ['contas', 'notificacoes', 'anexos', 'atalhos', 'avancado', 'orquestracao', 'voz', 'harnesses', 'sincronizacao', 'shared-config', 'jev', 'computer', 'diario'];
+
+/** Do servidor, mas o convidado continua lendo: o diário dele não muda nada no servidor. */
+export const convidadoLe = (tela: TelaConfig): boolean => tela === 'diario';
 
 export interface RotaConfig {
   tela: TelaConfig;

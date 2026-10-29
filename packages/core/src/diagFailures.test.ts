@@ -252,9 +252,9 @@ describe('sendDiagReportAll', () => {
     expect(diagReportNext(onlyA, [serverA, serverB]), '"só esta" falhou e a pessoa marcou todas').toBe('send');
     const signed = { code: 'aaaa2222', group: { code: 'aaaa2222', token: TOKEN }, results: [okA, { server: serverB, result: fail('unreachable') }] };
     expect(diagReportNext(signed, [serverA, serverB])).toBe('resend');
-    expect(diagReportNext({ ...signed, group: null }, [serverA, serverB]), 'com código e sem assinatura: envio novo').toBe('send');
+    expect(diagReportNext({ ...signed, group: null }, [serverA, serverB]), 'com código e sem assinatura').toBe('none');
     const ungrouped = { ...signed, group: null, results: [okA, { server: serverB, result: { ok: false as const, code: 'diag_report_ungrouped', status: 0, kind: 'ungrouped' as const } }] };
-    expect(diagReportNext(ungrouped, [serverA, serverB]), 'o receptor não juntou: dá para mandar de novo').toBe('send');
+    expect(diagReportNext(ungrouped, [serverA, serverB]), 'o receptor não juntou: outro envio também não juntaria').toBe('none');
     const expired = { ...signed, results: [okA, { server: serverB, result: fail('expired') }] };
     expect(diagReportNext(expired, [serverA, serverB])).toBe('send');
     const unsupported = { code: null, group: null, results: [{ server: serverA, result: fail('unsupported') }] };
