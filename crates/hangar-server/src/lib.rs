@@ -384,3 +384,5 @@ pub(crate) fn write_test_executable(path: &std::path::Path, content: impl AsRef<
     assert!(status.success(), "install não gravou {}", path.display());
     std::fs::remove_file(&source).unwrap();
 }
+
+pub mod codex_setup;

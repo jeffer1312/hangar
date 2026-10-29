@@ -281,3 +281,5 @@ mod voice_ws;
 mod speech_public;
 mod workspace_routes;
 mod worktree_routes;
+
+mod codex_setup;

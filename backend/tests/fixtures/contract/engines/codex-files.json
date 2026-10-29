@@ -1,0 +1,6131 @@
+{
+  "source_commit": "fc1ed83a37fe22c126328f3717ccd6b37db17e10",
+  "command": "PYTHONPATH=backend python backend/tests/fixtures/contract/engines/generate_codex_files.py",
+  "cases": [
+    {
+      "current": {},
+      "source": {},
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {}
+        }
+      }
+    },
+    {
+      "current": {},
+      "source": {},
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {}
+        }
+      }
+    },
+    {
+      "current": {},
+      "source": {},
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {}
+        }
+      }
+    },
+    {
+      "current": {},
+      "source": {
+        "hooks": {}
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {}
+        }
+      }
+    },
+    {
+      "current": {},
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {}
+        }
+      }
+    },
+    {
+      "current": {},
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {}
+        }
+      }
+    },
+    {
+      "current": {},
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {},
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {},
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {},
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {},
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {},
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {},
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {},
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {},
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {},
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {}
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {},
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {}
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {},
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {}
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {}
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {}
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {}
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {}
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {},
+      "previous": {},
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {},
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {},
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {}
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {}
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "description": "pessoal",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {},
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {},
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {},
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              },
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              },
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              },
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              },
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              },
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              },
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {},
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {},
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {},
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Write",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "exclusivo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "novo"
+                  }
+                ]
+              },
+              {
+                "matcher": "Bash",
+                "hooks": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  {
+                    "type": "prompt",
+                    "prompt": "pessoal"
+                  },
+                  {
+                    "type": "command",
+                    "command": "antigo"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {},
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {},
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {},
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": ""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): comando precisa ser texto"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {},
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {},
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {},
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": []
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): objeto hooks esperado"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {},
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {},
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {},
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {
+        "hooks": {}
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "novo"
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": []
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {},
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "hooks": {}
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    },
+    {
+      "current": {
+        "hooks": {
+          "PreToolUse": "errado"
+        }
+      },
+      "source": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "prompt",
+                  "prompt": "pessoal"
+                },
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "previous": {
+        "description": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "antigo"
+                }
+              ]
+            },
+            {
+              "matcher": "Write",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "exclusivo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "hooks.json inválido (atual): lista de grupos esperada"
+      }
+    }
+  ]
+}
