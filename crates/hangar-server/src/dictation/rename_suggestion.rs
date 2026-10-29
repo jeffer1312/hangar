@@ -265,6 +265,13 @@ fn suggestion_model<'a>(provider: &str, configured: &'a str, account_model: Opti
     }
 }
 
+/// O modelo da conta Codex: o do perfil ativo vence o do topo do `config.toml`.
+fn account_model(config: &toml::Value) -> Option<&str> {
+    let profile = config.get("profile").and_then(toml::Value::as_str)
+        .and_then(|p| config.get("profiles")?.get(p)?.get("model")?.as_str());
+    profile.or_else(|| config.get("model")?.as_str())
+}
+
 /// `Ok(None)` = sem sugestão e sem falha (sem pedido, resposta vazia). O modo da organização do
 /// ditado não conta: ele nasce desligado e só vale para o ditado.
 async fn generate(st: &AppState, row: &SessionRow) -> Result<Option<String>, &'static str> {
@@ -274,20 +281,17 @@ async fn generate(st: &AppState, row: &SessionRow) -> Result<Option<String>, &'s
     let request = OrganizationRequest { session: Some(name.into()), harness_allowed: true, ..Default::default() };
     let context = context::for_row(st, row, &request)?;
     let configured = if context.provider == "claude" { &config.dictation_claude_model } else { &config.dictation_codex_model };
-    let account = if context.provider != "claude" && configured.is_empty() {
-        let config = super::catalog::codex_configuration(&context.home)?;
-        let profile = config.get("profile").and_then(toml::Value::as_str)
-            .and_then(|p| config.get("profiles")?.get(p)?.get("model")?.as_str());
-        profile.or_else(|| config.get("model")?.as_str()).map(str::to_owned)
-    } else {
-        None
-    };
-    let model = suggestion_model(&context.provider, configured, account.as_deref())?;
     let Some(jsonl) = context.jsonl.clone() else { return Ok(None) };
     let provider = context.provider.clone();
     let first = tokio::task::spawn_blocking(move || first_user_message(&provider, &jsonl)).await
         .map_err(|_| "dictation_context_unavailable")??;
     let Some(first) = first else { return Ok(None) };
+    let account = if context.provider != "claude" && configured.is_empty() {
+        account_model(&super::catalog::codex_configuration(&context.home)?).map(str::to_owned)
+    } else {
+        None
+    };
+    let model = suggestion_model(&context.provider, configured, account.as_deref())?;
     let input = format!("Branch: {}\nPrimeiro pedido:\n{first}", row.branch.as_deref().unwrap_or("-"));
     let output = harness::run_prompt(st, &context, model, PROMPT, &input, TIMEOUT).await?;
     // O retrato da lista basta para ver se a vida mudou: outra descoberta inteira não acrescenta nada.
@@ -414,6 +418,16 @@ mod tests {
         assert_eq!(suggestion_model("codex", "gpt-x", Some("gpt-conta")), Ok("gpt-x"));
         assert_eq!(suggestion_model("codex", "", Some("gpt-conta")), Ok("gpt-conta"), "sem escolha, o modelo da conta");
         assert_eq!(suggestion_model("codex", "", None), Err("rename_suggestion_no_model"), "sem padrão, a causa vai ao diário");
+    }
+
+    #[test]
+    fn the_account_model_prefers_the_active_profile() {
+        let toml = |s: &str| -> toml::Value { toml::from_str(s).unwrap() };
+        let both = toml("model = \"topo\"\nprofile = \"w\"\n[profiles.w]\nmodel = \"perfil\"\n");
+        assert_eq!(account_model(&both), Some("perfil"));
+        assert_eq!(account_model(&toml("model = \"topo\"\nprofile = \"w\"\n[profiles.w]\n")), Some("topo"));
+        assert_eq!(account_model(&toml("profile = \"w\"\n[profiles.w]\nmodel = \"perfil\"\n")), Some("perfil"));
+        assert_eq!(account_model(&toml("")), None);
     }
 
     #[test]
