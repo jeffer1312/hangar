@@ -1,0 +1,1371 @@
+{
+  "source_commit": "d290182f567812c92b75709a5cd814a089b4ea98",
+  "command": "python backend/tests/fixtures/contract/harness-health/generate_values.py",
+  "cases": [
+    {
+      "name": "claude-model-value-0",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\": null}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-value-0",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\": null}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "pi-model-value-0",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\": null, \"defaultModel\": \"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "fixture"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-model-value-1",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\": false}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-value-1",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\": false}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "pi-model-value-1",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\": false, \"defaultModel\": \"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "fixture"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-model-value-2",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\": true}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "True"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-value-2",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\": true}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'bool' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "pi-model-value-2",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\": true, \"defaultModel\": \"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "TypeError",
+        "message": "sequence item 0: expected str instance, bool found"
+      }
+    },
+    {
+      "name": "claude-model-value-3",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\": 0}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-value-3",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\": 0}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "pi-model-value-3",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\": 0, \"defaultModel\": \"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "fixture"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-model-value-4",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\": 1}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "1"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-value-4",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\": 1}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'int' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "pi-model-value-4",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\": 1, \"defaultModel\": \"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "TypeError",
+        "message": "sequence item 0: expected str instance, int found"
+      }
+    },
+    {
+      "name": "claude-model-value-5",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\": \"\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-value-5",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\": \"\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "pi-model-value-5",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\": \"\", \"defaultModel\": \"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "fixture"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-model-value-6",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\": []}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-value-6",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\": []}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "pi-model-value-6",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\": [], \"defaultModel\": \"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "fixture"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-model-value-7",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\": [\"a\"]}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "['a']"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-value-7",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\": [\"a\"]}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'list' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "pi-model-value-7",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\": [\"a\"], \"defaultModel\": \"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "TypeError",
+        "message": "sequence item 0: expected str instance, list found"
+      }
+    },
+    {
+      "name": "claude-model-value-8",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\": {}}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-value-8",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\": {}}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "pi-model-value-8",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\": {}, \"defaultModel\": \"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "fixture"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-model-value-9",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\": {\"x\": 1}}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'x': 1}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-value-9",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\": {\"x\": 1}}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_ok",
+          "params": {
+            "n": "1",
+            "lista": "x"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "pi-model-value-9",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\": {\"x\": 1}, \"defaultModel\": \"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "TypeError",
+        "message": "sequence item 0: expected str instance, dict found"
+      }
+    },
+    {
+      "name": "claude-model-value-10",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\": NaN}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "nan"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-value-10",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\": NaN}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'float' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "pi-model-value-10",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\": NaN, \"defaultModel\": \"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "TypeError",
+        "message": "sequence item 0: expected str instance, float found"
+      }
+    },
+    {
+      "name": "claude-model-value-11",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\": Infinity}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "inf"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-value-11",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\": Infinity}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'float' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "pi-model-value-11",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\": Infinity, \"defaultModel\": \"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "TypeError",
+        "message": "sequence item 0: expected str instance, float found"
+      }
+    },
+    {
+      "name": "claude-model-value-12",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\": \"\\ud800\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "\ud800"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-value-12",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\": \"\\ud800\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'str' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "pi-model-value-12",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\": \"\\ud800\", \"defaultModel\": \"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "\ud800/fixture"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-model-value-13",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\": \"\\u001cfixture\\u001f\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "\u001cfixture\u001f"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-value-13",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\": \"\\u001cfixture\\u001f\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "error": "AttributeError",
+        "message": "'str' object has no attribute 'keys'"
+      }
+    },
+    {
+      "name": "pi-model-value-13",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\": \"\\u001cfixture\\u001f\", \"defaultModel\": \"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "\u001cfixture\u001f/fixture"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-nan",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=nan"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "nan"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-inf",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=inf"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "inf"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model--inf",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=-inf"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "-inf"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-true",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=true"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "True"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-0",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=0"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-1",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=1"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "1"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-[\"x\"]",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=[\"x\"]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "['x']"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-{x=1}",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model={x=1}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'x': 1}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-nan",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=nan"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "nan"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-inf",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=inf"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "inf"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model--inf",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=-inf"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "-inf"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-true",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=true"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "True"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-0",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=0"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-1",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=1"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "1"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-[\"x\"]",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=[\"x\"]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "['x']"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-{x=1}",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model={x=1}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "{'x': 1}"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    }
+  ]
+}
