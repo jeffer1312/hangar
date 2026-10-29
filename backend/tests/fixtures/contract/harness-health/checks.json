@@ -1,0 +1,1528 @@
+{
+  "source_commit": "d290182f567812c92b75709a5cd814a089b4ea98",
+  "command": "python backend/tests/fixtures/contract/harness-health/generate_checks.py",
+  "cases": [
+    {
+      "name": "claude-mcp-missing",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-present",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{\"mcpServers\":{\"z\":{},\"\u00e1\":{},\"a\":{}}}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_ok",
+          "params": {
+            "n": "3",
+            "lista": "a, z, \u00e1"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-mcp-invalid",
+      "kind": "_mcp",
+      "cli": "claude",
+      "files": {
+        ".claude.json": "{"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp-missing",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp-present",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "[mcp_servers.z]\n[mcp_servers.a]\n"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_ok",
+          "params": {
+            "n": "2",
+            "lista": "a, z"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-mcp-invalid",
+      "kind": "_mcp",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "{"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "pi-mcp-missing",
+      "kind": "_mcp",
+      "cli": "pi",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "pi-mcp-present",
+      "kind": "_mcp",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/mcp.json": "{\"mcpServers\":{\"z\":{},\"a\":{}}}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_ok",
+          "params": {
+            "n": "2",
+            "lista": "a, z"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "pi-mcp-invalid",
+      "kind": "_mcp",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/mcp.json": "{"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "omp-mcp-missing",
+      "kind": "_mcp",
+      "cli": "omp",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "omp-mcp-present",
+      "kind": "_mcp",
+      "cli": "omp",
+      "files": {
+        ".omp/agent/mcp.json": "{\"mcpServers\":{\"z\":{},\"a\":{}}}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_ok",
+          "params": {
+            "n": "2",
+            "lista": "a, z"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "omp-mcp-invalid",
+      "kind": "_mcp",
+      "cli": "omp",
+      "files": {
+        ".omp/agent/mcp.json": "{"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp-missing",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp-present",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "[mcp_servers.z]\n[mcp_servers.a]\n"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_ok",
+          "params": {
+            "n": "2",
+            "lista": "a, z"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-mcp-invalid",
+      "kind": "_mcp",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "{"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "mcp",
+          "ok": true,
+          "codigo": "mcp_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-model-missing",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "claude-model",
+      "kind": "_modelo_padrao",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"model\":\"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "fixture"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model-missing",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-model",
+      "kind": "_modelo_padrao",
+      "cli": "codex",
+      "files": {
+        ".codex/config.toml": "model=\"fixture\""
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "fixture"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "pi-model-missing",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "pi-model",
+      "kind": "_modelo_padrao",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/settings.json": "{\"defaultProvider\":\"provider\",\"defaultModel\":\"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "provider/fixture"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "omp-model-missing",
+      "kind": "_modelo_padrao",
+      "cli": "omp",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "omp-model",
+      "kind": "_modelo_padrao",
+      "cli": "omp",
+      "files": {
+        ".omp/agent/settings.json": "{\"defaultModel\":\"fixture\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "fixture"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model-missing",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "kimi-model",
+      "kind": "_modelo_padrao",
+      "cli": "kimi",
+      "files": {
+        ".kimi-code/config.toml": "default_model=\"fixture\""
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "modelo",
+          "ok": true,
+          "codigo": "modelo_padrao",
+          "params": {
+            "modelo": "fixture"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "fullscreen-missing",
+      "kind": "_fullscreen",
+      "cli": "pi",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "fullscreen",
+          "ok": false,
+          "codigo": "fullscreen_desligado",
+          "params": {},
+          "conserto": "fullscreen:pi",
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "fullscreen-broken",
+      "kind": "_fullscreen",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/fullscreen-tui.json": "{"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "fullscreen",
+          "ok": null,
+          "codigo": "config_ilegivel",
+          "params": {},
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "fullscreen-nonobject",
+      "kind": "_fullscreen",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/fullscreen-tui.json": "[]"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "fullscreen",
+          "ok": null,
+          "codigo": "config_ilegivel",
+          "params": {},
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "fullscreen-enabled",
+      "kind": "_fullscreen",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/fullscreen-tui.json": "{\"enabled\":true}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "fullscreen",
+          "ok": true,
+          "codigo": "fullscreen_ok",
+          "params": {},
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "fullscreen-disabled",
+      "kind": "_fullscreen",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/fullscreen-tui.json": "{\"enabled\":false}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "fullscreen",
+          "ok": true,
+          "codigo": "fullscreen_por_escolha",
+          "params": {},
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "fullscreen-number",
+      "kind": "_fullscreen",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/fullscreen-tui.json": "{\"enabled\":1}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "fullscreen",
+          "ok": true,
+          "codigo": "fullscreen_por_escolha",
+          "params": {},
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "fullscreen-claude-missing",
+      "kind": "_fullscreen_claude",
+      "cli": "claude",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "fullscreen",
+          "ok": null,
+          "codigo": "config_ilegivel",
+          "params": {},
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "fullscreen-claude-invalid",
+      "kind": "_fullscreen_claude",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "fullscreen",
+          "ok": false,
+          "codigo": "fullscreen_claude_desligado",
+          "params": {},
+          "conserto": "fullscreen:claude",
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "fullscreen-claude-other",
+      "kind": "_fullscreen_claude",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"tui\":\"other\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "fullscreen",
+          "ok": false,
+          "codigo": "fullscreen_claude_desligado",
+          "params": {},
+          "conserto": "fullscreen:claude",
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "fullscreen-claude-enabled",
+      "kind": "_fullscreen_claude",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"tui\":\"fullscreen\"}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "fullscreen",
+          "ok": true,
+          "codigo": "fullscreen_ok",
+          "params": {},
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "codex-hooks-missing",
+      "kind": "_hooks_codex",
+      "cli": "claude",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "hooks",
+          "ok": true,
+          "codigo": "hooks_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-hooks-invalid",
+      "kind": "_hooks_codex",
+      "cli": "claude",
+      "files": {
+        ".codex/hooks.json": "{"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "hooks",
+          "ok": true,
+          "codigo": "hooks_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-hooks-empty",
+      "kind": "_hooks_codex",
+      "cli": "claude",
+      "files": {
+        ".codex/hooks.json": "{\"hooks\":{}}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "hooks",
+          "ok": true,
+          "codigo": "hooks_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-hooks-shape",
+      "kind": "_hooks_codex",
+      "cli": "claude",
+      "files": {
+        ".codex/hooks.json": "{\"hooks\":[]}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "hooks",
+          "ok": true,
+          "codigo": "hooks_nenhum",
+          "params": {},
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "codex-hooks-events",
+      "kind": "_hooks_codex",
+      "cli": "claude",
+      "files": {
+        ".codex/hooks.json": "{\"hooks\":{\"Stop\":[{},{}],\"PreToolUse\":[{}],\"Other\":4}}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "hooks",
+          "ok": true,
+          "codigo": "hooks_codex",
+          "params": {
+            "n": "3",
+            "eventos": "Other, PreToolUse, Stop"
+          },
+          "conserto": null,
+          "info": true
+        }
+      }
+    },
+    {
+      "name": "wrapper-no-shell",
+      "kind": "_wrapper",
+      "cli": "claude",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "wrapper",
+          "ok": null,
+          "codigo": "wrapper_sem_shell",
+          "params": {},
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "wrapper-missing-no-bash",
+      "kind": "_wrapper",
+      "cli": "claude",
+      "files": {
+        ".bashrc": ""
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "wrapper",
+          "ok": false,
+          "codigo": "wrapper_falta",
+          "params": {
+            "lista": "bash"
+          },
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "wrapper-missing-with-bash",
+      "kind": "_wrapper",
+      "cli": "claude",
+      "files": {
+        ".bashrc": ""
+      },
+      "directories": [],
+      "links": {},
+      "programs": [
+        "bash"
+      ],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "wrapper",
+          "ok": false,
+          "codigo": "wrapper_falta",
+          "params": {
+            "lista": "bash"
+          },
+          "conserto": "wrapper",
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "wrapper-all-shells",
+      "kind": "_wrapper",
+      "cli": "claude",
+      "files": {
+        ".bashrc": "source /other/scripts/shell/claude.posix.sh",
+        ".zshrc": "source /other/scripts/shell/claude.posix.sh",
+        ".config/fish/functions/claude.fish": "fixture"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "wrapper",
+          "ok": true,
+          "codigo": "wrapper_ok",
+          "params": {
+            "onde": "fish, bash, zsh"
+          },
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "wrapper-missing-zsh",
+      "kind": "_wrapper",
+      "cli": "claude",
+      "files": {
+        ".bashrc": "shell/claude.posix.sh",
+        ".zshrc": ""
+      },
+      "directories": [],
+      "links": {},
+      "programs": [
+        "bash"
+      ],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "wrapper",
+          "ok": false,
+          "codigo": "wrapper_falta",
+          "params": {
+            "lista": "zsh"
+          },
+          "conserto": "wrapper",
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "wrapper-codex-no-launchers",
+      "kind": "_wrapper",
+      "cli": "codex",
+      "files": {
+        ".bashrc": "shell/codex.posix.sh"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [
+        "bash"
+      ],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "wrapper",
+          "ok": false,
+          "codigo": "wrapper_falta",
+          "params": {
+            "lista": "lan\u00e7ador hangar-codex, lan\u00e7ador hangar-codex-tui"
+          },
+          "conserto": "wrapper",
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "wrapper-codex-complete",
+      "kind": "_wrapper",
+      "cli": "codex",
+      "files": {
+        ".bashrc": "shell/codex.posix.sh",
+        ".local/bin/hangar-codex": "fixture",
+        ".local/bin/hangar-codex-tui": "fixture"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "wrapper",
+          "ok": true,
+          "codigo": "wrapper_ok",
+          "params": {
+            "onde": "bash"
+          },
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "wrapper-powershell-allhosts",
+      "kind": "_wrapper",
+      "cli": "claude",
+      "files": {
+        "Documents/WindowsPowerShell/profile.ps1": ". C:\\other\\scripts\\shell\\claude.ps1"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": true,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "wrapper",
+          "ok": true,
+          "codigo": "wrapper_ok",
+          "params": {
+            "onde": "PowerShell"
+          },
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "wrapper-powershell-missing",
+      "kind": "_wrapper",
+      "cli": "claude",
+      "files": {
+        "Documents/PowerShell/Microsoft.PowerShell_profile.ps1": ""
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": true,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "wrapper",
+          "ok": false,
+          "codigo": "wrapper_falta",
+          "params": {
+            "lista": "PowerShell"
+          },
+          "conserto": "wrapper",
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "psmux-default",
+      "kind": "_conf_psmux",
+      "cli": "claude",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": true,
+      "env": {},
+      "expected": {
+        "ok": "$ROOT/.tmux.conf"
+      }
+    },
+    {
+      "name": "psmux-first",
+      "kind": "_conf_psmux",
+      "cli": "claude",
+      "files": {
+        ".psmux.conf": "",
+        ".tmux.conf": ""
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": true,
+      "env": {},
+      "expected": {
+        "ok": "$ROOT/.psmux.conf"
+      }
+    },
+    {
+      "name": "psmux-rc",
+      "kind": "_conf_psmux",
+      "cli": "claude",
+      "files": {
+        ".psmuxrc": "",
+        ".tmux.conf": ""
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": true,
+      "env": {},
+      "expected": {
+        "ok": "$ROOT/.psmuxrc"
+      }
+    },
+    {
+      "name": "psmux-config",
+      "kind": "_conf_psmux",
+      "cli": "claude",
+      "files": {
+        ".config/psmux/psmux.conf": ""
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": true,
+      "env": {},
+      "expected": {
+        "ok": "$ROOT/.config/psmux/psmux.conf"
+      }
+    },
+    {
+      "name": "psmux-override",
+      "kind": "_conf_psmux",
+      "cli": "claude",
+      "files": {
+        ".psmux.conf": ""
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": true,
+      "env": {
+        "PSMUX_CONFIG_FILE": "$ROOT/custom.conf"
+      },
+      "expected": {
+        "ok": "$ROOT/custom.conf"
+      }
+    },
+    {
+      "name": "extensions-missing-pi",
+      "kind": "_extensoes",
+      "cli": "pi",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "extensoes",
+          "ok": false,
+          "codigo": "faltam",
+          "params": {
+            "lista": "hangar-state, rich-status-line, claude-bridge, claude-todo, claude-hooks-adapter, git-checkpoint, fullscreen-tui, lib"
+          },
+          "conserto": "extensoes:pi",
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "extensions-personal-pi",
+      "kind": "_extensoes",
+      "cli": "pi",
+      "files": {
+        ".pi/agent/extensions/hangar-state.ts": "fixture",
+        ".pi/agent/extensions/rich-status-line.ts": "fixture",
+        ".pi/agent/extensions/claude-bridge.ts": "fixture",
+        ".pi/agent/extensions/claude-todo.ts": "fixture",
+        ".pi/agent/extensions/claude-hooks-adapter.ts": "fixture",
+        ".pi/agent/extensions/git-checkpoint.ts": "fixture",
+        ".pi/agent/extensions/fullscreen-tui.ts": "fixture"
+      },
+      "directories": [
+        ".pi/agent/extensions/lib"
+      ],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "extensoes",
+          "ok": true,
+          "codigo": "extensoes_ok",
+          "params": {
+            "n": "7"
+          },
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "extensions-other-pi",
+      "kind": "_extensoes",
+      "cli": "pi",
+      "files": {
+        "other/source.ts": "fixture"
+      },
+      "directories": [],
+      "links": {
+        ".pi/agent/extensions/hangar-state.ts": "$ROOT/other/source.ts"
+      },
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "extensoes",
+          "ok": false,
+          "codigo": "extensoes_outra_fonte",
+          "params": {
+            "lista": "hangar-state \u2192 ~/other/source.ts",
+            "faltam": "rich-status-line, claude-bridge, claude-todo, claude-hooks-adapter, git-checkpoint, fullscreen-tui, lib"
+          },
+          "conserto": "extensoes:pi",
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "extensions-missing-omp",
+      "kind": "_extensoes",
+      "cli": "omp",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "extensoes",
+          "ok": false,
+          "codigo": "faltam",
+          "params": {
+            "lista": "hangar-state, rich-status-line, claude-bridge, claude-hooks-adapter, git-checkpoint, lib"
+          },
+          "conserto": "extensoes:omp",
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "extensions-personal-omp",
+      "kind": "_extensoes",
+      "cli": "omp",
+      "files": {
+        ".omp/agent/extensions/hangar-state.ts": "fixture",
+        ".omp/agent/extensions/rich-status-line.ts": "fixture",
+        ".omp/agent/extensions/claude-bridge.ts": "fixture",
+        ".omp/agent/extensions/claude-hooks-adapter.ts": "fixture",
+        ".omp/agent/extensions/git-checkpoint.ts": "fixture"
+      },
+      "directories": [
+        ".omp/agent/extensions/lib"
+      ],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "extensoes",
+          "ok": true,
+          "codigo": "extensoes_ok",
+          "params": {
+            "n": "5"
+          },
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "extensions-other-omp",
+      "kind": "_extensoes",
+      "cli": "omp",
+      "files": {
+        "other/source.ts": "fixture"
+      },
+      "directories": [],
+      "links": {
+        ".omp/agent/extensions/hangar-state.ts": "$ROOT/other/source.ts"
+      },
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "extensoes",
+          "ok": false,
+          "codigo": "extensoes_outra_fonte",
+          "params": {
+            "lista": "hangar-state \u2192 ~/other/source.ts",
+            "faltam": "rich-status-line, claude-bridge, claude-hooks-adapter, git-checkpoint, lib"
+          },
+          "conserto": "extensoes:omp",
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "claude-hooks-missing",
+      "kind": "_hooks_claude",
+      "cli": "claude",
+      "files": {},
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "hooks",
+          "ok": null,
+          "codigo": "config_ilegivel",
+          "params": {},
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "claude-hooks-broken",
+      "kind": "_hooks_claude",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "hooks",
+          "ok": null,
+          "codigo": "config_ilegivel",
+          "params": {},
+          "conserto": null,
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "claude-hooks-empty",
+      "kind": "_hooks_claude",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "hooks",
+          "ok": false,
+          "codigo": "faltam",
+          "params": {
+            "lista": "state_hook.py, askq_capture.py, preview_hook.py, subagent_hook.py, pair-context, nav_hook.py"
+          },
+          "conserto": "hooks-claude",
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "claude-hooks-binary-missing",
+      "kind": "_hooks_claude",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"hooks\": {\"SessionStart\": [{\"hooks\": [{\"command\": \"\\\"$ROOT/bin/server\\\" state_hook.py askq_capture.py preview_hook.py subagent_hook.py pair-context nav_hook.py\"}]}]}}"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "hooks",
+          "ok": false,
+          "codigo": "faltam",
+          "params": {
+            "lista": "pair-context"
+          },
+          "conserto": "hooks-claude",
+          "info": false
+        }
+      }
+    },
+    {
+      "name": "claude-hooks-binary-present",
+      "kind": "_hooks_claude",
+      "cli": "claude",
+      "files": {
+        ".claude/settings.json": "{\"hooks\": {\"SessionStart\": [{\"hooks\": [{\"command\": \"\\\"$ROOT/bin/server\\\" state_hook.py askq_capture.py preview_hook.py subagent_hook.py pair-context nav_hook.py\"}]}]}}",
+        "bin/server": "fixture"
+      },
+      "directories": [],
+      "links": {},
+      "programs": [],
+      "windows": false,
+      "env": {},
+      "expected": {
+        "ok": {
+          "id": "hooks",
+          "ok": true,
+          "codigo": "hooks_ok",
+          "params": {
+            "n": "6"
+          },
+          "conserto": null,
+          "info": false
+        }
+      }
+    }
+  ]
+}

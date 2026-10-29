@@ -64,3 +64,5 @@ pub fn sync_hooks_checked(service: &AccountService, repo: &Path) -> Result<Value
         Err(HookSyncFailure { changes, errors })
     }
 }
+
+pub mod health;
