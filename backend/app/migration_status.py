@@ -60,35 +60,6 @@ def _mode() -> str:
     return current.mode if current is not None else runtime_coordinator._initial_mode
 
 
-_branch: str | None = None
-_branch_failed_at = 0.0
-_BRANCH_RETRY_S = 60.0
-
-
-def _checkout_branch() -> str | None:
-    # Lida uma vez por processo, como a versão: a branch só muda no Atualizar, que reinicia o backend.
-    # Falha não fica guardada: a próxima visita tenta de novo.
-    global _branch, _branch_failed_at
-    if _branch is not None or time.monotonic() - _branch_failed_at < _BRANCH_RETRY_S:
-        return _branch
-    if m := diag.install_manifest():
-        _branch = m["channel"]
-        return _branch
-    from app import atualizar, git_ops
-    try:
-        result = git_ops._run(str(atualizar.REPO), "rev-parse", "--abbrev-ref", "HEAD", timeout=5)
-    except git_ops.GitError as e:
-        _branch_failed_at = time.monotonic()
-        diag.registrar("migration_status.branch", "aviso", **diag.erro_campos(e))
-        return None
-    if result.returncode != 0:
-        _branch_failed_at = time.monotonic()
-        diag.registrar("migration_status.branch", "aviso", codigo=str(result.returncode))
-        return None
-    _branch = result.stdout.strip() or None
-    return _branch
-
-
 def _status_memory(text: str) -> tuple[int, int]:
     """(VmRSS, VmSwap) em bytes do `/proc/<pid>/status`: com zram o kernel troca uma pela outra."""
     found = {}
@@ -214,8 +185,6 @@ def facts() -> dict:
         "protocol": rust_server.RUST_SERVER_PROTOCOL,
         "port": _listen_port,
         "version": diag.VERSAO_EM_EXECUCAO,
-        "branch": _checkout_branch(),
-        "update_branch": settings.update_branch or None,
         "binary": binary_info,
         "processes": {
             "python": _usage(os.getpid()),

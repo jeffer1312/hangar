@@ -384,16 +384,46 @@ async fn python_facts(st: &AppState) -> Result<Value, &'static str> {
     serde_json::from_slice(&bytes).map_err(|_| "json")
 }
 
+async fn owned_branch_fields(st: Arc<AppState>) -> Result<(Option<String>, Option<String>), String> {
+    static CLOCK: LazyLock<Instant> = LazyLock::new(Instant::now);
+    tokio::task::spawn_blocking(move || {
+        let home = &st.accounts.env.home;
+        let root = crate::install_root::root(home);
+        let branch = root.as_deref().and_then(|root| st.migration_branch.get(root, &st.accounts.env.base, CLOCK.elapsed()));
+        let update_branch = if matches!(crate::update::http::mode(home), crate::update::http::Mode::Package(_)) {
+            let channel = crate::update::channel(&crate::update::Layout::new(home));
+            if channel == "latest" { String::new() } else { channel }
+        } else {
+            let snapshot = st.settings_snapshot()?;
+            crate::machine_peers::live_config::update_channel(home, root.as_deref().map(|root|root.join("backend")).as_deref(), snapshot.environment(), "CP_UPDATE_BRANCH")?
+        };
+        Ok((branch, (!update_branch.is_empty()).then_some(update_branch)))
+    }).await.map_err(|error|error.to_string())?
+}
+
 /// `GET /api/migration/status` do dono. Convidado e outro método seguem ao Python, que recusa.
 pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner || req.method() != Method::GET {
         return pass(&st, req, &fwd).await;
     }
-    let (python, python_error) = match cached_python_facts(&st).await {
+    let (mut python, python_error) = match cached_python_facts(&st).await {
         Ok(v) => (v, Value::Null),
         Err(code) => (Value::Null, json!(code)),
     };
+    if python.is_object() {
+        let (branch, update_branch) = match owned_branch_fields(st.clone()).await {
+            Ok(fields) => fields,
+            Err(_) => {
+                st.diag.report("migration_status.config", "", "migration_status_config_unavailable", "não foi possível ler a configuração do canal");
+                let mut response = crate::session_write::detail(axum::http::StatusCode::SERVICE_UNAVAILABLE, "migration_status_config_unavailable", "não foi possível ler a configuração do canal", json!({}));
+                cors(req.headers(), response.headers_mut());
+                return response;
+            }
+        };
+        python["branch"] = json!(branch);
+        python["update_branch"] = json!(update_branch);
+    }
     let (public, private) = totals();
     let body = json!({
         "served_by": "rust",
