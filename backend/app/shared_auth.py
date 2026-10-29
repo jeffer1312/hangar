@@ -61,7 +61,10 @@ class Context:
         self.library.hangar_auth_verify_receipt_v1.restype = ctypes.c_uint32
         self.library.hangar_auth_close_v1.argtypes = [ctypes.c_void_p]
         self.library.hangar_auth_close_v1.restype = None
-        self.directory = tempfile.TemporaryDirectory(prefix="hangar-auth-")
+        # Fora da pasta temporária do sistema: a limpeza dela apagaria o contador com o servidor de pé.
+        state_root = Path.home() / ".hangar"
+        state_root.mkdir(parents=True, exist_ok=True)
+        self.directory = tempfile.TemporaryDirectory(prefix="hangar-auth-", dir=state_root)
         self.upstream_port = upstream_port
         self.config = {"abi": 1, "store_version": 1, "mode": "create",
                        "state_path": str(Path(self.directory.name).resolve() / "state.json"),
