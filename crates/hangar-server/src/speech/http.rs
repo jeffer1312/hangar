@@ -473,20 +473,29 @@ async fn conversations(
         .as_ref()
         .map(|dirs| dirs.claude.clone())
         .unwrap_or_else(|| st.accounts.env.claude_base.clone());
-    let requests: Vec<_> = names
-        .into_iter()
-        .filter_map(|name| {
-            let row = rows.iter().find(|row| row.name == name)?;
-            let info = crate::locate::info_of(row, &claude);
-            info.jsonl.as_ref()?;
-            Some((name, info))
-        })
-        .collect();
+    let home = st.accounts.env.home.clone();
+    let dirs = st.list.env().dirs.clone();
     tokio::task::spawn_blocking(move || {
+        let rows = if let Some(dirs) = dirs {
+            crate::list::local_transfers::transfers(&rows, &dirs)
+                .map(|(rows, _)| rows)
+                .map_err(std::io::Error::other)?
+        } else {
+            rows.as_ref().clone()
+        };
+        let requests: Vec<_> = names
+            .into_iter()
+            .filter_map(|name| {
+                let row = rows.iter().find(|row| row.name == name)?.clone();
+                row.jsonl.as_ref()?;
+                Some((name, row))
+            })
+            .collect();
         requests
             .into_iter()
-            .map(|(name, info)| {
-                super::history::read(&info, 30).map(|events| (name, summarize(&events)))
+            .map(|(name, row)| {
+                super::history::read_row(&row, &home, &claude, 30)
+                    .map(|events| (name, summarize(&events)))
             })
             .collect::<Result<Vec<_>, _>>()
             .map(|conversations| {
@@ -546,55 +555,163 @@ fn summarize(events: &[ChatEvent]) -> String {
 mod tests {
     use super::*;
 
+    fn expand_paths(value: &Value, home: &Path) -> Value {
+        match value {
+            Value::String(value) => {
+                let path = match value.as_str() {
+                    "@SOURCE@" => Some(home.join("snapshot.jsonl")),
+                    "@ROLLOUT@" => Some(home.join("rollout.jsonl")),
+                    "@CODEX@" => Some(home.join("codex")),
+                    "@HOME@" => Some(home.to_owned()),
+                    "@ORIGIN@" => Some(home.join("original.jsonl")),
+                    _ => None,
+                };
+                path.map(|path| json!(path)).unwrap_or_else(|| json!(value))
+            }
+            Value::Object(values) => Value::Object(
+                values
+                    .iter()
+                    .map(|(key, value)| (key.clone(), expand_paths(value, home)))
+                    .collect(),
+            ),
+            Value::Array(values) => Value::Array(
+                values
+                    .iter()
+                    .map(|value| expand_paths(value, home))
+                    .collect(),
+            ),
+            value => value.clone(),
+        }
+    }
+
     #[test]
-    fn group_context_matches_the_python_window_hook_filter_and_queue() {
+    fn transferred_group_context_matches_python_sources_boundary_queue_and_failures() {
         let fixtures: Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/speech/http_history.json"
+            "../../tests/fixtures/speech/http_transfer_history.json"
         ))
         .unwrap();
         for case in fixtures["cases"].as_array().unwrap() {
             let directory = tempfile::tempdir().unwrap();
-            let transcript = directory.path().join("conversation.jsonl");
-            let queue = directory.path().join("queue.jsonl");
-            for (path, rows) in [(&transcript, &case["records"]), (&queue, &case["queue"])] {
-                let lines = rows
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(Value::to_string)
-                    .collect::<Vec<_>>()
-                    .join("\n")
-                    + "\n";
-                std::fs::write(path, lines).unwrap();
+            let home = directory.path();
+            std::fs::create_dir_all(home.join("codex")).unwrap();
+            std::fs::create_dir_all(home.join(".hangar/conversation-transfers")).unwrap();
+            std::fs::create_dir_all(home.join(".claude/.hangar-queue")).unwrap();
+            std::fs::write(
+                home.join("snapshot.jsonl"),
+                case["source_bytes"].as_str().unwrap(),
+            )
+            .unwrap();
+            std::fs::write(
+                home.join("rollout.jsonl"),
+                case["rollout_bytes"].as_str().unwrap(),
+            )
+            .unwrap();
+            let record = expand_paths(&case["record"], home);
+            let id = record["id"].as_str().unwrap();
+            std::fs::write(
+                home.join(".hangar/conversation-transfers")
+                    .join(format!("{id}.json")),
+                record.to_string(),
+            )
+            .unwrap();
+            let queue = case["queue"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
+            std::fs::write(home.join(".claude/.hangar-queue/s.jsonl"), queue).unwrap();
+            let row = serde_json::from_value(
+                json!({"name":"s","provider":"codex","jsonl":home.join("rollout.jsonl"),
+                "codex_home":home.join("codex"),"transfer_id":id,"lifecycle_id":"k:original"}),
+            )
+            .unwrap();
+            let result = super::super::history::read_row(&row, home, &home.join(".claude"), 30);
+            if case.get("error").is_some() {
+                assert!(
+                    result.is_err(),
+                    "a fonte inválida virou contexto: {}",
+                    case["name"]
+                );
+                continue;
             }
-            let info = crate::transcript::InternalInfo {
-                provider: case["provider"].as_str().unwrap().into(),
-                jsonl: Some(transcript),
-                session_key: String::new(),
-                history: json!({"queue":queue}),
-                headless: false,
-                lifecycle_id: None,
-                cwd: None,
-            };
-            let limit = case["limit"].as_u64().unwrap() as usize;
-            let events = super::super::history::read(&info, limit).unwrap();
+            let events = result.unwrap_or_else(|error| panic!("{}: {error}", case["name"]));
             let projection: Vec<_> = events
                 .iter()
-                .skip(events.len().saturating_sub(limit))
                 .map(|event| json!({"kind":event.kind,"text":event.text,"ts":event.ts}))
                 .collect();
             assert_eq!(
                 json!(projection),
                 case["events"],
-                "eventos: {}",
+                "eventos transferidos: {}",
                 case["name"]
             );
             assert_eq!(
                 summarize(&events),
                 case["summary"],
-                "contexto: {}",
+                "contexto transferido: {}",
                 case["name"]
             );
+        }
+    }
+
+    #[test]
+    fn group_context_matches_the_python_window_hook_filter_and_queue() {
+        for source in [
+            include_str!("../../tests/fixtures/speech/http_history.json"),
+            include_str!("../../tests/fixtures/speech/http_history_windows.json"),
+        ] {
+            let fixtures: Value = serde_json::from_str(source).unwrap();
+            for case in fixtures["cases"].as_array().unwrap() {
+                let directory = tempfile::tempdir().unwrap();
+                let transcript = directory.path().join("conversation.jsonl");
+                let queue = directory.path().join("queue.jsonl");
+                for (path, rows) in [(&transcript, &case["records"]), (&queue, &case["queue"])] {
+                    let lines = rows
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(Value::to_string)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        + "\n";
+                    std::fs::write(path, lines).unwrap();
+                }
+                let info = crate::transcript::InternalInfo {
+                    provider: case["provider"].as_str().unwrap().into(),
+                    jsonl: Some(transcript),
+                    session_key: String::new(),
+                    history: json!({"queue":queue}),
+                    headless: false,
+                    lifecycle_id: None,
+                    cwd: None,
+                };
+                let limit = case["limit"].as_u64().unwrap() as usize;
+                let events = super::super::history::read(&info, limit).unwrap();
+                let projection: Vec<_> = events
+                    .iter()
+                    .skip(
+                        events
+                            .len()
+                            .saturating_sub(case["events"].as_array().unwrap().len()),
+                    )
+                    .map(|event| json!({"kind":event.kind,"text":event.text,"ts":event.ts}))
+                    .collect();
+                assert_eq!(
+                    json!(projection),
+                    case["events"],
+                    "eventos: {}",
+                    case["name"]
+                );
+                assert_eq!(
+                    summarize(&events),
+                    case["summary"],
+                    "contexto: {}",
+                    case["name"]
+                );
+            }
         }
     }
 }

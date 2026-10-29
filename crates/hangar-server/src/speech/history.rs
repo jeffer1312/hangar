@@ -13,6 +13,9 @@ use serde_json::Value;
 
 use crate::transcript::{InternalInfo, TAIL_WINDOW, history, py, pyjson};
 
+#[path = "transfer_history.rs"]
+mod transfer_history;
+
 type Item = (f64, u64, ChatEvent);
 static ANSI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;:?]*[ -/]*[@-~]").unwrap());
 
@@ -35,6 +38,35 @@ pub fn read(info: &InternalInfo, limit: usize) -> io::Result<Vec<ChatEvent>> {
         }
         window = window.saturating_mul(4);
     };
+    merge_queue(info, &mut items, &committed, previous, start)?;
+    items.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+    });
+    Ok(items.into_iter().map(|(_, _, event)| event).collect())
+}
+
+pub fn read_row(
+    row: &hangar_api::session::SessionRow,
+    home: &Path,
+    claude: &Path,
+    limit: usize,
+) -> io::Result<Vec<ChatEvent>> {
+    let info = crate::locate::info_of(row, claude);
+    if let Some(events) = transfer_history::read(row, home, &info, limit)? {
+        return Ok(events);
+    }
+    read(&info, limit)
+}
+
+fn merge_queue(
+    info: &InternalInfo,
+    items: &mut Vec<Item>,
+    committed: &HashMap<String, f64>,
+    previous: f64,
+    start: f64,
+) -> io::Result<()> {
     if let Some(queue) = info.history.get("queue").and_then(Value::as_str) {
         for entry in load_queue(Path::new(queue))? {
             let Some(text) = entry
@@ -73,12 +105,7 @@ pub fn read(info: &InternalInfo, limit: usize) -> io::Result<Vec<ChatEvent>> {
             items.push((ts, 1_000_000_000, history::entry_event(&entry)));
         }
     }
-    items.sort_by(|a, b| {
-        a.0.partial_cmp(&b.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.1.cmp(&b.1))
-    });
-    Ok(items.into_iter().map(|(_, _, event)| event).collect())
+    Ok(())
 }
 
 fn load_queue(path: &Path) -> io::Result<Vec<serde_json::Map<String, Value>>> {
