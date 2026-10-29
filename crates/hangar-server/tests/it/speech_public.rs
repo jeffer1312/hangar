@@ -123,10 +123,11 @@ async fn speech_public_group_suggestion_keeps_native_sessions_with_and_without_t
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let model = tokio::spawn(async move {
-        axum::serve(listener,Router::new().route("/chat/completions",post(move |axum::Json(body):axum::Json<Value>| {
+        axum::serve(listener,Router::new().route("/chat/completions",post(move |body:axum::body::Bytes| {
             let capture=capture.clone();async move {
+                let body:Value=serde_json::from_slice(&body).unwrap();
                 capture.lock().unwrap().push(body["messages"][1]["content"].as_str().unwrap().to_owned());
-                axum::Json(json!({"choices":[{"message":{"content":"Conferir a tarefa do grupo"}}]}))
+                ([("content-type","application/json")],json!({"choices":[{"message":{"content":"Conferir a tarefa do grupo"}}]}).to_string())
             }
         }))).await.unwrap();
     });

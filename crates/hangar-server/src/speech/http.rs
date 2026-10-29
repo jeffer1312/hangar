@@ -571,8 +571,8 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let upstream = tokio::spawn(async move {
-            axum::serve(listener,Router::new().route("/voices",get(||async { axum::Json(json!({"voices":[{"voice_id":"voice-fixture","name":"Voz de prova"}]})) }))
-                .route("/user/subscription",get(||async { axum::Json(json!({"character_count":321,"character_limit":1200})) }))).await.unwrap();
+            axum::serve(listener,Router::new().route("/voices",get(||async { ([("content-type","application/json")],json!({"voices":[{"voice_id":"voice-fixture","name":"Voz de prova"}]}).to_string()) }))
+                .route("/user/subscription",get(||async { ([("content-type","application/json")],json!({"character_count":321,"character_limit":1200}).to_string()) }))).await.unwrap();
         });
         let directory = tempfile::tempdir().unwrap();
         let home = directory.path();
