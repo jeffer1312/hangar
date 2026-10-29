@@ -1,0 +1,74 @@
+{
+  "source_commit": "9e5e5d4e3fc280f43e17d10da99db662fafe0877",
+  "platform": "posix",
+  "command": "python backend/tests/fixtures/contract/harness-health/generate_wrapper_executable.py",
+  "cases": [
+    {
+      "name": "missing",
+      "modes": [],
+      "expected": {
+        "id": "wrapper",
+        "ok": false,
+        "codigo": "wrapper_falta",
+        "params": {
+          "lista": "bash"
+        },
+        "conserto": null,
+        "info": false
+      },
+      "program": null
+    },
+    {
+      "name": "not-executable",
+      "modes": [
+        384
+      ],
+      "expected": {
+        "id": "wrapper",
+        "ok": false,
+        "codigo": "wrapper_falta",
+        "params": {
+          "lista": "bash"
+        },
+        "conserto": null,
+        "info": false
+      },
+      "program": null
+    },
+    {
+      "name": "executable",
+      "modes": [
+        448
+      ],
+      "expected": {
+        "id": "wrapper",
+        "ok": false,
+        "codigo": "wrapper_falta",
+        "params": {
+          "lista": "bash"
+        },
+        "conserto": "wrapper",
+        "info": false
+      },
+      "program": "$ROOT/bin-0/bash"
+    },
+    {
+      "name": "later-executable",
+      "modes": [
+        384,
+        448
+      ],
+      "expected": {
+        "id": "wrapper",
+        "ok": false,
+        "codigo": "wrapper_falta",
+        "params": {
+          "lista": "bash"
+        },
+        "conserto": "wrapper",
+        "info": false
+      },
+      "program": "$ROOT/bin-1/bash"
+    }
+  ]
+}

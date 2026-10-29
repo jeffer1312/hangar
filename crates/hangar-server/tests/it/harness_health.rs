@@ -145,6 +145,8 @@ fn harness_health_files_match_python() {
         }
         for program in case["programs"].as_array().unwrap() {
             let path = home.path().join("bin").join(program.as_str().unwrap());
+            #[cfg(windows)]
+            let path = path.with_extension("cmd");
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, "").unwrap();
             #[cfg(unix)]

@@ -321,8 +321,7 @@ pub fn wrapper(env: &AccountEnvironment, cli: &str, windows: bool) -> Value {
         return item("wrapper", None, "wrapper_sem_shell", None, false, &[]);
     }
     if !missing.is_empty() {
-        let repair =
-            windows || crate::runtime::process::resolve_program("bash", env.base.iter()).is_some();
+        let repair = windows || crate::cli_probe::resolve_program("bash", env).is_some();
         return item(
             "wrapper",
             Some(false),

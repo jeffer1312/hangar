@@ -55,7 +55,7 @@ impl Probe {
                 return result.clone();
             }
         }
-        let program = resolve(cli, env);
+        let program = resolve_program(cli, env);
         let result = match program {
             None => Ok(None),
             Some(program) => capture(
@@ -116,7 +116,7 @@ impl Probe {
         }
     }
 }
-fn resolve(cli: &str, env: &AccountEnvironment) -> Option<std::path::PathBuf> {
+pub fn resolve_program(cli: &str, env: &AccountEnvironment) -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     {
         crate::runtime::process::resolve_program(cli, env.base.iter())
