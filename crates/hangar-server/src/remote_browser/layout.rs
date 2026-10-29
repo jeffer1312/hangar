@@ -1,5 +1,5 @@
 //! Posse do tamanho imposto: o último espectador conserva o original.
-use super::{input, shell, ws::Failure};
+use super::{shell, ws::Failure};
 use crate::list::bridge::ListBridge;
 use serde_json::{Value, json};
 use std::{

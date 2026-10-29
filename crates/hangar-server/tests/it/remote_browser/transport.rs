@@ -565,6 +565,7 @@ async fn frozen_case(name: &str) {
             desktop
                 .wait(|d| d.requests.len() >= expected["cmd"].as_array().unwrap().len())
                 .await;
+            scene.state.remote_browser.shutdown(&scene.nav_dir(), &scene.state.list).await;
             let mut actual = desktop.result(vec![], logs.0.lock().unwrap().clone());
             actual["events_by_viewer"] = json!([events, events_b]);
             actual["layout_after_old_viewer"] = json!(after);
@@ -635,6 +636,7 @@ async fn frozen_case(name: &str) {
         if changes_d02 {
             desktop.assert_no_new_requests(expected["cmd"].as_array().unwrap()).await;
         }
+        scene.state.remote_browser.shutdown(&scene.nav_dir(), &scene.state.list).await;
         let mut actual = desktop.result(events, logs.0.lock().unwrap().clone());
         if expected.get("close").is_some() {
             actual["close"] = closed.unwrap_or(json!({"code":1000,"reason":""}));

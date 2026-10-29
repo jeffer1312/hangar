@@ -29,7 +29,7 @@ use serde_json::{Value, json};
 use std::{
     net::SocketAddr,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::sync::Mutex;
 
@@ -408,6 +408,7 @@ async fn read(
                     send(output, change.event).await?;
                 }
                 Ok(None) => {}
+                Err(error) if error.repr.starts_with("OverflowError(") => return Err(error),
                 Err(error) => send(output, json!({"t":"erro","m":error.message})).await?,
             }
         } else {

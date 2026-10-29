@@ -173,10 +173,17 @@ impl Cdp {
                             Some(Err(tokio_tungstenite::tungstenite::Error::Capacity(
                                 tokio_tungstenite::tungstenite::error::CapacityError::MessageTooLong { size, max_size }
                             ))) => {
-                                closing(&mut socket, Some(CloseFrame {
+                                drop(PumpEnd(waiters.clone()));
+                                let _ = socket.close(Some(CloseFrame {
                                     code: CloseCode::Size,
                                     reason: format!("frame with {size} bytes exceeds limit of {max_size} bytes").into(),
                                 })).await;
+                                // O Stream termina no erro; drenar o transporte evita perder o Close num reset TCP.
+                                let _ = tokio::time::timeout(Duration::from_secs(10), async {
+                                    use tokio::io::AsyncReadExt;
+                                    let mut discarded = [0; 8192];
+                                    while socket.get_mut().read(&mut discarded).await.is_ok_and(|count| count > 0) {}
+                                }).await;
                                 break;
                             }
                             None | Some(Err(_)) => break,
