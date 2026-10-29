@@ -1,0 +1,436 @@
+//! Cliente externo de texto; credenciais e conteúdo nunca passam por outro processo.
+use std::{sync::OnceLock, time::Duration};
+
+use serde_json::{Value, json};
+
+use super::{SpeechError, config::SpeechConfig};
+
+pub async fn chat(
+    config: &SpeechConfig,
+    system: &str,
+    prompt: &str,
+    temperature: f64,
+    timeout: Duration,
+) -> Result<String, SpeechError> {
+    let (endpoint, key, model) = config.text_provider();
+    if key.is_empty() {
+        let detail = if endpoint == "https://api.groq.com/openai/v1" {
+            "Chave do provedor não configurada: configure a organização do texto em Configurações → Voz."
+        } else {
+            "Chave do provedor não configurada: preencha a Chave do LLM em Configurações → Avançado."
+        };
+        return Err(SpeechError::new(503, detail));
+    }
+    let mut body = json!({"model":model,"messages":[{"role":"system","content":system},
+        {"role":"user","content":prompt}],"temperature":temperature});
+    let effort = config.string("llm_reasoning_effort");
+    if !trim(&effort).is_empty() {
+        body["reasoning_effort"] = json!(trim(&effort));
+    }
+    if prefer_throughput(&endpoint, &model) {
+        body["provider"] = json!({"sort":"throughput"});
+    }
+    let response = client()?
+        .post(format!(
+            "{}/chat/completions",
+            endpoint.trim_end_matches('/')
+        ))
+        .header("authorization", format!("Bearer {key}"))
+        .header("content-type", "application/json")
+        .header("user-agent", "hangar/1.0")
+        .timeout(timeout)
+        .body(crate::transcript::pyjson::dumps_unicode(&body, false))
+        .send()
+        .await
+        .map_err(|error| {
+            SpeechError::new(
+                502,
+                format!("Falha ao contatar o provedor: {}", error.without_url()),
+            )
+        })?;
+    let status = response.status();
+    let bytes = read_response(response).await;
+    if !status.is_success() {
+        let detail = bytes
+            .map(|bytes| {
+                String::from_utf8_lossy(&bytes)
+                    .chars()
+                    .take(300)
+                    .collect::<String>()
+            })
+            .unwrap_or_else(|_| "(sem corpo)".into());
+        return Err(SpeechError::new(
+            502,
+            format!("provedor {}: {detail}", status.as_u16()),
+        ));
+    }
+    parse_content(&bytes?)
+}
+
+fn client() -> Result<&'static reqwest::Client, SpeechError> {
+    // O transporte conserva conexões; endpoint, credencial e prazo continuam sendo por pedido.
+    // Um redirecionamento não autoriza enviar a credencial ao endereço novo.
+    static CLIENT: OnceLock<Result<reqwest::Client, ()>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            crate::http_client()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|_| ())
+        })
+        .as_ref()
+        .map_err(|_| SpeechError::new(502, "Não foi possível iniciar o cliente do provedor."))
+}
+
+fn prefer_throughput(endpoint: &str, model: &str) -> bool {
+    reqwest::Url::parse(endpoint)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| host == "openrouter.ai")
+        && !model.contains(':')
+}
+
+async fn read_response(mut response: reqwest::Response) -> Result<Vec<u8>, SpeechError> {
+    const LIMIT: usize = 4 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| SpeechError::new(502, "Falha ao ler a resposta do provedor."))?
+    {
+        if chunk.len() > LIMIT - bytes.len() {
+            return Err(SpeechError::new(
+                502,
+                "A resposta do provedor excede o limite de leitura.",
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+fn parse_content(bytes: &[u8]) -> Result<String, SpeechError> {
+    let value: Value = serde_json::from_str(&String::from_utf8_lossy(bytes))
+        .map_err(|_| SpeechError::new(502, "A resposta do provedor não é um JSON válido."))?;
+    let text = value["choices"]
+        .get(0)
+        .and_then(|v| v["message"]["content"].as_str())
+        .ok_or_else(|| {
+            SpeechError::new(502, "A resposta do provedor não contém o texto esperado.")
+        })?;
+    let text = trim(text);
+    if text.is_empty() {
+        return Err(SpeechError::new(502, "O provedor devolveu texto vazio."));
+    }
+    Ok(text.to_owned())
+}
+
+pub(super) fn digest(text: &str) -> String {
+    ring::digest::digest(&ring::digest::SHA256, text.as_bytes())
+        .as_ref()
+        .iter()
+        .map(|v| format!("{v:02x}"))
+        .collect()
+}
+
+pub(super) fn profile(config: &SpeechConfig) -> String {
+    let (endpoint, key, model) = config.text_provider();
+    digest(&format!(
+        "{endpoint}\0{key}\0{model}\0{}",
+        config.string("llm_reasoning_effort")
+    ))
+}
+
+pub(super) fn trim(text: &str) -> &str {
+    text.trim_matches(|c: char| c.is_whitespace() || matches!(c, '\u{1c}'..='\u{1f}'))
+}
+
+#[cfg(test)]
+pub(super) mod testing {
+    use super::*;
+    use axum::{
+        Router,
+        extract::{Request, State},
+        response::{IntoResponse, Response},
+        routing::post,
+    };
+    use std::{
+        collections::VecDeque,
+        path::PathBuf,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    #[derive(Clone)]
+    struct Replies {
+        values: Arc<Mutex<VecDeque<(u16, Value)>>>,
+        hits: Arc<AtomicUsize>,
+        bodies: Arc<Mutex<Vec<Value>>>,
+        headers: Arc<Mutex<Vec<axum::http::HeaderMap>>>,
+    }
+
+    pub struct FakeServer {
+        pub config: SpeechConfig,
+        pub hits: Arc<AtomicUsize>,
+        pub bodies: Arc<Mutex<Vec<Value>>>,
+        pub headers: Arc<Mutex<Vec<axum::http::HeaderMap>>>,
+        task: tokio::task::JoinHandle<()>,
+        _home: tempfile::TempDir,
+    }
+
+    impl Drop for FakeServer {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    pub async fn fake(values: Vec<(u16, Value)>) -> FakeServer {
+        async fn reply(State(state): State<Replies>, request: Request) -> Response {
+            state
+                .headers
+                .lock()
+                .unwrap()
+                .push(request.headers().clone());
+            let bytes = axum::body::to_bytes(request.into_body(), 4 * 1024 * 1024)
+                .await
+                .unwrap();
+            state
+                .bodies
+                .lock()
+                .unwrap()
+                .push(serde_json::from_slice(&bytes).unwrap());
+            state.hits.fetch_add(1, Ordering::SeqCst);
+            let (status, value) = state
+                .values
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| (200, json!({"choices":[{"message":{"content":"ok"}}]})));
+            (
+                axum::http::StatusCode::from_u16(status).unwrap(),
+                [("content-type", "application/json")],
+                value.to_string(),
+            )
+                .into_response()
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let state = Replies {
+            values: Arc::new(Mutex::new(values.into())),
+            hits: Arc::default(),
+            bodies: Arc::default(),
+            headers: Arc::default(),
+        };
+        let router = Router::new()
+            .route("/v1/chat/completions", post(reply))
+            .with_state(state.clone());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let home = tempfile::tempdir().unwrap();
+        let config = SpeechConfig {
+            values: json!({"llm_base_url":format!("http://{address}/v1"),"llm_api_key":"fixture-key"}),
+            home: home.path().to_owned(),
+            cache_dir: PathBuf::new(),
+        };
+        FakeServer {
+            config,
+            hits: state.hits,
+            bodies: state.bodies,
+            headers: state.headers,
+            task,
+            _home: home,
+        }
+    }
+
+    pub fn content(value: &str) -> (u16, Value) {
+        (200, json!({"choices":[{"message":{"content":value}}]}))
+    }
+
+    pub fn fixture() -> Value {
+        serde_json::from_str(include_str!(
+            "../../tests/fixtures/speech/text_contract.json"
+        ))
+        .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{testing::*, *};
+
+    #[tokio::test]
+    async fn request_preserves_the_contract_and_trims_unicode() {
+        let mut server = fake(vec![content("\u{1c} ação \u{85}")]).await;
+        server.config.values["llm_model"] = json!("custom");
+        server.config.values["llm_reasoning_effort"] = json!("none");
+        assert_eq!(
+            chat(
+                &server.config,
+                "sistema",
+                "ação",
+                0.3,
+                Duration::from_secs(2)
+            )
+            .await
+            .unwrap(),
+            "ação"
+        );
+        let bodies = server.bodies.lock().unwrap();
+        assert_eq!(
+            bodies[0],
+            json!({"model":"custom","messages":[{"role":"system","content":"sistema"},{"role":"user","content":"ação"}],"temperature":0.3,"reasoning_effort":"none"})
+        );
+        let headers = server.headers.lock().unwrap();
+        assert_eq!(headers[0]["authorization"], "Bearer fixture-key");
+        assert_eq!(headers[0]["user-agent"], "hangar/1.0");
+        assert_eq!(headers[0]["content-type"], "application/json");
+    }
+
+    #[tokio::test]
+    async fn external_failures_and_non_text_content_never_become_success() {
+        for value in [
+            json!({}),
+            json!({"choices":[]}),
+            json!({"choices":[{"message":{"content":null}}]}),
+            json!({"choices":[{"message":{"content":[{"text":"oi"}]}}]}),
+            json!({"choices":[{"message":{"content":"  "}}]}),
+        ] {
+            let server = fake(vec![(200, value)]).await;
+            assert_eq!(
+                chat(&server.config, "s", "p", 0.0, Duration::from_secs(2))
+                    .await
+                    .unwrap_err()
+                    .status,
+                502
+            );
+        }
+        let server = fake(vec![(429, json!({"error":"limite"}))]).await;
+        let error = chat(&server.config, "s", "p", 0.0, Duration::from_secs(2))
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, 502);
+        assert!(error.detail.starts_with("provedor 429:"));
+    }
+
+    #[tokio::test]
+    async fn a_missing_key_fails_before_the_provider() {
+        let mut server = fake(vec![]).await;
+        server.config.values["llm_api_key"] = json!("");
+        assert_eq!(
+            chat(&server.config, "s", "p", 0.0, Duration::from_secs(2))
+                .await
+                .unwrap_err()
+                .status,
+            503
+        );
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn provider_resolution_matches_the_original_python() {
+        for case in fixture()["provider_cases"].as_array().unwrap() {
+            let config = SpeechConfig {
+                values: case["config"].clone(),
+                home: Default::default(),
+                cache_dir: Default::default(),
+            };
+            assert_eq!(json!(config.text_provider()), case["expected"]);
+        }
+    }
+
+    #[test]
+    fn throughput_is_only_added_to_openrouter_without_a_user_suffix() {
+        assert!(prefer_throughput(
+            "https://openrouter.ai/api/v1",
+            "openai/gpt-x"
+        ));
+        assert!(!prefer_throughput(
+            "https://openrouter.ai/api/v1",
+            "openai/gpt-x:floor"
+        ));
+        assert!(!prefer_throughput(
+            "https://other.invalid/v1",
+            "openai/gpt-x"
+        ));
+        assert!(!prefer_throughput("not a URL", "openai/gpt-x"));
+    }
+
+    #[tokio::test]
+    async fn absent_reasoning_effort_is_absent_from_the_request() {
+        let server = fake(vec![content("texto")]).await;
+        chat(&server.config, "s", "p", 0.0, Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert!(
+            server.bodies.lock().unwrap()[0]
+                .get("reasoning_effort")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn redirect_never_contacts_the_destination_with_the_credential() {
+        let destination = fake(vec![]).await;
+        let target = format!(
+            "{}/chat/completions",
+            destination.config.string("llm_base_url")
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = axum::Router::new().fallback(move || {
+            let target = target.clone();
+            async move {
+                (
+                    axum::http::StatusCode::TEMPORARY_REDIRECT,
+                    [("location", target)],
+                    "moved",
+                )
+            }
+        });
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let mut config = destination.config.clone();
+        config.values["llm_base_url"] = json!(format!("http://{address}/v1"));
+        let error = chat(&config, "s", "p", 0.0, Duration::from_secs(2))
+            .await
+            .unwrap_err();
+        task.abort();
+        assert!(error.detail.starts_with("provedor 307:"));
+        assert_eq!(
+            destination.hits.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_success_and_invalid_json_are_visible_provider_errors() {
+        let server = fake(vec![content(&"x".repeat(4 * 1024 * 1024))]).await;
+        let error = chat(&server.config, "s", "p", 0.0, Duration::from_secs(2))
+            .await
+            .unwrap_err();
+        assert!(error.detail.contains("limite de leitura"));
+        assert_eq!(parse_content(b"not JSON").unwrap_err().status, 502);
+    }
+
+    #[tokio::test]
+    async fn http_failure_details_are_limited_in_characters() {
+        let value = json!({"error":"ação".repeat(300)});
+        let expected = value.to_string().chars().take(300).collect::<String>();
+        let server = fake(vec![(500, value)]).await;
+        let error = chat(&server.config, "s", "p", 0.0, Duration::from_secs(2))
+            .await
+            .unwrap_err();
+        assert_eq!(error.detail, format!("provedor 500: {expected}"));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn arbitrary_provider_bytes_do_not_panic(bytes in proptest::collection::vec(proptest::prelude::any::<u8>(),0..4096)) {
+            let _ = parse_content(&bytes);
+        }
+    }
+}
