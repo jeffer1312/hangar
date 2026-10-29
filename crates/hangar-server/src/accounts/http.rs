@@ -545,6 +545,13 @@ async fn codex_operation(state:&crate::routes::AppState,action:&str,id:&str,atte
     let account=match state.accounts.resolve(Provider::Codex,id) {Ok(account)=>account,Err(err)=>return error(err)};
     let result=match action {
         "status"=>Ok(state.accounts.codex_login_status(&account)),
+        "refresh_hooks"=>match state.state.runtime.get() {
+            Some(runtime)=>match AccountKey::new(Provider::Codex,&account.home) {
+                Ok(key)=>Ok(runtime.refresh_hooks(&key).await),
+                Err(_)=>Err(AccountError::io()),
+            },
+            None=>Err(AccountError::io()),
+        },
         "login"=>match bridge(state) {
             Ok(bridge)=>match super::codex_login::CodexInvalidator::new(state.cfg.upstream,state.cfg.internal_secret.clone(),bridge.instance().into()) {
                 Ok(invalidator)=>state.accounts.start_codex_login(&account,state.state.runtime.get().cloned(),invalidator).await,

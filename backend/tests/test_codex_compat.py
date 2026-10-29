@@ -19,6 +19,75 @@ from app.codex_compat import (
 )
 
 
+@pytest.mark.parametrize("failure", [None,"exit","timeout"])
+def test_runtime_ecc_instala_so_producao_uma_vez_antes_de_confiar(tmp_path, monkeypatch, failure):
+    from app import codex_compat as module
+    home = tmp_path / ".codex"
+    root = home / "plugins/cache/ecc/ecc/1"
+    (root / ".codex-plugin").mkdir(parents=True)
+    (root / ".codex-plugin/plugin.json").write_text(json.dumps({"name":"ecc"}))
+    (root / "package.json").write_text(json.dumps({"dependencies":{"js-yaml":"4.3.2"},
+                                                  "devDependencies":{"not-needed":"1.0.0"}}))
+    (root / "package-lock.json").write_text(json.dumps({"packages":{
+        "node_modules/js-yaml":{"version":"4.3.2"}}}))
+    node = tmp_path / "node"
+    npm = tmp_path / "npm-cli.js"
+    node.write_text("")
+    npm.write_text("")
+    monkeypatch.setattr(module.shutil, "which", lambda name: str(node if name == "node" else npm))
+    calls = []
+
+    def run(args, **kwargs):
+        if args[1] != "-e":
+            calls.append(args)
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(args,120,output=b"npm partial",stderr=b"private detail")
+            if failure == "exit":
+                return subprocess.CompletedProcess(args,1,stdout=b"npm partial",stderr=b"private detail")
+            package = root / "node_modules/js-yaml"
+            package.mkdir(parents=True)
+            (package / "package.json").write_text('{"version":"4.3.2"}')
+        return subprocess.CompletedProcess(args,0,stdout=b"",stderr=b"")
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    changed = []
+    if failure:
+        with pytest.raises(RuntimeError,match="dependências do ECC"):
+            module.adaptar_hooks_plugin(root,home,tmp_path/"backups",normalizar=lambda value:value,
+                                       ao_alterar=lambda:changed.append(True))
+        assert b"private detail" in (tmp_path/"backups/ecc-runtime-npm.log").read_bytes()
+        assert not changed
+        return
+    for _ in range(2):
+        module.adaptar_hooks_plugin(root,home,tmp_path / "backups",normalizar=lambda value:value,
+                                   ao_alterar=lambda:changed.append(True))
+    assert (root / "node_modules/js-yaml/package.json").is_file()
+    assert len(calls) == 1
+    assert "--omit=dev" in calls[0]
+    assert "--ignore-scripts" in calls[0]
+    assert "--no-bin-links" in calls[0]
+    assert changed == [True]
+
+
+def test_confianca_inicial_aprova_so_hooks_da_conta_e_plugins(tmp_path):
+    from app.codex_compat import edicoes_confianca_hooks
+    data = {"data":[{"hooks":[
+        {"key":"ecc@ecc:session_start:0:0","currentHash":"sha256:decl/sha256:content",
+         "source":"plugin","trustStatus":"untrusted","enabled":True},
+        {"key":str(tmp_path / "hooks.json")+":pre_tool_use:0:0","currentHash":"sha256:account",
+         "source":"user","trustStatus":"modified","enabled":True},
+        {"key":"repo/hooks.json:0","currentHash":"sha256:repo","source":"project",
+         "trustStatus":"untrusted","enabled":True},
+        {"key":"off","currentHash":"sha256:off","source":"plugin",
+         "trustStatus":"untrusted","enabled":False},
+    ]}]}
+    edits, manual = edicoes_confianca_hooks(data,tmp_path)
+    assert any(edit["value"] == "sha256:decl/sha256:content" for edit in edits)
+    assert any(edit["value"] == "sha256:account" for edit in edits)
+    assert not any(edit["value"] in ("sha256:repo","sha256:off") for edit in edits)
+    assert manual > 0
+
+
 WRAPPER = Path(__file__).resolve().parents[2] / "scripts" / "codex-hook-allow.py"
 
 

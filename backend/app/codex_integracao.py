@@ -21,7 +21,7 @@ from app.codex_arquivos import (
     AlteradoExternamente, backup, editar_config, exclusivo, gravar, hash_bytes,
     json_bytes, json_obj, ler, mesclar_hooks, remapear, transformar,
 )
-from app.codex_compat import adaptar_hooks_plugin, normalizar_hooks, remover_instrucao_de_leitura, wrapper_instalado
+from app.codex_compat import adaptar_hooks_plugin, edicoes_confianca_hooks, normalizar_hooks, remover_instrucao_de_leitura, wrapper_instalado
 from app.codex_instrucoes import limite_instrucoes, preparar_instrucoes
 from app.codex_importador import CodexNativo, CodexNativoErro
 from app.codex_msgs import msg, serializar
@@ -312,6 +312,8 @@ class IntegracaoCodex:
 
     async def iniciar(self, motivo: str = "manual", forcar: bool = True) -> dict:
         if self._task is None or self._task.done():
+            from app.codex_contas import PREPARED_MARKER
+            (self.codex_home / PREPARED_MARKER).unlink(missing_ok=True)
             self._estado = {**self.status(), "estado": "executando", "etapa": msg("etapa_aguardando")}
             self._task_forcada = forcar
             self._task = asyncio.create_task(self.reconciliar(motivo, forcar))
@@ -512,23 +514,34 @@ class IntegracaoCodex:
             transformar(alvo, lambda raw: remover_instrucao_de_leitura(raw.decode()).encode(), self.backups)
 
     async def _conferir_confianca(self, codex) -> None:
+        from app import account_bridge
+        from app.codex_contas import Account, AccountError, default_home
+        from fastapi import HTTPException
+
         try:
             dados = await codex.request("hooks/list", {"cwds": [str(self.home)]})
-            entradas = dados.get("data") if isinstance(dados, dict) else None
-            if not isinstance(entradas, list) or any(not isinstance(e, dict) or not isinstance(e.get("hooks", []), list)
-                                                     or any(not isinstance(h, dict) for h in e.get("hooks", []))
-                                                     for e in entradas):
-                raise CodexNativoErro("hooks/list em formato desconhecido")
-            pendente = any(h.get("enabled") and h.get("trustStatus") in ("untrusted", "modified")
-                          for entry in entradas for h in entry.get("hooks", []))
+            edits, manual = edicoes_confianca_hooks(dados, self.codex_home)
+            if edits:
+                await codex.request("config/batchWrite", {"edits":edits,"reloadUserConfig":True})
+            is_default = self.codex_home.resolve() in ((self.home / ".codex").resolve(), default_home().resolve())
+            account_id = ("default" if is_default else
+                          self.codex_home.name.removeprefix(".codex-"))
+            account = Account(account_id, self.codex_home, is_default)
+            result = await self._mutacao(account_bridge.request_codex, "refresh_hooks", account)
+            if result is not None and result.get("ok") is not True:
+                raise CodexNativoErro("O Codex não confirmou a recarga dos hooks nas sessões abertas")
+            pendente = bool(result and result.get("approval_required")) or manual > 0
             if pendente:
                 self._confianca()
             else:
                 self._estado["confianca_pendente"] = False
                 self._estado["avisos"] = [a for a in self._estado["avisos"]
                                           if serializar(a).get('codigo') != "aviso_hooks_alterados"]
-        except CodexNativoErro:
-            self._estado["avisos"].append(msg("aviso_confianca_indisponivel"))
+        except (CodexNativoErro, AccountError, HTTPException, ValueError) as exc:
+            if isinstance(exc,ValueError):
+                self._estado["avisos"].append(msg("aviso_confianca_indisponivel"))
+            self._confianca()
+            self._erro(msg("erro_recarregar_hooks"))
 
     def _hooks(self, fonte: dict, registro: dict) -> None:
         path = self.codex_home / "hooks.json"
@@ -789,7 +802,7 @@ class IntegracaoCodex:
                 plugins[id_] = conhecido
                 # Retém a identidade mesmo se uma etapa posterior falhar ou a fonte mudar.
                 registro.setdefault("plugins", {})[id_] = conhecido
-                self._hooks_plugin(Path(conhecido["path"]))
+                await self._mutacao(self._hooks_plugin, Path(conhecido["path"]))
                 plugins_pendentes.discard(id_)
                 self._checkpoint(registro)
             except (OSError, KeyError, ValueError, RuntimeError):
@@ -1118,20 +1131,21 @@ class IntegracaoCodex:
         return hash_bytes(json_bytes(self._phase_fingerprints(fontes=fontes)))
 
     def precisa_reconciliar(self) -> bool:
-        """Cache por conteúdo: fonte igual à da última rodada, marketplace dentro do prazo e sem
-        falha a retentar = não há o que fazer, e abrir sessão não chama o Codex."""
+        """Preparo concluído é reutilizado; atualizar depois disso depende da sincronização manual."""
         if self._task and not self._task.done():
             return False
         try:
             registro = json_obj(self.raiz / "estado.json")
         except (OSError, ValueError):
             return True
+        status = registro.get("status", {})
+        if status.get("estado") == "ok":
+            return False
         try:
             if registro.get("fingerprint") != self.fingerprint():
                 return True
         except (OSError, ValueError):
             return True
-        status = registro.get("status", {})
         proxima = status.get("proxima_atualizacao")
         if proxima and datetime.fromisoformat(proxima).timestamp() <= time.time():
             return True

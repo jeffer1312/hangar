@@ -245,7 +245,7 @@ fn terminal_operation(kind:OperationKind) -> bool {
     type K = OperationKind;
     matches!(kind,K::Input | K::Steer | K::Interrupt | K::Select | K::AnswerQuestions | K::SkipQuestion | K::DispatchAsyncAnswer
         | K::Compact | K::ListModels | K::ListSkills | K::ReadRateLimits | K::ReadSettings | K::SetModel | K::SetEffort | K::SetServiceTier | K::SetMode
-        | K::ReadSubagent | K::SubagentMessage | K::TerminateTerminal)
+        | K::ReadSubagent | K::SubagentMessage | K::TerminateTerminal | K::RefreshHooks)
 }
 fn string(value:&Value) -> Option<String> { value.as_str().map(str::to_owned) }
 fn service_tier(value:&Value) -> Option<String> {
@@ -797,45 +797,84 @@ impl Engine {
 
     /// Plugin ou `hooks.json` sincronizado pelo Hangar mudou com a sessão aberta e o Codex passou a
     /// recusar o hook. Só a conexão desta sessão recarrega a confiança que o app-server dela tem em memória.
-    fn trust_synced_hooks(&mut self,effects:&mut Vec<Effect>) {
-        if self.rpc.values().any(|rpc|!rpc.timed_out && rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust")) { return; }
+    fn trust_synced_hooks(&mut self,parent:Option<&str>,effects:&mut Vec<Effect>) -> bool {
+        if let Some(rpc) = self.rpc.values_mut().find(|rpc|!rpc.timed_out && rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust")) {
+            if let Some(parent) = parent {
+                let next = rpc.continuation.as_mut().unwrap();
+                if next["parent"].is_string() { return false; }
+                next["parent"] = parent.into();
+            }
+            return true;
+        }
         let cwds:Vec<Value> = self.metadata["cwd"].as_str().map(Value::from).into_iter().collect();
         self.counter += 1;
         self.rpc(format!("hook_trust:{}:{}",self.generation,self.counter),"hooks/list",json!({"cwds":cwds}),
-            Some(json!({"kind":"hook_trust"})),effects);
+            Some(json!({"kind":"hook_trust","parent":parent})),effects);
+        true
     }
 
     fn hook_trust_reply(&mut self,rpc:&Rpc,line:&Value,effects:&mut Vec<Effect>) {
+        let parent = rpc.continuation.as_ref().and_then(|next|next["parent"].as_str());
+        let review = "Use uma sessão com terminal na mesma conta para executar /hooks e depois recarregue esta sessão no Hangar.";
+        let reply = |effects:&mut Vec<Effect>,disposition,payload| {
+            if let Some(parent) = parent { effects.push(Effect::Reply { operation_id:parent.into(),disposition,payload }); }
+        };
         // Uma rodada por turno: a recusa que voltar depois dela é falha de verdade e aparece como as outras.
         if rpc.method != "hooks/list" || !line["error"].is_null() { self.hook_trust_settled = true; }
         if !line["error"].is_null() {
             self.policy("unknown_private",json!({"kind":"hook_trust_failed","event":{"method":rpc.method,"error":line["error"]["message"]}}),effects);
             let why = line["error"]["message"].as_str().unwrap_or("erro sem mensagem");
-            self.hook_notice("hook_failed",&format!("o Hangar não conseguiu reaprovar os hooks alterados: {why}"),effects);
+            self.hook_notice("hook_failed",&format!("o Hangar não conseguiu reaprovar os hooks alterados: {why}. {review}"),effects);
+            reply(effects,Disposition::Rejected,json!({"error":"O Codex recusou a recarga dos hooks","approval_required":true}));
             return;
         }
-        if rpc.method != "hooks/list" { return; }
+        if rpc.method != "hooks/list" {
+            let manual = rpc.continuation.as_ref().is_some_and(|next|next["approval_required"] == true);
+            if manual { self.hook_notice("hook_prompt",review,effects); }
+            reply(effects,Disposition::Accepted,json!({"refreshed":true,"approval_required":manual}));
+            return;
+        }
+        let Some(entries) = line["result"]["data"].as_array() else {
+            self.hook_trust_settled = true;
+            self.hook_notice("hook_failed",&format!("o Codex não informou os hooks. {review}"),effects);
+            reply(effects,Disposition::Rejected,json!({"error":"Lista de hooks inválida","approval_required":true}));
+            return;
+        };
+        if entries.iter().any(|entry|["errors","warnings"].iter().any(|field|entry[field].as_array().is_some_and(|items|!items.is_empty()))) {
+            self.hook_trust_settled = true;
+            self.hook_notice("hook_failed",&format!("o Codex não conseguiu carregar todos os hooks. {review}"),effects);
+            reply(effects,Disposition::Rejected,json!({"error":"O Codex não conseguiu carregar todos os hooks","approval_required":true}));
+            return;
+        }
         // Aberta na home, o Codex lista o `hooks.json` da conta como hook de projeto: é o mesmo arquivo que o Hangar escreve.
         // Barra normalizada: no Windows a chave vem com `\`.
         let account_hooks = self.metadata["codex_home"].as_str().map(|home|format!("{}/hooks.json:",home.replace('\\',"/").trim_end_matches('/')));
+        let synced = |hook:&Value| matches!(hook["source"].as_str(),Some("user" | "plugin"))
+            || hook["key"].as_str().is_some_and(|key|account_hooks.as_deref().is_some_and(|prefix|key.replace('\\',"/").starts_with(prefix)));
+        let manual = entries.iter().flat_map(|entry|entry["hooks"].as_array().into_iter().flatten())
+            .any(|hook|hook["enabled"] == true && (hook["trustStatus"] == "untrusted" || hook["trustStatus"] == "modified" && !synced(hook)));
         // Só o que já foi aprovado antes (`modified` = conteúdo mudou depois da aprovação): hook nunca aprovado
         // (`untrusted`) continua pedindo a decisão de quem usa.
-        let edits:Vec<Value> = line["result"]["data"].as_array().into_iter().flatten()
+        let edits:Vec<Value> = entries.iter()
             .flat_map(|entry|entry["hooks"].as_array().into_iter().flatten())
             .filter(|hook|hook["enabled"] == true && matches!(hook["trustStatus"].as_str(),Some("modified" | "trusted")))
-            .filter_map(|hook|Some((hook["key"].as_str()?,hook["currentHash"].as_str()?,hook["source"].as_str().unwrap_or(""))))
-            .filter(|(key,_,source)|matches!(*source,"user" | "plugin")
-                || account_hooks.as_deref().is_some_and(|prefix|key.replace('\\',"/").starts_with(prefix)))
-            .map(|(key,hash,_)|{
+            .filter(|hook|synced(hook))
+            .filter_map(|hook|Some((hook["key"].as_str()?,hook["currentHash"].as_str()?)))
+            .map(|(key,hash)|{
                 let path = ["hooks","state",key,"trusted_hash"].map(|part|Value::from(part).to_string()).join(".");
                 json!({"keyPath":path,"value":hash,"mergeStrategy":"replace"})
             })
             .collect();
-        if edits.is_empty() { self.hook_trust_settled = true; return; }
+        if edits.is_empty() {
+            self.hook_trust_settled = true;
+            if manual { self.hook_notice("hook_prompt",review,effects); }
+            reply(effects,Disposition::Accepted,json!({"refreshed":true,"approval_required":manual}));
+            return;
+        }
         // Reescreve também os já confiados: a recarga é o que tira a recusa da memória desta sessão.
         self.counter += 1;
         self.rpc(format!("hook_trust:{}:{}",self.generation,self.counter),"config/batchWrite",
-            json!({"edits":edits,"reloadUserConfig":true}),Some(json!({"kind":"hook_trust"})),effects);
+            json!({"edits":edits,"reloadUserConfig":true}),Some(json!({"kind":"hook_trust","parent":parent,"approval_required":manual})),effects);
     }
 
     fn send(&mut self,operation_id:String,request:ClientRequest,continuation:Option<Value>,effects:&mut Vec<Effect>) {
@@ -1560,6 +1599,10 @@ impl Engine {
             OperationKind::ListSkills => self.send(id,self.skills_list(),None,&mut effects),
             OperationKind::ReadRateLimits => self.send(id,ClientRequest::AccountRateLimitsRead,None,&mut effects),
             OperationKind::ReadSettings => self.send(id,self.thread_read(payload["include_turns"].as_bool().unwrap_or(false)),None,&mut effects),
+            OperationKind::RefreshHooks => {
+                if !self.trust_synced_hooks(Some(&id),&mut effects) { return Err(error("A recarga dos hooks já está em andamento; tente novamente.")); }
+                self.hook_trust_settled = false;
+            }
             OperationKind::SetModel | OperationKind::SetEffort => {
                 // Campo presente no pedido vence o atual; `null` no pedido limpa.
                 let pick = |key:&str,current:&Option<String>|payload.get(key).map_or_else(||current.clone(),|value|string(value));
@@ -2526,7 +2569,7 @@ impl Engine {
             // Só a recusa do próprio Codex (`failed` com a entrada de erro dele), não um texto que o hook escreveu.
             N::HookCompleted(n) if !self.hook_trust_settled && n.run.status == "failed" && n.run.entries.iter()
                 .any(|entry|entry.kind == "error" && entry.text.as_deref().is_some_and(|text|text.contains(HOOK_APPROVAL_REQUIRED))) => {
-                self.trust_synced_hooks(effects);
+                self.trust_synced_hooks(None,effects);
                 return Ok(());
             }
             N::HookCompleted(n) if n.run.event_name == "userPromptSubmit" && ["blocked","stopped"].contains(&n.run.status.as_str()) => {

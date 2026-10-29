@@ -6,7 +6,7 @@ hooks so-Claude do app (previa, AskUserQuestion, pareamento) e reescreveria o co
 checkout diferente. O adapter do Codex le o marcador deste hook como segunda fonte de "turno
 fechou" (adapters/codex/adapter.py), entao ele precisa existir mesmo com a integracao desligada.
 
-Só reescreve formatos Windows que já falham: qualquer entrada funcional de outro checkout fica
+Só reescreve formatos Windows e o Python legado ausente do pacote: entrada funcional de outro checkout fica
 como está, pois no Codex hook alterado é hook não aprovado.
 """
 import logging
@@ -22,6 +22,7 @@ from app.hook_installer import (
     _STATE_COMMAND,
     _load_settings,
     _refers_to,
+    _tokens,
     _write,
 )
 
@@ -87,6 +88,33 @@ def _reescrever_formato_cmd(hooks: dict, comando: str, script: str = STATE_HOOK)
     return tocados
 
 
+def _reparar_python_legado(hooks: dict, windows: bool) -> list[str]:
+    legacy = Path(STATE_HOOK).parents[2] / "backend/.venv" / ("Scripts/python.exe" if windows else "bin/python")
+    if legacy.is_file() or not Path(_PYTHON).is_file():
+        return []
+    commands = ((STATE_HOOK, comando_estado(windows)), (NAV_HOOK, comando_navegador(windows)),
+                (GUARD_HOOK, comando_guarda(windows)))
+    touched = []
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            for hook in (group.get("hooks") if isinstance(group, dict) and isinstance(group.get("hooks"), list) else []):
+                command = hook.get("command") if isinstance(hook, dict) else None
+                if not isinstance(command, str):
+                    continue
+                tokens = _tokens(command)
+                program = tokens[1] if tokens[0] == "&" and len(tokens) > 1 else tokens[0]
+                if Path(program.strip("\"'")) != legacy:
+                    continue
+                for script, replacement in commands:
+                    if _refers_to(command, script, por_nome=True):
+                        hook["command"] = replacement
+                        touched.append(event)
+                        break
+    return touched
+
+
 def ensure_codex_state_hook_installed(home: Path | None = None, *, windows: bool | None = None) -> list[str]:
     """Instala os hooks próprios do Codex; devolve os eventos gravados (só para log)."""
     try:
@@ -127,7 +155,8 @@ def ensure_codex_state_hook_installed(home: Path | None = None, *, windows: bool
         if windows:
             faltando += _reescrever_formato_cmd(hooks, comando)
             faltando += _reescrever_formato_cmd(hooks, guarda, GUARD_HOOK)
-            faltando = list(dict.fromkeys(faltando))
+        faltando += _reparar_python_legado(hooks, windows)
+        faltando = list(dict.fromkeys(faltando))
         if faltando:
             _write(path, data)
         return faltando

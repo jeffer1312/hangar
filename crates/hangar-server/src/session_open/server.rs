@@ -450,26 +450,22 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
     // O spec desta resolução contra o guardado na reserva: nada resolvido nem montado de novo para ela.
     if let Some(adopting) = adopting.as_deref_mut() { adopting.compare(&resolved).await; }
     if !super::open::opens_here(&resolved.spec) { return Decision::NotOurs; }
-    if let super::Account::Codex { account_id } = &resolved.spec.account { codex_preparation_warning(st, account_id).await; }
+    if let super::Account::Codex { account_id } = &resolved.spec.account {
+        if let Err(error) = codex_preparation(st,account_id).await { return Decision::Refused(error); }
+    }
     match super::open::open_adopting(host, resolved, caller, adopting).await {
         Ok(opened) => Decision::Opened(opened),
         Err(error) => Decision::Refused(error),
     }
 }
 
-/// `_codex_require_idle_preparation`: conta Codex adicional com a sincronização fora de `ready` abre
-/// assim mesmo; o estado fica no log.
-async fn codex_preparation_warning(st: &AppState, account_id: &str) {
-    let Ok(account) = st.accounts.resolve(crate::accounts::Provider::Codex, account_id) else { return };
-    if account.is_default { return; }
-    let status = match crate::accounts::http::bridge(st) {
-        Ok(bridge) => st.accounts.preparation_status(&account, &bridge).await,
-        Err(error) => return tracing::warn!(code = error.code, "conta Codex {account_id}: sincronização não lida antes de abrir"),
-    };
-    if status["status"] != "ready" {
-        let issues: Vec<&str> = status["issues"].as_array().into_iter().flatten().filter_map(|i| i["code"].as_str()).collect();
-        tracing::warn!("conta Codex {account_id} com sincronização {}; pendências: {issues:?}", status["status"]);
-    }
+async fn codex_preparation(st: &AppState, account_id: &str) -> Result<(),OpenError> {
+    let account = st.accounts.resolve(crate::accounts::Provider::Codex,account_id)
+        .map_err(|error|OpenError::new(error.status,error.code,error.message))?;
+    let bridge = crate::accounts::http::bridge(st)
+        .map_err(|error|OpenError::new(error.status,error.code,error.message))?;
+    st.accounts.prepare_for_session(&account,bridge,tokio::time::Instant::now()+std::time::Duration::from_secs(60)).await
+        .map(|_|()).map_err(|error|OpenError::new(error.status,error.code,error.message).with_params(error.params))
 }
 
 /// A linha `api.servidor` do middleware de acesso do Python, para o pedido que o Rust atendeu

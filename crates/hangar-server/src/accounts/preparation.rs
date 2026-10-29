@@ -33,6 +33,7 @@ pub struct PreparationState {
 }
 pub type Preparations = Arc<Mutex<HashMap<AccountKey, PreparationState>>>;
 pub type PreparationGates = super::locks::KeyedGates;
+pub const PREPARED_MARKER: &str = ".hangar-prepared-v1";
 
 pub fn running() -> Value {
     json!({"status":"running","trust_pending":false,"issues":[],"etapa":null})
@@ -48,6 +49,27 @@ fn complete(value: &Value) -> bool {
 }
 
 impl AccountService {
+    pub async fn prepare_for_session(
+        &self, account: &Account, bridge: AccountsBridge, deadline: tokio::time::Instant,
+    ) -> Result<Value, AccountError> {
+        let mut status = self.prepare(account, bridge.clone(), false, None).await?;
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(AccountError::new(503,"codex_account_preparing",
+                    "a conta continua em preparo; aguarde a conclusão e tente abrir novamente",json!({"account_id":account.id})));
+            }
+            match status["status"].as_str() {
+                Some("ready")=>return Ok(status),
+                Some("running")=>{},
+                _=>return Err(AccountError::new(503,"codex_account_prepare_incomplete",
+                    "o preparo da conta não terminou; confira as pendências na sincronização",json!({"account_id":account.id,"issues":status["issues"]}))),
+            }
+            // O preparo publica estado, mas não oferece assinatura; a espera só lê o estado e tem prazo.
+            tokio::time::sleep_until((tokio::time::Instant::now()+Duration::from_millis(200)).min(deadline)).await;
+            status = self.preparation_status(account,&bridge).await;
+        }
+    }
+
     fn preparation_gate(&self, key: &AccountKey) -> Arc<tokio::sync::Mutex<()>> {
         self.preparation_gates.gate(key)
     }
@@ -82,9 +104,6 @@ impl AccountService {
         }
     }
     fn stored_status(&self, account: &Account, key: &AccountKey) -> Value {
-        if account.is_default {
-            return json!({"status":"ready","trust_pending":false,"issues":[],"etapa":null,"herdado":null});
-        }
         let home = account.home.to_string_lossy();
         let digest: String = ring::digest::digest(&ring::digest::SHA256, home.as_bytes())
             .as_ref()
@@ -129,7 +148,11 @@ impl AccountService {
                 Err(_) => return failed("codex_account_state_invalid"),
             }
         }
-        idle_sync()
+        if account.is_default && account.home.join(PREPARED_MARKER).is_file() {
+            json!({"status":"ready","trust_pending":false,"issues":[],"etapa":null,"herdado":null})
+        } else {
+            idle_sync()
+        }
     }
     pub async fn preparation_status(&self, account: &Account, bridge: &AccountsBridge) -> Value {
         let Ok(key) = AccountKey::new(Provider::Codex, &account.home) else {
@@ -196,9 +219,6 @@ impl AccountService {
         force: bool,
         cwd: Option<String>,
     ) -> Result<Value, AccountError> {
-        if account.is_default {
-            return Ok(json!({"status":"ready","trust_pending":false,"issues":[]}));
-        }
         if cwd
             .as_ref()
             .is_some_and(|value| !Path::new(value).is_absolute() || !Path::new(value).is_dir())
@@ -217,6 +237,13 @@ impl AccountService {
             .try_acquire(&key, GuardMode::Shared)
             .map_err(|_| AccountError::io())?;
         self.resolve(Provider::Codex, &account.id)?;
+        let force_pending = self.force_path(&key)?.try_exists().map_err(|_| AccountError::io())?;
+        let marker = account.home.join(PREPARED_MARKER);
+        let prepared = if !force && !force_pending && marker.is_file() {
+            self.preparation_status(account, &bridge).await
+        } else {
+            Value::Null
+        };
         {
             let mut states = self.preparations.lock().unwrap();
             if let Some(state) = states.get_mut(&key).filter(|state| state.running) {
@@ -225,6 +252,14 @@ impl AccountService {
                     Self::persist(&self.force_path(&key)?, &json!(true))?;
                 }
                 return Ok(state.result.clone());
+            }
+            if prepared["status"] == "ready" {
+                return Ok(prepared);
+            }
+            match std::fs::remove_file(&marker) {
+                Ok(())=>{},
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound=>{},
+                Err(_)=>return Err(AccountError::io()),
             }
             states.insert(
                 key.clone(),
@@ -265,6 +300,9 @@ impl AccountService {
                     state.force_pending = false;
                 } else {
                     if forced && self.clear_force(key).is_err() {
+                        result = failed("account_prepare_state_failed");
+                    }
+                    if result["status"] == "ready" && Self::persist(&account.home.join(PREPARED_MARKER),&json!({"version":1})).is_err() {
                         result = failed("account_prepare_state_failed");
                     }
                     if self

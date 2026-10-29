@@ -68,7 +68,7 @@ pub enum WriteOutcome { Written, NotWritten, Unknown }
 pub enum OperationKind {
     Input, Steer, SteerQueue, Interrupt, AnswerQuestions, Select, SetModel, SetEffort, SetServiceTier,
     SetPermissionMode, Compact, Clear, ListModels, ListSkills, ReadRateLimits, ReadSettings,
-    SetMode, SkipQuestion, Restart, OpenTerminal, Reload, Cwd, Detach,
+    SetMode, SkipQuestion, Restart, OpenTerminal, Reload, Cwd, Detach, RefreshHooks,
     /// Codex: encerra um comando que ficou rodando (`thread/backgroundTerminals/terminate`).
     TerminateTerminal,
     ReadSubagent, SubagentMessage,
