@@ -1595,7 +1595,7 @@
         {/snippet}
         {#snippet afterChoices()}
           {#if !conversaAlvo && provider === 'codex'}
-            <CodexContextControl server={servers.find((s) => s.id === targetServer) ?? null} bind:busy={contextBusy} />
+            <CodexContextControl server={servers.find((s) => s.id === targetServer) ?? null} bind:busy={contextBusy} desktop={isDesktop} />
           {/if}
           {#if selectedMotor && (proxyAccounts || selectedMotor.cliproxy_error)}
             <div class="field">

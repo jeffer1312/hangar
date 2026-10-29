@@ -148,6 +148,8 @@ struct FixtureFacts {
     /// `limit-spent.json`, quantas leituras de rede houve e as contas registradas como desconhecidas.
     fresh_quotas: Option<Vec<Value>>, spent: std::collections::BTreeMap<String, f64>,
     network_reads: std::sync::Mutex<u32>, unknown_quota: std::sync::Mutex<Vec<String>>,
+    /// Pasta de conta Codex cujo catálogo recusa a escolha do pedido.
+    refused_codex_home: Option<String>,
 }
 
 /// A ponte do ditado com o Rust fora, como o harness a responde (`session_open_contract.py:941`).
@@ -171,6 +173,7 @@ impl FixtureFacts {
             spent: Default::default(),
             network_reads: Default::default(),
             unknown_quota: Default::default(),
+            refused_codex_home: None,
         }
     }
 
@@ -290,8 +293,11 @@ impl resolve::OpenFacts for FixtureFacts {
         Err(OpenError::new(404, "codex_account_not_found", "conta Codex inválida").with_params(json!({"account_id": account_id})))
     }
 
-    fn codex_choice(&self, _home: Option<&str>, model: Option<&str>, _effort: Option<&str>, _tier: Option<ServiceTier>)
+    fn codex_choice(&self, home: Option<&str>, model: Option<&str>, _effort: Option<&str>, _tier: Option<ServiceTier>)
         -> Result<(), resolve::CodexCatalogError> {
+        if home.is_some() && home == self.refused_codex_home.as_deref() {
+            return Err(resolve::CodexCatalogError::Invalid("modelo fora do catálogo desta conta".into()));
+        }
         let reply = |op: &str| match self.bridge(op) {
             None => Err(resolve::CodexCatalogError::Unavailable(HARNESS_BRIDGE_DOWN.into())),
             Some(reply) if reply["error"]["status"] == 400 => Err(resolve::CodexCatalogError::Invalid(reply["error"]["detail"].as_str().unwrap().into())),
@@ -3237,4 +3243,57 @@ fn an_explicit_exhausted_account_is_born_on_the_one_with_room() {
     let resolved = resolve_fixture(&full).unwrap();
     assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude".into() }, AccountSource::Explicit));
     assert!(resolved.warnings.is_empty());
+}
+
+/// Com a cota atual desconhecida, destino só abaixo dos 95%; a que bateu o limite (`limit-spent`)
+/// nunca é destino, em nenhum dos dois casos.
+#[test]
+fn a_full_or_spent_account_is_never_a_destination() {
+    let unread = claude_row(".claude", "default", true, "expirada", 0.0);
+    let b = "<ROOT>/home/.claude-b".to_owned();
+    let mut fixture = fixture_named("create_quota_switch");
+    fixture["scenario"]["fakes"]["quotas"] = json!([unread, claude_row(".claude-b", "b", false, "lida", 99.0)]);
+    let facts = FixtureFacts::of(&fixture);
+    let resolved = open_with(&fixture, &facts).unwrap();
+    assert_eq!((resolved.spec.account, resolved.warnings), (Account::Default, vec![]), "99% não recebe no lugar da desconhecida");
+    assert_eq!(*facts.unknown_quota.lock().unwrap(), ["claude:<ROOT>/home/.claude"]);
+
+    fixture["scenario"]["fakes"]["quotas"] = json!([unread, claude_row(".claude-b", "b", false, "lida", 10.0)]);
+    let facts = FixtureFacts { spent: [(b.clone(), 5000.0)].into(), ..FixtureFacts::of(&fixture) };
+    assert_eq!(open_with(&fixture, &facts).unwrap().spec.account, Account::Default, "desconhecida: a esgotada não é destino");
+
+    fixture["scenario"]["fakes"]["quotas"] = json!([claude_row(".claude", "default", true, "lida", 101.0), claude_row(".claude-b", "b", false, "lida", 10.0)]);
+    let facts = FixtureFacts { spent: [(b, 5000.0)].into(), ..FixtureFacts::of(&fixture) };
+    assert_eq!(open_with(&fixture, &facts).unwrap().spec.account, Account::Default, "esgotada: a do limite também não");
+}
+
+/// A conta Codex de mais folga que não aceita o modelo pedido não troca a abertura: fica na pedida,
+/// nunca uma abertura recusada por causa da troca.
+#[test]
+fn a_codex_switch_never_fails_the_open_over_the_request_choices() {
+    let mut fixture = fixture_named("create_codex_terminal_default");
+    let codex = |home: &str, label: &str, pct: f64| json!({"id": format!("codex:<ROOT>/home/{home}"), "label": label,
+        "provedor": "codex", "ativa": false, "estado": "lida", "janelas": [{"rotulo": "7d", "pct": pct}]});
+    fixture["scenario"]["fakes"]["quotas"] = json!([codex(".codex", "Codex", 99.0), codex(".codex-trabalho", "trabalho", 30.0)]);
+    fixture["scenario"]["steps"][0]["json"]["model"] = json!("gpt-5.5");
+    let connected = vec![resolve::CodexLogin { id: "default".into(), is_default: true }, resolve::CodexLogin { id: "trabalho".into(), is_default: false }];
+    let facts = FixtureFacts { connected, refused_codex_home: Some("<ROOT>/home/.codex-trabalho".into()), ..FixtureFacts::of(&fixture) };
+    let resolved = open_with(&fixture, &facts).unwrap();
+    assert_eq!(resolved.spec.account, Account::Codex { account_id: "default".into() });
+    assert!(resolved.warnings.is_empty(), "{:?}", resolved.warnings);
+}
+
+/// A segunda passada sem o padrão salvo reaproveita a leitura de rede da primeira e não registra
+/// a conta desconhecida de novo.
+#[test]
+fn the_saved_choice_retry_reads_the_quota_once() {
+    let mut fixture = fixture_named("create_quota_switch");
+    fixture["scenario"]["fakes"]["quotas"] = json!([]);
+    let key = crate::session_defaults::scope_key("claude", "", "").unwrap();
+    fixture["scenario"]["state"]["files"]["<ROOT>/home/.hangar/session-defaults.json"] = json!({ key: {"model": "opus", "effort": "ultra", "permission": ""} });
+    let facts = FixtureFacts::of(&fixture);
+    let resolved = open_with(&fixture, &facts).unwrap();
+    assert!(resolved.warnings.iter().any(|w| w.contains("padrão salvo")), "{:?}", resolved.warnings);
+    assert_eq!(*facts.network_reads.lock().unwrap(), 1);
+    assert_eq!(facts.unknown_quota.lock().unwrap().len(), 1);
 }

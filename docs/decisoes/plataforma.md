@@ -3062,12 +3062,22 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
     não souber, segue e registra `rust.open_quota_unknown` no diário;
   - a regra vale também para conta Codex;
   - conta com 95% ou mais sai da escolha mesmo quando a tela a mandou (`config_dir` ou
-    `codex_account`): a sessão nasce direto na de mais folga, abaixo dos 95%, sem pergunta e sem
-    trocar depois. A tela mostra o aviso de sempre ("conta X com N% de uso; a sessão nasceu em Y"),
-    e `account_source` vem `quota`. Decisão do usuário em 28/10: a regra é a mesma para todo
-    cliente (D-003 da abertura única), sem confirmação;
-  - sem outra conta abaixo dos 95% e com menos uso, a sessão segue na pedida e o log registra
-    `open_quota_no_room`. A conta escolhida pelo convidado não troca.
+    `codex_account`): a sessão nasce direto na de mais folga, sem pergunta e sem trocar depois. Com
+    todas a 95% ou mais, vai para a de uso estritamente menor, mesmo acima dos 95%; nenhuma com
+    menos uso, segue na pedida e o log registra `open_quota_no_room`. A tela mostra o aviso de
+    sempre ("conta X com N% de uso; a sessão nasceu em Y"), e `account_source` vem `quota`.
+    Decisão do usuário em 28/10: a regra é a mesma para todo cliente (D-003 da abertura única),
+    sem confirmação;
+  - cota da conta desconhecida mesmo depois da leitura: a escolhida fica; a padrão ou herdada vai
+    para a de cota lida abaixo dos 95% e de mais folga, com aviso; nenhuma assim, fica;
+  - destino só com leitura atual (`lida`), e conta no limite (100% ou `limit-spent.json` valendo)
+    nunca é destino;
+  - no Codex, a troca só acontece se a conta de destino aceitar o modelo, o esforço e o Fast
+    pedidos; se não aceitar, a sessão fica na pedida, e a troca nunca faz a abertura falhar. A
+    retomada do Arquivo (`account_bound`) não troca. A conta escolhida pelo convidado não troca;
+  - a leitura de cota da abertura usa o serviço de contas do servidor (o mesmo cache, a mesma fila
+    e a mesma espera depois de um 429) e acontece uma vez por abertura, mesmo quando a resolução
+    roda de novo sem o padrão salvo.
 
   Nos testes, a leitura pela rede é desligada (`disable_open_network_read`, `HANGAR_QUOTA_NETWORK=0`).
 

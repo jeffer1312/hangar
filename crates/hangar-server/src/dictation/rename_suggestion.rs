@@ -76,20 +76,21 @@ fn with_open<R>(home: &Path, change: impl FnOnce(&mut HashMap<String, String>) -
     change(all.entry(home.to_owned()).or_insert_with(|| scan(&record::dir(home))))
 }
 
-/// A chave do pane por vida `t:`: a lista não pergunta ao multiplexador a cada tique.
-static PANE_KEYS: LazyLock<Mutex<HashMap<String, Option<String>>>> = LazyLock::new(Mutex::default);
+/// A chave do pane por nome e vida `t:`: a lista não pergunta ao multiplexador a cada tique. A vida
+/// sozinha não basta (sessões restauradas nascem no mesmo segundo), e leitura sem chave não fica guardada.
+static PANE_KEYS: LazyLock<Mutex<HashMap<(String, String), String>>> = LazyLock::new(Mutex::default);
 
 async fn pane_key(mux: &Mux, row: &SessionRow) -> Option<String> {
-    let life = row.lifecycle_id.clone()?;
-    if let Some(known) = PANE_KEYS.lock().unwrap_or_else(PoisonError::into_inner).get(&life) {
-        return known.clone();
+    let id = (row.name.clone(), row.lifecycle_id.clone()?);
+    if let Some(known) = PANE_KEYS.lock().unwrap_or_else(PoisonError::into_inner).get(&id) {
+        return Some(known.clone());
     }
-    let key = mux.session_env(&row.name, "CP_SESSION_KEY").await;
+    let key = mux.session_env(&row.name, "CP_SESSION_KEY").await?;
     let mut keys = PANE_KEYS.lock().unwrap_or_else(PoisonError::into_inner);
     // shortcut: esquece tudo ao passar de 512 vidas; vale até haver centenas de sessões abertas.
     if keys.len() > 512 { keys.clear(); }
-    keys.insert(life, key.clone());
-    key
+    keys.insert(id, key.clone());
+    Some(key)
 }
 
 /// A sugestão em aberto de cada linha. A chave vem da vida `k:`; a sessão com terminal sem ela só
@@ -200,6 +201,9 @@ async fn target(st: &AppState, name: &str) -> Result<Target, Response> {
 
 async fn suggest(st: &AppState, name: &str) -> Response {
     let t = match target(st, name).await { Ok(t) => t, Err(response) => return response };
+    if !has_executor(&t.row.provider) {
+        return StatusCode::NO_CONTENT.into_response();
+    }
     let cwd = t.spec.as_ref().map(|s| s.cwd.as_str()).or(t.row.cwd.as_deref()).unwrap_or_default();
     if !is_generic(t.spec.as_ref(), name, cwd) {
         return refuse(StatusCode::CONFLICT, "erro_nome_nao_generico", "a sessão já tem um nome dado por alguém");
@@ -212,21 +216,13 @@ async fn suggest(st: &AppState, name: &str) -> Response {
     if let Some(suggestion) = spec.rename_suggestion {
         return json_response(StatusCode::OK, json!({"suggestion": suggestion}));
     }
-    let suggestion = match generate(st, name, t.row.branch.as_deref()).await {
+    let suggestion = match generate(st, &t.row).await {
         Ok(Some(s)) => match free(&s, &t.taken) { Some(s) => s, None => return StatusCode::NO_CONTENT.into_response() },
         Ok(None) => return StatusCode::NO_CONTENT.into_response(),
         Err(code) => return quiet(st, name, code),
     };
     let (home, stored) = (t.home, suggestion.clone());
-    let written = blocking(move || {
-        let Some(mut spec) = read_spec(&home, &key)? else { return Ok(false) };
-        // Recusada enquanto o executor rodava: fica a recusa.
-        if spec.rename_dismissed { return Ok(false); }
-        spec.rename_suggestion = Some(stored.clone());
-        record::write(&home, &spec)?;
-        with_open(&home, |open| open.insert(key, stored));
-        Ok(true)
-    }).await;
+    let written = blocking(move || store(&home, &key, &stored)).await;
     match written {
         Ok(true) => {
             st.list.invalidate();
@@ -237,13 +233,34 @@ async fn suggest(st: &AppState, name: &str) -> Response {
     }
 }
 
+/// Grava relendo o registro na hora: recusada ou renomeada enquanto o executor rodava, fica como está.
+fn store(home: &Path, key: &str, suggestion: &str) -> io::Result<bool> {
+    let Some(mut spec) = read_spec(home, key)? else { return Ok(false) };
+    if spec.rename_dismissed || spec.name_auto == Some(false) { return Ok(false); }
+    spec.rename_suggestion = Some(suggestion.to_owned());
+    record::write(home, &spec)?;
+    with_open(home, |open| open.insert(key.to_owned(), suggestion.to_owned()));
+    Ok(true)
+}
+
+/// Só Claude e Codex têm executor da organização; nos outros não há o que gerar nem falha a registrar.
+fn has_executor(provider: &str) -> bool { matches!(provider, "claude" | "codex") }
+
+/// A conversa que gerou a sugestão ainda é a da sessão, na mesma conta.
+fn same_life(before: &SessionRow, now: &SessionRow) -> bool {
+    let generation = |r: &SessionRow| r.lifecycle_id.clone().or_else(|| r.jsonl.clone());
+    generation(before) == generation(now) && before.provider == now.provider && before.conta == now.conta
+        && before.codex_home == now.codex_home
+}
+
 /// `Ok(None)` = sem sugestão e sem falha (sem modelo de organização do provedor, sem pedido, resposta
 /// vazia). O modo da organização do ditado não conta: ele nasce desligado e só vale para o ditado.
-async fn generate(st: &AppState, name: &str, branch: Option<&str>) -> Result<Option<String>, &'static str> {
+async fn generate(st: &AppState, row: &SessionRow) -> Result<Option<String>, &'static str> {
+    let name = row.name.as_str();
     let config = super::routes::configuration(st).await.map_err(|()| "dictation_rust_unavailable")?;
     // A rota é só do dono: é o pedido do dono que a conta do harness exige.
     let request = OrganizationRequest { session: Some(name.into()), harness_allowed: true, ..Default::default() };
-    let context = context::resolve(st, &request).await?;
+    let context = context::for_row(st, row, &request)?;
     let model = if context.provider == "claude" { &config.dictation_claude_model } else { &config.dictation_codex_model };
     if model.is_empty() {
         return Ok(None);
@@ -253,10 +270,11 @@ async fn generate(st: &AppState, name: &str, branch: Option<&str>) -> Result<Opt
     let first = tokio::task::spawn_blocking(move || first_user_message(&provider, &jsonl)).await
         .map_err(|_| "dictation_context_unavailable")??;
     let Some(first) = first else { return Ok(None) };
-    let input = format!("Branch: {}\nPrimeiro pedido:\n{first}", branch.unwrap_or("-"));
+    let input = format!("Branch: {}\nPrimeiro pedido:\n{first}", row.branch.as_deref().unwrap_or("-"));
     let output = harness::run_prompt(st, &context, model, PROMPT, &input, TIMEOUT).await?;
-    let current = context::resolve(st, &request).await?;
-    if current.generation != context.generation || current.home != context.home || current.provider != context.provider {
+    // O retrato da lista basta para ver se a vida mudou: outra descoberta inteira não acrescenta nada.
+    let current = st.list.find_row(name).await.map_err(|_| "dictation_target_missing")?.ok_or("dictation_target_missing")?;
+    if !same_life(row, &current) {
         return Err("dictation_target_changed");
     }
     let suggestion = clean_suggestion(&output);
@@ -351,6 +369,53 @@ mod tests {
         assert_eq!((after.name_auto, after.rename_suggestion.as_deref()), (Some(false), None));
         assert!(!is_generic(Some(&after), "hangar-2", "/w/hangar"));
         forget_after_rename(home.path(), "sem-formato").unwrap();
+    }
+
+    #[test]
+    fn a_rename_during_the_executor_keeps_the_name() {
+        let home = tempfile::tempdir().unwrap();
+        let renamed = spec(Some(false));
+        record::write(home.path(), &renamed).unwrap();
+        assert!(!store(home.path(), &renamed.key, "nome-novo").unwrap());
+        assert_eq!(record::read(home.path(), &renamed.key).unwrap().unwrap().rename_suggestion, None);
+        let generic = SessionSpec { key: "d".repeat(32), ..spec(Some(true)) };
+        record::write(home.path(), &generic).unwrap();
+        assert!(store(home.path(), &generic.key, "nome-novo").unwrap());
+    }
+
+    #[test]
+    fn only_claude_and_codex_have_an_executor() {
+        assert!(has_executor("claude") && has_executor("codex"));
+        for provider in ["pi", "omp", "kimi"] { assert!(!has_executor(provider), "{provider}"); }
+    }
+
+    #[test]
+    fn the_life_check_compares_generation_provider_and_account() {
+        let row = |v: serde_json::Value| -> SessionRow { serde_json::from_value(v).unwrap() };
+        let base = row(json!({"name": "s", "lifecycle_id": "k:1", "jsonl": "/a.jsonl", "provider": "claude"}));
+        assert!(same_life(&base, &row(json!({"name": "s", "lifecycle_id": "k:1", "jsonl": "/b.jsonl", "provider": "claude"}))));
+        assert!(!same_life(&base, &row(json!({"name": "s", "lifecycle_id": "k:2", "provider": "claude"}))));
+        assert!(!same_life(&base, &row(json!({"name": "s", "lifecycle_id": "k:1", "provider": "codex"}))));
+        assert!(!same_life(&base, &row(json!({"name": "s", "lifecycle_id": "k:1", "provider": "claude", "conta": "/c"}))));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_pane_key_is_per_session_and_a_failed_read_is_asked_again() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (program, broken) = (dir.path().join("mux"), dir.path().join("broken"));
+        // `show-environment -t =<nome> CP_SESSION_KEY`: a chave é o próprio alvo.
+        std::fs::write(&program, format!("#!/bin/sh\n[ -e '{}' ] && exit 1\necho \"CP_SESSION_KEY=key$3\"\n", broken.display())).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mux = Mux::with_program(program, Duration::from_secs(5));
+        let row = |name: &str| -> SessionRow { serde_json::from_value(json!({"name": name, "lifecycle_id": "t:4242"})).unwrap() };
+        assert_eq!(pane_key(&mux, &row("pk-a")).await.as_deref(), Some("key=pk-a"));
+        assert_eq!(pane_key(&mux, &row("pk-b")).await.as_deref(), Some("key=pk-b"), "nascidas no mesmo segundo");
+        std::fs::write(&broken, "").unwrap();
+        assert_eq!(pane_key(&mux, &row("pk-c")).await, None);
+        std::fs::remove_file(&broken).unwrap();
+        assert_eq!(pane_key(&mux, &row("pk-c")).await.as_deref(), Some("key=pk-c"), "a falha não fica guardada");
     }
 
     #[tokio::test]

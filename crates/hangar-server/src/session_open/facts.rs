@@ -32,7 +32,16 @@ pub struct LocalFacts {
 
 impl LocalFacts {
     pub fn new(env: AccountEnvironment, runtime: tokio::runtime::Handle) -> Self {
-        Self { accounts: AccountService::new(env), runtime, models: Default::default(), slots: tokio::sync::Semaphore::new(4),
+        Self::with_service(AccountService::new(env), runtime)
+    }
+
+    /// Com o serviço de contas do servidor: a leitura de cota da abertura divide cache, fila e espera do 429 com ele.
+    pub fn shared(env: AccountEnvironment, accounts: &AccountService, runtime: tokio::runtime::Handle) -> Self {
+        Self::with_service(AccountService { env, ..accounts.clone() }, runtime)
+    }
+
+    fn with_service(accounts: AccountService, runtime: tokio::runtime::Handle) -> Self {
+        Self { accounts, runtime, models: Default::default(), slots: tokio::sync::Semaphore::new(4),
             mux: Default::default(), procs: std::sync::Arc::new(SystemProcs::default()), serverless: false }
     }
 
@@ -635,4 +644,22 @@ impl OpenFacts for LocalFacts {
     fn new_key(&self) -> String { crate::mods::state::random_hex(16) }
 
     fn now(&self) -> f64 { crate::accounts::quotas::now() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cota da abertura usa o cache, a fila de leitura e a espera do 429 do serviço do servidor, com o
+    /// ambiente da abertura.
+    #[test]
+    fn shared_facts_read_quotas_through_the_server_service() {
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let env = |home: &str| AccountEnvironment::from_map([("HOME".to_owned(), home.to_owned())].into());
+        let server = AccountService::new(env("/srv"));
+        let facts = LocalFacts::shared(env("/abertura"), &server, runtime.handle().clone());
+        assert!(std::sync::Arc::ptr_eq(&facts.accounts.quotas.cache, &server.quotas.cache));
+        assert!(std::sync::Arc::ptr_eq(&facts.accounts.quotas.refresh, &server.quotas.refresh));
+        assert_eq!(facts.env().home, PathBuf::from("/abertura"));
+    }
 }

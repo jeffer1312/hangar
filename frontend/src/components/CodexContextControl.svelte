@@ -3,7 +3,8 @@
   import * as m from '../paraglide/messages';
   import { getActiveId, listOwnServers, listServers } from '../lib/auth';
 
-  let { server, busy = $bindable(false) }: { server: Server | null; busy?: boolean } = $props();
+  // `desktop`: a vista desktop web é legada e não ganha o "Em todas as minhas máquinas".
+  let { server, busy = $bindable(false), desktop = false }: { server: Server | null; busy?: boolean; desktop?: boolean } = $props();
   let enabled = $state(false);
   // O valor que a pessoa ESCOLHEU enquanto a gravação não volta: o switch mostra ele na hora.
   // Desfazer a marca e esperar o servidor fazia o clique parecer não ter pegado.
@@ -37,20 +38,33 @@
     const here = server?.id ?? getActiveId();
     return ownUpdatableServers(listServers()).filter((s) => s.id !== here);
   };
-  const hasOthers = $derived(others().length > 0);
+  const hasOthers = $derived(!desktop && others().length > 0);
   let applyAll = $state(false);
   let applying = $state(false);
   let results = $state<ApplyResult[]>([]);
   let lastValue = false;
+  // Rodadas em fila: cada uma só começa quando a anterior termina, e a superada antes de começar
+  // não roda. Assim o último toque é o último POST em cada máquina e o último a escrever
+  // `results`; em paralelo, a rodada antiga podia chegar depois e desfazer a nova.
+  let round = 0;
+  let queue: Promise<void> = Promise.resolve();
 
   async function applyOthers(value: boolean, only?: string) {
+    const id = ++round;
     lastValue = value;
     applying = true;
+    const previous = queue;
+    let done = () => {};
+    queue = new Promise<void>((resolve) => (done = resolve));
     try {
+      await previous;
+      if (id !== round) return;
       const fresh = await applyToOwnServers(others().filter((s) => !only || s.id === only), (s) => applyCodexContext(s, value));
+      if (id !== round) return;
       results = only ? results.map((r) => fresh.find((f) => f.serverId === r.serverId) ?? r) : fresh;
     } finally {
-      applying = false;
+      done();
+      if (id === round) applying = false;
     }
   }
   function resultText(r: ApplyResult): string {

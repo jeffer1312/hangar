@@ -145,10 +145,11 @@ fn conflict(msg: impl Into<String>) -> OpenError { OpenError::new(409, "erro_cri
 
 pub fn resolve_open(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn OpenFacts) -> Result<Resolved, OpenError> {
     let mut used_saved_choice = false;
-    match resolve_with(request, caller, facts, true, &mut used_saved_choice) {
+    let reads = QuotaReads::default();
+    match resolve_with(request, caller, facts, true, &mut used_saved_choice, &reads) {
         // Modelo ou esforço salvos que deixaram de valer (catálogo mudou) não travam toda abertura.
         Err(error) if used_saved_choice => {
-            let mut resolved = resolve_with(request, caller, facts, false, &mut used_saved_choice)?;
+            let mut resolved = resolve_with(request, caller, facts, false, &mut used_saved_choice, &reads)?;
             resolved.warnings.push(format!("o modelo ou esforço do padrão salvo não vale para esta abertura ({}); ficou sem eles", error.msg));
             Ok(resolved)
         }
@@ -156,8 +157,12 @@ pub fn resolve_open(request: &SessionOpenRequest, caller: &OpenCaller, facts: &d
     }
 }
 
+/// O que a regra de cota leu e registrou numa abertura: a segunda passada sem o padrão salvo reaproveita.
+#[derive(Default)]
+struct QuotaReads { network: std::cell::OnceCell<Vec<Value>>, unknown_reported: std::cell::Cell<bool> }
+
 fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn OpenFacts, saved_choice: bool,
-                used_saved_choice: &mut bool) -> Result<Resolved, OpenError> {
+                used_saved_choice: &mut bool, reads: &QuotaReads) -> Result<Resolved, OpenError> {
     let guest = matches!(caller, OpenCaller::Guest { .. });
     let mut warnings = Vec::new();
     // O omitido vem da criadora; `inherit: false` deixa tudo no padrão da conta. O convidado
@@ -299,13 +304,16 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
     if quota_rule {
         let name = request.name.as_deref().unwrap_or_default();
         let current = if provider == AgentProvider::Codex { codex_account.as_deref().or(Some("default")) } else { config_dir.as_deref() };
-        let switch = match quota_check(provider, current, facts) {
+        let switch = match quota_check(provider, current, facts, reads) {
             QuotaCheck::Room => None,
             // Ninguém escolheu a conta: nascer numa de cota lida evita gastar às cegas uma que pode estar no fim.
             QuotaCheck::Unknown { current, best: Some(best) } if !explicit =>
                 Some((format!("cota da conta {} não pôde ser lida; a sessão nasceu em {}", current.label, best.label), best)),
             // A escolhida fica. Nenhuma conta com cota lida: decisão em aberto com o usuário, fica na pedida.
-            QuotaCheck::Unknown { current, .. } => { facts.quota_unknown(name, &current.id); None }
+            QuotaCheck::Unknown { current, .. } => {
+                if !reads.unknown_reported.replace(true) { facts.quota_unknown(name, &current.id); }
+                None
+            }
             QuotaCheck::Exhausted { current, best: None } => {
                 tracing::warn!(code = "open_quota_no_room", session = name, account = %current.id,
                     "conta com {:.0}% de uso e nenhuma outra com folga; a sessão segue nela", current.usage.unwrap_or(100.0));
@@ -314,6 +322,10 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
             QuotaCheck::Exhausted { current, best: Some(best) } =>
                 Some((format!("conta {} com {:.0}% de uso; a sessão nasceu em {}", current.label, current.usage.unwrap_or(100.0), best.label), best)),
         };
+        // A troca nunca faz a abertura falhar: conta Codex que recusa a escolha do pedido é "nenhuma melhor".
+        let switch = switch.filter(|(_, best)| provider != AgentProvider::Codex || codex_fits(request, &best.choice, facts)
+            || { tracing::warn!(code = "open_quota_switch_refused", session = name, account = %best.id,
+                "a conta de mais folga recusa a escolha do pedido; a sessão segue na pedida"); false });
         if let Some((warning, best)) = switch {
             tracing::warn!("create_session {name}: {warning}");
             if provider == AgentProvider::Codex { codex_account = Some(best.choice) } else { config_dir = Some(best.choice) }
@@ -512,26 +524,29 @@ fn quota_accounts(provider: AgentProvider, current: Option<&str>, rows: &[Value]
 }
 
 /// `cotas.conta_com_cota`: a conta a 95% ou mais (ou de cota desconhecida) e a de mais folga que a
-/// substitui (a ativa no empate), desde que tenha mais folga que ela, mesmo acima dos 95%.
+/// substitui (a ativa no empate), desde que tenha mais folga que ela, mesmo acima dos 95%; no lugar
+/// da desconhecida, só uma abaixo dos 95%.
 fn quota_verdict(provider: AgentProvider, current: Option<&str>, rows: &[Value],
                  spent: &std::collections::BTreeMap<String, f64>, facts: &dyn OpenFacts) -> QuotaCheck {
     let Some((current, others)) = quota_accounts(provider, current, rows, spent, facts) else { return QuotaCheck::Room };
     if current.usage.is_some_and(|usage| usage < QUOTA_LIMIT) {
         return QuotaCheck::Room;
     }
+    // Conta no limite (100% ou `limit-spent`) nunca é destino; com a atual desconhecida, só abaixo dos 95%.
+    let ceiling = current.usage.map_or(QUOTA_LIMIT, |usage| usage.min(100.0));
     let best = others.into_iter().filter(|a| a.read && a.id != current.id)
         .filter_map(|a| Some((a.usage?, a)))
-        .filter(|(other, _)| current.usage.is_none_or(|usage| *other < usage))
+        .filter(|(other, _)| *other < ceiling)
         .reduce(|best, next| if (-next.0, next.1.active) > (-best.0, best.1.active) { next } else { best })
         .map(|(_, a)| a);
     if current.usage.is_none() { QuotaCheck::Unknown { current, best } } else { QuotaCheck::Exhausted { current, best } }
 }
 
 /// A regra pelo cache; sem cota conhecida da conta, uma leitura curta da rede antes de desistir.
-fn quota_check(provider: AgentProvider, current: Option<&str>, facts: &dyn OpenFacts) -> QuotaCheck {
+fn quota_check(provider: AgentProvider, current: Option<&str>, facts: &dyn OpenFacts, reads: &QuotaReads) -> QuotaCheck {
     let spent = if provider == AgentProvider::Claude { facts.spent_accounts() } else { Default::default() };
     match quota_verdict(provider, current, &facts.quotas(false), &spent, facts) {
-        QuotaCheck::Unknown { .. } => quota_verdict(provider, current, &facts.quotas(true), &spent, facts),
+        QuotaCheck::Unknown { .. } => quota_verdict(provider, current, reads.network.get_or_init(|| facts.quotas(true)), &spent, facts),
         known => known,
     }
 }
@@ -613,21 +628,36 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
         // O nível do Codex varia por modelo: só o catálogo cruza modelo × nível × Fast.
         // Conta nomeada (pedida, herdada ou a conectada no lugar da padrão) lê o catálogo dela.
         let home = codex_home.as_deref().filter(|_| codex_account.is_some());
-        match facts.codex_choice(home, request.model.as_deref(), request.effort.as_deref(), request.service_tier) {
-            Ok(()) => {}
-            Err(CodexCatalogError::Invalid(e)) => return Err(OpenError::new(422, "erro_codex_escolha_invalida", e.clone()).with_params(json!({"erro": e}))),
-            Err(CodexCatalogError::Unavailable(e)) if request.service_tier == Some(ServiceTier::Priority) => {
-                return Err(OpenError::new(502, "erro_codex_catalogo_invalido", format!("Fast não pôde ser conferido: {e}")).with_params(json!({"erro": e})));
-            }
-            // Catálogo fora do ar não impede abrir: a escolha segue e o CLI decide.
-            Err(CodexCatalogError::Unavailable(e)) => tracing::warn!("codex: catalogo indisponivel, escolha nao conferida: {e}"),
-            Err(CodexCatalogError::Refused(e)) => return Err(OpenError::new(502, "erro_codex_catalogo_invalido", e.clone()).with_params(json!({"erro": e}))),
+        if let Some(error) = codex_refusal(facts.codex_choice(home, request.model.as_deref(), request.effort.as_deref(), request.service_tier),
+                                           request.service_tier) {
+            return Err(error);
         }
     }
     if request.new_branch && request.branch.is_none() {
         return Err(OpenError::new(400, "erro_criacao_sessao", "branch nova sem nome"));
     }
     Ok(model)
+}
+
+/// Como cada resposta do catálogo do Codex recusa a abertura; `None` = segue.
+fn codex_refusal(result: Result<(), CodexCatalogError>, tier: Option<ServiceTier>) -> Option<OpenError> {
+    match result {
+        Ok(()) => None,
+        Err(CodexCatalogError::Invalid(e)) => Some(OpenError::new(422, "erro_codex_escolha_invalida", e.clone()).with_params(json!({"erro": e}))),
+        Err(CodexCatalogError::Unavailable(e)) if tier == Some(ServiceTier::Priority) =>
+            Some(OpenError::new(502, "erro_codex_catalogo_invalido", format!("Fast não pôde ser conferido: {e}")).with_params(json!({"erro": e}))),
+        // Catálogo fora do ar não impede abrir: a escolha segue e o CLI decide.
+        Err(CodexCatalogError::Unavailable(e)) => { tracing::warn!("codex: catalogo indisponivel, escolha nao conferida: {e}"); None }
+        Err(CodexCatalogError::Refused(e)) => Some(OpenError::new(502, "erro_codex_catalogo_invalido", e.clone()).with_params(json!({"erro": e}))),
+    }
+}
+
+/// A conta Codex de destino da troca por cota aceita o modelo, o esforço e o Fast do pedido.
+fn codex_fits(request: &SessionOpenRequest, account: &str, facts: &dyn OpenFacts) -> bool {
+    if !(truthy(&request.model) || truthy(&request.effort) || request.service_tier.is_some()) { return true; }
+    let Ok(home) = facts.codex_home(account) else { return false };
+    codex_refusal(facts.codex_choice(Some(&home), request.model.as_deref(), request.effort.as_deref(), request.service_tier),
+        request.service_tier).is_none()
 }
 
 /// `model_args.validar`: a regex é a barreira do shell, e cada binário tem a própria flag de esforço.

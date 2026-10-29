@@ -394,7 +394,7 @@
     {#if !convidado}{#key resolvedServer?.id}<MigrationSettings server={resolvedServer} />{/key}{/if}
   {:else if telaAtual === 'maquinas'}
     <MaquinasSettings resolvedServer={resolvedServer} apiTarget={alvo}
-      fallbackFocus={fecharEl} {store}
+      fallbackFocus={fecharEl} {store} desktop={isDesktop}
       onLogout={onLogout ?? (() => {})} />
   {:else if telaAtual === 'contas'}
     <ContasSettings apiTarget={alvo} desktop={isDesktop} />

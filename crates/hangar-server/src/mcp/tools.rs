@@ -176,13 +176,6 @@ fn remote_account(rows: &[Value], conta: &str) -> Option<String> {
     }).map(|(path, _)| path.to_owned())
 }
 
-/// A home de lá: a mãe da conta `default` (`~/.claude`).
-fn remote_home(rows: &[Value]) -> Option<String> {
-    let base = rows.iter().find(|c| c["label"] == "default")?["path"].as_str()?;
-    let sep = if base.contains('\\') { '\\' } else { '/' };
-    base.rsplit_once(sep).map(|(home, _)| home.to_owned()).filter(|h| !h.is_empty())
-}
-
 /// A resposta da criação, igual para esta e para outra máquina.
 fn created(info: &Value, server: Option<&str>) -> Outcome {
     let mut out = json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"],
@@ -205,33 +198,33 @@ async fn remote_session(peers: &PeerClient, server: &str, mut a: NewSession) -> 
     if a.inherit == Some(true) { return Err("inherit não vale noutra máquina: lá nada herda de quem chama".into()); }
     a.inherit = None;
     let resume = a.resume.clone().filter(|s| !s.is_empty());
-    let mut cwd = a.cwd.clone().filter(|c| !c.is_empty());
-    let conta = a.conta.clone().filter(|c| !c.is_empty());
+    // Sem pasta, a home de lá: o servidor de lá expande o `~`.
+    let cwd = a.cwd.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| "~".into());
     let call = move |method, path: String, body: Option<Value>| async move {
         peers.call(server, method, &path, body.as_ref()).await.map(|v| v.unwrap_or(Value::Null)).map_err(|e| e.text(server))
     };
-    if conta.is_some() || (cwd.is_none() && resume.is_none()) {
+    if let Some(conta) = a.conta.clone().filter(|c| !c.is_empty()) {
         let configs = call(reqwest::Method::GET, "/api/claude-configs".into(), None).await?;
         let rows = configs.as_array().map(Vec::as_slice).unwrap_or_default();
-        if let Some(conta) = &conta {
-            let labels: Vec<&str> = rows.iter().filter_map(|c| c["label"].as_str()).collect();
-            a.conta = Some(remote_account(rows, conta)
-                .ok_or_else(|| format!("conta '{conta}' não existe em '{server}' — lá há: {}", labels.join(", ")))?);
-        }
-        if cwd.is_none() && resume.is_none() {
-            cwd = Some(remote_home(rows).ok_or_else(|| format!("não achei a home de '{server}': passe `cwd`"))?);
-        }
+        let labels: Vec<&str> = rows.iter().filter_map(|c| c["label"].as_str()).collect();
+        a.conta = Some(remote_account(rows, &conta)
+            .ok_or_else(|| format!("conta '{conta}' não existe em '{server}' — lá há: {}", labels.join(", ")))?);
     }
     if let Some(sid) = resume {
         let info = call(reqwest::Method::POST, format!("/api/archive/-/{}/resume", segment(&sid)), Some(a.clone_for_resume()?)).await?;
-        let mut out = json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"],
-            "server": server});
-        // O aviso de troca de conta por cota é a única notícia de que a sessão nasceu noutra conta.
-        if info["avisos"].as_array().is_some_and(|a| !a.is_empty()) { out["avisos"] = info["avisos"].clone(); }
-        return Ok(dict(out));
+        return Ok(resumed(&info, Some(server)));
     }
-    let info = call(reqwest::Method::POST, "/api/sessions".into(), Some(a.create_body(cwd.unwrap_or_default()))).await?;
+    let info = call(reqwest::Method::POST, "/api/sessions".into(), Some(a.create_body(cwd))).await?;
     created(&info, Some(server))
+}
+
+/// A resposta da retomada do Arquivo, igual para esta e para outra máquina.
+fn resumed(info: &Value, server: Option<&str>) -> CallToolResult {
+    let mut out = json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"]});
+    if let Some(server) = server { out["server"] = json!(server); }
+    // O aviso de troca de conta por cota é a única notícia de que a sessão nasceu noutra conta.
+    if info["avisos"].as_array().is_some_and(|a| !a.is_empty()) { out["avisos"] = info["avisos"].clone(); }
+    dict(out)
 }
 
 #[derive(Deserialize)]
@@ -474,7 +467,7 @@ impl Tools {
     async fn resume_session(&self, sid: &str, a: Result<Value, String>) -> Outcome {
         let body = a?;
         let info = self.ok(Method::POST, &format!("/api/archive/-/{}/resume", segment(sid)), Some(body)).await?;
-        Ok(dict(json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"]})))
+        Ok(resumed(&info, None))
     }
 
     async fn close_session(&self, headers: &HeaderMap, alvo: &str) -> Outcome {
@@ -740,7 +733,7 @@ mod tests {
         let result = remote_session(&peers, "lab", a).await.unwrap();
         let (auth, body) = seen.lock().unwrap().take().expect("POST /api/sessions lá");
         assert_eq!(auth, "Bearer tok-lab");
-        assert_eq!(body, json!({"name": "filha", "cwd": "/home/r", "model": "opus", "headless": true,
+        assert_eq!(body, json!({"name": "filha", "cwd": "~", "model": "opus", "headless": true,
             "config_dir": "/home/r/.claude-work", "initial_prompt": "oi"}));
         let out = result.structured_content.unwrap();
         assert_eq!((out["server"].clone(), out["name"].clone(), out["config_dir"].clone()),
@@ -765,12 +758,23 @@ mod tests {
     }
 
     #[test]
-    fn remote_account_and_home_come_from_the_peer_configs() {
+    fn remote_account_comes_from_the_peer_configs() {
         let rows = [json!({"path": "C:\\Users\\r\\.claude", "label": "default"}), json!({"path": "C:\\Users\\r\\.claude-work", "label": "trabalho"})];
-        assert_eq!(remote_home(&rows).as_deref(), Some("C:\\Users\\r"));
         for conta in ["work", "trabalho", ".claude-work", "C:\\Users\\r\\.claude-work"] {
             assert_eq!(remote_account(&rows, conta).as_deref(), Some("C:\\Users\\r\\.claude-work"), "{conta}");
         }
         assert_eq!(remote_account(&rows, "outra"), None);
+    }
+
+    /// A retomada desta máquina leva os avisos (troca de conta por cota) como a de outra.
+    #[test]
+    fn a_resume_carries_the_warnings_here_and_there() {
+        let info = json!({"name": "s", "cwd": "/w", "provider": "codex", "headless": true, "avisos": ["conta Codex com 99% de uso; a sessão nasceu em b"]});
+        for server in [None, Some("lab")] {
+            let out = resumed(&info, server).structured_content.unwrap();
+            assert_eq!(out["avisos"], info["avisos"], "{server:?}");
+            assert_eq!(out.get("server").and_then(Value::as_str), server);
+        }
+        assert!(resumed(&json!({"name": "s", "avisos": []}), None).structured_content.unwrap().get("avisos").is_none());
     }
 }
