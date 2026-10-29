@@ -65,6 +65,7 @@ pub(crate) struct CommandTree {group:i32}
 #[cfg(unix)]
 impl CommandTree {
     pub(crate) fn configure(command:&mut Command)->io::Result<Self> {command.process_group(0);Ok(Self {group:0})}
+    pub(crate) fn configure_detached(command:&mut Command)->io::Result<Self> {Self::configure(command)}
     pub(crate) fn attach(&mut self,child:&Child)->io::Result<()> {
         self.group=child.id().ok_or_else(||io::Error::other("auxiliar sem identidade"))? as i32;Ok(())
     }
@@ -141,6 +142,11 @@ mod windows {
         pub(crate) fn configure(command:&mut Command)->io::Result<Self> {
             command.creation_flags(0x00000004 | 0x08000000);
             Self::create(true)
+        }
+        /// A conclusão normal conserva auxiliares; prazo e cancelamento terminam o Job explicitamente.
+        pub(crate) fn configure_detached(command: &mut Command) -> io::Result<Self> {
+            command.creation_flags(0x00000004 | 0x08000000);
+            Self::create(false)
         }
         pub(crate) fn configure_std(command: &mut std::process::Command) -> io::Result<Self> {
             use std::os::windows::process::CommandExt;
