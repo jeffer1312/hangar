@@ -95,8 +95,8 @@ import * as m from '../paraglide/messages';
     if (alvo && !loading && !sessions.some((x) => x.serverId === alvo.serverId && x.name === alvo.name)) grupoAlvo = null;
   });
   function selo(s: AggSession) {
-    // O cabeçalho do bloco já diz o ticket e as máquinas; a linha diz de qual máquina ela é.
-    const label = model.memberMachine(s) ?? model.groupBadge(s);
+    // A máquina da linha vai na placa do card (`showMachine`); o selo fica com o grupo.
+    const label = model.groupBadge(s);
     return label ? { label, onOpen: () => (grupoAlvo = { name: s.name, serverId: s.serverId }) } : null;
   }
   // Sessões locais do mesmo grupo: o convite de par com acesso completo abre todas.
@@ -666,6 +666,7 @@ import * as m from '../paraglide/messages';
                         selected={model.selected.has(`${session.serverId}:${session.name}`)}
                         onToggleSelect={() => model.toggleSelected(`${session.serverId}:${session.name}`)}
                         {showFolder}
+                        showMachine={model.memberMachine(session) !== null}
                         peers={allSessions}
                         onShare={() => (shareAlvo = { name: session.name, serverId: session.serverId })}
               onPairAccept={() => (pairAlvo = { name: session.name, serverId: session.serverId })}
@@ -728,6 +729,7 @@ import * as m from '../paraglide/messages';
               selected={model.selected.has(`${session.serverId}:${session.name}`)}
               onToggleSelect={() => model.toggleSelected(`${session.serverId}:${session.name}`)}
               {showFolder}
+              showMachine={model.memberMachine(session) !== null}
               peers={allSessions}
               onShare={() => (shareAlvo = { name: session.name, serverId: session.serverId })}
               onPairAccept={() => (pairAlvo = { name: session.name, serverId: session.serverId })}

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { openSessionsStream, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverRemoteRoute, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
+import { openSessionsStream, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverRemoteRoute, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
 import type { SessionInfo, Server, AggSession, ExternalPair } from '@hangar/core';
 import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
@@ -35,6 +35,8 @@ export interface SessionsState {
 
 // internas — fora do set() para não virar proxy
 const slots = new Map<string, Slot>();
+// Sem resposta boa o chaveiro deixa de valer; lista e etiquetas ficam.
+const failedSlot = (id: string, error: string) => patchSlot(slots, id, { error, keyring: undefined });
 const streams = new Map<string, ReturnType<typeof openSessionsStream>>();
 type ConnectionAttempt = { server: Server; generation: number; abort: AbortController; routing: boolean };
 const connecting = new Map<string, ConnectionAttempt>();
@@ -236,11 +238,11 @@ function connect(list: Server[], get: () => SessionsState, set: (p: Partial<Sess
     if (s.inviteEnded) continue;
     if (streams.has(s.id) || retryTimers.has(s.id) || connecting.has(s.id)) continue;
     if (retryDelay(s.id) > 0) {
-      slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: lastFailureHttp.get(s.id) ? m.sessao_erro_servidor() : 'offline' });
+      slots.set(s.id, failedSlot(s.id, lastFailureHttp.get(s.id) ? m.sessao_erro_servidor() : 'offline'));
       scheduleRetry(s.id, get, set);
       continue;
     }
-    if (estaDesligado(s.id)) slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+    if (estaDesligado(s.id)) slots.set(s.id, failedSlot(s.id, 'offline'));
     const attempt = { server: { ...s }, generation, abort: new AbortController(), routing: true };
     connecting.set(s.id, attempt);
     void synchronize(attempt, get, set);
@@ -358,7 +360,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       const sessions = await response.json() as SessionInfo[];
       if (!isCurrent(attempt)) return;
       if (!Array.isArray(sessions)) throw new Error('invalid_sessions');
-      slots.set(s.id, { sessions: reuseUnchanged(slots.get(s.id)?.sessions, sessions), error: null });
+      slots.set(s.id, patchSlot(slots, s.id, { sessions: reuseUnchanged(slots.get(s.id)?.sessions, sessions), error: null, keyring: undefined }));
       recompute(set);
     } catch (error) {
       if (!isCurrent(attempt)) return;
@@ -366,7 +368,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista', codigo: 'sincronia',
         detalhe: error instanceof Error ? error.name : 'erro' }, s.baseUrl);
       if (!httpResponse) failed(true);
-      slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: httpResponse ? m.sessao_erro_servidor() : 'offline' });
+      slots.set(s.id, failedSlot(s.id, httpResponse ? m.sessao_erro_servidor() : 'offline'));
       recompute(set);
       if (countedHttpFailure) {
         esquecerRota(s.id);
@@ -392,13 +394,13 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
         const sessions: unknown = JSON.parse(e.data);
         if (!Array.isArray(sessions)) throw new Error('invalid_sessions');
         receivedList();
-        slots.set(s.id, { sessions: reuseUnchanged(slots.get(s.id)?.sessions, sessions as SessionInfo[]), error: null, keyring: slots.get(s.id)?.keyring });
+        slots.set(s.id, patchSlot(slots, s.id, { sessions: reuseUnchanged(slots.get(s.id)?.sessions, sessions as SessionInfo[]), error: null }));
         if (falhaDados) registrarDiag({ evento: 'lista.voltou', tela: 'lista' }, s.baseUrl);
         falhaDados = false;
       } catch {
         falhaDados = true;
         registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista', codigo: 'json_invalido' }, s.baseUrl);
-        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: m.sessao_erro_servidor(), keyring: slots.get(s.id)?.keyring });
+        slots.set(s.id, patchSlot(slots, s.id, { error: m.sessao_erro_servidor() }));
       }
       recompute(set);
     });
@@ -412,7 +414,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       const slot = slots.get(s.id);
       const sessions = slot?.sessions ?? null;
       if (sessions?.length && !slot?.error) return;
-      slots.set(s.id, { sessions, error: sessions?.length ? null : m.sessao_erro_servidor(), keyring: slot?.keyring });
+      slots.set(s.id, patchSlot(slots, s.id, { sessions, error: sessions?.length ? null : m.sessao_erro_servidor() }));
       recompute(set);
     });
     // Chaveiro `login` da máquina: chega na conexão e a cada troca; frame torto mantém o último.
@@ -424,7 +426,18 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       if (state !== 'locked' && state !== 'unlocked' && state !== 'absent') return;
       const slot = slots.get(s.id);
       if (slot?.keyring === state) return;
-      slots.set(s.id, { sessions: slot?.sessions ?? null, error: slot?.error ?? null, keyring: state });
+      slots.set(s.id, patchSlot(slots, s.id, { keyring: state }));
+      recompute(set);
+    });
+    // Etiquetas da máquina e das contas: chegam na conexão e a cada troca. Repetido ou torto mantém as últimas.
+    es.addEventListener('tags', (e) => {
+      if (!active()) return;
+      answered();
+      const data: string = e.data;
+      if (slots.get(s.id)?.tagsRaw === data) return;
+      const tags = parseTagsEvent(data);
+      if (!tags) return;
+      slots.set(s.id, patchSlot(slots, s.id, { tags, tagsRaw: data }));
       recompute(set);
     });
     es.onerror = (event) => {
@@ -438,7 +451,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       es.close();
       if (http && rejected(status)) return;
       httpFailed();
-      slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: http ? m.sessao_erro_servidor() : 'offline' });
+      slots.set(s.id, failedSlot(s.id, http ? m.sessao_erro_servidor() : 'offline'));
       recompute(set);
       esquecerRota(s.id);
       scheduleRetry(s.id, get, set);
@@ -451,7 +464,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       detalhe: error instanceof Error ? error.name : 'erro' }, s.baseUrl);
     failed();
     httpFailed();
-    slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+    slots.set(s.id, failedSlot(s.id, 'offline'));
     recompute(set);
     esquecerRota(s.id);
     scheduleRetry(s.id, get, set);

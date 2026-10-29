@@ -1,0 +1,427 @@
+{
+  "source_commit": "ba2db1021ab7fb801eca50a50f9509dcb825ac7e",
+  "command": "cd backend && uv run python tests/fixtures/contract/dictation_public/capture.py",
+  "cases": [
+    {
+      "method": "POST",
+      "path": "/api/ditado/relimpar",
+      "body": {
+        "texto": "fala",
+        "estilo": "prosa",
+        "include_recent_messages": 1.5
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "bool_type",
+            "loc": [
+              "body",
+              "include_recent_messages"
+            ],
+            "msg": "Input should be a valid boolean",
+            "input": 1.5
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/dictation/transcribe?limpar=bad&include_recent_messages=bad",
+      "body": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "bool_parsing",
+            "loc": [
+              "query",
+              "limpar"
+            ],
+            "msg": "Input should be a valid boolean, unable to interpret input",
+            "input": "bad"
+          },
+          {
+            "type": "bool_parsing",
+            "loc": [
+              "query",
+              "include_recent_messages"
+            ],
+            "msg": "Input should be a valid boolean, unable to interpret input",
+            "input": "bad"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/dictation/models?fresh=bad",
+      "body": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "query",
+              "session"
+            ],
+            "msg": "Field required",
+            "input": null
+          },
+          {
+            "type": "bool_parsing",
+            "loc": [
+              "query",
+              "fresh"
+            ],
+            "msg": "Input should be a valid boolean, unable to interpret input",
+            "input": "bad"
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/dictation/transcribe?limpar=0",
+      "body": null,
+      "status": 200,
+      "response": {
+        "text": "Fala original.",
+        "provider": "fixture"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/dictation/transcribe?limpar=bad",
+      "body": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "bool_parsing",
+            "loc": [
+              "query",
+              "limpar"
+            ],
+            "msg": "Input should be a valid boolean, unable to interpret input",
+            "input": "bad"
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/ditado/relimpar",
+      "body": {
+        "texto": "Fala original.",
+        "estilo": "limpar",
+        "organization_mode": "none"
+      },
+      "status": 200,
+      "response": {
+        "text": "Fala original.",
+        "raw": "Fala original.",
+        "organization_mode": "none",
+        "estilo_aplicado": "cru",
+        "aviso": null,
+        "organization_code": null
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/ditado/relimpar",
+      "body": {
+        "texto": "",
+        "estilo": "limpar"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_too_short",
+            "loc": [
+              "body",
+              "texto"
+            ],
+            "msg": "String should have at least 1 character",
+            "input": "",
+            "ctx": {
+              "min_length": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/ditado/relimpar",
+      "body": {
+        "texto": "Fala original.",
+        "estilo": "errado"
+      },
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "erro_estilo_invalido",
+          "params": {},
+          "msg": "Estilo de organização inválido: 'errado'."
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/ditado/relimpar",
+      "body": {
+        "texto": "fala",
+        "estilo": "prosa",
+        "extra": 1
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "extra"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": 1
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/ditado/relimpar",
+      "body": {},
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "texto"
+            ],
+            "msg": "Field required",
+            "input": {}
+          },
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "estilo"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/dictation/models",
+      "body": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "query",
+              "session"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/dictation/models?session=x&fresh=bad",
+      "body": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "bool_parsing",
+            "loc": [
+              "query",
+              "fresh"
+            ],
+            "msg": "Input should be a valid boolean, unable to interpret input",
+            "input": "bad"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/transcription/providers/status",
+      "body": null,
+      "status": 200,
+      "response": {
+        "providers": []
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/ditado/relimpar",
+      "body": {
+        "texto": 12,
+        "estilo": false
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "texto"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 12
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "estilo"
+            ],
+            "msg": "Input should be a valid string",
+            "input": false
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/ditado/relimpar",
+      "body": {
+        "texto": "fala",
+        "estilo": "prosa",
+        "recent_messages": [
+          3
+        ]
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "dict_type",
+            "loc": [
+              "body",
+              "recent_messages",
+              0
+            ],
+            "msg": "Input should be a valid dictionary",
+            "input": 3
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/ditado/relimpar",
+      "body": {
+        "texto": "fala",
+        "estilo": "prosa",
+        "include_recent_messages": "sim"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "bool_parsing",
+            "loc": [
+              "body",
+              "include_recent_messages"
+            ],
+            "msg": "Input should be a valid boolean, unable to interpret input",
+            "input": "sim"
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/ditado/relimpar",
+      "body": {
+        "texto": "fala",
+        "estilo": "prosa",
+        "include_recent_messages": "1"
+      },
+      "status": 200,
+      "response": {
+        "text": "fala",
+        "raw": "fala",
+        "organization_mode": "none",
+        "estilo_aplicado": "cru",
+        "aviso": null,
+        "organization_code": null
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/ditado/relimpar",
+      "body": null,
+      "raw_body": "{\"texto\":\"fala\",\"estilo\":\"prosa\",\"organization_mode\":\"none\"}",
+      "headers": {
+        "content-type": "text/plain"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{\"texto\":\"fala\",\"estilo\":\"prosa\",\"organization_mode\":\"none\"}"
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/ditado/relimpar",
+      "body": null,
+      "raw_body": "{\"texto\":\"fala\",\"estilo\":\"prosa\",\"organization_mode\":\"none\"}",
+      "headers": {
+        "content-type": "application/json; charset=utf-8"
+      },
+      "status": 200,
+      "response": {
+        "text": "fala",
+        "raw": "fala",
+        "organization_mode": "none",
+        "estilo_aplicado": "cru",
+        "aviso": null,
+        "organization_code": null
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/ditado/relimpar",
+      "body": null,
+      "raw_body": "{\"texto\":\"fala\",\"estilo\":\"prosa\",\"organization_mode\":\"none\"}",
+      "headers": {
+        "content-type": "application/vnd.hangar+json"
+      },
+      "status": 200,
+      "response": {
+        "text": "fala",
+        "raw": "fala",
+        "organization_mode": "none",
+        "estilo_aplicado": "cru",
+        "aviso": null,
+        "organization_code": null
+      }
+    }
+  ]
+}

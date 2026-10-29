@@ -57,6 +57,15 @@ function clampPct(n: number): number {
   return Math.min(100, Math.max(0, n));
 }
 
+/** Contexto da sessão em % (0–100): o `context` da lista vence, como no nativo; senão a statusline; sem leitura, `null`. */
+export function sessionContextPct(s: Pick<SessionInfo, 'status_line' | 'context'>): number | null {
+  const ctx = s.context;
+  // `window` entre aspas: a trava de fronteira lê a palavra solta como o global do DOM.
+  if (ctx && ctx['window'] > 0) return clampPct((ctx.used / ctx['window']) * 100);
+  const fromLine = parseStatusLine(s.status_line)?.ctxPct;
+  return typeof fromLine === 'number' && isFinite(fromLine) ? fromLine : null;
+}
+
 export function parseStatusLine(raw: string | null | undefined, session?: SessionInfo | null): StatusFields | null {
   // Codex e Claude sem terminal não publicam Git na statusline, e com o agente numa worktree ela fala
   // da pasta de abertura: nos dois casos vale a lista.

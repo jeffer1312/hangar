@@ -1804,6 +1804,8 @@ impl Hangar {
         };
         let face = if line.entry.as_ref().is_some_and(|e| e.invite) { chrome::small_icon(IconName::Link, 21., theme::muted()).into_any_element() }
             else { div().text_size(px(19.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::muted()).child(initial(&name)).into_any_element() };
+        let tag_entry = line.entry.clone().filter(|entry| !entry.invite);
+        let tag_title = format!("{} · {name}", tr_shared("tags_machine_title", &[]));
         div().flex().flex_col().gap(px(16.)).pb(px(8.))
             .child(div().mb(px(4.)).flex().items_center().gap(px(14.))
                 .child(tile(face, 46., theme::raised(), Some(head_dot)))
@@ -1815,6 +1817,15 @@ impl Hangar {
                 .when(!rename_ids.is_empty(), |el| el.child(Button::new("machines-peer-rename").ghost().small().label(tr("machines_rename"))
                     .accessibility_label(tr("machines_rename_aria").replace("{nome}", &name))
                     .on_click(cx.listener(move |this, _, window, cx| this.start_machine_rename(rename_ids.clone(), name.clone(), window, cx)))))
+                // A etiqueta é gravada na própria máquina: só com a entrada (endereço e token) guardada aqui.
+                .when_some(tag_entry, |el, entry| el.child(Button::new("machines-peer-tag").ghost().small().label(tr_shared("tags_machine_title", &[]))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let api = match this.machine_api(&servers::norm(&entry.address)) { Some(api) => Ok(api), None => Api::new(&entry.address, &entry.token) };
+                        match api {
+                            Ok(api) => this.open_tag_editor(api, super::tags::Subject::Machine, tag_title.clone(), window, cx),
+                            Err(error) => window.push_notification(Notification::warning(Self::fetch_failure(&error)), cx),
+                        }
+                    }))))
             .children(rename_editor)
             .child(device)
             .child(messages)
@@ -2093,6 +2104,12 @@ impl Hangar {
             .when(!rename_ids.is_empty(), |el| el.child(Button::new("machines-this-rename").ghost().small().label(tr("machines_rename"))
                 .accessibility_label(tr("machines_rename_aria").replace("{nome}", &server_name))
                 .on_click(cx.listener(move |this, _, window, cx| this.start_machine_rename(rename_ids.clone(), server_name.clone(), window, cx)))))
+            .when(!self.active_invite(), |el| el.child(Button::new("machines-this-tag").ghost().small().label(tr_shared("tags_machine_title", &[]))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    let Some(api) = this.api.clone() else { return };
+                    let title = format!("{} · {}", tr_shared("tags_machine_title", &[]), this.server_label(cx));
+                    this.open_tag_editor(api, super::tags::Subject::Machine, title, window, cx);
+                }))))
             .when(!id.is_empty(), |el| el.child(div().flex_shrink_0().px(px(10.)).py(px(2.)).rounded_full().border_1().border_color(theme::border())
                 .font_family(theme::MONO).text_size(px(12.)).text_color(theme::muted()).child(id.clone())));
         let scope_env = chip(tr("machines_scope_env"), theme::muted(), theme::raised()).flex_shrink_0().into_any_element();

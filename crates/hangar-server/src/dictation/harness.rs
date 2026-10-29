@@ -197,6 +197,46 @@ async fn run_with_budget(
     references: Option<&[ReferenceMessage]>,
     deadline: tokio::time::Instant,
 ) -> Result<String, &'static str> {
+    run_prompt_until(
+        state,
+        context,
+        model,
+        &prompts::with_references(style, references),
+        raw,
+        deadline,
+    )
+    .await
+}
+
+/// O mesmo executor com outro prompt de sistema; quem chama confere a saída (sem `guards::validate`,
+/// que é do texto do ditado).
+pub async fn run_prompt(
+    state: &AppState,
+    context: &Context,
+    model: &str,
+    system_prompt: &str,
+    input: &str,
+    timeout: std::time::Duration,
+) -> Result<String, &'static str> {
+    run_prompt_until(
+        state,
+        context,
+        model,
+        system_prompt,
+        input,
+        tokio::time::Instant::now() + timeout,
+    )
+    .await
+}
+
+async fn run_prompt_until(
+    state: &AppState,
+    context: &Context,
+    model: &str,
+    system_prompt: &str,
+    input: &str,
+    deadline: tokio::time::Instant,
+) -> Result<String, &'static str> {
     if tokio::time::Instant::now() >= deadline {
         return Err("dictation_organization_timeout");
     }
@@ -207,12 +247,12 @@ async fn run_with_budget(
         .try_acquire_owned()
         .map_err(|_| "dictation_busy")?;
     let guard = std::sync::Arc::new(account_guard(state, context)?);
-    let (command, directory) = build_command(state, context, model, style, references)?;
+    let (command, directory) = build_command_with_prompt(state, context, model, system_prompt)?;
     let budget = deadline.saturating_duration_since(tokio::time::Instant::now());
     if budget.is_zero() {
         return Err("dictation_organization_timeout");
     }
-    let bytes = limited_output_guarded(command, directory, raw, budget, Some(guard)).await?;
+    let bytes = limited_output_guarded(command, directory, input, budget, Some(guard)).await?;
     parse_output(&bytes, context.provider == "claude")
 }
 
@@ -243,6 +283,20 @@ pub fn build_command(
     model: &str,
     style: DictationStyle,
     references: Option<&[ReferenceMessage]>,
+) -> Result<(tokio::process::Command, tempfile::TempDir), &'static str> {
+    build_command_with_prompt(
+        state,
+        context,
+        model,
+        &prompts::with_references(style, references),
+    )
+}
+
+pub fn build_command_with_prompt(
+    state: &AppState,
+    context: &Context,
+    model: &str,
+    system_prompt: &str,
 ) -> Result<(tokio::process::Command, tempfile::TempDir), &'static str> {
     let directory = tempfile::tempdir().map_err(|_| "dictation_organization_failed")?;
     let mut command = if context.provider == "claude" {
@@ -279,7 +333,7 @@ pub fn build_command(
             ]);
         // As referências da conversa ficam fora do argv, que qualquer usuário lê no `ps`.
         let prompt = directory.path().join("system-prompt.txt");
-        private_file(&prompt, &prompts::with_references(style, references))?;
+        private_file(&prompt, system_prompt)?;
         command.arg("--system-prompt-file").arg(prompt);
         if !context.settings.as_object().is_none_or(|m| m.is_empty()) {
             let file = directory.path().join("auth-settings.json");
@@ -304,7 +358,7 @@ pub fn build_command(
         ]);
         catalog::codex_overrides(&mut command);
         let file = directory.path().join("instructions.txt");
-        private_file(&file, &prompts::with_references(style, references))?;
+        private_file(&file, system_prompt)?;
         command.arg("-c").arg(format!(
             "model_instructions_file={}",
             json!(file.to_string_lossy())

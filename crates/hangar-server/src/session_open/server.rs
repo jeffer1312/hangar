@@ -435,9 +435,9 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
                          mut adopting: Option<&mut super::adopt::Adopting>) -> Decision {
     let facts_env = host.env.clone();
     let runtime = tokio::runtime::Handle::current();
-    let (request_for_facts, caller_for_facts) = (request.clone(), caller.clone());
+    let (request_for_facts, caller_for_facts, accounts) = (request.clone(), caller.clone(), st.accounts.clone());
     let resolved = tokio::task::spawn_blocking(move || {
-        let facts = super::facts::LocalFacts::new(facts_env, runtime);
+        let facts = super::facts::LocalFacts::shared(facts_env, &accounts, runtime);
         super::resolve_open(&request_for_facts, &caller_for_facts, &facts)
     }).await;
     let resolved = match resolved.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da abertura não terminou"))) {
@@ -643,9 +643,9 @@ pub async fn resume_archived(st: &Arc<AppState>, project: &str, sid: &str, body:
         let host = ServerHost::new(st.clone()).await;
         let live = host.live_sessions().await?;
         let (env, runtime, server_projects) = (host.env.clone(), tokio::runtime::Handle::current(), host.server_projects());
-        let (p, s) = (project.clone(), sid.clone());
+        let (p, s, accounts) = (project.clone(), sid.clone(), st.accounts.clone());
         let planned = tokio::task::spawn_blocking(move || {
-            let facts = super::facts::LocalFacts::new(env.clone(), runtime);
+            let facts = super::facts::LocalFacts::shared(env.clone(), &accounts, runtime);
             let config_dirs = super::OpenFacts::config_dirs(&facts)?;
             let w = super::archive::Where { home: &env.home, env: &env.base, server_projects: &server_projects, config_dirs: &config_dirs, live: &live };
             let plan = super::archive::plan(&w, &facts, &p, &s, body)?;

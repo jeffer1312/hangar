@@ -312,6 +312,14 @@ impl Ctx {
             tracing::warn!(session = %new, code = "hidden_shell_kept", "o shell escondido do nome antigo não fechou no rename");
             self.st.diag.report("sessao.rename_shell", new, "hidden_shell_kept", "o shell escondido do nome antigo ficou aberto");
         }
+        let life = self.identity(new).await.1;
+        if let Some(key) = crate::dictation::rename_suggestion::key_of(&self.st, new, life.as_deref()).await {
+            let home = self.home.clone();
+            if let Err(error) = blocking(move || crate::dictation::rename_suggestion::forget_after_rename(&home, &key)).await {
+                tracing::warn!(session = %new, %error, "marca de nome genérico não apagada no rename");
+                self.st.diag.report("rust.rename_suggestion", new, "rename_mark_kept", "marca de nome generico ficou no rename");
+            }
+        }
         self.st.list.rename(old, new);
         self.st.list.invalidate();
     }

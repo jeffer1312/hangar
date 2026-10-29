@@ -266,7 +266,7 @@ async fn fake_python(State(f): State<Arc<Fake>>, mut req: Request) -> Response {
         let bytes = axum::body::to_bytes(std::mem::take(req.body_mut()), 1 << 20).await.unwrap_or_default();
         f.plugin_ui.lock().unwrap().push(serde_json::from_slice(&bytes).unwrap_or(Value::Null));
     }
-    if req.method() != axum::http::Method::GET && path != "/ws" && path != "/api/plugin/ui" {
+    if req.method() != axum::http::Method::GET && path != "/api/ws" && path != "/api/plugin/ui" {
         let bytes = axum::body::to_bytes(std::mem::take(req.body_mut()), 1 << 24).await.unwrap_or_default();
         *f.last_body.lock().unwrap() = bytes.to_vec();
     }
@@ -277,10 +277,10 @@ async fn fake_python(State(f): State<Arc<Fake>>, mut req: Request) -> Response {
         return Response::builder().status(code).header("content-type", "application/json").body(Body::from(body.to_string())).unwrap();
     }
     match path.as_str() {
-        "/redirect" => Response::builder().status(302).header("location", "/outro").body(Body::empty()).unwrap(),
-        "/probe" => status(StatusCode::UNAUTHORIZED),
-        "/limited" => status(StatusCode::TOO_MANY_REQUESTS),
-        "/stream" => {
+        "/api/redirect" => Response::builder().status(302).header("location", "/api/outro").body(Body::empty()).unwrap(),
+        "/api/probe" => status(StatusCode::UNAUTHORIZED),
+        "/api/limited" => status(StatusCode::TOO_MANY_REQUESTS),
+        "/api/stream" => {
             let f2 = f.clone();
             let s = futures_util::stream::once(async { Ok::<_, Infallible>(Bytes::from_static(b"um")) })
                 .chain(futures_util::stream::once(async move {
@@ -290,7 +290,7 @@ async fn fake_python(State(f): State<Arc<Fake>>, mut req: Request) -> Response {
             Response::new(Body::from_stream(s))
         }
         // O navegador remoto do convidado também é WebSocket no Python.
-        p if p == "/ws" || p.ends_with("/nav-remoto") => {
+        p if p == "/api/ws" || p.ends_with("/nav-remoto") => {
             let upgrade = hyper::upgrade::on(&mut req);
             tokio::spawn(async move {
                 let Ok(up) = upgrade.await else { return };
@@ -314,6 +314,8 @@ async fn fake_python(State(f): State<Arc<Fake>>, mut req: Request) -> Response {
 }
 
 pub fn config(upstream: SocketAddr, trusted: &str) -> Config {
+    // A abertura leria a cota pela rede com o token falso das contas de teste.
+    hangar_server::accounts::quotas::disable_open_network_read();
     Config {
         listen: "127.0.0.1:0".parse().unwrap(),
         upstream,
@@ -364,6 +366,7 @@ pub async fn spawn_server(cfg: Config) -> SocketAddr {
 
 /// Servidor com um `AppState` montado pelo teste (para mexer no `Mods` dele por fora).
 pub async fn spawn_state(mut state: hangar_server::routes::AppState) -> SocketAddr {
+    hangar_server::accounts::quotas::disable_open_network_read();
     state.side.locate = fake_locate(state.cfg.upstream);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

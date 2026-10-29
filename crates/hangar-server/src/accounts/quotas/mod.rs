@@ -130,6 +130,15 @@ enum Origin {
     Other(other::Reader),
 }
 
+/// A leitura curta de cota da abertura sai pela rede; os testes de integração a desligam, porque as
+/// contas deles têm token falso e ela iria à Anthropic. Do processo inteiro, como o `use_cano_binary`.
+static OPEN_READ_OFFLINE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[doc(hidden)]
+pub fn disable_open_network_read() { OPEN_READ_OFFLINE.store(true, std::sync::atomic::Ordering::Relaxed) }
+
+pub fn open_network_read() -> bool { !OPEN_READ_OFFLINE.load(std::sync::atomic::Ordering::Relaxed) }
+
 pub fn now() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

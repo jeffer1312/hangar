@@ -172,6 +172,9 @@ pub struct SessionRow {
     pub plan_tasks: Option<Vec<(u32, u32)>>,
     #[serde(default)]
     pub plan_hidden: Option<bool>,
+    /// Nome sugerido para a sessão de nome genérico, sem "agora não" do dono; só existe no Rust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename_suggestion: Option<String>,
 }
 
 fn default_provider() -> String {

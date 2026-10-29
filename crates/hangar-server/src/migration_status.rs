@@ -27,7 +27,7 @@ pub const AREAS: [&str; 22] = [
 ];
 
 /// Trabalho que o Python pede ao Rust por trás (porta privada e canal do runtime).
-pub const PRIVATE: [&str; 7] = ["send_headless", "send_terminal", "terminal_observe", "workspace_bridge", "list_bridge", "transcription_bridge", "dictation_bridge"];
+pub const PRIVATE: [&str; 6] = ["send_headless", "send_terminal", "terminal_observe", "workspace_bridge", "list_bridge", "dictation_bridge"];
 
 const WINDOW_MINUTES: u64 = 10;
 const FACTS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -86,7 +86,7 @@ pub fn area_of(path: &str) -> usize {
         (&["/api/peers", "/api/alcance", "/api/external-pairs", "/api/pair"], "pairing"),
         (&["/api/push"], "push"),
         (&["/api/atualizacao", "/api/update-channel", "/api/deploy"], "update"),
-        (&["/api/dictation", "/api/ditado", "/api/tts"], "dictation"),
+        (&["/api/dictation", "/api/ditado", "/api/transcription", "/api/voice", "/api/tts"], "dictation"),
         (&["/api/plugin"], "mods"),
         (&["/api/migration"], "other"),
     ];
@@ -97,7 +97,10 @@ pub fn area_of(path: &str) -> usize {
 /// O Rust atende este pedido do dono sem repassar? Mesma decisão do `routes::router`: as rotas
 /// GET registradas lá, mais os `matches` de Git/arquivos e de worktrees que o `pass_any` consulta.
 pub fn rust_route(method: &Method, path: &str) -> bool {
-    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/session-defaults" | "/api/web-ui") { return true; }
+    if crate::ui::matches(method, path) || crate::dictation::http::matches(method, path) { return true; }
+    // O serviço MCP responde também aos métodos recusados, sem repasse ao Python.
+    if matches!(path, "/mcp" | "/mcp/") { return true; }
+    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/session-defaults" | "/api/tags" | "/api/web-ui") { return true; }
     if (matches!(*method, Method::GET | Method::PUT) && path == "/api/update-channel") { return true; }
     if (*method == Method::GET && path == "/api/atualizacao")
         || (*method == Method::POST && matches!(path, "/api/atualizacao/iniciar" | "/api/atualizacao/reiniciar" | "/api/atualizacao/dev-mode")) { return true; }
@@ -169,6 +172,10 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         | "permission-mode" | "modo-execucao" | "recarregar" | "conta" | "engine/model" | "model-effort" | "bastao" | "resume" | "rename")) {
         return true;
     }
+    // Sugestão de nome da sessão genérica (`dictation::rename_suggestion`): só o dono, nunca repassada.
+    if matches!(*method, Method::POST | Method::DELETE) && tail == Some("rename-suggestion") {
+        return true;
+    }
     // A pergunta lateral do Claude, com e sem terminal, e o histórico dela.
     if matches!(*method, Method::POST | Method::GET) && tail == Some("btw") {
         return true;
@@ -235,11 +242,17 @@ const PROBES: &[(&str, &str)] = &[
     ("GET", "/api/claude-configs"), ("GET", "/api/engines"), ("POST", "/api/sessions/x/conta"),
     ("GET", "/api/guests"), ("POST", "/api/sessions/x/share"),
     ("GET", "/api/peers"), ("POST", "/api/sessions/x/pair"),
-    ("POST", "/mcp"),
+    ("GET", "/mcp"), ("POST", "/mcp"), ("DELETE", "/mcp"),
     ("GET", "/api/push/settings"),
     ("GET", "/api/atualizacao"), ("GET", "/api/update-channel"),
     ("POST", "/api/sessions/x/upload"),
-    ("POST", "/api/dictation/transcribe"),
+    ("POST", "/api/dictation/transcribe"), ("POST", "/api/ditado/relimpar"),
+    ("GET", "/api/dictation/models"), ("GET", "/api/transcription/providers/status"),
+    ("POST", "/api/transcription/providers/x/test"),
+    ("GET", "/api/voice"), ("GET", "/api/voice/settings"), ("PUT", "/api/voice/settings"),
+    ("GET", "/api/voice/memory"), ("DELETE", "/api/voice/memory/x"),
+    ("POST", "/api/tts"), ("POST", "/api/tts/narrar"), ("GET", "/api/tts/voices"),
+    ("GET", "/api/tts/saldo"), ("GET", "/api/tts/audio/x"),
     ("POST", "/api/sessions/x/plugin/press"), ("POST", "/api/sessions/x/plugin/close"), ("POST", "/api/plugin/ui"), ("POST", "/api/plugin/ask"),
     ("GET", "/"), ("GET", "/assets/index.js"),
     ("GET", "/api/config"),
@@ -291,7 +304,6 @@ pub async fn count_bridge(req: Request, next: Next) -> Response {
         "/__hangar_server/terminal" => "terminal_observe",
         "/__hangar_server/workspace" => "workspace_bridge",
         "/__hangar_server/list" => "list_bridge",
-        path if path.starts_with("/__hangar_server/transcription/") => "transcription_bridge",
         path if path.starts_with("/__hangar_server/dictation/") => "dictation_bridge",
         _ => "",
     };
@@ -440,7 +452,7 @@ mod tests {
         assert_eq!(AREAS[area_of("/api/sessions-x")], "other", "prefixo só casa por segmento inteiro");
         assert_eq!(AREAS[area_of("/assets/index.js")], "static");
         // A tela web repassa o que não tem na pasta: só o contador por resposta sabe quem atendeu.
-        assert!(!get("/docs") && !get("/"));
+        assert!(!get("/docs") && get("/"));
         assert_eq!(AREAS[area_of("/api/sessions/a")], "session");
     }
 
@@ -477,6 +489,86 @@ mod tests {
         assert!(rust_route(&Method::POST, "/api/sessions/a/pair-access"));
         assert!(rust_route(&Method::DELETE, "/api/external-pairs/ana"));
         assert!(!rust_route(&Method::DELETE, "/api/external-pairs/a/b"));
+    }
+
+    #[test]
+    fn mcp_and_voice_are_reported_without_hiding_python_speech_routes() {
+        for path in ["/mcp", "/mcp/"] {
+            for method in [Method::GET, Method::POST, Method::DELETE, Method::HEAD, Method::PUT] {
+                assert!(rust_route(&method, path), "MCP já pertence ao Rust: {method} {path}");
+            }
+        }
+        assert!(!rust_route(&Method::POST, "/mcp/unknown"));
+        for (method, path) in [
+            (Method::GET, "/"), (Method::HEAD, "/assets/app.js"),
+            (Method::POST, "/api/dictation/transcribe"), (Method::POST, "/api/ditado/relimpar"),
+            (Method::GET, "/api/dictation/models"), (Method::GET, "/api/transcription/providers/status"),
+            (Method::POST, "/api/transcription/providers/x/test"),
+        ] {
+            assert!(rust_route(&method, path), "rota migrada ainda marcada como Python: {method} {path}");
+        }
+        for path in ["/api/voice", "/api/voice/settings", "/api/transcription/providers/status", "/api/tts/audio/example"] {
+            assert_eq!(AREAS[area_of(path)], "dictation", "área de {path}");
+        }
+        assert_eq!(AREAS[area_of("/api/voice-other")], "other");
+        let areas = areas_json(&[[0; 2]; AREAS.len()]);
+        let speech = areas.as_array().unwrap().iter().find(|item| item["key"] == "dictation").unwrap();
+        let routes = speech["routes"].as_array().unwrap();
+        for (method, path, rust) in [
+            ("GET", "/api/voice", true),
+            ("POST", "/api/tts", false),
+            ("POST", "/api/tts/narrar", false),
+            ("GET", "/api/tts/voices", false),
+            ("GET", "/api/tts/saldo", false),
+            ("GET", "/api/tts/audio/x", false),
+        ] {
+            assert!(routes.iter().any(|r| r["method"] == method && r["path"] == path && r["rust"] == rust), "rota ausente/incorreta: {method} {path}");
+        }
+        for path in ["/api/ditado/relimpar", "/api/dictation/models", "/api/transcription/providers/status", "/api/transcription/providers/x/test"] {
+            assert!(routes.iter().any(|r| r["path"] == path), "auxiliar ausente: {path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_external_request_is_counted_once() {
+        // O construtor lê configurações: um processo isolado evita alterar o ambiente dos outros testes.
+        if std::env::var_os("HANGAR_MCP_COUNTER_CHILD").is_none() {
+            let home = tempfile::tempdir().unwrap();
+            let proof = home.path().join("counter-checked");
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child.env_clear()
+                .env("HANGAR_MCP_COUNTER_CHILD", "1")
+                .env("HANGAR_MCP_COUNTER_PROOF", &proof)
+                .env("HOME", home.path()).env("USERPROFILE", home.path())
+                .env("LOCALAPPDATA", home.path()).env("APPDATA", home.path())
+                .env("XDG_CONFIG_HOME", home.path()).env("XDG_CACHE_HOME", home.path())
+                .env("TMPDIR", home.path()).env("TEMP", home.path()).env("TMP", home.path());
+            if let Some(root) = std::env::var_os("SystemRoot") { child.env("SystemRoot", root); }
+            let output = child.args(["--exact", "migration_status::tests::mcp_external_request_is_counted_once", "--nocapture"])
+                .output().unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(proof.is_file(), "o processo filho não executou a prova do contador");
+            return;
+        }
+        use tower_service::Service;
+        let state = Arc::new(AppState::new(crate::config::Config {
+            listen: "127.0.0.1:0".parse().unwrap(),
+            upstream: "127.0.0.1:1".parse().unwrap(),
+            internal_secret: "test-secret".into(),
+            auth_token: "test-owner".into(),
+            log_path: None,
+            trusted: crate::auth::TrustedHosts::parse("127.0.0.1"),
+        }));
+        let mut router = crate::mcp::router(state, axum::Router::new());
+        let before = totals().0[area("mcp")];
+        let request = Request::builder().method(Method::POST).uri("/mcp")
+            .extension(ConnectInfo("127.0.0.1:45000".parse::<SocketAddr>().unwrap()))
+            .body(Body::empty()).unwrap();
+        let response = router.call(request).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+        let after = totals().0[area("mcp")];
+        assert_eq!([after[0] - before[0], after[1] - before[1]], [1, 0]);
+        std::fs::write(std::env::var_os("HANGAR_MCP_COUNTER_PROOF").unwrap(), b"ok").unwrap();
     }
 
     #[test]

@@ -1,4 +1,4 @@
-"""Transporte JSON para organização e catálogos Rust; compartilha a conexão privada do STT."""
+"""Transporte JSON dos catálogos Rust; compartilha a conexão privada do servidor."""
 import http.client
 import json
 import urllib.error
@@ -24,7 +24,7 @@ def request(operation: str, payload: dict) -> dict:
                                   data=body, method="POST", headers={"x-hangar-internal": config[1], "content-type": "application/json"})
     try:
         try:
-            with transcription_bridge._opener.open(call, timeout=210 if operation == "organize" else 60) as response:
+            with transcription_bridge._opener.open(call, timeout=60) as response:
                 body = response.read(4 * 1024 * 1024 + 1)
         except urllib.error.HTTPError as error:
             body = error.read(4 * 1024 * 1024 + 1)
@@ -53,20 +53,3 @@ def request(operation: str, payload: dict) -> dict:
                        etapa=operation, causa=type(error).__name__,
                        causa_interna=type(reason).__name__ if isinstance(reason, BaseException) else None)
         raise BridgeError(503, "dictation_rust_unavailable", "Não foi possível confirmar a organização no Rust; a transcrição foi preservada.") from None
-
-
-def organize(raw: str, style: str | None = None, *, mode: str | None = None, session: str | None = None,
-             generation: str | None = None, model: str | None = None, account: str | None = None, harness_allowed: bool = True,
-             include_recent_messages: bool | None = None, recent_messages: list[dict] | None = None) -> dict:
-    payload = {"raw": raw, "style": style, "mode": mode, "session": session,
-               "generation": generation, "model": model, "account": account, "harness_allowed": harness_allowed,
-               "include_recent_messages": include_recent_messages, "recent_messages": recent_messages}
-    try:
-        result = request("organize", payload)
-        if not isinstance(result.get("text"), str) or result.get("raw") != raw:
-            raise BridgeError(503, "dictation_rust_unavailable", "A resposta de organização não corresponde à transcrição; foi mantido o original.")
-        return result
-    except BridgeError as error:
-        # O transporte pode cair depois do STT: o texto já obtido nunca vira um erro sem conteúdo.
-        return {"text": raw, "raw": raw, "aviso": error.detail, "estilo_aplicado": "cru",
-                "organization_mode": mode, "organization_code": error.code}

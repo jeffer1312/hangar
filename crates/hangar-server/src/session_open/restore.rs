@@ -582,7 +582,8 @@ mod tests {
             surface: Surface::Terminal, account: if provider == AgentProvider::Codex { super::super::Account::Codex { account_id: "default".into() } }
             else { super::super::Account::Default }, account_source: super::super::AccountSource::Default, model: None, effort: None,
             service_tier: None, permission_mode: Some(mode), subagent_model: None, customizations: None, jev: false, read_only: false,
-            worktree: None, creator: None, created_at: 1.0, conversation: Some("c1".into()) };
+            worktree: None, creator: None, created_at: 1.0, conversation: Some("c1".into()),
+            name_auto: None, rename_suggestion: None, rename_dismissed: false };
         super::super::record::write(home, &spec).unwrap();
     }
 
