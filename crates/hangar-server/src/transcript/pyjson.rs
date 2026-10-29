@@ -79,31 +79,75 @@ pub(crate) fn decode_raw(raw: &str) -> Option<Value> {
             decoder.end().ok()?;
             Some(value)
         }
-        let raw = raw.trim_matches([' ', '\t', '\r', '\n']);
-        match raw.as_bytes().first()? {
+        type Raw = Box<serde_json::value::RawValue>;
+        enum Frame {
+            Array(Vec<Value>, std::vec::IntoIter<Raw>),
+            Object(serde_json::Map<String, Value>, String, indexmap::map::IntoIter<String, Raw>),
+        }
+        // A profundidade pertence aos dados; não pode consumir a pilha da thread HTTP.
+        let mut frames = Vec::new();
+        let mut next = raw.to_owned();
+        'decode: loop {
+        let text = next;
+        let raw = text.trim_matches([' ', '\t', '\r', '\n']);
+        let mut value = match raw.as_bytes().first()? {
             b'{' => {
-                let entries: indexmap::IndexMap<String, Box<serde_json::value::RawValue>> = typed(raw)?;
-                let mut map = serde_json::Map::new();
-                for (key,value) in entries { map.insert(key,decode_raw(value.get())?); }
-                Some(Value::Object(map))
+                let entries: indexmap::IndexMap<String, Raw> = typed(raw)?;
+                let mut entries = entries.into_iter();
+                if let Some((key, child)) = entries.next() {
+                    frames.push(Frame::Object(serde_json::Map::new(), key, entries));
+                    next = child.get().to_owned();
+                    continue;
+                }
+                Value::Object(serde_json::Map::new())
             }
             b'[' => {
-                let entries: Vec<Box<serde_json::value::RawValue>> = typed(raw)?;
-                Some(Value::Array(entries.into_iter().map(|v|decode_raw(v.get())).collect::<Option<_>>()?))
+                let entries: Vec<Raw> = typed(raw)?;
+                let mut entries = entries.into_iter();
+                if let Some(child) = entries.next() {
+                    frames.push(Frame::Array(Vec::new(), entries));
+                    next = child.get().to_owned();
+                    continue;
+                }
+                Value::Array(Vec::new())
             }
-            b'"' => typed(raw).map(Value::String),
-            b't' | b'f' => typed(raw).map(Value::Bool),
-            b'n' if raw == "null" => Some(Value::Null),
+            b'"' => Value::String(typed(raw)?),
+            b't' | b'f' => Value::Bool(typed(raw)?),
+            b'n' if raw == "null" => Value::Null,
             _ => {
                 if raw == "-0" || raw.contains(['.','e','E']) {
                     let number: f64 = typed(raw)?;
-                    Number::from_f64(number).map(Value::Number)
+                    Value::Number(Number::from_f64(number)?)
                 } else {
                     let _: Number = typed(raw)?;
                     let canonical = raw.parse::<num_bigint::BigInt>().ok()?.to_string();
-                    canonical.parse::<Number>().ok().map(Value::Number)
+                    Value::Number(canonical.parse::<Number>().ok()?)
                 }
             },
+        };
+        while let Some(frame) = frames.pop() {
+            value = match frame {
+                Frame::Array(mut values, mut rest) => {
+                    values.push(value);
+                    if let Some(child) = rest.next() {
+                        frames.push(Frame::Array(values, rest));
+                        next = child.get().to_owned();
+                        continue 'decode;
+                    }
+                    Value::Array(values)
+                }
+                Frame::Object(mut values, key, mut rest) => {
+                    values.insert(key, value);
+                    if let Some((key, child)) = rest.next() {
+                        frames.push(Frame::Object(values, key, rest));
+                        next = child.get().to_owned();
+                        continue 'decode;
+                    }
+                    Value::Object(values)
+                }
+            };
+        }
+        return Some(value);
         }
     }
 
