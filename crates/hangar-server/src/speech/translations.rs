@@ -82,22 +82,66 @@ fn strip_fence(raw: &str) -> &str {
     text_client::trim(raw)
 }
 
-async fn load(path: PathBuf) -> BTreeMap<String, String> {
+#[derive(Default)]
+struct LoadedCache {
+    entries: BTreeMap<String, String>,
+    error: Option<String>,
+}
+
+impl LoadedCache {
+    fn failed(error: impl Into<String>) -> Self {
+        Self {
+            error: Some(error.into()),
+            ..Self::default()
+        }
+    }
+}
+
+async fn load(path: PathBuf) -> LoadedCache {
     tokio::task::spawn_blocking(move || {
-        let bytes = crate::runtime::queue::read_replaced(&path).ok()?;
-        let values: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-        Some(
-            values
-                .as_object()?
-                .iter()
-                .filter_map(|(key, value)| value.as_str().map(|v| (key.clone(), v.to_owned())))
-                .collect(),
-        )
+        let bytes = match crate::runtime::queue::read_replaced(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return LoadedCache::default();
+            }
+            Err(error) => {
+                return LoadedCache::failed(format!(
+                    "Não consegui ler o cache de tradução: {error}"
+                ));
+            }
+        };
+        let values: serde_json::Value = match serde_json::from_slice(&bytes) {
+            Ok(value) => value,
+            Err(_) => {
+                return LoadedCache::failed(
+                    "O cache de tradução não contém um JSON válido; o arquivo foi preservado.",
+                );
+            }
+        };
+        let Some(values) = values.as_object() else {
+            return LoadedCache::failed(
+                "O cache de tradução não contém um objeto de textos; o arquivo foi preservado.",
+            );
+        };
+        let mut loaded = LoadedCache::default();
+        for (key, value) in values {
+            if let Some(value) = value.as_str() {
+                loaded.entries.insert(key.clone(), value.to_owned());
+            } else {
+                loaded.error = Some(
+                    "O cache de tradução contém entradas inválidas; o arquivo foi preservado."
+                        .into(),
+                );
+            }
+        }
+        loaded
     })
     .await
-    .ok()
-    .flatten()
-    .unwrap_or_default()
+    .unwrap_or_else(|_| {
+        LoadedCache::failed(
+            "Não consegui concluir a leitura do cache de tradução; o arquivo foi preservado.",
+        )
+    })
 }
 
 async fn save(path: &Path, cache: &BTreeMap<String, String>) -> Result<(), String> {
@@ -164,7 +208,11 @@ impl Service {
         }
         let _lock = self.lock.lock().await;
         let path = config.home.join(".hangar/config-sync/traducoes.json");
-        let mut cache = load(path.clone()).await;
+        let loaded = load(path.clone()).await;
+        // Sem uma leitura completa não sabemos quais entradas uma gravação apagaria.
+        let writable = loaded.error.is_none();
+        let mut cache = loaded.entries;
+        let mut error = loaded.error.unwrap_or_default();
         let mut seen = HashSet::new();
         let missing: Vec<_> = texts
             .iter()
@@ -176,7 +224,6 @@ impl Service {
             })
             .cloned()
             .collect();
-        let mut error = String::new();
         for (index, batch) in missing.chunks(self.batch_size).enumerate() {
             match self.call_waiting(config, batch, language).await {
                 Ok(values) => {
@@ -186,12 +233,14 @@ impl Service {
                             .zip(values)
                             .map(|(text, value)| (key(language, text), value)),
                     );
-                    if let Err(reason) = save(&path, &cache).await {
-                        error = reason;
+                    if writable {
+                        if let Err(reason) = save(&path, &cache).await {
+                            error = reason;
+                        }
                     }
                 }
                 Err(reason) => {
-                    error = if is_rate_limit(&reason) {
+                    let reason = if is_rate_limit(&reason) {
                         format!(
                             "O provedor limitou as chamadas; traduzi {} de {}, compare de novo para continuar",
                             index * self.batch_size,
@@ -200,6 +249,12 @@ impl Service {
                     } else {
                         reason.detail
                     };
+                    if error.is_empty() {
+                        error = reason;
+                    } else {
+                        error.push(' ');
+                        error.push_str(&reason);
+                    }
                     break;
                 }
             }
@@ -331,21 +386,33 @@ mod tests {
 
     #[tokio::test]
     async fn a_cache_write_failure_keeps_the_translation_and_reports_the_cause() {
-        let server = fake(vec![content("[\"Executa os testes.\"]")]).await;
+        use std::sync::Arc;
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let server = fake_gated(
+            vec![content("[\"Executa os testes.\"]")],
+            Some((entered.clone(), release.clone())),
+        )
+        .await;
+        let task = tokio::spawn({
+            let config = server.config.clone();
+            async move {
+                Service::default()
+                    .translate(&config, &["Runs the tests for the file.".into()], "pt")
+                    .await
+            }
+        });
+        entered.notified().await;
+        // A leitura já terminou; só a escrita deve encontrar o diretório bloqueado.
         std::fs::write(
             server.config.home.join(".hangar"),
             "impede o diretório".as_bytes(),
         )
         .unwrap();
-        let (translated, error) = Service::default()
-            .translate(
-                &server.config,
-                &["Runs the tests for the file.".into()],
-                "pt",
-            )
-            .await;
+        release.notify_one();
+        let (translated, error) = task.await.unwrap();
         assert_eq!(translated, vec!["Executa os testes."]);
-        assert!(error.contains("cache de tradução"));
+        assert!(error.contains("gravar o cache de tradução"));
     }
 
     #[tokio::test]
@@ -368,18 +435,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_invalid_cache_value_is_ignored_instead_of_returned_as_non_text() {
+    async fn invalid_cache_entries_are_reported_without_overwriting_valid_entries() {
         let server = fake(vec![content("[\"Executa os testes.\"]")]).await;
         let path = server
             .config
             .home
             .join(".hangar/config-sync/traducoes.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &path,
-            serde_json::json!({key("pt","Runs the tests for the file."):17}).to_string(),
-        )
-        .unwrap();
+        let old = serde_json::json!({key("pt","Runs the tests for the file."):17,
+            key("pt","Opens the browser for the user."):"Abre o navegador."})
+        .to_string();
+        std::fs::write(&path, &old).unwrap();
+        let (translated, error) = Service::default()
+            .translate(
+                &server.config,
+                &[
+                    "Opens the browser for the user.".into(),
+                    "Runs the tests for the file.".into(),
+                ],
+                "pt",
+            )
+            .await;
+        assert_eq!(translated, vec!["Abre o navegador.", "Executa os testes."]);
+        assert!(error.contains("entradas inválidas"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), old);
+    }
+
+    #[tokio::test]
+    async fn corrupt_cache_files_are_preserved_while_the_current_result_remains_available() {
+        for original in [
+            b"{not JSON".as_slice(),
+            b"[]".as_slice(),
+            b"\xff".as_slice(),
+        ] {
+            let server = fake(vec![content("[\"Executa os testes.\"]")]).await;
+            let path = server
+                .config
+                .home
+                .join(".hangar/config-sync/traducoes.json");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, original).unwrap();
+            let (translated, error) = Service::default()
+                .translate(
+                    &server.config,
+                    &["Runs the tests for the file.".into()],
+                    "pt",
+                )
+                .await;
+            assert_eq!(translated, vec!["Executa os testes."]);
+            assert!(!error.is_empty());
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_cache_is_not_replaced_by_a_new_translation() {
+        let server = fake(vec![content("[\"Executa os testes.\"]")]).await;
+        let path = server
+            .config
+            .home
+            .join(".hangar/config-sync/traducoes.json");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("preserved"), b"original").unwrap();
         let (translated, error) = Service::default()
             .translate(
                 &server.config,
@@ -388,7 +505,38 @@ mod tests {
             )
             .await;
         assert_eq!(translated, vec!["Executa os testes."]);
-        assert!(error.is_empty());
+        assert!(error.contains("ler o cache de tradução"));
+        assert!(path.is_dir());
+        assert_eq!(std::fs::read(path.join("preserved")).unwrap(), b"original");
+    }
+
+    #[tokio::test]
+    async fn cache_and_provider_failures_preserve_both_the_partial_result_and_causes() {
+        let server = fake(vec![(500, serde_json::json!({"error":"unavailable"}))]).await;
+        let path = server
+            .config
+            .home
+            .join(".hangar/config-sync/traducoes.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original=serde_json::json!({key("pt","Runs the tests for the file."):"Executa os testes.","damaged":17}).to_string();
+        std::fs::write(&path, &original).unwrap();
+        let (translated, error) = Service::default()
+            .translate(
+                &server.config,
+                &[
+                    "Runs the tests for the file.".into(),
+                    "Opens the browser for the user.".into(),
+                ],
+                "pt",
+            )
+            .await;
+        assert_eq!(
+            translated,
+            vec!["Executa os testes.", "Opens the browser for the user."]
+        );
+        assert!(error.contains("entradas inválidas"));
+        assert!(error.contains("provedor 500:"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     }
 
     #[test]
