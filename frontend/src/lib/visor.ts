@@ -237,7 +237,7 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
 
   const mostrarBaixar = (botao: HTMLButtonElement, estado: 'idle' | 'busy' | 'again' | 'failed') => {
     botao.disabled = estado === 'busy';
-    botao.textContent = estado === 'busy' ? '…' : estado === 'again' ? m.save_file_tap_again() : '⤓';
+    botao.textContent = estado === 'busy' ? m.save_file_downloading() : estado === 'again' ? m.save_file_tap_again() : `⤓ ${m.visor_baixar()}`;
     botao.title = estado === 'failed' ? m.save_file_failed() : m.visor_baixar();
     botao.setAttribute('aria-label', botao.title);
     const meta = faixa?.querySelector('.visor-meta');
