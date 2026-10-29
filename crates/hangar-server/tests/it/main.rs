@@ -295,6 +295,7 @@ mod dotenv_config;
 mod cliproxy_config;
 mod value_coercion;
 mod runtime_environment;
+mod config_metadata;
 mod plugin_publish;
 mod codec_values;
 mod http_contract;
