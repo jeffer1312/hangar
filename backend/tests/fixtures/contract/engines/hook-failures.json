@@ -1,0 +1,18 @@
+{
+  "source_commit": "165927796b07bf299a95f1628afba321815a3ebd",
+  "command": "PYTHONPATH=backend python backend/tests/fixtures/contract/engines/generate_hook_failures.py",
+  "cases": [
+    {
+      "provider": "kimi",
+      "initial": "{ inválido",
+      "result": [],
+      "after": "{ inválido"
+    },
+    {
+      "provider": "codex",
+      "initial": "{ inválido",
+      "result": [],
+      "after": "{ inválido"
+    }
+  ]
+}

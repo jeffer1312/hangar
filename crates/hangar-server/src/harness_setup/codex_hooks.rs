@@ -12,6 +12,19 @@ fn command(python: &Path, script: &Path, windows: bool, guard: bool) -> String {
     }
 }
 pub fn sync(home: &Path, repo: &Path, windows: bool) -> Result<Vec<String>, String> {
+    sync_impl(home, repo, windows, false)
+}
+
+pub fn sync_checked(home: &Path, repo: &Path, windows: bool) -> Result<Vec<String>, String> {
+    sync_impl(home, repo, windows, true)
+}
+
+fn sync_impl(
+    home: &Path,
+    repo: &Path,
+    windows: bool,
+    checked: bool,
+) -> Result<Vec<String>, String> {
     if !home.is_dir() {
         return Ok(vec![]);
     }
@@ -26,6 +39,7 @@ pub fn sync(home: &Path, repo: &Path, windows: bool) -> Result<Vec<String>, Stri
     } else {
         match serde_json::from_str(&raw) {
             Ok(v) => v,
+            Err(_) if checked => return Err("hooks.json inválido; hooks preservados".into()),
             Err(_) => return Ok(vec![]),
         }
     };
@@ -34,7 +48,11 @@ pub fn sync(home: &Path, repo: &Path, windows: bool) -> Result<Vec<String>, Stri
             .get("hooks")
             .is_some_and(|v| !v.is_null() && !v.is_object())
     {
-        return Ok(vec![]);
+        return if checked {
+            Err("hooks.json inválido; hooks preservados".into())
+        } else {
+            Ok(vec![])
+        };
     }
     if data["hooks"].is_null() {
         data["hooks"] = json!({});

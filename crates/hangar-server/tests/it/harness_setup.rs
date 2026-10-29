@@ -509,3 +509,73 @@ fn skills_configuration_matches_python_review_cases() {
         );
     }
 }
+
+#[test]
+fn checked_hooks_report_failures_without_overwriting_personal_files() {
+    use hangar_server::accounts::AccountService;
+    use std::fs;
+    for provider in ["claude", "kimi", "codex"] {
+        let root = tempfile::tempdir().unwrap();
+        let env = AccountEnvironment::from_map(
+            [
+                ("HOME".into(), root.path().to_string_lossy().into_owned()),
+                (
+                    "USERPROFILE".into(),
+                    root.path().to_string_lossy().into_owned(),
+                ),
+            ]
+            .into(),
+        );
+        let (dir, file) = match provider {
+            "claude" => (env.claude_base.clone(), "settings.json"),
+            "kimi" => (root.path().join(".kimi-code"), "config.toml"),
+            _ => (env.codex_default.clone(), "hooks.json"),
+        };
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(file), "{ inválido").unwrap();
+        let failure =
+            harness_setup::sync_hooks_checked(&AccountService::new(env), &root.path().join("repo"))
+                .expect_err("a aplicação deve informar a configuração que impediu instalar hooks");
+        assert!(!failure.errors[provider].is_empty());
+        assert_eq!(fs::read_to_string(dir.join(file)).unwrap(), "{ inválido");
+        assert!(failure.changes[provider].as_array().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn checked_hooks_keep_partial_success_and_legacy_result() {
+    use hangar_server::accounts::AccountService;
+    use std::fs;
+    let root = tempfile::tempdir().unwrap();
+    let env = AccountEnvironment::from_map(
+        [
+            ("HOME".into(), root.path().to_string_lossy().into_owned()),
+            (
+                "USERPROFILE".into(),
+                root.path().to_string_lossy().into_owned(),
+            ),
+        ]
+        .into(),
+    );
+    fs::create_dir_all(root.path().join(".kimi-code")).unwrap();
+    fs::write(root.path().join(".kimi-code/config.toml"), "[").unwrap();
+    fs::create_dir_all(&env.codex_default).unwrap();
+    let service = AccountService::new(env);
+    let repo = root.path().join("repo");
+    let failure = harness_setup::sync_hooks_checked(&service, &repo).unwrap_err();
+    assert_eq!(
+        failure
+            .errors
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["kimi"]
+    );
+    assert!(!failure.changes["codex"].as_array().unwrap().is_empty());
+    assert!(service.env.codex_default.join("hooks.json").is_file());
+    let legacy = harness_setup::sync_hooks(&service, &repo);
+    assert_eq!(legacy["kimi"], json!([]));
+    assert!(legacy.get("errors").is_none());
+    fs::remove_file(root.path().join(".kimi-code/config.toml")).unwrap();
+    assert!(harness_setup::sync_hooks_checked(&service, &repo).is_ok());
+}

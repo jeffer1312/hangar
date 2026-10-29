@@ -30,3 +30,37 @@ pub fn sync_hooks(service: &AccountService, repo: &Path) -> Value {
     }
     result
 }
+
+#[derive(Debug)]
+pub struct HookSyncFailure {
+    pub changes: Value,
+    pub errors: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+pub fn sync_hooks_checked(service: &AccountService, repo: &Path) -> Result<Value, HookSyncFailure> {
+    let (mut changes, claude_errors) = hooks::sync_report(service, repo);
+    let mut errors = std::collections::BTreeMap::new();
+    if !claude_errors.is_empty() {
+        errors.insert("claude".into(), claude_errors);
+    }
+    for (provider, result) in [
+        ("kimi", kimi_hooks::sync(&service.env, repo)),
+        (
+            "codex",
+            codex_hooks::sync_checked(&service.env.codex_default, repo, cfg!(windows)),
+        ),
+    ] {
+        match result {
+            Ok(paths) => changes[provider] = serde_json::json!(paths),
+            Err(error) => {
+                changes[provider] = serde_json::json!([]);
+                errors.insert(provider.into(), vec![error]);
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(changes)
+    } else {
+        Err(HookSyncFailure { changes, errors })
+    }
+}

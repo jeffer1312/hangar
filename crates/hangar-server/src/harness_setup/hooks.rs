@@ -182,11 +182,19 @@ fn safe_command(python: &Path, script: &Path, event: &str, telemetry: bool) -> S
     }
 }
 pub fn sync(service: &AccountService, repo: &Path) -> Value {
+    sync_report(service, repo).0
+}
+
+pub(super) fn sync_report(service: &AccountService, repo: &Path) -> (Value, Vec<String>) {
+    let mut errors = Vec::new();
     let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let python = crate::install_root::python_exe(repo, cfg!(windows));
     let mut dirs: Vec<_> = service
         .snapshot(Provider::Claude)
-        .unwrap_or_default()
+        .unwrap_or_else(|error| {
+            errors.push(format!("descoberta das contas Claude: {error:?}"));
+            Vec::new()
+        })
         .into_iter()
         .map(|a| a.home)
         .chain([service.env.claude_base.clone()])
@@ -220,7 +228,7 @@ pub fn sync(service: &AccountService, repo: &Path) -> Value {
                     .get("hooks")
                     .is_some_and(|h| !h.is_null() && !h.is_object())
             {
-                return Ok(false);
+                return Err("settings.json inválido; hooks preservados".into());
             }
             if data["hooks"].is_null() {
                 data["hooks"] = json!({});
@@ -303,9 +311,12 @@ pub fn sync(service: &AccountService, repo: &Path) -> Value {
         })();
         match result {
             Ok(true) => touched.push(path),
-            Err(error) => tracing::warn!(%error,"Hooks não atualizados"),
+            Err(error) => {
+                tracing::warn!(%error,"Hooks não atualizados");
+                errors.push(error);
+            }
             _ => {}
         }
     }
-    json!({"claude":touched})
+    (json!({"claude":touched}), errors)
 }
