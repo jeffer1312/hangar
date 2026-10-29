@@ -187,6 +187,14 @@ describe('API e execução por máquina', () => {
     expect(calls.filter((path) => path.startsWith('off/'))).toEqual(['off/api/peers/identificador']);
   });
 
+  it('identidade com corpo que não é JSON não tira a máquina da rodada', async () => {
+    identity = (id) => id === 'junk' ? new Response('{', { status: 200, headers: { 'Content-Type': 'application/json' } })
+      : json({ identificador: id, lan_url: '' });
+    const result = await prepareUpdateAll(['on', 'junk'].map((id) => server(id)), options);
+    expect(result.run.map((entry) => entry.server.id)).toEqual(['on', 'junk']);
+    expect(result.failed).toEqual([]);
+  });
+
   it('quem não leu os avisos fica fora da rodada; o aceite de cada máquina chega ao POST dela', async () => {
     const bodies: Record<string, unknown> = {};
     accept = (id, body) => { bodies[id] = body; return json({ ok: true, started: false }); };
