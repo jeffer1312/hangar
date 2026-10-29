@@ -3,6 +3,7 @@ pub mod cli;
 pub mod doctor;
 pub mod dotenv;
 pub mod network;
+pub mod live_config;
 pub mod store;
 use crate::{
     routes::{AppState, owner_gate},

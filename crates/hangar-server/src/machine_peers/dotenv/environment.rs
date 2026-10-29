@@ -28,6 +28,10 @@ impl SettingsEnvironment {
         }
         captured
     }
+    /// Lê o arquivo com a mesma interpolação do snapshot, sem aplicar o override final.
+    pub fn file_value(&self, raw:&str, key:&str)->Option<String> {
+        super::file_settings(raw,&self.exact).remove(&key.to_lowercase()).flatten()
+    }
     /// Para consumidores que já validaram os nomes relevantes; `value` conserva a recusa UTF-8.
     pub fn settings(&self,raw:&str)->BTreeMap<String,Option<String>> {
         let mut values=super::file_settings(raw,&self.exact);
@@ -65,6 +69,7 @@ impl SettingsSnapshot {
         };
         Ok(Self::from_parts(environment,raw))
     }
+    pub fn environment(&self)->&SettingsEnvironment { &self.environment }
     pub fn value(&self,key:&str)->Result<Option<String>,String>{self.aliases(&[key])}
     /// A fonte tem prioridade sobre o alias: qualquer alias no ambiente vence os do arquivo.
     pub fn aliases(&self,keys:&[&str])->Result<Option<String>,String>{
