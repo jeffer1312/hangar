@@ -307,10 +307,16 @@ impl Hangar {
         let failed = tool.result.is_some_and(|i| self.chat.events[i].is_error == Some(true)) || self.agent_failed(tool.call);
         let run = self.effective_agent(tool.call);
         let state_note = (!failed).then(|| self.codex_agent_state_note(tool.call)).flatten();
-        let running = !failed && run.as_ref().is_some_and(|agent| agent.running);
+        // Parado esperando o próprio trabalho de fundo: nem relógio nem marca de execução.
+        let waiting = !failed && run.as_ref().is_some_and(|agent| agent.waiting);
+        let running = !failed && !waiting && run.as_ref().is_some_and(|agent| agent.running);
         let now = chrono::Utc::now().timestamp_millis() as f64 / 1000.;
-        let duration = run.as_ref().filter(|agent| state_note.is_none() && (!failed || !agent.running)).and_then(|agent| agent.elapsed(now));
-        let timer = duration.and_then(|elapsed| {
+        let duration = run.as_ref().filter(|agent| !waiting && state_note.is_none() && (!failed || !agent.running)).and_then(|agent| agent.elapsed(now));
+        let timer = if waiting {
+            Some(div().flex_shrink_0().h(px(16.)).flex().items_center().gap(px(4.)).text_size(px(11.)).text_color(theme::muted())
+                .child(chrome::small_icon(IconName::Hourglass, 12., theme::muted()))
+                .child(super::activity::web("tool_agente_esperando")).into_any_element())
+        } else { duration.and_then(|elapsed| {
             let clock = agent_clock();
             if running {
                 let since = Instant::now().checked_sub(elapsed)?;
@@ -324,7 +330,7 @@ impl Hangar {
             .or_else(|| run.as_ref().filter(|_| !failed).map(|_| {
             div().flex_shrink_0().text_size(px(11.)).text_color(theme::muted())
                 .child(if running { tr("tool_running") } else { super::activity::web("atividade_sub_concluido") }).into_any_element()
-        })));
+        }))) };
         let mark = running.then(|| self.working_mark_slot(super::panes::Area::Conversation, format!("agent-{key}"), 12., theme::accent()));
         let ending = failed.then(|| if duration.is_some() { chrome::small_icon(IconName::CircleX, 13., theme::warning()).into_any_element() } else { failed_ending() });
         let card = agent_card(SharedString::from(format!("agent-card-{key}")), name, description, model, failed, timer, mark, ending, cx)

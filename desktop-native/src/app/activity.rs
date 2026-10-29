@@ -1659,7 +1659,7 @@ mod tests {
     #[test]
     fn codex_history_waits_for_proven_state_and_late_detail_cannot_reopen_finished_child() {
         let agent = AgentRun { call: 0, id: "spawn".into(), description: "review".into(), subagent_type: None,
-            model: None, prompt: None, running: true, agent_id: None, agent_path: Some("/root/review".into()), started_at: None, finished_at: None };
+            model: None, prompt: None, running: true, waiting: false, agent_id: None, agent_path: Some("/root/review".into()), started_at: None, finished_at: None };
         assert!(!super::native_running(&agent, &[], None, false));
         let mut states = super::NativeAgents::from([("child".into(), super::CodexSubagent {
             agent_path: Some("/root/review".into()), state: Some("finished".into()), ended_at: Some(1000.), ..Default::default()
@@ -1837,7 +1837,7 @@ mod tests {
 
     fn parent(id: &str, prompt: &str, agent_id: Option<&str>, running: bool) -> AgentRun {
         AgentRun { call: 0, id: id.into(), description: String::new(), subagent_type: None, model: None, prompt: Some(prompt.into()),
-            running, agent_id: agent_id.map(Into::into), agent_path: None, started_at: None, finished_at: None }
+            running, waiting: false, agent_id: agent_id.map(Into::into), agent_path: None, started_at: None, finished_at: None }
     }
 
     #[test]

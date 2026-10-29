@@ -223,6 +223,25 @@ fn background_agent_stopped_by_the_user_ends_by_its_description() {
 }
 
 #[test]
+fn waiting_notice_keeps_the_agent_running_as_waiting_until_its_end() {
+    let events = [
+        event(json!({"id":"agent","kind":"tool_use","tool_use_id":"a","tool_name":"Agent","tool_input":{"prompt":"Ler","run_in_background":true}})),
+        event(json!({"id":"launch","kind":"tool_result","tool_use_id":"a","result":"Async agent launched successfully.\nagentId: ab12 (use it)"})),
+        event(json!({"id":"wait","kind":"tool_result","tool_use_id":"task:waiting:ab12","result":"task-notification","ts":5.0})),
+        event(json!({"id":"end","kind":"tool_result","tool_use_id":"task:ab12","result":"task-notification","ts":9.0})),
+    ];
+    let mut fold = super::ActivityFold::default();
+    for (i, ev) in events.iter().enumerate().take(3) { fold.push(i, ev); }
+    let run = &fold.snapshot().agents[0];
+    assert_eq!((run.running, run.waiting), (true, true));
+    assert_eq!(fold.snapshot(), conversation::fold_activity(&events[..3]));
+    fold.push(3, &events[3]);
+    let run = &fold.snapshot().agents[0];
+    assert_eq!((run.running, run.waiting), (false, false));
+    assert_eq!(fold.snapshot(), conversation::fold_activity(&events));
+}
+
+#[test]
 fn teammate_runs_until_idle_and_keeps_its_real_agent_id() {
     let events = [
         event(json!({"id":"agent","kind":"tool_use","tool_use_id":"a","tool_name":"Agent","tool_input":{"prompt":"Ler","name":"x"}})),

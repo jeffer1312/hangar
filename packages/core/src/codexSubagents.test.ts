@@ -19,7 +19,10 @@ it('o estado novo vence uma descoberta ou detalhe atrasado e permite retomada', 
   const finished = projectCodexSubagent(run, { child: view });
   expect(finished.state).toBe('finished');
   expect(finished.endedAt).toBe('1970-01-01T00:16:40.000Z');
-  expect(projectCodexSubagent(finished, { child: { ...view, state: 'running', ended_at: null } }).state).toBe('running');
+  const resumed = projectCodexSubagent(finished, { child: { ...view, state: 'running', ended_at: null } });
+  expect([resumed.state, resumed.endedAt]).toEqual(['running', null]);
+  // Retrato terminado sem hora mantém a hora do disco.
+  expect(projectCodexSubagent(finished, { child: { ...view, ended_at: null } }).endedAt).toBe('1970-01-01T00:16:40.000Z');
   expect(projectCodexSubagent(run, {}).state).toBe('running');
   expect(projectCodexSubagent(run, { other: view })).toBe(run);
   expect(projectCodexSubagent(run, { child: { ...view, state: null } }).problema).toBe('erro_subagente_estado_indisponivel');

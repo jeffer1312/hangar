@@ -1622,6 +1622,7 @@
   "tool_copiar": "copy",
   "tool_copiado": "copied",
   "tool_executando_ha": "Running for {tempo}",
+  "tool_agente_esperando": "Waiting on background work",
   "tool_toque_ver": "tap to see",
   "tool_toque_ocultar": "tap to hide",
   "tool_clique_ver": "click to see",

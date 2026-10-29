@@ -134,6 +134,19 @@ describe('activity — pareamento de agente background', () => {
     expect(run([launch('tu1'), launched('tu1', 'aa0777'), citando]).runningAgents).toBe(0);
   });
 
+  it('task:waiting marca o agente como esperando até o fim ou a retomada', () => {
+    const espera = (ts: number): ChatEvent => ({ kind: 'tool_result', id: `e${seq++}`, tool_use_id: 'task:waiting:aa0777', result: 'task-notification', ts });
+    const retoma: ChatEvent = { kind: 'tool_use', id: `e${seq++}`, tool_use_id: 'tu2', tool_name: 'SendMessage', tool_input: { to: 'aa0777', message: 'continua' }, ts: 10 };
+    const aceito: ChatEvent = { kind: 'tool_result', id: `e${seq++}`, tool_use_id: 'tu2', result: '{"success":true}', ts: 11 };
+    const base = [launch('tu1'), launched('tu1', 'aa0777'), espera(5)];
+    const a = run(base);
+    expect([a.runningAgents, a.agents[0].waiting]).toEqual([1, true]);
+    expect(run([...base, done('aa0777')]).runningAgents).toBe(0);
+    expect(run([...base, retoma, aceito]).agents[0].waiting).toBeUndefined();
+    // Aviso atrasado, anterior à retomada, não volta a marcar espera.
+    expect(run([launch('tu1'), launched('tu1', 'aa0777'), retoma, aceito, espera(9)]).agents[0].waiting).toBeUndefined();
+  });
+
   it('agente de fundo comum retomado por SendMessage ao agentId volta a rodar', () => {
     const fim = (ts: number): ChatEvent => ({ kind: 'tool_result', id: `e${seq++}`, tool_use_id: 'task:aa0777', result: 'task-notification', ts });
     const retoma: ChatEvent = { kind: 'tool_use', id: `e${seq++}`, tool_use_id: 'tu2', tool_name: 'SendMessage', tool_input: { to: 'aa0777', message: 'continua' }, ts: 10 };
