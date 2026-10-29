@@ -1,0 +1,79 @@
+{
+  "source_commit": "73cb2256fdebd43bb1a08a15da67348114182ab3",
+  "command": "python backend/tests/fixtures/contract/engines/generate_persona.py",
+  "cases": [
+    {
+      "scenario": "empty",
+      "installed": {
+        "plugins": {}
+      },
+      "stdout": "ponte: nenhum agente instalado, nada a fazer\n",
+      "links": {}
+    },
+    {
+      "scenario": "both",
+      "installed": {
+        "plugins": {}
+      },
+      "stdout": "ponte: kimi, pi\n",
+      "links": {
+        ".kimi-code/AGENTS.md": "$ROOT/.claude/CLAUDE.md",
+        ".pi/agent/CLAUDE.md": "$ROOT/.claude/CLAUDE.md"
+      }
+    },
+    {
+      "scenario": "personal",
+      "installed": {
+        "plugins": {}
+      },
+      "stdout": "ponte: kimi, pi\n  kimi: AGENTS.md já existe como arquivo de verdade — não mexi\n  pi: CLAUDE.md já existe como arquivo de verdade — não mexi\n",
+      "links": {}
+    },
+    {
+      "scenario": "link",
+      "installed": {
+        "plugins": {}
+      },
+      "stdout": "ponte: kimi, pi\n",
+      "links": {
+        ".kimi-code/AGENTS.md": "$ROOT/.claude/CLAUDE.md",
+        ".pi/agent/CLAUDE.md": "$ROOT/.claude/CLAUDE.md"
+      }
+    },
+    {
+      "scenario": "packages",
+      "installed": {
+        "plugins": {
+          "superpowers@claude-plugins-official": [
+            {
+              "installPath": "$ROOT/plugin-1"
+            },
+            {
+              "installPath": "$ROOT/plugin-2"
+            }
+          ],
+          "ponytail@ponytail": [
+            {
+              "installPath": "$ROOT/ponytail"
+            }
+          ]
+        }
+      },
+      "stdout": "ponte: kimi, pi\n",
+      "links": {
+        ".kimi-code/AGENTS.md": "$ROOT/.claude/CLAUDE.md",
+        ".pi/agent/CLAUDE.md": "$ROOT/.claude/CLAUDE.md",
+        ".pi/agent/packages/ponytail": "$ROOT/ponytail",
+        ".pi/agent/packages/superpowers": "$ROOT/plugin-1"
+      }
+    },
+    {
+      "scenario": "missing_persona",
+      "installed": {
+        "plugins": {}
+      },
+      "stdout": "ponte: kimi, pi\n",
+      "links": {}
+    }
+  ]
+}

@@ -1,0 +1,612 @@
+{
+  "source_commit": "fc1ed83a37fe22c126328f3717ccd6b37db17e10",
+  "command": "PYTHONPATH=backend python backend/tests/fixtures/contract/engines/generate_hooks.py",
+  "cases": [
+    {
+      "initial": {},
+      "event": "PreToolUse",
+      "command": "\"python\" \"/fixture/state_hook.py\" || exit 0",
+      "expected": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ],
+              "matcher": "Bash"
+            }
+          ]
+        }
+      },
+      "changed": true
+    },
+    {
+      "initial": {},
+      "event": "PreToolUse",
+      "command": null,
+      "expected": {
+        "hooks": {
+          "PreToolUse": []
+        }
+      },
+      "changed": false
+    },
+    {
+      "initial": {
+        "hooks": {}
+      },
+      "event": "PreToolUse",
+      "command": "\"python\" \"/fixture/state_hook.py\" || exit 0",
+      "expected": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ],
+              "matcher": "Bash"
+            }
+          ]
+        }
+      },
+      "changed": true
+    },
+    {
+      "initial": {
+        "hooks": {}
+      },
+      "event": "PreToolUse",
+      "command": null,
+      "expected": {
+        "hooks": {
+          "PreToolUse": []
+        }
+      },
+      "changed": false
+    },
+    {
+      "initial": {
+        "hooks": {
+          "PreToolUse": []
+        }
+      },
+      "event": "PreToolUse",
+      "command": "\"python\" \"/fixture/state_hook.py\" || exit 0",
+      "expected": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ],
+              "matcher": "Bash"
+            }
+          ]
+        }
+      },
+      "changed": true
+    },
+    {
+      "initial": {
+        "hooks": {
+          "PreToolUse": []
+        }
+      },
+      "event": "PreToolUse",
+      "command": null,
+      "expected": {
+        "hooks": {
+          "PreToolUse": []
+        }
+      },
+      "changed": false
+    },
+    {
+      "initial": {
+        "hooks": {
+          "PreToolUse": "estranho"
+        }
+      },
+      "event": "PreToolUse",
+      "command": "\"python\" \"/fixture/state_hook.py\" || exit 0",
+      "expected": {
+        "hooks": {
+          "PreToolUse": "estranho"
+        }
+      },
+      "changed": false
+    },
+    {
+      "initial": {
+        "hooks": {
+          "PreToolUse": "estranho"
+        }
+      },
+      "event": "PreToolUse",
+      "command": null,
+      "expected": {
+        "hooks": {
+          "PreToolUse": "estranho"
+        }
+      },
+      "changed": false
+    },
+    {
+      "initial": {
+        "model": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "terceiro"
+                },
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                },
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "event": "PreToolUse",
+      "command": "\"python\" \"/fixture/state_hook.py\" || exit 0",
+      "expected": {
+        "model": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "terceiro"
+                },
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "changed": true
+    },
+    {
+      "initial": {
+        "model": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "terceiro"
+                },
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                },
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "event": "PreToolUse",
+      "command": null,
+      "expected": {
+        "model": "pessoal",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "terceiro"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "changed": true
+    },
+    {
+      "initial": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "command": "python /antigo/state_hook.py"
+                }
+              ]
+            },
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "event": "PreToolUse",
+      "command": "\"python\" \"/fixture/state_hook.py\" || exit 0",
+      "expected": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0",
+                  "type": "command"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "changed": true
+    },
+    {
+      "initial": {
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "command": "python /antigo/state_hook.py"
+                }
+              ]
+            },
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "event": "PreToolUse",
+      "command": null,
+      "expected": {
+        "hooks": {
+          "PreToolUse": []
+        }
+      },
+      "changed": true
+    },
+    {
+      "initial": {},
+      "event": "SessionStart",
+      "command": "\"python\" \"/fixture/state_hook.py\" || exit 0",
+      "expected": {
+        "hooks": {
+          "SessionStart": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ],
+              "matcher": "Bash"
+            }
+          ]
+        }
+      },
+      "changed": true
+    },
+    {
+      "initial": {},
+      "event": "SessionStart",
+      "command": null,
+      "expected": {
+        "hooks": {
+          "SessionStart": []
+        }
+      },
+      "changed": false
+    },
+    {
+      "initial": {
+        "hooks": {}
+      },
+      "event": "SessionStart",
+      "command": "\"python\" \"/fixture/state_hook.py\" || exit 0",
+      "expected": {
+        "hooks": {
+          "SessionStart": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ],
+              "matcher": "Bash"
+            }
+          ]
+        }
+      },
+      "changed": true
+    },
+    {
+      "initial": {
+        "hooks": {}
+      },
+      "event": "SessionStart",
+      "command": null,
+      "expected": {
+        "hooks": {
+          "SessionStart": []
+        }
+      },
+      "changed": false
+    },
+    {
+      "initial": {
+        "hooks": {
+          "SessionStart": []
+        }
+      },
+      "event": "SessionStart",
+      "command": "\"python\" \"/fixture/state_hook.py\" || exit 0",
+      "expected": {
+        "hooks": {
+          "SessionStart": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ],
+              "matcher": "Bash"
+            }
+          ]
+        }
+      },
+      "changed": true
+    },
+    {
+      "initial": {
+        "hooks": {
+          "SessionStart": []
+        }
+      },
+      "event": "SessionStart",
+      "command": null,
+      "expected": {
+        "hooks": {
+          "SessionStart": []
+        }
+      },
+      "changed": false
+    },
+    {
+      "initial": {
+        "hooks": {
+          "SessionStart": "estranho"
+        }
+      },
+      "event": "SessionStart",
+      "command": "\"python\" \"/fixture/state_hook.py\" || exit 0",
+      "expected": {
+        "hooks": {
+          "SessionStart": "estranho"
+        }
+      },
+      "changed": false
+    },
+    {
+      "initial": {
+        "hooks": {
+          "SessionStart": "estranho"
+        }
+      },
+      "event": "SessionStart",
+      "command": null,
+      "expected": {
+        "hooks": {
+          "SessionStart": "estranho"
+        }
+      },
+      "changed": false
+    },
+    {
+      "initial": {
+        "model": "pessoal",
+        "hooks": {
+          "SessionStart": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "terceiro"
+                },
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                },
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "event": "SessionStart",
+      "command": "\"python\" \"/fixture/state_hook.py\" || exit 0",
+      "expected": {
+        "model": "pessoal",
+        "hooks": {
+          "SessionStart": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "terceiro"
+                },
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "changed": true
+    },
+    {
+      "initial": {
+        "model": "pessoal",
+        "hooks": {
+          "SessionStart": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "terceiro"
+                },
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                },
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "event": "SessionStart",
+      "command": null,
+      "expected": {
+        "model": "pessoal",
+        "hooks": {
+          "SessionStart": [
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "terceiro"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "changed": true
+    },
+    {
+      "initial": {
+        "hooks": {
+          "SessionStart": [
+            {
+              "hooks": [
+                {
+                  "command": "python /antigo/state_hook.py"
+                }
+              ]
+            },
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "event": "SessionStart",
+      "command": "\"python\" \"/fixture/state_hook.py\" || exit 0",
+      "expected": {
+        "hooks": {
+          "SessionStart": [
+            {
+              "hooks": [
+                {
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0",
+                  "type": "command"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "changed": true
+    },
+    {
+      "initial": {
+        "hooks": {
+          "SessionStart": [
+            {
+              "hooks": [
+                {
+                  "command": "python /antigo/state_hook.py"
+                }
+              ]
+            },
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "\"python\" \"/fixture/state_hook.py\" || exit 0"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "event": "SessionStart",
+      "command": null,
+      "expected": {
+        "hooks": {
+          "SessionStart": []
+        }
+      },
+      "changed": true
+    }
+  ]
+}

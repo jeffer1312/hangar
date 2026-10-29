@@ -285,3 +285,5 @@ mod workspace_routes;
 mod worktree_routes;
 
 mod codex_setup;
+
+mod harness_setup;
