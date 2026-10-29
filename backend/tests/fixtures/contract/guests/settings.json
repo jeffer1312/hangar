@@ -1,0 +1,247 @@
+{
+  "source_commit": "7e1653bca7515fcca59d965b8ce8966254e3d826",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_settings.py",
+  "rows": [
+    {
+      "field": "sync_rate_max",
+      "input": "10",
+      "accepted": true,
+      "value": 10
+    },
+    {
+      "field": "sync_rate_max",
+      "input": "-1",
+      "accepted": true,
+      "value": -1
+    },
+    {
+      "field": "sync_rate_max",
+      "input": "100000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "accepted": true,
+      "value": 100000000000000000000000000000000000000000000000000000000000000000000000000000000
+    },
+    {
+      "field": "sync_rate_max",
+      "input": "1.0",
+      "accepted": true,
+      "value": 1
+    },
+    {
+      "field": "sync_rate_max",
+      "input": "1e3",
+      "accepted": false,
+      "errors": [
+        {
+          "type": "int_parsing",
+          "loc": [
+            "sync_rate_max"
+          ],
+          "msg": "Input should be a valid integer, unable to parse string as an integer",
+          "input": "1e3"
+        }
+      ]
+    },
+    {
+      "field": "sync_rate_max",
+      "input": " 2 ",
+      "accepted": true,
+      "value": 2
+    },
+    {
+      "field": "sync_rate_max",
+      "input": "+3",
+      "accepted": true,
+      "value": 3
+    },
+    {
+      "field": "sync_rate_max",
+      "input": "1_000",
+      "accepted": true,
+      "value": 1000
+    },
+    {
+      "field": "sync_rate_max",
+      "input": "no",
+      "accepted": false,
+      "errors": [
+        {
+          "type": "int_parsing",
+          "loc": [
+            "sync_rate_max"
+          ],
+          "msg": "Input should be a valid integer, unable to parse string as an integer",
+          "input": "no"
+        }
+      ]
+    },
+    {
+      "field": "sync_rate_window",
+      "input": "300",
+      "accepted": true,
+      "value": 300
+    },
+    {
+      "field": "sync_rate_window",
+      "input": "-1",
+      "accepted": true,
+      "value": -1
+    },
+    {
+      "field": "sync_rate_window",
+      "input": "100000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "accepted": true,
+      "value": 100000000000000000000000000000000000000000000000000000000000000000000000000000000
+    },
+    {
+      "field": "sync_rate_window",
+      "input": "0",
+      "accepted": true,
+      "value": 0
+    },
+    {
+      "field": "sync_rate_window",
+      "input": "1.5",
+      "accepted": false,
+      "errors": [
+        {
+          "type": "int_parsing",
+          "loc": [
+            "sync_rate_window"
+          ],
+          "msg": "Input should be a valid integer, unable to parse string as an integer",
+          "input": "1.5"
+        }
+      ]
+    },
+    {
+      "field": "lan_bind_ip",
+      "input": "127.0.0.1",
+      "accepted": true,
+      "value": "127.0.0.1",
+      "secure": false
+    },
+    {
+      "field": "lan_bind_ip",
+      "input": "127.0.0.2",
+      "accepted": true,
+      "value": "127.0.0.2",
+      "secure": true
+    },
+    {
+      "field": "lan_bind_ip",
+      "input": "localhost",
+      "accepted": true,
+      "value": "localhost",
+      "secure": false
+    },
+    {
+      "field": "lan_bind_ip",
+      "input": "::1",
+      "accepted": true,
+      "value": "::1",
+      "secure": false
+    },
+    {
+      "field": "lan_bind_ip",
+      "input": "0.0.0.0",
+      "accepted": true,
+      "value": "0.0.0.0",
+      "secure": false
+    },
+    {
+      "field": "lan_bind_ip",
+      "input": "auto",
+      "accepted": true,
+      "value": "auto",
+      "secure": false
+    },
+    {
+      "field": "lan_bind_ip",
+      "input": "192.0.2.1",
+      "accepted": true,
+      "value": "192.0.2.1",
+      "secure": true
+    },
+    {
+      "field": "sync",
+      "input": "1",
+      "accepted": true,
+      "value": true
+    },
+    {
+      "field": "sync",
+      "input": "true",
+      "accepted": true,
+      "value": true
+    },
+    {
+      "field": "sync",
+      "input": "t",
+      "accepted": true,
+      "value": true
+    },
+    {
+      "field": "sync",
+      "input": "y",
+      "accepted": true,
+      "value": true
+    },
+    {
+      "field": "sync",
+      "input": "on",
+      "accepted": true,
+      "value": true
+    },
+    {
+      "field": "sync",
+      "input": "off",
+      "accepted": true,
+      "value": false
+    },
+    {
+      "field": "sync",
+      "input": " True ",
+      "accepted": false,
+      "errors": [
+        {
+          "type": "bool_parsing",
+          "loc": [
+            "sync"
+          ],
+          "msg": "Input should be a valid boolean, unable to interpret input",
+          "input": " True "
+        }
+      ]
+    },
+    {
+      "field": "sync",
+      "input": "",
+      "accepted": false,
+      "errors": [
+        {
+          "type": "bool_parsing",
+          "loc": [
+            "sync"
+          ],
+          "msg": "Input should be a valid boolean, unable to interpret input",
+          "input": ""
+        }
+      ]
+    },
+    {
+      "field": "sync",
+      "input": "2",
+      "accepted": false,
+      "errors": [
+        {
+          "type": "bool_parsing",
+          "loc": [
+            "sync"
+          ],
+          "msg": "Input should be a valid boolean, unable to interpret input",
+          "input": "2"
+        }
+      ]
+    }
+  ]
+}
