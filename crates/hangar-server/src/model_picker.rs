@@ -114,7 +114,7 @@ pub fn normalize(model: Option<&str>, effort: Option<&str>) -> Result<(Option<St
 }
 
 /// O `repr()` de uma str do Python, que as mensagens de recusa citam.
-fn py_repr(s: &str) -> String {
+pub(crate) fn py_repr(s: &str) -> String {
     let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
     let mut out = String::from(quote);
     for c in s.chars() {

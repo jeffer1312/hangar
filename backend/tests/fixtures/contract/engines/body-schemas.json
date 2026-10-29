@@ -1,0 +1,3207 @@
+{
+  "source_commit": "7e1f554d9c79053ac549fd538c86de3f71e96bfb",
+  "command": "uv run --with httpx python tests/fixtures/contract/engines/generate_body_schemas.py",
+  "cases": [
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-0",
+      "hex": "",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-1",
+      "hex": "6e756c6c",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-2",
+      "hex": "5b5d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-3",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 200,
+      "headers": {
+        "content-length": "44",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "nome": null,
+        "base_url": null,
+        "api_key": null
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-4",
+      "hex": "7b226578747261223a317d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "111",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "extra"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": 1
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-5",
+      "hex": "7b226964223a2263686176653a6d6f746f72227d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "120",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "chave:motor"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-6",
+      "hex": "7b226d6f64656c223a226b33227d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "114",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "k3"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-7",
+      "hex": "7b226d6f64656c223a377d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "111",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": 7
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-8",
+      "hex": "7b226d616e6167656d656e745f6b6579223a66616c73657d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "management_key"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": false
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-9",
+      "hex": "7b226964223a2278222c22616c766f73223a6e756c6c7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "212",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "x"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "alvos"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-10",
+      "hex": "7b226964223a2278222c22616c766f73223a5b315d7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "211",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "x"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "alvos"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": [
+              1
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-11",
+      "hex": "7b226964223a2278222c22616c766f73223a5b5d7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "210",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "x"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "alvos"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-12",
+      "hex": "7b226964223a2278222c226170656c69646f223a6e756c6c7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "214",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "x"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "apelido"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-13",
+      "hex": "7b226e6f6d65223a377d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "106",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "nome"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 7
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-14",
+      "hex": "7b22626173655f75726c223a66616c73657d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "114",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "base_url"
+            ],
+            "msg": "Input should be a valid string",
+            "input": false
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-15",
+      "hex": "7b226d6f64656c223a4e614e7d",
+      "content_type": "application/json",
+      "status": 500,
+      "headers": {
+        "content-length": "21",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Internal Server Error"
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-16",
+      "hex": "7b226578747261223a225c7564383030227d",
+      "content_type": "application/json",
+      "status": 500,
+      "headers": {
+        "content-length": "21",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Internal Server Error"
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "body-17",
+      "hex": "7b226d616e6167656d656e745f6b6579223a22787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878227d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "634",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "management_key"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": null,
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "text/plain",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/octet-stream",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "text/json",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 200,
+      "headers": {
+        "content-length": "44",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "nome": null,
+        "base_url": null,
+        "api_key": null
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/problem+json",
+      "status": 200,
+      "headers": {
+        "content-length": "44",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "nome": null,
+        "base_url": null,
+        "api_key": null
+      }
+    },
+    {
+      "schema": "EngineProbeBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/json; charset=ascii",
+      "status": 200,
+      "headers": {
+        "content-length": "44",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "nome": null,
+        "base_url": null,
+        "api_key": null
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-0",
+      "hex": "",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-1",
+      "hex": "6e756c6c",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-2",
+      "hex": "5b5d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-3",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 200,
+      "headers": {
+        "content-length": "21",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "management_key": ""
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-4",
+      "hex": "7b226578747261223a317d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "111",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "extra"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": 1
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-5",
+      "hex": "7b226964223a2263686176653a6d6f746f72227d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "120",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "chave:motor"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-6",
+      "hex": "7b226d6f64656c223a226b33227d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "114",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "k3"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-7",
+      "hex": "7b226d6f64656c223a377d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "111",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": 7
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-8",
+      "hex": "7b226d616e6167656d656e745f6b6579223a66616c73657d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "120",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "management_key"
+            ],
+            "msg": "Input should be a valid string",
+            "input": false
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-9",
+      "hex": "7b226964223a2278222c22616c766f73223a6e756c6c7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "212",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "x"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "alvos"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-10",
+      "hex": "7b226964223a2278222c22616c766f73223a5b315d7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "211",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "x"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "alvos"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": [
+              1
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-11",
+      "hex": "7b226964223a2278222c22616c766f73223a5b5d7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "210",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "x"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "alvos"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-12",
+      "hex": "7b226964223a2278222c226170656c69646f223a6e756c6c7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "214",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "x"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "apelido"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-13",
+      "hex": "7b226e6f6d65223a377d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "110",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "nome"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": 7
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-14",
+      "hex": "7b22626173655f75726c223a66616c73657d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "118",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "base_url"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": false
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-15",
+      "hex": "7b226d6f64656c223a4e614e7d",
+      "content_type": "application/json",
+      "status": 500,
+      "headers": {
+        "content-length": "21",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Internal Server Error"
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-16",
+      "hex": "7b226578747261223a225c7564383030227d",
+      "content_type": "application/json",
+      "status": 500,
+      "headers": {
+        "content-length": "21",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Internal Server Error"
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "body-17",
+      "hex": "7b226d616e6167656d656e745f6b6579223a22787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878227d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "670",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "string_too_long",
+            "loc": [
+              "body",
+              "management_key"
+            ],
+            "msg": "String should have at most 512 characters",
+            "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "ctx": {
+              "max_length": 512
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": null,
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "text/plain",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/octet-stream",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "text/json",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 200,
+      "headers": {
+        "content-length": "21",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "management_key": ""
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/problem+json",
+      "status": 200,
+      "headers": {
+        "content-length": "21",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "management_key": ""
+      }
+    },
+    {
+      "schema": "CliproxyManagementBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/json; charset=ascii",
+      "status": 200,
+      "headers": {
+        "content-length": "21",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "management_key": ""
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-0",
+      "hex": "",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-1",
+      "hex": "6e756c6c",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-2",
+      "hex": "5b5d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-3",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "88",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-4",
+      "hex": "7b226578747261223a317d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "196",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {
+              "extra": 1
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "extra"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": 1
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-5",
+      "hex": "7b226964223a2263686176653a6d6f746f72227d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "214",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {
+              "id": "chave:motor"
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "chave:motor"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-6",
+      "hex": "7b226d6f64656c223a226b33227d",
+      "content_type": "application/json",
+      "status": 200,
+      "headers": {
+        "content-length": "28",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "model": "k3",
+        "effort": null
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-7",
+      "hex": "7b226d6f64656c223a377d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "107",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 7
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-8",
+      "hex": "7b226d616e6167656d656e745f6b6579223a66616c73657d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "222",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {
+              "management_key": false
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "management_key"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": false
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-9",
+      "hex": "7b226964223a2278222c22616c766f73223a6e756c6c7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "309",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {
+              "id": "x",
+              "alvos": null
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "x"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "alvos"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-10",
+      "hex": "7b226964223a2278222c22616c766f73223a5b315d7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "307",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {
+              "id": "x",
+              "alvos": [
+                1
+              ]
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "x"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "alvos"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": [
+              1
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-11",
+      "hex": "7b226964223a2278222c22616c766f73223a5b5d7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "305",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {
+              "id": "x",
+              "alvos": []
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "x"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "alvos"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-12",
+      "hex": "7b226964223a2278222c226170656c69646f223a6e756c6c7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "313",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {
+              "id": "x",
+              "apelido": null
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "x"
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "apelido"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-13",
+      "hex": "7b226e6f6d65223a377d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "194",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {
+              "nome": 7
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "nome"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": 7
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-14",
+      "hex": "7b22626173655f75726c223a66616c73657d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "210",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_url": false
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "base_url"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": false
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-15",
+      "hex": "7b226d6f64656c223a4e614e7d",
+      "content_type": "application/json",
+      "status": 500,
+      "headers": {
+        "content-length": "21",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Internal Server Error"
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-16",
+      "hex": "7b226578747261223a225c7564383030227d",
+      "content_type": "application/json",
+      "status": 500,
+      "headers": {
+        "content-length": "21",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Internal Server Error"
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "body-17",
+      "hex": "7b226d616e6167656d656e745f6b6579223a22787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878227d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "1242",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {
+              "management_key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "management_key"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": null,
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "text/plain",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/octet-stream",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "text/json",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "88",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/problem+json",
+      "status": 422,
+      "headers": {
+        "content-length": "88",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "schema": "EngineModelBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/json; charset=ascii",
+      "status": 422,
+      "headers": {
+        "content-length": "88",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-0",
+      "hex": "",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-1",
+      "hex": "6e756c6c",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-2",
+      "hex": "5b5d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-3",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "85",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-4",
+      "hex": "7b226578747261223a317d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "94",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {
+              "extra": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-5",
+      "hex": "7b226964223a2263686176653a6d6f746f72227d",
+      "content_type": "application/json",
+      "status": 200,
+      "headers": {
+        "content-length": "50",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "id": "chave:motor",
+        "alvos": [
+          "pi",
+          "kimi",
+          "codex"
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-6",
+      "hex": "7b226d6f64656c223a226b33227d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "97",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {
+              "model": "k3"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-7",
+      "hex": "7b226d6f64656c223a377d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "94",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {
+              "model": 7
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-8",
+      "hex": "7b226d616e6167656d656e745f6b6579223a66616c73657d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "107",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {
+              "management_key": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-9",
+      "hex": "7b226964223a2278222c22616c766f73223a6e756c6c7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "106",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "list_type",
+            "loc": [
+              "body",
+              "alvos"
+            ],
+            "msg": "Input should be a valid list",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-10",
+      "hex": "7b226964223a2278222c22616c766f73223a5b315d7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "109",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "alvos",
+              0
+            ],
+            "msg": "Input should be a valid string",
+            "input": 1
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-11",
+      "hex": "7b226964223a2278222c22616c766f73223a5b5d7d",
+      "content_type": "application/json",
+      "status": 200,
+      "headers": {
+        "content-length": "21",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "id": "x",
+        "alvos": []
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-12",
+      "hex": "7b226964223a2278222c226170656c69646f223a6e756c6c7d",
+      "content_type": "application/json",
+      "status": 200,
+      "headers": {
+        "content-length": "40",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "id": "x",
+        "alvos": [
+          "pi",
+          "kimi",
+          "codex"
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-13",
+      "hex": "7b226e6f6d65223a377d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "93",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {
+              "nome": 7
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-14",
+      "hex": "7b22626173655f75726c223a66616c73657d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "101",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_url": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-15",
+      "hex": "7b226d6f64656c223a4e614e7d",
+      "content_type": "application/json",
+      "status": 500,
+      "headers": {
+        "content-length": "21",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Internal Server Error"
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-16",
+      "hex": "7b226578747261223a225c7564383030227d",
+      "content_type": "application/json",
+      "status": 500,
+      "headers": {
+        "content-length": "21",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Internal Server Error"
+    },
+    {
+      "schema": "SyncBody",
+      "name": "body-17",
+      "hex": "7b226d616e6167656d656e745f6b6579223a22787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878227d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "617",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {
+              "management_key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": null,
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "text/plain",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/octet-stream",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "text/json",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "85",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/problem+json",
+      "status": 422,
+      "headers": {
+        "content-length": "85",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "schema": "SyncBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/json; charset=ascii",
+      "status": 422,
+      "headers": {
+        "content-length": "85",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-0",
+      "hex": "",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-1",
+      "hex": "6e756c6c",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-2",
+      "hex": "5b5d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-3",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "85",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-4",
+      "hex": "7b226578747261223a317d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "94",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {
+              "extra": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-5",
+      "hex": "7b226964223a2263686176653a6d6f746f72227d",
+      "content_type": "application/json",
+      "status": 200,
+      "headers": {
+        "content-length": "33",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "id": "chave:motor",
+        "apelido": ""
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-6",
+      "hex": "7b226d6f64656c223a226b33227d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "97",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {
+              "model": "k3"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-7",
+      "hex": "7b226d6f64656c223a377d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "94",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {
+              "model": 7
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-8",
+      "hex": "7b226d616e6167656d656e745f6b6579223a66616c73657d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "107",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {
+              "management_key": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-9",
+      "hex": "7b226964223a2278222c22616c766f73223a6e756c6c7d",
+      "content_type": "application/json",
+      "status": 200,
+      "headers": {
+        "content-length": "23",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "id": "x",
+        "apelido": ""
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-10",
+      "hex": "7b226964223a2278222c22616c766f73223a5b315d7d",
+      "content_type": "application/json",
+      "status": 200,
+      "headers": {
+        "content-length": "23",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "id": "x",
+        "apelido": ""
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-11",
+      "hex": "7b226964223a2278222c22616c766f73223a5b5d7d",
+      "content_type": "application/json",
+      "status": 200,
+      "headers": {
+        "content-length": "23",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "id": "x",
+        "apelido": ""
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-12",
+      "hex": "7b226964223a2278222c226170656c69646f223a6e756c6c7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "112",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "apelido"
+            ],
+            "msg": "Input should be a valid string",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-13",
+      "hex": "7b226e6f6d65223a377d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "93",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {
+              "nome": 7
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-14",
+      "hex": "7b22626173655f75726c223a66616c73657d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "101",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {
+              "base_url": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-15",
+      "hex": "7b226d6f64656c223a4e614e7d",
+      "content_type": "application/json",
+      "status": 500,
+      "headers": {
+        "content-length": "21",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Internal Server Error"
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-16",
+      "hex": "7b226578747261223a225c7564383030227d",
+      "content_type": "application/json",
+      "status": 500,
+      "headers": {
+        "content-length": "21",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Internal Server Error"
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "body-17",
+      "hex": "7b226d616e6167656d656e745f6b6579223a22787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878227d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "617",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {
+              "management_key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": null,
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "text/plain",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/octet-stream",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "text/json",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/json",
+      "status": 422,
+      "headers": {
+        "content-length": "85",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/problem+json",
+      "status": 422,
+      "headers": {
+        "content-length": "85",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "schema": "ApelidoBody",
+      "name": "content-type",
+      "hex": "7b7d",
+      "content_type": "application/json; charset=ascii",
+      "status": 422,
+      "headers": {
+        "content-length": "85",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "id"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    }
+  ]
+}

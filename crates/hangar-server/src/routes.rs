@@ -746,6 +746,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .with_state(state.clone())
         .merge(owner_share_router(&state, pair))
         .layer(axum::middleware::from_fn(request_auth))
+        .layer(axum::middleware::from_fn_with_state(state.clone(),crate::engines::cors_layer))
 }
 
 /// A ponte do plugin do Claude (`plugin::routes`) é do Rust inteira; a interface dos mods também.
@@ -976,11 +977,34 @@ pub(crate) async fn pass_any(
         cors(req.headers(), response.headers_mut());
         return response;
     }
+    if crate::engines::model_http::candidate(req.method(),req.uri().path()) {
+        if !on_guest_port(&req) {
+            if let Err(mut response) = owner_gate(&st, peer, &req).await {
+                crate::http_cors::apply(req.headers(), &mut response);
+                return response;
+            }
+        }
+        let (forward,caller)=match who(&st,peer,&req).await {Ok(value)=>value, Err(e)=>return crate::auth::unavailable(e)};
+        if !matches!(caller,Some(Caller::Owner)) {
+            return if caller.is_some() {StatusCode::FORBIDDEN.into_response()} else {crate::share_reach::unauthorized(&st,&forward.client_ip).await};
+        }
+        let (method,path,query)=(req.method().clone(),req.uri().path().to_owned(),req.uri().query().map(str::to_owned));
+        if let Some(mut response)=crate::engines::model_http::response(&st,&method,&path,query.as_deref()).await {
+            crate::http_cors::apply(req.headers(),&mut response);return response;
+        }
+    }
     let models = crate::provider_models::matches(req.method(), req.uri().path())
         || crate::provider_models::catalog_request(req.method(), req.uri().path(), req.uri().query());
     let orchestration = crate::orchestration::matches(req.method(), req.uri().path());
     let sync = crate::omp_sync::matches(req.method(), req.uri().path());
-    if models || orchestration || sync {
+    let engines = crate::engines::matches(req.method(), req.uri().path());
+    if engines && !on_guest_port(&req) {
+        if let Err(mut response) = owner_gate(&st, peer, &req).await {
+            crate::http_cors::apply(req.headers(), &mut response);
+            return response;
+        }
+    }
+    if models || orchestration || sync || engines {
         let (forward, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
         let allowed = matches!(&caller, Some(Caller::Owner)) || (models && req.extensions().get::<SessionPath>()
             .is_some_and(|path| caller.as_ref().is_some_and(|who| who.can(&path.session, req.method()))));
@@ -990,11 +1014,13 @@ pub(crate) async fn pass_any(
         }
         req.extensions_mut().insert(ConnectInfo(peer));
         let headers = req.headers().clone();
-        let mut response = if models { crate::provider_models::serve(&st, req).await }
+        let mut response = if engines { crate::engines::serve(&st, req).await }
+            else if models { crate::provider_models::serve(&st, req).await }
             else if orchestration { crate::orchestration::serve(&st, req).await }
             else if let Some(service) = st.omp_sync.get() { crate::omp_sync::serve(&st, service, req).await }
             else { crate::session_write::json_response(StatusCode::SERVICE_UNAVAILABLE, serde_json::json!({"code":"omp_sync_unavailable"})) };
-        cors(&headers, response.headers_mut());
+        if engines { crate::http_cors::apply(&headers, &mut response); }
+        else { cors(&headers, response.headers_mut()); }
         return response;
     }
     // Anexos e contas do dono são do Rust; o anexo também do convidado da sessão (o porteiro já

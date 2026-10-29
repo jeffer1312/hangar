@@ -2560,11 +2560,10 @@ if (-not $bash) {
     # O app reportava "sessao criada" e ela sumia calada. Hoje o backend recusa alto quando este
     # lancador falta (registry._exigir_cp_engine) — este bloco e o outro lado do conserto, o que
     # faz o motor de fato FUNCIONAR no Windows.
-    # Pelo PYTHON e nao pelo bash, mesmo motivo do hangar-conta: o hangar-engine e script Python
-    # (`#!/usr/bin/env python3`) e `bash arquivo` nao honra shebang.
+    # O lançador resolve o executável Rust sem depender do Python ou do serviço.
     $lancadorEngine = Join-Path $binUsuario 'hangar-engine.cmd'
     $conteudoEngine = "@echo off`r`n" +
-                      "call `"%~dp0hangar-python.cmd`" `"$raizAtalhos\scripts\hangar-engine`" %*`r`n"
+                      "call `"$raizAtalhos\scripts\hangar-engine.cmd`" %*`r`n"
     if (Escrever-Lancador $lancadorEngine $conteudoEngine 'cmd') { Ok "lancador hangar-engine.cmd criado em $binUsuario" }
     else { Ok 'lancador hangar-engine.cmd ja atualizado' }
 

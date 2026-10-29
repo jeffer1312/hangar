@@ -1,0 +1,98 @@
+{
+  "source_commit": "ed725e81a3fe879d3c7c588354b224c99469f0ef",
+  "command": "uv run python tests/fixtures/contract/engines/generate_catalog_cache.py",
+  "cases": [
+    {
+      "name": "first",
+      "result": {
+        "models": [
+          {
+            "id": "v0",
+            "context_length": null,
+            "vision": null
+          }
+        ]
+      },
+      "calls": 1
+    },
+    {
+      "name": "cached",
+      "result": {
+        "models": [
+          {
+            "id": "v0",
+            "context_length": null,
+            "vision": null
+          }
+        ]
+      },
+      "calls": 1
+    },
+    {
+      "name": "same-put-invalidates",
+      "result": {
+        "models": [
+          {
+            "id": "v1",
+            "context_length": null,
+            "vision": null
+          }
+        ]
+      },
+      "calls": 2
+    },
+    {
+      "name": "delete-recreate-invalidates",
+      "result": {
+        "models": [
+          {
+            "id": "v2",
+            "context_length": null,
+            "vision": null
+          }
+        ]
+      },
+      "calls": 3
+    },
+    {
+      "name": "external-delete-keeps-cache",
+      "result": {
+        "models": [
+          {
+            "id": "v2",
+            "context_length": null,
+            "vision": null
+          }
+        ]
+      },
+      "calls": 3
+    },
+    {
+      "name": "expired-missing",
+      "result": {
+        "status": 409,
+        "detail": {
+          "code": "erro_motor_ausente",
+          "msg": "motor 'motor' nao esta mais no engines.json",
+          "params": {
+            "nome": "motor"
+          }
+        }
+      },
+      "calls": 3
+    },
+    {
+      "name": "fresh",
+      "result": {
+        "models": [
+          {
+            "id": "v3",
+            "context_length": null,
+            "vision": null
+          }
+        ]
+      },
+      "calls": 4
+    }
+  ]
+}

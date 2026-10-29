@@ -1,0 +1,326 @@
+{
+  "source_commit": "9ba24b43208d314dcd37a0f23ec61d49c0f303b4",
+  "command": "python backend/tests/fixtures/contract/engines/generate_engine_http.py",
+  "cases": [
+    {
+      "name": "missing",
+      "result": {
+        "status": 404,
+        "detail": {
+          "code": "erro_sessao_inexistente",
+          "msg": "sessao nao encontrada",
+          "params": {}
+        }
+      },
+      "calls": [
+        [
+          "panel"
+        ]
+      ]
+    },
+    {
+      "name": "not_engine",
+      "result": {
+        "status": 400,
+        "detail": {
+          "code": "erro_rota_so_motor",
+          "msg": "esta rota so existe pra sessoes que rodam num motor",
+          "params": {}
+        }
+      },
+      "calls": [
+        [
+          "panel"
+        ]
+      ]
+    },
+    {
+      "name": "outside_catalog",
+      "result": {
+        "status": 422,
+        "detail": {
+          "code": "erro_modelo_fora_catalogo",
+          "msg": "modelo fora do catalogo do motor 'motor': k3",
+          "params": {
+            "motor": "motor",
+            "modelo": "k3"
+          }
+        }
+      },
+      "calls": [
+        [
+          "panel"
+        ],
+        [
+          "catalog",
+          true
+        ]
+      ]
+    },
+    {
+      "name": "fast_refused",
+      "result": {
+        "status": 409,
+        "detail": {
+          "code": "erro_fast_indisponivel",
+          "msg": "Desligue Fast antes de escolher um modelo que não o suporta",
+          "params": {}
+        }
+      },
+      "calls": [
+        [
+          "panel"
+        ],
+        [
+          "catalog",
+          true
+        ]
+      ]
+    },
+    {
+      "name": "headless",
+      "result": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "model": "k3"
+        }
+      },
+      "calls": [
+        [
+          "panel"
+        ],
+        [
+          "catalog",
+          true
+        ],
+        [
+          "headless",
+          "k3",
+          null
+        ]
+      ]
+    },
+    {
+      "name": "headless_effort_deferred",
+      "result": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "model": "k3",
+          "effort_error": "esforço entra no fim do turno em andamento"
+        }
+      },
+      "calls": [
+        [
+          "panel"
+        ],
+        [
+          "catalog",
+          true
+        ],
+        [
+          "headless",
+          "k3",
+          "high"
+        ]
+      ]
+    },
+    {
+      "name": "headless_failed",
+      "result": {
+        "status": 409,
+        "detail": {
+          "code": "erro_headless_modelo",
+          "msg": "troca de modelo falhou: fixture-error",
+          "params": {
+            "erro": "fixture-error"
+          }
+        }
+      },
+      "calls": [
+        [
+          "panel"
+        ],
+        [
+          "catalog",
+          true
+        ],
+        [
+          "headless",
+          "k3",
+          null
+        ]
+      ]
+    },
+    {
+      "name": "terminal",
+      "result": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "result": "Set model to k3",
+          "model": "k3"
+        }
+      },
+      "calls": [
+        [
+          "panel"
+        ],
+        [
+          "catalog",
+          true
+        ],
+        [
+          "snapshot"
+        ],
+        [
+          "terminal",
+          "k3"
+        ],
+        [
+          "restore"
+        ]
+      ]
+    },
+    {
+      "name": "terminal_trim",
+      "result": {
+        "status": 422,
+        "detail": {
+          "code": "erro_modelo_fora_catalogo",
+          "msg": "modelo fora do catalogo do motor 'motor':  k3 ",
+          "params": {
+            "motor": "motor",
+            "modelo": " k3 "
+          }
+        }
+      },
+      "calls": [
+        [
+          "panel"
+        ],
+        [
+          "catalog",
+          true
+        ]
+      ]
+    },
+    {
+      "name": "terminal_not_typed",
+      "result": {
+        "status": 409,
+        "detail": {
+          "reason": "picker"
+        }
+      },
+      "calls": [
+        [
+          "panel"
+        ],
+        [
+          "catalog",
+          true
+        ],
+        [
+          "snapshot"
+        ],
+        [
+          "terminal",
+          "k3"
+        ]
+      ]
+    },
+    {
+      "name": "terminal_picker",
+      "result": {
+        "status": 409,
+        "detail": {
+          "reason": "picker"
+        }
+      },
+      "calls": [
+        [
+          "panel"
+        ],
+        [
+          "catalog",
+          true
+        ],
+        [
+          "snapshot"
+        ],
+        [
+          "terminal",
+          "k3"
+        ],
+        [
+          "restore"
+        ]
+      ]
+    },
+    {
+      "name": "terminal_invalid",
+      "result": {
+        "status": 422,
+        "detail": "fixture-invalid"
+      },
+      "calls": [
+        [
+          "panel"
+        ],
+        [
+          "catalog",
+          true
+        ],
+        [
+          "snapshot"
+        ],
+        [
+          "terminal",
+          "k3"
+        ],
+        [
+          "restore"
+        ]
+      ]
+    },
+    {
+      "name": "terminal_effort_failed",
+      "result": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "result": "Set model to k3",
+          "model": "k3",
+          "effort_error": "fixture-effort"
+        }
+      },
+      "calls": [
+        [
+          "panel"
+        ],
+        [
+          "catalog",
+          true
+        ],
+        [
+          "snapshot"
+        ],
+        [
+          "terminal",
+          "k3"
+        ],
+        [
+          "restore"
+        ],
+        [
+          "effort",
+          null,
+          "high",
+          "session"
+        ]
+      ]
+    }
+  ]
+}

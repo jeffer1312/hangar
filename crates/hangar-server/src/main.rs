@@ -41,6 +41,9 @@ fn main() -> std::process::ExitCode {
     if args.first().map(String::as_str) == Some("harness-setup") {
         return hangar_server::harness_setup::cli::run(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("engine") {
+        return hangar_server::engines::cli::run(&args[1..]);
+    }
     // `conta`: a reconciliação das contas Claude que o `hangar-conta` do shell chama, sem o servidor.
     if args.first().map(String::as_str) == Some("conta") {
         return hangar_server::accounts::claude_config::cli(&args[1..]);

@@ -1,0 +1,6541 @@
+{
+  "source_commit": "73cb2256fdebd43bb1a08a15da67348114182ab3",
+  "command": "PYTHONPATH=backend python backend/tests/fixtures/contract/engines/generate.py",
+  "cases": [
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "nome: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+      }
+    },
+    {
+      "name": "A",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "nome: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+      }
+    },
+    {
+      "name": "a b",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "nome: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+      }
+    },
+    {
+      "name": "a/b",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "nome: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+      }
+    },
+    {
+      "name": "-a",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "nome: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+      }
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "nome: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+      }
+    },
+    {
+      "name": "a_b-9",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "a_b-9"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": null
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": ""
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": "  "
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": true
+      },
+      "expected": {
+        "error": "label: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": false
+      },
+      "expected": {
+        "error": "label: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": 0
+      },
+      "expected": {
+        "error": "label: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": -1
+      },
+      "expected": {
+        "error": "label: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": 1
+      },
+      "expected": {
+        "error": "label: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": 12.9
+      },
+      "expected": {
+        "error": "label: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": "42"
+      },
+      "expected": {
+        "ok": {
+          "label": "42",
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": "2.5"
+      },
+      "expected": {
+        "ok": {
+          "label": "2.5",
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": []
+      },
+      "expected": {
+        "error": "label: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": {}
+      },
+      "expected": {
+        "error": "label: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": "a\nb"
+      },
+      "expected": {
+        "error": "label: sem quebra de linha nem caractere nulo"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "label": " a "
+      },
+      "expected": {
+        "ok": {
+          "label": "a",
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": null,
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: obrigatório"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: obrigatório"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "  ",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: obrigatório"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": true,
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": false,
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": 0,
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": -1,
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": 1,
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": 12.9,
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "42",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: use uma URL http(s) completa"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "2.5",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: use uma URL http(s) completa"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": [],
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": {},
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "a\nb",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: sem quebra de linha nem caractere nulo"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": " a ",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: use uma URL http(s) completa"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": null,
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "api_key: obrigatório"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "api_key: obrigatório"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "  ",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "api_key: obrigatório"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": true,
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "api_key: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": false,
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "api_key: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": 0,
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "api_key: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": -1,
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "api_key: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": 1,
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "api_key: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": 12.9,
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "api_key: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "42",
+        "model": "modelo"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "42",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "2.5",
+        "model": "modelo"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "2.5",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": [],
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "api_key: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": {},
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "api_key: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "a\nb",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "api_key: sem quebra de linha nem caractere nulo"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": " a ",
+        "model": "modelo"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "a",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": null
+      },
+      "expected": {
+        "error": "model: obrigatório"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": ""
+      },
+      "expected": {
+        "error": "model: obrigatório"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "  "
+      },
+      "expected": {
+        "error": "model: obrigatório"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": true
+      },
+      "expected": {
+        "error": "model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": false
+      },
+      "expected": {
+        "error": "model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": 0
+      },
+      "expected": {
+        "error": "model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": -1
+      },
+      "expected": {
+        "error": "model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": 1
+      },
+      "expected": {
+        "error": "model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": 12.9
+      },
+      "expected": {
+        "error": "model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "42"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "42",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "2.5"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "2.5",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": []
+      },
+      "expected": {
+        "error": "model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": {}
+      },
+      "expected": {
+        "error": "model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "a\nb"
+      },
+      "expected": {
+        "error": "model: sem quebra de linha nem caractere nulo"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": " a "
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "a",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": null
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": ""
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": "  "
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": true
+      },
+      "expected": {
+        "error": "subagent_model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": false
+      },
+      "expected": {
+        "error": "subagent_model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": 0
+      },
+      "expected": {
+        "error": "subagent_model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": -1
+      },
+      "expected": {
+        "error": "subagent_model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": 1
+      },
+      "expected": {
+        "error": "subagent_model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": 12.9
+      },
+      "expected": {
+        "error": "subagent_model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": "42"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "subagent_model": "42",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": "2.5"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "subagent_model": "2.5",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": []
+      },
+      "expected": {
+        "error": "subagent_model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": {}
+      },
+      "expected": {
+        "error": "subagent_model: esperado texto"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": "a\nb"
+      },
+      "expected": {
+        "error": "subagent_model: sem quebra de linha nem caractere nulo"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "subagent_model": " a "
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "subagent_model": "a",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": null
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": ""
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "  "
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": true
+      },
+      "expected": {
+        "error": "context_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": false
+      },
+      "expected": {
+        "error": "context_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": 0
+      },
+      "expected": {
+        "error": "context_window: deve ser maior que zero"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": -1
+      },
+      "expected": {
+        "error": "context_window: deve ser maior que zero"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": 1
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 1,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": 12.9
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "42"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 42,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "2.5"
+      },
+      "expected": {
+        "error": "context_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": []
+      },
+      "expected": {
+        "error": "context_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": {}
+      },
+      "expected": {
+        "error": "context_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "a\nb"
+      },
+      "expected": {
+        "error": "context_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": " a "
+      },
+      "expected": {
+        "error": "context_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": null
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": ""
+      },
+      "expected": {
+        "error": "vision: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": "  "
+      },
+      "expected": {
+        "error": "vision: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": true
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "vision": true,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": false
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "vision": false,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": 0
+      },
+      "expected": {
+        "error": "vision: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": -1
+      },
+      "expected": {
+        "error": "vision: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": 1
+      },
+      "expected": {
+        "error": "vision: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": 12.9
+      },
+      "expected": {
+        "error": "vision: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": "42"
+      },
+      "expected": {
+        "error": "vision: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": "2.5"
+      },
+      "expected": {
+        "error": "vision: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": []
+      },
+      "expected": {
+        "error": "vision: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": {}
+      },
+      "expected": {
+        "error": "vision: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": "a\nb"
+      },
+      "expected": {
+        "error": "vision: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "vision": " a "
+      },
+      "expected": {
+        "error": "vision: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": null
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": ""
+      },
+      "expected": {
+        "error": "auth_via_api_key: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": "  "
+      },
+      "expected": {
+        "error": "auth_via_api_key: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": true
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "auth_via_api_key": true,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": false
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "auth_via_api_key": false,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": 0
+      },
+      "expected": {
+        "error": "auth_via_api_key: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": -1
+      },
+      "expected": {
+        "error": "auth_via_api_key: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": 1
+      },
+      "expected": {
+        "error": "auth_via_api_key: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": 12.9
+      },
+      "expected": {
+        "error": "auth_via_api_key: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": "42"
+      },
+      "expected": {
+        "error": "auth_via_api_key: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": "2.5"
+      },
+      "expected": {
+        "error": "auth_via_api_key: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": []
+      },
+      "expected": {
+        "error": "auth_via_api_key: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": {}
+      },
+      "expected": {
+        "error": "auth_via_api_key: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": "a\nb"
+      },
+      "expected": {
+        "error": "auth_via_api_key: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auth_via_api_key": " a "
+      },
+      "expected": {
+        "error": "auth_via_api_key: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": null
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": ""
+      },
+      "expected": {
+        "error": "tool_search: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": "  "
+      },
+      "expected": {
+        "error": "tool_search: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": true
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "tool_search": true,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": false
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "tool_search": false,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": 0
+      },
+      "expected": {
+        "error": "tool_search: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": -1
+      },
+      "expected": {
+        "error": "tool_search: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": 1
+      },
+      "expected": {
+        "error": "tool_search: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": 12.9
+      },
+      "expected": {
+        "error": "tool_search: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": "42"
+      },
+      "expected": {
+        "error": "tool_search: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": "2.5"
+      },
+      "expected": {
+        "error": "tool_search: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": []
+      },
+      "expected": {
+        "error": "tool_search: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": {}
+      },
+      "expected": {
+        "error": "tool_search: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": "a\nb"
+      },
+      "expected": {
+        "error": "tool_search: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "tool_search": " a "
+      },
+      "expected": {
+        "error": "tool_search: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": null
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": ""
+      },
+      "expected": {
+        "error": "bundled_skills: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": "  "
+      },
+      "expected": {
+        "error": "bundled_skills: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": true
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "bundled_skills": true,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": false
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "bundled_skills": false,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": 0
+      },
+      "expected": {
+        "error": "bundled_skills: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": -1
+      },
+      "expected": {
+        "error": "bundled_skills: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": 1
+      },
+      "expected": {
+        "error": "bundled_skills: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": 12.9
+      },
+      "expected": {
+        "error": "bundled_skills: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": "42"
+      },
+      "expected": {
+        "error": "bundled_skills: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": "2.5"
+      },
+      "expected": {
+        "error": "bundled_skills: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": []
+      },
+      "expected": {
+        "error": "bundled_skills: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": {}
+      },
+      "expected": {
+        "error": "bundled_skills: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": "a\nb"
+      },
+      "expected": {
+        "error": "bundled_skills: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "bundled_skills": " a "
+      },
+      "expected": {
+        "error": "bundled_skills: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": null
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": ""
+      },
+      "expected": {
+        "error": "experimental_betas: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": "  "
+      },
+      "expected": {
+        "error": "experimental_betas: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": true
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "experimental_betas": true,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": false
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "experimental_betas": false,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": 0
+      },
+      "expected": {
+        "error": "experimental_betas: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": -1
+      },
+      "expected": {
+        "error": "experimental_betas: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": 1
+      },
+      "expected": {
+        "error": "experimental_betas: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": 12.9
+      },
+      "expected": {
+        "error": "experimental_betas: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": "42"
+      },
+      "expected": {
+        "error": "experimental_betas: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": "2.5"
+      },
+      "expected": {
+        "error": "experimental_betas: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": []
+      },
+      "expected": {
+        "error": "experimental_betas: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": {}
+      },
+      "expected": {
+        "error": "experimental_betas: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": "a\nb"
+      },
+      "expected": {
+        "error": "experimental_betas: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "experimental_betas": " a "
+      },
+      "expected": {
+        "error": "experimental_betas: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": null
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": ""
+      },
+      "expected": {
+        "error": "prompt_caching: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": "  "
+      },
+      "expected": {
+        "error": "prompt_caching: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": true
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "prompt_caching": true,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": false
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "prompt_caching": false,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": 0
+      },
+      "expected": {
+        "error": "prompt_caching: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": -1
+      },
+      "expected": {
+        "error": "prompt_caching: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": 1
+      },
+      "expected": {
+        "error": "prompt_caching: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": 12.9
+      },
+      "expected": {
+        "error": "prompt_caching: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": "42"
+      },
+      "expected": {
+        "error": "prompt_caching: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": "2.5"
+      },
+      "expected": {
+        "error": "prompt_caching: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": []
+      },
+      "expected": {
+        "error": "prompt_caching: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": {}
+      },
+      "expected": {
+        "error": "prompt_caching: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": "a\nb"
+      },
+      "expected": {
+        "error": "prompt_caching: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "prompt_caching": " a "
+      },
+      "expected": {
+        "error": "prompt_caching: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": null
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": ""
+      },
+      "expected": {
+        "error": "adaptive_thinking: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": "  "
+      },
+      "expected": {
+        "error": "adaptive_thinking: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": true
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "adaptive_thinking": true,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": false
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "adaptive_thinking": false,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": 0
+      },
+      "expected": {
+        "error": "adaptive_thinking: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": -1
+      },
+      "expected": {
+        "error": "adaptive_thinking: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": 1
+      },
+      "expected": {
+        "error": "adaptive_thinking: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": 12.9
+      },
+      "expected": {
+        "error": "adaptive_thinking: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": "42"
+      },
+      "expected": {
+        "error": "adaptive_thinking: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": "2.5"
+      },
+      "expected": {
+        "error": "adaptive_thinking: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": []
+      },
+      "expected": {
+        "error": "adaptive_thinking: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": {}
+      },
+      "expected": {
+        "error": "adaptive_thinking: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": "a\nb"
+      },
+      "expected": {
+        "error": "adaptive_thinking: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "adaptive_thinking": " a "
+      },
+      "expected": {
+        "error": "adaptive_thinking: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": null
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": ""
+      },
+      "expected": {
+        "error": "gateway_model_discovery: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": "  "
+      },
+      "expected": {
+        "error": "gateway_model_discovery: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": true
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "gateway_model_discovery": true,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": false
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "gateway_model_discovery": false,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": 0
+      },
+      "expected": {
+        "error": "gateway_model_discovery: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": -1
+      },
+      "expected": {
+        "error": "gateway_model_discovery: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": 1
+      },
+      "expected": {
+        "error": "gateway_model_discovery: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": 12.9
+      },
+      "expected": {
+        "error": "gateway_model_discovery: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": "42"
+      },
+      "expected": {
+        "error": "gateway_model_discovery: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": "2.5"
+      },
+      "expected": {
+        "error": "gateway_model_discovery: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": []
+      },
+      "expected": {
+        "error": "gateway_model_discovery: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": {}
+      },
+      "expected": {
+        "error": "gateway_model_discovery: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": "a\nb"
+      },
+      "expected": {
+        "error": "gateway_model_discovery: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "gateway_model_discovery": " a "
+      },
+      "expected": {
+        "error": "gateway_model_discovery: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": null
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": ""
+      },
+      "expected": {
+        "error": "fine_grained_tool_streaming: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": "  "
+      },
+      "expected": {
+        "error": "fine_grained_tool_streaming: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": true
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "fine_grained_tool_streaming": true,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": false
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "fine_grained_tool_streaming": false,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": 0
+      },
+      "expected": {
+        "error": "fine_grained_tool_streaming: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": -1
+      },
+      "expected": {
+        "error": "fine_grained_tool_streaming: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": 1
+      },
+      "expected": {
+        "error": "fine_grained_tool_streaming: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": 12.9
+      },
+      "expected": {
+        "error": "fine_grained_tool_streaming: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": "42"
+      },
+      "expected": {
+        "error": "fine_grained_tool_streaming: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": "2.5"
+      },
+      "expected": {
+        "error": "fine_grained_tool_streaming: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": []
+      },
+      "expected": {
+        "error": "fine_grained_tool_streaming: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": {}
+      },
+      "expected": {
+        "error": "fine_grained_tool_streaming: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": "a\nb"
+      },
+      "expected": {
+        "error": "fine_grained_tool_streaming: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "fine_grained_tool_streaming": " a "
+      },
+      "expected": {
+        "error": "fine_grained_tool_streaming: esperado true/false"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": null
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": ""
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": "  "
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": true
+      },
+      "expected": {
+        "error": "auto_compact_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": false
+      },
+      "expected": {
+        "error": "auto_compact_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": 0
+      },
+      "expected": {
+        "error": "auto_compact_window: deve ser maior que zero"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": -1
+      },
+      "expected": {
+        "error": "auto_compact_window: deve ser maior que zero"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": 1
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "auto_compact_window": 1,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": 12.9
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "auto_compact_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": "42"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "auto_compact_window": 42,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": "2.5"
+      },
+      "expected": {
+        "error": "auto_compact_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": []
+      },
+      "expected": {
+        "error": "auto_compact_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": {}
+      },
+      "expected": {
+        "error": "auto_compact_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": "a\nb"
+      },
+      "expected": {
+        "error": "auto_compact_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "auto_compact_window": " a "
+      },
+      "expected": {
+        "error": "auto_compact_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": null
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": ""
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": "  "
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": true
+      },
+      "expected": {
+        "error": "max_output_tokens: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": false
+      },
+      "expected": {
+        "error": "max_output_tokens: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": 0
+      },
+      "expected": {
+        "error": "max_output_tokens: deve ser maior que zero"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": -1
+      },
+      "expected": {
+        "error": "max_output_tokens: deve ser maior que zero"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": 1
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "max_output_tokens": 1,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": 12.9
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "max_output_tokens": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": "42"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "max_output_tokens": 42,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": "2.5"
+      },
+      "expected": {
+        "error": "max_output_tokens: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": []
+      },
+      "expected": {
+        "error": "max_output_tokens: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": {}
+      },
+      "expected": {
+        "error": "max_output_tokens: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": "a\nb"
+      },
+      "expected": {
+        "error": "max_output_tokens: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "max_output_tokens": " a "
+      },
+      "expected": {
+        "error": "max_output_tokens: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "http://localhost:8317/v1",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "http://localhost:8317",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "http://127.0.0.1",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "http://127.0.0.1",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "http://10.0.0.2",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "http://10.0.0.2",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "http://192.168.0.2",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "http://192.168.0.2",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "http://172.16.0.2",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "http://172.16.0.2",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "http://[::1]",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "http://[::1]",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://host.invalid/path/v1///",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://host.invalid/path",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "http://host.invalid",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: use https (http só para loopback ou rede privada)"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "ftp://host.invalid",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: use uma URL http(s) completa"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "host.invalid",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: use uma URL http(s) completa"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://",
+        "api_key": "fixture-key",
+        "model": "modelo"
+      },
+      "expected": {
+        "error": "base_url: use uma URL http(s) completa"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "1_000"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 1000,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "_12"
+      },
+      "expected": {
+        "error": "context_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "12_"
+      },
+      "expected": {
+        "error": "context_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "1__2"
+      },
+      "expected": {
+        "error": "context_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "+1_2"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "-_1"
+      },
+      "expected": {
+        "error": "context_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "١٢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "１２"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "1٢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "¹²"
+      },
+      "expected": {
+        "error": "context_window: esperado número"
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "12"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "1_2"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "١٢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "١_٢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "۱۲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "۱_۲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "߁߂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "߁_߂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "१२"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "१_२"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "১২"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "১_২"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "੧੨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "੧_੨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "૧૨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "૧_૨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "୧୨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "୧_୨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "௧௨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "௧_௨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "౧౨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "౧_౨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "೧೨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "೧_೨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "൧൨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "൧_൨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "෧෨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "෧_෨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "๑๒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "๑_๒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "໑໒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "໑_໒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "༡༢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "༡_༢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "၁၂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "၁_၂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "႑႒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "႑_႒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "១២"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "១_២"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᠑᠒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᠑_᠒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᥇᥈"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᥇_᥈"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᧑᧒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᧑_᧒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᪁᪂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᪁_᪂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᪑᪒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᪑_᪒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᭑᭒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᭑_᭒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᮱᮲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᮱_᮲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᱁᱂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᱁_᱂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᱑᱒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "᱑_᱒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "꘡꘢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "꘡_꘢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "꣑꣒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "꣑_꣒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "꤁꤂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "꤁_꤂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "꧑꧒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "꧑_꧒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "꧱꧲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "꧱_꧲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "꩑꩒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "꩑_꩒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "꯱꯲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "꯱_꯲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "１２"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "１_２"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𐒡𐒢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𐒡_𐒢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𐴱𐴲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𐴱_𐴲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𐵁𐵂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𐵁_𐵂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑁧𑁨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑁧_𑁨"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑃱𑃲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑃱_𑃲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑄷𑄸"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑄷_𑄸"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑇑𑇒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑇑_𑇒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑋱𑋲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑋱_𑋲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑑑𑑒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑑑_𑑒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑓑𑓒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑓑_𑓒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑙑𑙒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑙑_𑙒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑛁𑛂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑛁_𑛂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑛑𑛒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑛑_𑛒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑛛𑛜"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑛛_𑛜"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑜱𑜲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑜱_𑜲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑣡𑣢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑣡_𑣢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑥑𑥒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑥑_𑥒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑯱𑯲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑯱_𑯲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑱑𑱒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑱑_𑱒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑵑𑵒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑵑_𑵒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑶡𑶢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑶡_𑶢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑽑𑽒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𑽑_𑽒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𖄱𖄲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𖄱_𖄲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𖩡𖩢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𖩡_𖩢"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𖫁𖫂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𖫁_𖫂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𖭑𖭒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𖭑_𖭒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𖵱𖵲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𖵱_𖵲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𜳱𜳲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𜳱_𜳲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𝟏𝟐"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𝟏_𝟐"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𝟙𝟚"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𝟙_𝟚"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𝟣𝟤"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𝟣_𝟤"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𝟭𝟮"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𝟭_𝟮"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𝟷𝟸"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𝟷_𝟸"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𞅁𞅂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𞅁_𞅂"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𞋱𞋲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𞋱_𞋲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𞓱𞓲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𞓱_𞓲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𞗲𞗳"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𞗲_𞗳"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𞥑𞥒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "𞥑_𞥒"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "🯱🯲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "context_window": "🯱_🯲"
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 12,
+          "label": "motor"
+        }
+      }
+    },
+    {
+      "name": "motor",
+      "body": {
+        "base_url": "https://provider.invalid/v1/",
+        "api_key": "fixture-key",
+        "model": "modelo",
+        "extra": "ignorado",
+        "context_window": 10000000000000000000000000000000000000000
+      },
+      "expected": {
+        "ok": {
+          "base_url": "https://provider.invalid",
+          "api_key": "fixture-key",
+          "model": "modelo",
+          "context_window": 10000000000000000000000000000000000000000,
+          "label": "motor"
+        }
+      }
+    }
+  ]
+}

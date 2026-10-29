@@ -1,0 +1,64 @@
+{
+  "source_commit": "7e1f554d9c79053ac549fd538c86de3f71e96bfb",
+  "command": "uv run --with httpx python tests/fixtures/contract/engines/generate_model_serialization.py",
+  "cases": [
+    {
+      "hex": "7b226d6f64656c223a20225c7564383030227d",
+      "status": 500,
+      "headers": {
+        "content-length": "21",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Internal Server Error"
+    },
+    {
+      "hex": "7b226d6f64656c223a2022785c7564666666227d",
+      "status": 500,
+      "headers": {
+        "content-length": "21",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Internal Server Error"
+    },
+    {
+      "hex": "7b226d6f64656c223a20224e614e227d",
+      "status": 422,
+      "headers": {
+        "content-length": "143",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": {
+          "code": "erro_modelo_fora_catalogo",
+          "msg": "modelo fora do catalogo do motor 'motor': NaN",
+          "params": {
+            "motor": "motor",
+            "modelo": "NaN"
+          }
+        }
+      }
+    },
+    {
+      "hex": "7b226d6f64656c223a20226d697373696e67227d",
+      "status": 422,
+      "headers": {
+        "content-length": "151",
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "ETag, x-hangar-css-width, x-hangar-css-height"
+      },
+      "body": {
+        "detail": {
+          "code": "erro_modelo_fora_catalogo",
+          "msg": "modelo fora do catalogo do motor 'motor': missing",
+          "params": {
+            "motor": "motor",
+            "modelo": "missing"
+          }
+        }
+      }
+    }
+  ]
+}

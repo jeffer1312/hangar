@@ -354,24 +354,8 @@ pub(crate) fn installed_providers(env: &AccountEnvironment, runtime: &tokio::run
 
 impl OpenFacts for LocalFacts {
     fn providers(&self) -> Result<ProviderCatalog, OpenError> {
-        let available = installed_providers(self.env(), &self.runtime)?;
-        let claude_logins: Vec<Option<bool>> = if available.contains(&AgentProvider::Claude) {
-            // Login ilegível só deixa de preferir quem está conectado, como no Python.
-            let accounts = self.accounts.claude_accounts().unwrap_or_else(|error| {
-                tracing::warn!(code = error.code, "catálogo de provedores: login Claude ilegível");
-                Vec::new()
-            });
-            accounts.iter().map(|(_, account)| self.runtime.block_on(self.accounts.read_claude_auth(account))["loggedIn"].as_bool()).collect()
-        } else {
-            Vec::new()
-        };
-        let codex_states: Vec<String> = if available.contains(&AgentProvider::Codex) {
-            self.codex_states()?.into_iter().map(|(_, state)| state).collect()
-        } else {
-            Vec::new()
-        };
-        let runtime = crate::runtime::codex_launch::runtime_config(self.env());
-        Ok(provider_catalog(available, &claude_logins, !self.engines().is_empty(), &codex_states, text(&runtime["last_session_provider"])))
+        self.runtime.block_on(crate::engines::providers::read(&self.accounts))
+            .map(|snapshot| snapshot.selection)
     }
 
     fn creator(&self, name: &str) -> Result<Option<CreatorFacts>, OpenError> {

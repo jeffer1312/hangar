@@ -1,0 +1,118 @@
+{
+  "source_commit": "73cb2256fdebd43bb1a08a15da67348114182ab3",
+  "command": "PYTHONPATH=backend python backend/tests/fixtures/contract/engines/generate.py",
+  "cases": [
+    {
+      "data": null,
+      "expected": {
+        "error": "resposta inesperada do provedor (sem lista 'data')"
+      }
+    },
+    {
+      "data": {},
+      "expected": {
+        "error": "resposta inesperada do provedor (sem lista 'data')"
+      }
+    },
+    {
+      "data": [],
+      "expected": {
+        "ok": []
+      }
+    },
+    {
+      "data": "x",
+      "expected": {
+        "error": "resposta inesperada do provedor (sem lista 'data')"
+      }
+    },
+    {
+      "data": [
+        null,
+        1,
+        {},
+        {
+          "id": ""
+        },
+        {
+          "id": 1
+        },
+        {
+          "id": "m"
+        }
+      ],
+      "expected": {
+        "ok": [
+          {
+            "id": 1,
+            "context_length": null,
+            "vision": null
+          },
+          {
+            "id": "m",
+            "context_length": null,
+            "vision": null
+          }
+        ]
+      }
+    },
+    {
+      "data": [
+        {
+          "id": "m",
+          "context_length": 0,
+          "context_window": 123,
+          "supports_image_in": false
+        }
+      ],
+      "expected": {
+        "ok": [
+          {
+            "id": "m",
+            "context_length": 123,
+            "vision": false
+          }
+        ]
+      }
+    },
+    {
+      "data": [
+        {
+          "id": "m",
+          "supports_image_in": null,
+          "capabilities": {
+            "vision": true
+          }
+        }
+      ],
+      "expected": {
+        "ok": [
+          {
+            "id": "m",
+            "context_length": null,
+            "vision": null
+          }
+        ]
+      }
+    },
+    {
+      "data": [
+        {
+          "id": "m",
+          "capabilities": {
+            "image_in": true
+          }
+        }
+      ],
+      "expected": {
+        "ok": [
+          {
+            "id": "m",
+            "context_length": null,
+            "vision": true
+          }
+        ]
+      }
+    }
+  ]
+}

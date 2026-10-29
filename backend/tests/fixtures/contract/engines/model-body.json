@@ -1,0 +1,412 @@
+{
+  "source_commit": "2a4858a303f6ff267e4fc3f160b3da5f93f54c24",
+  "command": "uv run --with httpx python tests/fixtures/contract/engines/generate_model_body.py",
+  "cases": [
+    {
+      "name": "body-0",
+      "hex": "",
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "body-1",
+      "hex": "6e756c6c",
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "body-2",
+      "hex": "5b5d",
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "body-3",
+      "hex": "7b7d",
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "body-4",
+      "hex": "7b226566666f7274223a2268696768227d",
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Field required",
+            "input": {
+              "effort": "high"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "body-5",
+      "hex": "7b226d6f64656c223a6e756c6c7d",
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Input should be a valid string",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "body-6",
+      "hex": "7b226d6f64656c223a377d",
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 7
+          }
+        ]
+      }
+    },
+    {
+      "name": "body-7",
+      "hex": "7b226d6f64656c223a747275657d",
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Input should be a valid string",
+            "input": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "body-8",
+      "hex": "7b226d6f64656c223a5b5d7d",
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Input should be a valid string",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "body-9",
+      "hex": "7b226d6f64656c223a226b33222c226566666f7274223a377d",
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "effort"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 7
+          }
+        ]
+      }
+    },
+    {
+      "name": "body-10",
+      "hex": "7b226d6f64656c223a226b33222c226578747261223a747275657d",
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "extra"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "body-11",
+      "hex": "7b226d6f64656c223a66616c73652c226566666f7274223a5b5d2c226578747261223a317d",
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "model"
+            ],
+            "msg": "Input should be a valid string",
+            "input": false
+          },
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "effort"
+            ],
+            "msg": "Input should be a valid string",
+            "input": []
+          },
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "extra"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "body-12",
+      "hex": "7b226d6f64656c223a22227d",
+      "status": 200,
+      "body": {
+        "model": "",
+        "effort": null
+      }
+    },
+    {
+      "name": "body-13",
+      "hex": "7b226d6f64656c223a226b33227d",
+      "status": 200,
+      "body": {
+        "model": "k3",
+        "effort": null
+      }
+    },
+    {
+      "name": "body-14",
+      "hex": "7b226d6f64656c223a226b33222c226566666f7274223a6e756c6c7d",
+      "status": 200,
+      "body": {
+        "model": "k3",
+        "effort": null
+      }
+    },
+    {
+      "name": "body-15",
+      "hex": "7b226d6f64656c223a226b33222c226566666f7274223a2268696768227d",
+      "status": 200,
+      "body": {
+        "model": "k3",
+        "effort": "high"
+      }
+    },
+    {
+      "name": "body-16",
+      "hex": "7b226d6f64656c223a4e614e7d",
+      "status": 500,
+      "body": "Internal Server Error"
+    },
+    {
+      "name": "body-17",
+      "hex": "7b226d6f64656c223a496e66696e6974797d",
+      "status": 500,
+      "body": "Internal Server Error"
+    },
+    {
+      "name": "body-18",
+      "hex": "7b226d6f64656c223a225c7564383030227d",
+      "status": 500,
+      "body": "Internal Server Error"
+    },
+    {
+      "name": "body-19",
+      "hex": "7b226d6f64656c223a226b33222c226578747261223a225c7564383030227d",
+      "status": 500,
+      "body": "Internal Server Error"
+    },
+    {
+      "name": "body-20",
+      "hex": "7b226d6f64656c223a226b33222c7d",
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              13
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Illegal trailing comma before end of object"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "body-21",
+      "hex": "7b226d6f64656c223a7d",
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              9
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting value"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "utf-8-sig",
+      "hex": "efbbbf7b226d6f64656c223a226b33227d",
+      "status": 200,
+      "body": {
+        "model": "k3",
+        "effort": null
+      }
+    },
+    {
+      "name": "utf-16",
+      "hex": "fffe7b0022006d006f00640065006c0022003a0022006b00330022007d00",
+      "status": 200,
+      "body": {
+        "model": "k3",
+        "effort": null
+      }
+    },
+    {
+      "name": "utf-16-le",
+      "hex": "7b0022006d006f00640065006c0022003a0022006b00330022007d00",
+      "status": 200,
+      "body": {
+        "model": "k3",
+        "effort": null
+      }
+    },
+    {
+      "name": "utf-16-be",
+      "hex": "007b0022006d006f00640065006c0022003a0022006b00330022007d",
+      "status": 200,
+      "body": {
+        "model": "k3",
+        "effort": null
+      }
+    },
+    {
+      "name": "utf-32",
+      "hex": "fffe00007b000000220000006d0000006f00000064000000650000006c000000220000003a000000220000006b00000033000000220000007d000000",
+      "status": 200,
+      "body": {
+        "model": "k3",
+        "effort": null
+      }
+    },
+    {
+      "name": "utf-32-le",
+      "hex": "7b000000220000006d0000006f00000064000000650000006c000000220000003a000000220000006b00000033000000220000007d000000",
+      "status": 200,
+      "body": {
+        "model": "k3",
+        "effort": null
+      }
+    },
+    {
+      "name": "utf-32-be",
+      "hex": "0000007b000000220000006d0000006f00000064000000650000006c000000220000003a000000220000006b00000033000000220000007d",
+      "status": 200,
+      "body": {
+        "model": "k3",
+        "effort": null
+      }
+    },
+    {
+      "name": "invalid-utf8",
+      "hex": "7b226d6f64656c223a22ff227d",
+      "status": 400,
+      "body": {
+        "detail": "There was an error parsing the body"
+      }
+    }
+  ]
+}
